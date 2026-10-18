@@ -1,20 +1,8 @@
 /**
- * PeerLinkRequests - links an agent asks the user to make.
- *
- * The agent rarely knows where the user's machines answer, so it usually
- * names none: the user picks the machine in a card, along with the access,
- * and their client answers with the addresses it knows for that machine and
- * a pairing code from it, which the client mints with its own session there
- * or the user pastes. The code goes straight
- * to `PeerLinks.link` and is never recorded, so it never reaches the
- * transcript, projections, or the agent's context.
- *
- * Asking does not wait: provider CLIs abandon a tool call after a few
- * minutes, and a person may answer much later. The card stays open until the
- * user answers it or stops or archives the thread, and the answer reaches the
- * agent as a notification in its thread.
- *
- * @module PeerLinkRequests
+ * Links an agent asks the user to make. The user picks the machine and access in a card, and
+ * their client answers with its addresses and a pairing code that goes straight to
+ * `PeerLinks.link`, never into the transcript or the agent's context. Asking does not wait
+ * (provider CLIs abandon a long tool call): the answer reaches the agent as a notification.
  */
 import {
   CommandId,
@@ -147,8 +135,8 @@ const make = Effect.gen(function* () {
       ...(wake === undefined ? {} : { wake }),
     });
 
-  const request: PeerLinkRequests["Service"]["request"] = (scope, input) =>
-    Effect.gen(function* () {
+  const request: PeerLinkRequests["Service"]["request"] = Effect.fn("PeerLinkRequests.request")(
+    function* (scope, input) {
       // The card is shown in, and answered from, the caller's own thread.
       const threadScope = yield* McpInvocationContext.requireThreadScope(
         scope,
@@ -245,7 +233,9 @@ const make = Effect.gen(function* () {
         ),
       );
       return pendingResult(turnItemId);
-    }).pipe(Effect.withSpan("PeerLinkRequests.request"));
+    },
+    Effect.withSpan("PeerLinkRequests.request"),
+  );
 
   const linkedOutcome = (linked: PeerLink): LinkRequestOutcome => ({
     linkStatus: "linked",
@@ -306,8 +296,8 @@ const make = Effect.gen(function* () {
   // One answer per card at a time: two answers racing on one card must not
   // both link. Other cards go on while a slow peer holds one.
   const answerLocks = yield* KeyedLock.make<TurnItemId>();
-  const answer: PeerLinkRequests["Service"]["answer"] = (input) =>
-    Effect.gen(function* () {
+  const answer: PeerLinkRequests["Service"]["answer"] = Effect.fn("PeerLinkRequests.answer")(
+    function* (input) {
       yield* Effect.annotateCurrentSpan({
         "orchestration_v2.thread_id": input.threadId,
         "link_request.answer": input.answer.type,
@@ -337,10 +327,13 @@ const make = Effect.gen(function* () {
       ).pipe(
         Effect.mapError((cause) => new PeerLinkRequestError({ reason: "record_failed", cause })),
       );
-    }).pipe(
-      (effect) => answerLocks.withLock(input.turnItemId, effect),
-      Effect.withSpan("PeerLinkRequests.answer"),
-    );
+    },
+    (effect, input) =>
+      effect.pipe(
+        (effect) => answerLocks.withLock(input.turnItemId, effect),
+        Effect.withSpan("PeerLinkRequests.answer"),
+      ),
+  );
 
   return PeerLinkRequests.of({ request, answer });
 });
@@ -387,7 +380,7 @@ const outcomeNotice = (
     case "linked": {
       const label = outcome.linkedLabel ?? target;
       return {
-        text: `The user linked ${label} with ${outcome.linkedAccess} access. Pass environmentId ${outcome.linkedEnvironmentId} to act there; t3_environment_links lists it.`,
+        text: `The user linked ${label} with ${outcome.linkedAccess} access. Pass environmentId ${outcome.linkedEnvironmentId} to act there.`,
         notification: {
           source: { kind: "background_task" },
           outcome: "completed",

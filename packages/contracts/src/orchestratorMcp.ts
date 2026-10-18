@@ -762,27 +762,22 @@ export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSe
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({
     description:
-      "The environment to link, when you know it, e.g. from a machine the user mentioned. Omit it otherwise: the user picks the machine in the card.",
+      "The machine, when known, e.g. from a mentioned machine. Otherwise the user picks it in the card.",
   }),
   url: Schema.optional(TrimmedNonEmptyString).annotate({
     description:
-      "Only when the user gave an address: its https, Tailscale, LAN or loopback base URL. Never guess one.",
+      "Only an address the user gave: https, Tailscale, LAN or loopback. Never guess one.",
   }),
   hint: Schema.optional(TrimmedNonEmptyString).annotate({
-    description:
-      'A short phrase from the user\'s words naming the machine, e.g. "vps" or "mac mini". It only preselects a machine in the card.',
+    description: 'The user\'s words for the machine, e.g. "vps". Preselects it in the card.',
   }),
   reason: Schema.optional(TrimmedNonEmptyString).annotate({
-    description: "One sentence on why, shown on the card.",
+    description: "One sentence for the card.",
   }),
   requestedAccess: Schema.optional(AuthMcpClientAccess).annotate({
-    description:
-      "The access to suggest. The user picks the access in the card; it defaults to approval-required.",
+    description: "Suggested access. The user picks; default approval-required.",
   }),
-  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
-    description:
-      "Reuse when retrying a call that lost its result, so the user sees one card and its current outcome is returned. Use a new id to ask again.",
-  }),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpEnvironmentLinkInput = typeof OrchestratorMcpEnvironmentLinkInput.Type;
 
