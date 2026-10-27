@@ -23,6 +23,7 @@ import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../mcp/McpToolAccess.ts";
 import * as PeerLinks from "./PeerLinks.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import {
   descriptorOf,
   layerLinkingEnvironment,
@@ -80,6 +81,7 @@ const makeA = (descriptor: ExecutionEnvironmentDescriptor) =>
       links: Context.get(context, PeerLinks.PeerLinks),
       peer: Context.get(context, PeerMcpClient.PeerMcpClient),
       sql: Context.get(context, SqlClient.SqlClient),
+      settings: Context.get(context, ServerSettings.ServerSettingsService),
     })),
   );
 
@@ -149,6 +151,43 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
       expect(notFound).toMatchObject({ code: "thread_not_found", message: "No such thread." });
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "each machine's Linked environments beta gates links, and a link waits while it is off",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const b = yield* serveB(box);
+        const a = yield* makeA(laptop);
+        const pairing = yield* b.auth.issuePairingCredential();
+        const link = a.links.link({ url: b.url, pairingCode: pairing.credential, access: "auto" });
+
+        yield* a.settings.updateSettings({ linkedEnvironmentsEnabled: false });
+        expect(yield* link.pipe(Effect.flip)).toMatchObject({
+          reason: "disabled",
+          message: PeerLinks.LINKED_ENVIRONMENTS_OFF,
+        });
+        expect(yield* Ref.get(b.bearers)).toEqual([]);
+
+        yield* a.settings.updateSettings({ linkedEnvironmentsEnabled: true });
+        yield* b.settings.updateSettings({ linkedEnvironmentsEnabled: false });
+        const refusedThere = yield* link.pipe(Effect.flip);
+        expect(refusedThere.reason).toBe("pairing_rejected");
+        expect(refusedThere.message).toContain("Linked environments is off on that machine");
+        expect(yield* linkedSessions(b)).toEqual([]);
+
+        yield* b.settings.updateSettings({ linkedEnvironmentsEnabled: true });
+        yield* link;
+        yield* b.settings.updateSettings({ linkedEnvironmentsEnabled: false });
+        // Not final, so a task already running there picks up again once it is back on.
+        const waiting = yield* probe(a).pipe(Effect.flip);
+        expect(waiting.code).toBe("orchestration_error");
+        expect(waiting.message).toContain("has Linked environments turned off");
+        yield* b.settings.updateSettings({ linkedEnvironmentsEnabled: true });
+        expect(yield* probe(a)).toEqual({ caller: "T3 Code · Laptop", modes: "auto/default" });
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("two links racing to one peer leave the stored access matching the token", () =>

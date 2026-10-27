@@ -2,6 +2,7 @@ import {
   matchComposerEnvironmentItems,
   matchComposerThreadItems,
 } from "@t3tools/client-runtime/composerThreadItems";
+import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
 import type {
   EnvironmentId,
@@ -28,6 +29,7 @@ import {
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useThreadShells } from "~/state/entities";
 import { useEnvironmentIdentities, useEnvironmentMachines } from "~/state/environments";
+import { offersLinkedEnvironmentsAtom } from "~/state/peerLinks";
 import {
   pullRequestEnvironment,
   usePullRequestList,
@@ -104,6 +106,7 @@ export function useComposerMenuItems({
   // The user's machines feed `@` machine matches; the catalog summary is cheap and stable.
   const environmentIdentities = useEnvironmentIdentities();
   const environmentMachines = useEnvironmentMachines();
+  const offersMachines = useAtomValue(offersLinkedEnvironmentsAtom(environmentId));
   const mentionableEnvironments = environmentIdentities.map((identity) => ({
     ...identity,
     machine: environmentMachines.get(identity.environmentId) ?? ("server" as const),
@@ -184,7 +187,7 @@ export function useComposerMenuItems({
           now,
         }),
         // An answer to an agent's question carries thread links, not machines.
-        ...(questionAttachmentTarget === null
+        ...(questionAttachmentTarget === null && offersMachines
           ? matchComposerEnvironmentItems({
               environments: mentionableEnvironments,
               environmentId,
