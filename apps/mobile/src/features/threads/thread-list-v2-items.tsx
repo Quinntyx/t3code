@@ -41,6 +41,7 @@ import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentScope } from "../../state/session";
@@ -58,6 +59,7 @@ import {
 import { useThreadPr } from "../../state/use-thread-pr";
 import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable, useSwipeRowSide } from "../home/thread-swipe-actions";
+import { useHiddenThreads, useSetThreadHidden } from "../home/use-hidden-threads";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
@@ -653,6 +655,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
+  const { hiddenThreadKeys } = useHiddenThreads();
+  const setThreadHidden = useSetThreadHidden();
+  const hidden = hiddenThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id));
+  const handleHidden = useCallback(() => {
+    void setThreadHidden(thread, !hidden);
+  }, [setThreadHidden, thread, hidden]);
+  const hiddenAction = useMemo(
+    () => ({
+      accessibilityLabel: `${hidden ? "Restore" : "Hide"} ${thread.title} on this device`,
+      icon: hidden ? ("eye" as const) : ("eye.slash" as const),
+      label: hidden ? "Restore" : "Hide",
+      onPress: handleHidden,
+    }),
+    [hidden, thread.title, handleHidden],
+  );
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
@@ -704,10 +721,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   // VoiceOver cannot focus buttons inside the accessible row.
   const rowAccessibilityActions = useMemo(
     () => [
+      { name: "hideLocal", label: hidden ? "Restore on this device" : "Hide on this device" },
       ...(prBadgeLabel ? [{ name: "openPullRequests", label: prBadgeLabel }] : []),
       ...(showsWoke ? [{ name: "dismissWoke", label: "Dismiss Woke notification" }] : []),
     ],
-    [prBadgeLabel, showsWoke],
+    [hidden, prBadgeLabel, showsWoke],
   );
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
@@ -908,6 +926,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "hide-local") {
+        handleHidden();
+        return;
+      }
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -946,6 +968,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
+      handleHidden,
       thread,
       handleArchive,
       handleDelete,
@@ -1020,7 +1043,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
   const swipeAccessibilityHint = !canOperateThread
-    ? "Opens the thread"
+    ? `Opens the thread. Swipe ${swipeRowSide === "left" ? "right" : "left"} to ${hiddenAction.label.toLowerCase()} on this device.`
     : secondaryAction === null
       ? `Opens the thread. Swipe ${swipeRowSide === "left" ? "right" : "left"} to ${primaryAction.label.toLowerCase()}.`
       : `Opens the thread. Swipe ${swipeRowSide === "left" ? "right" : "left"} for ${primaryAction.label.toLowerCase()} and snooze actions.`;
@@ -1275,6 +1298,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityState={{ selected }}
         accessibilityActions={rowAccessibilityActions}
         onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === "hideLocal") handleHidden();
           if (event.nativeEvent.actionName === "openPullRequests") handleOpenPullRequests();
           if (event.nativeEvent.actionName === "dismissWoke") handleAcknowledgeWoke();
         }}
@@ -1372,9 +1396,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </RowPressable>
     );
 
-  if (!canOperateThread)
-    return <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>;
-
   return (
     <View collapsable={false}>
       {customSnoozeOpen && (
@@ -1393,16 +1414,25 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}
-        primaryAction={primaryAction}
-        secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}`}
+        primaryAction={canOperateThread ? primaryAction : hiddenAction}
+        secondaryAction={canOperateThread ? secondaryAction : null}
+        // Leftward pans inside an Android phone drawer close the panel.
+        oppositeAction={
+          canOperateThread && (!sidebarPane || swipeRowSide === "right") ? hiddenAction : undefined
+        }
+        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}:${hidden}`}
         simultaneousWith={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
       >
         {(close) => (
           <Menu
             actions={[
-              ...(thread.branch
+              {
+                id: "hide-local",
+                title: hidden ? "Restore on this device" : "Hide on this device",
+                image: hidden ? "eye" : "eye.slash",
+              },
+              ...(canOperateThread && thread.branch
                 ? [
                     {
                       id: "new-thread-on-branch",
@@ -1412,15 +1442,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ]
                 : []),
               { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
-              ...(snoozedRow
-                ? snoozedMenuActions
-                : !props.settlementSupported
-                  ? legacyMenuActions
-                  : canUnsettle
-                    ? slimMenuActions
-                    : swipeActions.secondary === "snooze"
-                      ? snoozableCardMenuActions
-                      : cardMenuActions),
+              ...(!canOperateThread
+                ? []
+                : snoozedRow
+                  ? snoozedMenuActions
+                  : !props.settlementSupported
+                    ? legacyMenuActions
+                    : canUnsettle
+                      ? slimMenuActions
+                      : swipeActions.secondary === "snooze"
+                        ? snoozableCardMenuActions
+                        : cardMenuActions),
             ]}
             onPressAction={handleMenuAction}
             shouldOpenOnLongPress

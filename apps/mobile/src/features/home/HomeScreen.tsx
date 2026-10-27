@@ -12,7 +12,7 @@ import {
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { use, useEffect, useRef, useState, type ComponentProps } from "react";
+import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
   ScrollView,
@@ -85,6 +85,8 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
+import { filterHiddenThreads } from "./hidden-threads";
+import { useHiddenThreads } from "./use-hidden-threads";
 
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
@@ -239,6 +241,11 @@ function renderHomeScrollView(props: ScrollViewProps) {
 }
 
 export function HomeScreen(props: HomeScreenProps) {
+  const { hiddenThreadKeys, showHidden } = useHiddenThreads();
+  const threads = useMemo(
+    () => filterHiddenThreads(props.threads, hiddenThreadKeys, showHidden),
+    [props.threads, hiddenThreadKeys, showHidden],
+  );
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const workspace = useWorkspaceTabs();
   const [initialScrollOffset] = useState(() => workspace?.getScrollOffset("threads") ?? 0);
@@ -382,7 +389,7 @@ export function HomeScreen(props: HomeScreenProps) {
       ? {}
       : { projectIds: v2ScopedProjectGroup.projectRefs.map((ref) => ref.projectId) },
   );
-  const threadSearchMatchByKey = useThreadListSearchMatches(props.threads, threadSearch);
+  const threadSearchMatchByKey = useThreadListSearchMatches(threads, threadSearch);
   const v2ProjectTitleByProjectKey = new Map(
     projectScopes.flatMap((scope) =>
       scope.projectRefs.map(
@@ -423,7 +430,7 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
-  const now = useThreadListNow(props.threads);
+  const now = useThreadListNow(threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -444,7 +451,7 @@ export function HomeScreen(props: HomeScreenProps) {
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads: props.threads,
+    threads,
     pendingTasks: props.pendingTasks,
     environmentId: props.selectedEnvironmentId,
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -737,8 +744,12 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     ) : (
       <EmptyState
-        title="No threads yet"
-        detail="Create a task to start a new coding session."
+        title={!showHidden && hiddenThreadKeys.size > 0 ? "No visible threads" : "No threads yet"}
+        detail={
+          !showHidden && hiddenThreadKeys.size > 0
+            ? "Show hidden threads in the list filters to restore them on this device."
+            : "Create a task to start a new coding session."
+        }
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     );
