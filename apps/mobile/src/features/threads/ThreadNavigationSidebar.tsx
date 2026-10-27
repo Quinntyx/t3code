@@ -51,7 +51,6 @@ import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import { filterHiddenThreads } from "../home/hidden-threads";
 import { useHiddenThreads } from "../home/use-hidden-threads";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
@@ -154,12 +153,8 @@ function ThreadNavigationSidebarPane(
   const enabledTabs = useEnabledNavigationTabs();
   const floatingTabs = floatingTabsMetrics(enabledTabs.length + 1, scale, fabSize, props.width);
   const projects = useProjects();
-  const allThreads = useNavigationThreadShells();
-  const { hiddenThreadKeys, showHidden, setShowHidden } = useHiddenThreads();
-  const threads = useMemo(
-    () => filterHiddenThreads(allThreads, hiddenThreadKeys, showHidden),
-    [allThreads, hiddenThreadKeys, showHidden],
-  );
+  const threads = useNavigationThreadShells();
+  const { showHidden, setShowHidden } = useHiddenThreads();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const footerGradientId = `sidebar-footer-${useId().replaceAll(":", "")}`;
   const hasFooter =

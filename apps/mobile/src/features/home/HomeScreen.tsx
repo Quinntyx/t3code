@@ -12,7 +12,7 @@ import {
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { use, useEffect, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
   ScrollView,
@@ -85,7 +85,6 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
-import { filterHiddenThreads } from "./hidden-threads";
 import { useHiddenThreads } from "./use-hidden-threads";
 
 interface HomeScreenProps {
@@ -242,10 +241,7 @@ function renderHomeScrollView(props: ScrollViewProps) {
 
 export function HomeScreen(props: HomeScreenProps) {
   const { hiddenThreadKeys, showHidden } = useHiddenThreads();
-  const threads = useMemo(
-    () => filterHiddenThreads(props.threads, hiddenThreadKeys, showHidden),
-    [props.threads, hiddenThreadKeys, showHidden],
-  );
+  const threads = props.threads;
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const workspace = useWorkspaceTabs();
   const [initialScrollOffset] = useState(() => workspace?.getScrollOffset("threads") ?? 0);
