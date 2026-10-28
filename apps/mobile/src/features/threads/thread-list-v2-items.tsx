@@ -1432,10 +1432,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onSwipeableWillOpen={props.onSwipeableWillOpen}
         primaryAction={canOperateThread ? primaryAction : hiddenAction}
         secondaryAction={canOperateThread ? secondaryAction : null}
-        // Leftward pans inside an Android phone drawer close the panel.
-        oppositeAction={
-          canOperateThread && (!sidebarPane || swipeRowSide === "right") ? hiddenAction : undefined
-        }
+        oppositeAction={canOperateThread ? hiddenAction : undefined}
         resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}:${hidden}`}
         simultaneousWith={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
