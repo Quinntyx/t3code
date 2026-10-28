@@ -2346,6 +2346,9 @@ export default function ChatView(props: ChatViewProps) {
     isWorking,
     pendingBackgroundTasks,
     turnItems: serverProjection?.turnItems ?? EMPTY_TURN_ITEMS,
+    onRunInTerminal: activeProject
+      ? (command) => runShellCommandStable(command, { preferNewTerminal: true })
+      : undefined,
     activePendingApproval,
     activePendingUserInput,
     localCheckoutBranchMismatch,

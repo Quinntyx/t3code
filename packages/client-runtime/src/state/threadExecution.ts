@@ -17,10 +17,12 @@ import {
   type OrchestrationV2ThreadProjection,
   orchestrationV2RunWorkStartedAt,
   type ThreadId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  findPullRequestForWatchTask,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { getProviderOptionCurrentLabel, getProviderOptionStatedValue } from "@t3tools/shared/model";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
@@ -364,6 +366,69 @@ export function presentPendingBackgroundWork(
     items,
     waiting,
   };
+}
+
+export function backgroundCommandOutputFile(output: string | undefined): string | null {
+  const path = output?.match(/Output is being written to: (\S+?)(?:\.(?=\s|$)|$)/u)?.[1];
+  return path || null;
+}
+
+export function followOutputFileCommand(path: string): string {
+  return `tail -n +1 -F '${path.replaceAll("'", "'\\''")}'`;
+}
+
+export interface BackgroundWorkDetail {
+  readonly item: PendingBackgroundWorkItem;
+  readonly awaited: boolean;
+  readonly turnItem: ThreadStructure["turnItems"][number] | undefined;
+  readonly command: string | null;
+  readonly isRawCommand: boolean;
+  readonly outputFile: string | null;
+  readonly startedAtMs: number | null;
+  readonly updatedAtMs: number;
+  readonly activity: string | null;
+  readonly childThreadId: ThreadId | undefined;
+  readonly pullRequest: ThreadPullRequestLink | undefined;
+}
+
+export function deriveBackgroundWorkDetails(input: {
+  readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly turnItems: ThreadStructure["turnItems"];
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+}): {
+  readonly presentation: PendingBackgroundWorkPresentation;
+  readonly details: ReadonlyArray<BackgroundWorkDetail>;
+} | null {
+  const presentation = presentPendingBackgroundWork(input.tasks);
+  if (presentation === null) return null;
+  const tasksById = new Map(input.tasks.map((task) => [task.taskId, task]));
+  const details = presentation.items.map((item): BackgroundWorkDetail => {
+    const task = tasksById.get(item.taskId);
+    const itemKey = task?.nativeItemId ?? item.taskId;
+    const turnItem = input.turnItems.findLast(
+      (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === itemKey,
+    );
+    const subagent = turnItem?.type === "subagent" ? turnItem : undefined;
+    const commandItem = turnItem?.type === "command_execution" ? turnItem : undefined;
+    const command = commandItem?.input.trim() || null;
+    return {
+      item,
+      awaited: task?.awaited === true,
+      turnItem,
+      command,
+      isRawCommand: command !== null && command === item.label,
+      outputFile: backgroundCommandOutputFile(commandItem?.output),
+      startedAtMs: turnItem?.startedAt ? DateTime.toEpochMillis(turnItem.startedAt) : null,
+      updatedAtMs:
+        turnItem !== undefined && "updatedAt" in turnItem
+          ? DateTime.toEpochMillis(turnItem.updatedAt)
+          : 0,
+      activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
+      childThreadId: item.childThreadId ?? subagent?.childThreadId ?? undefined,
+      pullRequest: findPullRequestForWatchTask(item.taskId, input.pullRequests),
+    };
+  });
+  return { presentation, details };
 }
 
 export interface ProviderGoalPresentation {

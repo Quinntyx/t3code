@@ -1,13 +1,32 @@
-import { useAtomValue } from "@effect/atom-react";
-import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  StackActions,
+  useIsFocused,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
-  presentPendingBackgroundWork,
-  type PendingBackgroundWorkItem,
+  backgroundCommandOutputFile,
+  deriveBackgroundWorkDetails,
+  followOutputFileCommand,
+  type BackgroundWorkDetail,
 } from "@t3tools/client-runtime/state/thread-execution";
-import type { EnvironmentId, ThreadId, ThreadPullRequestLink } from "@t3tools/contracts";
-import { findPullRequestForWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  toolCallLines,
+  turnItemDetailRevision,
+  turnItemNeedsDetailFetch,
+  turnItemOutputText,
+} from "@t3tools/client-runtime/work-log/item-detail";
+import {
+  AuthTerminalOperateScope,
+  type EnvironmentId,
+  type ThreadId,
+  type ThreadPullRequestLink,
+} from "@t3tools/contracts";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { nextTerminalId } from "@t3tools/shared/terminalLabels";
 import * as Haptics from "expo-haptics";
+import { useState } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { ScreenStack } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,15 +34,25 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidSheetHeader } from "../../components/ui/AndroidScreenHeader";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { cn } from "../../lib/cn";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { uuidv4 } from "../../lib/uuid";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
-import { environmentThreadShells } from "../../state/threads";
+import { useProject, useQuietThreadShell } from "../../state/entities";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { useEnvironmentQuery } from "../../state/query";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
+import { useQuietThreadStructure } from "../../state/use-thread-detail";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { pullRequestChecksStatus, pullRequestStatus } from "../pull-requests/pullRequestStatus";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { stageCommandTerminalLaunch } from "../terminal/terminalLaunchContext";
+import { ThreadCommandOutput, useCommandOutputStreaming } from "./thread-command-output";
+import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 const KIND_LABELS = {
@@ -40,10 +69,39 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const target = route.params;
-  const thread = useAtomValue(
-    environmentThreadShells.threadShellAtom(scopeThreadRef(target.environmentId, target.threadId)),
+  const threadRef = scopeThreadRef(target.environmentId, target.threadId);
+  const thread = useQuietThreadShell(threadRef);
+  const structure = useQuietThreadStructure(threadRef);
+  const project = useProject(
+    thread ? { environmentId: target.environmentId, projectId: thread.projectId } : null,
   );
-  const presentation = presentPendingBackgroundWork(thread?.pendingBackgroundTasks ?? []);
+  const canOperateTerminal = useEnvironmentScope(target.environmentId, AuthTerminalOperateScope);
+  const work = deriveBackgroundWorkDetails({
+    tasks: thread?.pendingBackgroundTasks ?? [],
+    turnItems: structure?.projection.turnItems ?? [],
+    pullRequests: thread?.pullRequests,
+  });
+  const followOutput = (path: string) => {
+    if (
+      !project?.workspaceRoot ||
+      !readEnvironmentScope(target.environmentId, AuthTerminalOperateScope)
+    )
+      return;
+    void Haptics.selectionAsync();
+    const terminalId = nextTerminalId([], uuidv4());
+    stageCommandTerminalLaunch({
+      target: { ...target, terminalId },
+      workspaceRoot: project.workspaceRoot,
+      threadShellWorktreePath: thread?.worktreePath ?? null,
+      threadDetailWorktreePath: structure?.projection.thread.worktreePath ?? null,
+      command: followOutputFileCommand(path),
+    });
+    void navigation.navigate("ThreadTerminal", {
+      environmentId: String(target.environmentId),
+      threadId: String(target.threadId),
+      terminalId,
+    });
+  };
   const openThread = (threadId: ThreadId) => {
     void Haptics.selectionAsync();
     // A thread replaces the leaf sheet so workspace back navigation still works.
@@ -59,22 +117,28 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
       contentContainerClassName="px-5 pb-6"
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
     >
-      {presentation === null ? (
+      {work === null ? (
         <Text className="pt-6 text-center text-sm text-foreground-muted">
           Nothing running in the background.
         </Text>
       ) : (
-        presentation.items.map((item) => {
-          const link =
-            item.kind === "monitor"
-              ? findPullRequestForWatchTask(item.taskId, thread?.pullRequests)
-              : undefined;
-          return link ? (
-            <PullRequestMonitorRow key={item.taskId} link={link} />
+        work.details.map((detail) =>
+          detail.pullRequest ? (
+            <PullRequestMonitorRow
+              key={detail.item.taskId}
+              link={detail.pullRequest}
+              startedAtMs={detail.startedAtMs}
+            />
           ) : (
-            <BackgroundWorkRow key={item.taskId} item={item} onOpen={openThread} />
-          );
-        })
+            <BackgroundWorkRow
+              key={detail.item.taskId}
+              detail={detail}
+              target={target}
+              onOpen={openThread}
+              onFollow={canOperateTerminal && project?.workspaceRoot ? followOutput : undefined}
+            />
+          ),
+        )
       )}
     </ScrollView>
   );
@@ -122,7 +186,19 @@ const CHECKS_LABELS = {
   failing: "checks failing",
 } as const;
 
-function PullRequestMonitorRow(props: { readonly link: ThreadPullRequestLink }) {
+function BackgroundWorkElapsed({ startedAtMs }: { readonly startedAtMs: number | null }) {
+  const nowMs = useVisibleSecondClock(startedAtMs !== null);
+  return startedAtMs === null ? null : (
+    <Text className="text-xs text-foreground-muted">
+      {` · ${formatDuration(Math.max(0, nowMs - startedAtMs))}`}
+    </Text>
+  );
+}
+
+function PullRequestMonitorRow(props: {
+  readonly link: ThreadPullRequestLink;
+  readonly startedAtMs: number | null;
+}) {
   const { link } = props;
   // The snapshot arrives from the host after the link, so the row must stay tappable without it.
   const snapshot = link.snapshot;
@@ -137,6 +213,7 @@ function PullRequestMonitorRow(props: { readonly link: ThreadPullRequestLink }) 
       accessibilityLabel={`Watching pull request ${link.number}, ${title}${status ? `, ${status.label}` : ""}${checksLabel ? `, ${checksLabel}` : ""}`}
       accessibilityHint="Opens this pull request externally"
       onPress={() => {
+        void Haptics.selectionAsync();
         void tryOpenExternalUrl(link.url, "pull-request").then((opened) => {
           if (!opened) Dialog.alert("Unable to open PR", "The pull request could not be opened.");
         });
@@ -159,7 +236,8 @@ function PullRequestMonitorRow(props: { readonly link: ThreadPullRequestLink }) 
               #{link.number}
             </Text>
             <Text className="text-xs text-foreground-muted">
-              {status ? `Watching · ${status.label}` : "Watching"}
+              Monitor · Watching{status ? ` · ${status.label}` : ""}
+              <BackgroundWorkElapsed startedAtMs={props.startedAtMs} />
             </Text>
             {checks ? (
               <View className="flex-row items-center gap-1">
@@ -176,40 +254,166 @@ function PullRequestMonitorRow(props: { readonly link: ThreadPullRequestLink }) 
 }
 
 function BackgroundWorkRow(props: {
-  readonly item: PendingBackgroundWorkItem;
+  readonly detail: BackgroundWorkDetail;
+  readonly target: BackgroundWorkTarget;
   readonly onOpen: (threadId: ThreadId) => void;
+  readonly onFollow: ((path: string) => void) | undefined;
 }) {
-  const { item } = props;
-  const childThreadId = item.childThreadId;
-  const row = (
-    <View className="flex-row items-center gap-3 border-b border-border py-3.5">
-      <SymbolView
-        name={
-          item.kind === "subagent" ? "person.2" : item.kind === "monitor" ? "clock" : "terminal"
+  const { item, childThreadId } = props.detail;
+  const [expanded, setExpanded] = useState(false);
+  const focused = useIsFocused();
+  return (
+    <View className="border-b border-border">
+      <Pressable
+        accessibilityRole={childThreadId === undefined ? "button" : "link"}
+        accessibilityLabel={
+          childThreadId === undefined ? item.label : `Open subagent ${item.label}`
         }
-        size={15}
-        tintColorClassName="accent-foreground-muted"
-        type="monochrome"
-      />
-      <View className="min-w-0 flex-1">
-        <Text className="font-t3-medium text-sm text-foreground">{item.label}</Text>
-        <Text className="text-xs text-foreground-muted">{KIND_LABELS[item.kind]}</Text>
-      </View>
-      {childThreadId === undefined ? null : (
-        <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />
-      )}
+        accessibilityState={childThreadId === undefined ? { expanded } : undefined}
+        onPress={() => {
+          if (childThreadId !== undefined) {
+            props.onOpen(childThreadId);
+          } else {
+            void Haptics.selectionAsync();
+            setExpanded((value) => !value);
+          }
+        }}
+        className="active:opacity-70"
+      >
+        <View className="flex-row items-center gap-3 py-3.5">
+          <SymbolView
+            name={
+              item.kind === "subagent" ? "person.2" : item.kind === "monitor" ? "clock" : "terminal"
+            }
+            size={15}
+            tintColorClassName="accent-foreground-muted"
+            type="monochrome"
+          />
+          <View className="min-w-0 flex-1">
+            <Text className="font-t3-medium text-sm text-foreground">{item.label}</Text>
+            <Text className="text-xs text-foreground-muted">
+              {KIND_LABELS[item.kind]}
+              <BackgroundWorkElapsed startedAtMs={props.detail.startedAtMs} />
+            </Text>
+          </View>
+          <SymbolView
+            name={expanded && childThreadId === undefined ? "chevron.down" : "chevron.right"}
+            size={12}
+            tintColorClassName="accent-icon-subtle"
+          />
+        </View>
+      </Pressable>
+      {expanded && focused ? (
+        <BackgroundWorkInspection
+          detail={props.detail}
+          target={props.target}
+          onFollow={props.onFollow}
+        />
+      ) : null}
     </View>
   );
-  return childThreadId === undefined ? (
-    <View accessible>{row}</View>
-  ) : (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityLabel={`Open subagent ${item.label}`}
-      onPress={() => props.onOpen(childThreadId)}
-      className="active:opacity-70"
-    >
-      {row}
-    </Pressable>
+}
+
+function BackgroundWorkInspection(props: {
+  readonly detail: BackgroundWorkDetail;
+  readonly target: BackgroundWorkTarget;
+  readonly onFollow: ((path: string) => void) | undefined;
+}) {
+  const { detail, target, onFollow } = props;
+  const { themeAppearance } = useAppearancePreferences();
+  const streaming = useCommandOutputStreaming(target.environmentId);
+  const item = detail.turnItem;
+  const inspectableItem =
+    item?.type === "command_execution" || item?.type === "dynamic_tool" ? item : null;
+  const needsFetch = inspectableItem !== null && turnItemNeedsDetailFetch(inspectableItem);
+  const fetched = useEnvironmentQuery(
+    needsFetch
+      ? orchestrationEnvironment.turnItem({
+          environmentId: target.environmentId,
+          input: {
+            threadId: inspectableItem.threadId,
+            itemId: inspectableItem.id,
+            revision: turnItemDetailRevision(inspectableItem),
+          },
+        })
+      : null,
+  );
+  const shownItem = fetched.data?.item ?? item;
+  const commandItem = shownItem?.type === "command_execution" ? shownItem : null;
+  const toolItem = shownItem?.type === "dynamic_tool" ? shownItem : null;
+  const subagent = shownItem?.type === "subagent" ? shownItem : null;
+  const command = commandItem?.input ?? detail.command;
+  const description = shownItem?.title?.trim() || detail.item.label;
+  const outputFile = detail.outputFile ?? backgroundCommandOutputFile(commandItem?.output);
+  const loading = needsFetch && fetched.data === null && fetched.error === null;
+  const streamsOutput = streaming && commandItem !== null && outputFile === null && !loading;
+  const output = inspectableItem ? turnItemOutputText(fetched.data?.item ?? inspectableItem) : null;
+  const toolInput = toolItem ? toolCallLines({ args: toolItem.input }) : null;
+  const inputText =
+    toolInput?.args?.map(([name, value]) => `${name}: ${value}`).join("\n") ??
+    toolInput?.argsText ??
+    subagent?.prompt;
+  return (
+    <View className="gap-3 pb-4 pl-7">
+      {description !== command?.trim() ? (
+        <Text selectable className="text-sm text-foreground-muted">
+          {description}
+        </Text>
+      ) : null}
+      {command ? (
+        <View className="rounded-lg bg-subtle p-3">
+          <ScrollView horizontal nestedScrollEnabled>
+            <Text selectable className="font-mono text-xs leading-normal text-foreground">
+              {command}
+            </Text>
+          </ScrollView>
+        </View>
+      ) : null}
+      {toolItem ? (
+        <Text selectable className="font-t3-medium text-xs text-foreground">
+          {toolItem.toolName ?? "Tool"}
+        </Text>
+      ) : null}
+      {inputText ? (
+        <Text selectable className="font-mono text-xs leading-normal text-foreground-muted">
+          {inputText}
+        </Text>
+      ) : null}
+      {outputFile !== null ? (
+        <>
+          <Text className="text-xs text-foreground-muted">Output file on this environment</Text>
+          <Text selectable className="font-mono text-xs text-foreground-muted">
+            {outputFile}
+          </Text>
+          {onFollow ? (
+            <Button
+              label="Follow in terminal"
+              icon="terminal"
+              onPress={() => onFollow(outputFile)}
+            />
+          ) : null}
+        </>
+      ) : streamsOutput && commandItem ? (
+        <ThreadCommandOutput
+          environmentId={target.environmentId}
+          threadId={commandItem.threadId}
+          itemId={commandItem.id}
+          themeAppearance={themeAppearance}
+        />
+      ) : (
+        <ScrollView nestedScrollEnabled className="max-h-60">
+          <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
+            {loading
+              ? "Loading output…"
+              : fetched.error
+                ? `Couldn't load output: ${fetched.error}`
+                : (output ?? subagent?.progress ?? subagent?.result ?? "No output yet.")}
+          </Text>
+        </ScrollView>
+      )}
+      <Text selectable className="font-mono text-3xs text-foreground-subtle">
+        Task {detail.item.taskId}
+      </Text>
+    </View>
   );
 }

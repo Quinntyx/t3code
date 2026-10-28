@@ -1,16 +1,17 @@
 import type {
+  EnvironmentId,
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
   ThreadId,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
-  presentPendingBackgroundWork,
+  deriveBackgroundWorkDetails,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
-import * as DateTime from "effect/DateTime";
 import {
   CircleDashedIcon,
   GitBranchIcon,
@@ -19,9 +20,11 @@ import {
   TargetIcon,
   TerminalIcon,
 } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { tickTextContent } from "~/lib/tickTextContent";
 import { Button, InlineButton } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
@@ -104,8 +107,48 @@ export function goalNowItem(input: {
   };
 }
 
+function BackgroundWorkPopover({
+  title,
+  ...props
+}: Parameters<typeof BackgroundWorkDetails>[0] & { readonly title: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={<InlineButton tone="muted" />}>{title}</PopoverTrigger>
+      <PopoverPopup
+        side="top"
+        align="start"
+        aria-label="Background work details"
+        className="w-[min(36rem,calc(100vw-2rem))]"
+        touchBackdrop
+      >
+        {open ? (
+          <BackgroundWorkDetails
+            {...props}
+            onOpenThread={(threadId) => {
+              setOpen(false);
+              props.onOpenThread(threadId);
+            }}
+            onRunInTerminal={
+              props.onRunInTerminal
+                ? (command) => {
+                    setOpen(false);
+                    props.onRunInTerminal?.(command);
+                  }
+                : undefined
+            }
+          />
+        ) : null}
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
 /** Background commands and subagents, for the end of the timeline. */
 export function backgroundWorkNowItem(input: {
+  readonly environmentId: EnvironmentId;
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+  readonly onRunInTerminal?: ((command: string) => void) | undefined;
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
@@ -115,58 +158,51 @@ export function backgroundWorkNowItem(input: {
   readonly onOpenThread: (threadId: ThreadId) => void;
 }): ThreadNowItem | null {
   const { onOpenThread } = input;
-  const presentation = presentPendingBackgroundWork(input.tasks);
-  if (presentation === null) return null;
-  const rows = presentation.items.map((task) => {
-    const itemKey =
-      input.tasks.find((pending) => pending.taskId === task.taskId)?.nativeItemId ?? task.taskId;
-    // Same key derivePendingBackgroundWork gives turn-item tasks; subagent items carry progress.
-    const item = input.turnItems.findLast(
-      (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === itemKey,
-    );
-    const subagent = item?.type === "subagent" ? item : undefined;
-    return {
-      task,
-      // Claude labels a command with a prose description; only the command itself is code.
-      isRawCommand: item?.type === "command_execution" && item.input.trim() === task.label,
-      activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
-      startedAtMs: item?.startedAt ? DateTime.toEpochMillis(item.startedAt) : null,
-      updatedAtMs: subagent ? DateTime.toEpochMillis(subagent.updatedAt) : 0,
-      childThreadId: task.childThreadId ?? subagent?.childThreadId ?? undefined,
-    };
-  });
+  const backgroundWork = deriveBackgroundWorkDetails(input);
+  if (backgroundWork === null) return null;
+  const { presentation, details: rows } = backgroundWork;
   const [only] = rows.length === 1 ? rows : [];
   const newest = rows
     .filter((row) => row.activity)
     .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   const label = (row: (typeof rows)[number]) =>
-    row.isRawCommand ? <span className="font-mono">{row.task.label}</span> : row.task.label;
+    row.isRawCommand ? <span className="font-mono">{row.item.label}</span> : row.item.label;
   const showsRunningState =
-    only !== undefined && only.task.named && only.activity === null && !presentation.waiting;
+    only !== undefined && only.item.named && only.activity === null && !presentation.waiting;
   const onlyThreadId = only?.childThreadId;
   const startedAtMs = only?.startedAtMs ?? null;
   return {
     id: `background-work:${input.threadId}`,
-    icon: rows.every((row) => row.task.kind !== "subagent") ? (
+    icon: rows.every((row) => row.item.kind !== "subagent") ? (
       <TerminalIcon />
     ) : (
       <CircleDashedIcon />
     ),
-    title:
-      only?.task.named === true ? (
-        <>
-          {presentation.waiting ? "Waiting on " : null}
-          <span className="text-foreground/80">{label(only)}</span>
-        </>
-      ) : (
-        <span className="text-foreground/80">{presentation.title}</span>
-      ),
+    titleProvidesDetails: true,
+    title: (
+      <BackgroundWorkPopover
+        environmentId={input.environmentId}
+        details={rows}
+        onOpenThread={onOpenThread}
+        onRunInTerminal={input.onRunInTerminal}
+        title={
+          only?.item.named === true ? (
+            <>
+              {presentation.waiting ? "Waiting on " : null}
+              <span className="text-foreground/80">{label(only)}</span>
+            </>
+          ) : (
+            <span className="text-foreground/80">{presentation.title}</span>
+          )
+        }
+      />
+    ),
     description: only
       ? only.activity
       : newest
-        ? `${newest.task.label}: ${newest.activity}`
+        ? `${newest.item.label}: ${newest.activity}`
         : rows.map((row, index) => (
-            <Fragment key={row.task.taskId}>
+            <Fragment key={row.item.taskId}>
               {index > 0 ? ", " : null}
               {label(row)}
             </Fragment>

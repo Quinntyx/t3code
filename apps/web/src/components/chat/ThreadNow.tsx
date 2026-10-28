@@ -10,6 +10,8 @@ export interface ThreadNowItem {
   readonly id: string;
   readonly icon: ReactNode;
   readonly title: ReactNode;
+  /** Keep an interactive title out of the overflow popover, which clones its children. */
+  readonly titleProvidesDetails?: boolean;
   readonly description?: ReactNode;
   readonly actions?: ReactNode;
 }
@@ -33,6 +35,19 @@ function ThreadNowLine({
   /** Announces the line when it appears; only for something that needs the user. */
   readonly announce?: boolean;
 }) {
+  const content = (
+    <>
+      {item.title}
+      {item.description ? (
+        <>
+          {" "}
+          <span className="ms-0.5 text-muted-foreground/60 light:text-muted-foreground/80">
+            {item.description}
+          </span>
+        </>
+      ) : null}
+    </>
+  );
   return (
     <div
       role={announce ? "alert" : undefined}
@@ -44,22 +59,18 @@ function ThreadNowLine({
       </span>
       {/* Title and detail read as one line that gives way before the actions, so Stop stays
           reachable; when it is cut, its details button shows all of it. */}
-      <NoticeText
-        detailsLabel={
-          typeof item.title === "string" ? `Show details: ${item.title}` : "Show details"
-        }
-        className="min-w-0 truncate"
-      >
-        {item.title}
-        {item.description ? (
-          <>
-            {" "}
-            <span className="ms-0.5 text-muted-foreground/60 light:text-muted-foreground/80">
-              {item.description}
-            </span>
-          </>
-        ) : null}
-      </NoticeText>
+      {item.titleProvidesDetails ? (
+        <span className="min-w-0 truncate">{content}</span>
+      ) : (
+        <NoticeText
+          detailsLabel={
+            typeof item.title === "string" ? `Show details: ${item.title}` : "Show details"
+          }
+          className="min-w-0 truncate"
+        >
+          {content}
+        </NoticeText>
+      )}
       {item.actions ? (
         <span className="ms-1.5 flex shrink-0 items-center gap-2.5">{item.actions}</span>
       ) : null}
