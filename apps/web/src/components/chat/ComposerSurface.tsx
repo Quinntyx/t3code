@@ -18,7 +18,7 @@ function Shell({
         // The outer corner and inset action share a center, including the one-pixel surface border.
         "[--chat-composer-radius:calc(var(--chat-composer-action-radius)+var(--chat-composer-action-inset)+1px)] [--chat-composer-inner-radius:calc(var(--chat-composer-radius)-1px)]",
         "has-data-[chat-composer-resting=true]:[--chat-composer-action-inset:calc(1.5rem-var(--chat-composer-action-radius))] has-data-[chat-composer-mobile-collapsed=true]:[--chat-composer-action-inset:calc(1.5rem-var(--chat-composer-action-radius))]",
-        "[--chat-composer-drawer-inset:1.375rem] [--chat-composer-glass-surface:var(--card)] [--chat-composer-outline:rgb(0_0_0/8%)]",
+        "[--chat-composer-drawer-inset:1.75rem] [--chat-composer-glass-surface:var(--card)] [--chat-composer-outline:rgb(0_0_0/8%)]",
         "dark:[--chat-composer-glass-surface:var(--surface-raised)] dark:[--chat-composer-highlight:rgb(255_255_255/3%)] dark:[--chat-composer-outline:color-mix(in_srgb,var(--color-white)_5%,transparent)]",
         "[html[data-theme-id]_&]:[--chat-composer-glass-surface:var(--app-theme-surface-raised)] [html[data-theme-id]_&]:[--chat-composer-outline:var(--app-theme-toolbar-border)]",
         "dark:[html[data-theme-id]:not([data-theme-id=t3-chat])_&]:[--chat-composer-highlight:color-mix(in_srgb,var(--app-theme-input)_12%,transparent)] dark:[html[data-theme-id]:not([data-theme-id=t3-chat])_&]:[--chat-composer-outline:color-mix(in_srgb,var(--app-theme-input)_30%,var(--background))]",
