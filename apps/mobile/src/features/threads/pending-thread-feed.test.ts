@@ -123,10 +123,32 @@ describe("pending timeline messages", () => {
       threadKey: "env:thread",
       queuedMessages: [],
       projectedMessages: [{ id: echoed.messageId }],
+      runs: [
+        { userMessageId: echoed.messageId, status: "rolled_back" },
+        { userMessageId: waiting.messageId, status: "starting" },
+      ],
     });
     expect(shown).toEqual([waiting]);
     expect(appendPendingThreadMessages([], [], shown).map((entry) => entry.id)).toEqual([
       "waiting",
     ]);
+  });
+
+  it("stops showing a long-delivered acknowledged message whose settled run left the bounded window", () => {
+    // After a bounded reload, projection.messages keeps only recent turns, so an
+    // hour-old delivered message is no longer echoed there. Its run settled long
+    // ago, which is proof of delivery on its own; the row must not resurrect.
+    const delivered = pending("delivered");
+    const waiting = pending("waiting");
+    const shown = selectPendingAcknowledgedMessages([delivered, waiting], {
+      threadKey: "env:thread",
+      queuedMessages: [],
+      projectedMessages: [],
+      runs: [
+        { userMessageId: delivered.messageId, status: "failed" },
+        { userMessageId: waiting.messageId, status: "running" },
+      ],
+    });
+    expect(shown).toEqual([waiting]);
   });
 });
