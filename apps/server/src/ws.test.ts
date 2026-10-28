@@ -2,6 +2,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AuthSessionId,
+  DEUS_UNAVAILABLE,
+  DeusRpcGroup,
+  DeusSessionRef,
+  DeusAttachmentId,
+  DeusConversation,
+  DeusCursor,
+  DeusInputId,
+  DeusMemoryId,
+  DeusTaskId,
   EnvironmentId,
   ProjectId,
   ThreadId,
@@ -23,6 +32,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as RpcTest from "effect/rpc/RpcTest";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { Headers } from "effect/http";
@@ -129,6 +140,8 @@ import {
   WS_RPC_SERVER_OPTIONS,
   withLateEditorConfig,
 } from "./ws.ts";
+
+const decodeDeusSessionRef = Schema.decodeEffect(DeusSessionRef);
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
@@ -560,6 +573,135 @@ const layerConfigSources = Layer.mergeAll(
 );
 
 it.effect(
+  "advertises Deus as unavailable and returns typed errors from every placeholder RPC",
+  () =>
+    Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(DeusRpcGroup).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("deus-test"),
+              subject: "deus-test",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            yield* ServerBrowser.ServerBrowser,
+          ).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                layerUnusedConfigRpcServices,
+                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: process.cwd(),
+                }),
+                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+              ),
+            ),
+          ),
+        ),
+      );
+      const ref = yield* decodeDeusSessionRef({
+        environmentId: "environment",
+        projectId: "empty-project",
+        sessionId: "session",
+      });
+      const input = {
+        ...ref,
+        inputId: DeusInputId.make("input"),
+        conversation: DeusConversation.make(1),
+      };
+      const attachment = {
+        ...ref,
+        attachmentId: DeusAttachmentId.make("attachment"),
+        generation: 1,
+      };
+      assert.deepEqual(yield* client[WS_METHODS.deusGetCapabilities](ref), DEUS_UNAVAILABLE);
+      const calls = [
+        Effect.asVoid(client[WS_METHODS.deusOpen](input)),
+        Effect.asVoid(client[WS_METHODS.deusGetSnapshot](ref)),
+        client[WS_METHODS.deusSubscribe]({ ...ref, after: DeusCursor.make(0) }).pipe(
+          Stream.runDrain,
+        ),
+        Effect.asVoid(client[WS_METHODS.deusSendInput]({ ...input, text: "hello" })),
+        Effect.asVoid(client[WS_METHODS.deusResetConversation](input)),
+        Effect.asVoid(
+          client[WS_METHODS.deusLaunchTask]({
+            ...input,
+            prompt: "work",
+            kind: "work",
+            model: { instanceId: ProviderInstanceId.make("pi"), model: "gpt-6.1-sol" },
+            runtimeMode: "full-access",
+            workspace: "project",
+          }),
+        ),
+        Effect.asVoid(
+          client[WS_METHODS.deusTaskAction]({
+            ...input,
+            taskId: DeusTaskId.make("task"),
+            action: { type: "interrupt" },
+          }),
+        ),
+        Effect.asVoid(client[WS_METHODS.deusMemorySearch]({ ...ref, query: "context", limit: 1 })),
+        Effect.asVoid(
+          client[WS_METHODS.deusMemoryRead]({ ...ref, memoryId: DeusMemoryId.make("memory") }),
+        ),
+        Effect.asVoid(
+          client[WS_METHODS.deusMemoryCorrect]({
+            ...input,
+            memoryId: DeusMemoryId.make("memory"),
+            expectedRevision: 1,
+            correction: null,
+          }),
+        ),
+        Effect.asVoid(
+          client[WS_METHODS.deusPonder]({ ...input, snapshotCursor: DeusCursor.make(0) }),
+        ),
+        Effect.asVoid(client[WS_METHODS.deusAttach]({ ...input, takeover: false })),
+        client[WS_METHODS.deusDetach](attachment),
+        client[WS_METHODS.deusMediaPush]({
+          ...attachment,
+          responseEpoch: 0,
+          sequence: 0,
+          type: "pcm",
+          encoding: "pcm16le",
+          channels: 1,
+          sampleRate: 16_000,
+          data: "AAA=",
+        }),
+        client[WS_METHODS.deusMediaControl]({
+          ...attachment,
+          responseEpoch: 0,
+          sequence: 0,
+          action: "mute",
+        }),
+        client[WS_METHODS.deusMediaSubscribe](attachment).pipe(Stream.runDrain),
+        Effect.asVoid(client[WS_METHODS.deusGetSettings](ref)),
+        Effect.asVoid(client[WS_METHODS.deusUpdateSettings]({ ...ref, patch: { enabled: true } })),
+        Effect.asVoid(client[WS_METHODS.deusSetCredential]({ ...ref, secretRef: null })),
+      ];
+      for (const call of calls)
+        assert.equal((yield* Effect.flip(call))._tag, "DeusUnavailableError");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.fresh(layerConfigSources),
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ),
+      ),
+      Effect.scoped,
+    ),
+);
+
+it.effect(
   "preserves settings during discovery and keybindings during snapshot ACK at the config RPC boundary",
   () =>
     Effect.gen(function* () {
@@ -674,6 +816,7 @@ it.effect(
       assert.equal(snapshot.type, "snapshot");
       if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
       assert.isFalse(snapshot.config.settings.defaultAutoPull);
+      assert.deepEqual(snapshot.config.deus, DEUS_UNAVAILABLE);
       assert.deepEqual(snapshot.config.keybindings, initialKeybindings);
       const duringAck = yield* keybindings.upsertKeybindingRule({
         key: "mod+alt+y",

@@ -5,6 +5,14 @@ import {
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
+  DEUS_UNAVAILABLE,
+  DeusAttachmentId,
+  DeusCursor,
+  DeusInputId,
+  DeusSessionId,
+  DeusUnavailableError,
+  EnvironmentId,
+  ProjectId,
   ProviderInstanceId,
   ThreadId,
   AuthOrchestrationOperateScope,
@@ -68,6 +76,35 @@ describe("RPC authorization scopes", () => {
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalOperateScope);
     }
+  });
+
+  it("separates Deus metadata, media ownership, and management permissions", () => {
+    for (const method of [
+      WS_METHODS.deusGetCapabilities,
+      WS_METHODS.deusGetSnapshot,
+      WS_METHODS.deusSubscribe,
+      WS_METHODS.deusMemorySearch,
+      WS_METHODS.deusMemoryRead,
+      WS_METHODS.deusGetSettings,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    for (const method of [
+      WS_METHODS.deusOpen,
+      WS_METHODS.deusSendInput,
+      WS_METHODS.deusResetConversation,
+      WS_METHODS.deusLaunchTask,
+      WS_METHODS.deusTaskAction,
+      WS_METHODS.deusMemoryCorrect,
+      WS_METHODS.deusPonder,
+      WS_METHODS.deusAttach,
+      WS_METHODS.deusDetach,
+      WS_METHODS.deusMediaPush,
+      WS_METHODS.deusMediaControl,
+      WS_METHODS.deusMediaSubscribe,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.deusUpdateSettings)).toBe(AuthSettingsWriteScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.deusSetCredential)).toBe(AuthProvidersManageScope);
   });
 
   it("rejects unknown RPC method names", () => {
@@ -168,6 +205,153 @@ describe("RPC scope middleware", () => {
         requiredPermission: missing,
       });
       expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("Deus RPC authorization", () => {
+  const tested = [
+    WS_METHODS.deusGetCapabilities,
+    WS_METHODS.deusOpen,
+    WS_METHODS.deusSubscribe,
+    WS_METHODS.deusMediaSubscribe,
+    WS_METHODS.deusUpdateSettings,
+    WS_METHODS.deusSetCredential,
+  ] as const;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const input = {
+    environmentId: EnvironmentId.make("environment"),
+    projectId: ProjectId.make("project"),
+    sessionId: DeusSessionId.make("session"),
+    inputId: DeusInputId.make("input"),
+    after: DeusCursor.make(0),
+    attachmentId: DeusAttachmentId.make("attachment"),
+    generation: 1,
+    patch: { enabled: true },
+    secretRef: null,
+  };
+
+  it.effect.each([
+    { scopes: [], unary: WS_METHODS.deusGetCapabilities, missing: AuthOrchestrationReadScope },
+    {
+      scopes: [AuthOrchestrationReadScope],
+      unary: WS_METHODS.deusOpen,
+      missing: AuthOrchestrationOperateScope,
+    },
+    {
+      scopes: [AuthOrchestrationOperateScope],
+      unary: WS_METHODS.deusUpdateSettings,
+      missing: AuthSettingsWriteScope,
+    },
+    {
+      scopes: [AuthSettingsWriteScope],
+      unary: WS_METHODS.deusSetCredential,
+      missing: AuthProvidersManageScope,
+    },
+  ] as const)(
+    "rejects $unary without $missing before the handler runs",
+    ({ scopes, unary, missing }) =>
+      Effect.gen(function* () {
+        let handled = 0;
+        const unavailable = Effect.sync(() => {
+          handled++;
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new DeusUnavailableError({ message: "Not implemented.", reason: "unsupported" }),
+            ),
+          ),
+        );
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              group.toLayerHandler(WS_METHODS.deusGetCapabilities, () =>
+                Effect.sync(() => {
+                  handled++;
+                  return DEUS_UNAVAILABLE;
+                }),
+              ),
+              group.toLayerHandler(WS_METHODS.deusOpen, () => unavailable),
+              group.toLayerHandler(WS_METHODS.deusSubscribe, () => Stream.fromEffect(unavailable)),
+              group.toLayerHandler(WS_METHODS.deusMediaSubscribe, () =>
+                Stream.fromEffect(unavailable),
+              ),
+              group.toLayerHandler(WS_METHODS.deusUpdateSettings, () => unavailable),
+              group.toLayerHandler(WS_METHODS.deusSetCredential, () => unavailable),
+              RpcAuthorization.layer(scopes),
+            ),
+          ),
+        );
+        const responses = {
+          [WS_METHODS.deusGetCapabilities]: client[WS_METHODS.deusGetCapabilities](input).pipe(
+            Effect.asVoid,
+          ),
+          [WS_METHODS.deusOpen]: client[WS_METHODS.deusOpen](input).pipe(Effect.asVoid),
+          [WS_METHODS.deusUpdateSettings]: client[WS_METHODS.deusUpdateSettings](input).pipe(
+            Effect.asVoid,
+          ),
+          [WS_METHODS.deusSetCredential]: client[WS_METHODS.deusSetCredential](input).pipe(
+            Effect.asVoid,
+          ),
+        };
+        expect(yield* responses[unary].pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+        expect(handled).toBe(0);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("allows metadata observers but denies their media subscription", () =>
+    Effect.gen(function* () {
+      const handled: string[] = [];
+      const unavailable = new DeusUnavailableError({
+        message: "Not implemented.",
+        reason: "unsupported",
+      });
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.deusGetCapabilities, () =>
+              Effect.succeed(DEUS_UNAVAILABLE),
+            ),
+            group.toLayerHandler(WS_METHODS.deusOpen, () => Effect.fail(unavailable)),
+            group.toLayerHandler(WS_METHODS.deusSubscribe, () =>
+              Stream.fromEffect(
+                Effect.sync(() => handled.push("metadata")).pipe(
+                  Effect.andThen(Effect.fail(unavailable)),
+                ),
+              ),
+            ),
+            group.toLayerHandler(WS_METHODS.deusMediaSubscribe, () =>
+              Stream.fromEffect(
+                Effect.sync(() => handled.push("media")).pipe(
+                  Effect.andThen(Effect.fail(unavailable)),
+                ),
+              ),
+            ),
+            group.toLayerHandler(WS_METHODS.deusUpdateSettings, () => Effect.fail(unavailable)),
+            group.toLayerHandler(WS_METHODS.deusSetCredential, () => Effect.fail(unavailable)),
+            RpcAuthorization.layer([AuthOrchestrationReadScope]),
+          ),
+        ),
+      );
+      expect(yield* client[WS_METHODS.deusGetCapabilities](input)).toEqual(DEUS_UNAVAILABLE);
+      expect(
+        yield* client[WS_METHODS.deusSubscribe](input).pipe(Stream.runDrain, Effect.flip),
+      ).toMatchObject({ _tag: "DeusUnavailableError" });
+      expect(
+        yield* client[WS_METHODS.deusMediaSubscribe](input).pipe(Stream.runDrain, Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthOrchestrationOperateScope,
+      });
+      expect(handled).toEqual(["metadata"]);
     }).pipe(Effect.scoped),
   );
 });

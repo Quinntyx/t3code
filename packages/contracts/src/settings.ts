@@ -1187,6 +1187,32 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const DeusSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  textModel: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  liveModel: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  voice: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  learningEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  ponderModel: Schema.NullOr(ModelSelection).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+});
+export type DeusSettings = typeof DeusSettings.Type;
+
+export const DeusSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  textModel: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  liveModel: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  voice: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  learningEnabled: Schema.optionalKey(Schema.Boolean),
+  ponderModel: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+});
+export type DeusSettingsPatch = typeof DeusSettingsPatch.Type;
+
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),

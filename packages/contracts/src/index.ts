@@ -70,3 +70,4 @@ export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";
 export * from "./emailRequest.ts";
 export * from "./clientRpcPermissions.ts";
+export * from "./deus.ts";

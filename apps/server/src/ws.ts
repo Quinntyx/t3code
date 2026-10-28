@@ -22,6 +22,8 @@ import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
   AcpRegistryOperationError,
+  DEUS_UNAVAILABLE,
+  DeusUnavailableError,
   CommandId,
   authScopeResponse,
   AuthAccessStreamError,
@@ -1792,6 +1794,7 @@ export const layerWsRpc = (
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
           },
           settings,
+          deus: DEUS_UNAVAILABLE,
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
           shellOlderSettled: true,
@@ -1868,6 +1871,10 @@ export const layerWsRpc = (
         return result;
       });
 
+      const deusUnavailable = new DeusUnavailableError({
+        message: "Deus services are not implemented on this server.",
+        reason: "unsupported",
+      });
       const handlers = ServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
@@ -2190,6 +2197,26 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
+        [WS_METHODS.deusGetCapabilities]: (_input) => Effect.succeed(DEUS_UNAVAILABLE),
+        [WS_METHODS.deusOpen]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusGetSnapshot]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusSubscribe]: (_input) => Stream.fail(deusUnavailable),
+        [WS_METHODS.deusSendInput]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusResetConversation]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusLaunchTask]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusTaskAction]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusMemorySearch]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusMemoryRead]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusMemoryCorrect]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusPonder]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusAttach]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusDetach]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusMediaPush]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusMediaControl]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusMediaSubscribe]: (_input) => Stream.fail(deusUnavailable),
+        [WS_METHODS.deusGetSettings]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusUpdateSettings]: (_input) => Effect.fail(deusUnavailable),
+        [WS_METHODS.deusSetCredential]: (_input) => Effect.fail(deusUnavailable),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) =>
           loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),

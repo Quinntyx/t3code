@@ -24,6 +24,7 @@ import {
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
+import { DeusCapabilities } from "./deus.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
@@ -606,6 +607,7 @@ export const ServerEventLoopStall = Schema.Struct({
 export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
 
 export const ServerConfig = Schema.Struct({
+  deus: Schema.optionalKey(DeusCapabilities),
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
   cwd: TrimmedNonEmptyString,

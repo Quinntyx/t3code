@@ -12,6 +12,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
@@ -95,6 +96,38 @@ describe("command permissions", () => {
       }),
     ),
   );
+
+  it.effect.each([
+    { method: WS_METHODS.deusSendInput, scope: AuthOrchestrationOperateScope },
+    { method: WS_METHODS.deusMediaSubscribe, scope: AuthOrchestrationOperateScope },
+    { method: WS_METHODS.deusGetSnapshot, scope: AuthOrchestrationReadScope },
+    { method: WS_METHODS.deusUpdateSettings, scope: AuthSettingsWriteScope },
+    { method: WS_METHODS.deusSetCredential, scope: AuthProvidersManageScope },
+  ] as const)("checks destination grants for $method", ({ method, scope }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createCommandPermissions(runtime, method);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect(yield* command.authorize(registry, env).pipe(Effect.flip)).toMatchObject({
+          requiredPermission: scope,
+        });
+        registry.set(
+          sessions(env),
+          AsyncResult.success({ ...grant(false), scopes: [scope], permissions: [scope] }),
+        );
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        yield* command.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(command.permissionAtom(other))).toBe(false);
+        expect(yield* command.authorize(registry, other).pipe(Effect.flip)).toMatchObject({
+          requiredPermission: scope,
+        });
+      }),
+    ),
+  );
+
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

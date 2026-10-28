@@ -41,6 +41,7 @@ import {
   MachineHandoffImportResult,
   MachineHandoffError,
 } from "./machineHandoff.ts";
+import * as Deus from "./deus.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -543,6 +544,27 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverGetThreadUsage: "server.getThreadUsage",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  deusGetCapabilities: "deus.getCapabilities",
+  deusOpen: "deus.open",
+  deusGetSnapshot: "deus.getSnapshot",
+  deusSubscribe: "deus.subscribe",
+  deusSendInput: "deus.sendInput",
+  deusResetConversation: "deus.resetConversation",
+  deusLaunchTask: "deus.launchTask",
+  deusTaskAction: "deus.taskAction",
+  deusMemorySearch: "deus.memorySearch",
+  deusMemoryRead: "deus.memoryRead",
+  deusMemoryCorrect: "deus.memoryCorrect",
+  deusPonder: "deus.ponder",
+  deusAttach: "deus.attach",
+  deusDetach: "deus.detach",
+  deusMediaPush: "deus.mediaPush",
+  deusMediaControl: "deus.mediaControl",
+  deusMediaSubscribe: "deus.mediaSubscribe",
+  deusGetSettings: "deus.getSettings",
+  deusUpdateSettings: "deus.updateSettings",
+  deusSetCredential: "deus.setCredential",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1978,6 +2000,113 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const DeusRpcError = Schema.Union([Deus.DeusError, EnvironmentAuthorizationError]);
+
+export const DeusRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.deusGetCapabilities, {
+    payload: Deus.DeusScope,
+    success: Deus.DeusCapabilities,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusOpen, {
+    payload: Deus.DeusOpenInput,
+    success: Deus.DeusSnapshot,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusGetSnapshot, {
+    payload: Deus.DeusSessionRef,
+    success: Deus.DeusSnapshot,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusSubscribe, {
+    payload: Deus.DeusSubscriptionInput,
+    success: Deus.DeusSubscriptionEvent,
+    error: DeusRpcError,
+    stream: true,
+  }),
+  Rpc.make(WS_METHODS.deusSendInput, {
+    payload: Deus.DeusInput,
+    success: Deus.DeusInputReceipt,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusResetConversation, {
+    payload: Deus.DeusResetConversationInput,
+    success: Deus.DeusSnapshot,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusLaunchTask, {
+    payload: Deus.DeusTaskLaunchInput,
+    success: Deus.DeusTaskActionResult,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusTaskAction, {
+    payload: Deus.DeusTaskActionInput,
+    success: Deus.DeusTaskActionResult,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusMemorySearch, {
+    payload: Deus.DeusMemorySearchInput,
+    success: Schema.Array(Deus.DeusMemory),
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusMemoryRead, {
+    payload: Deus.DeusMemoryReadInput,
+    success: Deus.DeusMemory,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusMemoryCorrect, {
+    payload: Deus.DeusMemoryCorrectionInput,
+    success: Deus.DeusMemory,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusPonder, {
+    payload: Deus.DeusPonderInput,
+    success: Deus.DeusPonderReceipt,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusAttach, {
+    payload: Deus.DeusAttachInput,
+    success: Deus.DeusAttachment,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusDetach, {
+    payload: Deus.DeusAttachmentInput,
+    success: Schema.Void,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusMediaPush, {
+    payload: Deus.DeusPcmInput,
+    success: Schema.Void,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusMediaControl, {
+    payload: Deus.DeusMediaControlInput,
+    success: Schema.Void,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusMediaSubscribe, {
+    payload: Deus.DeusAttachmentInput,
+    success: Deus.DeusMediaOutput,
+    error: DeusRpcError,
+    stream: true,
+  }),
+  Rpc.make(WS_METHODS.deusGetSettings, {
+    payload: Deus.DeusScope,
+    success: Deus.DeusConfiguration,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusUpdateSettings, {
+    payload: Deus.DeusUpdateSettingsInput,
+    success: Deus.DeusConfiguration,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusSetCredential, {
+    payload: Deus.DeusCredentialInput,
+    success: Deus.DeusConfiguration,
+    error: DeusRpcError,
+  }),
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsExportMachineHandoffRpc,
   WsImportMachineHandoffRpc,
@@ -2188,4 +2317,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
   WsOrchestrationV2SubscribeCommandOutputRpc,
-).middleware(RpcScopeAuthorization);
+)
+  .merge(DeusRpcGroup)
+  .middleware(RpcScopeAuthorization);
