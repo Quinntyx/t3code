@@ -41,6 +41,8 @@ import * as PullRequestHttp from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as DeusRepository from "./deus/DeusRepository.ts";
+import * as DeusSessionService from "./deus/DeusSessionService.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -603,6 +605,7 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  DeusSessionService.layer.pipe(Layer.provideMerge(DeusRepository.layer)),
   AgentAwarenessRelay.layer,
   ThreadUsageService.layer,
   HeldHooksWaker.layer,
@@ -1108,6 +1111,17 @@ const layerMakeServer = Layer.unwrap(
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
       layerCloudDesiredLinkReconcile,
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+          const deus = yield* DeusSessionService.DeusSessionService;
+          yield* startup.awaitCommandReady.pipe(
+            Effect.andThen(deus.start),
+            Effect.orDie,
+            Effect.forkScoped,
+          );
+        }),
+      ),
       HeapSnapshot.layer,
     );
 
