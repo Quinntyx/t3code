@@ -515,6 +515,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Delete confirmation"]
       : []),
     ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? ["Quit shortcut"] : []),
+    ...(settings.hideWindowControls !== DEFAULT_UNIFIED_SETTINGS.hideWindowControls
+      ? ["Window controls"]
+      : []),
     ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
     ...(settings.threadTitleInstructions !== DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions
       ? ["Thread title instructions"]
@@ -622,6 +625,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
+      hideWindowControls: DEFAULT_UNIFIED_SETTINGS.hideWindowControls,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       threadTitleInstructions: DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
@@ -1034,6 +1038,36 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      {isElectron ? (
+        <SettingsSection id="window" title="Window">
+          <SettingsRow
+            {...searchableSetting("hide-window-controls")}
+            description="Hides the window minimize, maximize, and close buttons. Restart T3 to apply."
+            resetAction={
+              settings.hideWindowControls !== DEFAULT_UNIFIED_SETTINGS.hideWindowControls ? (
+                <SettingResetButton
+                  label="window controls"
+                  onClick={() =>
+                    updateSettings({
+                      hideWindowControls: DEFAULT_UNIFIED_SETTINGS.hideWindowControls,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.hideWindowControls}
+                onCheckedChange={(checked) =>
+                  updateSettings({ hideWindowControls: Boolean(checked) })
+                }
+                aria-label="Hide window controls"
+              />
+            }
+          />
+        </SettingsSection>
+      ) : null}
     </SettingsPageContainer>
   );
 }

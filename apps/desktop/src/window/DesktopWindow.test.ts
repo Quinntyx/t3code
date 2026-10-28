@@ -1,7 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import { DesktopSnapShotId } from "@t3tools/contracts";
+import {
+  DesktopSnapShotId,
+  DEFAULT_CLIENT_SETTINGS,
+  type ClientSettings,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -118,6 +122,7 @@ function makeFakeBrowserWindow() {
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     setWindowButtonPosition: vi.fn(),
+    setWindowButtonVisibility: vi.fn(),
     show: vi.fn(),
     webContents,
   };
@@ -139,6 +144,7 @@ function makeFakeBrowserWindow() {
     send: webContents.send,
     setZoomLevel: webContents.setZoomLevel,
     setWindowButtonPosition: window.setWindowButtonPosition,
+    setWindowButtonVisibility: window.setWindowButtonVisibility,
     setBackgroundThrottling: webContents.setBackgroundThrottling,
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
@@ -193,17 +199,20 @@ const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronTheme["Service"]);
 
-const layerDesktopEnvironment = DesktopEnvironment.layer(environmentInput).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      NodeServices.layer,
-      DesktopConfig.layerTest({
-        T3CODE_PORT: "3773",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
-      }),
+const makeEnvironmentLayer = (platform: NodeJS.Platform) =>
+  DesktopEnvironment.layer({ ...environmentInput, platform }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_PORT: "3773",
+          VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+        }),
+      ),
     ),
-  ),
-);
+  );
+
+const layerDesktopEnvironment = makeEnvironmentLayer("darwin");
 
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
@@ -229,8 +238,16 @@ function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly platform?: NodeJS.Platform;
+  readonly clientSettings?: Option.Option<ClientSettings>;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
+  const layerEnvironment =
+    input.platform === undefined ? layerDesktopEnvironment : makeEnvironmentLayer(input.platform);
+  const layerClientSettings =
+    input.clientSettings === undefined
+      ? layerDesktopClientSettings
+      : DesktopClientSettings.layerTest(input.clientSettings);
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
     get: Effect.sync(() => desktopSettings),
     load: Effect.sync(() => desktopSettings),
@@ -298,9 +315,9 @@ function layerTest(input: {
           recordMetrics: () => Effect.void,
           shutdown: Effect.void,
         }),
-        layerDesktopEnvironment,
+        layerEnvironment,
         layerDesktopAppSettings,
-        layerDesktopClientSettings,
+        layerClientSettings,
         layerDesktopServerExposure,
         DesktopState.layer,
         layerElectronApp,
@@ -471,6 +488,96 @@ describe("DesktopWindow", () => {
       DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE,
     );
   });
+
+  // Native caption buttons and traffic lights are created with the frame; the
+  // setting decides whether they exist at all.
+  it.effect(
+    "creates the main window without the native controls overlay on Linux when hidden",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          createdWindowOptions,
+          clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
+          platform: "linux",
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.createMain;
+          const options = createdWindowOptions[0];
+          if (options === undefined) {
+            return yield* Effect.die("main window options were not captured");
+          }
+          assert.equal(options.titleBarStyle, "hidden");
+          assert.isUndefined(options.titleBarOverlay);
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect("keeps the native controls overlay on Linux by default", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        clientSettings: Option.some(DEFAULT_CLIENT_SETTINGS),
+        platform: "linux",
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMain;
+        const options = createdWindowOptions[0];
+        if (options === undefined) {
+          return yield* Effect.die("main window options were not captured");
+        }
+        assert.deepEqual(options.titleBarOverlay, {
+          color: "#01000000",
+          height: 40,
+          symbolColor: "#1f2937",
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("hides the macOS traffic lights when the setting hides window controls", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMain;
+        const options = createdWindowOptions[0];
+        if (options === undefined) {
+          return yield* Effect.die("main window options were not captured");
+        }
+        assert.equal(options.titleBarStyle, "hiddenInset");
+        assert.deepEqual(fakeWindow.setWindowButtonVisibility.mock.calls, [[false]]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 
   it.effect(
     "opens and reopens the window without backend readiness when local execution is disabled",

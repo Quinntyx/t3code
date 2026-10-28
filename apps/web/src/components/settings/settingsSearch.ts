@@ -615,6 +615,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "hide-window-controls",
+    title: "Hide window controls",
+    to: "/settings/general",
+    searchTerms: ["window decorations minimize maximize close buttons titlebar frame hide disable"],
+    desktopOnly: true,
+  },
+  {
     id: "text-generation-model",
     title: "Text generation model",
     to: "/settings/threads",
