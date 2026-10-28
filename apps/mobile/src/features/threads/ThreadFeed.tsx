@@ -165,7 +165,10 @@ import { VideoPreviewModal, type VideoPreviewSource } from "../../components/Vid
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
-import { ThreadTrajectorySegments } from "./ThreadTrajectorySegments";
+import {
+  ThreadTrajectorySegments,
+  ThreadTrajectorySegmentsMeasurement,
+} from "./ThreadTrajectorySegments";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
 import { Menu } from "../../components/ui/Menu";
@@ -1240,6 +1243,111 @@ function compactionLabel(label: string, title: string | undefined) {
     : label;
 }
 
+function ThreadRunFoldRow(props: {
+  readonly entry: Extract<ThreadFeedEntry, { type: "run-fold" }>;
+  readonly iconSubtleColor: string | ColorValue;
+  readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
+  readonly onToggleTurnFold: (runId: RunId) => void;
+  readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
+}) {
+  const { width: windowWidth } = useWindowDimensions();
+  const [availableWidth, setAvailableWidth] = useState(0);
+  const [measurement, setMeasurement] = useState<{
+    readonly width: number;
+    readonly textSizeKey: string;
+  } | null>(null);
+  const naturalWidth =
+    measurement?.textSizeKey === props.workRowSizing.textSizeKey ? measurement.width : null;
+  const compact =
+    naturalWidth === null ||
+    !(availableWidth > 0 && naturalWidth > 0 && naturalWidth <= availableWidth);
+  const minHeight = Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight);
+
+  const buttonContent = (compactLabel: boolean, measurement: boolean) => {
+    const label = compactLabel
+      ? (splitCompactLabel(props.entry.label)?.value ?? props.entry.label)
+      : props.entry.label;
+    return (
+      <>
+        <Text
+          key={props.workRowSizing.textSizeKey}
+          numberOfLines={1}
+          className={cn(
+            "font-t3-medium text-sm tabular-nums text-foreground-muted",
+            !measurement && "shrink",
+          )}
+        >
+          {label}
+        </Text>
+        <ThreadDisclosureChevron
+          expanded={props.entry.expanded}
+          collapsedDirection="right"
+          size={15}
+          tintColor={props.iconSubtleColor}
+        />
+      </>
+    );
+  };
+
+  return (
+    <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
+      <View
+        className="min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1"
+        onLayout={(event) => setAvailableWidth(event.nativeEvent.layout.width)}
+      >
+        <View
+          pointerEvents="none"
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: windowWidth,
+            opacity: 0,
+            alignItems: "flex-start",
+          }}
+        >
+          <View
+            className="flex-row items-center gap-x-1"
+            style={{ alignSelf: "flex-start" }}
+            onLayout={(event) =>
+              setMeasurement({
+                width: event.nativeEvent.layout.width,
+                textSizeKey: props.workRowSizing.textSizeKey,
+              })
+            }
+          >
+            <View className="min-h-11 min-w-0 flex-row items-center gap-2" style={{ minHeight }}>
+              {buttonContent(false, true)}
+            </View>
+            <ThreadTrajectorySegmentsMeasurement summary={props.entry.trajectory} />
+          </View>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: props.entry.expanded }}
+          accessibilityLabel={props.entry.label}
+          onPress={() => props.onToggleTurnFold(props.entry.runId)}
+          hitSlop={4}
+          className="min-h-11 min-w-0 flex-row items-center gap-2"
+          style={{ minHeight }}
+        >
+          {buttonContent(compact, false)}
+        </Pressable>
+        <ThreadTrajectorySegments summary={props.entry.trajectory} compact={compact} />
+      </View>
+      {props.entry.checkpointSummary ? (
+        <TurnDiffStat
+          checkpoint={props.entry.checkpointSummary}
+          onOpenTurnDiff={props.onOpenTurnDiff}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedRow; index: number },
   props: Pick<
@@ -1309,45 +1417,14 @@ function renderFeedEntry(
   }
 
   if (entry.type === "run-fold") {
-    const compact = props.contentWidth < 544;
-    const compactLabel = compact ? splitCompactLabel(entry.label) : null;
     return (
-      <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
-        <View className="min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ expanded: entry.expanded }}
-            accessibilityLabel={entry.label}
-            onPress={() => props.onToggleTurnFold(entry.runId)}
-            hitSlop={4}
-            className="min-h-11 min-w-0 flex-row items-center gap-2"
-            style={{
-              minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight),
-            }}
-          >
-            <Text
-              key={props.workRowSizing.textSizeKey}
-              numberOfLines={1}
-              className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
-            >
-              {compactLabel?.value ?? entry.label}
-            </Text>
-            <ThreadDisclosureChevron
-              expanded={entry.expanded}
-              collapsedDirection="right"
-              size={15}
-              tintColor={iconSubtleColor}
-            />
-          </Pressable>
-          <ThreadTrajectorySegments summary={entry.trajectory} compact={compact} />
-        </View>
-        {entry.checkpointSummary ? (
-          <TurnDiffStat
-            checkpoint={entry.checkpointSummary}
-            onOpenTurnDiff={props.onOpenTurnDiff}
-          />
-        ) : null}
-      </View>
+      <ThreadRunFoldRow
+        entry={entry}
+        iconSubtleColor={props.iconSubtleColor}
+        workRowSizing={props.workRowSizing}
+        onToggleTurnFold={props.onToggleTurnFold}
+        onOpenTurnDiff={props.onOpenTurnDiff}
+      />
     );
   }
 

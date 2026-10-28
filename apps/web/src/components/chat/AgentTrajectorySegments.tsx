@@ -5,7 +5,30 @@ import {
 
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 
-export function AgentTrajectorySegments({ summary }: { summary: AgentTrajectorySummary }) {
+export function AgentTrajectorySegmentsMeasurement({
+  summary,
+}: {
+  summary: AgentTrajectorySummary;
+}) {
+  return summary.map((segment) => (
+    <span key={segment.kind} className="inline-flex items-center gap-1">
+      <span aria-hidden="true" className="text-muted-foreground/60">
+        ·
+      </span>
+      <span className="px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+        {segment.label}
+      </span>
+    </span>
+  ));
+}
+
+export function AgentTrajectorySegments({
+  summary,
+  compact,
+}: {
+  summary: AgentTrajectorySummary;
+  compact: boolean;
+}) {
   return summary.map((segment) => {
     const labelParts = splitCompactLabel(segment.label);
     return (
@@ -27,14 +50,7 @@ export function AgentTrajectorySegments({ summary }: { summary: AgentTrajectoryS
               />
             }
           >
-            {labelParts ? (
-              <>
-                <span className="hidden @[34rem]/turn-fold:inline">{labelParts.prefix}</span>
-                {labelParts.value}
-              </>
-            ) : (
-              segment.label
-            )}
+            {labelParts && compact ? labelParts.value : segment.label}
           </PopoverTrigger>
           <PopoverPopup side="top" align="start" width="sm" padding="compact" touchBackdrop>
             <PopoverTitle>{segment.title}</PopoverTitle>

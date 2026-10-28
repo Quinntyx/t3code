@@ -76,7 +76,10 @@ import {
 import { type ThreadFindMatch } from "./threadFind";
 import { useThreadFindNavigation } from "./useThreadFindNavigation";
 import { Tooltip, TooltipTrigger, TooltipPopup, TooltipScrollDismissArea } from "../ui/tooltip";
-import { AgentTrajectorySegments } from "./AgentTrajectorySegments";
+import {
+  AgentTrajectorySegments,
+  AgentTrajectorySegmentsMeasurement,
+} from "./AgentTrajectorySegments";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -1552,13 +1555,64 @@ function ContextCompactionTimelineRow({
   );
 }
 
+function TurnFoldButtonContent({
+  row,
+  compact,
+}: {
+  row: Extract<TimelineRow, { kind: "turn-fold" }>;
+  compact: boolean;
+}) {
+  const labelParts = splitCompactLabel(row.label);
+  return (
+    <>
+      <span>{labelParts && compact ? labelParts.value : row.label}</span>
+      <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
+    </>
+  );
+}
+
+function useFittedInlineContent() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [fits, setFits] = useState(false);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const measure = () => setFits(content.scrollWidth <= container.clientWidth);
+    measure();
+    return observeResize([container, content], measure);
+  }, []);
+
+  return { containerRef, contentRef, fits };
+}
+
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
-  const labelParts = splitCompactLabel(row.label);
+  const { containerRef, contentRef, fits } = useFittedInlineContent();
+  const compact = !fits;
 
   return (
-    <div className="group/timeline-row @container/turn-fold relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5">
+    <div className="group/timeline-row relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
+      <div
+        ref={containerRef}
+        className="relative flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5"
+      >
+        <span
+          aria-hidden="true"
+          className="pointer-events-none invisible absolute left-0 top-0 h-0 w-0 overflow-hidden"
+        >
+          <span
+            ref={contentRef}
+            className="inline-flex w-max items-center gap-x-1 whitespace-nowrap text-sm leading-relaxed text-muted-foreground tabular-nums"
+          >
+            <span className="inline-flex items-center gap-1 px-1">
+              <TurnFoldButtonContent row={row} compact={false} />
+            </span>
+            <AgentTrajectorySegmentsMeasurement summary={row.trajectory} />
+          </span>
+        </span>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -1572,24 +1626,14 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
               />
             }
           >
-            <span>
-              {labelParts ? (
-                <>
-                  <span className="hidden @[34rem]/turn-fold:inline">{labelParts.prefix}</span>
-                  {labelParts.value}
-                </>
-              ) : (
-                row.label
-              )}
-            </span>
-            <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
+            <TurnFoldButtonContent row={row} compact={compact} />
           </TooltipTrigger>
           <TooltipPopup>
             Elapsed time for this response, including thinking and tool calls. Click to{" "}
             {row.expanded ? "hide" : "show"} the activity.
           </TooltipPopup>
         </Tooltip>
-        <AgentTrajectorySegments summary={row.trajectory} />
+        <AgentTrajectorySegments summary={row.trajectory} compact={compact} />
       </div>
       <TimelineRowTimestamp
         createdAt={row.createdAt}

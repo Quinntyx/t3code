@@ -7,6 +7,25 @@ import {
 import { AppText as Text } from "../../components/ui/AppText";
 import { alert } from "../../components/ui/Dialog";
 
+export function ThreadTrajectorySegmentsMeasurement({
+  summary,
+}: {
+  readonly summary: AgentTrajectorySummary;
+}) {
+  return summary.map((segment) => (
+    <View key={segment.kind} className="flex-row items-center gap-x-1">
+      <Text accessible={false} className="text-sm text-foreground-muted">
+        ·
+      </Text>
+      <View className="min-h-11 justify-center px-1">
+        <Text className="font-t3-medium text-sm tabular-nums text-foreground-muted">
+          {segment.label}
+        </Text>
+      </View>
+    </View>
+  ));
+}
+
 export function ThreadTrajectorySegments({
   summary,
   compact,
