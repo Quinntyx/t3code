@@ -72,6 +72,7 @@ import {
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS } from "./mcpExtensionSource.ts";
+import { piFailureClassification } from "./usageLimits.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -1758,9 +1759,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (recordString(message, "role") !== "assistant") return;
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
+              const errorMessage =
+                recordString(message, "errorMessage") ?? "Pi reported a model error.";
               turn.failure = makeProviderFailure({
-                message: recordString(message, "errorMessage") ?? "Pi reported a model error.",
-                class: "provider_error",
+                message: errorMessage,
+                ...piFailureClassification(errorMessage, yield* DateTime.now),
               });
             }
             return;
@@ -1886,9 +1889,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               turn.failure = null;
               return;
             }
+            const finalError = recordString(event, "finalError") ?? "Pi auto-retry failed.";
             const failure = makeProviderFailure({
-              message: recordString(event, "finalError") ?? "Pi auto-retry failed.",
-              class: "provider_error",
+              message: finalError,
+              ...piFailureClassification(finalError, emittedAt),
               retryable: false,
             });
             const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
@@ -2019,9 +2023,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   ? turn
                   : null;
             if (failedTurn !== null) {
+              const error = recordString(event, "error") ?? "Pi rejected the prompt.";
               const failure = makeProviderFailure({
-                message: recordString(event, "error") ?? "Pi rejected the prompt.",
-                class: "provider_error",
+                message: error,
+                ...piFailureClassification(error, yield* DateTime.now),
               });
               if (failedTurn.adoptedWake && command === "prompt") {
                 failedTurn.rejectedPromptFailure = failure;
