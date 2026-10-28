@@ -8,6 +8,7 @@ interface PanEvent {
 }
 interface PanHandlers {
   enabled?: boolean;
+  handlerTag?: number;
   onStart?: () => void;
   onUpdate?: (event: PanEvent) => void;
   onEnd?: (event: PanEvent) => void;
@@ -17,6 +18,7 @@ interface PanHandlers {
 const harness = vi.hoisted(() => ({
   timingTargets: [] as number[],
   pans: [] as PanHandlers[],
+  nextPanTag: 1000,
   split: false,
   keyboard: false,
   dismissKeyboard: vi.fn(() => Promise.resolve()),
@@ -69,9 +71,11 @@ vi.mock("react-native-reanimated", async () => {
 
 vi.mock("react-native-gesture-handler", () => {
   const pan = () => {
-    const handlers: PanHandlers = {};
+    const handlerTag = harness.nextPanTag++;
+    const handlers: PanHandlers = { handlerTag };
     harness.pans.push(handlers);
     const builder = {
+      handlerTag,
       enabled: (enabled: boolean) => {
         handlers.enabled = enabled;
         return builder;
@@ -127,6 +131,7 @@ import {
   ThreadListDrawerGestureWrapper,
   useThreadListDrawer,
   useThreadDetailsDrawer,
+  useBlockingGestureTags,
   threadListDrawerWidth,
   type ThreadListDrawerContextValue,
 } from "./thread-list-drawer";
@@ -137,19 +142,22 @@ function Capture({
   readonly onChange: (drawers: {
     left: ThreadListDrawerContextValue;
     right: ThreadListDrawerContextValue;
+    blockingTags: ReadonlyArray<number>;
   }) => void;
 }) {
   const left = useThreadListDrawer();
   const right = useThreadDetailsDrawer();
+  const blockingTags = useBlockingGestureTags();
   useEffect(() => {
-    onChange({ left, right });
-  }, [left, right, onChange]);
+    onChange({ left, right, blockingTags });
+  }, [left, right, blockingTags, onChange]);
   return null;
 }
 
 function setup() {
   harness.timingTargets = [];
   harness.pans = [];
+  harness.nextPanTag = 1000;
   harness.split = false;
   harness.keyboard = false;
   harness.back = undefined;
@@ -160,6 +168,7 @@ function setup() {
   let latest: {
     left: ThreadListDrawerContextValue;
     right: ThreadListDrawerContextValue;
+    blockingTags: ReadonlyArray<number>;
   };
   const render = () =>
     root.render(
@@ -199,6 +208,7 @@ function setup() {
     thread: () => find("Thread"),
     drawer: () => latest.right,
     drawers: () => latest,
+    blockingTags: () => latest.blockingTags,
     render,
     [Symbol.dispose]: () => {
       act(() => root.unmount());
@@ -272,6 +282,22 @@ describe("thread list drawer", () => {
     harness.keyboard = true;
     act(screen.render);
     expect(harness.pans.at(-1)?.enabled).toBe(false);
+  });
+
+  it("hands markdown the drawer pans' tags so over-wide blocks can win their drags", () => {
+    using screen = setup();
+    // Mount layout effects register the pans; each mount has its own churned set.
+    const recorded = () => {
+      const tags = screen.blockingTags();
+      expect(tags).toHaveLength(3);
+      expect(new Set(tags).size).toBe(3);
+      expect(tags.every((tag) => tag > 0)).toBe(true);
+    };
+    act(screen.render);
+    recorded();
+    // The freshly churned pans re-register; the reader still sees exactly the pans.
+    act(screen.render);
+    recorded();
   });
 
   it("keeps the drawer within the pane and the compact viewport", () => {

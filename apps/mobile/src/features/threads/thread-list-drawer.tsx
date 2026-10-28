@@ -1,8 +1,10 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -49,6 +51,8 @@ function useDrawers() {
   const [active, setActive] = useState<ThreadDrawerSide | null>(null);
   const activeRef = useRef<ThreadDrawerSide | null>(null);
   const [detailsMounted, setDetailsMounted] = useState(false);
+  const panTagsRef = useRef<Record<string, ReadonlyArray<number>>>({});
+  const blockingTagsRef = useRef<ReadonlyArray<number>>(EMPTY_TAGS);
   const left = useSharedValue(0);
   const right = useSharedValue(0);
   const animateTo = (next: ThreadDrawerSide | null) => {
@@ -67,13 +71,56 @@ function useDrawers() {
   };
   // A row tap can close before its pan finalizes with an older render's state.
   const settleProgress = () => animateTo(activeRef.current);
-  return { active, left, right, detailsMounted, setOpen, prepareOpen, settleProgress };
+  // Markdown blocks join these pan tags so over-wide tables and code blocks can
+  // win their horizontal drags natively (see the fork's blockingGestureTags).
+  // Tags live in refs: the pan memo rebuilds each render (effect events are not
+  // stable identities) and re-rendering for each churn would loop.
+  const registerPanTags = useCallback((key: string, tags: ReadonlyArray<number>) => {
+    const recorded = panTagsRef.current[key];
+    if (
+      recorded !== undefined &&
+      recorded.length === tags.length &&
+      recorded.every((tag, index) => tag === tags[index])
+    ) {
+      return;
+    }
+    panTagsRef.current = { ...panTagsRef.current, [key]: tags };
+    const merged: number[] = [];
+    for (const recordedList of Object.values(panTagsRef.current)) {
+      for (const tag of recordedList) {
+        if (tag > 0 && !merged.includes(tag)) merged.push(tag);
+      }
+    }
+    blockingTagsRef.current = merged;
+  }, []);
+  return {
+    active,
+    left,
+    right,
+    detailsMounted,
+    blockingTagsRef,
+    registerPanTags,
+    setOpen,
+    prepareOpen,
+    settleProgress,
+  };
 }
 
 export function ThreadListDrawerProvider({ children }: { readonly children: ReactNode }) {
   const drawers = useDrawers();
   return <ThreadDrawersContext value={drawers}>{children}</ThreadDrawersContext>;
 }
+
+/**
+ * Gesture-handler tags of the drawer pans. Markdown blocks pass them to the
+ * renderer as `blockingGestureTags` so over-wide tables and code blocks win
+ * their own horizontal drags.
+ */
+export function useBlockingGestureTags(): ReadonlyArray<number> {
+  return useContext(ThreadDrawersContext)?.blockingTagsRef.current ?? EMPTY_TAGS;
+}
+
+const EMPTY_TAGS: ReadonlyArray<number> = [];
 
 function useThreadDrawer(side: ThreadDrawerSide) {
   const drawers = useContext(ThreadDrawersContext);
@@ -92,12 +139,24 @@ function useThreadDrawer(side: ThreadDrawerSide) {
     open: drawers.active === side,
     progress: drawers[side],
     mounted: side === "left" || drawers.detailsMounted,
+    registerPanTags: drawers.registerPanTags,
     setOpen,
     prepareOpen,
     openDrawer,
     closeDrawer,
     settleProgress: drawers.settleProgress,
   };
+}
+
+/* Pans attach their native handlers in the detector's layout effect, which runs
+ * before any parent effect here, so the tag is final by the time React runs this.
+ */
+function useRegisteredPanTags(key: string, gesture: { readonly handlerTag: number }) {
+  const { registerPanTags } = useThreadDrawer("left");
+  // oxlint-disable-next-line t3code/react-effect-budget -- detector mount order is the only source for the native handler tag
+  useLayoutEffect(() => {
+    if (gesture.handlerTag > 0) registerPanTags(key, [gesture.handlerTag]);
+  }, [gesture.handlerTag, key, registerPanTags]);
 }
 
 export type ThreadListDrawerContextValue = ReturnType<typeof useThreadDrawer>;
@@ -149,7 +208,6 @@ function useDrawerGesture(
         "worklet";
         if (!success) runOnJS(settleOpen)();
       });
-    if (!open) gesture.failOffsetX(-direction * DRAWER_ACTIVATION_DISTANCE);
     return gesture;
     // oxlint-disable-next-line react/memo-dependencies -- runOnJS needs the effect events in its dependency set.
   }, [enabled, width, open, side, progress, commitOpen, prepareOpen, settleOpen]);
@@ -182,6 +240,7 @@ export function ThreadListDrawerHost({
   });
   useHardwareBack(open, handleBack);
   const closeGesture = useDrawerGesture(side, drawer, open, width, true);
+  useRegisteredPanTags(`close-${side}`, closeGesture);
   const panelStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: (side === "left" ? -1 : 1) * width * (1 - progress.value) }],
   }));
@@ -244,6 +303,8 @@ export function ThreadListDrawerGestureWrapper({
     false,
   );
   const right = useDrawerGesture("right", details, enabled && detailsEnabled, width, false);
+  useRegisteredPanTags("open-left", left);
+  useRegisteredPanTags("open-right", right);
   // oxlint-disable-next-line react/capitalized-calls -- Gesture.Race composes native gestures, not React components.
   const gesture = useMemo(() => Gesture.Race(left, right), [left, right]);
   return (

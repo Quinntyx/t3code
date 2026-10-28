@@ -155,7 +155,7 @@ function enrichedStyle(
 }
 
 export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
-  const { renderImage, resolveImageSource, fileEmbedLabel } = props;
+  const { renderImage, resolveImageSource, fileEmbedLabel, blockingGestureTags } = props;
   const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
   const { markdown, fileHrefs } = useMemo(() => {
     if (!fileEmbedLabel) {
@@ -318,6 +318,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         <EnrichedMarkdownText
           markdown={markdown}
           markdownStyle={markdownStyle}
+          blockingGestureTags={blockingGestureTags}
           // Android trims the last block's bottom margin during measurement
           // (removeTrailingMargin); ask for it back so a message ending in a
           // paragraph doesn't glue to the meta row below the text view.
