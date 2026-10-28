@@ -74,7 +74,8 @@ import {
 } from "./MessagesTimeline.logic";
 import { type ThreadFindMatch } from "./threadFind";
 import { useThreadFindNavigation } from "./useThreadFindNavigation";
-import { TooltipScrollDismissArea } from "../ui/tooltip";
+import { Tooltip, TooltipTrigger, TooltipPopup, TooltipScrollDismissArea } from "../ui/tooltip";
+import { AgentTrajectorySegments } from "./AgentTrajectorySegments";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -1554,17 +1555,30 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
   const ctx = use(TimelineRowCtx);
 
   return (
-    <div className="group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
-      <button
-        type="button"
-        aria-expanded={row.expanded}
-        data-scroll-anchor-ignore
-        onClick={() => ctx.onToggleTurnFold(row.runId)}
-        className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-      >
-        <span>{row.label}</span>
-        <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
-      </button>
+    <div className="group/timeline-row relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-expanded={row.expanded}
+                data-scroll-anchor-ignore
+                onClick={() => ctx.onToggleTurnFold(row.runId)}
+                className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+              />
+            }
+          >
+            <span>{row.label}</span>
+            <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
+          </TooltipTrigger>
+          <TooltipPopup>
+            Elapsed time for this response, including thinking and tool calls. Click to{" "}
+            {row.expanded ? "hide" : "show"} the activity.
+          </TooltipPopup>
+        </Tooltip>
+        <AgentTrajectorySegments summary={row.trajectory} />
+      </div>
       <TimelineRowTimestamp
         createdAt={row.createdAt}
         timestampFormat={ctx.timestampFormat}

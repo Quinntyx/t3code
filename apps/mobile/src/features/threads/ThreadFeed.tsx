@@ -164,6 +164,7 @@ import { VideoPreviewModal, type VideoPreviewSource } from "../../components/Vid
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
+import { ThreadTrajectorySegments } from "./ThreadTrajectorySegments";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
 import { Menu } from "../../components/ui/Menu";
@@ -1309,30 +1310,33 @@ function renderFeedEntry(
   if (entry.type === "run-fold") {
     return (
       <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: entry.expanded }}
-          onPress={() => props.onToggleTurnFold(entry.runId)}
-          hitSlop={4}
-          className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-          style={{
-            minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight),
-          }}
-        >
-          <Text
-            key={props.workRowSizing.textSizeKey}
-            numberOfLines={1}
-            className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
+        <View className="min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1">
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: entry.expanded }}
+            onPress={() => props.onToggleTurnFold(entry.runId)}
+            hitSlop={4}
+            className="min-h-11 min-w-0 flex-row items-center gap-2"
+            style={{
+              minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight),
+            }}
           >
-            {entry.label}
-          </Text>
-          <ThreadDisclosureChevron
-            expanded={entry.expanded}
-            collapsedDirection="right"
-            size={15}
-            tintColor={iconSubtleColor}
-          />
-        </Pressable>
+            <Text
+              key={props.workRowSizing.textSizeKey}
+              numberOfLines={1}
+              className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
+            >
+              {entry.label}
+            </Text>
+            <ThreadDisclosureChevron
+              expanded={entry.expanded}
+              collapsedDirection="right"
+              size={15}
+              tintColor={iconSubtleColor}
+            />
+          </Pressable>
+          <ThreadTrajectorySegments summary={entry.trajectory} />
+        </View>
         {entry.checkpointSummary ? (
           <TurnDiffStat
             checkpoint={entry.checkpointSummary}

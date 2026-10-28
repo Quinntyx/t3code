@@ -1849,7 +1849,11 @@ describe("deriveMessagesTimelineRows", () => {
     const items = (resume: ResumeState) =>
       [
         prompt("launch", 1, 0),
-        { ...base("launch-ls", 2, 4), type: "command_execution" as const, input: "ls src" },
+        {
+          ...base("launch-ls", 2, 4),
+          type: "command_execution" as const,
+          input: "cat /skills/git/SKILL.md",
+        },
         {
           ...base("launch-thinking", 3, 8),
           type: "reasoning" as const,
@@ -1928,6 +1932,16 @@ describe("deriveMessagesTimelineRows", () => {
 
     const launchFold = settled.find((row) => row.kind === "turn-fold");
     if (launchFold?.kind !== "turn-fold") throw new Error("Expected the launch fold");
+    expect(launchFold.trajectory).toEqual([
+      { kind: "skills", label: "Used 1 skill", title: "Skills used", details: ["git"] },
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls", details: ["Shell · 1 call"] },
+    ]);
+    const resumeFold = settled.find(
+      (row) => row.kind === "turn-fold" && row.runId !== launchFold.runId,
+    );
+    expect(resumeFold?.kind === "turn-fold" ? resumeFold.trajectory : null).toEqual([
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls", details: ["Shell · 1 call"] },
+    ]);
     const expanded = rows({
       resume: "completed",
       working: false,
