@@ -2,13 +2,25 @@ import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { claudeSkillInvocation, collectToolFilePaths } from "@t3tools/shared/toolActivity";
 
 export interface AgentTrajectorySegment {
-  readonly kind: "skills" | "tools" | "files";
+  readonly kind: "skills" | "tools";
   readonly label: string;
   readonly title: string;
   readonly details: ReadonlyArray<string>;
 }
 
 export type AgentTrajectorySummary = ReadonlyArray<AgentTrajectorySegment>;
+
+const COMPACT_LABEL_PREFIXES = ["Used ", "Called ", "Worked for ", "Continued for "] as const;
+
+export function splitCompactLabel(
+  label: string,
+): { readonly prefix: string; readonly value: string } | null {
+  for (const prefix of COMPACT_LABEL_PREFIXES) {
+    if (label.startsWith(prefix) && label.length > prefix.length)
+      return { prefix, value: label.slice(prefix.length) };
+  }
+  return null;
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -44,7 +56,6 @@ export function summarizeAgentTrajectory(
   const seen = new Set<string>();
   const tools = new Map<string, number>();
   const skills = new Set<string>();
-  const files = new Set<string>();
   for (const item of items) {
     if (seen.has(item.id)) continue;
     seen.add(item.id);
@@ -62,15 +73,6 @@ export function summarizeAgentTrajectory(
         if (name === "read" || name === "readfile" || name === "readtextfile") {
           for (const path of collectToolFilePaths({ input: item.input }))
             addSkillPath(path, skills);
-        }
-        if (
-          name === "edit" ||
-          name === "editfile" ||
-          name === "write" ||
-          name === "writefile" ||
-          name === "writetextfile"
-        ) {
-          for (const path of collectToolFilePaths({ input: item.input })) files.add(path);
         }
         if (
           name === "bash" ||
@@ -92,12 +94,6 @@ export function summarizeAgentTrajectory(
         break;
       case "file_change":
         toolName = "File edit";
-        if (item.status === "completed") {
-          for (const path of item.changes?.length
-            ? item.changes.map((change) => change.path)
-            : [item.fileName])
-            files.add(path);
-        }
         break;
       case "file_search":
         toolName = "File search";
@@ -129,13 +125,6 @@ export function summarizeAgentTrajectory(
         .map(([name, n]) => `${name} · ${n} call${n === 1 ? "" : "s"}`),
     });
   }
-  if (files.size > 0)
-    summary.push({
-      kind: "files",
-      label: `Changed ${files.size} file${files.size === 1 ? "" : "s"}`,
-      title: "Files changed",
-      details: [...files].sort(),
-    });
   return summary;
 }
 

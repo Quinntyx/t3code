@@ -17,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
+import { splitCompactLabel } from "@t3tools/client-runtime/work-log/trajectory-summary";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -1553,9 +1554,10 @@ function ContextCompactionTimelineRow({
 
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
+  const labelParts = splitCompactLabel(row.label);
 
   return (
-    <div className="group/timeline-row relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
+    <div className="group/timeline-row @container/turn-fold relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5">
         <Tooltip>
           <TooltipTrigger
@@ -1563,13 +1565,23 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
               <button
                 type="button"
                 aria-expanded={row.expanded}
+                aria-label={row.label}
                 data-scroll-anchor-ignore
                 onClick={() => ctx.onToggleTurnFold(row.runId)}
                 className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
               />
             }
           >
-            <span>{row.label}</span>
+            <span>
+              {labelParts ? (
+                <>
+                  <span className="hidden @[34rem]/turn-fold:inline">{labelParts.prefix}</span>
+                  {labelParts.value}
+                </>
+              ) : (
+                row.label
+              )}
+            </span>
             <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
           </TooltipTrigger>
           <TooltipPopup>

@@ -42,6 +42,7 @@ import {
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { splitCompactLabel } from "@t3tools/client-runtime/work-log/trajectory-summary";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   AuthFilesystemReadScope,
@@ -1308,12 +1309,15 @@ function renderFeedEntry(
   }
 
   if (entry.type === "run-fold") {
+    const compact = props.contentWidth < 544;
+    const compactLabel = compact ? splitCompactLabel(entry.label) : null;
     return (
       <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
         <View className="min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1">
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ expanded: entry.expanded }}
+            accessibilityLabel={entry.label}
             onPress={() => props.onToggleTurnFold(entry.runId)}
             hitSlop={4}
             className="min-h-11 min-w-0 flex-row items-center gap-2"
@@ -1326,7 +1330,7 @@ function renderFeedEntry(
               numberOfLines={1}
               className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
             >
-              {entry.label}
+              {compactLabel?.value ?? entry.label}
             </Text>
             <ThreadDisclosureChevron
               expanded={entry.expanded}
@@ -1335,7 +1339,7 @@ function renderFeedEntry(
               tintColor={iconSubtleColor}
             />
           </Pressable>
-          <ThreadTrajectorySegments summary={entry.trajectory} />
+          <ThreadTrajectorySegments summary={entry.trajectory} compact={compact} />
         </View>
         {entry.checkpointSummary ? (
           <TurnDiffStat
@@ -1850,14 +1854,20 @@ function TurnDiffStat(props: {
   const { files } = props.checkpoint;
   const additions = files.reduce((total, file) => total + file.additions, 0);
   const deletions = files.reduce((total, file) => total + file.deletions, 0);
-  const fileCountLabel = `${files.length} file${files.length === 1 ? "" : "s"} changed`;
+  const fileCount = files.length;
+  const fileCountLabel = `${fileCount} file${fileCount === 1 ? "" : "s"}`;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Review ${fileCountLabel}, ${additions} additions, ${deletions} deletions`}
+      accessibilityLabel={`Review ${fileCountLabel} changed, ${additions} additions, ${deletions} deletions`}
       onPress={() => props.onOpenTurnDiff(props.checkpoint)}
       className="min-h-11 shrink-0 flex-row items-center gap-2 px-2 active:bg-subtle"
     >
+      {fileCount > 0 ? (
+        <Text className="font-t3-medium text-xs tabular-nums text-foreground-muted">
+          {fileCountLabel} ·
+        </Text>
+      ) : null}
       <Text className="font-t3-medium text-xs tabular-nums text-adaptive-emerald-700-300">
         +{formatDiffCount(additions)}
       </Text>

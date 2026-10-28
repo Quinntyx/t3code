@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { summarizeAgentTrajectory, trajectorySummariesEqual } from "./trajectorySummary.js";
+import {
+  splitCompactLabel,
+  summarizeAgentTrajectory,
+  trajectorySummariesEqual,
+} from "./trajectorySummary.js";
 
 const base = {
   threadId: ThreadId.make("thread"),
@@ -111,43 +115,15 @@ describe("summarizeAgentTrajectory", () => {
     ]);
   });
 
-  it("lists unique successfully edited files, including multi-file patches", () => {
-    const patch: OrchestrationV2TurnItem = {
-      ...base,
-      id: TurnItemId.make("patch"),
-      type: "file_change",
-      fileName: "a.ts",
-      changes: [
-        { path: "a.ts", operation: "update" },
-        { path: "b.ts", operation: "add" },
-      ],
-    };
-    const summary = summarizeAgentTrajectory([
-      edit("first", "a.ts"),
-      patch,
-      { ...edit("failed", "not-edited.ts"), status: "failed" },
+  it("counts file changes as tool calls without a files cluster", () => {
+    expect(summarizeAgentTrajectory([edit("edit", "a.ts")])).toEqual([
+      {
+        kind: "tools",
+        label: "Called 1 tool",
+        title: "Tool calls",
+        details: ["File edit · 1 call"],
+      },
     ]);
-    expect(summary.at(-1)).toEqual({
-      kind: "files",
-      label: "Changed 2 files",
-      title: "Files changed",
-      details: ["a.ts", "b.ts"],
-    });
-  });
-
-  it("includes dynamic edit tools without treating read or search paths as edits", () => {
-    expect(
-      summarizeAgentTrajectory([
-        tool("edit", "functions.edit", { path: "a.ts" }),
-        tool("write", "Write", { file_path: "b.ts" }),
-        tool("read", "read", { path: "c.ts" }),
-      ]).at(-1),
-    ).toEqual({
-      kind: "files",
-      label: "Changed 2 files",
-      title: "Files changed",
-      details: ["a.ts", "b.ts"],
-    });
   });
 
   it("omits empty clusters and compares detail changes for cached timeline rows", () => {
@@ -165,5 +141,18 @@ describe("summarizeAgentTrajectory", () => {
         summarizeAgentTrajectory([tool("3", "read", { path: "/skills/design/SKILL.md" })]),
       ),
     ).toBe(false);
+  });
+});
+
+describe("splitCompactLabel", () => {
+  it("removes only the leading words from compactable labels", () => {
+    expect(splitCompactLabel("Worked for 34s")).toEqual({ prefix: "Worked for ", value: "34s" });
+    expect(splitCompactLabel("Continued for 2m")).toEqual({
+      prefix: "Continued for ",
+      value: "2m",
+    });
+    expect(splitCompactLabel("Used 2 skills")).toEqual({ prefix: "Used ", value: "2 skills" });
+    expect(splitCompactLabel("Called 3 tools")).toEqual({ prefix: "Called ", value: "3 tools" });
+    expect(splitCompactLabel("Worked")).toBeNull();
   });
 });
