@@ -304,7 +304,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   };
   const runProjectScriptStable = useStableCallback(runProjectScript);
 
-  const runShellCommand = (command: string) => {
+  const runShellCommand = (command: string, options?: { preferNewTerminal?: boolean }) => {
     void runProjectScript(
       {
         id: "chat-code-block",
@@ -313,7 +313,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
         icon: "play",
         runOnWorktreeCreate: false,
       },
-      { rememberAsLastInvoked: false, shellHistory: "preserve" },
+      { ...options, rememberAsLastInvoked: false, shellHistory: "preserve" },
     );
   };
   const runShellCommandStable = useStableCallback(runShellCommand);

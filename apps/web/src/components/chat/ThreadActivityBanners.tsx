@@ -1,18 +1,30 @@
 import type {
+  EnvironmentId,
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
   ThreadId,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
-  presentPendingBackgroundWork,
+  deriveBackgroundWorkDetails,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
-import { GitBranchIcon, MessageCircleIcon, ShieldQuestionIcon, TargetIcon } from "lucide-react";
-import { Fragment } from "react";
-import { cn } from "~/lib/utils";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import {
+  CircleDashedIcon,
+  GitBranchIcon,
+  MessageCircleIcon,
+  ShieldQuestionIcon,
+  TargetIcon,
+  TerminalIcon,
+} from "lucide-react";
+import { Fragment, useState, type ReactNode } from "react";
+import { tickTextContent } from "~/lib/tickTextContent";
 import { Button, InlineButton } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
@@ -95,63 +107,139 @@ export function goalNowItem(input: {
   };
 }
 
+function BackgroundWorkPopover({
+  title,
+  ...props
+}: Parameters<typeof BackgroundWorkDetails>[0] & { readonly title: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={<InlineButton tone="muted" />}>{title}</PopoverTrigger>
+      <PopoverPopup
+        side="top"
+        align="start"
+        aria-label="Background work details"
+        className="w-[min(36rem,calc(100vw-2rem))]"
+        touchBackdrop
+      >
+        {open ? (
+          <BackgroundWorkDetails
+            {...props}
+            onOpenThread={(threadId) => {
+              setOpen(false);
+              props.onOpenThread(threadId);
+            }}
+            onRunInTerminal={
+              props.onRunInTerminal
+                ? (command) => {
+                    setOpen(false);
+                    props.onRunInTerminal?.(command);
+                  }
+                : undefined
+            }
+          />
+        ) : null}
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
 /** Background commands and subagents, for the end of the timeline. */
 export function backgroundWorkNowItem(input: {
+  readonly environmentId: EnvironmentId;
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+  readonly onRunInTerminal?: ((command: string) => void) | undefined;
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly turnItems: ThreadStructure["turnItems"];
   readonly stopDisabled: boolean;
   readonly stopping: boolean;
   readonly onStop: () => Promise<void>;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }): ThreadNowItem | null {
   const { onOpenThread } = input;
-  const presentation = presentPendingBackgroundWork(input.tasks);
-  if (presentation === null) return null;
+  const backgroundWork = deriveBackgroundWorkDetails(input);
+  if (backgroundWork === null) return null;
+  const { presentation, details: rows } = backgroundWork;
+  const [only] = rows.length === 1 ? rows : [];
+  const newest = rows
+    .filter((row) => row.activity)
+    .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
+  const label = (row: (typeof rows)[number]) =>
+    row.isRawCommand ? <span className="font-mono">{row.item.label}</span> : row.item.label;
+  const showsRunningState =
+    only !== undefined && only.item.named && only.activity === null && !presentation.waiting;
+  const onlyThreadId = only?.childThreadId;
+  const startedAtMs = only?.startedAtMs ?? null;
   return {
     id: `background-work:${input.threadId}`,
-    icon: (
-      <span
-        className={cn(
-          "size-1.5 rounded-full",
-          presentation.waiting ? "bg-foreground" : "bg-muted-foreground",
-        )}
-        aria-hidden="true"
+    icon: rows.every((row) => row.item.kind !== "subagent") ? (
+      <TerminalIcon />
+    ) : (
+      <CircleDashedIcon />
+    ),
+    titleProvidesDetails: true,
+    title: (
+      <BackgroundWorkPopover
+        environmentId={input.environmentId}
+        details={rows}
+        onOpenThread={onOpenThread}
+        onRunInTerminal={input.onRunInTerminal}
+        title={
+          only?.item.named === true ? (
+            <>
+              {presentation.waiting ? "Waiting on " : null}
+              <span className="text-foreground/80">{label(only)}</span>
+            </>
+          ) : (
+            <span className="text-foreground/80">{presentation.title}</span>
+          )
+        }
       />
     ),
-    title: presentation.title,
-    description:
-      presentation.items.length === 1 && presentation.items[0]?.childThreadId === undefined
-        ? undefined
-        : presentation.items.map((item, index) => {
-            const childThreadId = item.childThreadId;
-            const separator = index < presentation.items.length - 1 ? "," : null;
-            return (
-              <Fragment key={item.taskId}>
-                {index > 0 ? " " : null}
-                {childThreadId === undefined ? (
-                  <>
-                    {item.label}
-                    {separator}
-                  </>
-                ) : (
-                  <span className="whitespace-nowrap">
-                    <InlineButton
-                      tone="muted"
-                      aria-label={`${presentation.items.length === 1 ? "Show" : "Open"} subagent ${item.label}`}
-                      onClick={() => onOpenThread(childThreadId)}
-                    >
-                      {presentation.items.length === 1 ? "Show" : item.label}
-                    </InlineButton>
-                    {separator}
-                  </span>
-                )}
-              </Fragment>
-            );
-          }),
+    description: only
+      ? only.activity
+      : newest
+        ? `${newest.item.label}: ${newest.activity}`
+        : rows.map((row, index) => (
+            <Fragment key={row.item.taskId}>
+              {index > 0 ? ", " : null}
+              {label(row)}
+            </Fragment>
+          )),
     actions: (
-      <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
-        {input.stopping ? "Stopping..." : "Stop"}
-      </InlineButton>
+      <>
+        {/* Outside the truncating title, so a long name cannot cut the state off. */}
+        {showsRunningState ? (
+          <span className="text-muted-foreground/60 light:text-muted-foreground/80">
+            running in background
+          </span>
+        ) : null}
+        {startedAtMs === null ? null : (
+          <>
+            <span
+              ref={tickTextContent(
+                (nowMs) => formatDuration(Math.max(1_000, nowMs - startedAtMs)),
+                true,
+              )}
+              className="tabular-nums"
+            />
+            <span aria-hidden>·</span>
+          </>
+        )}
+        {onlyThreadId === undefined ? null : (
+          <InlineButton tone="muted" onClick={() => onOpenThread(onlyThreadId)}>
+            Open
+          </InlineButton>
+        )}
+        <InlineButton
+          tone="muted"
+          disabled={input.stopDisabled}
+          onClick={() => void input.onStop()}
+        >
+          {input.stopping ? "Stopping..." : "Stop"}
+        </InlineButton>
+      </>
     ),
   };
 }

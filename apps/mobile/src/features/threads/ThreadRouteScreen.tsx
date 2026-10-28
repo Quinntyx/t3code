@@ -24,12 +24,7 @@ import {
   ThreadId,
   type ProjectScript,
 } from "@t3tools/contracts";
-import {
-  projectScriptCwd,
-  projectScriptRuntimeEnv,
-  projectScriptTerminalInput,
-  resolveProjectScripts,
-} from "@t3tools/shared/projectScripts";
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { Platform } from "react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -62,10 +57,7 @@ import {
   nextOpenTerminalId,
   resolveProjectScriptTerminalId,
 } from "../terminal/terminalMenu";
-import {
-  resolvePreferredThreadWorktreePath,
-  stagePendingTerminalLaunch,
-} from "../terminal/terminalLaunchContext";
+import { stageCommandTerminalLaunch } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { ThreadScreenBinding, ThreadScreenFallback, ThreadScreenHost } from "./ThreadScreenHost";
@@ -765,36 +757,22 @@ function ThreadRouteContent(
         (session) => session.status === "running" || session.status === "starting",
       ),
     });
-    const preferredWorktreePath = resolvePreferredThreadWorktreePath({
-      threadShellWorktreePath: selectedThread.worktreePath ?? null,
-      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
-    });
-    const cwd = projectScriptCwd({
-      project: { cwd: selectedThreadProject.workspaceRoot },
-      worktreePath: preferredWorktreePath,
-    });
-    const env = projectScriptRuntimeEnv({
-      project: { cwd: selectedThreadProject.workspaceRoot },
-      worktreePath: preferredWorktreePath,
-    });
-    stagePendingTerminalLaunch({
+    const launch = stageCommandTerminalLaunch({
       target: {
         environmentId: selectedThread.environmentId,
         threadId: selectedThread.id,
         terminalId: targetTerminalId,
       },
-      launch: {
-        cwd,
-        worktreePath: preferredWorktreePath,
-        env,
-        initialInput: projectScriptTerminalInput(script.command),
-      },
+      workspaceRoot: selectedThreadProject.workspaceRoot,
+      threadShellWorktreePath: selectedThread.worktreePath ?? null,
+      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
+      command: script.command,
     });
     terminalDebugLog("project-script:staged", {
       scriptId: script.id,
       terminalId: targetTerminalId,
-      cwd,
-      worktreePath: preferredWorktreePath,
+      cwd: launch.cwd,
+      worktreePath: launch.worktreePath,
     });
 
     void navigation.navigate("ThreadTerminal", {

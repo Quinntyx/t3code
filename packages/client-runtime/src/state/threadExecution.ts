@@ -17,10 +17,12 @@ import {
   type OrchestrationV2ThreadProjection,
   orchestrationV2RunWorkStartedAt,
   type ThreadId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  findPullRequestForWatchTask,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { getProviderOptionCurrentLabel, getProviderOptionStatedValue } from "@t3tools/shared/model";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
@@ -297,6 +299,8 @@ export interface PendingBackgroundWorkItem {
   readonly taskId: string;
   readonly kind: BackgroundWorkKind;
   readonly label: string;
+  /** False when the label is only the kind's noun, such as "command". */
+  readonly named: boolean;
   readonly childThreadId: ThreadId | undefined;
 }
 
@@ -323,13 +327,12 @@ export function presentPendingBackgroundWork(
         task.kind === "subagent" && description !== undefined
           ? formatSubagentDisplayTitle(description).trim()
           : description;
+      const named = label !== undefined && label.length > 0;
       return {
         taskId: task.taskId,
         kind: task.kind,
-        label:
-          label === undefined || label.length === 0
-            ? BACKGROUND_WORK_KINDS[task.kind].singular
-            : label,
+        label: named ? label : BACKGROUND_WORK_KINDS[task.kind].singular,
+        named,
         childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
       };
     })
@@ -341,14 +344,14 @@ export function presentPendingBackgroundWork(
   const [only] = items;
   if (items.length === 1 && only !== undefined) {
     const noun = BACKGROUND_WORK_KINDS[only.kind].singular;
-    const named = only.label !== noun;
+    const { named } = only;
     const title = waiting
       ? named
         ? `${only.kind === "monitor" ? "" : `Waiting on ${noun} `}${only.label}`
         : `Waiting on a ${noun}`
       : named
-        ? `Running: ${only.label}`
-        : `Running a ${noun}`;
+        ? `Running in background: ${only.label}`
+        : `A ${noun} running in background`;
     return { title, items, waiting };
   }
   const counts = new Map<BackgroundWorkKind, number>();
@@ -357,7 +360,75 @@ export function presentPendingBackgroundWork(
     const { singular, plural } = BACKGROUND_WORK_KINDS[kind];
     return `${count} ${count === 1 ? singular : plural}`;
   });
-  return { title: `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}`, items, waiting };
+  const groupsText = joinWithAnd(groups);
+  return {
+    title: waiting ? `Waiting on ${groupsText}` : `${groupsText} running in background`,
+    items,
+    waiting,
+  };
+}
+
+export function backgroundCommandOutputFile(output: string | undefined): string | null {
+  const path = output?.match(/Output is being written to: (\S+?)(?:\.(?=\s|$)|$)/u)?.[1];
+  return path || null;
+}
+
+export function followOutputFileCommand(path: string): string {
+  return `tail -n +1 -F '${path.replaceAll("'", "'\\''")}'`;
+}
+
+export interface BackgroundWorkDetail {
+  readonly item: PendingBackgroundWorkItem;
+  readonly awaited: boolean;
+  readonly turnItem: ThreadStructure["turnItems"][number] | undefined;
+  readonly command: string | null;
+  readonly isRawCommand: boolean;
+  readonly outputFile: string | null;
+  readonly startedAtMs: number | null;
+  readonly updatedAtMs: number;
+  readonly activity: string | null;
+  readonly childThreadId: ThreadId | undefined;
+  readonly pullRequest: ThreadPullRequestLink | undefined;
+}
+
+export function deriveBackgroundWorkDetails(input: {
+  readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly turnItems: ThreadStructure["turnItems"];
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+}): {
+  readonly presentation: PendingBackgroundWorkPresentation;
+  readonly details: ReadonlyArray<BackgroundWorkDetail>;
+} | null {
+  const presentation = presentPendingBackgroundWork(input.tasks);
+  if (presentation === null) return null;
+  const tasksById = new Map(input.tasks.map((task) => [task.taskId, task]));
+  const details = presentation.items.map((item): BackgroundWorkDetail => {
+    const task = tasksById.get(item.taskId);
+    const itemKey = task?.nativeItemId ?? item.taskId;
+    const turnItem = input.turnItems.findLast(
+      (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === itemKey,
+    );
+    const subagent = turnItem?.type === "subagent" ? turnItem : undefined;
+    const commandItem = turnItem?.type === "command_execution" ? turnItem : undefined;
+    const command = commandItem?.input.trim() || null;
+    return {
+      item,
+      awaited: task?.awaited === true,
+      turnItem,
+      command,
+      isRawCommand: command !== null && command === item.label,
+      outputFile: backgroundCommandOutputFile(commandItem?.output),
+      startedAtMs: turnItem?.startedAt ? DateTime.toEpochMillis(turnItem.startedAt) : null,
+      updatedAtMs:
+        turnItem !== undefined && "updatedAt" in turnItem
+          ? DateTime.toEpochMillis(turnItem.updatedAt)
+          : 0,
+      activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
+      childThreadId: item.childThreadId ?? subagent?.childThreadId ?? undefined,
+      pullRequest: findPullRequestForWatchTask(item.taskId, input.pullRequests),
+    };
+  });
+  return { presentation, details };
 }
 
 export interface ProviderGoalPresentation {

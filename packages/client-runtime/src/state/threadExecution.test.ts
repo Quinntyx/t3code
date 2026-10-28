@@ -12,6 +12,8 @@ import {
   ThreadId,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2RunStatus,
+  type OrchestrationV2TurnItem,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import {
@@ -22,6 +24,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
+  backgroundCommandOutputFile,
+  deriveBackgroundWorkDetails,
+  followOutputFileCommand,
   deriveReportedModelSelection,
   deriveLatestThreadRun,
   deriveProviderSubagentStatus,
@@ -360,6 +365,231 @@ describe("deriveProviderSubagentStatus", () => {
   it("leaves T3 delegated tasks and ordinary threads alone", () => {
     expect(deriveProviderSubagentStatus(child("mcp"))).toBeNull();
     expect(deriveProviderSubagentStatus({ ...v2Projection, nodes: [root] })).toBeNull();
+  });
+});
+
+describe("background work details", () => {
+  const base = {
+    id: TurnItemId.make("command-item"),
+    threadId: v2Projection.thread.id,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    status: "completed" as const,
+    title: "Build the smoke corpus",
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const command = {
+    ...base,
+    type: "command_execution" as const,
+    nativeItemRef: {
+      driver: ProviderDriverKind.make("claude"),
+      nativeId: "toolu_build",
+      strength: "strong" as const,
+    },
+    input: "  vp run build  ",
+    output:
+      "Command running in background with ID: bdqirlcyw. Output is being written to: /tmp/claude-1000/session/tasks/bdqirlcyw.output. You will be notified when it completes.",
+  } satisfies OrchestrationV2TurnItem;
+
+  it("matches Claude's completed Bash item via nativeItemId and parses its output file", () => {
+    const result = deriveBackgroundWorkDetails({
+      tasks: [
+        {
+          taskId: "bdqirlcyw",
+          nativeItemId: "toolu_build",
+          kind: "command",
+          description: "Build the smoke corpus",
+          awaited: true,
+        },
+      ],
+      turnItems: [command],
+    });
+
+    expect(result?.presentation.waiting).toBe(true);
+    expect(result?.details[0]).toMatchObject({
+      item: { taskId: "bdqirlcyw", label: "Build the smoke corpus" },
+      awaited: true,
+      turnItem: command,
+      command: "vp run build",
+      isRawCommand: false,
+      outputFile: "/tmp/claude-1000/session/tasks/bdqirlcyw.output",
+      startedAtMs: DateTime.toEpochMillis(now),
+      updatedAtMs: DateTime.toEpochMillis(now),
+      activity: null,
+    });
+  });
+
+  it("distinguishes the exact command label from a prose description and takes the newest match", () => {
+    const result = deriveBackgroundWorkDetails({
+      tasks: [{ taskId: "toolu_build", kind: "command", description: " vp run build " }],
+      turnItems: [{ ...command, input: "old command" }, command],
+    });
+    expect(result?.details[0]).toMatchObject({
+      command: "vp run build",
+      isRawCommand: true,
+      awaited: false,
+    });
+    expect(result?.details[0]?.turnItem).toBe(command);
+  });
+
+  it("collapses subagent progress and resolves its child thread in presentation order", () => {
+    const childThreadId = ThreadId.make("child");
+    const subagent = {
+      ...base,
+      id: TurnItemId.make("subagent-item"),
+      type: "subagent" as const,
+      subagentId: NodeId.make("subagent"),
+      origin: "provider_native" as const,
+      driver: ProviderDriverKind.make("claude"),
+      providerInstanceId: v2Projection.thread.providerInstanceId,
+      childThreadId,
+      prompt: "Review the build",
+      progress: "  Checking\n the\t build  ",
+      result: null,
+    } satisfies OrchestrationV2TurnItem;
+    const result = deriveBackgroundWorkDetails({
+      tasks: [
+        { taskId: "toolu_build", kind: "command" },
+        { taskId: "subagent-item", kind: "subagent", description: "Review the build" },
+      ],
+      turnItems: [command, subagent],
+    });
+
+    expect(result?.details.map((detail) => detail.item.kind)).toEqual(["subagent", "command"]);
+    expect(result?.details[0]).toMatchObject({
+      activity: "Checking the build",
+      childThreadId,
+      command: null,
+      outputFile: null,
+      updatedAtMs: DateTime.toEpochMillis(now),
+    });
+    const explicitChild = ThreadId.make("explicit-child");
+    expect(
+      deriveBackgroundWorkDetails({
+        tasks: [{ taskId: "subagent-item", kind: "subagent", childThreadId: explicitChild }],
+        turnItems: [subagent],
+      })?.details[0]?.childThreadId,
+    ).toBe(explicitChild);
+  });
+
+  it("links a PR-watch monitor to its pull request without a turn item", () => {
+    const pullRequest: ThreadPullRequestLink = {
+      host: "github.com",
+      repository: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+      source: "agent",
+      linkedAt: "2026-07-28T10:00:00.000Z",
+      snapshot: null,
+      stack: null,
+      watch: {
+        startedAt: "2026-07-28T10:00:00.000Z",
+        headSha: null,
+        failedChecks: [],
+        passed: false,
+        passedChecks: [],
+        remarksThrough: "2026-07-28T10:00:00.000Z",
+        remarkIds: [],
+        conflicting: false,
+        wakes: 0,
+      },
+    };
+    const result = deriveBackgroundWorkDetails({
+      tasks: [
+        { taskId: "pull-request-watch:github.com/acme/app#42", kind: "monitor", awaited: true },
+      ],
+      turnItems: [],
+      pullRequests: [pullRequest],
+    });
+    expect(result?.details[0]?.pullRequest).toBe(pullRequest);
+    expect(result?.details[0]?.turnItem).toBeUndefined();
+  });
+
+  it("keeps unmatched tasks inspectable and returns null only for an empty roster", () => {
+    expect(deriveBackgroundWorkDetails({ tasks: [], turnItems: [command] })).toBeNull();
+    expect(
+      deriveBackgroundWorkDetails({
+        tasks: [{ taskId: "unknown", kind: "background_task" }],
+        turnItems: [command],
+      })?.details[0],
+    ).toEqual({
+      item: {
+        taskId: "unknown",
+        kind: "background_task",
+        label: "background task",
+        named: false,
+        childThreadId: undefined,
+      },
+      awaited: false,
+      turnItem: undefined,
+      command: null,
+      isRawCommand: false,
+      outputFile: null,
+      startedAtMs: null,
+      updatedAtMs: 0,
+      activity: null,
+      childThreadId: undefined,
+      pullRequest: undefined,
+    });
+  });
+
+  it("retains monitor output and dynamic tool input for inspection", () => {
+    const monitor = {
+      ...command,
+      monitor: true,
+      output: "Monitor started (task watch, expires in 30s)",
+    };
+    const tool = {
+      ...base,
+      id: TurnItemId.make("dynamic"),
+      type: "dynamic_tool" as const,
+      toolName: "background_build",
+      input: { target: "app" },
+    } satisfies OrchestrationV2TurnItem;
+    const result = deriveBackgroundWorkDetails({
+      tasks: [
+        { taskId: "toolu_build", kind: "monitor" },
+        { taskId: "dynamic", kind: "background_task" },
+      ],
+      turnItems: [monitor, tool],
+    });
+    expect(result?.details[0]).toMatchObject({
+      turnItem: monitor,
+      command: "vp run build",
+      outputFile: null,
+    });
+    expect(result?.details[1]).toMatchObject({ turnItem: tool, command: null });
+  });
+});
+
+describe("background command output files", () => {
+  it("parses paths with and without the notification sentence or trailing period", () => {
+    expect(backgroundCommandOutputFile("Output is being written to: /tmp/build.output.")).toBe(
+      "/tmp/build.output",
+    );
+    expect(backgroundCommandOutputFile("Output is being written to: /tmp/build.output")).toBe(
+      "/tmp/build.output",
+    );
+    expect(backgroundCommandOutputFile(undefined)).toBeNull();
+    expect(backgroundCommandOutputFile("Monitor started (task watch, expires in 30s)")).toBeNull();
+    expect(backgroundCommandOutputFile("Output is being written to: ")).toBeNull();
+    expect(
+      backgroundCommandOutputFile("Output is being written to: /tmp/build output."),
+    ).toBeNull();
+  });
+
+  it("quotes output paths as literal POSIX shell arguments", () => {
+    expect(followOutputFileCommand("/tmp/build.output")).toBe("tail -n +1 -F '/tmp/build.output'");
+    expect(followOutputFileCommand("/tmp/a b'$(echo nope).output")).toBe(
+      "tail -n +1 -F '/tmp/a b'\\''$(echo nope).output'",
+    );
   });
 });
 

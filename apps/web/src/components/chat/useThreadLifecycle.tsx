@@ -17,6 +17,7 @@ import type { usePendingThreadRequests } from "./usePendingThreadRequests";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  AuthTerminalOperateScope,
   type EnvironmentId,
   type ScopedThreadRef,
   type ThreadId,
@@ -82,6 +83,8 @@ interface ThreadLifecycleInput {
   readonly runtimeMode: RuntimeMode;
   readonly isWorking: boolean;
   readonly pendingBackgroundTasks: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
+  readonly turnItems: Parameters<typeof backgroundWorkNowItem>[0]["turnItems"];
+  readonly onRunInTerminal: ((command: string) => void) | undefined;
   readonly activePendingApproval: PendingThreadRequests["activePendingApproval"];
   readonly activePendingUserInput: PendingThreadRequests["activePendingUserInput"];
   readonly localCheckoutBranchMismatch: {
@@ -132,6 +135,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     runtimeMode,
     isWorking,
     pendingBackgroundTasks,
+    turnItems,
     activePendingApproval,
     activePendingUserInput,
     localCheckoutBranchMismatch,
@@ -153,6 +157,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const router = useRouter();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
+  const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -511,8 +516,12 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
 
   const backgroundWorkNow = activeThread
     ? backgroundWorkNowItem({
+        environmentId,
+        pullRequests: (activeThreadShell ?? activeThread).pullRequests,
+        onRunInTerminal: canOperateTerminal ? input.onRunInTerminal : undefined,
         threadId: activeThread.id,
         tasks: activeBackgroundTasks,
+        turnItems,
         stopDisabled: !canOperateThread || isStoppingBackgroundWork,
         stopping: isStoppingBackgroundWork,
         onStop: handleStopBackgroundWorkStable,
