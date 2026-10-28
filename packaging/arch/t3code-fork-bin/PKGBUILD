@@ -22,7 +22,7 @@
 #   yay -Bi packaging/arch/t3code-fork-bin
 
 pkgname=t3code-fork-bin
-pkgver=0.1.3.r7992.g1fd58f6c8e
+pkgver=0.1.3.r8004.gba5c538986
 pkgrel=1
 pkgdesc='Desktop app and server for coding agents (fork build)'
 arch=('x86_64')
@@ -80,8 +80,8 @@ source=(
   "${pkgname}-${pkgver}-LICENSE::https://raw.githubusercontent.com/Quinntyx/t3code/v${pkgver}/LICENSE"
 )
 sha256sums=(
-  'dbd9672892557e5dc754f4aa8029ed2b535f9a2617fd7e881809b41888f019fa' # AppImage
-  '3cb440b543bbc7a249e7d2c2baaf5d40f2b78507916e8c838503d948a7506f86' # server archive
+  'a5642697d5894a0dd352a58e307508f4bbddccbae3e6189250357cfd6b3fa84c' # AppImage
+  '4cc63d59145606aa8d6babf98177efeb9acfdda4157ede984151adf23b8f3c72' # server archive
   '935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43' # upstream license
 )
 
