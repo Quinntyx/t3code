@@ -7,6 +7,8 @@ import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@t3tools
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -641,6 +643,109 @@ it.effect("invalidates workspace-derived metadata when a project moves", () =>
       );
     }).pipe(Effect.provide(layerTestFor(layerVersionedMetadata)));
   }),
+);
+
+it.effect("resolves newly registered and existing worktree-container projects to main", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const workspacePaths = yield* Effect.service(WorkspacePaths.WorkspacePaths).pipe(
+      Effect.provide(WorkspacePaths.layer),
+    );
+    const makeService = ProjectService.make.pipe(
+      Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
+    );
+    const original = yield* makeService;
+    const container = yield* fs.makeTempDirectoryScoped({ prefix: "project-container-" });
+    const projectId = ProjectId.make("project:container");
+    yield* original.create({
+      commandId: CommandId.make("command:container:create"),
+      projectId,
+      title: "Container",
+      workspaceRoot: container,
+    });
+    const main = path.join(container, "main");
+    yield* fs.makeDirectory(path.join(main, ".git"), { recursive: true });
+
+    const restarted = yield* makeService;
+    assert.equal(Option.getOrThrow(yield* restarted.getById(projectId)).workspaceRoot, main);
+    assert.equal(Option.getOrThrow(yield* restarted.getShell(projectId)).workspaceRoot, main);
+    assert.equal(Option.getOrThrow(yield* restarted.getByWorkspaceRoot(container)).id, projectId);
+    assert.equal(Option.getOrThrow(yield* restarted.getByWorkspaceRoot(main)).id, projectId);
+    const store = yield* ProjectStore.ProjectStoreV2;
+    assert.equal(Option.getOrThrow(yield* store.get(projectId)).workspaceRoot, main);
+    assert.equal((yield* restarted.snapshot).projects[0]?.workspaceRoot, main);
+    const duplicate = yield* restarted
+      .create({
+        commandId: CommandId.make("command:container:duplicate"),
+        projectId: ProjectId.make("project:container:duplicate"),
+        title: "Duplicate",
+        workspaceRoot: container,
+      })
+      .pipe(Effect.flip);
+    assert.equal(duplicate._tag, "ProjectConflictError");
+
+    const other = yield* fs.makeTempDirectoryScoped({ prefix: "project-container-new-" });
+    yield* fs.makeDirectory(path.join(other, "main", ".git"), { recursive: true });
+    const created = yield* restarted.create({
+      commandId: CommandId.make("command:container:new"),
+      projectId: ProjectId.make("project:container:new"),
+      title: "New container",
+      workspaceRoot: other,
+    });
+    assert.equal(created.workspaceRoot, path.join(other, "main"));
+    yield* makeService;
+    const sql = yield* SqlClient.SqlClient;
+    const events = yield* sql<{ readonly event_type: string }>`
+      SELECT event_type FROM orchestration_events
+      WHERE stream_id = ${projectId} ORDER BY sequence ASC
+    `;
+    assert.deepEqual(
+      events.map((event) => event.event_type),
+      ["project.created", "project.meta-updated"],
+    );
+  }).pipe(
+    Effect.provide(layerProjectServiceDependencies.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
+);
+
+it.effect("preserves both projects when a container's main checkout is already registered", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const workspacePaths = yield* Effect.service(WorkspacePaths.WorkspacePaths).pipe(
+      Effect.provide(WorkspacePaths.layer),
+    );
+    const makeService = ProjectService.make.pipe(
+      Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
+    );
+    const original = yield* makeService;
+    const container = yield* fs.makeTempDirectoryScoped({ prefix: "project-container-conflict-" });
+    const main = path.join(container, "main");
+    yield* fs.makeDirectory(main);
+    const parentId = ProjectId.make("project:container:parent");
+    const mainId = ProjectId.make("project:container:main");
+    yield* original.create({
+      commandId: CommandId.make("command:container:parent"),
+      projectId: parentId,
+      title: "Container",
+      workspaceRoot: container,
+    });
+    yield* original.create({
+      commandId: CommandId.make("command:container:main"),
+      projectId: mainId,
+      title: "Main",
+      workspaceRoot: main,
+    });
+    yield* fs.makeDirectory(path.join(main, ".git"));
+
+    const restarted = yield* makeService;
+    assert.equal(Option.getOrThrow(yield* restarted.getById(parentId)).workspaceRoot, container);
+    assert.equal(Option.getOrThrow(yield* restarted.getById(mainId)).workspaceRoot, main);
+    assert.equal((yield* restarted.snapshot).projects.length, 2);
+  }).pipe(
+    Effect.provide(layerProjectServiceDependencies.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
 );
 
 it.effect("serializes two projects claiming the same workspace root", () =>

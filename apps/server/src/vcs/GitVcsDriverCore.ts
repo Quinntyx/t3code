@@ -44,6 +44,7 @@ import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import { makeResolveMainCheckout } from "../workspace/worktreeLayout.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -923,6 +924,7 @@ export const windowsLongPathConfigEnv = (
 export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const resolveMainCheckout = yield* makeResolveMainCheckout;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig.ServerConfig;
   const crypto = yield* Crypto.Crypto;
@@ -3698,7 +3700,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
         });
       }
-      worktreePath = path.join(parentDir, repoName, sanitizedBranch);
+      const repository = options?.worktreesDirectory
+        ? null
+        : yield* resolveRepositoryPaths(input.cwd);
+      const primaryCheckout =
+        repository === null
+          ? null
+          : path.basename(repository.gitCommonDir) === ".git"
+            ? path.dirname(repository.gitCommonDir)
+            : path.join(path.dirname(repository.gitCommonDir), "main");
+      const container = primaryCheckout ? path.dirname(primaryCheckout) : null;
+      const useContainer =
+        primaryCheckout !== null &&
+        path.basename(primaryCheckout) === "main" &&
+        container !== null &&
+        (yield* resolveMainCheckout(container)) === primaryCheckout &&
+        (yield* resolveRepositoryPaths(primaryCheckout))?.gitCommonDir === repository?.gitCommonDir;
+      worktreePath = useContainer
+        ? path.join(container, sanitizedBranch)
+        : path.join(parentDir, repoName, sanitizedBranch);
     }
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, "--", worktreePath, input.refName]

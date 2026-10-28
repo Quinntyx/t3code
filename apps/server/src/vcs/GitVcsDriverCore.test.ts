@@ -3304,6 +3304,93 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("creates sibling worktrees for a main checkout in a worktree container", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const container = yield* makeTmpDir("worktree-container-");
+        const main = path.join(container, "main");
+        yield* fs.makeDirectory(main);
+        const { initialBranch } = yield* initRepoWithCommit(main);
+        const first = yield* driver.createWorktree({
+          cwd: main,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/first",
+        });
+        assert.equal(first.worktree.path, path.join(container, "feature-first"));
+        assert.equal(
+          yield* git(first.worktree.path, ["branch", "--show-current"]),
+          "feature/first",
+        );
+
+        const second = yield* driver.createWorktree({
+          cwd: first.worktree.path,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/second",
+        });
+        assert.equal(second.worktree.path, path.join(container, "feature-second"));
+        assert.equal(
+          yield* fs.readFileString(path.join(second.worktree.path, "README.md")),
+          "# test\n",
+        );
+
+        const configuredRoot = yield* makeTmpDir("configured-worktrees-");
+        const configured = yield* driver.createWorktree(
+          { cwd: main, path: null, refName: initialBranch, newRefName: "feature/configured" },
+          { worktreesDirectory: configuredRoot },
+        );
+        assert.equal(
+          configured.worktree.path,
+          path.join(configuredRoot, "main", "feature-configured"),
+        );
+
+        const explicitPath = path.join(yield* makeTmpDir("explicit-worktrees-"), "checkout");
+        const explicit = yield* driver.createWorktree({
+          cwd: main,
+          path: explicitPath,
+          refName: initialBranch,
+          newRefName: "feature/explicit",
+        });
+        assert.equal(explicit.worktree.path, explicitPath);
+        yield* driver.removeWorktree({ cwd: main, path: first.worktree.path });
+        assert.isFalse(yield* fs.exists(first.worktree.path));
+        assert.equal(yield* git(main, ["branch", "--show-current"]), initialBranch);
+      }),
+    );
+
+    it.effect("keeps sibling placement when main is a linked worktree of a bare repository", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const seed = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(seed);
+        const container = yield* makeTmpDir("bare-worktree-container-");
+        const bare = path.join(container, ".bare");
+        const main = path.join(container, "main");
+        yield* git(container, ["clone", "--bare", seed, bare]);
+        yield* git(bare, ["--git-dir=.", "worktree", "add", main, initialBranch]);
+        assert.equal((yield* fs.stat(path.join(main, ".git"))).type, "File");
+        const first = yield* driver.createWorktree({
+          cwd: main,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/linked-first",
+        });
+        assert.equal(first.worktree.path, path.join(container, "feature-linked-first"));
+        const second = yield* driver.createWorktree({
+          cwd: first.worktree.path,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/linked-second",
+        });
+        assert.equal(second.worktree.path, path.join(container, "feature-linked-second"));
+      }),
+    );
+
     it.effect("creates worktrees under the configured worktrees directory", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;

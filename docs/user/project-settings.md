@@ -170,10 +170,17 @@ applies when the project and environment are both on **Inherit**.
 
 ## Worktree location
 
-New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
-such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
+If you keep a project's checkout in `my-project/main` with other worktrees alongside it, you can
+add either `my-project` or `my-project/main` as the project. T3 Code uses `main` as the checkout
+and creates new worktrees beside it. Projects previously added at the parent folder are resolved
+to `main` when the server starts. An ordinary repository containing a folder named `main` is not
+changed.
+
+Other projects create worktrees in the `worktrees` folder of the T3 home directory. To override
+either location, set **Settings → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
-are, and cleanup covers both the default folder and the custom one.
+are, and automatic cleanup covers the default and configured locations, not sibling worktrees
+in your own project folder.
 
 ## Storage cleanup
 

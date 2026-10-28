@@ -557,6 +557,32 @@ export const make = Effect.gen(function* () {
     } satisfies ProjectSnapshot;
   });
 
+  yield* projects.list().pipe(
+    Effect.flatMap((rows) =>
+      Effect.forEach(
+        rows,
+        Effect.fn("ProjectService.resolveExistingWorktreeContainer")(function* (row) {
+          const workspaceRoot = yield* normalizeWorkspaceRoot({
+            projectId: row.projectId,
+            workspaceRoot: row.workspaceRoot,
+          }).pipe(Effect.orElseSucceed(() => row.workspaceRoot));
+          if (workspaceRoot === row.workspaceRoot) return;
+          yield* update({
+            commandId: CommandId.make(`project:main-checkout:${row.projectId}:${row.updatedAt}`),
+            projectId: row.projectId,
+            workspaceRoot,
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not resolve a project's main checkout.", cause),
+            ),
+          );
+        }),
+        { concurrency: 1, discard: true },
+      ),
+    ),
+    Effect.catch((cause) => Effect.logWarning("Could not read existing project layouts.", cause)),
+  );
+
   return ProjectService.of({
     create,
     bootstrap,
