@@ -13,9 +13,9 @@ function Shell({
       data-with-context={contextStrip || undefined}
       className={cn(
         "@container/composer-surface group/composer-surface relative isolate mx-auto w-full max-w-(--chat-content-max-width)",
-        "[--chat-composer-radius:1.5rem] sm:[--chat-composer-radius:1.75rem] [--chat-composer-action-inset:0.75rem] sm:[--chat-composer-action-inset:1rem] [--chat-composer-inner-radius:calc(var(--chat-composer-radius)-1px)] [--chat-composer-action-radius:calc(var(--chat-composer-inner-radius)-var(--chat-composer-action-inset))]",
+        "[--chat-composer-radius:3.25rem] sm:[--chat-composer-radius:3.5rem] [--chat-composer-inner-radius:calc(var(--chat-composer-radius)-1px)]",
         "[--chat-composer-curve:0.4477] supports-[corner-shape:squircle]:[--chat-composer-curve:0.1]",
-        "has-data-[chat-composer-resting=true]:[--chat-composer-radius:1.5rem] has-data-[chat-composer-resting=true]:[--chat-composer-action-inset:0.5rem] has-data-[chat-composer-mobile-collapsed=true]:[--chat-composer-action-inset:0.5rem]",
+        "has-data-[chat-composer-resting=true]:[--chat-composer-radius:1.5rem] has-data-[chat-composer-mobile-collapsed=true]:[--chat-composer-radius:1.5rem]",
         "[--chat-composer-drawer-inset:1.375rem] [--chat-composer-glass-surface:var(--card)] [--chat-composer-outline:rgb(0_0_0/8%)]",
         "dark:[--chat-composer-glass-surface:var(--surface-raised)] dark:[--chat-composer-highlight:rgb(255_255_255/3%)] dark:[--chat-composer-outline:color-mix(in_srgb,var(--color-white)_5%,transparent)]",
         "[html[data-theme-id]_&]:[--chat-composer-glass-surface:var(--app-theme-surface-raised)] [html[data-theme-id]_&]:[--chat-composer-outline:var(--app-theme-toolbar-border)]",
