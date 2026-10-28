@@ -544,6 +544,7 @@ type MessagesTimelineRowContent =
       kind: "working";
       id: string;
       createdAt: string | null;
+      trajectory?: AgentTrajectorySummary;
       /** A running compaction owns the working row, so its divider appears only once it ends. */
       compacting?: string;
     }
@@ -1653,6 +1654,7 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt ?? null,
+      trajectory: summarizeTimelineTrajectory(timelineEntries.slice(activeTurnHeaderIndex)),
       ...(compactingLabel ? { compacting: compactingLabel } : {}),
     });
   };

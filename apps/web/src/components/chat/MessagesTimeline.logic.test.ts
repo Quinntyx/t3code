@@ -247,6 +247,25 @@ describe("deriveMessagesTimelineRows", () => {
     expect(first.kind === "work" && first.entry.toolLifecycleStatus).toBe("inProgress");
   });
 
+  it("shows the live trajectory on the working row", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: fixture.visibleTurnItems,
+        optimisticMessages: [],
+      }),
+      isWorking: true,
+      runningRunId: fixture.runId,
+      activeTurnStartedAt: fixture.time(5),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    const working = rows.find((row) => row.kind === "working");
+    expect(working?.kind === "working" ? working.trajectory : null).toMatchObject([
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls" },
+    ]);
+  });
+
   it("recovers the failed Sky call stored as a generic js integration", () => {
     const fixture = makeStreamingTimelineFixture();
     const source = fixture.visibleTurnItems.find((row) => row.item.type === "dynamic_tool")!;
