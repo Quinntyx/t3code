@@ -65,6 +65,8 @@ export interface MarkdownLinkCustomization {
 export interface SelectableMarkdownTextProps {
   readonly markdown: string;
   readonly textStyle: NativeMarkdownTextStyle;
+  /** Gesture-handler tags whose handlers yield to over-wide horizontally scrolled blocks. */
+  readonly blockingGestureTags?: ReadonlyArray<number>;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly preserveSoftBreaks?: boolean;
   readonly onLinkPress?: (href: string) => void;
