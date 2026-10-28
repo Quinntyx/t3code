@@ -1,7 +1,102 @@
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt b/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
+@@ -2,12 +2,17 @@ package com.swmansion.enriched.markdown.accessibility
+ 
+ import android.content.Context
+ import android.graphics.Rect
++import android.text.Selection
++import android.text.Spannable
+ import android.util.AttributeSet
+ import android.view.KeyEvent
+ import android.view.MotionEvent
++import android.view.ViewConfiguration
+ import androidx.appcompat.widget.AppCompatTextView
+ import com.swmansion.enriched.markdown.spans.LinkPillSpan
+ import com.swmansion.enriched.markdown.utils.text.span.prepareWidthAwareSpans
++import com.swmansion.enriched.markdown.utils.text.view.LinkLongPressMovementMethod
++import kotlin.math.abs
+ 
+ /** AppCompatTextView with built-in TalkBack support via MarkdownAccessibilityHelper. */
+ abstract class AccessibleMarkdownTextView
+@@ -19,6 +24,64 @@ abstract class AccessibleMarkdownTextView
+   ) : AppCompatTextView(context, attrs, defStyleAttr) {
+     val accessibilityHelper = MarkdownAccessibilityHelper(this)
+ 
++    private var downX = 0f
++    private var downY = 0f
++    private var downTime = 0L
++    private var isScrollGesture = false
++    private var scrolledBeforeLongPress = false
++
++    // Cancelled here, not in the movement method: once the platform's own drag starts it stops
++    // calling that method, so a scroll is left extending a selection nobody asked for.
++    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
++      when (event.actionMasked) {
++        MotionEvent.ACTION_DOWN -> {
++          downX = event.x
++          downY = event.y
++          downTime = event.eventTime
++          isScrollGesture = false
++        }
++
++        MotionEvent.ACTION_MOVE ->
++          if (!isScrollGesture && movedPastSlop(event)) {
++            isScrollGesture = true
++            // Nothing can be selected yet, so whatever is selected belongs to an earlier gesture.
++            scrolledBeforeLongPress = event.eventTime - downTime < ViewConfiguration.getLongPressTimeout()
++            cancelPendingPresses()
++            if (scrolledBeforeLongPress) clearSelection()
++          }
++
++        MotionEvent.ACTION_CANCEL -> {
++          isScrollGesture = false
++          cancelPendingPresses()
++        }
++
++        MotionEvent.ACTION_UP -> {
++          // On a scroll the press state is already gone; on a tap the movement method still
++          // needs it to deliver the link, so only the pending timer is dropped here.
++          if (isScrollGesture) cancelLongPress()
++          if (isScrollGesture && scrolledBeforeLongPress) clearSelection()
++          isScrollGesture = false
++        }
++      }
++      return super.dispatchTouchEvent(event)
++    }
++
++    private fun movedPastSlop(event: MotionEvent): Boolean {
++      val slop = ViewConfiguration.get(context).scaledTouchSlop
++      return abs(event.x - downX) > slop || abs(event.y - downY) > slop
++    }
++
++    private fun cancelPendingPresses() {
++      cancelLongPress()
++      (movementMethod as? LinkLongPressMovementMethod)?.cancelPendingPress(this)
++    }
++
++    private fun clearSelection() {
++      val buffer = text as? Spannable ?: return
++      if (!hasSelection()) return
++      Selection.removeSelection(buffer)
++    }
++
+     override fun setText(
+       text: CharSequence?,
+       type: BufferType?,
+@@ -67,6 +130,8 @@ abstract class AccessibleMarkdownTextView
+     }
+ 
+     override fun onDetachedFromWindow() {
++      // A recycled row is detached mid-gesture and never sees the release, so its press dies here.
++      cancelPendingPresses()
+       // Before super, and here rather than in a ViewManager's
+       // onDropViewInstance: getViewTreeObserver() returns the WINDOW's observer
+       // only while the view is attached. Once detached it hands back the view's
 diff --git a/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt b/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt
 --- a/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt
 +++ b/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt
-@@ -83,6 +83,9 @@
+@@ -83,6 +83,9 @@ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
            abs(event.y - startY) > config.scaledTouchSlop
          ) {
            cancelLongPress()
@@ -11,3 +106,23 @@ diff --git a/android/src/main/java/com/swmansion/enriched/markdown/utils/text/vi
            isLinkTouchActive = false
            pressedLink = null
            pressedImage = null
+@@ -172,6 +175,19 @@ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
+     longPressRunnable = null
+   }
+ 
++  /**
++   * Drops a press that turned out to be a scroll, including the parent intercept it holds, so
++   * a press cannot outlive its gesture or fire from a row that was recycled in the meantime.
++   */
++  fun cancelPendingPress(widget: TextView) {
++    cancelLongPress()
++    isLinkTouchActive = false
++    pressedLink = null
++    pressedImage = null
++    pressedCodeBlock = null
++    releaseParentIntercept(widget)
++  }
++
+   // Undo only our own request: a long-press drag selection relies on the Editor's
+   // request staying in place until ACTION_UP, or a scrolling parent steals the drag.
+   private fun releaseParentIntercept(widget: TextView) {
