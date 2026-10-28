@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { makeResolveMainCheckout } from "./worktreeLayout.ts";
 
 export class WorkspaceRootNotExistsError extends Schema.TaggedError<WorkspaceRootNotExistsError>()(
   "WorkspaceRootNotExistsError",
@@ -110,6 +111,7 @@ function toPosixRelativePath(input: string): string {
 const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const resolveMainCheckout = yield* makeResolveMainCheckout;
 
   const statWorkspaceRoot = Effect.fn("WorkspacePaths.statWorkspaceRoot")(function* (
     workspaceRoot: string,
@@ -174,7 +176,7 @@ const make = Effect.gen(function* () {
         normalizedWorkspaceRoot,
       });
     }
-    return normalizedWorkspaceRoot;
+    return yield* resolveMainCheckout(normalizedWorkspaceRoot);
   });
 
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =

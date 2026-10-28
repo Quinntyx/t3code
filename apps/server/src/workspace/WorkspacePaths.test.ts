@@ -21,6 +21,55 @@ const makeTempDir = Effect.fn("makeTempDir")(function* () {
 
 it.layer(layerTest)("WorkspacePathsLive", (it) => {
   describe("normalizeWorkspaceRoot", () => {
+    it.effect.each(["Directory", "File"] as const)(
+      "resolves a worktree container with a %s .git entry to its main checkout",
+      (gitEntryType) =>
+        Effect.gen(function* () {
+          const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const container = yield* makeTempDir();
+          const main = path.join(container, "main");
+          yield* fs.makeDirectory(main);
+          if (gitEntryType === "Directory") {
+            yield* fs.makeDirectory(path.join(main, ".git"));
+          } else {
+            yield* fs.writeFileString(path.join(main, ".git"), "gitdir: ../.bare/worktrees/main\n");
+          }
+
+          expect(yield* workspacePaths.normalizeWorkspaceRoot(container)).toBe(main);
+          expect(yield* workspacePaths.normalizeWorkspaceRoot(main)).toBe(main);
+        }),
+    );
+
+    it.effect("does not redirect ordinary repositories or directories inside them", () =>
+      Effect.gen(function* () {
+        const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir();
+        yield* fs.makeDirectory(path.join(root, ".git"));
+        yield* fs.makeDirectory(path.join(root, "main", ".git"), { recursive: true });
+        const nested = path.join(root, "nested");
+        yield* fs.makeDirectory(path.join(nested, "main", ".git"), { recursive: true });
+
+        expect(yield* workspacePaths.normalizeWorkspaceRoot(root)).toBe(root);
+        expect(yield* workspacePaths.normalizeWorkspaceRoot(nested)).toBe(nested);
+      }),
+    );
+
+    it.effect("leaves a plain main directory alone", () =>
+      Effect.gen(function* () {
+        const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir();
+        yield* fs.makeDirectory(path.join(root, "main"));
+
+        expect(yield* workspacePaths.normalizeWorkspaceRoot(root)).toBe(root);
+      }),
+    );
+
     it.effect("creates missing directories when createIfMissing is enabled", () =>
       Effect.gen(function* () {
         const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
