@@ -788,8 +788,7 @@ function ThreadRouteContent(
             onPress: handleToggleInspector,
           }
         : undefined,
-    onOpenFilesInspector:
-      fileInspector.supported && selectedThreadCwd !== null ? handleOpenFilesInspector : undefined,
+    onOpenFilesInspector: selectedThreadCwd !== null ? handleOpenFilesInspector : undefined,
     onOpenGitInspector: fileInspector.supported ? handleOpenGitInspector : undefined,
     onMergeBack:
       mergeBackTargetThreadId !== null && mergeBackRun !== null
@@ -975,6 +974,16 @@ function ThreadRouteContent(
               <ThreadHeader
                 title={selectedThread.title}
                 subtitle={headerSubtitle}
+                workspace={{
+                  projectTitle: selectedThreadProject?.title ?? "Project",
+                  projectId: selectedThreadProject?.id ?? null,
+                  workspaceRoot: selectedThreadProject?.workspaceRoot ?? null,
+                  environmentLabel:
+                    selectedEnvironmentConnection?.environmentLabel ?? "Environment",
+                  connectionState: routeConnectionState,
+                  cwd: selectedThreadCwd,
+                  worktreePath: selectedThread.worktreePath ?? selectedThreadDetailWorktreePath,
+                }}
                 headerColor={headerColor}
                 usesNativeHeaderGlass={usesNativeHeaderGlass}
                 gitControls={threadGitControlProps}
