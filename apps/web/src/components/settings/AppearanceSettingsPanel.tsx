@@ -155,7 +155,7 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("setting-glass-opacity")}
-          description="Higher values make menus, dialogs, and the composer more solid."
+          description="Higher values make frosted menus, dialogs, and the composer more solid. Liquid glass uses a fixed 4% white tint instead."
           resetAction={
             settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
               <SettingResetButton
@@ -201,7 +201,7 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("setting-liquid-glass")}
-          description="Bend what is behind the composer, menus, and dialogs instead of only blurring it, at a much thinner tint. Chromium-only; other browsers keep the flat frost."
+          description="Use lyra rebane’s liquid glass refraction, 1px blur, and 4% white tint on the composer, menus, and dialogs. Chromium-only; other browsers keep the flat frost."
           resetAction={
             settings.liquidGlassEnabled ? (
               <SettingResetButton

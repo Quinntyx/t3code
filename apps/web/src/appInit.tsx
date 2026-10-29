@@ -49,16 +49,6 @@ import { registerOpenFavoriteEditorCommand } from "./components/chat/OpenInPicke
 import { environmentThreadShells } from "./state/threads";
 import { resolveThreadRouteTarget } from "./threadRoutes";
 
-const LIQUID_GLASS_TINT_SCALE = 0.55;
-
-function renderedGlassOpacity(settings: ClientSettings): number {
-  // Refraction is only visible through a thinner tint, so liquid glass scales the slider down
-  // instead of letting an opaque surface hide the effect it was just switched on for.
-  return settings.liquidGlassEnabled
-    ? Math.round(settings.glassOpacity * LIQUID_GLASS_TINT_SCALE)
-    : settings.glassOpacity;
-}
-
 /** Writes appearance settings onto the document, touching only the groups that changed. */
 function startClientAppearance(): void {
   const root = document.documentElement;
@@ -85,11 +75,8 @@ function startClientAppearance(): void {
     if (previous?.appearanceContrast !== settings.appearanceContrast) {
       applyAppearanceContrast(root, settings.appearanceContrast);
     }
-    if (
-      previous?.glassOpacity !== settings.glassOpacity ||
-      previous.liquidGlassEnabled !== settings.liquidGlassEnabled
-    ) {
-      root.style.setProperty("--glass-opacity", `${renderedGlassOpacity(settings)}%`);
+    if (previous?.glassOpacity !== settings.glassOpacity) {
+      root.style.setProperty("--glass-opacity", `${settings.glassOpacity}%`);
       if (settings.glassOpacity === 100) {
         root.style.setProperty("--glass-blur", "0px");
       } else {

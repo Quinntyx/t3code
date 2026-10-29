@@ -31,25 +31,13 @@ function supportsLiquidGlass(): boolean {
   return window.CSS?.supports("backdrop-filter", "url(#liquid-glass)") === true;
 }
 
-function radiusOf(element: Element, width: number, height: number): number {
-  const read = (pseudo: string | undefined) => {
-    const value = getComputedStyle(element, pseudo).borderTopLeftRadius;
-    const amount = Number.parseFloat(value);
-    if (!Number.isFinite(amount)) return 0;
-    if (!value.trim().endsWith("%")) return amount;
-    return amount >= 50 ? Math.min(width, height) / 2 : (amount / 100) * Math.min(width, height);
-  };
-  // The composer paints its frost on a rounded pseudo-element while the host stays square.
-  return Math.round(read(undefined) || read("::before"));
-}
-
 function measure(element: Element): LiquidGlassSurface | null {
   const rect = element.getBoundingClientRect();
   if (rect.width < MIN_SIZE || rect.height < MIN_SIZE) return null;
   if (rect.width * rect.height > MAX_AREA) return null;
   const width = Math.round(rect.width);
   const height = Math.round(rect.height);
-  return { width, height, radius: Math.min(radiusOf(element, width, height), height / 2) };
+  return { width, height };
 }
 
 /**
@@ -76,6 +64,7 @@ export function startLiquidGlass(): LiquidGlassController {
     window.clearTimeout(surface.timer);
     surface.filter?.remove();
     (element as HTMLElement).style.removeProperty("--glass-liquid-filter");
+    (element as HTMLElement).style.removeProperty("--glass-liquid-tint");
     surfaces.delete(element);
   };
 
@@ -85,7 +74,7 @@ export function startLiquidGlass(): LiquidGlassController {
       release(element);
       return;
     }
-    const key = `${geometry.width}x${geometry.height}x${geometry.radius}`;
+    const key = `${geometry.width}x${geometry.height}`;
     const existing = surfaces.get(element);
     if (existing?.key === key && existing.filter) return;
 
@@ -114,6 +103,7 @@ export function startLiquidGlass(): LiquidGlassController {
       "--glass-liquid-filter",
       liquidGlassBackdropFilter(id),
     );
+    (element as HTMLElement).style.setProperty("--glass-liquid-tint", "rgb(255 255 255 / 4%)");
   };
 
   function schedule(element: Element) {

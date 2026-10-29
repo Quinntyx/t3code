@@ -363,7 +363,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility surface-glass {
-  background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
+  background: var(
+    --glass-liquid-tint,
+    color-mix(in srgb, var(--background) var(--glass-opacity), transparent)
+  );
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -385,7 +388,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent),
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent)
     ),
-    color-mix(in srgb, var(--background) var(--glass-opacity), transparent) !important;
+    var(
+      --glass-liquid-tint,
+      color-mix(in srgb, var(--background) var(--glass-opacity), transparent)
+    ) !important;
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -436,7 +442,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility dialog-glass {
-  background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
+  background: var(
+    --glass-liquid-tint,
+    color-mix(in srgb, var(--background) var(--glass-opacity), transparent)
+  );
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -471,10 +480,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility dropdown-glass {
-  background: color-mix(
-    in srgb,
-    var(--popover) 18%,
-    color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
+  background: var(
+    --glass-liquid-tint,
+    color-mix(
+      in srgb,
+      var(--popover) 18%,
+      color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
+    )
   );
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
