@@ -10,6 +10,7 @@ import {
   type ServerProviderSlashCommand,
   isProviderAvailable,
   type ServerProvider,
+  type ServerProviderResetCredits,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceSnapshots,
@@ -855,4 +856,138 @@ export function collectProviderUsageLimits(
     }
   }
   return { createdAt: DateTime.formatIso(DateTime.makeUnsafe(now)), accounts, notices };
+}
+
+export interface ProviderLimitWindow {
+  readonly key: string;
+  readonly kind: ServerProviderUsageWindow["kind"];
+  readonly label: string;
+  readonly windowDurationMins: number | undefined;
+  readonly remainingPercent: number;
+  readonly timeLeftPercent: number | null;
+  readonly pace: LimitPace | null;
+  readonly accounts: number;
+  readonly readyAccounts: number;
+  readonly resetsAt: string | null;
+  /** Pools only: the share of the pool the next reset returns. */
+  readonly restoresPercent: number | null;
+  readonly resetCredits: ServerProviderResetCredits | null;
+}
+
+export interface ProviderLimitsSummary {
+  readonly windows: readonly ProviderLimitWindow[];
+  readonly sources: ReadonlyArray<{
+    readonly id: string;
+    readonly label: string;
+    readonly windows: readonly ProviderLimitWindow[];
+  }>;
+  readonly exhausted: boolean;
+}
+
+function summarizePool(pool: LimitPool, now: number): readonly ProviderLimitWindow[] {
+  return displayLimitWindows(pool).map((window) => {
+    const timeLeft = window.members.flatMap((member) => {
+      const left = paceRemainingPercent(member.window, now);
+      return left === null ? [] : [left];
+    });
+    const single = window.members.length === 1 ? window.members[0] : undefined;
+    const upcoming = window.resets.filter((reset) => reset.at > now);
+    const next = single
+      ? upcoming[0]
+      : (upcoming.find((reset) => reset.restoresPercent > 0) ?? upcoming[0]);
+    const credits = single?.account.limits.resetCredits;
+    return {
+      key: `${window.kind}:${window.id}`,
+      kind: window.kind,
+      label: window.label,
+      windowDurationMins: window.members[0]?.window.windowDurationMins,
+      remainingPercent: window.remainingPercent,
+      timeLeftPercent:
+        timeLeft.length === 0
+          ? null
+          : Math.round(timeLeft.reduce((sum, left) => sum + left, 0) / timeLeft.length),
+      pace: window.pace,
+      accounts: window.members.length,
+      readyAccounts: window.members.filter((member) => member.window.usedPercent < 100).length,
+      resetsAt: next?.member.window.resetsAt ?? null,
+      restoresPercent: single ? null : (next?.restoresPercent ?? null),
+      resetCredits: credits?.availableCount ? credits : null,
+    };
+  });
+}
+
+/**
+ * One model picker card: the instance's own account, then each usage source's accounts of the
+ * same driver pooled per source. Hub accounts that duplicate a native login stay on that login's card.
+ */
+export function summarizeProviderLimits(
+  provider: ServerProvider,
+  providers: readonly ServerProvider[],
+  sources: UsageLimitSourceSnapshots,
+  now: number,
+): ProviderLimitsSummary | null {
+  const resolveKey = accountKeyResolver([
+    ...providers.filter((candidate) => candidate.enabled).map(nativeReport),
+    ...sources.flatMap((source) => source.accounts),
+  ]);
+  const usable = (limits: ServerProviderUsageLimits | undefined) =>
+    limits !== undefined && limitsNotice(limits) === null;
+  const ownLimits = usable(provider.usageLimits) ? provider.usageLimits : undefined;
+  const own = ownLimits
+    ? collectLimitPools(
+        [
+          {
+            key: `instance:${provider.instanceId}`,
+            driver: provider.driver,
+            displayName: provider.displayName?.trim() || null,
+            email: provider.auth.email,
+            plan: provider.auth.label,
+            accentColor: provider.accentColor,
+            environments: [],
+            sourceLabel: null,
+            redeem: null,
+            limits: ownLimits,
+          },
+        ],
+        now,
+      )[0]
+    : undefined;
+  const nativeKeys = new Set(
+    providersWithLimits(providers).flatMap((candidate) => {
+      const key =
+        candidate.driver === provider.driver && usable(candidate.usageLimits)
+          ? resolveKey(nativeReport(candidate))
+          : null;
+      return key ? [key] : [];
+    }),
+  );
+  const pooled = sources.flatMap((source) => {
+    const accounts = source.accounts.flatMap((account): LimitAccount[] => {
+      const key = resolveKey(account);
+      if (account.driver !== provider.driver || !usable(account.usageLimits)) return [];
+      if (key !== null && nativeKeys.has(key)) return [];
+      return [
+        {
+          key: `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`,
+          driver: account.driver,
+          displayName: null,
+          email: account.email,
+          plan: account.plan,
+          accentColor: undefined,
+          environments: [],
+          sourceLabel: source.label,
+          redeem: null,
+          limits: account.usageLimits,
+        },
+      ];
+    });
+    const pool = collectLimitPools(accounts, now)[0];
+    return pool ? [{ id: source.id, label: source.label, windows: summarizePool(pool, now) }] : [];
+  });
+  if (!own && pooled.length === 0) return null;
+  return {
+    windows: own ? summarizePool(own, now) : [],
+    sources: pooled,
+    exhausted: exhaustedUsageWindow(provider, now) !== undefined,
+  };
 }
