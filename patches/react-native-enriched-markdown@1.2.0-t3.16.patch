@@ -1378,7 +1378,15 @@ diff --git a/lib/module/EnrichedMarkdownTextNativeComponent.ts b/lib/module/Enri
 diff --git a/lib/module/native/EnrichedMarkdownText.js b/lib/module/native/EnrichedMarkdownText.js
 --- a/lib/module/native/EnrichedMarkdownText.js
 +++ b/lib/module/native/EnrichedMarkdownText.js
-@@ -364,6 +362,7 @@
+@@ -79,6 +79,7 @@
+   markdown,
+   markdownStyle = {},
+   containerStyle,
++  blockingGestureTags,
+   onLinkPress,
+   onLinkLongPress,
+   onImagePress,
+@@ -364,6 +365,7 @@
      allowFontScaling,
      maxFontSizeMultiplier,
      allowTrailingMargin,
