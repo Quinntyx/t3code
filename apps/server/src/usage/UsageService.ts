@@ -39,6 +39,7 @@ import type {
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
 import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
+import type { ThreadUsagePricing } from "./threadUsage.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -143,6 +144,7 @@ export class UsageService extends Context.Service<
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
+    readonly pricingTables: Effect.Effect<ThreadUsagePricing, UsageReadError>;
   }
 >()("t3/usage/UsageService") {}
 
@@ -929,7 +931,18 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const pricingTables = Effect.gen(function* () {
+    const [, settings] = yield* Effect.all([ensureRates(false), readSettings], {
+      concurrency: 2,
+    });
+    return {
+      rates,
+      overrides: createOverrideRateTable(settings.usagePriceOverrides),
+      modelAliases: resolveModelAliases(settings.usageModelAliases),
+    };
+  }).pipe(Effect.withSpan("UsageService.pricingTables"));
+
+  return { readSummary, refreshRates, pricingTables, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);
