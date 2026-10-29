@@ -3904,7 +3904,25 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("classifies a ChatGPT usage limit with its reset time", () =>
+  it.effect.each([
+    {
+      label: "pi-ai's ChatGPT message",
+      errorMessage: "You have hit your ChatGPT usage limit (team plan). Try again in ~275 min.",
+      resetAt: "2026-10-28T23:27:00.000Z",
+    },
+    {
+      label: "a gateway's relayed upstream code",
+      errorMessage:
+        "auth_unavailable: no auth available (providers=codex, model=gpt-6.1-sol; last upstream error: usage_limit_reached: The usage limit has been reached)",
+      resetAt: undefined,
+    },
+    {
+      label: "a gateway's upstream code without its prose",
+      errorMessage:
+        "auth_unavailable: no auth available (providers=codex, model=gpt-6.1-sol; last upstream error: usage_limit_reached:)",
+      resetAt: undefined,
+    },
+  ])("classifies $label as a usage limit", ({ errorMessage, resetAt }) =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -3919,19 +3937,46 @@ describe("PiAdapterV2", () => {
       yield* TestClock.setTime(Date.parse("2026-10-28T18:52:00.000Z"));
       yield* fake.emit({
         type: "message_end",
-        message: {
-          role: "assistant",
-          content: [],
-          stopReason: "error",
-          errorMessage: "You have hit your ChatGPT usage limit (team plan). Try again in ~275 min.",
-        },
+        message: { role: "assistant", content: [], stopReason: "error", errorMessage },
       });
       yield* fake.emit({ type: "agent_settled" });
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.deepInclude(terminal.type === "turn.terminal" ? terminal.failure : null, {
-        class: "usage_limit",
-        resetAt: "2026-10-28T23:27:00.000Z",
+      const failure = terminal.type === "turn.terminal" ? terminal.failure : null;
+      assert.equal(failure?.class, "usage_limit");
+      assert.equal(failure?.resetAt, resetAt);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("classifies a usage limit Pi is retrying", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
       });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: true });
+      yield* fake.emit({
+        type: "auto_retry_start",
+        attempt: 1,
+        maxAttempts: 2,
+        delayMs: 1_000,
+        errorMessage:
+          "auth_unavailable: no auth available (providers=codex, model=gpt-6.1-sol; last upstream error: usage_limit_reached: The usage limit has been reached)",
+      });
+      const retry = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "error",
+      );
+      assert.isTrue(
+        retry.type === "turn_item.updated" &&
+          retry.turnItem.type === "error" &&
+          retry.turnItem.failure.class === "usage_limit" &&
+          retry.turnItem.failure.retryable === true,
+      );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
