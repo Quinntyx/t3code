@@ -5,11 +5,6 @@ import { shimmerPalette, shimmerPhases, WARP_TERMS, type ShimmerPalette } from "
 /** Canvas pixels per CSS pixel. The bands are soft, so the browser's upscale hides the rest. */
 const RENDER_SCALE = 0.5;
 const FRAME_INTERVAL_MS = 1000 / 30;
-/** Fraction of full pace the field drifts at behind a conversation. */
-const CALM_PACE = 0.3;
-// Slower drift moves less per frame, so calm mode can draw less often without visible steps.
-const CALM_FRAME_INTERVAL_MS = 1000 / 20;
-const PACE_EASE_SECONDS = 0.25;
 const MAX_STEP_SECONDS = 0.1;
 
 const VERTEX_SHADER = `#version 300 es
@@ -61,11 +56,8 @@ void main() {
 `;
 
 export interface AmbientShimmer {
-  setCalm(calm: boolean): void;
   stop(): void;
 }
-
-const UNAVAILABLE: AmbientShimmer = { setCalm: () => {}, stop: () => {} };
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
@@ -130,11 +122,10 @@ function readPalette(probe: HTMLElement): ShimmerPalette | null {
 }
 
 /**
- * Fills `container` with a never-repeating iridescent field until stopped. Animates at 30fps, or
- * slower and at 20fps when calm; pauses while the page is hidden; draws a still frame for reduced
- * motion.
+ * Fills `container` with a never-repeating iridescent field until stopped. Animates at 30fps,
+ * pauses while the page is hidden, and draws a still frame for reduced motion.
  */
-export function startAmbientShimmer(container: HTMLElement, initialCalm: boolean): AmbientShimmer {
+export function startAmbientShimmer(container: HTMLElement): AmbientShimmer {
   // Owned here rather than by React: a context lost on stop cannot be revived on the same node.
   const canvas = document.createElement("canvas");
   canvas.style.cssText = "display:block;width:100%;height:100%";
@@ -146,14 +137,14 @@ export function startAmbientShimmer(container: HTMLElement, initialCalm: boolean
     premultipliedAlpha: false,
     powerPreference: "low-power",
   });
-  if (!gl) return UNAVAILABLE;
+  if (!gl) return { stop: () => {} };
 
   let program: ReturnType<typeof createProgram> | null = null;
   try {
     program = createProgram(gl);
   } catch (error) {
     console.warn("Ambient shimmer unavailable", error);
-    return UNAVAILABLE;
+    return { stop: () => {} };
   }
 
   container.append(canvas);
@@ -162,8 +153,6 @@ export function startAmbientShimmer(container: HTMLElement, initialCalm: boolean
   const seed = Math.random() * 1000;
   let palette: ShimmerPalette | null = null;
   let paletteStale = true;
-  let calm = initialCalm;
-  let pace = calm ? CALM_PACE : 1;
   let seconds = 0;
   let lastTick = 0;
   let lastDraw = -Infinity;
@@ -195,11 +184,9 @@ export function startAmbientShimmer(container: HTMLElement, initialCalm: boolean
   const tick = (now: number) => {
     frame = 0;
     if (!animating()) return;
-    const step = Math.min(MAX_STEP_SECONDS, Math.max(0, (now - lastTick) / 1000));
+    seconds += Math.min(MAX_STEP_SECONDS, Math.max(0, (now - lastTick) / 1000));
     lastTick = now;
-    pace += ((calm ? CALM_PACE : 1) - pace) * (1 - Math.exp(-step / PACE_EASE_SECONDS));
-    seconds += step * pace;
-    if (now - lastDraw >= (calm ? CALM_FRAME_INTERVAL_MS : FRAME_INTERVAL_MS) - 1) {
+    if (now - lastDraw >= FRAME_INTERVAL_MS - 1) {
       lastDraw = now;
       draw();
     }
@@ -260,9 +247,6 @@ export function startAmbientShimmer(container: HTMLElement, initialCalm: boolean
   resume();
 
   return {
-    setCalm: (next) => {
-      calm = next;
-    },
     stop: () => {
       if (stopped) return;
       stopped = true;

@@ -3197,7 +3197,7 @@ export default function ChatView(props: ChatViewProps) {
         data-chat-column
         inert={rightPanelMaximized}
       >
-        {ambientShimmer ? <AmbientShimmer calm={!isDraftHeroState} /> : null}
+        {ambientShimmer ? <AmbientShimmer prominent={isDraftHeroState} /> : null}
         <header
           ref={threadPanelPopoverAnchorRef}
           data-chat-header
