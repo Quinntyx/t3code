@@ -1,5 +1,10 @@
 import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
-import type { PullRequestRef, PullRequestStack, ThreadPullRequestLink } from "@t3tools/contracts";
+import type {
+  PullRequestRef,
+  PullRequestStack,
+  PullRequestStackMembership,
+  ThreadPullRequestLink,
+} from "@t3tools/contracts";
 
 export function pullRequestStackMerge(
   stack: PullRequestStack,
@@ -71,6 +76,13 @@ export function singlePullRequestMergeAllowed(input: {
   readonly supportsStackActions: boolean;
   readonly hasStack: boolean;
   readonly isFresh: boolean;
+  /** The live detail read's own membership; absent when that read did not report one. */
+  readonly liveMembership: PullRequestStackMembership | null | undefined;
 }) {
-  return !input.supportsStackActions || (!input.hasStack && input.isFresh);
+  if (!input.supportsStackActions) return true;
+  // A live membership answer settles it without the slower stack lookup, unless that disagrees.
+  if (input.liveMembership !== undefined) {
+    return input.liveMembership === null && !(input.hasStack && input.isFresh);
+  }
+  return !input.hasStack && input.isFresh;
 }

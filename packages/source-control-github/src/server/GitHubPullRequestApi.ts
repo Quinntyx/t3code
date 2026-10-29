@@ -1433,6 +1433,7 @@ export const make = Effect.gen(function* () {
         headRef: `refs/pull/${input.number}/head`,
         required: asksRequired(input.host),
         requestedReviewers,
+        stacks: input.host.toLowerCase() === "github.com",
       });
     return SourceControlRateLimit.Interactive.pipe(
       Effect.flatMap((allowReserve) =>

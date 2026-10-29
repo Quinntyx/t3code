@@ -187,7 +187,9 @@ export interface ProviderChangeRequestStat {
   readonly deletions: number;
 }
 
-export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
+export interface ProviderChangeRequestDetail extends Omit<ProviderChangeRequest, "stack"> {
+  /** Null means no stack; absent means not requested. */
+  readonly stack?: PullRequestStackMembership | null;
   readonly maintainerCanModify?: boolean;
   readonly headSha?: string | null;
   readonly body: string;

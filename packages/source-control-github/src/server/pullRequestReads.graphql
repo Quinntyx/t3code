@@ -59,6 +59,7 @@ query PullRequestCore(
   $headRef: String!
   $required: Boolean!
   $requestedReviewers: Int!
+  $stacks: Boolean!
 ) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed
@@ -110,6 +111,15 @@ query PullRequestCore(
       }
       autoMergeRequest {
         mergeMethod
+      }
+      # Lets the header decide single-merge from this read alone; github.com only.
+      stack @include(if: $stacks) {
+        number
+        size
+        baseRefName
+      }
+      stackEntry @include(if: $stacks) {
+        position
       }
       viewerCanUpdate
       viewerDidAuthor

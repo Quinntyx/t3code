@@ -546,12 +546,21 @@ export function PullRequestDetailPanel({
     supportsThreadPullRequests &&
     detail?.capabilities.stacks === true &&
     detail.capabilities.stackActions === true;
+  const liveStackMembership = detailQuery.data?.stack;
   const canMergeSinglePullRequest = allowsSinglePullRequestMerge({
     supportsStackActions,
     hasStack: nativeStack !== null,
     stackPending: !nativeStackQuery.isFresh,
     stackError: nativeStackQuery.error,
+    liveMembership: liveStackMembership,
   });
+  // Nothing yet says whether this is a stack layer, so the merge control holds its place.
+  const mergeAwaitsStack =
+    !canMergeSinglePullRequest &&
+    nativeStack === null &&
+    !nativeStackQuery.isFresh &&
+    nativeStackQuery.error === null &&
+    liveStackMembership === undefined;
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
   const refreshDetail = () => {
@@ -1142,9 +1151,10 @@ export function PullRequestDetailPanel({
         checksState,
         autoMergeEnabled: detail.autoMergeEnabled,
         hasMergeMethod: allowedMergeMethods.length > 0,
-        canMerge: canMergeSinglePullRequest && can("merge"),
+        canMerge: (canMergeSinglePullRequest || mergeAwaitsStack) && can("merge"),
         canMarkReady: can("ready"),
-        canEnableAutoMerge: canMergeSinglePullRequest && can("enable-auto-merge"),
+        canEnableAutoMerge:
+          (canMergeSinglePullRequest || mergeAwaitsStack) && can("enable-auto-merge"),
       })
     : null;
   const showsDraftToggle =
@@ -1324,6 +1334,7 @@ export function PullRequestDetailPanel({
               <PullRequestPrimaryAction
                 pullRequestKey={pullRequestKey}
                 primaryAction={primaryAction}
+                awaitingStack={mergeAwaitsStack}
                 autoMergeArmed={autoMergeArmed}
                 armedAutoMergeLabel={armedAutoMergeLabel}
                 pendingAutoMergeLabel={pendingAutoMergeLabel}

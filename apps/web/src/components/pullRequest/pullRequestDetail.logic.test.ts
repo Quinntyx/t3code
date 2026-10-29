@@ -1488,18 +1488,32 @@ describe("cached pull request detail", () => {
 });
 
 describe("single-PR merge compatibility during stack discovery", () => {
+  const membership = { number: 3, position: 1, size: 2, base: "main" };
   it.each([
-    [false, true, false, null, true],
-    [false, false, true, null, true],
-    [true, false, true, null, false],
-    [true, false, false, "Lookup failed", false],
-    [true, true, false, null, false],
-    [true, false, false, null, true],
+    [false, true, false, null, undefined, true],
+    [false, false, true, null, undefined, true],
+    [true, false, true, null, undefined, false],
+    [true, false, false, "Lookup failed", undefined, false],
+    [true, true, false, null, undefined, false],
+    [true, false, false, null, undefined, true],
+    // The live detail answers first; only a fresh stack lookup can overrule it.
+    [true, false, true, null, null, true],
+    [true, true, true, null, null, true],
+    [true, false, false, "Lookup failed", null, true],
+    [true, true, false, null, null, false],
+    [true, false, true, null, membership, false],
+    [true, false, false, null, membership, false],
   ] as const)(
-    "capability=%s stack=%s pending=%s error=%s permits=%s",
-    (supportsStackActions, hasStack, stackPending, stackError, allowed) => {
+    "capability=%s stack=%s pending=%s error=%s live=%j permits=%s",
+    (supportsStackActions, hasStack, stackPending, stackError, liveMembership, allowed) => {
       expect(
-        allowsSinglePullRequestMerge({ supportsStackActions, hasStack, stackPending, stackError }),
+        allowsSinglePullRequestMerge({
+          supportsStackActions,
+          hasStack,
+          stackPending,
+          stackError,
+          liveMembership,
+        }),
       ).toBe(allowed);
     },
   );
