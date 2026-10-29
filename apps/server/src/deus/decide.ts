@@ -5,6 +5,8 @@ import {
   DeusInput,
   DeusInputId,
   DeusInputReceipt,
+  DeusObservationId,
+  DeusDelta,
   DeusResetConversationInput,
   DeusSessionRef,
   DeusSnapshot,
@@ -41,7 +43,17 @@ export const TaskReport = Schema.Struct({
   text: Schema.Trimmed.check(Schema.isMinLength(1)),
 });
 export type TaskReport = typeof TaskReport.Type;
+export const ObservationInput = Schema.Struct({
+  ...DeusSessionRef.fields,
+  inputId: DeusInputId,
+  sourceCursor: DeusCursor,
+  kind: Schema.Literals(["context", "correction", "proposed-preference", "speculation"]),
+  text: Schema.Trimmed.check(Schema.isMinLength(1)),
+  supersedes: Schema.NullOr(DeusObservationId),
+});
+export type ObservationInput = typeof ObservationInput.Type;
 export const Command = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("observe"), input: ObservationInput }),
   Schema.Struct({ type: Schema.Literal("input"), input: DeusInput }),
   Schema.Struct({ type: Schema.Literal("reset"), input: DeusResetConversationInput }),
   Schema.Struct({ type: Schema.Literal("launch"), input: DeusTaskLaunchInput }),
@@ -86,7 +98,9 @@ export function decide(
     readonly taskId: DeusTaskId;
     readonly threadId: ThreadId;
     readonly commandId: CommandId;
+    readonly observationId: DeusObservationId;
   },
+  source?: DeusDelta,
 ):
   | { readonly changes: ReadonlyArray<DeusDurableChange>; readonly intent?: Intent }
   | DeusStateError {
@@ -95,6 +109,72 @@ export function decide(
     return new DeusStateError({ reason: "conflict", message: "The conversation has changed." });
   }
   switch (command.type) {
+    case "observe": {
+      if (
+        !source ||
+        source.cursor !== command.input.sourceCursor ||
+        source.sessionId !== input.sessionId ||
+        source.environmentId !== input.environmentId ||
+        source.projectId !== input.projectId ||
+        (source.change.type !== "transcript" && source.change.type !== "report")
+      ) {
+        return new DeusStateError({
+          reason: "not-found",
+          message: "Observation source was not found.",
+        });
+      }
+      const human =
+        source.change.type === "transcript" && source.change.transcript.role === "human";
+      const original =
+        source.change.type === "report" ? source.change.report : source.change.transcript;
+      if (
+        !original.conversation ||
+        (command.input.kind === "correction" && !human) ||
+        (command.input.supersedes !== null && command.input.kind !== "correction")
+      ) {
+        return new DeusStateError({
+          reason: "conflict",
+          message: "Only a human source can correct working context.",
+        });
+      }
+      if (command.input.supersedes !== null) {
+        const previous = snapshot.observations.find((item) => item.id === command.input.supersedes);
+        if (
+          !previous?.source ||
+          previous.source.cursor >= source.cursor ||
+          snapshot.observations.some((item) => item.supersedes === previous.id)
+        ) {
+          return new DeusStateError({
+            reason: "conflict",
+            message: "Correction target is missing or already superseded.",
+          });
+        }
+      }
+      return {
+        changes: [
+          {
+            type: "observation",
+            observation: {
+              id: ids.observationId,
+              kind: command.input.kind,
+              source: {
+                environmentId: input.environmentId,
+                projectId: input.projectId,
+                sessionId: input.sessionId,
+                cursor: source.cursor,
+              },
+              conversation: original.conversation,
+              text: command.input.text,
+              inputId:
+                source.change.type === "transcript" ? source.change.transcript.inputId : null,
+              taskId: source.change.type === "report" ? source.change.report.taskId : null,
+              supersedes: command.input.supersedes,
+              createdAt: now,
+            },
+          },
+        ],
+      };
+    }
     case "input":
       return {
         changes: [
@@ -237,6 +317,25 @@ export function decide(
                 : { subagentId: command.input.subagentId }),
               mode: command.input.mode,
               text: command.input.text,
+              createdAt: now,
+            },
+          },
+          {
+            type: "observation",
+            observation: {
+              id: ids.observationId,
+              kind: "report" as const,
+              source: {
+                environmentId: input.environmentId,
+                projectId: input.projectId,
+                sessionId: input.sessionId,
+                cursor: DeusCursor.make(snapshot.cursor + 1),
+              },
+              conversation: task.conversation,
+              text: command.input.text,
+              inputId: input.inputId,
+              taskId: task.id,
+              supersedes: null,
               createdAt: now,
             },
           },

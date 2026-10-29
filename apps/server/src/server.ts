@@ -41,6 +41,8 @@ import * as PullRequestHttp from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as DeusContextService from "./deus/DeusContextService.ts";
+import * as DeusMemoryService from "./deus/DeusMemoryService.ts";
 import * as DeusRepository from "./deus/DeusRepository.ts";
 import * as DeusSessionService from "./deus/DeusSessionService.ts";
 import * as DeusThreadBridge from "./deus/DeusThreadBridge.ts";
@@ -608,7 +610,8 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  DeusThreadBridge.layer.pipe(
+  Layer.merge(DeusThreadBridge.layer, DeusContextService.layer).pipe(
+    Layer.provideMerge(DeusMemoryService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
     Layer.provideMerge(DeusSessionService.layer.pipe(Layer.provideMerge(DeusRepository.layer))),
     Layer.provide(DeusAuthority.layerUnavailable),
     Layer.provide(CommandReceiptStoreV2.layer),

@@ -187,8 +187,22 @@ export const DeusReport = Schema.Struct({
 });
 export type DeusReport = typeof DeusReport.Type;
 
+export const DeusSourceRef = Schema.Struct({ ...DeusSessionRef.fields, cursor: DeusCursor });
+export type DeusSourceRef = typeof DeusSourceRef.Type;
+
+export const DeusObservationKind = Schema.Literals([
+  "context",
+  "report",
+  "correction",
+  "proposed-preference",
+  "speculation",
+]);
+export type DeusObservationKind = typeof DeusObservationKind.Type;
+
 export const DeusObservation = Schema.Struct({
   id: DeusObservationId,
+  kind: Schema.optional(DeusObservationKind),
+  source: Schema.optional(DeusSourceRef),
   conversation: DeusConversation,
   text: TrimmedNonEmptyString,
   inputId: Schema.NullOr(DeusInputId),

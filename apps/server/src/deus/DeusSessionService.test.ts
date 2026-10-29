@@ -281,6 +281,19 @@ it.effect(
       assert.equal(current.tasks[0]?.status, "running");
       assert.equal(current.tasks[0]?.workers[0]?.runId, runId);
       assert.equal(current.reports[0]?.runId, runId);
+      assert.lengthOf(current.observations, 1);
+      assert.equal(current.observations[0]?.text, report.text);
+      assert.deepInclude(current.observations[0], {
+        conversation: DeusConversation.make(1),
+        taskId: launched.task.id,
+        inputId: report.inputId,
+        kind: "report",
+        source: {
+          ...scope,
+          sessionId: session.sessionId,
+          cursor: current.reports[0]!.cursor,
+        },
+      });
       assert.equal(current.memories[0]?.text, "Retain this");
     }).pipe(Effect.provide(testLayer)),
 );

@@ -5,6 +5,8 @@ import {
   DeusCursor,
   DeusDelta,
   DeusOpenInput,
+  DeusObservationId,
+  DeusSourceRef,
   DeusScope,
   DeusSessionId,
   DeusSessionRef,
@@ -52,6 +54,7 @@ export class DeusRepository extends Context.Service<
       ref: DeusSessionRef,
       after: DeusCursor,
     ) => Effect.Effect<ReadonlyArray<DeusDelta>, DeusRepositoryError>;
+    readonly readSource: (ref: DeusSourceRef) => Effect.Effect<DeusDelta, DeusRepositoryError>;
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly pending: Effect.Effect<ReadonlyArray<PendingIntent>, DeusRepositoryError>;
     readonly workerSessions: Effect.Effect<ReadonlyArray<DeusSessionRef>, DeusRepositoryError>;
@@ -67,6 +70,7 @@ const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CommandResult));
 const decodeDelta = Schema.decodeEffect(Schema.fromJsonString(DeusDelta));
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(PendingIntent));
 const decodeSessionRef = Schema.decodeEffect(DeusSessionRef);
+const decodeSourceRef = Schema.decodeEffect(DeusSourceRef);
 const encodeSnapshot = Schema.encodeSync(Schema.fromJsonString(DeusSnapshot));
 const encodeDelta = Schema.encodeSync(Schema.fromJsonString(DeusDelta));
 const encodePending = Schema.encodeSync(Schema.fromJsonString(PendingIntent));
@@ -122,6 +126,38 @@ const make = Effect.gen(function* () {
         message: "Deus session does not belong to this scope.",
       });
     return yield* decodeSnapshot(rows[0].snapshot_json);
+  });
+  const sourceAt = Effect.fn("DeusRepository.sourceAt")(function* (ref: DeusSourceRef) {
+    const rows = yield* sql<{ delta_json: string }>`SELECT delta_json FROM deus_events
+      WHERE session_id = ${ref.sessionId} AND cursor = ${ref.cursor}`;
+    if (!rows[0])
+      return yield* new DeusStateError({
+        reason: "not-found",
+        message: "Deus source was not found.",
+      });
+    const delta = yield* decodeDelta(rows[0].delta_json);
+    if (
+      delta.environmentId !== ref.environmentId ||
+      delta.projectId !== ref.projectId ||
+      delta.sessionId !== ref.sessionId ||
+      delta.cursor !== ref.cursor
+    )
+      return yield* new DeusStateError({
+        reason: "scope-mismatch",
+        message: "Deus source is not in this scope.",
+      });
+    return delta;
+  });
+  const readSource = Effect.fn("DeusRepository.readSource")(function (raw: DeusSourceRef) {
+    return sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const ref = yield* decodeSourceRef(raw);
+          yield* readSnapshot(ref);
+          return yield* sourceAt(ref);
+        }),
+      )
+      .pipe(mapError("read-source"));
   });
   const receipt = Effect.fn("DeusRepository.receipt")(function* (
     scope: DeusScope,
@@ -212,12 +248,23 @@ const make = Effect.gen(function* () {
                   };
                 }
                 const now = DateTime.formatIso(yield* DateTime.now);
-                const planned = decide(current, command, now, {
-                  transcriptId: DeusTranscriptId.make(yield* crypto.randomUUIDv4()),
-                  taskId: DeusTaskId.make(yield* crypto.randomUUIDv4()),
-                  threadId: ThreadId.make(yield* crypto.randomUUIDv4()),
-                  commandId: CommandId.make(`deus-launch:${input.sessionId}:${input.inputId}`),
-                });
+                const source =
+                  command.type === "observe"
+                    ? yield* sourceAt({ ...input, cursor: command.input.sourceCursor })
+                    : undefined;
+                const planned = decide(
+                  current,
+                  command,
+                  now,
+                  {
+                    transcriptId: DeusTranscriptId.make(yield* crypto.randomUUIDv4()),
+                    taskId: DeusTaskId.make(yield* crypto.randomUUIDv4()),
+                    threadId: ThreadId.make(yield* crypto.randomUUIDv4()),
+                    commandId: CommandId.make(`deus-launch:${input.sessionId}:${input.inputId}`),
+                    observationId: DeusObservationId.make(yield* crypto.randomUUIDv4()),
+                  },
+                  source,
+                );
                 if (isStateError(planned)) return yield* planned;
                 if (command.type === "acknowledge-launch") {
                   const ack = command.input;
@@ -357,6 +404,7 @@ const make = Effect.gen(function* () {
     snapshot,
     commit,
     readDeltas,
+    readSource,
     pending,
     subscribe: PubSub.subscribe(changes),
     projectDeleted: Effect.fn("DeusRepository.projectDeleted")(function (_projectId) {
