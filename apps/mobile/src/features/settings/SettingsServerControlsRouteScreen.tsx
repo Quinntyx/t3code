@@ -24,6 +24,7 @@ import {
   SettingsEnvironmentFilterHeader,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
+import { BrowserRenderingSections } from "./components/BrowserRenderingSections";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -378,6 +379,17 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                     />
                   </SettingsSection>
+                  {projectSelected ? null : (
+                    <BrowserRenderingSections
+                      environmentId={
+                        targets.length === 1 ? (reference?.environment.environmentId ?? null) : null
+                      }
+                      gpu={uniform("serverBrowserGpu")}
+                      scale={uniform("serverBrowserRenderScale")}
+                      disabled={disabled}
+                      write={write}
+                    />
+                  )}
                   <AutoSettleSettingsRows write={write} pending={pendingWrites > 0} />
                 </>
               ) : null}

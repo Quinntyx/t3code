@@ -78,6 +78,7 @@ it.effect.each([
     const inputs: unknown[] = [];
     const attachments: Parameters<ServerBrowser.ServerBrowser["Service"]["attachViewer"]>[0][] = [];
     const acked = Promise.withResolvers<void>();
+    const keyFrameRequested = Promise.withResolvers<void>();
     const frame = new Uint8Array([255, 216, 255, 217]);
     const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
     yield* Queue.offer(output, { _tag: "viewport", width: 1280, height: 800 });
@@ -89,6 +90,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: (input) =>
@@ -97,6 +99,7 @@ it.effect.each([
           return {
             output,
             input: (message) => Effect.sync(() => void inputs.push(message)),
+            requestKeyFrame: Effect.sync(() => keyFrameRequested.resolve()),
           };
         }),
     });
@@ -111,7 +114,7 @@ it.effect.each([
     );
     const server = Context.get(services, HttpServer.HttpServer);
     const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
-    const resource = `/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket${interactive ? "" : "&interactive=false"}`;
+    const resource = `/api/preview-stream/ws?threadId=thread&tabId=tab&codecs=vp8,hevc&wsTicket=one-use-ticket${interactive ? "" : "&interactive=false"}`;
     const received = Promise.withResolvers<void>();
     const socket = yield* Effect.acquireRelease(
       Effect.sync(() => new WebSocket(`${origin}${resource}`)),
@@ -129,12 +132,15 @@ it.effect.each([
       frames.push(new Uint8Array(event.data as ArrayBuffer));
       for (const message of mutations) socket.send(JSON.stringify(message));
       socket.send("malformed input");
+      // Read-only viewers decode video too, so key frame requests skip the control check.
+      socket.send(JSON.stringify({ type: "keyFrame" }));
       socket.send(JSON.stringify({ type: "ack" }));
       received.resolve();
     });
     yield* Effect.promise(() => received.promise);
     // The socket ack follows every mutation, providing a barrier without sleeps.
     yield* Effect.promise(() => acked.promise);
+    yield* Effect.promise(() => keyFrameRequested.promise);
     expect(frames).toEqual([frame]);
     expect(viewports).toEqual([{ type: "viewport", width: 1280, height: 800 }]);
     expect(inputs).toEqual(canOperate ? [...mutations, null] : []);
@@ -146,81 +152,138 @@ it.effect.each([
         maxHeight: 800,
         quality: 70,
         canOperate,
+        videoCodecs: ["vp8"],
       },
     ]);
     expect(auth.requests).toEqual([resource]);
   }).pipe(Effect.scoped),
 );
 
-it.effect("sends replies ahead of stale frames and only the newest frame after an ack", () =>
+const openFrameStream = Effect.fnUntraced(function* (
+  output: Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>,
+) {
+  const browser = ServerBrowser.ServerBrowser.of({
+    clearProfile: () => Effect.void,
+    reportProfiles: () => Effect.void,
+    listGpus: Effect.succeed({ gpus: [] }),
+    openDownload: () => Effect.succeedNone,
+    answerFileChooser: () => Effect.succeed(false),
+    attachViewer: () =>
+      Effect.succeed({ output, input: () => Effect.void, requestKeyFrame: Effect.void }),
+  });
+  const services = yield* Layer.build(
+    HttpRouter.serve(
+      routeLayer.pipe(
+        Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
+        Layer.provide(platformLayer),
+      ),
+      { disableListenLog: true },
+    ).pipe(
+      Layer.provideMerge(NodeHttpServer.layerTest),
+      Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
+    ),
+  );
+  const server = Context.get(services, HttpServer.HttpServer);
+  const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
+  const received: Array<number | string> = [];
+  const waiters: Array<{ count: number; resolve: () => void }> = [];
+  const socket = yield* Effect.acquireRelease(
+    Effect.sync(
+      () =>
+        new WebSocket(
+          `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket`,
+        ),
+    ),
+    (socket) => Effect.sync(() => socket.close()),
+  );
+  socket.binaryType = "arraybuffer";
+  socket.addEventListener("message", (event) => {
+    received.push(
+      typeof event.data === "string"
+        ? JSON.parse(event.data).type
+        : new Uint8Array(event.data as ArrayBuffer)[0]!,
+    );
+    for (const waiter of waiters.filter((waiter) => received.length >= waiter.count)) {
+      waiters.splice(waiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  });
+  const receivedCount = (count: number) =>
+    Effect.promise(
+      () =>
+        new Promise<void>((resolve) =>
+          received.length >= count ? resolve() : waiters.push({ count, resolve }),
+        ),
+    );
+  const ack = Effect.sync(() => socket.send(JSON.stringify({ type: "ack" })));
+  return { received, receivedCount, ack };
+});
+
+it.effect("sends replies ahead of a large frame and only the newest frame after its ack", () =>
   Effect.gen(function* () {
     const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
     const released: number[] = [];
-    const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => ({
-      _tag: "frame",
-      data: new Uint8Array([id]),
-      ack: Effect.sync(() => void released.push(id)),
-    });
-    const browser = ServerBrowser.ServerBrowser.of({
-      clearProfile: () => Effect.void,
-      reportProfiles: () => Effect.void,
-      openDownload: () => Effect.succeedNone,
-      answerFileChooser: () => Effect.succeed(false),
-      attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
-    });
-    const services = yield* Layer.build(
-      HttpRouter.serve(
-        routeLayer.pipe(
-          Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
-          Layer.provide(platformLayer),
-        ),
-        { disableListenLog: true },
-      ).pipe(
-        Layer.provideMerge(NodeHttpServer.layerTest),
-        Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
-      ),
-    );
-    const server = Context.get(services, HttpServer.HttpServer);
-    const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
-    const received: Array<number | string> = [];
-    let next = Promise.withResolvers<void>();
-    const socket = yield* Effect.acquireRelease(
-      Effect.sync(
-        () =>
-          new WebSocket(
-            `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket`,
-          ),
-      ),
-      (socket) => Effect.sync(() => socket.close()),
-    );
-    socket.binaryType = "arraybuffer";
-    socket.addEventListener("message", (event) => {
-      received.push(
-        typeof event.data === "string"
-          ? JSON.parse(event.data).type
-          : new Uint8Array(event.data as ArrayBuffer)[0]!,
-      );
-      next.resolve();
-    });
+    // Past the in-flight byte budget, so each frame travels alone.
+    const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => {
+      const data = new Uint8Array(128 * 1024);
+      data[0] = id;
+      return { _tag: "frame", data, ack: Effect.sync(() => void released.push(id)) };
+    };
+    const stream = yield* openFrameStream(output);
 
     yield* Queue.offer(output, frame(1));
-    yield* Effect.promise(() => next.promise);
-    next = Promise.withResolvers();
+    yield* stream.receivedCount(1);
     yield* Queue.offerAll(output, [
       frame(2),
       frame(3),
       frame(4),
       { _tag: "probe", x: 0, y: 0, editable: false },
     ]);
-    yield* Effect.promise(() => next.promise);
-    expect(received).toEqual([1, "probe"]);
+    yield* stream.receivedCount(2);
+    expect(stream.received).toEqual([1, "probe"]);
     expect(released).toEqual([2, 3]);
 
-    next = Promise.withResolvers();
-    socket.send(JSON.stringify({ type: "ack" }));
-    yield* Effect.promise(() => next.promise);
-    expect(received).toEqual([1, "probe", 4]);
+    yield* stream.ack;
+    yield* stream.receivedCount(3);
+    expect(stream.received).toEqual([1, "probe", 4]);
     expect(released).toEqual([2, 3, 1]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps several small frames in flight and encodes waiting frames only when sent", () =>
+  Effect.gen(function* () {
+    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+    const released: number[] = [];
+    const encoded: number[] = [];
+    const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => ({
+      _tag: "frame",
+      data: Effect.sync(() => {
+        encoded.push(id);
+        return new Uint8Array([id]);
+      }),
+      ack: Effect.sync(() => void released.push(id)),
+    });
+    const stream = yield* openFrameStream(output);
+
+    // A distant viewer gets more than one frame per round trip.
+    yield* Queue.offerAll(output, [1, 2, 3, 4, 5, 6].map(frame));
+    yield* stream.receivedCount(6);
+    yield* Queue.offerAll(output, [
+      frame(7),
+      frame(8),
+      { _tag: "probe", x: 0, y: 0, editable: false },
+    ]);
+    yield* stream.receivedCount(7);
+    expect(stream.received).toEqual([1, 2, 3, 4, 5, 6, "probe"]);
+    // Superseded before it was sent, so it was never encoded.
+    expect(released).toEqual([7]);
+    expect(encoded).toEqual([1, 2, 3, 4, 5, 6]);
+
+    yield* stream.ack;
+    yield* stream.receivedCount(8);
+    expect(stream.received).toEqual([1, 2, 3, 4, 5, 6, "probe", 8]);
+    expect(released).toEqual([7, 1]);
+    expect(encoded).toEqual([1, 2, 3, 4, 5, 6, 8]);
   }).pipe(Effect.scoped),
 );
 
@@ -235,6 +298,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => {
@@ -276,6 +340,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: (input) =>
         Effect.sync(() => {
           requests.push(input);
@@ -324,6 +389,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
         Effect.sync(() => {
@@ -393,6 +459,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.fail(new ServerBrowser.ServerBrowserLaunchError({ cause: error })),

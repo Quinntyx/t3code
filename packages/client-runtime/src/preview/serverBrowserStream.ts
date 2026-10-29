@@ -1,7 +1,9 @@
 // @effect-diagnostics globalTimers:off globalFetch:off - This browser and WebView transport runs without an Effect runtime.
 import { type DeviceHubAccess, withDeviceHubQuery } from "../device/hubAccess.ts";
 import {
+  decodePreviewStreamFrame,
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
+  PREVIEW_STREAM_VIDEO_CODECS,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
@@ -183,7 +185,8 @@ export interface PreviewStreamTarget {
 }
 
 export interface PreviewStreamEvents {
-  readonly onFrame: (jpeg: ArrayBuffer) => void;
+  /** A JPEG or video frame; pass it to a `PreviewFramePainter`. */
+  readonly onFrame: (frame: ArrayBuffer) => void;
   readonly onViewport: (viewport: PreviewStreamViewport) => void;
   readonly onProbe?: (probe: PreviewStreamProbe) => void;
   readonly onPointer?: (pointer: PreviewStreamPointer) => void;
@@ -201,10 +204,24 @@ export interface PreviewStreamEvents {
 
 export interface PreviewStreamClient {
   readonly send: (input: PreviewStreamInput) => boolean;
+  /** For a painter whose video decoder failed; the next video frame is then a key frame. */
+  readonly requestKeyFrame: () => void;
   readonly stop: () => void;
 }
 
+let decodableVideoCodecs: Promise<ReadonlyArray<string>> | null = null;
+const videoCodecs = () =>
+  (decodableVideoCodecs ??= Promise.all(
+    PREVIEW_STREAM_VIDEO_CODECS.map((codec) =>
+      VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true }).then(
+        (support) => (support.supported ? [codec] : []),
+        () => [],
+      ),
+    ),
+  ).then((supported) => supported.flat()));
+
 const ACK_MESSAGE = JSON.stringify({ type: "ack" });
+const KEY_FRAME_MESSAGE = JSON.stringify({ type: "keyFrame" });
 export function createPreviewStreamClient(
   target: PreviewStreamTarget,
   events: PreviewStreamEvents,
@@ -216,7 +233,7 @@ export function createPreviewStreamClient(
     maxHeight: String(Math.max(1, Math.round(target.maxHeight))),
   });
   if (target.interactive === false) query.set("interactive", "false");
-  const url = withDeviceHubQuery(`${target.access.wsBase}/ws?${query.toString()}`, target.access);
+  let url = "";
   let stopped = false;
   let socket: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -369,7 +386,14 @@ export function createPreviewStreamClient(
     ws.addEventListener("error", () => ws.close());
   };
 
-  connect();
+  const open = (codecs: ReadonlyArray<string>) => {
+    if (codecs.length > 0) query.set("codecs", codecs.join(","));
+    url = withDeviceHubQuery(`${target.access.wsBase}/ws?${query.toString()}`, target.access);
+    connect();
+  };
+  // WebCodecs is missing in insecure contexts and older WebViews, which keep JPEG frames.
+  if (typeof VideoDecoder === "undefined") open([]);
+  else void videoCodecs().then(open);
 
   return {
     send: (input) => {
@@ -378,6 +402,9 @@ export function createPreviewStreamClient(
       if (input.type !== "takeControl" && control.controller !== "you") return false;
       socket.send(JSON.stringify(input));
       return true;
+    },
+    requestKeyFrame: () => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(KEY_FRAME_MESSAGE);
     },
     stop: () => {
       stopped = true;
@@ -391,52 +418,99 @@ export function createPreviewStreamClient(
 }
 
 export interface PreviewFramePainter {
-  readonly paint: (jpeg: ArrayBuffer) => void;
+  readonly paint: (frame: ArrayBuffer) => void;
   readonly stop: () => void;
 }
 
-/** One decode at a time, keeping only the latest waiting frame for slow viewers. */
+/**
+ * Paints JPEG and video frames, never letting an older frame cover a newer one. JPEGs decode
+ * one at a time and keep only the latest waiting; every video frame decodes, as each builds on
+ * the last. A failed decoder waits for the key frame `onKeyFrameNeeded` asks for.
+ */
 export function createPreviewFramePainter(
   canvas: HTMLCanvasElement,
   onPainted?: () => void,
+  onKeyFrameNeeded?: () => void,
 ): PreviewFramePainter {
   const context = canvas.getContext("2d");
   let stopped = false;
+  let sequence = 0;
+  let painted = -1;
   let decoding = false;
-  let waiting: ArrayBuffer | null = null;
-  const draw = (jpeg: ArrayBuffer) => {
+  let waiting: { readonly order: number; readonly jpeg: Uint8Array } | null = null;
+  let decoder: VideoDecoder | null = null;
+  const show = (order: number, image: CanvasImageSource, width: number, height: number) => {
+    if (stopped || !context || order < painted) return;
+    painted = order;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.drawImage(image, 0, 0);
+    onPainted?.();
+  };
+  const drawJpeg = (order: number, jpeg: Uint8Array) => {
     decoding = true;
-    void createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
+    void createImageBitmap(new Blob([jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }))
       .then((bitmap) => {
-        if (stopped || !context) {
-          bitmap.close();
-          return;
-        }
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-        }
-        context.drawImage(bitmap, 0, 0);
+        show(order, bitmap, bitmap.width, bitmap.height);
         bitmap.close();
-        onPainted?.();
       })
       .catch(() => undefined)
       .finally(() => {
         decoding = false;
         const next = waiting;
         waiting = null;
-        if (next && !stopped) draw(next);
+        if (next && !stopped) drawJpeg(next.order, next.jpeg);
       });
   };
+  const openDecoder = () =>
+    new VideoDecoder({
+      output: (frame) => {
+        show(frame.timestamp, frame, frame.displayWidth, frame.displayHeight);
+        frame.close();
+      },
+      error: () => resetDecoder(),
+    });
+  const resetDecoder = () => {
+    if (decoder && decoder.state !== "closed") decoder.close();
+    decoder = null;
+    if (!stopped) onKeyFrameNeeded?.();
+  };
   return {
-    paint: (jpeg) => {
-      if (stopped) return;
-      if (decoding) waiting = jpeg;
-      else draw(jpeg);
+    paint: (data) => {
+      const frame = decodePreviewStreamFrame(new Uint8Array(data));
+      if (stopped || !frame) return;
+      const order = sequence++;
+      if (frame.type === "jpeg") {
+        if (decoding) waiting = { order, jpeg: frame.data };
+        else drawJpeg(order, frame.data);
+        return;
+      }
+      try {
+        if (frame.type === "key") {
+          decoder ??= openDecoder();
+          decoder.configure({
+            codec: frame.codec,
+            codedWidth: frame.width,
+            codedHeight: frame.height,
+            optimizeForLatency: true,
+          });
+        }
+        // Deltas are useless until the key frame after a decoder failure.
+        if (!decoder) return;
+        decoder.decode(
+          new EncodedVideoChunk({ type: frame.type, timestamp: order, data: frame.data }),
+        );
+      } catch {
+        resetDecoder();
+      }
     },
     stop: () => {
       stopped = true;
       waiting = null;
+      if (decoder && decoder.state !== "closed") decoder.close();
+      decoder = null;
     },
   };
 }

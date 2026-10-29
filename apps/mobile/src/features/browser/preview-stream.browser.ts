@@ -135,10 +135,14 @@ export function start(configuration: PreviewStreamConfiguration) {
     streaming = status === "streaming";
     post({ type: "status", status });
   };
-  const painter = createPreviewFramePainter(canvas, () => {
-    if (!streaming && !stopped) reportStatus("streaming");
-    sendPictureInPictureFrame();
-  });
+  const painter = createPreviewFramePainter(
+    canvas,
+    () => {
+      if (!streaming && !stopped) reportStatus("streaming");
+      sendPictureInPictureFrame();
+    },
+    () => client?.requestKeyFrame(),
+  );
   const send = (message: PreviewStreamInput) => client?.send(message) ?? false;
   const clearInput = () => {
     if (wheelFrame !== null) cancelAnimationFrame(wheelFrame);
@@ -170,7 +174,7 @@ export function start(configuration: PreviewStreamConfiguration) {
         interactive,
       },
       {
-        onFrame: (jpeg) => painter.paint(jpeg),
+        onFrame: (frame) => painter.paint(frame),
         onPointer: showAgentCursor,
         onClipboard: (text) => post({ type: "clipboard", text }),
         onDownload: (download) => post({ type: "download", ...download }),

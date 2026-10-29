@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
-// Screencasts ignore emulated device scale; real 2x keeps captures sharp.
-// --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
+// Screencasts ignore emulated device scale; a real device scale keeps captures sharp.
+// The software default (--disable-gpu) composites cheaply while preserving SwiftShader WebGL.
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
@@ -39,6 +39,10 @@ import {
   type PreviewNavStatus,
   type PreviewSessionSnapshot,
   type PreviewViewportSetting,
+  encodePreviewStreamVideoFrame,
+  type ServerBrowserGpuList,
+  DEFAULT_SERVER_BROWSER_GPU,
+  DEFAULT_SERVER_BROWSER_RENDER_SCALE,
   ThreadId,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   type PreviewAppearancePreference,
@@ -73,6 +77,7 @@ import type {
 
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -83,17 +88,21 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { discoverGpus, gpuLaunchArgs } from "./ServerBrowserGpus.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
-const RENDER_SCALE = 2;
 // Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const SCREENCAST_ACK_PACE_MS = 100;
 const SCREENCAST_SETTLE_MS = 200;
 const SCREENCAST_MOTION_FRAMES = 4;
 const SCREENCAST_MOTION_WINDOW_MS = 300;
 const SCREENCAST_MOTION_QUALITY = 50;
+// Video frames are tiny, so they pace only Chromium's capture: three in flight allow 60 fps.
+const VIDEO_ACK_PACE_MS = 50;
+// Video blurs text, so a JPEG still follows once the page stops changing.
+const VIDEO_SETTLE_MS = 400;
 const HOST_RECONNECT_DELAY = "1 second";
 const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
@@ -156,7 +165,8 @@ export class ServerBrowserLaunchError extends Schema.TaggedError<ServerBrowserLa
 export type ServerBrowserViewerOutput =
   | {
       readonly _tag: "frame";
-      readonly data: Uint8Array;
+      /** Video frames encode only when sent, so frames superseded on a slow link cost nothing. */
+      readonly data: Uint8Array | Effect.Effect<Uint8Array | null>;
       readonly ack: Effect.Effect<void>;
     }
   | { readonly _tag: "viewport"; readonly width: number; readonly height: number }
@@ -205,6 +215,8 @@ export type ServerBrowserViewerOutput =
 export interface ServerBrowserViewer {
   readonly output: Queue.Dequeue<ServerBrowserViewerOutput>;
   readonly input: (message: unknown) => Effect.Effect<void>;
+  /** Read-only viewers decode video too, so this is not gated on control. */
+  readonly requestKeyFrame: Effect.Effect<void>;
 }
 
 export class ServerBrowser extends Context.Service<
@@ -217,6 +229,8 @@ export class ServerBrowser extends Context.Service<
       readonly maxHeight: number;
       readonly quality: number;
       readonly canOperate: boolean;
+      /** Codecs the viewer decodes, preferred first; empty keeps JPEG frames. */
+      readonly videoCodecs?: ReadonlyArray<string>;
     }) => Effect.Effect<
       ServerBrowserViewer,
       ServerBrowserTabNotFoundError | ServerBrowserLaunchError,
@@ -242,6 +256,9 @@ export class ServerBrowser extends Context.Service<
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
     readonly reportProfiles: (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+
+    /** GPUs this host's browser can render on, for the rendering setting. */
+    readonly listGpus: Effect.Effect<ServerBrowserGpuList>;
   }
 >()("t3/preview/ServerBrowser") {}
 
@@ -256,6 +273,8 @@ interface ViewerState {
   scrolledAt: number;
 
   requestedSize: { width: number; height: number; order: number } | null;
+  /** A wheel or pointer move still waiting for earlier input, which later ones merge into. */
+  waitingMotion: Record<string, unknown> | null;
 }
 
 interface EncoderWindow {
@@ -460,6 +479,22 @@ const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const renderingOf = (settings: {
+    readonly serverBrowserGpu: string;
+    readonly serverBrowserRenderScale: number;
+  }) => ({ gpu: settings.serverBrowserGpu, scale: settings.serverBrowserRenderScale });
+  let rendering = renderingOf(
+    yield* serverSettings.getSettings.pipe(
+      Effect.orElseSucceed(() => ({
+        serverBrowserGpu: DEFAULT_SERVER_BROWSER_GPU,
+        serverBrowserRenderScale: DEFAULT_SERVER_BROWSER_RENDER_SCALE,
+      })),
+    ),
+  );
+  // Tabs reopen only after the old browsers close, so a profile is never opened twice.
+  let relaunched = Promise.resolve();
+  const relaunchedTabs = new Set<string>();
 
   const tabs = new Map<string, ServerTab>();
   const pendingTabs = new Map<string, Promise<ServerTab>>();
@@ -472,6 +507,10 @@ const make = Effect.gen(function* () {
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
+    rendering: async () => ({
+      args: await gpuLaunchArgs(rendering.gpu, host.platform),
+      scale: rendering.scale,
+    }),
     executable: () => runPromise(previewBrowser.executable),
     // Playwright's launch error drops Chrome's own output; its sandbox note survives.
     diagnose: (executable, cause) =>
@@ -612,7 +651,7 @@ const make = Effect.gen(function* () {
     await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
       width: layout.width,
       height: layout.height,
-      deviceScaleFactor: RENDER_SCALE * tab.zoomFactor,
+      deviceScaleFactor: rendering.scale * tab.zoomFactor,
       mobile: false,
     });
   };
@@ -655,14 +694,15 @@ const make = Effect.gen(function* () {
 
   const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
 
-  const dropTab = (tab: ServerTab, closeSession: boolean) => {
+  const dropTab = (tab: ServerTab, closeSession: boolean, reopens = false) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
     tabs.delete(key);
     tab.closing = true;
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
-    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    const end =
+      reopens || (tab.desktop && !closeSession && sessionOpen(tab)) ? "reconnect" : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
     void tab.control.close().catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
@@ -891,16 +931,20 @@ const make = Effect.gen(function* () {
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
     reportLiveTabs();
-    // Existing desktop and popup PDFs can start loading before interception attaches.
-    if (
-      snapshot.navStatus._tag === "Loading" &&
-      ((!adopted && !desktop) || isPdfAssetUrl(snapshot.navStatus.url))
-    ) {
+    // Existing desktop and popup PDFs can start loading before interception attaches. A tab
+    // reopened by a browser relaunch returns to its page even after that page loaded.
+    const navStatus = snapshot.navStatus;
+    const reopened = relaunchedTabs.delete(key);
+    const resumeUrl =
+      navStatus._tag === "Loading" || (reopened && navStatus._tag !== "Idle")
+        ? navStatus.url
+        : null;
+    if (resumeUrl !== null && ((!adopted && !desktop) || isPdfAssetUrl(resumeUrl))) {
       const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
       tab.initialNavigation = (
-        (desktop || adopted) && page.url() === snapshot.navStatus.url
+        (desktop || adopted) && page.url() === resumeUrl
           ? page.reload(options)
-          : page.goto(snapshot.navStatus.url, options)
+          : page.goto(resumeUrl, options)
       ).then(constVoid, (cause: unknown) => {
         throw ServerBrowserPage.toOperationError(cause, NAVIGATION_TIMEOUT_MS);
       });
@@ -1225,7 +1269,8 @@ const make = Effect.gen(function* () {
     if (pending) return pending;
     const existing = tabs.get(key);
     if (existing) return Promise.resolve(existing);
-    const opening = createTab(snapshot)
+    const opening = relaunched
+      .then(() => createTab(snapshot))
       .catch((cause: unknown) => {
         runFork(
           Effect.logWarning(
@@ -1465,6 +1510,28 @@ const make = Effect.gen(function* () {
     });
     tab.captureLock = run.then(constVoid, constVoid);
     return run;
+  };
+
+  const openVideoEncoder = async (codecs: ReadonlyArray<string>) => {
+    const page = await contexts.scratchPage().catch(() => null);
+    if (!page) return null;
+    try {
+      await page.route(ServerBrowserPage.VIDEO_ENCODER_URL, (route) =>
+        route.fulfill({ contentType: "text/html", body: "<!doctype html>" }),
+      );
+      await page.goto(ServerBrowserPage.VIDEO_ENCODER_URL);
+      await page.evaluate(ServerBrowserPage.videoEncoderScript);
+      const codec = await page.evaluate(
+        (candidates) =>
+          (globalThis as unknown as ServerBrowserPage.VideoEncoderWindow).__t3Video.pick(
+            candidates,
+          ),
+        codecs,
+      );
+      if (codec !== null) return { page, codec };
+    } catch {}
+    await page.close().catch(constVoid);
+    return null;
   };
 
   const startRecording = (tab: ServerTab): Promise<Recording> => {
@@ -1968,7 +2035,7 @@ const make = Effect.gen(function* () {
         return withScreencastsPaused(tab, () =>
           ServerBrowserPage.snapshot({
             ...tab,
-            renderScale: tab.desktop ? "display" : RENDER_SCALE,
+            renderScale: tab.desktop ? "display" : rendering.scale,
           }),
         );
       }
@@ -2107,6 +2174,13 @@ const make = Effect.gen(function* () {
     viewer.pressedButtons.clear();
     viewer.requestedSize = null;
   };
+
+  const motionKind = (message: Record<string, unknown>) =>
+    message.type === "wheel"
+      ? "wheel"
+      : message.type === "mouse" && message.action === "move"
+        ? "move"
+        : null;
 
   const dispatchViewerInput = async (
     tab: ServerTab,
@@ -2267,9 +2341,46 @@ const make = Effect.gen(function* () {
         ),
     );
     const quality = Math.min(100, Math.max(1, Math.round(input.quality)));
+    const video =
+      input.videoCodecs && input.videoCodecs.length > 0
+        ? yield* Effect.acquireRelease(
+            Effect.promise(() => openVideoEncoder(input.videoCodecs ?? [])),
+            (opened) => Effect.promise(async () => opened?.page.close().catch(constVoid)),
+          )
+        : null;
+    let videoEncoder = video;
+    const encodeFrame = async (jpeg: string) => {
+      const current = videoEncoder;
+      if (!current) return Buffer.from(jpeg, "base64");
+      try {
+        const encoded = await current.page.evaluate(
+          (data) =>
+            (globalThis as unknown as ServerBrowserPage.VideoEncoderWindow).__t3Video.encode(data),
+          jpeg,
+        );
+        if (!encoded) return null;
+        const data = Buffer.from(encoded.data, "base64");
+        return encodePreviewStreamVideoFrame(
+          encoded.key
+            ? {
+                type: "key",
+                codec: current.codec,
+                width: encoded.width,
+                height: encoded.height,
+                data,
+              }
+            : { type: "delta", data },
+        );
+      } catch {
+        // A failed encoder, e.g. past the codec's size limit, leaves this viewer on JPEG.
+        videoEncoder = null;
+        return Buffer.from(jpeg, "base64");
+      }
+    };
     // Chromium may drop the final frame during a burst; send a still when it settles.
     let framesInFlight = 0;
     let mayHaveDropped = false;
+    let videoSinceStill = false;
     let motion = false;
     const recentFrames: Array<number> = [];
     let screencastParams = Promise.resolve();
@@ -2320,6 +2431,7 @@ const make = Effect.gen(function* () {
       resume: () => startScreencast(screencastScale),
       scrolledAt: 0,
       requestedSize: null,
+      waitingMotion: null,
     };
     yield* Effect.acquireRelease(
       Effect.sync(() => {
@@ -2352,48 +2464,77 @@ const make = Effect.gen(function* () {
       }),
     );
     let screencastStarted = false;
+    let previousFrame: string | null = null;
     session.on("Page.screencastFrame", (frame) => {
       screencastStarted = true;
+      // A capture can repaint an unchanged page. Sending that frame would only cost bandwidth,
+      // and for video it would schedule another still, whose capture repaints again.
+      if (frame.data === previousFrame) {
+        void session
+          .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+          .then(constVoid, constVoid);
+        return;
+      }
+      previousFrame = frame.data;
       if (framesInFlight > 0) mayHaveDropped = true;
       framesInFlight += 1;
       const arrivedAt = Date.now();
-      recentFrames.push(arrivedAt);
-      while (recentFrames[0]! < arrivedAt - SCREENCAST_MOTION_WINDOW_MS) recentFrames.shift();
-      if (
-        !motion &&
-        recentFrames.length >= SCREENCAST_MOTION_FRAMES &&
-        arrivedAt - viewer.scrolledAt < SCREENCAST_MOTION_WINDOW_MS
-      ) {
-        motion = true;
-        void startScreencast(0.5);
-      } else if (motion && arrivedAt - viewer.scrolledAt > SCREENCAST_SETTLE_MS) {
-        motion = false;
-        recentFrames.length = 0;
-        void startScreencast(1);
-      }
-      if (settleTimer !== null) clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        settleTimer = null;
-        if (!motion && !mayHaveDropped) return;
-        mayHaveDropped = false;
-        if (motion) {
+      // Video already keeps moving frames small, so only JPEG viewers drop resolution.
+      if (!video) {
+        recentFrames.push(arrivedAt);
+        while (recentFrames[0]! < arrivedAt - SCREENCAST_MOTION_WINDOW_MS) recentFrames.shift();
+        if (
+          !motion &&
+          recentFrames.length >= SCREENCAST_MOTION_FRAMES &&
+          arrivedAt - viewer.scrolledAt < SCREENCAST_MOTION_WINDOW_MS
+        ) {
+          motion = true;
+          void startScreencast(0.5);
+        } else if (motion && arrivedAt - viewer.scrolledAt > SCREENCAST_SETTLE_MS) {
           motion = false;
           recentFrames.length = 0;
           void startScreencast(1);
         }
-        void pushStill();
-      }, SCREENCAST_SETTLE_MS);
+      }
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      settleTimer = setTimeout(
+        () => {
+          settleTimer = null;
+          if (!motion && !mayHaveDropped && !videoSinceStill) return;
+          mayHaveDropped = false;
+          videoSinceStill = false;
+          if (motion) {
+            motion = false;
+            recentFrames.length = 0;
+            void startScreencast(1);
+          }
+          void pushStill();
+        },
+        video ? VIDEO_SETTLE_MS : SCREENCAST_SETTLE_MS,
+      );
+      let released: Promise<void> | null = null;
+      const release = () =>
+        (released ??= sleepUntil(
+          arrivedAt + (video ? VIDEO_ACK_PACE_MS : SCREENCAST_ACK_PACE_MS),
+        ).then(() => {
+          framesInFlight -= 1;
+          return session
+            .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+            .then(constVoid, constVoid);
+        }));
+      if (videoEncoder) videoSinceStill = true;
       viewer.push({
         _tag: "frame",
-        data: Buffer.from(frame.data, "base64"),
-        ack: Effect.promise(() =>
-          sleepUntil(arrivedAt + SCREENCAST_ACK_PACE_MS).then(() => {
-            framesInFlight -= 1;
-            return session
-              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-              .catch(constVoid);
-          }),
-        ),
+        // The window between server and viewer bounds video, so Chromium is released once a
+        // frame is encoded rather than when the viewer acks it.
+        data: video
+          ? Effect.promise(() =>
+              encodeFrame(frame.data).finally(() => {
+                void release();
+              }),
+            )
+          : Buffer.from(frame.data, "base64"),
+        ack: Effect.promise(release),
       });
     });
     broadcastViewport(tab);
@@ -2403,6 +2544,15 @@ const make = Effect.gen(function* () {
     if (!screencastStarted) yield* Effect.promise(pushStill);
     return {
       output,
+      requestKeyFrame: Effect.promise(async () => {
+        await videoEncoder?.page
+          .evaluate(() =>
+            (
+              globalThis as unknown as ServerBrowserPage.VideoEncoderWindow
+            ).__t3Video.requestKeyFrame(),
+          )
+          .catch(constVoid);
+      }),
       input: (raw: unknown) =>
         Effect.promise(async () => {
           if (!viewer.canOperate) return;
@@ -2432,9 +2582,26 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else {
-              await tab.control.human(viewer.id, () =>
-                dispatchViewerInput(tab, session, viewer, message),
-              );
+              // Each dispatch waits for the page to handle it, so a slow page would replay seconds
+              // of queued wheels and moves. Ones arriving while another waits merge into it.
+              const waiting = viewer.waitingMotion;
+              if (waiting && motionKind(waiting) === motionKind(message)) {
+                const deltas =
+                  message.type === "wheel"
+                    ? {
+                        deltaX: num(waiting.deltaX) + num(message.deltaX),
+                        deltaY: num(waiting.deltaY) + num(message.deltaY),
+                      }
+                    : {};
+                Object.assign(waiting, message, deltas);
+                return;
+              }
+              const input = motionKind(message) === null ? message : { ...message };
+              viewer.waitingMotion = input === message ? null : input;
+              await tab.control.human(viewer.id, () => {
+                if (viewer.waitingMotion === input) viewer.waitingMotion = null;
+                return dispatchViewerInput(tab, session, viewer, input);
+              });
             }
           } catch {
             broadcastControl(tab);
@@ -2444,6 +2611,25 @@ const make = Effect.gen(function* () {
   });
 
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
+  // GPU and scale are launch flags, so a change relaunches the browser. Its tabs reload in
+  // place: viewers reconnect and each tab reopens at its page on first use.
+  yield* serverSettings.streamChanges.pipe(
+    Stream.map(renderingOf),
+    Stream.runForEach((next) =>
+      Effect.promise(() => {
+        if (next.gpu === rendering.gpu && next.scale === rendering.scale) return relaunched;
+        rendering = next;
+        for (const tab of tabs.values()) {
+          if (tab.desktop) continue;
+          relaunchedTabs.add(tabKey(tab.threadId, tab.tabId));
+          dropTab(tab, false, true);
+        }
+        relaunched = relaunched.then(() => contexts.relaunch());
+        return relaunched;
+      }),
+    ),
+    Effect.forkScoped,
+  );
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
     (yield* PreviewBrowserHost.sandboxBlocked)
@@ -2530,10 +2716,16 @@ const make = Effect.gen(function* () {
       catch: (cause) => new PreviewClearProfileError({ profileId, cause }),
     });
 
+  const listGpus = Effect.promise(() => discoverGpus(host.platform)).pipe(
+    Effect.map((gpus) => ({ gpus })),
+    Effect.withSpan("ServerBrowser.listGpus"),
+  );
+
   return ServerBrowser.of({
     attachViewer,
     clearProfile,
     reportProfiles,
+    listGpus,
     openDownload,
     answerFileChooser,
   });

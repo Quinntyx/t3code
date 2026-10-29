@@ -63,6 +63,11 @@ export function createPreviewEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
+    gpus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:preview:gpus",
+      tag: WS_METHODS.previewListGpus,
+      staleTimeMs: 60_000,
+    }),
     clearProfile: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:preview:clear-profile",
       tag: WS_METHODS.previewClearProfile,
