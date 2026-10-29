@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { startAmbientShimmer } from "~/ambient-shimmer/renderer";
 import { cn } from "~/lib/utils";
 
-/** The experimental shimmer behind the chat column: full on the new thread page, faint in threads. */
+/** Experimental shimmer behind the chat column: soft on new threads, fainter in conversations. */
 export function AmbientShimmer({ prominent }: { prominent: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -21,7 +21,7 @@ export function AmbientShimmer({ prominent }: { prominent: boolean }) {
       aria-hidden
       className={cn(
         "pointer-events-none absolute inset-0 transition-opacity duration-700 ease-out",
-        prominent ? "opacity-100" : "opacity-30",
+        prominent ? "opacity-30" : "opacity-12",
       )}
     />
   );
