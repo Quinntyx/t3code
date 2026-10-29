@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { OrchestrationV2Subagent } from "./orchestrationV2.ts";
 import {
   DeusAttachmentId,
   DeusInputId,
@@ -130,6 +131,15 @@ export type DeusTranscript = typeof DeusTranscript.Type;
 export const DeusReportMode = Schema.Literals(["SILENT", "WHEN_IDLE", "INTERRUPT"]);
 export type DeusReportMode = typeof DeusReportMode.Type;
 
+export const DeusWorkerReportInput = Schema.Struct({
+  inputId: DeusInputId,
+  runId: RunId,
+  subagentId: Schema.optional(OrchestrationV2Subagent.fields.id),
+  mode: DeusReportMode,
+  text: Schema.Trimmed.check(Schema.isMinLength(1), Schema.isMaxLength(16000)),
+});
+export type DeusWorkerReportInput = typeof DeusWorkerReportInput.Type;
+
 export const DeusWorkerLink = Schema.Struct({
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -140,6 +150,17 @@ export const DeusWorkerLink = Schema.Struct({
 });
 export type DeusWorkerLink = typeof DeusWorkerLink.Type;
 
+export const DeusDescendant = Schema.Struct({
+  id: OrchestrationV2Subagent.fields.id,
+  threadId: ThreadId,
+  runId: Schema.NullOr(RunId),
+  origin: OrchestrationV2Subagent.fields.origin,
+  childThreadId: Schema.NullOr(ThreadId),
+  nativeTaskRef: OrchestrationV2Subagent.fields.nativeTaskRef,
+  status: OrchestrationV2Subagent.fields.status,
+});
+export type DeusDescendant = typeof DeusDescendant.Type;
+
 export const DeusTask = Schema.Struct({
   id: DeusTaskId,
   inputId: DeusInputId,
@@ -147,6 +168,7 @@ export const DeusTask = Schema.Struct({
   title: TrimmedNonEmptyString,
   status: Schema.Literals(["pending", "running", "waiting", "completed", "failed", "cancelled"]),
   workers: Schema.Array(DeusWorkerLink),
+  descendants: Schema.optional(Schema.Array(DeusDescendant)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -157,6 +179,8 @@ export const DeusReport = Schema.Struct({
   taskId: DeusTaskId,
   threadId: ThreadId,
   runId: RunId,
+  conversation: Schema.optional(DeusConversation),
+  subagentId: Schema.optional(OrchestrationV2Subagent.fields.id),
   mode: DeusReportMode,
   text: TrimmedNonEmptyString,
   createdAt: IsoDateTime,

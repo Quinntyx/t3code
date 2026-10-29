@@ -13,6 +13,7 @@ import {
   DeusTaskId,
   DeusTaskLaunchInput,
   DeusTranscriptId,
+  NodeId,
   RunId,
   ThreadId,
   type DeusDurableChange,
@@ -35,6 +36,7 @@ export const TaskReport = Schema.Struct({
   taskId: DeusTaskId,
   threadId: ThreadId,
   runId: RunId,
+  subagentId: Schema.optional(NodeId),
   mode: Schema.Literals(["SILENT", "WHEN_IDLE", "INTERRUPT"]),
   text: Schema.Trimmed.check(Schema.isMinLength(1)),
 });
@@ -45,6 +47,10 @@ export const Command = Schema.Union([
   Schema.Struct({ type: Schema.Literal("launch"), input: DeusTaskLaunchInput }),
   Schema.Struct({ type: Schema.Literal("acknowledge-launch"), input: LaunchAcknowledgment }),
   Schema.Struct({ type: Schema.Literal("report"), input: TaskReport }),
+  Schema.Struct({
+    type: Schema.Literal("synchronize-task"),
+    input: Schema.Struct({ ...DeusSessionRef.fields, inputId: DeusInputId, task: DeusTask }),
+  }),
 ]);
 export type Command = typeof Command.Type;
 export const Intent = Schema.Union([
@@ -170,7 +176,7 @@ export function decide(
             type: "task",
             task: {
               ...task,
-              status: "running",
+              status: task.status === "pending" ? "running" : task.status,
               updatedAt: now,
               workers: task.workers.map((worker) =>
                 worker.threadId === command.input.threadId
@@ -181,6 +187,27 @@ export function decide(
           },
         ],
       };
+    }
+    case "synchronize-task": {
+      const task = snapshot.tasks.find((item) => item.id === command.input.task.id);
+      if (
+        !task ||
+        task.inputId !== command.input.task.inputId ||
+        task.conversation !== command.input.task.conversation ||
+        task.workers.some(
+          (worker) =>
+            !command.input.task.workers.some(
+              (next) =>
+                next.threadId === worker.threadId &&
+                (worker.runId === null || next.runId === worker.runId),
+            ),
+        )
+      )
+        return new DeusStateError({
+          reason: "scope-mismatch",
+          message: "Task synchronization changed its original identity.",
+        });
+      return { changes: [{ type: "task", task: { ...command.input.task, updatedAt: now } }] };
     }
     case "report": {
       const task = snapshot.tasks.find((item) => item.id === command.input.taskId);
@@ -204,6 +231,10 @@ export function decide(
               taskId: task.id,
               threadId: command.input.threadId,
               runId: command.input.runId,
+              conversation: task.conversation,
+              ...(command.input.subagentId === undefined
+                ? {}
+                : { subagentId: command.input.subagentId }),
               mode: command.input.mode,
               text: command.input.text,
               createdAt: now,

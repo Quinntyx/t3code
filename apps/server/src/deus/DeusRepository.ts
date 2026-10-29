@@ -54,6 +54,10 @@ export class DeusRepository extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<DeusDelta>, DeusRepositoryError>;
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly pending: Effect.Effect<ReadonlyArray<PendingIntent>, DeusRepositoryError>;
+    readonly workerSessions: Effect.Effect<ReadonlyArray<DeusSessionRef>, DeusRepositoryError>;
+    readonly findWorker: (
+      threadId: ThreadId,
+    ) => Effect.Effect<DeusSessionRef | null, DeusRepositoryError>;
     readonly projectDeleted: (projectId: ProjectId) => Effect.Effect<void>;
   }
 >()("t3/deus/DeusRepository") {}
@@ -62,6 +66,7 @@ const decodeSnapshot = Schema.decodeEffect(Schema.fromJsonString(DeusSnapshot));
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CommandResult));
 const decodeDelta = Schema.decodeEffect(Schema.fromJsonString(DeusDelta));
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(PendingIntent));
+const decodeSessionRef = Schema.decodeEffect(DeusSessionRef);
 const encodeSnapshot = Schema.encodeSync(Schema.fromJsonString(DeusSnapshot));
 const encodeDelta = Schema.encodeSync(Schema.fromJsonString(DeusDelta));
 const encodePending = Schema.encodeSync(Schema.fromJsonString(PendingIntent));
@@ -312,7 +317,42 @@ const make = Effect.gen(function* () {
       }),
     )
     .pipe(mapError("pending"));
+  const findWorker = Effect.fn("DeusRepository.findWorker")(function* (threadId: ThreadId) {
+    const rows = yield* sql<{
+      session_id: string;
+      project_id: string;
+    }>`SELECT s.session_id, s.project_id FROM deus_worker_links w
+      JOIN deus_sessions s ON s.session_id = w.session_id JOIN projection_projects p ON p.project_id = s.project_id
+      WHERE w.thread_id = ${threadId} AND s.environment_id = ${environmentId} AND s.closed_at IS NULL AND p.deleted_at IS NULL`;
+    return rows[0]
+      ? yield* decodeSessionRef({
+          environmentId,
+          sessionId: rows[0].session_id,
+          projectId: rows[0].project_id,
+        })
+      : null;
+  });
   return DeusRepository.of({
+    findWorker: Effect.fn("DeusRepository.findRegisteredWorker")((threadId) =>
+      findWorker(threadId).pipe(mapError("findWorker")),
+    ),
+    workerSessions: sql<{
+      session_id: string;
+      project_id: string;
+    }>`SELECT DISTINCT s.session_id, s.project_id FROM deus_sessions s
+      JOIN deus_worker_links w ON w.session_id = s.session_id JOIN projection_projects p ON p.project_id = s.project_id
+      WHERE s.environment_id = ${environmentId} AND s.closed_at IS NULL AND p.deleted_at IS NULL`.pipe(
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, (row) =>
+          decodeSessionRef({
+            environmentId,
+            sessionId: row.session_id,
+            projectId: row.project_id,
+          }),
+        ),
+      ),
+      mapError("workerSessions"),
+    ),
     open,
     snapshot,
     commit,

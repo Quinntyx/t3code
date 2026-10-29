@@ -43,6 +43,8 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as DeusRepository from "./deus/DeusRepository.ts";
 import * as DeusSessionService from "./deus/DeusSessionService.ts";
+import * as DeusThreadBridge from "./deus/DeusThreadBridge.ts";
+import * as DeusAuthority from "./deus/DeusAuthority.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -196,6 +198,7 @@ import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
+import * as CommandReceiptStoreV2 from "./orchestration-v2/CommandReceiptStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
@@ -605,7 +608,12 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  DeusSessionService.layer.pipe(Layer.provideMerge(DeusRepository.layer)),
+  DeusThreadBridge.layer.pipe(
+    Layer.provideMerge(DeusSessionService.layer.pipe(Layer.provideMerge(DeusRepository.layer))),
+    Layer.provide(DeusAuthority.layerUnavailable),
+    Layer.provide(CommandReceiptStoreV2.layer),
+    Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
+  ),
   AgentAwarenessRelay.layer,
   ThreadUsageService.layer,
   HeldHooksWaker.layer,
@@ -1115,8 +1123,10 @@ const layerMakeServer = Layer.unwrap(
         Effect.gen(function* () {
           const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
           const deus = yield* DeusSessionService.DeusSessionService;
+          const bridge = yield* DeusThreadBridge.DeusThreadBridge;
           yield* startup.awaitCommandReady.pipe(
             Effect.andThen(deus.start),
+            Effect.andThen(bridge.start),
             Effect.orDie,
             Effect.forkScoped,
           );

@@ -94,6 +94,7 @@ export const OrchestrationV2CreationSource = Schema.Literals([
   "mcp",
   "provider",
   "server",
+  "deus",
 ]);
 export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
 
