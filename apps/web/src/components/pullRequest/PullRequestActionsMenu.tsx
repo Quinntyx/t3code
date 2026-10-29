@@ -97,7 +97,6 @@ export function PullRequestActionsMenu({
   environmentConnected,
   canWriteSourceControl,
   onMaintainerEditsSaved,
-  confirmDeleteBranch,
   pendingAction,
   perform,
   openOnHostText,
@@ -112,6 +111,8 @@ export function PullRequestActionsMenu({
     | "state"
     | "isDraft"
     | "headBranch"
+    | "headRepositoryNameWithOwner"
+    | "repository"
     | "capabilities"
     | "viewerPermissions"
     | "maintainerCanModify"
@@ -149,7 +150,6 @@ export function PullRequestActionsMenu({
   environmentConnected: boolean;
   canWriteSourceControl: boolean;
   onMaintainerEditsSaved: () => void;
-  confirmDeleteBranch: () => Promise<void>;
   pendingAction: PullRequestAction | null;
   perform: PerformPullRequestAction;
   openOnHostText: string;
@@ -458,17 +458,30 @@ export function PullRequestActionsMenu({
           <>
             <MenuSeparator />
             <MenuItem
+              closeOnClick={inlineConfirm.isArmed("delete-branch")}
+              aria-label={
+                inlineConfirm.isArmed("delete-branch")
+                  ? `Confirm delete branch ${detail.headBranch}?`
+                  : `Delete branch ${detail.headBranch}`
+              }
+              aria-description={`This deletes ${detail.headBranch} from ${detail.headRepositoryNameWithOwner ?? detail.repository}. Local branches and worktrees are not changed.`}
               variant="destructive"
               disabled={actionPending || !environmentConnected}
-              onClick={() => void confirmDeleteBranch()}
+              {...inlineConfirm.props("delete-branch", () => void perform("delete-branch"))}
             >
               <Trash2Icon className="mt-1 size-3.5 shrink-0 self-start" />
               <span className="flex min-w-0 flex-col">
                 <span>
-                  {pendingAction === "delete-branch" ? "Deleting branch..." : "Delete branch"}
+                  {pendingAction === "delete-branch"
+                    ? "Deleting branch..."
+                    : inlineConfirm.isArmed("delete-branch")
+                      ? "Confirm delete?"
+                      : "Delete branch"}
                 </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {environmentConnected ? detail.headBranch : "Reconnect to delete this branch"}
+                <span className="text-xs whitespace-normal text-muted-foreground">
+                  {environmentConnected
+                    ? `Deletes ${detail.headBranch} from ${detail.headRepositoryNameWithOwner ?? detail.repository}. Local branches and worktrees are not changed.`
+                    : "Reconnect to delete this branch"}
                 </span>
               </span>
             </MenuItem>
