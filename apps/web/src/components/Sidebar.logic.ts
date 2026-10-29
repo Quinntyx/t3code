@@ -867,6 +867,7 @@ export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "request"
+  | "pring"
   | "working"
   | "waiting"
   | "failed"
@@ -888,7 +889,9 @@ export function shouldRecedeSidebarThread(input: {
   ) {
     return false;
   }
-  if (input.status === "working" || input.status === "waiting") return true;
+  if (input.status === "working" || input.status === "pring" || input.status === "waiting") {
+    return true;
+  }
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
   }
@@ -905,7 +908,10 @@ type SidebarThreadStatusInput = Pick<
   | "blockedOnThreadWait"
 >;
 
-export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
+export function resolveSidebarThreadStatus(
+  thread: SidebarThreadStatusInput,
+  local: { readonly pullRequestGenerating?: boolean } = {},
+): SidebarThreadStatus {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return "approval";
   }
@@ -915,6 +921,10 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   // A guest is waiting on the owner; the agent's own requests come first.
   if ((thread.pendingGuestMessageCount ?? 0) > 0) {
     return "request";
+  }
+  // PR generation is client-only state; it counts as work the thread is still doing.
+  if (local.pullRequestGenerating === true) {
+    return "pring";
   }
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
@@ -941,7 +951,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
 export function resolveSidebarFolderDot(
   threads: ReadonlyArray<ThreadStatusInput & SidebarThreadStatusInput>,
 ): "attention" | "failed" | "unread" | "working" | null {
-  const statuses = new Set(threads.map(resolveSidebarThreadStatus));
+  const statuses = new Set(threads.map((thread) => resolveSidebarThreadStatus(thread)));
   if (
     statuses.has("input") ||
     statuses.has("approval") ||
@@ -956,7 +966,7 @@ export function resolveSidebarFolderDot(
     (thread) => resolveSidebarThreadStatus(thread) === "ready" && hasUnseenCompletion(thread),
   );
   if (hasUnread) return "unread";
-  if (statuses.has("working")) return "working";
+  if (statuses.has("working") || statuses.has("pring")) return "working";
   return null;
 }
 
@@ -1140,6 +1150,15 @@ export function useThreadPullRequestGenerating(
     () => isPullRequestGenerating({ environmentId: thread.environmentId, threadId: thread.id }),
     () => false,
   );
+}
+
+/** The single sidebar status entrypoint: folds client-only work into the thread's own state. */
+export function useSidebarThreadStatus(
+  thread: SidebarThreadStatusInput & Pick<SidebarThreadSummary, "environmentId" | "id">,
+): SidebarThreadStatus {
+  return resolveSidebarThreadStatus(thread, {
+    pullRequestGenerating: useThreadPullRequestGenerating(thread),
+  });
 }
 
 export function resolveThreadStatusPill(input: {

@@ -364,6 +364,24 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe(false);
   });
 
+  it("shows a client-side pull request generation as PRing over an idle thread", () => {
+    expect(
+      resolveSidebarThreadStatus(
+        { ...idle, runtime: { ...runtime, status: "completed" as const } },
+        { pullRequestGenerating: true },
+      ),
+    ).toBe("pring");
+    expect(
+      shouldRecedeSidebarThread({
+        status: "pring",
+        isUnread: false,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(true);
+  });
+
   it("reports failed only while the latest run failed", () => {
     expect(
       resolveSidebarThreadStatus({
