@@ -37,6 +37,7 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { BuddySection } from "./BuddySettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
+import { LiquidGlassPreview } from "./LiquidGlassPreview";
 import { LiquidGlassSettings } from "./LiquidGlassSettings";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -392,7 +393,9 @@ export function AppearanceSettingsPanel() {
                 }
               />
             }
-          />
+          >
+            {settings.liquidGlassEnabled ? <LiquidGlassPreview /> : null}
+          </SettingsRow>
           <LiquidGlassSettings />
           <SettingsRow
             {...searchableSetting("panel-animations")}
