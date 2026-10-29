@@ -12,6 +12,7 @@ import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area
 import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { HeaderItemsWidthContext } from "../../native/header-items-width";
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { isDuoDevice } from "../../lib/device-type";
@@ -189,17 +190,19 @@ function WorkspaceRootContent() {
           />
         )}
         <SafeAreaInsetsContext value={compactTabs ? { ...insets, bottom: 0 } : insets}>
-          {settingsOpen ? (
-            <SettingsRouteScreen />
-          ) : enabled.length === 0 ? (
-            <WorkspaceNoTabs />
-          ) : state.selectedTab === "threads" ? (
-            <HomeRouteScreen />
-          ) : state.selectedTab === "pullRequests" ? (
-            <PullRequestsScreen />
-          ) : (
-            <WorkspaceExtraTab tab={state.selectedTab} />
-          )}
+          <LiquidGlassTarget style={{ flex: 1 }}>
+            {settingsOpen ? (
+              <SettingsRouteScreen />
+            ) : enabled.length === 0 ? (
+              <WorkspaceNoTabs />
+            ) : state.selectedTab === "threads" ? (
+              <HomeRouteScreen />
+            ) : state.selectedTab === "pullRequests" ? (
+              <PullRequestsScreen />
+            ) : (
+              <WorkspaceExtraTab tab={state.selectedTab} />
+            )}
+          </LiquidGlassTarget>
         </SafeAreaInsetsContext>
         {deviceType !== "pad" && deviceType !== "phone" && sidebarPicker ? (
           <WorkspaceSidebarTabs />
