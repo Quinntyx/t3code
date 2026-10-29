@@ -750,18 +750,22 @@ export const make = Effect.gen(function* () {
   const createWorktree: GitManager["Service"]["createWorktree"] = Effect.fn(
     "GitManager.createWorktree",
   )(function* (input, options) {
+    const projectSettings = yield* projectSettingsFor(input).pipe(
+      Effect.map((resolved) => resolved.settings),
+      Effect.orElseSucceed(() => undefined),
+    );
     const submodules =
       options?.submodules !== undefined
         ? options.submodules
-        : yield* projectSettingsFor(input).pipe(
-            Effect.map(({ settings }) => settings.worktreeSubmodules),
-            Effect.orElseSucceed(() => null),
-          );
+        : (projectSettings?.worktreeSubmodules ?? null);
+    const containerLayout =
+      options?.containerLayout ?? projectSettings?.newWorktreesBesideMain ?? true;
     const worktreesDirectory = yield* readWorktreesDirectory;
     const result = yield* gitCore.createWorktree(input, {
       worktreesDirectory,
       ...options,
       submodules,
+      containerLayout,
     });
     if (input.newRefName && input.baseRefName) {
       yield* shareBranchBase(input.cwd, input.newRefName);
@@ -2958,6 +2962,10 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      const projectSettings = yield* projectSettingsFor(input).pipe(
+        Effect.map((resolved) => resolved.settings),
+        Effect.orElseSucceed(() => undefined),
+      );
       const worktree = yield* gitCore.createWorktree(
         {
           cwd: input.cwd,
@@ -2966,10 +2974,8 @@ export const make = Effect.gen(function* () {
         },
         {
           worktreesDirectory: yield* readWorktreesDirectory,
-          submodules: yield* projectSettingsFor(input).pipe(
-            Effect.map(({ settings }) => settings.worktreeSubmodules),
-            Effect.orElseSucceed(() => null),
-          ),
+          submodules: projectSettings?.worktreeSubmodules ?? null,
+          containerLayout: projectSettings?.newWorktreesBesideMain ?? true,
         },
       );
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);

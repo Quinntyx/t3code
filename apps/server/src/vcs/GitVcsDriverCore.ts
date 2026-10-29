@@ -4066,17 +4066,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
         });
       }
-      let directoryName = targetBranch.replace(/\//g, "-");
-      // Leave room for files beneath the worktree on Windows, regardless of branch length.
-      if (directoryName.length > 40) {
-        const digest = yield* crypto
-          .digest("SHA-256", new TextEncoder().encode(targetBranch))
-          .pipe(Effect.orDie);
-        // Avoid splitting a surrogate pair, which Git would list back as a different path.
-        const prefix = directoryName.slice(0, 23).replace(/[\uD800-\uDBFF]$/, "");
-        directoryName = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
-      }
-      worktreePath = path.join(parentDir, repoName, directoryName);
+      const repository = options?.worktreesDirectory
+        ? null
+        : yield* resolveRepositoryPaths(input.cwd);
+      const primaryCheckout =
+        repository === null
+          ? null
+          : path.basename(repository.gitCommonDir) === ".git"
+            ? path.dirname(repository.gitCommonDir)
+            : path.join(path.dirname(repository.gitCommonDir), "main");
+      const container = primaryCheckout ? path.dirname(primaryCheckout) : null;
+      const useContainer =
+        (options?.containerLayout ?? true) &&
+        primaryCheckout !== null &&
+        path.basename(primaryCheckout) === "main" &&
+        container !== null &&
+        (yield* resolveMainCheckout(container)) === primaryCheckout &&
+        (yield* resolveRepositoryPaths(primaryCheckout))?.gitCommonDir === repository?.gitCommonDir;
+      worktreePath = useContainer
+        ? path.join(container, sanitizedBranch)
+        : path.join(parentDir, repoName, sanitizedBranch);
     }
     if (input.newRefName) {
       // Kept apart from the checkout so the shared-config lock only covers the tracking write.

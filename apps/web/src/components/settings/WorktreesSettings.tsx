@@ -51,6 +51,41 @@ function StartFromRemoteRow() {
   );
 }
 
+function BesideMainRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      serverScoped
+      settingKeys={["newWorktreesBesideMain"]}
+      {...searchableSetting("beside-main")}
+      description="Creates a container-layout project's new worktrees beside its main checkout instead of the worktrees location. A configured worktree location still overrides this."
+      resetAction={
+        settings.newWorktreesBesideMain !== DEFAULT_UNIFIED_SETTINGS.newWorktreesBesideMain ? (
+          <SettingResetButton
+            label="new worktrees beside the main checkout"
+            onClick={() =>
+              updateSettings({
+                newWorktreesBesideMain: DEFAULT_UNIFIED_SETTINGS.newWorktreesBesideMain,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <ScopedSwitch
+          settingKeys={["newWorktreesBesideMain"]}
+          checked={settings.newWorktreesBesideMain}
+          onCheckedChange={(checked) =>
+            updateSettings({ newWorktreesBesideMain: Boolean(checked) })
+          }
+          aria-label="Place new worktrees beside the project's main checkout"
+        />
+      }
+    />
+  );
+}
+
 export function WorktreesSettingsPanel() {
   const { scope } = useSettingsScope();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
@@ -60,6 +95,7 @@ export function WorktreesSettingsPanel() {
       <SettingsSection id="worktree-creation" title="Creation">
         {!isProjectScope && <WorktreesDirectoryRow />}
         <StartFromRemoteRow />
+        <BesideMainRow />
         <AdvancedSettings targetIds={[searchableSetting("worktree-submodules").id]}>
           <WorktreeSubmodulesRow />
         </AdvancedSettings>

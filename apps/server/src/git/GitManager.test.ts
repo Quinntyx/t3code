@@ -3481,6 +3481,52 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
+  it.effect("places new worktrees beside main inside a container by default", () =>
+    Effect.gen(function* () {
+      const container = yield* makeTempDir("t3code-git-manager-container-");
+      const main = NodePath.join(container, "main");
+      yield* makeDirectory(main);
+      yield* initRepo(main);
+      const { manager } = yield* makeManager();
+
+      const created = yield* manager.createWorktree({
+        cwd: main,
+        refName: "main",
+        newRefName: "feature/default",
+        path: null,
+      });
+
+      expect(created.worktree.path).toBe(NodePath.join(container, "feature-default"));
+    }),
+  );
+
+  it.effect(
+    "sends container worktrees to the worktrees directory when container layout is off",
+    () =>
+      Effect.gen(function* () {
+        const container = yield* makeTempDir("t3code-git-manager-container-off-");
+        const main = NodePath.join(container, "main");
+        yield* makeDirectory(main);
+        yield* initRepo(main);
+        const { manager } = yield* makeManager({
+          serverSettings: { newWorktreesBesideMain: false },
+        });
+
+        const created = yield* manager.createWorktree({
+          cwd: main,
+          refName: "main",
+          newRefName: "feature/default",
+          path: null,
+        });
+
+        expect(NodePath.basename(NodePath.dirname(NodePath.dirname(created.worktree.path)))).toBe(
+          "worktrees",
+        );
+        expect(NodePath.basename(created.worktree.path)).toBe("feature-default");
+        expect(created.worktree.path.startsWith(`${container}${NodePath.sep}`)).toBe(false);
+      }),
+  );
+
   it.effect("generates PR content from the created worktree's selected remote base", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
