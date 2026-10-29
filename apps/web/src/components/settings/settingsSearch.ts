@@ -583,6 +583,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
   {
+    id: "beside-main",
+    title: "Beside the main checkout",
+    to: "/settings/worktrees",
+    scope: "project-defaults",
+    searchTerms: [
+      "new worktree container main checkout beside project folder worktrees location default override",
+    ],
+  },
+  {
     id: "add-project-starts-in",
     title: "Add project starts in",
     to: "/settings/threads",

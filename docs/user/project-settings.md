@@ -172,9 +172,10 @@ applies when the project and environment are both on **Inherit**.
 
 If you keep a project's checkout in `my-project/main` with other worktrees alongside it, you can
 add either `my-project` or `my-project/main` as the project. T3 Code uses `main` as the checkout
-and creates new worktrees beside it. Projects previously added at the parent folder are resolved
-to `main` when the server starts. An ordinary repository containing a folder named `main` is not
-changed.
+and creates new worktrees beside it. Turn off **Settings → Worktrees → Beside the main checkout** to
+give that project's new worktrees the same location as every other project's. Projects previously
+added at the parent folder are resolved to `main` when the server starts. An ordinary repository
+containing a folder named `main` is not changed.
 
 Other projects create worktrees in the `worktrees` folder of the T3 home directory. To override
 either location, set **Settings → Worktrees → Worktree location** to an absolute path like

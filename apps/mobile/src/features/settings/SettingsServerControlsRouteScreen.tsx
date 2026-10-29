@@ -62,6 +62,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
   ],
   "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge"],
   worktrees: [
+    "newWorktreesBesideMain",
     "newWorktreesStartFromOrigin",
     "worktreeSubmodules",
     "branchNamingMode",
@@ -428,6 +429,14 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       value={uniform("newWorktreesStartFromOrigin")}
                       disabled={disabledFor("newWorktreesStartFromOrigin")}
                       onValueChange={(value) => write({ newWorktreesStartFromOrigin: value })}
+                    />
+                    <SettingsSwitchRow
+                      icon="folder"
+                      label="Beside the main checkout"
+                      subtitle="Creates a container-layout project's new worktrees beside its main checkout instead of the worktrees location."
+                      value={uniform("newWorktreesBesideMain")}
+                      disabled={disabledFor("newWorktreesBesideMain")}
+                      onValueChange={(value) => write({ newWorktreesBesideMain: value })}
                     />
                   </SettingsSection>
                   <SettingsSection

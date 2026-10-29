@@ -3711,6 +3711,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             : path.join(path.dirname(repository.gitCommonDir), "main");
       const container = primaryCheckout ? path.dirname(primaryCheckout) : null;
       const useContainer =
+        (options?.containerLayout ?? true) &&
         primaryCheckout !== null &&
         path.basename(primaryCheckout) === "main" &&
         container !== null &&
