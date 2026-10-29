@@ -91,6 +91,10 @@
       "types": "./src/server/notification.ts",
       "import": "./src/server/notification.ts"
     },
+    "./server/opencodeGoUsage": {
+      "types": "./src/server/opencodeGoUsage.ts",
+      "import": "./src/server/opencodeGoUsage.ts"
+    },
     "./server/orchestrationInstructions": {
       "types": "./src/server/orchestrationInstructions.ts",
       "import": "./src/server/orchestrationInstructions.ts"

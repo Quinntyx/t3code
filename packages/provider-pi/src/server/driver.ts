@@ -2,6 +2,7 @@
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { PiSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -11,6 +12,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { piUsageReader } from "./usage.ts";
+import { readPiOpenCodeGoUsageLimits } from "./goUsageLimits.ts";
 import { makePiTextGeneration } from "./textGeneration.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./adapter.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
@@ -52,6 +54,7 @@ export type PiDriverEnv =
   | PiAdapterV2DriverEnv
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -94,6 +97,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     const fileSystem = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
+    const crypto = yield* Crypto.Crypto;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const host = yield* ProviderHost.ProviderHost;
     const { cwd } = host.paths;
@@ -140,9 +144,22 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     );
     const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
 
-    const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv, cwd).pipe(
+    const checkProvider = Effect.all(
+      {
+        provider: checkPiProviderStatus(effectiveConfig, processEnv, cwd),
+        usageLimits: readPiOpenCodeGoUsageLimits({
+          enabled,
+          settings: effectiveConfig,
+          environment: processEnv,
+        }),
+      },
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.map(({ provider, usageLimits }) => ({ ...provider, usageLimits })),
       Effect.map(stampIdentity),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(Crypto.Crypto, crypto),
     );
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);

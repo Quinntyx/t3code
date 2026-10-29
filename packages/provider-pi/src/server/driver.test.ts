@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -18,6 +19,14 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import type { PiSettings } from "../settings.ts";
 import { PiDriver } from "./driver.ts";
+
+const usagePayload = {
+  usage: {
+    rolling: { percent: 14, resetsAt: "2026-10-29T13:13:42.000Z" },
+    weekly: { percent: 84, resetsAt: "2026-11-02T00:00:00.000Z" },
+    monthly: { percent: 85, resetsAt: "2026-11-13T03:29:41.000Z" },
+  },
+};
 
 const layerTest = Layer.mergeAll(
   TestProviderHost.layer({
@@ -30,7 +39,11 @@ const layerTest = Layer.mergeAll(
   ProviderLatestVersions.layer,
   Layer.succeed(
     HttpClient.HttpClient,
-    HttpClient.make(() => Effect.die("Unexpected HTTP")),
+    HttpClient.make((request) =>
+      request.url === "https://opencode.ai/zen/go/v1/usage"
+        ? Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(usagePayload)))
+        : Effect.die("Unexpected HTTP"),
+    ),
   ),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -45,7 +58,11 @@ const personalSkill = {
 };
 
 const makePiSpawner = Effect.fnUntraced(function* (
-  discovery: { readonly state?: unknown; readonly models?: ReadonlyArray<unknown> } = {},
+  discovery: {
+    readonly state?: unknown;
+    readonly models?: ReadonlyArray<unknown>;
+    readonly goApiKey?: string;
+  } = {},
 ) {
   const pendingCommand = yield* Deferred.make<void>();
   const launches: Array<ChildProcess.StandardCommand> = [];
@@ -55,54 +72,64 @@ const makePiSpawner = Effect.fnUntraced(function* (
       if (!ChildProcess.isStandardCommand(command)) return yield* Effect.die("Unexpected pipeline");
       launches.push(command);
       const version = command.args.includes("--version");
+      const printApiKey = command.args.includes("print-api-key");
+      const immediate = version || printApiKey;
       const stdout = yield* Queue.unbounded<Uint8Array>();
       const cwd = command.options.cwd;
       return ChildProcessSpawner.makeHandle({
         // Outside the valid PID range, so transport cleanup cannot signal a real process.
         pid: ChildProcessSpawner.ProcessId(999_999_999),
-        exitCode: version ? Effect.succeed(ChildProcessSpawner.ExitCode(0)) : Effect.never,
-        isRunning: Effect.succeed(!version),
+        exitCode: immediate
+          ? Effect.succeed(ChildProcessSpawner.ExitCode(printApiKey && !discovery.goApiKey ? 1 : 0))
+          : Effect.never,
+        isRunning: Effect.succeed(!immediate),
         kill: () => Effect.void,
         unref: Effect.succeed(Effect.void),
-        stdin: Sink.forEach((chunk: Uint8Array) => {
-          const request = decodeRequest(new TextDecoder().decode(chunk).trim());
-          if (cwd === "/pending" && request.type === "get_commands") {
-            return Deferred.succeed(pendingCommand, undefined).pipe(Effect.asVoid);
-          }
-          const failed = cwd === "/failed" && request.type === "get_commands";
-          const data =
-            request.type === "get_commands"
-              ? {
-                  commands: [
-                    personalSkill,
-                    ...(cwd === "/machine"
-                      ? []
-                      : [
-                          {
-                            name: `skill:${cwd?.slice(1)}`,
-                            source: "skill",
-                            sourceInfo: {
-                              scope: "project",
-                              path: `${cwd}/.agents/skills/SKILL.md`,
-                            },
-                          },
-                          { name: `prompt-${cwd?.slice(1)}`, source: "prompt" },
-                        ]),
-                  ],
-                }
-              : request.type === "get_available_models"
-                ? { models: discovery.models ?? [{ provider: "test", id: "model" }] }
-                : request.type === "get_state"
-                  ? (discovery.state ?? {})
-                  : {};
-          return Queue.offer(
-            stdout,
-            encoder.encode(
-              `${JSON.stringify({ type: "response", id: request.id, success: !failed, data, ...(failed ? { error: "commands unavailable" } : {}) })}\n`,
-            ),
-          ).pipe(Effect.asVoid);
-        }),
-        stdout: version ? Stream.succeed(encoder.encode("pi 1.0.2\n")) : Stream.fromQueue(stdout),
+        stdin: immediate
+          ? Sink.drain
+          : Sink.forEach((chunk: Uint8Array) => {
+              const request = decodeRequest(new TextDecoder().decode(chunk).trim());
+              if (cwd === "/pending" && request.type === "get_commands") {
+                return Deferred.succeed(pendingCommand, undefined).pipe(Effect.asVoid);
+              }
+              const failed = cwd === "/failed" && request.type === "get_commands";
+              const data =
+                request.type === "get_commands"
+                  ? {
+                      commands: [
+                        personalSkill,
+                        ...(cwd === "/machine"
+                          ? []
+                          : [
+                              {
+                                name: `skill:${cwd?.slice(1)}`,
+                                source: "skill",
+                                sourceInfo: {
+                                  scope: "project",
+                                  path: `${cwd}/.agents/skills/SKILL.md`,
+                                },
+                              },
+                              { name: `prompt-${cwd?.slice(1)}`, source: "prompt" },
+                            ]),
+                      ],
+                    }
+                  : request.type === "get_available_models"
+                    ? { models: discovery.models ?? [{ provider: "test", id: "model" }] }
+                    : request.type === "get_state"
+                      ? (discovery.state ?? {})
+                      : {};
+              return Queue.offer(
+                stdout,
+                encoder.encode(
+                  `${JSON.stringify({ type: "response", id: request.id, success: !failed, data, ...(failed ? { error: "commands unavailable" } : {}) })}\n`,
+                ),
+              ).pipe(Effect.asVoid);
+            }),
+        stdout: version
+          ? Stream.succeed(encoder.encode("pi 1.0.2\n"))
+          : printApiKey
+            ? Stream.succeed(encoder.encode(discovery.goApiKey ? `${discovery.goApiKey}\n` : ""))
+            : Stream.fromQueue(stdout),
         stderr: Stream.empty,
         all: Stream.empty,
         getInputFd: () => Sink.drain,
@@ -244,5 +271,45 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           ["personal"],
         );
       }).pipe(Effect.scoped),
+  );
+});
+
+it.layer(layerTest)("PiDriver OpenCode Go limits", (it) => {
+  it.effect("reports Go windows from the credential Pi resolves", () =>
+    Effect.gen(function* () {
+      const { spawner, launches } = yield* makePiSpawner({ goApiKey: "oc_sk_pi" });
+      const instance = yield* create().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      yield* instance.snapshot.refresh;
+      const snapshot = yield* instance.snapshot.getSnapshot;
+      assert.deepEqual(
+        snapshot.usageLimits?.windows.map((window) => [window.id, window.kind, window.usedPercent]),
+        [
+          ["go_rolling", "session", 14],
+          ["go_weekly", "weekly", 84],
+          ["go_monthly", "monthly", 85],
+        ],
+      );
+      assert.isUndefined(snapshot.usageLimits?.unavailable);
+      assert.isTrue(
+        launches.some((launch) =>
+          launch.args.join(" ").includes("auth print-api-key --provider opencode-go"),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reports no Go limits when Pi has no Go credential", () =>
+    Effect.gen(function* () {
+      const { spawner } = yield* makePiSpawner();
+      const instance = yield* create().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      yield* instance.snapshot.refresh;
+      const snapshot = yield* instance.snapshot.getSnapshot;
+      assert.deepEqual(snapshot.usageLimits?.windows, []);
+      assert.equal(snapshot.usageLimits?.unavailable?.reason, "unsupported");
+    }).pipe(Effect.scoped),
   );
 });
