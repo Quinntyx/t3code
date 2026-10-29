@@ -28,6 +28,7 @@ function Shell({
         "has-data-[composer-banner-surface=attached]:before:hidden data-model-strip-transition:before:hidden",
         contextRow && [
           "[--chat-composer-context-extension:2.25rem] sm:[--chat-composer-context-extension:2rem]",
+          "[--chat-composer-drawer-padding:calc(var(--chat-composer-drawer-inset)+0.5rem)]",
           "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:before:rounded-none",
           "before:[clip-path:shape(from_0_var(--chat-composer-radius),arc_to_var(--chat-composer-radius)_0_of_var(--chat-composer-radius)_cw,line_to_calc(100%-var(--chat-composer-radius))_0,arc_to_100%_var(--chat-composer-radius)_of_var(--chat-composer-radius)_cw,line_to_100%_calc(100%-var(--chat-composer-context-extension)-var(--chat-composer-radius)),arc_to_calc(100%-var(--chat-composer-radius))_calc(100%-var(--chat-composer-context-extension))_of_var(--chat-composer-radius)_cw,line_to_calc(100%-var(--chat-composer-drawer-inset))_calc(100%-var(--chat-composer-context-extension)),line_to_calc(100%-var(--chat-composer-drawer-inset))_calc(100%-16px),arc_to_calc(100%-var(--chat-composer-drawer-inset)-16px)_100%_of_16px_cw,line_to_calc(var(--chat-composer-drawer-inset)+16px)_100%,arc_to_var(--chat-composer-drawer-inset)_calc(100%-16px)_of_16px_cw,line_to_var(--chat-composer-drawer-inset)_calc(100%-var(--chat-composer-context-extension)),line_to_var(--chat-composer-radius)_calc(100%-var(--chat-composer-context-extension)),arc_to_0_calc(100%-var(--chat-composer-context-extension)-var(--chat-composer-radius))_of_var(--chat-composer-radius)_cw,line_to_0_var(--chat-composer-radius),close)]",
           "not-supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:before:bottom-(--chat-composer-context-extension)",
@@ -42,6 +43,10 @@ function Shell({
 const outlineClasses =
   "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:border after:border-(--chat-composer-outline) dark:after:inset-shadow-2xs dark:after:inset-shadow-(color:--chat-composer-highlight)";
 
+// The drawer is one surface with the card, so the card's bottom edge stops short of it.
+const contextSeamClasses =
+  "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:group-data-[context-row=true]/composer-surface:after:[clip-path:polygon(0_0,100%_0,100%_100%,calc(100%-22px)_100%,calc(100%-22px)_calc(100%-2px),22px_calc(100%-2px),22px_100%,0_100%)]";
+
 function Host({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
@@ -49,6 +54,7 @@ function Host({ className, ...props }: ComponentProps<"div">) {
       className={cn(
         "relative z-10 w-full rounded-(--chat-composer-radius) shadow-composer after:z-1 dark:shadow-none",
         outlineClasses,
+        contextSeamClasses,
         "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-none group-has-data-[composer-banner-surface=attached]/composer-surface:after:hidden",
         className,
       )}
@@ -77,13 +83,15 @@ function Main({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-/** A plain row under the card (environment, worktree, branch) with no surface of its own. */
+/** A plain row inside the drawer under the card (environment, worktree, branch), inset to it. */
 function ContextStrip({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="composer-context-strip"
       className={cn(
-        "group/composer-context relative flex w-full items-center gap-2 overflow-x-clip px-2 pt-2 text-muted-foreground",
+        "group/composer-context relative flex h-(--chat-composer-context-extension) w-full items-center gap-2 overflow-x-clip px-2 text-muted-foreground",
+        // Without the drawer shape the row is a plain strip under the card, so it lines up with it.
+        "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:px-(--chat-composer-drawer-padding)",
         className,
       )}
       {...props}
