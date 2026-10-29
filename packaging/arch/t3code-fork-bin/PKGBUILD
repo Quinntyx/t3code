@@ -22,7 +22,7 @@
 #   yay -Bi packaging/arch/t3code-fork-bin
 
 pkgname=t3code-fork-bin
-pkgver=0.1.4.r8241.g7654bfdfc9
+pkgver=0.2.0.r8254.g63476fed6f
 pkgrel=1
 pkgdesc='Desktop app and server for coding agents (fork build)'
 arch=('x86_64')
@@ -70,8 +70,8 @@ install=t3code-fork-bin.install
 
 # The server archive carries its own Node runtime, so only the release tag ties
 # these two assets to the same commit.
-_appimage="T3-Code-0.1.4-x86_64.AppImage"
-_archive="t3-0.1.4-linux-x64.tar.gz"
+_appimage="T3-Code-0.2.0-x86_64.AppImage"
+_archive="t3-0.2.0-linux-x64.tar.gz"
 _release="https://github.com/Quinntyx/t3code/releases/download/v${pkgver}"
 
 source=(
@@ -80,8 +80,8 @@ source=(
   "${pkgname}-${pkgver}-LICENSE::https://raw.githubusercontent.com/Quinntyx/t3code/v${pkgver}/LICENSE"
 )
 sha256sums=(
-  '258c5ec8ba4c79fb5594c450b83a9e3d354901813f86369206f8071cb878a513' # AppImage
-  '1b4df9fbdb3a56736b9b982681a6d6b7956c5ba7a10ea0d878a455754e343167' # server archive
+  '018d006559d22fe687701294d8e9d406e3cf57ef35c8232275e309bee580f173' # AppImage
+  '7993db444709c65eba7b91c699c723329fe0565d2b1a8f635ce91ff8cddd66c8' # server archive
   '935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43' # upstream license
 )
 
