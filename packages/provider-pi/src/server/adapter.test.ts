@@ -32,6 +32,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -3823,6 +3824,37 @@ describe("PiAdapterV2", () => {
           terminal.retry?.attempt === 5 &&
           terminal.retry.maxAttempts === 5,
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("classifies a ChatGPT usage limit with its reset time", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* TestClock.setTime(Date.parse("2026-10-28T18:52:00.000Z"));
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "You have hit your ChatGPT usage limit (team plan). Try again in ~275 min.",
+        },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.deepInclude(terminal.type === "turn.terminal" ? terminal.failure : null, {
+        class: "usage_limit",
+        resetAt: "2026-10-28T23:27:00.000Z",
+      });
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
