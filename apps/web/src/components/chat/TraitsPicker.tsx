@@ -8,6 +8,7 @@ import {
   ULTRATHINK_PROMPT_PREFIX,
 } from "@t3tools/client-runtime/model-traits";
 import {
+  defaultInstanceIdForDriver,
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -24,7 +25,7 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
-import { memo, type ReactNode, useRef } from "react";
+import { memo, type MouseEvent, type ReactNode, useRef } from "react";
 import { GaugeIcon, ZapIcon } from "lucide-react";
 import {
   Menu,
@@ -36,6 +37,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
+import { readLocalApi } from "../../localApi";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
@@ -345,6 +347,12 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const modelSelection =
     instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const setProviderModelOptionsDefault = useComposerDraftStore(
+    (store) => store.setProviderModelOptionsDefault,
+  );
+  const stickyOptionsByModel = useComposerDraftStore(
+    (store) => store.stickyOptionsByModelByProvider,
+  );
   const updateModelOptions = (nextOptions: ProviderOptions | undefined) => {
     if ("onModelOptionsChange" in persistence) {
       persistence.onModelOptionsChange(nextOptions);
@@ -381,6 +389,71 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   } = selected;
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
     updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
+  };
+
+  const defaultOptionsInstanceKey = instanceId ?? defaultInstanceIdForDriver(provider);
+  const defaultOptionsModelKey = normalizeModelSlug(model, provider) ?? model ?? null;
+  const storedDefaultOptions =
+    defaultOptionsModelKey === null
+      ? undefined
+      : stickyOptionsByModel[defaultOptionsInstanceKey]?.[defaultOptionsModelKey];
+  // Only a reasoning level is a default a user can own; the stored value wins over the provider's.
+  const storedDefaultValueFor = (
+    descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+  ): string | null => {
+    if (!REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)) return null;
+    const stored = storedDefaultOptions?.find((option) => option.id === descriptor.id)?.value;
+    return typeof stored === "string" && descriptor.options.some((option) => option.id === stored)
+      ? stored
+      : null;
+  };
+  const setOptionDefault = (
+    descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+    value: string | null,
+  ) => {
+    if (!model) return;
+    // Keep only what the user chose, so traits they never set keep following the provider.
+    const others = (storedDefaultOptions ?? []).filter((option) => option.id !== descriptor.id);
+    const options = value === null ? others : [...others, { id: descriptor.id, value }];
+    setProviderModelOptionsDefault({ provider, instanceId, model, options });
+  };
+  const handleOptionContextMenu = (
+    event: MouseEvent<HTMLElement>,
+    descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+    option: { id: string; label: string },
+  ) => {
+    const api = readLocalApi();
+    // Settings surfaces persist their own default through onModelOptionsChange; this menu edits
+    // the composer's per-model memory, so it only belongs where the composer writes that.
+    if (
+      !api ||
+      !model ||
+      "onModelOptionsChange" in persistence ||
+      !REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)
+    )
+      return;
+    const storedDefaultValue = storedDefaultValueFor(descriptor);
+    event.preventDefault();
+    void api.contextMenu
+      .show(
+        [
+          { id: "set-default", label: `Set ${option.label} as default` },
+          ...(storedDefaultValue === null
+            ? []
+            : [
+                {
+                  id: "reset-default",
+                  label: "Reset to provider default",
+                  separatorBefore: true,
+                },
+              ]),
+        ],
+        { x: event.clientX, y: event.clientY },
+      )
+      .then((action) => {
+        if (action === "set-default") setOptionDefault(descriptor, option.id);
+        if (action === "reset-default") setOptionDefault(descriptor, null);
+      });
   };
 
   const handleSelectChange = (
@@ -433,6 +506,12 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id
             ? "ultrathink"
             : (getDescriptorStringValue(descriptor, modelSelection, reportedModelSelection) ?? "");
+        const choices = selectableProviderOptionChoices(descriptor);
+        // A user-set default replaces the provider's mark, so only one level reads as Default.
+        const defaultOptionId =
+          storedDefaultValueFor(descriptor) ??
+          choices.find((choice) => choice.isDefault)?.id ??
+          null;
 
         return (
           <div key={descriptor.id}>
@@ -451,18 +530,19 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 value={selectedValue}
                 onValueChange={(value) => handleSelectChange(descriptor, value)}
               >
-                {selectableProviderOptionChoices(descriptor).map((option) => (
+                {choices.map((option) => (
                   <MenuRadioItem
                     key={option.id}
                     value={option.id}
                     hideIndicator
                     closeOnClick
                     disabled={ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id}
+                    onContextMenu={(event) => handleOptionContextMenu(event, descriptor, option)}
                   >
                     <span className="flex w-full min-w-0 flex-col">
                       <span className="flex min-w-0 items-center gap-1">
                         <span className="min-w-0 truncate">{option.label}</span>
-                        {option.isDefault ? <DefaultBadge /> : null}
+                        {option.id === defaultOptionId ? <DefaultBadge /> : null}
                       </span>
                       {option.description ? (
                         <span className="max-w-56 text-pretty text-muted-foreground/80 text-xs">

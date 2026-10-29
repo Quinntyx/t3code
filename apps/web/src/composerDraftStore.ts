@@ -503,6 +503,13 @@ interface ComposerDraftStoreState {
   finalizePromotedDraftThread: (threadRef: ComposerThreadTarget) => void;
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
+  /** Writes the model's remembered options as its default without touching the open draft. */
+  setProviderModelOptionsDefault: (input: {
+    provider: ProviderDriverKind;
+    instanceId?: ProviderInstanceId | null | undefined;
+    model: string;
+    options: ReadonlyArray<ProviderOptionSelection>;
+  }) => void;
   setPrompt: (threadRef: ComposerThreadTarget, prompt: string) => void;
   setTerminalContexts: (threadRef: ComposerThreadTarget, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
@@ -2885,6 +2892,38 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return {
               stickyModelSelectionByProvider: nextMap,
               stickyActiveProvider: normalized.instanceId,
+            };
+          });
+        },
+        setProviderModelOptionsDefault: ({ provider, instanceId, model, options }) => {
+          const instanceKey = instanceId ?? defaultInstanceIdForDriver(provider);
+          const modelKey = normalizeModelSlug(model, provider) ?? model;
+          set((state) => {
+            const nextOptionsByModel = {
+              ...state.stickyOptionsByModelByProvider,
+              [instanceKey]: {
+                ...state.stickyOptionsByModelByProvider[instanceKey],
+                [modelKey]: [...options],
+              },
+            };
+            // A new draft seeds from the sticky selection, so a default set for its model has to
+            // land there too or the next thread would start on the old level.
+            const nextStickyMap =
+              state.stickyModelSelectionByProvider[instanceKey]?.model === modelKey
+                ? {
+                    ...state.stickyModelSelectionByProvider,
+                    [instanceKey]: createModelSelection(instanceKey, modelKey, [...options]),
+                  }
+                : state.stickyModelSelectionByProvider;
+            if (
+              Equal.equals(nextStickyMap, state.stickyModelSelectionByProvider) &&
+              Equal.equals(nextOptionsByModel, state.stickyOptionsByModelByProvider)
+            ) {
+              return state;
+            }
+            return {
+              stickyModelSelectionByProvider: nextStickyMap,
+              stickyOptionsByModelByProvider: nextOptionsByModel,
             };
           });
         },
