@@ -331,6 +331,10 @@ export type ChatWidth = typeof ChatWidth.Type;
 export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
+/** The animated companion drawn above the app, or none. */
+export const Buddy = Schema.Literals(["none", "whale-chan"]);
+export type Buddy = typeof Buddy.Type;
+
 export const ModelFavorite = Schema.Struct({
   provider: ProviderInstanceId,
   model: TrimmedNonEmptyString,
@@ -527,6 +531,7 @@ export const ClientSettingsSchema = Schema.Struct({
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  buddy: Buddy.pipe(Schema.withDecodingDefault(Effect.succeed("none"))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1805,5 +1810,6 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
+  buddy: Schema.optionalKey(Buddy),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

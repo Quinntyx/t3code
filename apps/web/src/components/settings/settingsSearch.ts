@@ -346,6 +346,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["latex tex katex equations formulas markdown"],
   },
   {
+    id: "buddy",
+    title: "Buddy",
+    to: "/settings/appearance",
+    searchTerms: ["companion pet mascot whale chan deepseek sprite animation overlay"],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",
