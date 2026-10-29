@@ -8,6 +8,9 @@ import {
 } from "@t3tools/shared/markdownLinks";
 import { isHostPath, resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
+import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { handoffFilePrompt, isHandoffFile } from "@t3tools/client-runtime/handoff";
 import {
   AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
@@ -669,6 +672,7 @@ function useChatMarkdownState({
     );
   };
   const openChangeRequestLink = useOpenChangeRequestLink(threadRef, pullRequestPanelRef);
+  const newThread = useNewThreadHandler();
   const openDeferredMarkdownLink = useOpenLink(threadRef);
   // Subscribe so hydrated settings apply before the anchor synchronously decides whether to intercept _blank.
   const linkTargetPreference = useClientSettings((settings) => settings.browserLinkTarget);
@@ -823,6 +827,15 @@ function useChatMarkdownState({
         cwd,
         findWorkspaceMatch: () => findWorkspaceFileMatch(fileLinkMeta),
       });
+    const handOffToNewThread = async (source: ScopedThreadRef) => {
+      const thread = readThreadShell(source);
+      if (!thread) return;
+      const { absolutePath } = await resolveHostPath();
+      await newThread(scopeProjectRef(thread.environmentId, thread.projectId), {
+        prompt: handoffFilePrompt(absolutePath),
+        modelSelection: thread.modelSelection,
+      });
+    };
     const mediaPath = mediaSource ?? fileLinkMeta.filePath;
     const canPreviewMedia =
       mediaMimeTypeFromExtension(
@@ -876,6 +889,17 @@ function useChatMarkdownState({
             : undefined
         }
         revealLabel={revealInFileManagerLabel}
+        onHandOff={
+          threadRef && isHandoffFile(fileLinkMeta.filePath)
+            ? () =>
+                void handOffToNewThread(threadRef).catch((cause) =>
+                  reportMarkdownActionFailure(
+                    { operation: "hand-off-to-new-thread", target: fileLinkMeta.targetPath },
+                    cause,
+                  ),
+                )
+            : undefined
+        }
         onOpenInBrowser={
           threadRef &&
           canOperatePreview &&

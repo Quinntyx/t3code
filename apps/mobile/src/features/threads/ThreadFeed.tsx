@@ -35,6 +35,7 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { handoffFilePrompt } from "@t3tools/client-runtime/handoff";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import {
   IDLE_COMPACTING_LABELS,
@@ -98,7 +99,7 @@ import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { isDuoDevice } from "../../lib/device-type";
@@ -269,6 +270,11 @@ import { composerDocumentAttachmentRecord } from "../../lib/composerContext";
 import * as Option from "effect/Option";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import {
+  createNewTaskDraft,
+  setComposerDraftText,
+  updateComposerDraftSettings,
+} from "../../state/use-composer-drafts";
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
@@ -2860,6 +2866,19 @@ export const ThreadFeed = memo(function ThreadFeed({
       path: fileRoutePathSegments(path),
     });
   };
+  const handOffToNewThread = (handoffPath: string) => {
+    const thread = appAtomRegistry.get(
+      environmentThreadShells.threadShellAtom(scopeThreadRef(props.environmentId, props.threadId)),
+    );
+    if (!thread) return;
+    const draftKey = createNewTaskDraft({
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+    });
+    setComposerDraftText(draftKey, handoffFilePrompt(handoffPath));
+    updateComposerDraftSettings(draftKey, { modelSelection: thread.modelSelection });
+    navigation.dispatch(StackActions.push("Thread", { draft: { draftId: draftKey } }));
+  };
   const resolveLinkedThread = (href: string) => {
     const link = parseThreadLinkHref(href);
     if (!link) return null;
@@ -3087,6 +3106,9 @@ export const ThreadFeed = memo(function ThreadFeed({
         }
         case "open-file":
           onMarkdownLinkPress(href);
+          return;
+        case "hand-off":
+          if (target.fullPath) handOffToNewThread(target.fullPath);
           return;
         case "save":
           shareFileChip(target);
