@@ -73,6 +73,8 @@ describe("Pi orchestration prompt section", () => {
       assert.isDefined(result);
       assert.isTrue(result!.systemPrompt.startsWith(`${event.systemPrompt}\n\n`));
       assert.include(result!.systemPrompt, "orchestrator_capabilities");
+      assert.include(result!.systemPrompt, "through the Pi harness");
+      assert.include(result!.systemPrompt, "embed images, video, and audio");
     }
   });
 });
