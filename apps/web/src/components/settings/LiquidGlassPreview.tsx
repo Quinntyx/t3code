@@ -12,7 +12,7 @@ const quadrants = [
   { inset: "50% 0 0 50%", background: `repeating-linear-gradient(90deg, ${STRIPES})` },
 ] as const satisfies ReadonlyArray<CSSProperties>;
 
-const glassClassName = "absolute -translate-x-1/2 shadow-lg liquid-frost glass-glare";
+const glassClassName = "absolute -translate-x-1/2 shadow-lg surface-glass";
 
 /** A miniature backdrop with glass on it, so liquid glass sliders show their effect while dragging. */
 export function LiquidGlassPreview() {
