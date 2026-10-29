@@ -36,6 +36,7 @@ import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp
 import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
 import { deriveBottomControlInsets, type NativeLayoutMetrics } from "../../lib/reserved-regions";
 import type {
@@ -1276,7 +1277,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
           screenAreaHeight - overlayHeaderInset - liveKeyboardHeight - estimatedOverlayHeight - 24,
         )
       ) : showContent ? (
-        <View
+        <LiquidGlassTarget
           style={{ flex: 1 }}
           onTouchStart={handleFeedTouchStart}
           onTouchMove={handleFeedTouchMove}
@@ -1347,7 +1348,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
               onUseArtifactTemplate={handleUseArtifactTemplate}
             />
           </RenderErrorBoundary>
-        </View>
+        </LiquidGlassTarget>
       ) : (
         <View className="flex-1" />
       )}

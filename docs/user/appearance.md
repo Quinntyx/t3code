@@ -21,6 +21,13 @@ Android uses **Material You Layout** by default unless you have turned it off in
 It changes shapes, spacing, and controls independently
 of the selected theme.
 
+## Liquid glass
+
+The experimental **Liquid glass** setting in **Settings → Appearance** bends the conversation and
+lists behind the composer, toolbars, and menus at their edges. It is available on desktop and web in
+Chromium browsers, and on Android 13 or newer. Blur, saturation, refraction, and dispersion sliders
+tune the effect; each device keeps its own values. It can increase GPU and battery use.
+
 ## Composer context
 
 Git-backed projects show branch and worktree controls below the composer while you create a thread.

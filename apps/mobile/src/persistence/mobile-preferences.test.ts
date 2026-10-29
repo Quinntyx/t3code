@@ -66,17 +66,25 @@ it.effect(
     }),
 );
 
-it.effect("reads older preferences without hidden keys and sanitizes stored hidden keys", () =>
+it.effect("reads older preferences without hidden keys and sanitizes stored values", () =>
   Effect.gen(function* () {
     const oldStore = yield* fixture({ baseFontSize: 18 });
     expect(yield* oldStore.load).toEqual({ baseFontSize: 18 });
     const store = yield* fixture({
       baseFontSize: 18,
       hiddenThreadKeys: ["first:same", false, null, "", "first:same", "second:same"],
+      liquidGlassEnabled: true,
+      glassOpacity: 20,
+      liquidGlassBlur: 4,
+      liquidGlassSaturation: 250,
+      liquidGlassRefraction: 12.5,
+      liquidGlassDispersion: "100",
     });
     expect(yield* store.load).toEqual({
       baseFontSize: 18,
       hiddenThreadKeys: ["first:same", "second:same"],
+      liquidGlassEnabled: true,
+      liquidGlassBlur: 4,
     });
   }),
 );
