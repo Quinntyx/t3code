@@ -1,7 +1,10 @@
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
-import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  resolveFocusProjectKeys,
+  resolveScratchProjectScopeKey,
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -224,6 +227,12 @@ function ThreadNavigationSidebarPane(
         projectGroupingMode: options.projectGroupingMode,
       }),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode],
+  );
+  const focusProjectKeys = resolveFocusProjectKeys(
+    projectScopes.map((scope) => scope.projectRefs),
+    threads.find(
+      (thread) => scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey,
+    ) ?? null,
   );
   const projectFilterOptions = projectScopes.map((scope) => ({
     key: scope.key,
@@ -595,6 +604,7 @@ function ThreadNavigationSidebarPane(
             }
             searchQuery={threadSearch.query}
             pane="sidebar"
+            offFocusProject={focusProjectKeys !== null && !focusProjectKeys.has(scopeKey)}
             selected={
               !activeNewTask &&
               scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey

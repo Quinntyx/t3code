@@ -284,6 +284,23 @@ function selectProjectIdentitySource<TProject extends EnvironmentProject>(
   return freshestIdentifiedProject ?? winner;
 }
 
+/**
+ * Keys of every project sharing the focused project's group, so the same
+ * repository on another environment counts as the same project.
+ */
+export function resolveFocusProjectKeys(
+  groups: Iterable<ReadonlyArray<ScopedProjectRef>>,
+  focus: ScopedProjectRef | null,
+): ReadonlySet<string> | null {
+  if (focus === null) return null;
+  const focusKey = scopedProjectKey(focus);
+  for (const refs of groups) {
+    const keys = refs.map(scopedProjectKey);
+    if (keys.includes(focusKey)) return new Set(keys);
+  }
+  return new Set([focusKey]);
+}
+
 export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
   readonly projects: ReadonlyArray<TProject>;
   readonly settings: ProjectGroupingSettings;

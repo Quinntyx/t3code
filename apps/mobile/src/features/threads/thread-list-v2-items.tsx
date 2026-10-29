@@ -619,6 +619,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly pane?: "screen" | "sidebar";
   readonly showTrailingDivider?: boolean;
   readonly selected?: boolean;
+  /** Outside the selected thread's project; settled and snoozed rows ignore it. */
+  readonly offFocusProject?: boolean;
   readonly fullSwipeWidth?: number;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenThreadPullRequests: (
@@ -1317,11 +1319,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 
-  const fadedCardContent = recede ? (
-    <View style={{ opacity: 0.55 }}>{cardContent}</View>
-  ) : (
-    cardContent
-  );
+  const offFocus = props.offFocusProject === true && variant === "card" && !selected && !recede;
+  const fadedCardContent =
+    recede || offFocus ? (
+      <View style={{ opacity: recede ? 0.55 : 0.6 }}>{cardContent}</View>
+    ) : (
+      cardContent
+    );
 
   const rowContent = (close: () => void) =>
     variant === "card" ? (
