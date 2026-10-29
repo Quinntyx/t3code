@@ -308,6 +308,9 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
       "/settings/threads",
     );
+    expect(movedSettingsPath("/settings/general", "hide-window-controls")).toBe(
+      "/settings/appearance",
+    );
     expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBe(
       "/settings/access",
     );
