@@ -78,7 +78,9 @@ export function resolveMediaSource(
         : (mediaMimeTypeFromExtension(basename.slice(extensionIndex)) ??
           audioMimeTypeFromExtension(basename.slice(extensionIndex)));
   const mimeType = detectedMimeType ?? (input.imageEmbed ? "image/*" : null);
-  if (mimeType === null || mimeType.startsWith("audio/")) return null;
+  // Audio and 3D models have no native inline renderer; callers fall back to a file label.
+  if (mimeType === null || mimeType.startsWith("audio/") || mimeType.startsWith("model/"))
+    return null;
   const kind = mimeType.startsWith("video/") ? "video" : "image";
 
   const reference =

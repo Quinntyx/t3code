@@ -200,6 +200,7 @@ import {
   ChatMarkdownAssetImage,
   ChatMarkdownImage,
   ChatMarkdownImageFallback,
+  ChatMarkdownModel,
   ChatMarkdownVideo,
   MarkdownLinkContext,
   markdownImageCopy,
@@ -1464,6 +1465,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={environmentId}
+          threadId={threadRef?.threadId ?? null}
           resource={{ _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd, url: hostMediaUrl }}
           alt={altText}
           kind={kind}
@@ -1491,6 +1493,16 @@ const CHAT_MARKDOWN_COMPONENTS = {
         src: mediaSrc,
         ...(reference ? { reference } : {}),
       };
+      if (kind === "model") {
+        return (
+          <ChatMarkdownModel
+            src={mediaSrc}
+            alt={altText}
+            copyMarkdown={copyMarkdown}
+            actionsSource={actionsSource}
+          />
+        );
+      }
       if (kind === "video") {
         return (
           <ChatMarkdownVideo
@@ -1541,6 +1553,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={threadRef.environmentId}
+          threadId={threadRef.threadId}
           resource={{
             _tag: "media-file",
             threadId: threadRef.threadId,
