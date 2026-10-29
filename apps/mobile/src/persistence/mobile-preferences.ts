@@ -103,6 +103,9 @@ export interface Preferences {
   readonly markdownFontSize?: number;
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
+  readonly uiFontId?: string | null;
+  readonly codeFontId?: string | null;
+  readonly terminalFontId?: string | null;
   readonly mathRenderingEnabled?: boolean;
   /** Unset means on: crash reports are sent unless the user turns them off. */
   readonly crashReportsEnabled?: boolean;
@@ -186,6 +189,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     markdownFontSize?: number;
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
+    uiFontId?: string | null;
+    codeFontId?: string | null;
+    terminalFontId?: string | null;
     mathRenderingEnabled?: boolean;
     crashReportsEnabled?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
@@ -285,6 +291,15 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.codeFontSize = parsed.codeFontSize;
   }
   if (typeof parsed.codeWordBreak === "boolean") preferences.codeWordBreak = parsed.codeWordBreak;
+  if (typeof parsed.uiFontId === "string" || parsed.uiFontId === null) {
+    preferences.uiFontId = parsed.uiFontId;
+  }
+  if (typeof parsed.codeFontId === "string" || parsed.codeFontId === null) {
+    preferences.codeFontId = parsed.codeFontId;
+  }
+  if (typeof parsed.terminalFontId === "string" || parsed.terminalFontId === null) {
+    preferences.terminalFontId = parsed.terminalFontId;
+  }
   if (typeof parsed.mathRenderingEnabled === "boolean")
     preferences.mathRenderingEnabled = parsed.mathRenderingEnabled;
   if (typeof parsed.crashReportsEnabled === "boolean") {

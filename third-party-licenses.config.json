@@ -141,6 +141,14 @@
       ]
     },
     {
+      "bundles": ["android", "assets", "ios", "mobile"],
+      "license": "OFL-1.1",
+      "name": "FiraCode Nerd Font",
+      "noticeFile": "apps/mobile/assets/fonts/LICENSE.FiraCodeNerdFont",
+      "sourceUrl": "https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.5.1",
+      "version": "3.5.1"
+    },
+    {
       "bundles": ["android", "assets", "mobile"],
       "license": "Apache-2.0",
       "name": "MesloLGS NF",

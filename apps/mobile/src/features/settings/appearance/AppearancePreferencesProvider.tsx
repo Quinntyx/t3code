@@ -17,6 +17,7 @@ import {
   resolveAppearancePreferences,
   type ResolvedAppearance,
 } from "../../../lib/appearancePreferences";
+import { defaultCodeFontFamily } from "../../../lib/fontFamilies";
 import { appAtomRegistry } from "../../../state/atom-registry";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../../state/preferences";
 import type { Preferences } from "../../../persistence/mobile-preferences";
@@ -70,6 +71,9 @@ interface AppearancePreferencesContextValue {
   readonly setTerminalFontSize: (value: number | null) => void;
   readonly setCodeFontSize: (value: number | null) => void;
   readonly setCodeWordBreak: (value: boolean) => void;
+  readonly setUiFontId: (value: string | null) => void;
+  readonly setCodeFontId: (value: string | null) => void;
+  readonly setTerminalFontId: (value: string | null) => void;
   readonly mathRenderingEnabled: boolean;
   readonly setMathRenderingEnabled: (value: boolean) => void;
 }
@@ -126,8 +130,12 @@ export function resolveThemeAppearance(stored: Preferences | null): MobileThemeA
 }
 
 function runtimeStateFor(stored: Preferences | null): MobileThemeRuntimeState {
+  const preferences = resolveAppearancePreferences(stored);
+  const appearance = resolveAppearance(preferences, Platform.OS);
   return {
-    baseFontSize: resolveAppearancePreferences(stored).baseFontSize,
+    baseFontSize: preferences.baseFontSize,
+    uiFont: appearance.uiFont,
+    monoFontFamily: appearance.codeFontFamily ?? defaultCodeFontFamily(Platform.OS),
     themeMode: normalizeMobileThemeMode(stored?.themeMode),
     themeAppearance: resolveThemeAppearance(stored),
   };
@@ -139,6 +147,8 @@ const themeRuntimeStateAtom = Atom.make((get) =>
   Atom.withEquality(
     (left: MobileThemeRuntimeState, right: MobileThemeRuntimeState) =>
       left.baseFontSize === right.baseFontSize &&
+      left.uiFont === right.uiFont &&
+      left.monoFontFamily === right.monoFontFamily &&
       left.themeMode === right.themeMode &&
       left.themeAppearance === right.themeAppearance,
   ),
@@ -152,7 +162,7 @@ let appliedRuntimeState: MobileThemeRuntimeState | null = null;
 
 function applyThemeRuntime(next: MobileThemeRuntimeState) {
   for (const operation of createMobileThemeRuntimeOperations(appliedRuntimeState, next)) {
-    if (operation.kind === "update-text-variables") {
+    if (operation.kind === "update-css-variables") {
       Uniwind.updateCSSVariables(operation.themeName, operation.variables);
       continue;
     }
@@ -217,10 +227,38 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   );
   const themeVariables = themeVariablesByAppearance[themeAppearance];
   const activeThemeName = getMobileUniwindThemeName(themeId, themeAppearance);
-  const { baseFontSize, codeFontSize, codeWordBreak, terminalFontSize } = preferences;
+  const {
+    baseFontSize,
+    codeFontSize,
+    codeWordBreak,
+    terminalFontSize,
+    uiFontId,
+    codeFontId,
+    terminalFontId,
+  } = preferences;
   const appearance = useMemo(
-    () => resolveAppearance({ baseFontSize, codeFontSize, codeWordBreak, terminalFontSize }),
-    [baseFontSize, codeFontSize, codeWordBreak, terminalFontSize],
+    () =>
+      resolveAppearance(
+        {
+          baseFontSize,
+          codeFontSize,
+          codeWordBreak,
+          terminalFontSize,
+          uiFontId,
+          codeFontId,
+          terminalFontId,
+        },
+        Platform.OS,
+      ),
+    [
+      baseFontSize,
+      codeFontSize,
+      codeWordBreak,
+      terminalFontSize,
+      uiFontId,
+      codeFontId,
+      terminalFontId,
+    ],
   );
   const isReady = AsyncResult.isSuccess(preferencesResult);
   const updatePreferences = (patch: Partial<Preferences>) => {
@@ -289,6 +327,22 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
     updatePreferences({ codeWordBreak: value });
   };
 
+  const setUiFontId = (value: string | null) => {
+    const next = runtimeStateFor({ ...storedPreferences, uiFontId: value });
+    applyThemeRuntime({ ...currentRuntimeState(), uiFont: next.uiFont });
+    updatePreferences({ uiFontId: value });
+  };
+
+  const setCodeFontId = (value: string | null) => {
+    const next = runtimeStateFor({ ...storedPreferences, codeFontId: value });
+    applyThemeRuntime({ ...currentRuntimeState(), monoFontFamily: next.monoFontFamily });
+    updatePreferences({ codeFontId: value });
+  };
+
+  const setTerminalFontId = (value: string | null) => {
+    updatePreferences({ terminalFontId: value });
+  };
+
   const mathRenderingEnabled = storedPreferences?.mathRenderingEnabled === true;
   const setMathRenderingEnabled = (value: boolean) =>
     updatePreferences({ mathRenderingEnabled: value });
@@ -315,6 +369,9 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontSize,
       setCodeFontSize,
       setCodeWordBreak,
+      setUiFontId,
+      setCodeFontId,
+      setTerminalFontId,
       mathRenderingEnabled,
       setMathRenderingEnabled,
     }),
@@ -338,6 +395,9 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontSize,
       setCodeFontSize,
       setCodeWordBreak,
+      setUiFontId,
+      setCodeFontId,
+      setTerminalFontId,
       mathRenderingEnabled,
       setMathRenderingEnabled,
     ],

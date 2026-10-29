@@ -152,7 +152,6 @@ import Animated, {
 } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
-import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
@@ -1052,8 +1051,13 @@ function useMarkdownStyles(): MarkdownStyleSets {
   const markdownUserCodeText = theme["--color-md-user-code-text"];
   const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
   const markdownUserFenceBg = theme["--color-md-user-fence-bg"];
-  const regularFontFamily = FONT_FAMILIES.regular;
-  const boldFontFamily = FONT_FAMILIES.bold;
+  const fonts = {
+    fontFamily: appearance.uiFont.regular,
+    headingFontFamily: appearance.uiFont.bold,
+    boldFontFamily: appearance.uiFont.bold,
+    boldByWeight: appearance.uiFont.boldByWeight,
+    codeFontFamily: appearance.codeFontFamily,
+  };
 
   return {
     user: {
@@ -1073,9 +1077,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
         fontSize: nativeMarkdownTypography.fontSize,
         lineHeight: nativeMarkdownTypography.lineHeight,
         headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-        fontFamily: regularFontFamily,
-        headingFontFamily: boldFontFamily,
-        boldFontFamily,
+        ...fonts,
       },
     },
     assistant: {
@@ -1095,9 +1097,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
         fontSize: nativeMarkdownTypography.fontSize,
         lineHeight: nativeMarkdownTypography.lineHeight,
         headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-        fontFamily: regularFontFamily,
-        headingFontFamily: boldFontFamily,
-        boldFontFamily,
+        ...fonts,
       },
     },
   };

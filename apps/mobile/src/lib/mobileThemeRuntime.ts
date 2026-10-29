@@ -1,4 +1,5 @@
 import { resolveTextScaleVariables } from "./appearancePreferences";
+import type { UiFontFaces } from "./fontFamilies";
 import { BUILT_IN_THEME_IDS, type BuiltInThemeId } from "@t3tools/shared/themePalettes";
 import {
   DEFAULT_MOBILE_THEME_ID,
@@ -13,15 +14,17 @@ export type MobileUniwindThemeName =
 
 export interface MobileThemeRuntimeState {
   readonly baseFontSize: number;
+  readonly uiFont: UiFontFaces;
+  readonly monoFontFamily: string;
   readonly themeAppearance: MobileThemeAppearance;
   readonly themeMode: MobileThemeMode;
 }
 
 export type MobileThemeRuntimeOperation =
   | {
-      readonly kind: "update-text-variables";
+      readonly kind: "update-css-variables";
       readonly themeName: "light" | "dark" | MobileUniwindThemeName;
-      readonly variables: Readonly<Record<string, number>>;
+      readonly variables: Readonly<Record<string, number | string>>;
     }
   | {
       readonly kind: "set-appearance-mode";
@@ -56,7 +59,23 @@ export function createMobileThemeRuntimeOperations(
   if (previous === null || previous.baseFontSize !== next.baseFontSize) {
     const variables = resolveTextScaleVariables(next.baseFontSize);
     for (const themeName of UNIWIND_THEME_NAMES) {
-      operations.push({ kind: "update-text-variables", themeName, variables });
+      operations.push({ kind: "update-css-variables", themeName, variables });
+    }
+  }
+
+  if (
+    previous === null ||
+    previous.uiFont !== next.uiFont ||
+    previous.monoFontFamily !== next.monoFontFamily
+  ) {
+    const variables = {
+      "--font-sans": next.uiFont.regular,
+      "--font-medium": next.uiFont.medium,
+      "--font-bold": next.uiFont.bold,
+      "--font-mono": next.monoFontFamily,
+    };
+    for (const themeName of UNIWIND_THEME_NAMES) {
+      operations.push({ kind: "update-css-variables", themeName, variables });
     }
   }
 
