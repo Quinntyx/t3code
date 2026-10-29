@@ -57,7 +57,6 @@ import { usePullRequestDefaultMergeMethodResolver } from "./usePullRequestAction
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import { usePreparePullRequestThreadAction } from "~/state/sourceControlActions";
 import { cn } from "~/lib/utils";
-import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { useProjects, useServerConfigs } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
@@ -1180,17 +1179,6 @@ export function PullRequestDetailPanel({
     (environment) =>
       environment.environmentId === environmentId && environment.connection.phase === "connected",
   );
-  const confirmDeleteBranch = async () => {
-    if (detail === null) return;
-    const confirmed = await readLocalApi()?.dialogs.confirm(
-      [
-        `Delete branch ${detail.headBranch}?`,
-        `This deletes ${detail.headBranch} from ${detail.headRepositoryNameWithOwner ?? detail.repository}. Local branches and worktrees are not changed.`,
-      ].join("\n"),
-      { variant: "destructive" },
-    );
-    if (confirmed) void perform("delete-branch");
-  };
   const showsApproveWorkflows =
     workflowApprovalsRequired > 0 && !checksStale && can("approve-workflows");
   const checksSummary = checksStale
@@ -1383,7 +1371,6 @@ export function PullRequestDetailPanel({
                 environmentConnected={environmentConnected}
                 canWriteSourceControl={canWriteSourceControl}
                 onMaintainerEditsSaved={refreshDetail}
-                confirmDeleteBranch={confirmDeleteBranch}
                 pendingAction={pendingAction}
                 perform={perform}
                 openOnHostText={openOnHostText}
