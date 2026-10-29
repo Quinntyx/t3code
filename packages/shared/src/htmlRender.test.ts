@@ -1,3 +1,4 @@
+import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -10,6 +11,67 @@ import { htmlRenderFromToolItem } from "./toolOutput.ts";
 const reference = { attachmentId: "thread-abc-123.html", title: "Chart", height: 420 };
 
 describe("injectHtmlRenderBootstrap", () => {
+  it.each([
+    ["data:image/png;base64,AA", true, "t3/notifications/open-image"],
+    ["DATA:image/svg+xml,%3Csvg%3E%3C/svg%3E", true, "t3/notifications/open-image"],
+    ["https://example.com/drawing.png", true, "ui/open-link"],
+    ["#drawing", true, undefined],
+    ["data:text/html,%3Cp%3Enot-an-image", true, undefined],
+    ["data:image/png;base64,AA", false, undefined],
+  ] as const)("routes an image link at %s (trusted: %s)", (href, isTrusted, method) => {
+    const html = injectHtmlRenderBootstrap('<a href="image"><img alt="Drawing"></a>');
+    const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"));
+    const messages: unknown[] = [];
+    const link = {
+      matches: (selector: string) => selector === "a[href]",
+      getAttribute: () => href,
+      querySelector: () => ({ alt: "Drawing" }),
+    };
+    const event = {
+      isTrusted,
+      defaultPrevented: false,
+      metaKey: false,
+      ctrlKey: false,
+      composedPath: () => [{ tagName: "IMG" }, link],
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    let click: ((input: typeof event) => void) | undefined;
+    NodeVM.runInNewContext(script, {
+      URL,
+      location: new URL("https://app.example/gallery.html"),
+      document: {
+        baseURI: "https://app.example/gallery.html",
+        getElementById: () => ({}),
+        addEventListener: (type: string, listener: typeof click) => {
+          if (type === "click") click = listener;
+        },
+      },
+      window: {
+        parent: { postMessage: (message: unknown) => messages.push(message) },
+        addEventListener: () => undefined,
+      },
+    });
+    expect(click).toBeTypeOf("function");
+    click?.(event);
+    expect(event.defaultPrevented).toBe(method !== undefined);
+    expect(messages).toEqual(
+      method === "t3/notifications/open-image"
+        ? [{ jsonrpc: "2.0", method, params: { src: new URL(href).href, name: "Drawing" } }]
+        : method === "ui/open-link"
+          ? [
+              {
+                jsonrpc: "2.0",
+                id: "t3-link-1",
+                method,
+                params: { url: href, metaKey: false, ctrlKey: false },
+              },
+            ]
+          : [],
+    );
+  });
+
   it("puts the theme ahead of the page's own head content", () => {
     const html =
       "<!doctype html><html><head><style>:root{--background:red}</style></head><body>x</body></html>";
