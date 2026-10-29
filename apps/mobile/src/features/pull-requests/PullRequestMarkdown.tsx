@@ -1,6 +1,6 @@
 import { splitPullRequestBody } from "@t3tools/client-runtime/pull-request-markdown";
 import type { ReactNode } from "react";
-import { Platform, View } from "react-native";
+import { View } from "react-native";
 import { useProject } from "../../state/entities";
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
 import {

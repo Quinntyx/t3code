@@ -149,7 +149,7 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
-      sidebarProjectScopeKey: null,
+      sidebarProjectScopeKeys: [],
       hiddenThreadKeys: [],
       pullRequestMergeMethod: "merge",
       threadChangedFilesExpandedById: {
