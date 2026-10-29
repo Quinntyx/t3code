@@ -686,7 +686,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "hide-window-controls",
     title: "Hide window controls",
-    to: "/settings/general",
+    to: "/settings/appearance",
     searchTerms: ["window decorations minimize maximize close buttons titlebar frame hide disable"],
     desktopOnly: true,
   },
