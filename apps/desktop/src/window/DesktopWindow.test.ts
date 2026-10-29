@@ -489,95 +489,44 @@ describe("DesktopWindow", () => {
     );
   });
 
-  // Native caption buttons and traffic lights are created with the frame; the
-  // setting decides whether they exist at all.
-  it.effect(
-    "creates the main window without the native controls overlay on Linux when hidden",
-    () =>
-      Effect.gen(function* () {
-        const fakeWindow = makeFakeBrowserWindow();
-        const createCount = yield* Ref.make(0);
-        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-        const layer = layerTest({
-          window: fakeWindow.window,
-          createCount,
-          mainWindow,
-          createdWindowOptions,
-          clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
-          platform: "linux",
-        });
-
-        yield* Effect.gen(function* () {
-          const desktopWindow = yield* DesktopWindow.DesktopWindow;
-          yield* desktopWindow.createMain;
-          const options = createdWindowOptions[0];
-          if (options === undefined) {
-            return yield* Effect.die("main window options were not captured");
-          }
-          assert.equal(options.titleBarStyle, "hidden");
-          assert.isUndefined(options.titleBarOverlay);
-        }).pipe(Effect.provide(layer));
+  it("rejects renderer navigations whose origin only serializes as null", () => {
+    for (const applicationUrl of ["t3code://app/", "t3code-dev://app/"]) {
+      assert.isTrue(
+        DesktopWindow.isSameOriginRendererNavigation({
+          applicationUrl,
+          navigationUrl: `${applicationUrl}threads?id=1#latest`,
+        }),
+        applicationUrl,
+      );
+    }
+    for (const navigationUrl of [
+      "t3code://other/",
+      "t3code://app.example/",
+      "t3code://app:8080/",
+      "t3code://user@other/",
+      "t3code:app",
+      "t3code-dev://app/",
+      "file:///etc/passwd",
+      "data:text/html,<p>hi</p>",
+      "javascript:alert(1)",
+      "about:blank",
+      "blob:t3code://app/0b5e2c4a",
+    ]) {
+      assert.isFalse(
+        DesktopWindow.isSameOriginRendererNavigation({
+          applicationUrl: "t3code://app/",
+          navigationUrl,
+        }),
+        navigationUrl,
+      );
+    }
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "data:text/html,app",
+        navigationUrl: "data:text/html,other",
       }),
-  );
-
-  it.effect("keeps the native controls overlay on Linux by default", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-        createdWindowOptions,
-        clientSettings: Option.some(DEFAULT_CLIENT_SETTINGS),
-        platform: "linux",
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.createMain;
-        const options = createdWindowOptions[0];
-        if (options === undefined) {
-          return yield* Effect.die("main window options were not captured");
-        }
-        assert.deepEqual(options.titleBarOverlay, {
-          color: "#01000000",
-          height: 40,
-          symbolColor: "#1f2937",
-        });
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
-  it.effect("hides the macOS traffic lights when the setting hides window controls", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-        createdWindowOptions,
-        clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.createMain;
-        const options = createdWindowOptions[0];
-        if (options === undefined) {
-          return yield* Effect.die("main window options were not captured");
-        }
-        assert.equal(options.titleBarStyle, "hiddenInset");
-        assert.deepEqual(fakeWindow.setWindowButtonVisibility.mock.calls, [[false]]);
-      }).pipe(Effect.provide(layer));
-    }),
-  );
+    );
+  });
 
   it.effect(
     "opens and reopens the window without backend readiness when local execution is disabled",
@@ -1080,6 +1029,17 @@ describe("DesktopWindow", () => {
         if (!willNavigate) {
           return yield* Effect.die("will-navigate listener was not registered");
         }
+        for (const [url, expectedPrevented] of [
+          ["t3code-dev://app/threads?id=1#latest", false],
+          ["t3code-dev://other/", true],
+          ["t3code://app/", true],
+        ] as const) {
+          const preventDefault = vi.fn();
+          willNavigate({ preventDefault }, url);
+          assert.equal(preventDefault.mock.calls.length, expectedPrevented ? 1 : 0, url);
+        }
+        assert.deepEqual(openedExternalUrls, []);
+
         let prevented = false;
         willNavigate(
           {

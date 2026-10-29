@@ -9,16 +9,19 @@ import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-ru
 import {
   deriveBackgroundWorkDetails,
   presentProviderGoal,
+  type RunStopPresentation,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
   CircleDashedIcon,
+  CircleStopIcon,
   GitBranchIcon,
   MessageCircleIcon,
   ShieldQuestionIcon,
   TargetIcon,
   TerminalIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
 import { tickTextContent } from "~/lib/tickTextContent";
@@ -107,41 +110,44 @@ export function goalNowItem(input: {
   };
 }
 
-function BackgroundWorkPopover({
-  title,
-  ...props
-}: Parameters<typeof BackgroundWorkDetails>[0] & { readonly title: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<InlineButton tone="muted" />}>{title}</PopoverTrigger>
-      <PopoverPopup
-        side="top"
-        align="start"
-        aria-label="Background work details"
-        className="w-[min(36rem,calc(100vw-2rem))]"
-        touchBackdrop
-      >
-        {open ? (
-          <BackgroundWorkDetails
-            {...props}
-            onOpenThread={(threadId) => {
-              setOpen(false);
-              props.onOpenThread(threadId);
-            }}
-            onRunInTerminal={
-              props.onRunInTerminal
-                ? (command) => {
-                    setOpen(false);
-                    props.onRunInTerminal?.(command);
-                  }
-                : undefined
-            }
-          />
+/** A Stop the provider has not finished; Force stop once it stops answering. */
+export function runStopNowItem(input: {
+  readonly threadId: ThreadId;
+  readonly stop: RunStopPresentation;
+  readonly canForceStop: boolean;
+  readonly forceStopping: boolean;
+  readonly onForceStop: () => void;
+}): ThreadNowItem {
+  const unresponsive = input.stop.state === "unresponsive";
+  const requestedAtMs = Date.parse(input.stop.requestedAt);
+  return {
+    id: `run-stop:${input.threadId}`,
+    icon: unresponsive ? (
+      <TriangleAlertIcon className="text-warning-foreground" />
+    ) : (
+      <CircleStopIcon />
+    ),
+    title: unresponsive ? "Agent not responding to Stop" : "Stopping",
+    description: unresponsive
+      ? "It may be short on memory. Force stop kills its processes."
+      : undefined,
+    actions: (
+      <>
+        <span
+          ref={tickTextContent(
+            (nowMs) => formatDuration(Math.max(1_000, nowMs - requestedAtMs)),
+            true,
+          )}
+          className="tabular-nums"
+        />
+        {unresponsive && input.canForceStop ? (
+          <InlineButton disabled={input.forceStopping} onClick={input.onForceStop}>
+            {input.forceStopping ? "Force stopping..." : "Force stop"}
+          </InlineButton>
         ) : null}
-      </PopoverPopup>
-    </Popover>
-  );
+      </>
+    ),
+  };
 }
 
 /** Background commands and subagents, for the end of the timeline. */
