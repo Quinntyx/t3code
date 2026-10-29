@@ -3,6 +3,7 @@ package expo.modules.t3nativecontrols
 import android.content.Intent
 import android.text.format.DateFormat
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowInsetsControllerCompat
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -19,6 +20,15 @@ class T3NativeControlsModule : Module() {
     Function("is24HourFormat") {
       val context = appContext.reactContext ?: error("The app is not active.")
       DateFormat.is24HourFormat(context)
+    }
+
+    // The contrast scrim is off, so React Native no longer picks the button color.
+    Function("setNavigationBarAppearance") { appearance: String ->
+      val activity = appContext.currentActivity ?: return@Function
+      activity.runOnUiThread {
+        WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+          .isAppearanceLightNavigationBars = appearance == "light"
+      }
     }
 
     AsyncFunction("openFile") { uri: String, mimeType: String, promise: Promise ->
