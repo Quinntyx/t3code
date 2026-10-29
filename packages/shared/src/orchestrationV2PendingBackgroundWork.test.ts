@@ -4,6 +4,7 @@ import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
   findPullRequestForWatchTask,
+  waitingOnAgents,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
 describe("backgroundWorkHoldsCompletion", () => {
@@ -14,6 +15,21 @@ describe("backgroundWorkHoldsCompletion", () => {
     ["a subagent", true, [{ taskId: "review", kind: "subagent" }]],
   ] as const)("with %s pending, holds completion: %s", (_case, holds, tasks) => {
     expect(backgroundWorkHoldsCompletion(tasks)).toBe(holds);
+  });
+});
+
+describe("waitingOnAgents", () => {
+  it.each([
+    ["a pull request watch", false, { pendingBackgroundTasks: [{ kind: "monitor" }] }],
+    ["an awaited command", false, { pendingBackgroundTasks: [{ kind: "command" }] }],
+    [
+      "a subagent beside a watch",
+      true,
+      { pendingBackgroundTasks: [{ kind: "monitor" }, { kind: "subagent" }] },
+    ],
+    ["a blocking thread wait", true, { blockedOnThreadWait: true }],
+  ] as const)("with %s, waits on agents: %s", (_case, expected, thread) => {
+    expect(waitingOnAgents(thread)).toBe(expected);
   });
 });
 

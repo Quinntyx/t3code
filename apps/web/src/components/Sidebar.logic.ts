@@ -1,6 +1,9 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  backgroundWorkHoldsCompletion,
+  waitingOnAgents,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import {
@@ -627,6 +630,7 @@ export interface ThreadStatusPill {
     | "Pending Approval"
     | "Awaiting Input"
     | "Guest Request"
+    | "Delegating"
     | "Waiting"
     | "Plan Ready";
   colorClass: string;
@@ -641,6 +645,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Failed: 3.5,
   Working: 3,
   Connecting: 3,
+  Delegating: 2.75,
   Waiting: 2.5,
   "Plan Ready": 2,
   Completed: 1,
@@ -1133,12 +1138,19 @@ export function resolveThreadStatusPill(input: {
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
   ) {
-    return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    };
+    return waitingOnAgents(thread)
+      ? {
+          label: "Delegating",
+          colorClass: "text-sky-600 dark:text-sky-300/80",
+          dotClass: "bg-sky-500 dark:bg-sky-300/80",
+          pulse: false,
+        }
+      : {
+          label: "Waiting",
+          colorClass: "text-sidebar-muted-foreground",
+          dotClass: "bg-sidebar-muted-foreground",
+          pulse: false,
+        };
   }
 
   if (hasUnseenFailure(thread)) {
