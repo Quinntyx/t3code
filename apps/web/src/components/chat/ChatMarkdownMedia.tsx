@@ -1,6 +1,11 @@
 import { MISSING_FILE_ACCESS_MESSAGE } from "@t3tools/client-runtime/state/assets";
 import { mediaFileReference, mediaUrlReference } from "@t3tools/client-runtime/media-reference";
-import type { AssetResource, EnvironmentId, SOURCE_CONTROL_MEDIA_ASSET } from "@t3tools/contracts";
+import type {
+  AssetResource,
+  EnvironmentId,
+  SOURCE_CONTROL_MEDIA_ASSET,
+  ThreadId,
+} from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 import {
   createContext,
@@ -18,6 +23,8 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { ModelViewer } from "./ModelViewer";
+import { createModelCacheKey } from "./modelCache";
 import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
 
 const CHAT_MARKDOWN_MEDIA_MAX_WIDTH_CLASS_NAME = "max-w-[min(100%,30rem)]";
@@ -98,7 +105,7 @@ function expandableMarkdownImageProps(
 
 function ChatMarkdownMediaUnavailableLabel(props: {
   readonly alt: string;
-  readonly kind?: "image" | "video" | "audio" | undefined;
+  readonly kind?: "image" | "video" | "audio" | "model" | undefined;
   readonly detail?: string | undefined;
 }) {
   const label =
@@ -106,7 +113,9 @@ function ChatMarkdownMediaUnavailableLabel(props: {
       ? "Audio unavailable"
       : props.kind === "video"
         ? "Video unavailable"
-        : "Image unavailable";
+        : props.kind === "model"
+          ? "3D model unavailable"
+          : "Image unavailable";
   return (
     <span data-thread-find-ignore className="inline-flex items-center gap-1.5">
       <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
@@ -118,7 +127,7 @@ function ChatMarkdownMediaUnavailableLabel(props: {
 export function ChatMarkdownImageFallback(props: {
   readonly alt: string;
   readonly copyMarkdown?: string | undefined;
-  readonly kind?: "image" | "video" | "audio";
+  readonly kind?: "image" | "video" | "audio" | "model";
   readonly actionsSource?: MediaActionSource | undefined;
   readonly detail?: string | undefined;
 }) {
@@ -308,6 +317,44 @@ export function ChatMarkdownVideo(props: {
   );
 }
 
+export function ChatMarkdownModel(props: {
+  readonly src: string | null;
+  readonly alt: string;
+  readonly copyMarkdown: string | undefined;
+  readonly actionsSource: MediaActionSource;
+  readonly cacheKey?: string | undefined;
+  readonly sourceFailed?: boolean | undefined;
+  readonly unavailableDetail?: string | undefined;
+  readonly style?: CSSProperties | undefined;
+  readonly onRetry?: (() => Promise<unknown>) | undefined;
+}) {
+  return (
+    <span
+      data-markdown-copy={props.copyMarkdown}
+      className={CHAT_MARKDOWN_MEDIA_LAYOUT_CLASS_NAME}
+      style={props.style}
+    >
+      <MediaActions source={props.actionsSource}>
+        {props.src === null || props.sourceFailed === true ? (
+          <ChatMarkdownImageFallback
+            alt={props.alt}
+            kind="model"
+            detail={props.unavailableDetail}
+          />
+        ) : (
+          <ModelViewer
+            key={props.src}
+            src={props.src}
+            name={props.alt || "model"}
+            cacheKey={props.cacheKey}
+            onRetry={props.onRetry}
+          />
+        )}
+      </MediaActions>
+    </span>
+  );
+}
+
 export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props: {
   readonly environmentId: EnvironmentId;
   readonly resource: Extract<
@@ -321,7 +368,8 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
         | "tool-output-image";
     }
   >;
-  readonly kind?: "image" | "video";
+  readonly kind?: "image" | "video" | "model";
+  readonly threadId?: ThreadId | null | undefined;
   readonly alt: string;
   readonly copyMarkdown?: string;
   readonly srcFragment?: string;
@@ -370,6 +418,16 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
         ? null
         : fallbackSrc + (props.srcFragment ?? "");
   const knownSize = assetUrl._tag === "Success" ? assetUrl.imageDimensions : undefined;
+  const modelCacheKey =
+    props.kind === "model" && assetUrl._tag === "Success"
+      ? createModelCacheKey({
+          environmentId: props.environmentId,
+          threadId: props.threadId,
+          resource: props.resource,
+          revision:
+            assetUrl.fileRevision ?? (props.resource._tag === "attachment" ? null : assetUrl.url),
+        })
+      : undefined;
   const maxHeightRem = props.maxHeightRem ?? 30;
   const style =
     props.style ??
@@ -398,6 +456,28 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
         }
       : {}),
   };
+
+  if (props.kind === "model") {
+    return (
+      <ChatMarkdownModel
+        key={JSON.stringify([props.environmentId, props.resource, props.srcFragment])}
+        src={src}
+        alt={props.alt}
+        copyMarkdown={props.copyMarkdown}
+        actionsSource={actionsSource}
+        cacheKey={modelCacheKey}
+        sourceFailed={assetUrl._tag === "Failure" && fallbackSrc === undefined}
+        unavailableDetail={
+          assetUrl._tag === "Failure" &&
+          assetUrl.reason === "missing-file-access" &&
+          fallbackSrc === undefined
+            ? MISSING_FILE_ACCESS_MESSAGE
+            : undefined
+        }
+        onRetry={refreshAssetUrl}
+      />
+    );
+  }
 
   if (props.kind === "video") {
     return (

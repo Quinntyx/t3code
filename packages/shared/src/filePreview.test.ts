@@ -39,6 +39,20 @@ describe("workspace file previews", () => {
     expect(filePreviewKind({ name: "download", mimeType: "application/x-sqlite3" })).toBe("sqlite");
     expect(filePreviewKind({ name: "misleading.zip", mimeType: "application/pdf" })).toBe("pdf");
   });
+  it("recognizes 3D models from GLB, OBJ, and STL", () => {
+    expect(filePreviewKind({ name: "asset.glb" })).toBe("model");
+    expect(filePreviewKind({ name: "mesh.OBJ" })).toBe("model");
+    expect(filePreviewKind({ name: "part.stl", mimeType: "application/octet-stream" })).toBe(
+      "model",
+    );
+    expect(filePreviewKind({ name: "download", mimeType: "model/gltf-binary" })).toBe("model");
+    // .gltf needs sibling .bin and texture files, so it stays a plain file.
+    expect(filePreviewKind({ name: "design.gltf" })).toBe("unsupported");
+    expect(hostPreviewMimeTypeFromExtension(".glb")).toBe("model/gltf-binary");
+    expect(hostPreviewMimeTypeFromExtension(".obj")).toBe("model/obj");
+    expect(hostPreviewMimeTypeFromExtension(".stl")).toBe("model/stl");
+    expect(isWorkspacePreviewEntryPath("models/asset.glb")).toBe(true);
+  });
   it.each(["ttf", "otf", "woff", "woff2"])(
     "previews %s fonts through signed host assets",
     (extension) => {
@@ -139,6 +153,11 @@ describe("media path parsing", () => {
     ["tone.webm-audio", "audio"],
     ["tone.webm", "video"],
     ["https://example.com/tone%2Emp3?download=1", "audio"],
+    ["asset.glb", "model"],
+    ["models%2Fasset%2Eglb", "model"],
+    ["https://example.com/mesh.OBJ?download=1", "model"],
+    ["part.STL", "model"],
+    ["design.gltf", null],
     ["data.csv", null],
     ["report.pdf", null],
     ["report.docx", null],

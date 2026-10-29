@@ -14,6 +14,7 @@ import {
   isWorkspaceAudioPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspaceFontPreviewPath,
+  isWorkspaceModelPreviewPath,
   isWorkspaceVideoPreviewPath,
   officePreviewKind,
   binaryPreviewKind,
@@ -52,6 +53,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
+import { ModelViewer } from "~/components/chat/ModelViewer";
+import { createModelCacheKey } from "~/components/chat/modelCache";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -222,7 +225,81 @@ function WorkspaceImagePreview(props: {
   );
 }
 
-export function WorkspaceBrowserPreview(props: {
+function WorkspaceModelPreview(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadRef: ScopedThreadRef;
+  readonly draft: boolean;
+  readonly absolutePath: string;
+  readonly workspaceRoot: string;
+  readonly alt: string;
+  readonly workspaceMutationId: string | null;
+}) {
+  const resource = workspaceAssetResource({
+    kind:
+      mediaFileReference(props.absolutePath, props.workspaceRoot).relativePath !== undefined
+        ? "workspace-file"
+        : "media-file",
+    threadRef: props.threadRef,
+    draft: props.draft,
+    workspaceRoot: props.workspaceRoot,
+    absolutePath: props.absolutePath,
+  });
+  const assetUrl = useAssetUrlState(
+    props.environmentId,
+    resource,
+    props.workspaceMutationId ?? undefined,
+  );
+  const revisionSuffix =
+    props.workspaceMutationId === null
+      ? ""
+      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
+  const modelUrl = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
+  const modelCacheKey = createModelCacheKey({
+    environmentId: props.environmentId,
+    threadId: props.threadRef.threadId,
+    resource,
+    revision:
+      assetUrl._tag === "Success"
+        ? (assetUrl.fileRevision ?? props.workspaceMutationId)
+        : props.workspaceMutationId,
+  });
+  const actionsSource: MediaActionSource = {
+    kind: "model",
+    name: props.alt,
+    src: modelUrl,
+    reference: mediaFileReference(props.absolutePath, props.workspaceRoot),
+    asset: { environmentId: props.environmentId, resource },
+  };
+
+  if (assetUrl._tag === "Failure") {
+    return (
+      <MediaActions source={actionsSource}>
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
+          Unable to load workspace model.
+        </div>
+      </MediaActions>
+    );
+  }
+
+  return modelUrl === null ? (
+    <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
+      <Spinner size="lg" />
+    </div>
+  ) : (
+    <MediaActions source={actionsSource}>
+      <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-auto p-3">
+        <ModelViewer
+          src={modelUrl}
+          name={props.alt}
+          cacheKey={modelCacheKey}
+          className="mx-auto max-h-[60vh] w-full max-w-none"
+        />
+      </div>
+    </MediaActions>
+  );
+}
+
+function WorkspaceBrowserPreview(props: {
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef;
   readonly draft: boolean;
@@ -1026,7 +1103,8 @@ export default function FilePreviewPanel({
   const isVideo = relativePath !== null && isWorkspaceVideoPreviewPath(relativePath);
   const isAudio = relativePath !== null && !isVideo && isWorkspaceAudioPreviewPath(relativePath);
   const isImage = relativePath !== null && !isVideo && isWorkspaceImagePreviewPath(relativePath);
-  const isMedia = isImage || isVideo || isAudio;
+  const isModel = relativePath !== null && !isVideo && isWorkspaceModelPreviewPath(relativePath);
+  const isMedia = isImage || isVideo || isAudio || isModel;
   const isPdf = relativePath !== null && isPdfPreviewFile(relativePath);
   const isDocument =
     relativePath !== null &&
@@ -1354,6 +1432,17 @@ export default function FilePreviewPanel({
               asset={{ environmentId, attachmentId: attachment.id }}
               htmlRender={attachment.htmlRender === true}
               threadRef={threadRef}
+            />
+          ) : relativePath && isModel && absolutePath ? (
+            <WorkspaceModelPreview
+              key={absolutePath}
+              environmentId={environmentId}
+              threadRef={threadRef}
+              draft={draft}
+              absolutePath={absolutePath}
+              workspaceRoot={cwd}
+              alt={relativePath}
+              workspaceMutationId={workspaceMutationId}
             />
           ) : relativePath && isVideo && absolutePath ? (
             <WorkspaceVideoPreview
