@@ -1,6 +1,7 @@
 import { type ReactNode, useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { observeResize } from "~/lib/observeResize";
+import { attachComposerDrawer, composerDrawerInset } from "./composerGlass";
 
 type ComposerCommandMenuPosition = {
   bottom: number;
@@ -37,10 +38,7 @@ export function ComposerCommandMenuLayer(props: {
       const rect = (mainSurface ?? form ?? anchor).getBoundingClientRect();
       const rootFontSizePx =
         Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
-      const drawerInsetRem = Number.parseFloat(
-        window.getComputedStyle(form ?? anchor).getPropertyValue("--chat-composer-drawer-inset"),
-      );
-      const drawerInset = drawerInsetRem * rootFontSizePx;
+      const drawerInset = composerDrawerInset(form ?? anchor);
       const width = rect.width - drawerInset * 2;
       if (width <= 0) {
         setPosition(null);
@@ -75,10 +73,16 @@ export function ComposerCommandMenuLayer(props: {
     };
   }, [props.anchor]);
 
-  if (!props.anchor || !position) return null;
+  const anchor = props.anchor;
+  if (!anchor || !position) return null;
 
   return createPortal(
     <div
+      ref={(element) => {
+        const shell = anchor.closest('[data-slot="composer-shell"]');
+        if (!element || !shell) return;
+        return attachComposerDrawer(shell, element);
+      }}
       className="pointer-events-auto fixed z-40 flex flex-col"
       data-composer-drawer-layer="true"
       style={{

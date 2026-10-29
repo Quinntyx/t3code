@@ -1,5 +1,7 @@
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
+import { type GlassEdge, RIM_WIDTH } from "./shape";
+
 export interface LiquidGlassOptions {
   blur: number;
   centerBlur: number;
@@ -20,7 +22,6 @@ export const DEFAULT_LIQUID_GLASS_OPTIONS: LiquidGlassOptions = {
 
 // Filter parameters from https://blade04208.github.io/css/liquid-glass.css (lyra rebane).
 const MAP_NEUTRAL = "#808080";
-const RIM_WIDTH = 12;
 const RED_CHANNEL = "1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1";
 const GREEN_CHANNEL = "0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 1";
 const BLUE_CHANNEL = "0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 1";
@@ -92,37 +93,45 @@ export function liquidGlassCenterBlurExtra({ blur, centerBlur }: LiquidGlassOpti
   return round(Math.sqrt(Math.max(0, centerBlur ** 2 - blur ** 2)));
 }
 
-function buildCenterBlur(surface: LiquidGlassSurface, extra: number) {
+// A rasterized map carries its rim weight in red, so the rim needs no second image.
+const RED_TO_ALPHA = "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0";
+
+function buildCenterBlur(rim: string, extra: number) {
   if (extra <= 0) return "";
   return [
     `<feGaussianBlur in="SourceGraphic" stdDeviation="${extra}" result="center-blurred"/>`,
     // Chromium ignores edgeMode here, so the blur fades past the box; the opaque backdrop refills it.
     `<feComposite in="center-blurred" in2="SourceGraphic" operator="over" result="center"/>`,
-    `<feImage href="data:image/svg+xml,${encodeURIComponent(buildRimMask(surface))}" preserveAspectRatio="none" result="rim-luminance"/>`,
-    `<feColorMatrix in="rim-luminance" type="luminanceToAlpha" result="rim"/>`,
+    rim,
     `<feComposite in="refracted" in2="rim" operator="in" result="edge"/>`,
     `<feComposite in="center" in2="rim" operator="out" result="interior"/>`,
     `<feComposite in="edge" in2="interior" operator="arithmetic" k2="1" k3="1"/>`,
   ].join("");
 }
 
+/** `mapHref` replaces the rounded-rect map with a rasterized one from `buildGlassGeometry`. */
 export function buildLiquidGlassFilter(
   id: string,
   surface: LiquidGlassSurface,
   options: Partial<LiquidGlassOptions> = {},
+  mapHref?: string,
 ) {
   const resolved = { ...DEFAULT_LIQUID_GLASS_OPTIONS, ...options };
-  const map = buildMap(id, surface);
+  const map = mapHref ?? `data:image/svg+xml,${encodeURIComponent(buildMap(id, surface))}`;
+  const rim = mapHref
+    ? `<feColorMatrix in="map" type="matrix" values="${RED_TO_ALPHA}" result="rim"/>`
+    : `<feImage href="data:image/svg+xml,${encodeURIComponent(buildRimMask(surface))}" preserveAspectRatio="none" result="rim-luminance"/>` +
+      `<feColorMatrix in="rim-luminance" type="luminanceToAlpha" result="rim"/>`;
   const markup = [
     `<svg xmlns="http://www.w3.org/2000/svg"><filter id="${id}" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">`,
-    `<feImage href="data:image/svg+xml,${encodeURIComponent(map)}" preserveAspectRatio="none" result="map"/>`,
+    `<feImage href="${map}" preserveAspectRatio="none" result="map"/>`,
     buildPasses(resolved),
     `<feBlend in="channel-2" in2="channel-1" mode="screen" result="blended"/>`,
     `<feBlend in="blended" in2="channel-0" mode="screen"/>`,
     // Reconstruct straight RGB first; screening three copies of edge alpha creates a dark rim.
     `<feComposite in2="SourceAlpha" operator="in"/>`,
     `<feOffset dx="0.0392156862745" dy="0.0392156862745" result="refracted"/>`,
-    buildCenterBlur(surface, liquidGlassCenterBlurExtra(resolved)),
+    buildCenterBlur(rim, liquidGlassCenterBlurExtra(resolved)),
     "</filter></svg>",
   ].join("");
   return { markup };
@@ -151,19 +160,16 @@ function glareFactor(normalX: number, normalY: number, strength: number): number
   return Math.min(1, Math.max(0, (factor * strength) ** (0.1 + GLARE_CONVERGENCE * 2)));
 }
 
-/** The outline as edge and corner-arc pieces, each lit by its own outward normal. */
-function glarePieces({ height, width }: LiquidGlassSurface, radius: number, strength: number) {
-  const pieces: string[] = [];
-  const piece = (d: string, normalX: number, normalY: number) => {
-    const level = Math.round(glareFactor(normalX, normalY, strength) * 255);
-    pieces.push(`<path d="${d}" stroke="rgb(${level},${level},${level})"/>`);
-  };
+/** The outline as edge and corner-arc pieces, each with its outward normal. */
+function rectEdges({ height, width }: LiquidGlassSurface, radius: number): GlassEdge[] {
+  const edges: GlassEdge[] = [];
+  const edge = (d: string, normalX: number, normalY: number) => edges.push({ d, normalX, normalY });
   const point = (x: number, y: number) => `${round(x)} ${round(y)}`;
-  piece(`M${point(radius, 0)}L${point(width - radius, 0)}`, 0, -1);
-  piece(`M${point(width, radius)}L${point(width, height - radius)}`, 1, 0);
-  piece(`M${point(width - radius, height)}L${point(radius, height)}`, 0, 1);
-  piece(`M${point(0, height - radius)}L${point(0, radius)}`, -1, 0);
-  if (radius <= 0) return pieces.join("");
+  edge(`M${point(radius, 0)}L${point(width - radius, 0)}`, 0, -1);
+  edge(`M${point(width, radius)}L${point(width, height - radius)}`, 1, 0);
+  edge(`M${point(width - radius, height)}L${point(radius, height)}`, 0, 1);
+  edge(`M${point(0, height - radius)}L${point(0, radius)}`, -1, 0);
+  if (radius <= 0) return edges;
   for (const [centerX, centerY, start] of [
     [width - radius, radius, -Math.PI / 2],
     [width - radius, height - radius, 0],
@@ -174,14 +180,24 @@ function glarePieces({ height, width }: LiquidGlassSurface, radius: number, stre
       const from = start + (step / GLARE_CORNER_STEPS) * (Math.PI / 2);
       const to = start + ((step + 1) / GLARE_CORNER_STEPS) * (Math.PI / 2);
       const middle = (from + to) / 2;
-      piece(
+      edge(
         `M${point(centerX + Math.cos(from) * radius, centerY + Math.sin(from) * radius)}A${round(radius)} ${round(radius)} 0 0 1 ${point(centerX + Math.cos(to) * radius, centerY + Math.sin(to) * radius)}`,
         Math.cos(middle),
         Math.sin(middle),
       );
     }
   }
-  return pieces.join("");
+  return edges;
+}
+
+interface GlareGeometry {
+  width: number;
+  height: number;
+  /** The shape painted with the given attributes. */
+  shape: (attributes: string) => string;
+  /** The shape shrunk by `amount`, painted black, for an edge mask over white. */
+  interior: (amount: number, filter: string) => string;
+  edges: readonly GlassEdge[];
 }
 
 /**
@@ -189,25 +205,25 @@ function glarePieces({ height, width }: LiquidGlassSurface, radius: number, stre
  * the rim legible on white the way the studio's under-glass shadow does.
  * Painted as a background layer, so the fill's opacity cannot wash it out.
  */
-export function buildLiquidGlassGlare(
-  surface: LiquidGlassSurface,
-  options: Partial<LiquidGlassOptions> = {},
-): string | null {
+function buildGlare(geometry: GlareGeometry, options: Partial<LiquidGlassOptions>): string | null {
   const strength = ({ ...DEFAULT_LIQUID_GLASS_OPTIONS, ...options }.glare ?? 0) / 100;
   if (strength <= 0) return null;
-  const { height, width } = surface;
-  const radius = cornerRadius(surface);
+  const { height, width, shape, interior } = geometry;
   const depth = round(Math.min(VIGNETTE_DEPTH, Math.min(width, height) / 3));
-  const inset = (amount: number) =>
-    `x="${amount}" y="${amount}" width="${round(Math.max(0, width - amount * 2))}" height="${round(Math.max(0, height - amount * 2))}" rx="${round(Math.max(0, radius - amount))}"`;
   const edgeMask = (id: string, amount: number, softness: number) =>
     [
       `<mask id="${id}" maskUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}">`,
-      `<rect ${inset(0)} fill="#fff"/>`,
-      `<rect ${inset(amount)} fill="#000" filter="url(#${id}-soft)"/>`,
+      shape('fill="#fff"'),
+      interior(amount, `url(#${id}-soft)`),
       "</mask>",
       `<filter id="${id}-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${softness}"/></filter>`,
     ].join("");
+  const pieces = geometry.edges
+    .map(({ d, normalX, normalY }) => {
+      const level = Math.round(glareFactor(normalX, normalY, strength) * 255);
+      return `<path d="${d}" stroke="rgb(${level},${level},${level})"/>`;
+    })
+    .join("");
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     "<defs>",
@@ -215,14 +231,66 @@ export function buildLiquidGlassGlare(
     edgeMask("vignette", depth, round(depth / 2)),
     `<filter id="smooth" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="1.5"/></filter>`,
     `<mask id="angle" maskUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}">`,
-    `<g fill="none" stroke-width="10" filter="url(#smooth)">${glarePieces(surface, radius, strength)}</g>`,
+    `<g fill="none" stroke-width="10" filter="url(#smooth)">${pieces}</g>`,
     "</mask>",
     "</defs>",
-    `<rect ${inset(0)} fill="#000" opacity="${round(Math.min(1, VIGNETTE_OPACITY * strength))}" mask="url(#vignette)"/>`,
-    `<g mask="url(#angle)"><rect ${inset(0)} fill="${GLARE_COLOR}" mask="url(#core)"/></g>`,
+    shape(
+      `fill="#000" opacity="${round(Math.min(1, VIGNETTE_OPACITY * strength))}" mask="url(#vignette)"`,
+    ),
+    `<g mask="url(#angle)">${shape(`fill="${GLARE_COLOR}" mask="url(#core)"`)}</g>`,
     "</svg>",
   ].join("");
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+export function buildLiquidGlassGlare(
+  surface: LiquidGlassSurface,
+  options: Partial<LiquidGlassOptions> = {},
+): string | null {
+  const { height, width } = surface;
+  const radius = cornerRadius(surface);
+  const inset = (amount: number) =>
+    `x="${amount}" y="${amount}" width="${round(Math.max(0, width - amount * 2))}" height="${round(Math.max(0, height - amount * 2))}" rx="${round(Math.max(0, radius - amount))}"`;
+  return buildGlare(
+    {
+      width,
+      height,
+      shape: (attributes) => `<rect ${inset(0)} ${attributes}/>`,
+      interior: (amount, filter) => `<rect ${inset(amount)} fill="#000" filter="${filter}"/>`,
+      edges: rectEdges(surface, radius),
+    },
+    options,
+  );
+}
+
+/** Glare for a traced outline; a round-joined stroke erodes it the way the rect insets do. */
+export function buildOutlineGlare(
+  outline: { width: number; height: number; path: string; edges: readonly GlassEdge[] },
+  options: Partial<LiquidGlassOptions> = {},
+): string | null {
+  const { path } = outline;
+  return buildGlare(
+    {
+      ...outline,
+      shape: (attributes) => `<path d="${path}" ${attributes}/>`,
+      interior: (amount, filter) =>
+        `<g filter="${filter}"><path d="${path}" fill="#000"/><path d="${path}" fill="none" stroke="#fff" stroke-width="${amount * 2}" stroke-linejoin="round"/></g>`,
+    },
+    options,
+  );
+}
+
+/** Masks for a traced outline: its fill, and a 1px ring just inside it for the border. */
+export function buildOutlineMasks(outline: { width: number; height: number; path: string }) {
+  const { height, path, width } = outline;
+  const svg = (body: string) =>
+    `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`)}")`;
+  return {
+    fill: svg(`<path d="${path}" fill="#fff"/>`),
+    ring: svg(
+      `<clipPath id="inside"><path d="${path}"/></clipPath><path d="${path}" fill="none" stroke="#fff" stroke-width="2" clip-path="url(#inside)"/>`,
+    ),
+  };
 }
 
 export function liquidGlassBackdropFilter(
