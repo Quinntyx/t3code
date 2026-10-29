@@ -49,9 +49,9 @@ function Surface({
         "relative isolate border-0 bg-transparent shadow-none [--chat-composer-attached-tint:transparent]",
         variantColors[variant],
         // Bleed the mask 1px past the seam to cover Chromium's fractional-pixel backdrop loss.
-        "[--chat-composer-attachment-overlap:calc(1rem+1px)] before:rounded-t-2xl before:mask-t-from-transparent before:mask-t-from-4 before:mask-t-to-black before:mask-t-to-4",
+        "[--chat-composer-attachment-overlap:calc(1rem+1px)] before:rounded-t-glass before:mask-t-from-transparent before:mask-t-from-4 before:mask-t-to-black before:mask-t-to-4",
         "before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:border before:border-(--chat-composer-attached-outline)",
-        "[--chat-composer-attached-fill:var(--glass-liquid-tint,color-mix(in_srgb,var(--chat-composer-attached-surface)_var(--glass-opacity),transparent))]",
+        "[--chat-composer-attached-fill:color-mix(in_srgb,var(--chat-composer-attached-surface)_var(--glass-opacity),transparent)]",
         "before:bg-(--chat-composer-attached-fill) before:bg-linear-to-b before:from-(--chat-composer-attached-tint) before:to-(--chat-composer-attached-tint) before:composer-frost",
         "before:shadow-composer dark:before:shadow-composer-dark",
         "dark:supports-[(backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px))]:before:bg-composer-seam-above",

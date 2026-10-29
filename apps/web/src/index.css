@@ -293,6 +293,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
+  --radius-glass: calc(var(--radius) + 1rem);
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
        per container, stepped so however many bars sit under it, the compositor
@@ -363,10 +364,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility surface-glass {
-  background: var(
-    --glass-liquid-tint,
-    color-mix(in srgb, var(--background) var(--glass-opacity), transparent)
-  );
+  background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -388,10 +386,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent),
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent)
     ),
-    var(
-      --glass-liquid-tint,
-      color-mix(in srgb, var(--background) var(--glass-opacity), transparent)
-    ) !important;
+    color-mix(in srgb, var(--background) var(--glass-opacity), transparent) !important;
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -442,10 +437,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility dialog-glass {
-  background: var(
-    --glass-liquid-tint,
-    color-mix(in srgb, var(--background) var(--glass-opacity), transparent)
-  );
+  background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -480,14 +472,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility dropdown-glass {
-  background: var(
-    --glass-liquid-tint,
-    color-mix(
-      in srgb,
-      var(--popover) 18%,
-      color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
-    )
-  );
+  background: color-mix(in srgb, var(--popover) var(--glass-opacity), transparent);
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))

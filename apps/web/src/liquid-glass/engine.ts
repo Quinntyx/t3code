@@ -64,7 +64,6 @@ export function startLiquidGlass(): LiquidGlassController {
     window.clearTimeout(surface.timer);
     surface.filter?.remove();
     (element as HTMLElement).style.removeProperty("--glass-liquid-filter");
-    (element as HTMLElement).style.removeProperty("--glass-liquid-tint");
     surfaces.delete(element);
   };
 
@@ -103,7 +102,6 @@ export function startLiquidGlass(): LiquidGlassController {
       "--glass-liquid-filter",
       liquidGlassBackdropFilter(id),
     );
-    (element as HTMLElement).style.setProperty("--glass-liquid-tint", "rgb(255 255 255 / 4%)");
   };
 
   function schedule(element: Element) {

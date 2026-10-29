@@ -305,7 +305,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "setting-liquid-glass",
     title: "Liquid glass",
     to: "/settings/appearance",
-    searchTerms: ["refraction bend distort lens frost glass dispersion"],
+    searchTerms: [
+      "refraction bend distort lens frost glass dispersion experimental performance gpu battery",
+    ],
   },
   {
     id: "diff-color-scheme",
