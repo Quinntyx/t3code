@@ -121,7 +121,9 @@ the environment. T3 cannot report limits for external OpenCode servers because t
 belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode Console connected
 in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
 your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
-refresh provider status. Cursor reports
+refresh provider status. Pi reports the same OpenCode Go allowance on Pi's card when the Pi
+account is signed in to Go, so a subscription driven through Pi does not need OpenCode running.
+Cursor reports
 its monthly allowance, including separate Auto and API usage, using the CLI login or
 `CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
 usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure
