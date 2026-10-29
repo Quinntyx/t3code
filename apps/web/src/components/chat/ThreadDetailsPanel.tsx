@@ -23,6 +23,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadUsagePanel } from "./ThreadUsagePanel";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -179,6 +180,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <ThreadUsagePanel environmentId={props.environmentId} threadId={props.threadId} />
           ) : null}
 
           {density === "full" && !props.draftId ? (
