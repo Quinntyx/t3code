@@ -146,8 +146,6 @@ const GLARE_OPPOSITE = 0.8;
 const GLARE_CORE = 2;
 const GLARE_COLOR = "#fff6de";
 const GLARE_CORNER_STEPS = 8;
-const VIGNETTE_DEPTH = 14;
-const VIGNETTE_OPACITY = 0.07;
 
 /** iyinchao's angular glare factor for an outward normal in screen coordinates. */
 function glareFactor(normalX: number, normalY: number, strength: number): number {
@@ -201,15 +199,14 @@ interface GlareGeometry {
 }
 
 /**
- * The rim light: a hard warm line lit per surface normal, over a faint inner vignette that keeps
- * the rim legible on white the way the studio's under-glass shadow does.
+ * The rim light: a hard warm line lit per surface normal. No dark inner vignette: on light themes
+ * it read as a grey halo around every glass surface.
  * Painted as a background layer, so the fill's opacity cannot wash it out.
  */
 function buildGlare(geometry: GlareGeometry, options: Partial<LiquidGlassOptions>): string | null {
   const strength = ({ ...DEFAULT_LIQUID_GLASS_OPTIONS, ...options }.glare ?? 0) / 100;
   if (strength <= 0) return null;
   const { height, width, shape, interior } = geometry;
-  const depth = round(Math.min(VIGNETTE_DEPTH, Math.min(width, height) / 3));
   const edgeMask = (id: string, amount: number, softness: number) =>
     [
       `<mask id="${id}" maskUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}">`,
@@ -228,15 +225,11 @@ function buildGlare(geometry: GlareGeometry, options: Partial<LiquidGlassOptions
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     "<defs>",
     edgeMask("core", GLARE_CORE, 0.35),
-    edgeMask("vignette", depth, round(depth / 2)),
     `<filter id="smooth" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="1.5"/></filter>`,
     `<mask id="angle" maskUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}">`,
     `<g fill="none" stroke-width="10" filter="url(#smooth)">${pieces}</g>`,
     "</mask>",
     "</defs>",
-    shape(
-      `fill="#000" opacity="${round(Math.min(1, VIGNETTE_OPACITY * strength))}" mask="url(#vignette)"`,
-    ),
     `<g mask="url(#angle)">${shape(`fill="${GLARE_COLOR}" mask="url(#core)"`)}</g>`,
     "</svg>",
   ].join("");

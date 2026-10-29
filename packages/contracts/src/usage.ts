@@ -1,6 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 /** Bump for incompatible UsageSummary changes; skipped unknown array variants need no bump. */
 export const USAGE_CONTRACT_VERSION = 6 as const;
@@ -140,5 +148,56 @@ export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageR
 }) {
   override get message(): string {
     return `Usage read failed (${this.reason}): ${this.detail}`;
+  }
+}
+
+export const ThreadUsageInput = Schema.Struct({ threadId: ThreadId });
+export type ThreadUsageInput = typeof ThreadUsageInput.Type;
+
+/** The thread's own turns, or the turns of the subagent threads it delegated to, at any depth. */
+export const ThreadUsageGroup = Schema.Literals(["main", "delegates"]);
+export type ThreadUsageGroup = typeof ThreadUsageGroup.Type;
+
+const ThreadUsageModelKey = {
+  providerInstanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+  model: TrimmedNonEmptyString,
+};
+
+export const ThreadUsageModel = Schema.Struct({
+  ...ThreadUsageModelKey,
+  group: ThreadUsageGroup,
+  /** Threads in the group that ran this model. */
+  threads: PositiveInt,
+  tokens: UsageTokenTotals,
+  totalTokens: NonNegativeInt,
+  /** API-list price of the tokens; null when no rate is known for the model. */
+  costUsd: Schema.NullOr(Schema.Number),
+});
+export type ThreadUsageModel = typeof ThreadUsageModel.Type;
+
+/** Tokens per bucket for one model across both groups, aligned to `ThreadUsage.startedAt`. */
+export const ThreadUsageSeries = Schema.Struct({
+  ...ThreadUsageModelKey,
+  buckets: Schema.Array(NonNegativeInt),
+});
+export type ThreadUsageSeries = typeof ThreadUsageSeries.Type;
+
+export const ThreadUsage = Schema.Struct({
+  startedAt: Schema.NullOr(IsoDateTime),
+  bucketMs: PositiveInt,
+  models: Schema.Array(ThreadUsageModel),
+  series: Schema.Array(ThreadUsageSeries),
+  /** When the thread's own context was compacted. */
+  compactedAt: Schema.Array(IsoDateTime),
+});
+export type ThreadUsage = typeof ThreadUsage.Type;
+
+export class ThreadUsageError extends Schema.TaggedError<ThreadUsageError>()("ThreadUsageError", {
+  threadId: ThreadId,
+  cause: Schema.optional(Schema.Defect()),
+}) {
+  override get message(): string {
+    return `Thread usage could not be read for ${this.threadId}.`;
   }
 }
