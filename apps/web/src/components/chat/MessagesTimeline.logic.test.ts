@@ -4003,9 +4003,10 @@ describe("failed turn transcript", () => {
   it.each([
     { position: "historical", failureClass: "provider_error" },
     { position: "historical", failureClass: "usage_limit" },
+    { position: "latest", failureClass: "provider_error" },
     { position: "latest", failureClass: "usage_limit" },
   ] as const)(
-    "keeps $position $failureClass failures visible with preceding work grouped appropriately",
+    "folds $position $failureClass failures while keeping the failure card visible",
     ({ position, failureClass }) => {
       const isLatest = position === "latest";
       const commands = isLatest ? ["pwd", "ls", "false"] : ["pwd"];
@@ -4065,6 +4066,21 @@ describe("failed turn transcript", () => {
           position: commands.length + 1,
           visibility: "local",
           sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("thought"),
+          item: {
+            ...base,
+            id: TurnItemId.make("thought"),
+            ordinal: commands.length + 1,
+            status: "completed",
+            type: "reasoning",
+            text: "Look at the tree first.",
+            streaming: false,
+          },
+        },
+        {
+          position: commands.length + 2,
+          visibility: "local",
+          sourceThreadId: threadId,
           sourceItemId: TurnItemId.make("failure"),
           item: {
             ...base,
@@ -4080,7 +4096,7 @@ describe("failed turn transcript", () => {
           },
         },
       ];
-      const rows = deriveMessagesTimelineRows({
+      const input = {
         timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
           visibleTurnItems: items,
           optimisticMessages: [],
@@ -4101,24 +4117,40 @@ describe("failed turn transcript", () => {
         ),
         latestRun: {
           runId: isLatest ? runId : RunId.make("newer-run"),
-          status: isLatest ? "failed" : "completed",
+          status: isLatest ? ("failed" as const) : ("completed" as const),
           startedAt: DateTime.formatIso(at),
           completedAt: DateTime.formatIso(at),
         },
         isWorking: false,
         turnDiffSummaries: [],
         supportsConversationRollback: false,
+      };
+      const rows = deriveMessagesTimelineRows(input);
+      expect(rows.map((row) => row.kind)).toEqual(["message", "turn-fold", "work"]);
+      expect(rows.some((row) => row.kind === "thinking")).toBe(false);
+      const fold = rows.find((row) => row.kind === "turn-fold");
+      expect(fold).toMatchObject({ runId, expanded: false });
+      expect(fold?.kind === "turn-fold" ? fold.trajectory.length : 0).toBeGreaterThan(0);
+
+      // Expanding the fold shows grouped tool rows, never one row per tool call.
+      const expandedRows = deriveMessagesTimelineRows({
+        ...input,
+        expandedRunIds: new Set([runId]),
       });
-      expect(rows.some((row) => row.kind === "turn-fold" || row.kind === "attempt-fold")).toBe(
-        false,
-      );
+      expect(expandedRows.map((row) => row.kind)).toEqual([
+        "message",
+        "turn-fold",
+        "work-toggle",
+        "work",
+      ]);
+      expect(expandedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
+        hiddenCount: isLatest ? 4 : 2,
+        expanded: false,
+      });
+      expect(expandedRows.some((row) => row.kind === "thinking")).toBe(false);
+
       const work = rows.flatMap((row) => (row.kind === "work" ? row.groupedEntries : []));
-      expect(rows.find((row) => row.kind === "work-toggle")).toEqual(
-        isLatest ? expect.objectContaining({ hiddenCount: 3, expanded: false }) : undefined,
-      );
-      expect(work.map((entry) => entry.id)).toEqual(
-        isLatest ? ["failure"] : ["command", "failure"],
-      );
+      expect(work.map((entry) => entry.id)).toEqual(["failure"]);
       expect(work.at(-1)?.detail).toBe("The provider stopped this turn.\nRetry later.");
       expect(work.at(-1)?.createdAt).toBe("2026-09-20T12:00:00.000Z");
       if (isLatest) return;
@@ -4148,11 +4180,12 @@ describe("failed turn transcript", () => {
       });
       expect(compactRows.map((row) => row.kind)).toEqual([
         "message",
+        "turn-fold",
         "message",
         "work",
         "assistant-meta",
       ]);
-      expect(compactRows[1]).toMatchObject({ showAssistantMeta: false });
+      expect(compactRows[2]).toMatchObject({ showAssistantMeta: false });
       expect(compactRows.at(-1)).toMatchObject({
         kind: "assistant-meta",
         showAssistantCopyButton: true,
