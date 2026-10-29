@@ -281,7 +281,9 @@ by any part of its pull request numbers. A complete number is also resolved dire
 pull request is older than the recent list. Type a single word after `#` to search pull requests in
 the repository by text. Choose a result to insert it as a chip.
 
-Another thread can be context too. Type `@` followed by part of its title to pick one from
+Another thread can be context too. Type `%` to list threads only, active ones first, then
+snoozed, then settled, newest first in each; keep typing part of a title to narrow the list. `@`
+followed by part of a title also offers matching threads alongside files. Either way you pick from
 the same server, or from a machine it links to while the Linked environments beta is on; those
 show the machine's name. On web and desktop you can also drag a thread out of the sidebar and
 drop it on the composer; a multi-selection drops together. On any client, **Copy thread** puts a

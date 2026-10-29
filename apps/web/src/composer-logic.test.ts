@@ -306,6 +306,18 @@ describe("detectComposerTrigger", () => {
       rangeEnd: cursorAfterAt,
     });
   });
+  it.each(["Compare with %", "Compare with %auth"])("detects the thread trigger in %j", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "thread",
+      query: text.slice("Compare with %".length),
+      rangeStart: "Compare with ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it.each(["50%", "Open %APPDATA%", "Use %auth "])("does not open the thread menu for %j", (text) =>
+    expect(detectComposerTrigger(text, text.length)).toBeNull(),
+  );
 });
 
 describe("filterComposerPullRequestMatches", () => {

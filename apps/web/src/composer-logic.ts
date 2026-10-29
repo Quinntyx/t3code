@@ -17,7 +17,7 @@ import {
 
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
-export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
+export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill" | "thread";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
 
@@ -266,6 +266,16 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
     return {
       kind: "pull-request",
       query: pullRequestMatch[1] ?? "",
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
+  // A second `%` makes the word text, such as `%APPDATA%`.
+  const threadMatch = /^%([^%]*)$/u.exec(token);
+  if (threadMatch) {
+    return {
+      kind: "thread",
+      query: threadMatch[1] ?? "",
       rangeStart: tokenStart,
       rangeEnd: cursor,
     };
