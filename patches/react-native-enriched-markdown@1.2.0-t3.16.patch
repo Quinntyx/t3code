@@ -179,19 +179,6 @@ diff --git a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMark
    void setAllowFontScaling(T view, boolean value);
    void setMaxFontSizeMultiplier(T view, float value);
 
-diff --git a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h
---- a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h
-+++ b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h
-@@ -265,7 +265,7 @@
- 
- #pragma mark - NativeEnrichedMarkdownParserNativeMd4cFlags
- 
--template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7, typename P8>
-+template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7>
- struct NativeEnrichedMarkdownParserNativeMd4cFlags {
-   P0 underline{};
-   P1 latexMath{};
-
 diff --git a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp
 --- a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp
 +++ b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp
@@ -902,19 +889,6 @@ diff --git a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h b/ios/g
    bool isGFM{false};
    bool allowFontScaling{true};
    Float maxFontSizeMultiplier{0.0};
-
-diff --git a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h
---- a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h
-+++ b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h
-@@ -265,7 +265,7 @@
- 
- #pragma mark - NativeEnrichedMarkdownParserNativeMd4cFlags
- 
--template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7, typename P8>
-+template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7>
- struct NativeEnrichedMarkdownParserNativeMd4cFlags {
-   P0 underline{};
-   P1 latexMath{};
 
 diff --git a/ios/segments/ENRMCodeBlockContainerView.m b/ios/segments/ENRMCodeBlockContainerView.m
 --- a/ios/segments/ENRMCodeBlockContainerView.m
