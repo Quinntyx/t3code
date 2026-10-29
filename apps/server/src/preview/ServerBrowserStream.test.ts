@@ -90,6 +90,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: (input) =>
@@ -164,6 +165,7 @@ const openFrameStream = Effect.fnUntraced(function* (
   const browser = ServerBrowser.ServerBrowser.of({
     clearProfile: () => Effect.void,
     reportProfiles: () => Effect.void,
+    listGpus: Effect.succeed({ gpus: [] }),
     openDownload: () => Effect.succeedNone,
     answerFileChooser: () => Effect.succeed(false),
     attachViewer: () =>
@@ -296,6 +298,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => {
@@ -337,6 +340,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: (input) =>
         Effect.sync(() => {
           requests.push(input);
@@ -385,6 +389,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
         Effect.sync(() => {
@@ -454,6 +459,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       reportProfiles: () => Effect.void,
+      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.fail(new ServerBrowser.ServerBrowserLaunchError({ cause: error })),

@@ -20,6 +20,11 @@ interface Options {
   readonly diagnose?: (executable: string, cause: unknown) => Promise<unknown>;
   readonly env?: NodeJS.ProcessEnv;
   readonly onContextClose?: (context: BrowserContext) => void;
+  /** GPU flags and device scale, read at each launch so a relaunch applies new settings. */
+  readonly rendering: () => Promise<{
+    readonly args: ReadonlyArray<string>;
+    readonly scale: number;
+  }>;
 }
 
 const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
@@ -81,12 +86,13 @@ export class ServerBrowserContexts {
   private async launchOptions() {
     const executablePath = await this.options.executable();
     const env = this.options.env ?? process.env;
+    const rendering = await this.options.rendering();
     return {
       executablePath,
       env,
       args: [
-        "--disable-gpu",
-        "--force-device-scale-factor=2",
+        ...rendering.args,
+        `--force-device-scale-factor=${rendering.scale}`,
         "--disable-blink-features=AutomationControlled",
       ],
       ignoreDefaultArgs: ["--enable-automation"],
@@ -150,7 +156,8 @@ export class ServerBrowserContexts {
   }
 
   private async createContext(profileId: string, isolationKey?: string) {
-    const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 };
+    const { scale } = await this.options.rendering();
+    const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: scale };
     if (isolationKey !== undefined || profileId === INCOGNITO_BROWSER_PROFILE_ID) {
       const browser = await this.sharedBrowser();
       return browser.newContext(contextOptions);
@@ -214,6 +221,17 @@ export class ServerBrowserContexts {
   close() {
     this.closing ??= this.dispose();
     return this.closing;
+  }
+
+  /** Closes every browser so the next page launches with the current rendering options. */
+  async relaunch() {
+    if (this.closing) return;
+    const contexts = [...this.contexts.values()];
+    const browser = this.browser;
+    this.contexts.clear();
+    this.browser = undefined;
+    await Promise.allSettled(contexts.map(async (pending) => (await pending).close()));
+    await (await browser?.catch(() => undefined))?.close().catch(constVoid);
   }
 
   private async dispose() {

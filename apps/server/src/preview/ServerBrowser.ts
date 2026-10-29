@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
-// Screencasts ignore emulated device scale; real 2x keeps captures sharp.
-// --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
+// Screencasts ignore emulated device scale; a real device scale keeps captures sharp.
+// The software default (--disable-gpu) composites cheaply while preserving SwiftShader WebGL.
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
@@ -40,6 +40,9 @@ import {
   type PreviewSessionSnapshot,
   type PreviewViewportSetting,
   encodePreviewStreamVideoFrame,
+  type ServerBrowserGpuList,
+  DEFAULT_SERVER_BROWSER_GPU,
+  DEFAULT_SERVER_BROWSER_RENDER_SCALE,
   ThreadId,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   type PreviewAppearancePreference,
@@ -74,6 +77,7 @@ import type {
 
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -84,11 +88,11 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { discoverGpus, gpuLaunchArgs } from "./ServerBrowserGpus.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
-const RENDER_SCALE = 2;
 // Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const SCREENCAST_ACK_PACE_MS = 100;
 const SCREENCAST_SETTLE_MS = 200;
@@ -252,6 +256,9 @@ export class ServerBrowser extends Context.Service<
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
     readonly reportProfiles: (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+
+    /** GPUs this host's browser can render on, for the rendering setting. */
+    readonly listGpus: Effect.Effect<ServerBrowserGpuList>;
   }
 >()("t3/preview/ServerBrowser") {}
 
@@ -472,6 +479,22 @@ const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const renderingOf = (settings: {
+    readonly serverBrowserGpu: string;
+    readonly serverBrowserRenderScale: number;
+  }) => ({ gpu: settings.serverBrowserGpu, scale: settings.serverBrowserRenderScale });
+  let rendering = renderingOf(
+    yield* serverSettings.getSettings.pipe(
+      Effect.orElseSucceed(() => ({
+        serverBrowserGpu: DEFAULT_SERVER_BROWSER_GPU,
+        serverBrowserRenderScale: DEFAULT_SERVER_BROWSER_RENDER_SCALE,
+      })),
+    ),
+  );
+  // Tabs reopen only after the old browsers close, so a profile is never opened twice.
+  let relaunched = Promise.resolve();
+  const relaunchedTabs = new Set<string>();
 
   const tabs = new Map<string, ServerTab>();
   const pendingTabs = new Map<string, Promise<ServerTab>>();
@@ -484,6 +507,10 @@ const make = Effect.gen(function* () {
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
+    rendering: async () => ({
+      args: await gpuLaunchArgs(rendering.gpu, host.platform),
+      scale: rendering.scale,
+    }),
     executable: () => runPromise(previewBrowser.executable),
     // Playwright's launch error drops Chrome's own output; its sandbox note survives.
     diagnose: (executable, cause) =>
@@ -624,7 +651,7 @@ const make = Effect.gen(function* () {
     await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
       width: layout.width,
       height: layout.height,
-      deviceScaleFactor: RENDER_SCALE * tab.zoomFactor,
+      deviceScaleFactor: rendering.scale * tab.zoomFactor,
       mobile: false,
     });
   };
@@ -667,14 +694,15 @@ const make = Effect.gen(function* () {
 
   const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
 
-  const dropTab = (tab: ServerTab, closeSession: boolean) => {
+  const dropTab = (tab: ServerTab, closeSession: boolean, reopens = false) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
     tabs.delete(key);
     tab.closing = true;
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
-    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    const end =
+      reopens || (tab.desktop && !closeSession && sessionOpen(tab)) ? "reconnect" : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
     void tab.control.close().catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
@@ -903,16 +931,20 @@ const make = Effect.gen(function* () {
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
     reportLiveTabs();
-    // Existing desktop and popup PDFs can start loading before interception attaches.
-    if (
-      snapshot.navStatus._tag === "Loading" &&
-      ((!adopted && !desktop) || isPdfAssetUrl(snapshot.navStatus.url))
-    ) {
+    // Existing desktop and popup PDFs can start loading before interception attaches. A tab
+    // reopened by a browser relaunch returns to its page even after that page loaded.
+    const navStatus = snapshot.navStatus;
+    const reopened = relaunchedTabs.delete(key);
+    const resumeUrl =
+      navStatus._tag === "Loading" || (reopened && navStatus._tag !== "Idle")
+        ? navStatus.url
+        : null;
+    if (resumeUrl !== null && ((!adopted && !desktop) || isPdfAssetUrl(resumeUrl))) {
       const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
       tab.initialNavigation = (
-        (desktop || adopted) && page.url() === snapshot.navStatus.url
+        (desktop || adopted) && page.url() === resumeUrl
           ? page.reload(options)
-          : page.goto(snapshot.navStatus.url, options)
+          : page.goto(resumeUrl, options)
       ).then(constVoid, (cause: unknown) => {
         throw ServerBrowserPage.toOperationError(cause, NAVIGATION_TIMEOUT_MS);
       });
@@ -1237,7 +1269,8 @@ const make = Effect.gen(function* () {
     if (pending) return pending;
     const existing = tabs.get(key);
     if (existing) return Promise.resolve(existing);
-    const opening = createTab(snapshot)
+    const opening = relaunched
+      .then(() => createTab(snapshot))
       .catch((cause: unknown) => {
         runFork(
           Effect.logWarning(
@@ -2002,7 +2035,7 @@ const make = Effect.gen(function* () {
         return withScreencastsPaused(tab, () =>
           ServerBrowserPage.snapshot({
             ...tab,
-            renderScale: tab.desktop ? "display" : RENDER_SCALE,
+            renderScale: tab.desktop ? "display" : rendering.scale,
           }),
         );
       }
@@ -2568,6 +2601,25 @@ const make = Effect.gen(function* () {
   });
 
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
+  // GPU and scale are launch flags, so a change relaunches the browser. Its tabs reload in
+  // place: viewers reconnect and each tab reopens at its page on first use.
+  yield* serverSettings.streamChanges.pipe(
+    Stream.map(renderingOf),
+    Stream.runForEach((next) =>
+      Effect.promise(() => {
+        if (next.gpu === rendering.gpu && next.scale === rendering.scale) return relaunched;
+        rendering = next;
+        for (const tab of tabs.values()) {
+          if (tab.desktop) continue;
+          relaunchedTabs.add(tabKey(tab.threadId, tab.tabId));
+          dropTab(tab, false, true);
+        }
+        relaunched = relaunched.then(() => contexts.relaunch());
+        return relaunched;
+      }),
+    ),
+    Effect.forkScoped,
+  );
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
     (yield* PreviewBrowserHost.sandboxBlocked)
@@ -2654,10 +2706,16 @@ const make = Effect.gen(function* () {
       catch: (cause) => new PreviewClearProfileError({ profileId, cause }),
     });
 
+  const listGpus = Effect.promise(() => discoverGpus(host.platform)).pipe(
+    Effect.map((gpus) => ({ gpus })),
+    Effect.withSpan("ServerBrowser.listGpus"),
+  );
+
   return ServerBrowser.of({
     attachViewer,
     clearProfile,
     reportProfiles,
+    listGpus,
     openDownload,
     answerFileChooser,
   });

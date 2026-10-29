@@ -33,6 +33,12 @@ import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
 import {
+  DEFAULT_SERVER_BROWSER_GPU,
+  DEFAULT_SERVER_BROWSER_RENDER_SCALE,
+  ServerBrowserGpu,
+  ServerBrowserRenderScale,
+} from "./preview.ts";
+import {
   BrowserRecordingFrameRate,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_PREVIEW_APPEARANCE,
@@ -1191,6 +1197,12 @@ export const ServerSettings = Schema.Struct({
   ),
 
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  serverBrowserGpu: ServerBrowserGpu.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SERVER_BROWSER_GPU)),
+  ),
+  serverBrowserRenderScale: ServerBrowserRenderScale.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SERVER_BROWSER_RENDER_SCALE)),
+  ),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1556,6 +1568,8 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  serverBrowserGpu: Schema.optionalKey(ServerBrowserGpu),
+  serverBrowserRenderScale: Schema.optionalKey(ServerBrowserRenderScale),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),

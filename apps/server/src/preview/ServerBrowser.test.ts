@@ -14,7 +14,9 @@ import {
   ThreadId,
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -28,6 +30,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettingsService from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -58,6 +61,9 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       const context = makeContext();
       desktopConnections.push({ endpoint, context });
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
+    }
+    async relaunch() {
+      relaunches.count += 1;
     }
     async close() {
       for (const context of contexts) await context.close();
@@ -259,6 +265,8 @@ function makeEncoderPage() {
 }
 
 const contexts: ReturnType<typeof makeContext>[] = [];
+const relaunches = { count: 0 };
+const settingsChanges = new NodeEvents.EventEmitter();
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
@@ -342,6 +350,19 @@ const dependencies = Layer.mergeAll(
     turn: (threadId, active) => Effect.sync(() => desktopTurns.emit("turn", threadId, active)),
   }),
   PreviewAgentActivity.layer,
+  Layer.mock(ServerSettingsService.ServerSettingsService, {
+    getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+    streamChanges: Stream.callback<ServerSettings>((queue) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const onChange = (settings: ServerSettings) => Queue.offerUnsafe(queue, settings);
+          settingsChanges.on("change", onChange);
+          return onChange;
+        }),
+        (onChange) => Effect.sync(() => settingsChanges.off("change", onChange)),
+      ),
+    ),
+  }),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-server-browser-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -538,6 +559,39 @@ it.live.each([
       committed.resolve();
       yield* Fiber.join(navigation);
       yield* Fiber.join(correction);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a rendering change relaunches the browser and reopens its tabs at their page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const url = "http://localhost:5173/settings";
+      yield* manager.reportStatus({
+        threadId: scope.thread.threadId,
+        tabId,
+        serverControlled: true,
+        navStatus: { _tag: "Success", url, title: "Settings" },
+        canGoBack: false,
+        canGoForward: false,
+      });
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      const relaunchesBefore = relaunches.count;
+      settingsChanges.emit("change", { ...DEFAULT_SERVER_SETTINGS, serverBrowserGpu: "auto" });
+      let output = yield* Queue.take(viewer.output);
+      while (output._tag !== "reconnect" && output._tag !== "gone") {
+        output = yield* Queue.take(viewer.output);
+      }
+      // Viewers reconnect rather than lose the tab, and it reopens where it was.
+      expect(output._tag).toBe("reconnect");
+      yield* browser.attachViewer(viewerInput(tabId, true));
+      expect(relaunches.count).toBe(relaunchesBefore + 1);
+      expect(contexts.at(-1)!.page.goto).toHaveBeenLastCalledWith(
+        url,
+        expect.objectContaining({ waitUntil: "commit" }),
+      );
     }),
   ).pipe(Effect.provide(layer)),
 );

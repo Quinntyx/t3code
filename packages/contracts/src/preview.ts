@@ -285,6 +285,27 @@ export const PreviewClearProfileInput = Schema.Struct({
 });
 export type PreviewClearProfileInput = typeof PreviewClearProfileInput.Type;
 
+/** "software" rasterizes on the CPU, "auto" lets Chromium pick, anything else is a GPU's `id`. */
+export const ServerBrowserGpu = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128));
+export type ServerBrowserGpu = typeof ServerBrowserGpu.Type;
+export const DEFAULT_SERVER_BROWSER_GPU = "software";
+export const ServerBrowserRenderScale = Schema.Literals([1, 1.5, 2, 3]);
+export type ServerBrowserRenderScale = typeof ServerBrowserRenderScale.Type;
+export const DEFAULT_SERVER_BROWSER_RENDER_SCALE: ServerBrowserRenderScale = 2;
+
+export const ServerBrowserGpuDevice = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  driver: Schema.NullOr(Schema.String),
+});
+export type ServerBrowserGpuDevice = typeof ServerBrowserGpuDevice.Type;
+
+export const ServerBrowserGpuList = Schema.Struct({
+  /** Only Linux can pin a GPU; elsewhere the choice is software or automatic. */
+  gpus: Schema.Array(ServerBrowserGpuDevice),
+});
+export type ServerBrowserGpuList = typeof ServerBrowserGpuList.Type;
+
 export const PreviewListInput = Schema.Struct({
   threadId: ThreadId,
 });
