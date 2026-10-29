@@ -439,8 +439,8 @@ export const make = Effect.gen(function* () {
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
     }
-    // macOS draws its controls in-process; hide them directly instead of at creation.
-    if (hideWindowControls) {
+    // macOS draws its controls in-process; Windows/Linux drop the overlay at creation.
+    if (environment.platform === "darwin" && hideWindowControls) {
       window.setWindowButtonVisibility(false);
     }
     let boundsPersistFiber: Fiber.Fiber<void, never> | undefined;

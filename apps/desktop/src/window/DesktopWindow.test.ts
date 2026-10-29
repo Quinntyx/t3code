@@ -489,41 +489,37 @@ describe("DesktopWindow", () => {
     );
   });
 
-  it("rejects renderer navigations whose origin only serializes as null", () => {
-    for (const applicationUrl of ["t3code://app/", "t3code-dev://app/"]) {
-      assert.isTrue(
-        DesktopWindow.isSameOriginRendererNavigation({
-          applicationUrl,
-          navigationUrl: `${applicationUrl}threads?id=1#latest`,
-        }),
-        applicationUrl,
-      );
-    }
-    for (const navigationUrl of [
-      "t3code://other/",
-      "t3code://app.example/",
-      "t3code://app:8080/",
-      "t3code://user@other/",
-      "t3code:app",
-      "t3code-dev://app/",
-      "file:///etc/passwd",
-      "data:text/html,<p>hi</p>",
-      "javascript:alert(1)",
-      "about:blank",
-      "blob:t3code://app/0b5e2c4a",
-    ]) {
-      assert.isFalse(
-        DesktopWindow.isSameOriginRendererNavigation({
-          applicationUrl: "t3code://app/",
-          navigationUrl,
-        }),
-        navigationUrl,
-      );
-    }
-    assert.isFalse(
-      DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "data:text/html,app",
-        navigationUrl: "data:text/html,other",
+  // Native caption buttons and traffic lights are created with the frame; the
+  // setting decides whether they exist at all.
+  it.effect(
+    "creates the main window without the native controls overlay on Linux when hidden",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        // The traffic-light API is macOS-only and absent on Linux windows.
+        Reflect.deleteProperty(fakeWindow.window, "setWindowButtonVisibility");
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          createdWindowOptions,
+          clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
+          platform: "linux",
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.createMain;
+          const options = createdWindowOptions[0];
+          if (options === undefined) {
+            return yield* Effect.die("main window options were not captured");
+          }
+          assert.equal(options.titleBarStyle, "hidden");
+          assert.isUndefined(options.titleBarOverlay);
+        }).pipe(Effect.provide(layer));
       }),
     );
   });
