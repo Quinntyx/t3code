@@ -349,7 +349,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "buddy",
     title: "Buddy",
     to: "/settings/appearance",
-    searchTerms: ["companion pet mascot whale chan deepseek sprite animation overlay"],
+    searchTerms: [
+      "companion pet mascot whale chan deepseek clawd claude crab anthropic sprite animation overlay",
+    ],
   },
   {
     id: "panel-animations",
