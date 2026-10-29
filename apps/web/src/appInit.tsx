@@ -4,6 +4,7 @@ import { createBrowserHistory, createHashHistory } from "@tanstack/react-router"
 
 import { applyAppearanceContrast } from "./appearanceContrast";
 import { applyAppearanceFontVariables } from "./appearanceFonts";
+import { startLiquidGlass, type LiquidGlassController } from "./liquid-glass/engine";
 import { startElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { startBrowserProfileReporting } from "./browser/BrowserProfileReporter";
 import { startPreviewTitleRecording } from "./browserHistoryStore";
@@ -58,6 +59,22 @@ import { resolveThreadRouteTarget } from "./threadRoutes";
 function startClientAppearance(): void {
   const root = document.documentElement;
   let applied: ClientSettings | null = null;
+  let liquidGlass: LiquidGlassController | null = null;
+  const applyLiquidGlass = (settings: ClientSettings) => {
+    if (!settings.liquidGlassEnabled) {
+      liquidGlass?.stop();
+      liquidGlass = null;
+      return;
+    }
+    const options = {
+      blur: settings.liquidGlassBlur,
+      saturation: settings.liquidGlassSaturation,
+      refraction: settings.liquidGlassRefraction,
+      dispersion: settings.liquidGlassDispersion,
+    };
+    if (liquidGlass) liquidGlass.update(options);
+    else liquidGlass = startLiquidGlass(options);
+  };
   const apply = () => {
     const settings = getClientSettings();
     const previous = applied;
@@ -79,6 +96,7 @@ function startClientAppearance(): void {
         root.style.removeProperty("--glass-blur");
       }
     }
+    applyLiquidGlass(settings);
     if (
       previous?.fontFamilySans !== settings.fontFamilySans ||
       previous.fontFamilyCode !== settings.fontFamilyCode ||

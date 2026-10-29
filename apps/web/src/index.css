@@ -292,6 +292,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
+  --radius-glass: calc(var(--radius) + 1rem);
+  --radius-glass-item: calc(var(--radius-glass) - 5px);
+  --radius-glass-list-item: calc(var(--radius-glass) - 0.5rem);
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
        per container, stepped so however many bars sit under it, the compositor
@@ -363,8 +366,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility surface-glass {
   background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
 
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     background: var(--background) !important;
@@ -379,8 +388,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent)
     ),
     color-mix(in srgb, var(--background) var(--glass-opacity), transparent) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
 
   &[data-variant="error"] {
     --alert-glass-tint: var(--destructive);
@@ -424,8 +439,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility dialog-glass {
   background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
   border-color: color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
   box-shadow: 0 24px 64px -24px rgb(0 0 0 / 65%);
 
@@ -452,18 +473,32 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility dropdown-glass {
-  background: color-mix(
-    in srgb,
-    var(--popover) 18%,
-    color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
+  background: color-mix(in srgb, var(--popover) var(--glass-opacity), transparent);
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
   );
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
   border: 1px solid color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
 
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     background: var(--popover) !important;
   }
+}
+
+/* One frost definition for every composer surface: the host, its pseudo-element, or the strip. */
+@utility composer-frost {
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
 }
 
 @utility topbar-scroll-fade {
