@@ -2,13 +2,16 @@ import { resolvePullRequestDetailChecks } from "@t3tools/client-runtime/pull-req
 import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
+  type ProjectId,
   type PullRequestListEntry,
   type PullRequestRef,
 } from "@t3tools/contracts";
-import { useState } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
+import { use, useEffect, useState } from "react";
 
 import { usePullRequestChecksRefresh } from "~/hooks/usePullRequestChecksRefresh";
-import { useServerConfigs } from "~/state/entities";
+import { useProjects, useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import {
@@ -20,10 +23,70 @@ import {
 import {
   readPullRequestDetailSnapshot,
   resolveDisplayedPullRequestDetail,
+  resolvePullRequestReference,
 } from "./pullRequestDetail.logic";
 
 export function pullRequestRefKey(reference: PullRequestRef) {
   return `${reference.projectId}:${reference.host ?? ""}:${reference.repository}#${reference.number}`;
+}
+
+/**
+ * Loads what the thread's pull request panel reads once per thread open, so opening the
+ * panel shows it at once. The reference resolves exactly as the panel's does. Its own
+ * component, so project and config changes do not re-render the chat view.
+ */
+export function ThreadPullRequestPrefetch(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly target: {
+    readonly projectId: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+    readonly number: number;
+  } | null;
+}) {
+  const { environmentId, target } = props;
+  const registry = use(RegistryContext);
+  const projects = useProjects();
+  const serverConfigs = useServerConfigs();
+  const reference =
+    environmentId === null || target === null
+      ? null
+      : resolvePullRequestReference(
+          {
+            projectId: target.projectId as ProjectId,
+            ...(target.host ? { host: target.host.toLowerCase() } : {}),
+            repository: target.repository,
+            number: target.number,
+          },
+          projects.find(
+            (project) => project.id === target.projectId && project.environmentId === environmentId,
+          )?.repositoryIdentity,
+          serverConfigs.get(environmentId) !== undefined,
+        );
+  const referenceKey =
+    environmentId === null || reference === null
+      ? null
+      : JSON.stringify([environmentId, reference]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- warms server queries in the shared atom registry, outside React
+  useEffect(() => {
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- `referenceKey` captures the reference, which is rebuilt every render.
+    if (environmentId === null || reference === null) return;
+    // Once, not mounted: mounted queries refetch on every source-control refresh.
+    const controller = new AbortController();
+    const options = { signal: controller.signal, reportFailure: false, reportDefect: false };
+    void executeAtomQuery(
+      registry,
+      pullRequestEnvironment.detail({ environmentId, input: { ...reference, allowStale: false } }),
+      options,
+    );
+    void executeAtomQuery(
+      registry,
+      pullRequestEnvironment.activity({ environmentId, input: reference }),
+      options,
+    );
+    return () => controller.abort();
+  }, [referenceKey, registry]);
+  return null;
 }
 
 /**

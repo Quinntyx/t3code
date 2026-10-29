@@ -129,7 +129,7 @@ import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   checkoutFailureDescription,
   readableFailure,
-  resolvePullRequestReferenceHost,
+  resolvePullRequestReference,
   resolvePullRequestPrimaryControl,
   allowedPullRequestMergeMethods,
   allowsSinglePullRequestMerge,
@@ -218,20 +218,6 @@ function reportCheckoutCommandError(error: Error) {
     title: "Could not copy checkout command",
     description: error.message,
   });
-}
-
-function resolvePullRequestReference(
-  requestedReference: PullRequestRef,
-  repositoryIdentity: Parameters<typeof resolvePullRequestReferenceHost>[1],
-  supportsThreadPullRequests: boolean,
-): PullRequestRef {
-  return supportsThreadPullRequests
-    ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
-    : {
-        projectId: requestedReference.projectId,
-        repository: requestedReference.repository,
-        number: requestedReference.number,
-      };
 }
 
 function pullRequestMarkdownContext(

@@ -243,6 +243,7 @@ import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
 import { assetEnvironment, useAssetUrl, useRefreshAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { readEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { projectEnvironment } from "../../state/projects";
@@ -519,7 +520,11 @@ function MessageAttachmentImage(props: {
     fileName: props.name,
     mimeType: props.mimeType,
   };
-  const uri = useAssetUrl(props.environmentId, resource);
+  const uri = useCachedAssetImageUri(
+    props.environmentId,
+    resource,
+    useAssetUrl(props.environmentId, resource),
+  );
   const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, resource);
   const retriedImage = useRef(false);
   const imageStyle = useResolveClassNames(props.className);

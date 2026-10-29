@@ -36,7 +36,7 @@ import { request, subscribeDynamic } from "../rpc/client.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
-import { followStreamInEnvironment } from "./runtime.ts";
+import { createRuntimeCommand, followStreamInEnvironment } from "./runtime.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
 import {
@@ -1090,9 +1090,29 @@ export function createEnvironmentThreadStateAtoms<R, E>(
       .pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-state:${key}`));
   });
 
+  // Persisted copies only; a thread open right now persists again when it closes.
+  const evictCachedThreads = createRuntimeCommand(runtime, {
+    label: "environment-thread-cache:evict",
+    execute: Effect.fn("EnvironmentThreadState.evictCachedThreads")(function* (
+      threads: ReadonlyArray<{
+        readonly environmentId: EnvironmentIdType;
+        readonly threadId: ThreadIdType;
+      }>,
+    ) {
+      const cache = yield* Persistence.EnvironmentCacheStore;
+      yield* Effect.forEach(
+        threads,
+        ({ environmentId, threadId }) =>
+          cache.removeThread(environmentId, threadId).pipe(Effect.ignore),
+        { discard: true },
+      );
+    }),
+  });
+
   return {
     stateAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
       family(threadKey({ environmentId, threadId })),
+    evictCachedThreads,
   };
 }
 
@@ -1108,6 +1128,7 @@ export * from "./threadCommands.ts";
 export * from "./threadFeedback.ts";
 export * from "./threadDetail.ts";
 export * from "./threadFamilies.ts";
+export * from "./threadPrefetch.ts";
 export * from "./olderSettledThreads.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";

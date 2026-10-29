@@ -610,6 +610,23 @@ export function createEnvironmentShellAtoms<R, E>(
   };
 }
 
+/** Environments whose threads reflect the server now, not a cache or a resync in flight. */
+export function createLiveShellEnvironmentIdsAtom(input: {
+  readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  readonly statusAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellStatus>;
+}) {
+  let previous: ReadonlySet<EnvironmentId> = new Set();
+  return Atom.make((get) => {
+    const next = new Set<EnvironmentId>();
+    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
+      if (get(input.statusAtom(environmentId)) === "live") next.add(environmentId);
+    }
+    if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+    previous = next;
+    return next;
+  }).pipe(Atom.withLabel("live-shell-environment-ids"));
+}
+
 export * from "./models.ts";
 export * from "./shellCommands.ts";
 export * from "./shellReducer.ts";
