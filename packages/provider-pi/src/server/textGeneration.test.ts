@@ -14,10 +14,12 @@ import { makePiTextGeneration } from "./textGeneration.ts";
 const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const makeFakePi = (reply: string, setModelError?: string) =>
-  Effect.gen(function* () {
+const makeFakePi = (replies: string | ReadonlyArray<string>, setModelError?: string) => {
+  const answers = typeof replies === "string" ? [replies] : replies;
+  return Effect.gen(function* () {
     const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
     const received: Array<Record<string, unknown>> = [];
+    let textIndex = 0;
     const emit = (record: Record<string, unknown>) =>
       Queue.offer(stdout, new TextEncoder().encode(`${encodeJsonLine(record)}\n`));
     let buffered = "";
@@ -34,6 +36,7 @@ const makeFakePi = (reply: string, setModelError?: string) =>
             yield* emit({ ...response, success: true });
             yield* emit({ type: "agent_settled" });
           } else if (record["type"] === "get_last_assistant_text") {
+            const reply = answers[textIndex++] ?? answers.at(-1) ?? "";
             yield* emit({ ...response, success: true, data: { text: reply } });
           } else if (record["type"] === "set_model" && setModelError !== undefined) {
             yield* emit({ ...response, success: false, error: setModelError });
@@ -62,6 +65,7 @@ const makeFakePi = (reply: string, setModelError?: string) =>
     );
     return { spawner, received };
   });
+};
 
 it.effect("names the model and the disabled extensions when Pi cannot load it", () =>
   Effect.gen(function* () {
@@ -86,5 +90,67 @@ it.effect("names the model and the disabled extensions when Pi cannot load it", 
     assert.include(error.detail, "Model not found: demo/demo-model");
     assert.include(error.detail, "--no-extensions");
     assert.isUndefined(pi.received.find((record) => record["type"] === "prompt"));
+  }),
+);
+
+it.effect("asks Pi to repair a reply that has no JSON object", () =>
+  Effect.gen(function* () {
+    const pi = yield* makeFakePi([
+      "I could not inspect the diff.",
+      '{"title":"Fix the empty reply","body":"Handles a reply with no JSON."}',
+    ]);
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+    const result = yield* textGeneration.generatePrContent({
+      cwd: process.cwd(),
+      baseBranch: "main",
+      headBranch: "fix/demo",
+      commitSummary: "fix: handle an empty reply",
+      diffSummary: "1 file changed",
+      diffPatch: "diff --git a/README.md b/README.md",
+      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+    });
+
+    assert.equal(result.title, "Fix the empty reply");
+    const prompts = pi.received.filter((record) => record["type"] === "prompt");
+    assert.lengthOf(prompts, 2);
+    const repairPrompt = String(prompts[1]?.["message"]);
+    assert.include(repairPrompt, "the reply contained no JSON object");
+    assert.include(repairPrompt, "JSON Schema");
+  }),
+);
+
+it.effect("reports why the repaired reply also failed", () =>
+  Effect.gen(function* () {
+    const pi = yield* makeFakePi(["I could not inspect the diff.", "Still not JSON."]);
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+    const error = yield* textGeneration
+      .generatePrContent({
+        cwd: process.cwd(),
+        baseBranch: "main",
+        headBranch: "fix/demo",
+        commitSummary: "fix: handle an empty reply",
+        diffSummary: "1 file changed",
+        diffPatch: "diff --git a/README.md b/README.md",
+        modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+      })
+      .pipe(Effect.flip);
+
+    assert.equal(error._tag, "TextGenerationError");
+    assert.include(
+      error.detail,
+      "Pi returned invalid structured output: the reply contained no JSON object (after one repair attempt).",
+    );
+    assert.lengthOf(
+      pi.received.filter((record) => record["type"] === "prompt"),
+      2,
+    );
   }),
 );

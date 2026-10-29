@@ -138,6 +138,28 @@ export function buildPrContentPrompt(input: PrContentPromptInput) {
   return { prompt, outputSchema };
 }
 
+export interface StructuredOutputRepairPromptInput {
+  readonly failure: string;
+  readonly outputSchema: Schema.Top;
+}
+
+export function buildStructuredOutputRepairPrompt(input: StructuredOutputRepairPromptInput) {
+  const schema = (() => {
+    try {
+      return JSON.stringify(Schema.toJsonSchemaDocument(input.outputSchema).schema);
+    } catch {
+      return undefined;
+    }
+  })();
+  return [
+    `Your previous reply could not be used: ${input.failure}.`,
+    "Reply again with one JSON object and nothing else. No prose, no markdown, no code fences.",
+    ...(schema === undefined
+      ? []
+      : ["The object must match this JSON Schema:", limitSection(schema, 4_000)]),
+  ].join("\n");
+}
+
 export interface ReviewGuidePromptInput {
   number: number;
   title: string;
