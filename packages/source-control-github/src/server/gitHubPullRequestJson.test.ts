@@ -419,6 +419,17 @@ describe("pull request detail decoding", () => {
     },
   );
 
+  it.each([
+    [{}, undefined],
+    [{ stack: null, stackEntry: null }, null],
+    [
+      { stack: { number: 3, size: 2, baseRefName: "main" }, stackEntry: { position: 1 } },
+      { number: 3, size: 2, base: "main", position: 1 },
+    ],
+  ])("reads stack membership only when the read asked for it: %j", (overrides, stack) => {
+    expect(detailOf([], overrides).stack).toEqual(stack);
+  });
+
   const detailJson = JSON.stringify({
     comments: [{ id: "c1", body: "second", createdAt: "2026-07-04T00:00:00Z" }],
     reviews: [

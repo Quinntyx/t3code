@@ -58,9 +58,14 @@ export function PullRequestMergeControls(props: {
     supportsStackActions: stack.supportsStackActions,
     hasStack: stack.stack !== null,
     isFresh: stack.isFresh,
+    liveMembership: pr.stack,
   });
   const checkingStack =
-    permissions.connected && stack.supportsStackActions && !stack.isFresh && !stack.error;
+    permissions.connected &&
+    stack.supportsStackActions &&
+    !stack.isFresh &&
+    !stack.error &&
+    (stack.stack !== null || !canMergeSingle);
   const reason =
     (!permissions.connected
       ? "Reconnect to merge."

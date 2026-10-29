@@ -592,6 +592,8 @@ export const PullRequestDetail = Schema.Struct({
   autoMergeMethod: Schema.optional(PullRequestMergeMethod),
   workflowApprovalsRequired: Schema.optional(NonNegativeInt),
   maintainerCanModify: Schema.optional(Schema.Boolean),
+  /** Null when the host says the pull request is in no stack; absent when the read did not ask. */
+  stack: Schema.optional(Schema.NullOr(PullRequestStackMembership)),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 

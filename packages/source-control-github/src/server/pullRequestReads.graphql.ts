@@ -222,6 +222,24 @@ export const AutoMergeRequest = Schema.Struct({
 })
 export interface AutoMergeRequest extends Schema.Struct.Type<typeof AutoMergeRequest.fields> {}
 
+/** A stack of PullRequests */
+export const PullRequestStack = Schema.Struct({
+  /** A number uniquely identifying the stack within its repository */
+  number: Shared.Int,
+  /** The total number of pull requests in the stack */
+  size: Shared.Int,
+  /** The branch that the stack's pull requests target */
+  baseRefName: Schema.String
+})
+export interface PullRequestStack extends Schema.Struct.Type<typeof PullRequestStack.fields> {}
+
+/** A member of a PullRequestStack */
+export const PullRequestStackEntry = Schema.Struct({
+  /** This entry's position in the stack, where 1 is the closest to the base branch, 2 is stacked on top of 1, etc. */
+  position: Shared.Int
+})
+export interface PullRequestStackEntry extends Schema.Struct.Type<typeof PullRequestStackEntry.fields> {}
+
 /** Represents a comparison between two commit revisions. */
 export const Comparison = Schema.Struct({
   /** The number of commits behind the base branch. */
@@ -410,6 +428,10 @@ export const PullRequestCoreRepositoryPullRequestPullRequest = Schema.Struct({
   ])),
   /** Returns the auto-merge request object if one exists for this pull request. */
   autoMergeRequest: Schema.NullOr(AutoMergeRequest),
+  /** The stack this Pull Request belongs to, or null if it is not part of a stack */
+  stack: Schema.optionalKey(Schema.NullOr(PullRequestStack)),
+  /** The stack entry for this Pull Request, or null if it is not part of a stack */
+  stackEntry: Schema.optionalKey(Schema.NullOr(PullRequestStackEntry)),
   /** Check if the current viewer can update this object. */
   viewerCanUpdate: Schema.Boolean,
   /** Did the viewer author this comment. */
@@ -456,10 +478,11 @@ export const PullRequestCore = GraphQL.query("PullRequestCore", {
       { name: "number", body: "Int!" },
       { name: "headRef", body: "String!" },
       { name: "required", body: "Boolean!" },
-      { name: "requestedReviewers", body: "Int!" }
+      { name: "requestedReviewers", body: "Int!" },
+      { name: "stacks", body: "Boolean!" }
     ],
     selections: [
-      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$", "number", "){number title url body state isDraft mergeable mergeStateStatus reviewDecision additions deletions changedFiles createdAt updatedAt mergedAt closedAt headRefName baseRefName headRefOid isCrossRepository maintainerCanModify headRepositoryOwner{__typename login}headRepository{nameWithOwner viewerPermission}headRef{id}author{__typename login avatarUrl...on User{id name}}autoMergeRequest{mergeMethod}viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch baseRef{compare(headRef:$", "headRef", "){behindBy}}reviewRequests(first:$", "requestedReviewers", "){nodes{requestedReviewer{__typename...on User{login name}...on Bot{login}...on Team{slug combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}labels(first:100){nodes{name color}}commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename...", "CheckContext", "}pageInfo{hasNextPage}}}}}}}}"] }
+      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$", "number", "){number title url body state isDraft mergeable mergeStateStatus reviewDecision additions deletions changedFiles createdAt updatedAt mergedAt closedAt headRefName baseRefName headRefOid isCrossRepository maintainerCanModify headRepositoryOwner{__typename login}headRepository{nameWithOwner viewerPermission}headRef{id}author{__typename login avatarUrl...on User{id name}}autoMergeRequest{mergeMethod}stack@include(if:$", "stacks", "){number size baseRefName}stackEntry@include(if:$", "stacks", "){position}viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch baseRef{compare(headRef:$", "headRef", "){behindBy}}reviewRequests(first:$", "requestedReviewers", "){nodes{requestedReviewer{__typename...on User{login name}...on Bot{login}...on Team{slug combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}labels(first:100){nodes{name color}}commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename...", "CheckContext", "}pageInfo{hasNextPage}}}}}}}}"] }
     ],
     fragments: [
       { name: "CheckContext", body: ["on StatusCheckRollupContext{__typename...on StatusContext{context state targetUrl createdAt description isRequired(pullRequestNumber:$", "number", ")@include(if:$", "required", ")}...on CheckRun{name status conclusion startedAt completedAt detailsUrl isRequired(pullRequestNumber:$", "number", ")@include(if:$", "required", ")checkSuite{workflowRun{workflow{name}}}}}"] }
@@ -471,7 +494,8 @@ export const PullRequestCore = GraphQL.query("PullRequestCore", {
     number: Shared.Int,
     headRef: Schema.String,
     required: Schema.Boolean,
-    requestedReviewers: Shared.Int
+    requestedReviewers: Shared.Int,
+    stacks: Schema.Boolean
   },
   result: Schema.Struct({
     /** Lookup a given repository by the owner and repository name. */

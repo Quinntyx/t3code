@@ -12,6 +12,7 @@ import { cn } from "~/lib/utils";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Skeleton } from "../ui/skeleton";
 import {
   Menu,
   MenuItem,
@@ -191,6 +192,7 @@ export function PullRequestResolveConflictsButton({
 export function PullRequestPrimaryAction({
   pullRequestKey,
   primaryAction,
+  awaitingStack,
   autoMergeArmed,
   armedAutoMergeLabel,
   pendingAutoMergeLabel,
@@ -203,6 +205,8 @@ export function PullRequestPrimaryAction({
 }: {
   pullRequestKey: string;
   primaryAction: ReturnType<typeof resolvePullRequestPrimaryControl> | null;
+  /** The merge control waits on stack membership, so it shows as a placeholder of its size. */
+  awaitingStack: boolean;
   autoMergeArmed: boolean;
   armedAutoMergeLabel: string;
   pendingAutoMergeLabel: string;
@@ -232,7 +236,23 @@ export function PullRequestPrimaryAction({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      {primaryAction === "resolve" ? (
+      {awaitingStack && (primaryAction === "merge" || primaryAction === "enable-auto-merge") ? (
+        <span
+          role="status"
+          aria-label="Checking merge options"
+          className="relative inline-flex shrink-0"
+        >
+          <span aria-hidden className="invisible inline-flex">
+            <Button size="xs" variant="default" disabled tabIndex={-1}>
+              <PullRequestGlyph.merged className="size-3.5" />
+              <span className="@max-[30rem]/pr-header:hidden">
+                {primaryAction === "merge" ? selectedMergeMethodLabel : pendingAutoMergeLabel}
+              </span>
+            </Button>
+          </span>
+          <Skeleton aria-hidden className="absolute inset-0" />
+        </span>
+      ) : primaryAction === "resolve" ? (
         resolveConflicts
       ) : primaryAction === "ready" ? (
         <Tooltip>

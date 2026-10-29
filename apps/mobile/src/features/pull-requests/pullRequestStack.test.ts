@@ -100,28 +100,25 @@ describe("mobile stack merge scope", () => {
       pullRequestStackMerge(stack, 99, sourceControlClients.get("gitlab").changeRequest).reason,
     ).toBe("This merge request is no longer in the stack. Refresh it.");
   });
-  it("waits for successful discovery before allowing a single PR merge on modern servers", () => {
-    expect(
-      singlePullRequestMergeAllowed({
-        supportsStackActions: true,
-        hasStack: false,
-        isFresh: false,
-      }),
-    ).toBe(false);
-    expect(
-      singlePullRequestMergeAllowed({ supportsStackActions: true, hasStack: false, isFresh: true }),
-    ).toBe(true);
-    expect(
-      singlePullRequestMergeAllowed({ supportsStackActions: true, hasStack: true, isFresh: true }),
-    ).toBe(false);
-    expect(
-      singlePullRequestMergeAllowed({
-        supportsStackActions: false,
-        hasStack: false,
-        isFresh: false,
-      }),
-    ).toBe(true);
-  });
+  const membership = { number: 10, position: 1, size: 3, base: "main" };
+  it.each([
+    [true, false, false, undefined, false],
+    [true, false, true, undefined, true],
+    [true, true, true, undefined, false],
+    [false, false, false, undefined, true],
+    // The live detail answers first; only a fresh stack lookup can overrule it.
+    [true, false, false, null, true],
+    [true, true, false, null, true],
+    [true, true, true, null, false],
+    [true, false, false, membership, false],
+  ] as const)(
+    "allows a single PR merge: actions=%s stack=%s fresh=%s live=%j -> %s",
+    (supportsStackActions, hasStack, isFresh, liveMembership, allowed) => {
+      expect(
+        singlePullRequestMergeAllowed({ supportsStackActions, hasStack, isFresh, liveMembership }),
+      ).toBe(allowed);
+    },
+  );
 });
 
 describe("mobile saved stack navigation", () => {
