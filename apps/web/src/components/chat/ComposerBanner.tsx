@@ -63,6 +63,8 @@ function Surface({
         !detached &&
           "dark:supports-[(backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px))]:before:bg-composer-seam-above",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:before:bg-(--chat-composer-attached-surface)",
+        // Merged into the composer's liquid glass, which draws this surface instead.
+        "[[data-liquid-glass-merged]_&]:before:hidden",
         className,
       )}
       {...props}

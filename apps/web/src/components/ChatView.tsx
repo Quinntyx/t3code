@@ -318,10 +318,6 @@ import {
   latestProviderTurnTokenUsage,
 } from "../lib/contextWindow";
 import {
-  MOBILE_COMPOSER_VIEW_TRANSITION_NAME,
-  MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME,
-} from "./chat/draftHeroTransition";
-import {
   buildLocalDraftThread,
   deriveCommittedServerUserMessageIds,
   dismissBranchMismatchForSession,
@@ -3417,10 +3413,8 @@ export default function ChatView(props: ChatViewProps) {
                     <div className="absolute inset-x-0 bottom-full">
                       <div
                         className="pb-4 group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
-                        style={
-                          forceExpandedMobileComposer
-                            ? { viewTransitionName: MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME }
-                            : undefined
+                        data-mobile-composer-transition={
+                          forceExpandedMobileComposer ? "headline" : undefined
                         }
                       >
                         <DraftHeroHeadline
@@ -3434,10 +3428,8 @@ export default function ChatView(props: ChatViewProps) {
                   <div
                     ref={draftHeroComposerAnchorRef}
                     className="relative z-10"
-                    style={
-                      forceExpandedMobileComposer
-                        ? { viewTransitionName: MOBILE_COMPOSER_VIEW_TRANSITION_NAME }
-                        : undefined
+                    data-mobile-composer-transition={
+                      forceExpandedMobileComposer ? "composer" : undefined
                     }
                   >
                     <ComposerSurface.Shell contextRow={showComposerContextStrip}>

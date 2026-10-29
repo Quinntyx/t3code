@@ -21,7 +21,8 @@ export function WorkspaceFileDropOverlay() {
 
 /**
  * Sits `bottom` pixels up, clear of the composer and its attached banners. The summary names
- * what waits at the end of the timeline, which is out of view while it shows.
+ * what waits at the end of the timeline, which is out of view while it shows. It stays under
+ * the composer overlay, whose glass grows over it while a composer drawer is open.
  */
 export function ScrollToEndButton(props: {
   readonly bottom: number;
@@ -30,7 +31,7 @@ export function ScrollToEndButton(props: {
 }) {
   return (
     <div
-      className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex justify-center py-1.5"
+      className="chat-scroll-to-bottom pointer-events-none absolute z-20 flex justify-center py-1.5"
       style={{ bottom: props.bottom }}
     >
       <Button
