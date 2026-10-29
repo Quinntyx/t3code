@@ -3,6 +3,10 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import {
+  isPullRequestGenerating,
+  subscribePullRequestGeneration,
+} from "@t3tools/client-runtime/state/thread-inbox";
+import {
   backgroundWorkHoldsCompletion,
   waitingOnAgents,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -673,6 +677,7 @@ export function buildBulkUnpinContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
+    | "PRing"
     | "Connecting"
     | "Completed"
     | "Failed"
@@ -692,6 +697,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 4,
   "Guest Request": 3.75,
   Failed: 3.5,
+  PRing: 3.2,
   Working: 3,
   Connecting: 3,
   Delegating: 2.75,
@@ -1126,8 +1132,19 @@ export function resolveWorkingStartedAt(
   return resolveThreadWorkingStartedAt(thread);
 }
 
+export function useThreadPullRequestGenerating(
+  thread: Pick<SidebarThreadSummary, "environmentId" | "id">,
+): boolean {
+  return React.useSyncExternalStore(
+    subscribePullRequestGeneration,
+    () => isPullRequestGenerating({ environmentId: thread.environmentId, threadId: thread.id }),
+    () => false,
+  );
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
+  pullRequestInFlight?: boolean | undefined;
 }): ThreadStatusPill | null {
   const { thread } = input;
 
@@ -1155,6 +1172,15 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-guest-foreground",
       dotClass: "bg-guest",
       pulse: false,
+    };
+  }
+
+  if (input.pullRequestInFlight === true) {
+    return {
+      label: "PRing",
+      colorClass: "text-teal-600 dark:text-teal-300/90",
+      dotClass: "bg-teal-500 dark:bg-teal-300/90",
+      pulse: true,
     };
   }
 

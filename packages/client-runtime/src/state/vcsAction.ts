@@ -1,4 +1,5 @@
 import {
+  actionOpensPullRequest,
   EnvironmentId,
   type EnvironmentId as EnvironmentIdType,
   GitActionProgressPhase,
@@ -27,6 +28,7 @@ import {
   type AtomCommandResult,
 } from "./runtime.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
+import { beginPullRequestGeneration } from "./threadInbox.ts";
 import { vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import { invalidateCachedVcsRefs } from "./vcsRefInvalidation.ts";
 
@@ -481,6 +483,13 @@ export function createVcsActionManager<R, E>(
             registry.set(stateAtom, EMPTY_VCS_ACTION_STATE);
           }
         });
+        const releasePullRequestGeneration =
+          input.threadId !== undefined && actionOpensPullRequest(input.action)
+            ? beginPullRequestGeneration({
+                environmentId: target.environmentId,
+                threadId: input.threadId,
+              })
+            : null;
         return yield* consumeVcsActionProgress(
           runStreamInEnvironment(
             target.environmentId,
@@ -511,6 +520,7 @@ export function createVcsActionManager<R, E>(
               createCommandPermissions(runtime, method).authorize(registry, id, payload),
           }),
           Effect.ensuring(invalidateCachedVcsRefs(registry, target)),
+          Effect.ensuring(Effect.sync(() => releasePullRequestGeneration?.())),
           Effect.tap(() => clearOwnedState),
           Effect.tapError((error) =>
             Effect.sync(() => {

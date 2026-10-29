@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -44,6 +45,7 @@ import {
   VcsActionRemoteFailureError,
   VcsActionTargetKeyParseError,
 } from "./vcsAction.ts";
+import { isPullRequestGenerating } from "./threadInbox.ts";
 import { vcsRefsCacheStateAtom } from "./vcsRefInvalidation.ts";
 
 const actionId = "action-123";
@@ -457,30 +459,70 @@ describe("vcsActionState", () => {
           interruptedActionId,
         );
         const rpcInputs = new Array<GitRunStackedActionInput>();
-        const client = {
-          [WS_METHODS.gitRunStackedAction]: (input: GitRunStackedActionInput) =>
-            (rpcInputs.push(input), input.actionId === successfulTransportActionId)
-              ? Stream.make(
-                  progress({
-                    kind: "action_finished",
-                    actionId: successfulTransportActionId,
-                    cwd,
-                    action,
-                    result,
-                  }),
-                )
-              : input.actionId === interruptedTransportActionId
-                ? Stream.fromEffect(Effect.interrupt)
-                : Stream.make(
+        const prActionId = "pr-generation";
+        const prTransportActionId = createVcsActionTransportId(targetKey, prActionId);
+        const prStarted = yield* Deferred.make<void>();
+        const prFinished = yield* Deferred.make<void>();
+        const runStackedAction = (input: GitRunStackedActionInput) => {
+          rpcInputs.push(input);
+          if (input.actionId === prTransportActionId) {
+            return Stream.concat(
+              Stream.fromEffect(
+                Deferred.succeed(prStarted, undefined).pipe(
+                  Effect.as(
                     progress({
-                      kind: "action_failed",
-                      actionId: failedTransportActionId,
+                      kind: "phase_started",
+                      actionId: prTransportActionId,
                       cwd,
-                      action,
-                      phase: "push",
-                      message: "push failed after creating the branch",
+                      action: "create_pr",
+                      phase: "pr",
+                      label: "Generating pull request...",
                     }),
                   ),
+                ),
+              ),
+              Stream.fromEffect(
+                Deferred.await(prFinished).pipe(
+                  Effect.as(
+                    progress({
+                      kind: "action_finished",
+                      actionId: prTransportActionId,
+                      cwd,
+                      action: "create_pr",
+                      result: { ...result, action: "create_pr" },
+                    }),
+                  ),
+                ),
+              ),
+            );
+          }
+          if (input.actionId === successfulTransportActionId) {
+            return Stream.make(
+              progress({
+                kind: "action_finished",
+                actionId: successfulTransportActionId,
+                cwd,
+                action,
+                result,
+              }),
+            );
+          }
+          if (input.actionId === interruptedTransportActionId) {
+            return Stream.fromEffect(Effect.interrupt);
+          }
+          return Stream.make(
+            progress({
+              kind: "action_failed",
+              actionId: failedTransportActionId,
+              cwd,
+              action,
+              phase: "push",
+              message: "push failed after creating the branch",
+            }),
+          );
+        };
+        const client = {
+          [WS_METHODS.gitRunStackedAction]: runStackedAction,
         } as unknown as WsRpcProtocolClient;
         const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
           target,
@@ -572,6 +614,20 @@ describe("vcsActionState", () => {
         expect(registry.get(manager.stateAtom(targetKey))).toEqual(EMPTY_VCS_ACTION_STATE);
         expect(registry.get(state).revision).toBe(3);
         expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`, `${environmentId}:*`]);
+
+        const prThreadId = ThreadId.make("thread-pr-generation");
+        const prRun = manager.runStackedAction(targetKey).run(registry, {
+          actionId: prActionId,
+          action: "create_pr",
+          threadId: prThreadId,
+          projectId,
+        });
+        yield* Deferred.await(prStarted);
+        expect(isPullRequestGenerating({ environmentId, threadId: prThreadId })).toBe(true);
+
+        yield* Deferred.succeed(prFinished, undefined);
+        expect(AsyncResult.isSuccess(yield* Effect.promise(() => prRun))).toBe(true);
+        expect(isPullRequestGenerating({ environmentId, threadId: prThreadId })).toBe(false);
       }),
     ),
   );

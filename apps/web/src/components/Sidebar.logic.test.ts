@@ -505,6 +505,18 @@ describe("resolveThreadStatusPill", () => {
     });
   });
 
+  it("shows PRing in place of Working while the pull request is generated", () => {
+    expect(
+      resolveThreadStatusPill({ thread: baseThread, pullRequestInFlight: true }),
+    ).toMatchObject({ label: "PRing", pulse: true });
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...baseThread, hasPendingApprovals: true },
+        pullRequestInFlight: true,
+      }),
+    ).toMatchObject({ label: "Pending Approval" });
+  });
+
   it("shows waiting for an idle thread with pending background tasks", () => {
     expect(
       resolveThreadStatusPill({
@@ -658,6 +670,23 @@ describe("resolveProjectStatusIndicator", () => {
         waiting,
       ]),
     ).toMatchObject({ label: "Waiting" });
+  });
+
+  it("ranks PRing above Working while a pull request is generated", () => {
+    const working = {
+      label: "Working" as const,
+      colorClass: "text-sky-600",
+      dotClass: "bg-sky-500",
+      pulse: true,
+    };
+    const pring = {
+      label: "PRing" as const,
+      colorClass: "text-teal-600",
+      dotClass: "bg-teal-500",
+      pulse: true,
+    };
+
+    expect(resolveProjectStatusIndicator([working, pring])).toMatchObject({ label: "PRing" });
   });
 });
 
