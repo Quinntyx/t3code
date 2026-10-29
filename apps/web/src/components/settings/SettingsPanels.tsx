@@ -499,6 +499,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
       ? ["New worktrees start from remote"]
       : []),
+    ...(settings.newWorktreesBesideMain !== DEFAULT_UNIFIED_SETTINGS.newWorktreesBesideMain
+      ? ["Beside the main checkout"]
+      : []),
     ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
       ? ["Add project base directory"]
       : []),
@@ -617,6 +620,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
+      newWorktreesBesideMain: DEFAULT_UNIFIED_SETTINGS.newWorktreesBesideMain,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,

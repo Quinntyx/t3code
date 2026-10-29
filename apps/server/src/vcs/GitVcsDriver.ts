@@ -141,6 +141,8 @@ export interface CreateWorktreeOptions {
   readonly progress?: CreateWorktreeProgress;
   /** Null or omitted defers to the checkout's t3.json. */
   readonly submodules?: WorktreeSubmodules | null;
+  /** False places the worktree in the worktrees directory even for a container-layout project (a "main" checkout beside its worktrees). Default true. */
+  readonly containerLayout?: boolean;
   readonly worktreesDirectory?: string;
 }
 

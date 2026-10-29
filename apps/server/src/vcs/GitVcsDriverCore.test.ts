@@ -3489,6 +3489,27 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("creates worktrees in the worktrees directory when container layout is off", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const { worktreesDir } = yield* ServerConfig.ServerConfig;
+        const container = yield* makeTmpDir("worktree-container-off-");
+        const main = path.join(container, "main");
+        yield* fs.makeDirectory(main);
+        const { initialBranch } = yield* initRepoWithCommit(main);
+
+        const created = yield* driver.createWorktree(
+          { cwd: main, path: null, refName: initialBranch, newRefName: "feature/disabled" },
+          { containerLayout: false },
+        );
+        const expected = path.join(worktreesDir, "main", "feature-disabled");
+        assert.equal(created.worktree.path, expected);
+        assert.equal(yield* fs.exists(expected), true);
+      }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(layerTest)))),
+    );
+
     it.effect("keeps sibling placement when main is a linked worktree of a bare repository", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
