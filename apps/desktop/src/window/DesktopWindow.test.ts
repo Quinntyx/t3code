@@ -496,6 +496,8 @@ describe("DesktopWindow", () => {
     () =>
       Effect.gen(function* () {
         const fakeWindow = makeFakeBrowserWindow();
+        // The traffic-light API is macOS-only and absent on Linux windows.
+        Reflect.deleteProperty(fakeWindow.window, "setWindowButtonVisibility");
         const createCount = yield* Ref.make(0);
         const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
         const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
