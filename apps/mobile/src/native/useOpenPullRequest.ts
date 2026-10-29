@@ -1,6 +1,6 @@
+import { useCallback } from "react";
 import { useNavigation, useRoute, StackActions } from "@react-navigation/native";
 import { nativePullRequestDestination } from "../lib/pullRequestNavigation";
-import { useCallback } from "react";
 import { Platform } from "react-native";
 import { useSelectWorkspaceDetail } from "../features/workspace/useSelectWorkspaceDetail";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -25,11 +25,8 @@ export function useNavigateToPullRequest(options?: {
     async (url: string, context: PullRequestContext | null) => {
       // Read at press time so a capability push does not hand every link a new handler.
       const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
-      const params = nativePullRequestDestination(
-        url,
-        context,
-        projects,
-        (environmentId) => serverConfigs.get(environmentId)?.environment.capabilities,
+      const params = nativePullRequestDestination(url, context, projects, (environmentId) =>
+        serverConfigs.has(environmentId),
       );
       if (!params) return tryOpenExternalUrl(url, "pull-request");
       if (Platform.OS === "android" && !drillIn) {

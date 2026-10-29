@@ -112,7 +112,9 @@ type PendingBackgroundWorkRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "sta
 type PendingBackgroundWorkPullRequest = Pick<
   ThreadPullRequestLink,
   "host" | "repository" | "number" | "url" | "source" | "watch"
->;
+> & {
+  readonly snapshot: Pick<NonNullable<ThreadPullRequestLink["snapshot"]>, "state"> | null;
+};
 
 type PendingBackgroundWorkProviderThread = Pick<
   OrchestrationV2ProviderThread,
@@ -287,13 +289,17 @@ export function derivePendingBackgroundWork(input: {
   return Array.from(byTaskId.values());
 }
 
-type WatchStateFields = Pick<ThreadPullRequestLink, "source" | "watch">;
+type WatchStateFields = Pick<ThreadPullRequestLink, "source" | "watch"> & {
+  readonly snapshot?: Pick<NonNullable<ThreadPullRequestLink["snapshot"]>, "state"> | null;
+};
 
 type PullRequestWatchLink = Pick<ThreadPullRequestLink, "host" | "repository" | "number"> &
   WatchStateFields;
 
 const isWatchedLink = (link: WatchStateFields) =>
-  link.watch !== undefined && link.source !== "stack-dismissed";
+  link.watch !== undefined &&
+  link.source !== "stack-dismissed" &&
+  link.snapshot?.state !== "merged";
 
 // Links store their normalized identity, and this id only has to be unique within the
 // thread, so it reads those fields instead of parsing the URL.
