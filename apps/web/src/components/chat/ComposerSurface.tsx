@@ -1,14 +1,21 @@
 import type { ComponentProps } from "react";
 
 import { cn } from "~/lib/utils";
+import { setLiquidGlassShape } from "~/liquid-glass/engine";
+import { composerGlassShape } from "./composerGlass";
 
 function Shell({
   contextRow = false,
   className,
   ...props
-}: ComponentProps<"div"> & { contextRow?: boolean }) {
+}: Omit<ComponentProps<"div">, "ref"> & { contextRow?: boolean }) {
   return (
     <div
+      ref={(element) => {
+        if (!element) return;
+        setLiquidGlassShape(element, () => composerGlassShape(element));
+        return () => setLiquidGlassShape(element, null);
+      }}
       data-slot="composer-shell"
       data-liquid-glass=""
       data-context-row={contextRow || undefined}
@@ -24,7 +31,7 @@ function Shell({
         "[html[data-theme-id]_&]:[--chat-composer-glass-surface:var(--app-theme-surface-raised)] [html[data-theme-id]_&]:[--chat-composer-outline:var(--app-theme-toolbar-border)]",
         "dark:[html[data-theme-id]:not([data-theme-id=t3-chat])_&]:[--chat-composer-highlight:color-mix(in_srgb,var(--app-theme-input)_12%,transparent)] dark:[html[data-theme-id]:not([data-theme-id=t3-chat])_&]:[--chat-composer-outline:color-mix(in_srgb,var(--app-theme-input)_30%,var(--background))]",
         "dark:[html[data-theme-id=t3-chat]_&]:[--chat-composer-highlight:color-mix(in_srgb,#432d48_12%,transparent)] dark:[html[data-theme-id=t3-chat]_&]:[--chat-composer-outline:#241e28]",
-        "[--chat-composer-glass-fill:color-mix(in_srgb,var(--chat-composer-glass-surface)_var(--glass-opacity),transparent)]",
+        "[--chat-composer-glass-fill:color-mix(in_srgb,var(--chat-composer-glass-surface)_var(--glass-opacity),transparent)] [--glass-liquid-edge:var(--chat-composer-outline)]",
         "before:pointer-events-none before:absolute before:inset-0 before:z-0 before:rounded-(--chat-composer-radius) before:bg-(--chat-composer-glass-fill) before:composer-frost before:glass-glare",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:before:bg-(--chat-composer-glass-surface)",
         "has-data-[composer-banner-surface=attached]:before:hidden data-model-strip-transition:before:hidden",
@@ -57,6 +64,8 @@ function Host({ className, ...props }: ComponentProps<"div">) {
         "relative z-10 w-full rounded-(--chat-composer-radius) shadow-composer after:z-1 dark:shadow-none",
         outlineClasses,
         contextSeamClasses,
+        // Shaped liquid glass draws the outline around the drawers and strip it merges.
+        "group-data-liquid-glass-shaped/composer-surface:after:hidden",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-none group-has-data-[composer-banner-surface=attached]/composer-surface:after:hidden",
         className,
       )}

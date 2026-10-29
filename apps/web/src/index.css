@@ -18,6 +18,16 @@
 
 /* On mobile, morph the expanded hero composer into the compact docked
    composer while it moves; the rest of the app remains visually stationary. */
+/* Named only during the transition: a view-transition-name makes a backdrop root, which would
+   keep the composer's glass from frosting anything outside it. */
+html[data-mobile-composer-route-transition="true"] [data-mobile-composer-transition="composer"] {
+  view-transition-name: t3-mobile-composer;
+}
+
+html[data-mobile-composer-route-transition="true"] [data-mobile-composer-transition="headline"] {
+  view-transition-name: t3-mobile-draft-headline;
+}
+
 html[data-mobile-composer-route-transition="true"]::view-transition-old(root),
 html[data-mobile-composer-route-transition="true"]::view-transition-new(root) {
   animation: none;
@@ -532,6 +542,29 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 @utility liquid-frost {
   -webkit-backdrop-filter: var(--glass-liquid-filter);
   backdrop-filter: var(--glass-liquid-filter);
+}
+
+/* Glass shaped from several parts (liquid-glass/engine.ts) owns its box and outline, replacing
+   the host's radius and clip; ::after draws the host's border along that outline. */
+[data-liquid-glass-shaped]::before,
+[data-liquid-glass-shaped]::after {
+  inset: var(--glass-liquid-top) var(--glass-liquid-right) var(--glass-liquid-bottom)
+    var(--glass-liquid-left);
+  border-radius: 0;
+  clip-path: none;
+}
+
+[data-liquid-glass-shaped]::before {
+  mask: var(--glass-liquid-mask) 0 0 / 100% 100% no-repeat;
+}
+
+[data-liquid-glass-shaped]::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--glass-liquid-edge, transparent);
+  mask: var(--glass-liquid-outline) 0 0 / 100% 100% no-repeat;
 }
 
 @utility topbar-scroll-fade {
