@@ -46,6 +46,7 @@ import {
   type ThreadStatusPill,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
+  useThreadPullRequestGenerating,
 } from "./Sidebar.logic";
 
 import type { SidebarThreadSummary } from "../types";
@@ -703,6 +704,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
       ...thread,
       lastVisitedAt,
     },
+    pullRequestInFlight: useThreadPullRequestGenerating(thread),
   });
 
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);

@@ -1,5 +1,9 @@
 import * as Schema from "effect/Schema";
-import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
+import {
+  actionOpensPullRequest,
+  GitPreparePullRequestThreadInput,
+  GitRunStackedActionInput,
+} from "./git.ts";
 import {
   AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
@@ -82,10 +86,7 @@ export function clientRpcRequiredScopes(
   }
   if (method === WS_METHODS.gitRunStackedAction && input !== undefined) {
     const payload = decodeStackedAction(input);
-    if (
-      payload.threadId !== undefined &&
-      (payload.action === "create_pr" || payload.action === "commit_push_pr")
-    )
+    if (payload.threadId !== undefined && actionOpensPullRequest(payload.action))
       return [AuthSourceControlWriteScope, AuthOrchestrationReadScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
