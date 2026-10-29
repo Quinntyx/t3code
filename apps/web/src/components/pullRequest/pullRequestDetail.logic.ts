@@ -23,6 +23,7 @@ import {
   type PullRequestRef,
   type RepositoryIdentity,
   type PullRequestReviewThread,
+  type PullRequestStackMembership,
   type PullRequestState,
   type PullRequestUpdateMethod,
   SourceControlProviderKind,
@@ -52,11 +53,14 @@ export function allowsSinglePullRequestMerge(input: {
   hasStack: boolean;
   stackPending: boolean;
   stackError: string | null;
+  /** The live detail read's own membership; absent when that read did not report one. */
+  liveMembership: PullRequestStackMembership | null | undefined;
 }): boolean {
-  return (
-    !input.supportsStackActions ||
-    (!input.hasStack && !input.stackPending && input.stackError === null)
-  );
+  if (!input.supportsStackActions) return true;
+  const freshStack = input.hasStack && !input.stackPending;
+  // A live membership answer settles it without the slower stack lookup, unless that disagrees.
+  if (input.liveMembership !== undefined) return input.liveMembership === null && !freshStack;
+  return !input.hasStack && !input.stackPending && input.stackError === null;
 }
 
 export function resolvePullRequestMergeMethod(
