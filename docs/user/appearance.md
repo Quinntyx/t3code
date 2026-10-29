@@ -28,6 +28,11 @@ lists behind the composer, toolbars, and menus at their edges. It is available o
 Chromium browsers, and on Android 13 or newer. Blur, saturation, refraction, and dispersion sliders
 tune the effect; each device keeps its own values. It can increase GPU and battery use.
 
+The experimental **Ambient shimmer** setting drifts soft, never-repeating bands of your theme's
+colors behind the chat on web and desktop. It is strongest on the new thread page and faint behind
+conversations, and gives liquid glass a backdrop to bend. It animates continuously, so it keeps the
+GPU busy and can cost battery; with reduced motion enabled it shows a still frame.
+
 ## Composer context
 
 Git-backed projects show branch and worktree controls below the composer while you create a thread.

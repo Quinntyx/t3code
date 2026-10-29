@@ -419,6 +419,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.liquidGlassGlare !== DEFAULT_UNIFIED_SETTINGS.liquidGlassGlare
       ? ["Edge glare"]
       : []),
+    ...(settings.ambientShimmerEnabled !== DEFAULT_UNIFIED_SETTINGS.ambientShimmerEnabled
+      ? ["Ambient shimmer"]
+      : []),
     ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
       ? ["Diff colors"]
       : []),
@@ -631,6 +634,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       liquidGlassRefraction: DEFAULT_UNIFIED_SETTINGS.liquidGlassRefraction,
       liquidGlassDispersion: DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion,
       liquidGlassGlare: DEFAULT_UNIFIED_SETTINGS.liquidGlassGlare,
+      ambientShimmerEnabled: DEFAULT_UNIFIED_SETTINGS.ambientShimmerEnabled,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,

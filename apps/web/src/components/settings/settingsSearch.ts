@@ -348,6 +348,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["glass specular highlight rim shine light reflection advanced"],
   },
   {
+    id: "setting-ambient-shimmer",
+    title: "Ambient shimmer",
+    to: "/settings/appearance",
+    searchTerms: [
+      "background iridescent rainbow holographic animated gradient glow experimental performance gpu battery",
+    ],
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/diffs",
