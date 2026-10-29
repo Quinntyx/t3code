@@ -23,6 +23,11 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
+  LIQUID_GLASS_KNOBS,
+  LIQUID_GLASS_DEFAULT_TUNING,
+  type LiquidGlassTuning,
+} from "../../liquid-glass/tuning";
+import {
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -45,6 +50,14 @@ const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
   full: "Full",
 };
 
+function sliderStyle(start: number, end: number, value: number): CSSProperties {
+  const ratio = (value - start) / (end - start);
+  return {
+    "--settings-slider-progress": `${ratio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
+  } as CSSProperties;
+}
+
 export function AppearanceSettingsPanel() {
   const {
     appearanceMode,
@@ -63,26 +76,26 @@ export function AppearanceSettingsPanel() {
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
-  const glassOpacityRatio =
-    (settings.glassOpacity - MIN_GLASS_OPACITY) / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY);
-  const glassOpacitySliderStyle = {
-    "--settings-slider-progress": `${glassOpacityRatio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
-  } as CSSProperties;
-  const appearanceContrastRatio =
-    (settings.appearanceContrast - MIN_APPEARANCE_CONTRAST) /
-    (MAX_APPEARANCE_CONTRAST - MIN_APPEARANCE_CONTRAST);
-  const appearanceContrastSliderStyle = {
-    "--settings-slider-progress": `${appearanceContrastRatio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - appearanceContrastRatio}rem`,
-  } as CSSProperties;
-  const panelAnimationDurationRatio =
-    (settings.panelAnimationDurationMs - MIN_PANEL_ANIMATION_DURATION_MS) /
-    (MAX_PANEL_ANIMATION_DURATION_MS - MIN_PANEL_ANIMATION_DURATION_MS);
-  const panelAnimationDurationSliderStyle = {
-    "--settings-slider-progress": `${panelAnimationDurationRatio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - panelAnimationDurationRatio}rem`,
-  } as CSSProperties;
+  const glassOpacitySliderStyle = sliderStyle(
+    MIN_GLASS_OPACITY,
+    MAX_GLASS_OPACITY,
+    settings.glassOpacity,
+  );
+  const appearanceContrastSliderStyle = sliderStyle(
+    MIN_APPEARANCE_CONTRAST,
+    MAX_APPEARANCE_CONTRAST,
+    settings.appearanceContrast,
+  );
+  const panelAnimationDurationSliderStyle = sliderStyle(
+    MIN_PANEL_ANIMATION_DURATION_MS,
+    MAX_PANEL_ANIMATION_DURATION_MS,
+    settings.panelAnimationDurationMs,
+  );
+  const tuningIsDefault = LIQUID_GLASS_KNOBS.every(
+    ({ key }) => settings.liquidGlassTuning[key] === LIQUID_GLASS_DEFAULT_TUNING[key],
+  );
+  const setTuning = (key: keyof LiquidGlassTuning, value: number) =>
+    updateSettings({ liquidGlassTuning: { ...settings.liquidGlassTuning, [key]: value } });
 
   return (
     <SettingsPageContainer>
@@ -198,6 +211,69 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+
+        <SettingsRow
+          {...searchableSetting("setting-liquid-glass")}
+          description="Refract what is behind the composer, menus, and dialogs instead of only blurring it. Chromium-only; other browsers keep the flat frost."
+          resetAction={
+            settings.liquidGlassEnabled || !tuningIsDefault ? (
+              <SettingResetButton
+                label="liquid glass"
+                onClick={() =>
+                  updateSettings({
+                    liquidGlassEnabled: DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled,
+                    liquidGlassTuning: LIQUID_GLASS_DEFAULT_TUNING,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              aria-label="Liquid glass"
+              checked={settings.liquidGlassEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ liquidGlassEnabled: Boolean(checked) })
+              }
+            />
+          }
+        />
+
+        {LIQUID_GLASS_KNOBS.map(({ key, label, min, max, step, precision }) => {
+          const value = settings.liquidGlassTuning[key];
+          return (
+            <SettingsRow
+              key={key}
+              title={label}
+              control={
+                <div className="flex w-full items-center gap-3 sm:w-52">
+                  <output
+                    className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+                    htmlFor={`liquid-glass-${key}`}
+                  >
+                    {value.toFixed(precision)}
+                  </output>
+                  <input
+                    aria-label={label}
+                    className="settings-slider min-w-0 flex-1"
+                    disabled={!settings.liquidGlassEnabled}
+                    id={`liquid-glass-${key}`}
+                    max={max}
+                    min={min}
+                    onChange={(event) => {
+                      const next = Number(event.currentTarget.value);
+                      if (next >= min && next <= max) setTuning(key, next);
+                    }}
+                    step={step}
+                    style={sliderStyle(min, max, value)}
+                    type="range"
+                    value={value}
+                  />
+                </div>
+              }
+            />
+          );
+        })}
 
         <SettingsRow
           {...searchableSetting("chat-width")}

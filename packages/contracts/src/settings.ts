@@ -103,6 +103,36 @@ export const GlassOpacity = Schema.Int.check(
 export type GlassOpacity = typeof GlassOpacity.Type;
 const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
 
+/**
+ * Liquid glass tuning in the units the deus-agent shader uses: refraction distances are
+ * material pixels (scaled per surface by its height), `refractionDistance` is a fraction
+ * of that height, and every factor/hardness value is a shader percent.
+ */
+const liquidGlassKnob = (defaultValue: number, minimum: number, maximum: number) =>
+  Schema.Number.check(Schema.isBetween({ minimum, maximum })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(defaultValue)),
+  );
+
+export const LiquidGlassTuning = Schema.Struct({
+  refractionThickness: liquidGlassKnob(9.1, 0, 60),
+  refractionDistance: liquidGlassKnob(0.02, 0, 0.2),
+  refractionFactor: liquidGlassKnob(4, 1, 8),
+  dispersion: liquidGlassKnob(30, 0, 60),
+  fresnelRange: liquidGlassKnob(13.75, 1, 100),
+  fresnelHardness: liquidGlassKnob(64.5, 0, 100),
+  fresnelFactor: liquidGlassKnob(20, 0, 100),
+  glareRange: liquidGlassKnob(24, 1, 100),
+  glareHardness: liquidGlassKnob(3.75, 0, 100),
+  glareFactor: liquidGlassKnob(90, 0, 150),
+  glareConvergence: liquidGlassKnob(50, 0, 100),
+  glareAngle: liquidGlassKnob(-45, -180, 180),
+});
+export type LiquidGlassTuning = typeof LiquidGlassTuning.Type;
+
+export const LIQUID_GLASS_DEFAULT_TUNING: LiquidGlassTuning = Schema.decodeSync(LiquidGlassTuning)(
+  {},
+);
+
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
 export const AppearanceContrast = Schema.Int.check(
@@ -387,6 +417,10 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
+  ),
+  liquidGlassEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  liquidGlassTuning: LiquidGlassTuning.pipe(
+    Schema.withDecodingDefault(Effect.succeed(LIQUID_GLASS_DEFAULT_TUNING)),
   ),
   fontSizeInterface: InterfaceFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
@@ -1637,6 +1671,8 @@ export const ClientSettingsPatch = Schema.Struct({
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),
+  liquidGlassEnabled: Schema.optionalKey(Schema.Boolean),
+  liquidGlassTuning: Schema.optionalKey(LiquidGlassTuning),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),

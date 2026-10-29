@@ -302,6 +302,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["transparent transparency solid menus dialogs composer"],
   },
   {
+    id: "setting-liquid-glass",
+    title: "Liquid glass",
+    to: "/settings/appearance",
+    searchTerms: [
+      "refraction bend distort blur frost glass lens apple ios chrome dispersion fresnel glare",
+    ],
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/diffs",
