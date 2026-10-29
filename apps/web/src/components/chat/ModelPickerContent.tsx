@@ -1,12 +1,14 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
+  type UsageLimitSourceSnapshots,
   type EnvironmentId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
+import { summarizeProviderLimits } from "@t3tools/shared/usageLimits";
 import { useAtomValue } from "@effect/atom-react";
 import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
 import { useNavigate } from "@tanstack/react-router";
@@ -43,6 +45,7 @@ import { ModelEsque } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { registerModelPickerContent } from "../../modelPickerVisibility";
 import { primaryServerKeybindingsAtom } from "../../state/server";
+import { useServerConfigs } from "../../state/entities";
 import {
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
@@ -162,6 +165,7 @@ function adjacentModelPickerProvider(input: {
 }
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
+const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 const MODEL_LIST_ESTIMATED_ITEM_SIZE = 52;
 // Rendered heights in `--spacing` units. Chrome is the search box and list padding, plus a 1px border.
 const ONE_LINE_ROW_UNITS = 8;
@@ -451,6 +455,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const keybindings = providedKeybindings ?? serverKeybindings;
   const [searchHeight, setSearchHeight] = useState(0);
   const toggleFavorite = useToggleEnvironmentModelFavorite(props.environmentId);
+  // Read once per opening, like the limits panel: hover cards must not tick while open.
+  const [limitsNow] = useState(Date.now);
+  const serverConfigs = useServerConfigs();
+  const usageLimitSources =
+    (props.environmentId === null
+      ? undefined
+      : serverConfigs.get(props.environmentId)?.usageLimitSources) ?? EMPTY_USAGE_LIMIT_SOURCES;
 
   const focusSearchInput = () => {
     searchInputRef.current?.focus({ preventScroll: true });
@@ -636,6 +647,18 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return [...available, ...disabled];
   })();
   const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const providerSnapshots = instanceEntries.map((entry) => entry.snapshot);
+  const limitsByInstance = new Map(
+    sidebarInstanceEntries.flatMap((entry) => {
+      const summary = summarizeProviderLimits(
+        entry.snapshot,
+        providerSnapshots,
+        usageLimitSources,
+        limitsNow,
+      );
+      return summary ? [[entry.instanceId, summary] as const] : [];
+    }),
+  );
   const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
 
   const filteredModels = (() => {
@@ -827,7 +850,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       <WindowKeyDownListener onKeyDown={onWindowKeyDown} />
       <div
         ref={pickerContentRef}
-        className="relative flex max-h-86.5 w-screen max-w-90 flex-row overflow-hidden"
+        className="relative flex max-h-86.5 w-screen max-w-90 flex-row overflow-hidden sm:max-h-120 sm:max-w-150"
         style={
           isSearching
             ? { height: searchHeight }
@@ -844,6 +867,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
             showFavorites
+            limitsByInstance={limitsByInstance}
+            now={limitsNow}
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
               ? {
