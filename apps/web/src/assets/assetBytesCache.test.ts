@@ -22,19 +22,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("loadModelBytes", () => {
+describe("loadAssetBlob", () => {
   it("reuses bytes already loaded for a key", async () => {
     const fetchMock = vi.fn(async () => new Response(MODEL_BYTES));
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("caches", undefined);
-    const { loadModelBytes } = await import("./modelCache");
+    const { loadAssetBlob } = await import("./assetBytesCache");
     const signal = new AbortController().signal;
 
-    const first = await loadModelBytes("memory-key", "https://example.test/a.glb", signal);
-    const second = await loadModelBytes("memory-key", "https://example.test/a.glb", signal);
+    const first = await loadAssetBlob("memory-key", "https://example.test/a.glb", signal);
+    const second = await loadAssetBlob("memory-key", "https://example.test/a.glb", signal);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(new Uint8Array(second)).toEqual(new Uint8Array(first));
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(
+      new Uint8Array(await first.arrayBuffer()),
+    );
   });
 
   it("reads persisted bytes without a network request", async () => {
@@ -44,17 +46,20 @@ describe("loadModelBytes", () => {
     const signal = new AbortController().signal;
 
     await (
-      await import("./modelCache")
-    ).loadModelBytes("persisted-key", "https://example.test/b.glb", signal);
+      await import("./assetBytesCache")
+    ).loadAssetBlob("persisted-key", "https://example.test/b.glb", signal);
     await vi.waitFor(() => expect(store.size).toBe(1));
 
     vi.resetModules();
-    const second = await (
-      await import("./modelCache")
-    ).loadModelBytes("persisted-key", "https://example.test/b.glb", signal);
+    const { loadAssetBlob, readCachedAssetBlob } = await import("./assetBytesCache");
+    // Before a URL is minted, only stored bytes can answer.
+    const unminted = await readCachedAssetBlob("persisted-key");
+    expect(await readCachedAssetBlob("missing-key")).toBeNull();
+    const second = await loadAssetBlob("persisted-key", "https://example.test/b.glb", signal);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(new Uint8Array(second)).toEqual(new Uint8Array(MODEL_BYTES));
+    expect(new Uint8Array(await unminted!.arrayBuffer())).toEqual(new Uint8Array(MODEL_BYTES));
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(new Uint8Array(MODEL_BYTES));
   });
 
   it("evicts memory and persisted bytes for settled threads", async () => {
@@ -63,10 +68,10 @@ describe("loadModelBytes", () => {
     const fetchMock = vi.fn(async () => new Response(MODEL_BYTES));
     vi.stubGlobal("fetch", fetchMock);
     const signal = new AbortController().signal;
-    const { createModelCacheKey, evictModelCacheForThreads, loadModelBytes } =
-      await import("./modelCache");
+    const { createAssetCacheKey, evictAssetCacheForThreads, loadAssetBlob } =
+      await import("./assetBytesCache");
     const key = (threadId: string, path: string) =>
-      createModelCacheKey({
+      createAssetCacheKey({
         environmentId: "env-1",
         threadId,
         resource: { _tag: "media-file", threadId, path },
@@ -75,17 +80,17 @@ describe("loadModelBytes", () => {
     const settledKey = key("thread-a", "/a.glb");
     const otherKey = key("thread-b", "/b.glb");
 
-    await loadModelBytes(settledKey, "https://example.test/a.glb", signal);
-    await loadModelBytes(otherKey, "https://example.test/b.glb", signal);
+    await loadAssetBlob(settledKey, "https://example.test/a.glb", signal);
+    await loadAssetBlob(otherKey, "https://example.test/b.glb", signal);
     await vi.waitFor(() => expect(store.size).toBe(2));
 
-    await evictModelCacheForThreads([{ environmentId: "env-1", threadId: "thread-a" }]);
+    await evictAssetCacheForThreads([{ environmentId: "env-1", threadId: "thread-a" }]);
     expect(store.size).toBe(1);
 
-    await loadModelBytes(otherKey, "https://example.test/b.glb", signal);
+    await loadAssetBlob(otherKey, "https://example.test/b.glb", signal);
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    await loadModelBytes(settledKey, "https://example.test/a.glb", signal);
+    await loadAssetBlob(settledKey, "https://example.test/a.glb", signal);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -99,16 +104,12 @@ describe("loadModelBytes", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { loadModelBytes } = await import("./modelCache");
+    const { loadAssetBlob } = await import("./assetBytesCache");
     const firstSignal = new AbortController().signal;
     const secondSignal = new AbortController().signal;
 
-    const first = loadModelBytes(
-      "coalesced-key",
-      "https://example.test/coalesced.glb",
-      firstSignal,
-    );
-    const second = loadModelBytes(
+    const first = loadAssetBlob("coalesced-key", "https://example.test/coalesced.glb", firstSignal);
+    const second = loadAssetBlob(
       "coalesced-key",
       "https://example.test/coalesced.glb",
       secondSignal,
@@ -117,8 +118,8 @@ describe("loadModelBytes", () => {
     resolveFetch?.(new Response(MODEL_BYTES));
 
     const [firstBytes, secondBytes] = await Promise.all([first, second]);
-    expect(new Uint8Array(firstBytes)).toEqual(new Uint8Array(MODEL_BYTES));
-    expect(new Uint8Array(secondBytes)).toEqual(new Uint8Array(MODEL_BYTES));
+    expect(new Uint8Array(await firstBytes.arrayBuffer())).toEqual(new Uint8Array(MODEL_BYTES));
+    expect(new Uint8Array(await secondBytes.arrayBuffer())).toEqual(new Uint8Array(MODEL_BYTES));
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -133,9 +134,9 @@ describe("loadModelBytes", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { createModelCacheKey, evictModelCacheForThreads, loadModelBytes } =
-      await import("./modelCache");
-    const key = createModelCacheKey({
+    const { createAssetCacheKey, evictAssetCacheForThreads, loadAssetBlob } =
+      await import("./assetBytesCache");
+    const key = createAssetCacheKey({
       environmentId: "env-1",
       threadId: "thread-a",
       resource: { _tag: "media-file", threadId: "thread-a", path: "/late.glb" },
@@ -143,14 +144,14 @@ describe("loadModelBytes", () => {
     });
     const signal = new AbortController().signal;
 
-    const loading = loadModelBytes(key, "https://example.test/late.glb", signal);
+    const loading = loadAssetBlob(key, "https://example.test/late.glb", signal);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await evictModelCacheForThreads([{ environmentId: "env-1", threadId: "thread-a" }]);
+    await evictAssetCacheForThreads([{ environmentId: "env-1", threadId: "thread-a" }]);
     resolveFetch?.(new Response(MODEL_BYTES));
     await loading;
 
     expect(store.size).toBe(0);
-    const reloading = loadModelBytes(key, "https://example.test/late.glb", signal);
+    const reloading = loadAssetBlob(key, "https://example.test/late.glb", signal);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     resolveFetch?.(new Response(MODEL_BYTES));
     await reloading;
@@ -181,22 +182,22 @@ describe("loadModelBytes", () => {
     });
     const fetchMock = vi.fn(async () => new Response(MODEL_BYTES));
     vi.stubGlobal("fetch", fetchMock);
-    const { createModelCacheKey, evictModelCacheForThreads, loadModelBytes } =
-      await import("./modelCache");
-    const key = createModelCacheKey({
+    const { createAssetCacheKey, evictAssetCacheForThreads, loadAssetBlob } =
+      await import("./assetBytesCache");
+    const key = createAssetCacheKey({
       environmentId: "env-1",
       threadId: "thread-a",
       resource: { _tag: "media-file", threadId: "thread-a", path: "/pending.glb" },
       revision: "rev-1",
     });
 
-    const loading = loadModelBytes(
+    const loading = loadAssetBlob(
       key,
       "https://example.test/pending.glb",
       new AbortController().signal,
     );
     await putStarted;
-    const eviction = evictModelCacheForThreads([{ environmentId: "env-1", threadId: "thread-a" }]);
+    const eviction = evictAssetCacheForThreads([{ environmentId: "env-1", threadId: "thread-a" }]);
     releasePut?.();
     await eviction;
     await loading;

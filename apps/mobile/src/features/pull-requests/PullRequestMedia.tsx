@@ -12,6 +12,8 @@ import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
 import { AppText } from "../../components/ui/AppText";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
+import { assetImageCacheKey } from "../../lib/assetImageSource";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
 import { VideoAttachmentTile } from "../../components/VideoAttachmentTile";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
@@ -36,11 +38,18 @@ export function usePullRequestMediaUrl(url: string) {
     context && fetchUrl
       ? { _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd: context.cwd, url: fetchUrl }
       : null;
-  const asset = useAssetUrlState(context?.environmentId ?? null, resource);
-  const refresh = useRefreshAssetUrl(context?.environmentId ?? null, resource);
+  const environmentId = context?.environmentId ?? null;
+  const asset = useAssetUrlState(environmentId, resource);
+  const refresh = useRefreshAssetUrl(environmentId, resource);
+  const signedUri = asset._tag === "Success" ? asset.url : resource ? null : url;
+  const uri = useCachedAssetImageUri(environmentId, resource, signedUri);
   return {
-    uri: asset._tag === "Success" ? asset.url : resource ? null : url,
-    unavailable: resource !== null && asset._tag === "Failure",
+    uri,
+    cacheKey:
+      environmentId === null || resource === null
+        ? undefined
+        : assetImageCacheKey(environmentId, resource),
+    unavailable: resource !== null && asset._tag === "Failure" && uri === null,
     source: pullRequestMediaSource(url, context),
     resolvePlaybackUri: resource ? async () => (await refresh()) ?? null : undefined,
   };
@@ -64,6 +73,7 @@ export function PullRequestMedia(props: {
       <>
         <ThreadMarkdownImageView
           uri={media.uri}
+          cacheKey={media.cacheKey}
           sourceKey={props.url}
           unavailable={media.unavailable}
           alt={name}
@@ -134,7 +144,13 @@ export function PullRequestImageAttachment(props: {
       >
         <View className="overflow-hidden rounded-2xl border border-border-subtle bg-grouped-card">
           <Image
-            source={media.uri ? { uri: media.uri } : null}
+            source={
+              media.uri === null
+                ? null
+                : media.cacheKey === undefined
+                  ? { uri: media.uri }
+                  : { uri: media.uri, cacheKey: media.cacheKey }
+            }
             style={{ width: 174, height: 112 }}
             contentFit="contain"
             cachePolicy="memory-disk"

@@ -112,6 +112,16 @@ thread stays mounted until its own stream is live and shows the stop, and the
 stream then closes and saves the settled state.
 Web and mobile do not keep threads alive.
 
+Every client runs a [prefetcher](../../packages/client-runtime/src/state/threadPrefetch.ts)
+for threads that want the user: idle and unsettled, on a live environment. It
+holds each one only until its stream is live and shows the run the shell reports
+(a reopened thread replays its retained state as live first), so the release
+persists it and a later open reads the warm cache and catches up by sequence. A
+thread loads again when its shell's `updatedAt` or item count moves; a failed
+load retries on the next shell or connection change. Settled threads lose their
+persisted detail (and, on web, their cached media bytes), including a sweep of
+every settled thread at startup; that is what bounds the persisted caches.
+
 Retain state and cursor together only after an update finishes. Cancellation must
 not advance the cached cursor beyond the applied data, and an old scope must not
 overwrite its successor's cache. Preserve pagination data on reuse, but clear

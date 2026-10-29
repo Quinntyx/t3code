@@ -300,6 +300,7 @@ import {
 } from "./chat/ThreadErrorBanner";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./chat/QueuedRunsControl";
 import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullRequest";
+import { ThreadPullRequestPrefetch } from "./pullRequest/usePullRequestDetail";
 import { useProactivePanels } from "../hooks/useProactivePanels";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
@@ -3874,6 +3875,14 @@ export default function ChatView(props: ChatViewProps) {
 
       <RevertConfirmHost threadKey={routeThreadKey} onConfirm={onConfirmRevertStable} />
       <LinkPullRequestDialogHost />
+      <ThreadPullRequestPrefetch
+        environmentId={
+          pullRequestSurfaceAvailable && activeThreadRef !== null
+            ? activeThreadRef.environmentId
+            : null
+        }
+        target={pullRequestSurfaceAvailable ? pullRequestPanelTarget : null}
+      />
       <ThreadVisitWatermark threadRef={routeThreadRef} />
       <ExpandedImageDialogHost threadKey={routeThreadKey} />
     </div>

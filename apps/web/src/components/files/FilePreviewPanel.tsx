@@ -54,7 +54,7 @@ import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPre
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { ModelViewer } from "~/components/chat/ModelViewer";
-import { createModelCacheKey } from "~/components/chat/modelCache";
+import { createAssetCacheKey } from "~/assets/assetBytesCache";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -254,7 +254,7 @@ function WorkspaceModelPreview(props: {
       ? ""
       : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
   const modelUrl = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
-  const modelCacheKey = createModelCacheKey({
+  const modelCacheKey = createAssetCacheKey({
     environmentId: props.environmentId,
     threadId: props.threadRef.threadId,
     resource,

@@ -1,14 +1,17 @@
-const CACHE_NAME = "t3-model-bytes-v1";
-const MEMORY_ENTRY_LIMIT = 4;
-const CACHE_ORIGIN = "https://t3-model-cache.invalid";
+const CACHE_NAME = "t3-asset-bytes-v1";
+const LEGACY_CACHE_NAME = "t3-model-bytes-v1";
+const MEMORY_BYTE_LIMIT = 64 * 1024 * 1024;
+const CACHE_ORIGIN = "https://t3-asset-cache.invalid";
 
-const memoryCache = new Map<string, ArrayBuffer>();
+const memoryCache = new Map<string, Blob>();
+let memoryBytes = 0;
+let legacyCacheDropped = false;
 const threadGenerations = new Map<string, number>();
 const evictingTargets = new Set<string>();
 const pendingWrites = new Map<string, Set<Promise<void>>>();
 
 type PendingLoad = {
-  readonly promise: Promise<ArrayBuffer>;
+  readonly promise: Promise<Blob>;
   readonly controller: AbortController;
   consumers: number;
 };
@@ -21,6 +24,12 @@ function cacheRequest(key: string): Request {
 
 async function openCache(): Promise<Cache | null> {
   if (typeof caches === "undefined") return null;
+  if (!legacyCacheDropped) {
+    legacyCacheDropped = true;
+    void Promise.resolve()
+      .then(() => caches.delete(LEGACY_CACHE_NAME))
+      .catch(() => false);
+  }
   try {
     return await caches.open(CACHE_NAME);
   } catch {
@@ -28,17 +37,42 @@ async function openCache(): Promise<Cache | null> {
   }
 }
 
-function remember(key: string, bytes: ArrayBuffer): void {
+const OBJECT_URL_RELEASE_GRACE_MS = 1_000;
+const objectUrls = new Map<string, { readonly url: string; holders: number }>();
+
+// A blob URL outlives its last holder while its bytes stay in memory, so an element that
+// copied it (an expanded preview) keeps working until the bytes themselves are dropped.
+function revokeUnusedObjectUrl(key: string): void {
+  const entry = objectUrls.get(key);
+  if (entry === undefined || entry.holders > 0 || memoryCache.has(key)) return;
+  objectUrls.delete(key);
+  URL.revokeObjectURL(entry.url);
+}
+
+function dropFromMemory(key: string): boolean {
+  const blob = memoryCache.get(key);
+  if (blob === undefined) return false;
   memoryCache.delete(key);
-  memoryCache.set(key, bytes);
-  while (memoryCache.size > MEMORY_ENTRY_LIMIT) {
-    const oldest = memoryCache.keys().next().value;
-    if (oldest === undefined) break;
-    memoryCache.delete(oldest);
+  memoryBytes -= blob.size;
+  return true;
+}
+
+function forget(key: string): void {
+  if (dropFromMemory(key)) revokeUnusedObjectUrl(key);
+}
+
+function remember(key: string, blob: Blob): void {
+  dropFromMemory(key);
+  if (blob.size > MEMORY_BYTE_LIMIT) return;
+  memoryCache.set(key, blob);
+  memoryBytes += blob.size;
+  for (const oldest of memoryCache.keys()) {
+    if (memoryBytes <= MEMORY_BYTE_LIMIT) break;
+    forget(oldest);
   }
 }
 
-export function createModelCacheKey(input: {
+export function createAssetCacheKey(input: {
   readonly environmentId?: string | null | undefined;
   readonly threadId?: string | null | undefined;
   readonly resource: unknown;
@@ -52,7 +86,7 @@ export function createModelCacheKey(input: {
   ]);
 }
 
-export interface ModelCacheThread {
+export interface AssetCacheThread {
   readonly environmentId: string;
   readonly threadId: string;
 }
@@ -122,7 +156,7 @@ function trackWrite(key: string, write: Promise<void>): void {
 }
 
 function abortError(): Error {
-  return new DOMException("The model load was cancelled.", "AbortError");
+  return new DOMException("The asset load was cancelled.", "AbortError");
 }
 
 function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -146,9 +180,9 @@ function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
   });
 }
 
-/** Drops a settled thread's model bytes from memory and Cache Storage. */
-export async function evictModelCacheForThreads(
-  threads: ReadonlyArray<ModelCacheThread>,
+/** Drops a settled thread's asset bytes from memory and Cache Storage. */
+export async function evictAssetCacheForThreads(
+  threads: ReadonlyArray<AssetCacheThread>,
 ): Promise<void> {
   if (threads.length === 0) return;
   const targets = new Set(
@@ -170,7 +204,7 @@ export async function evictModelCacheForThreads(
     if (writes.length > 0) await Promise.allSettled(writes);
 
     for (const key of memoryCache.keys()) {
-      if (belongsToTarget(key)) memoryCache.delete(key);
+      if (belongsToTarget(key)) forget(key);
     }
 
     const cache = await openCache();
@@ -191,34 +225,41 @@ export async function evictModelCacheForThreads(
   }
 }
 
-async function loadUncached(key: string, url: string, signal: AbortSignal): Promise<ArrayBuffer> {
-  const generation = generationFor(key);
+async function readStored(
+  key: string,
+  cache: Cache | null,
+  generation: number,
+): Promise<Blob | null> {
   const target = cacheEntryThreadTarget(key);
-  const evicting = target !== null && evictingTargets.has(target);
+  if (target !== null && evictingTargets.has(target)) return null;
   const memory = memoryCache.get(key);
-  if (memory !== undefined && !evicting) {
+  if (memory !== undefined) {
     remember(key, memory);
     return memory;
   }
-
-  const cache = await openCache();
-  if (cache !== null && !evicting) {
-    try {
-      const hit = await cache.match(cacheRequest(key));
-      if (hit !== undefined) {
-        const bytes = await hit.arrayBuffer();
-        if (isCurrentGeneration(key, generation)) remember(key, bytes);
-        return bytes;
-      }
-    } catch {
-      // Cache Storage is a best-effort fast path; fall through to the network.
-    }
+  if (cache === null) return null;
+  try {
+    const hit = await cache.match(cacheRequest(key));
+    if (hit === undefined) return null;
+    const blob = await hit.blob();
+    if (isCurrentGeneration(key, generation)) remember(key, blob);
+    return blob;
+  } catch {
+    // Cache Storage is a best-effort fast path; fall through to the network.
+    return null;
   }
+}
+
+async function loadUncached(key: string, url: string, signal: AbortSignal): Promise<Blob> {
+  const generation = generationFor(key);
+  const cache = await openCache();
+  const stored = await readStored(key, cache, generation);
+  if (stored !== null) return stored;
 
   const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`The model could not be loaded (${response.status}).`);
+  if (!response.ok) throw new Error(`The asset could not be loaded (${response.status}).`);
   const copy = cache === null ? null : response.clone();
-  const bytes = await response.arrayBuffer();
+  const bytes = await response.blob();
   if (isCurrentGeneration(key, generation)) {
     remember(key, bytes);
     if (cache !== null && copy !== null) {
@@ -239,15 +280,71 @@ function consumePendingLoad(key: string, pending: PendingLoad, signal: AbortSign
   });
 }
 
+/** The blob URL for bytes already in memory, so a remount can paint it on the first frame. */
+export function peekAssetObjectUrl(key: string): string | null {
+  const existing = objectUrls.get(key);
+  if (existing !== undefined) return existing.url;
+  const blob = memoryCache.get(key);
+  if (blob === undefined) return null;
+  // Owned by the memory entry until a holder takes it; forgetting the bytes revokes it.
+  const entry = { url: URL.createObjectURL(blob), holders: 0 };
+  objectUrls.set(key, entry);
+  return entry.url;
+}
+
 /**
- * Signed asset URLs change on every mint, so model bytes are cached under a
+ * Copies an asset an element just loaded from its signed URL into the byte cache. The
+ * request is answered from the HTTP cache, so the first view keeps native lazy loading.
+ */
+export function cacheLoadedAsset(key: string, src: string): void {
+  if (src.startsWith("blob:")) return;
+  void loadAssetBlob(key, src.split("#", 1)[0] ?? src, new AbortController().signal).catch(() => {
+    // Caching is best effort; the element already shows the image.
+  });
+}
+
+/**
+ * Shares one blob URL per key. Revocation waits a moment after the last holder lets go,
+ * so a consumer that re-subscribes to the same key keeps the URL its element shows.
+ */
+export function acquireAssetObjectUrl(
+  key: string,
+  blob: Blob,
+): { readonly url: string; readonly release: () => void } {
+  let entry = objectUrls.get(key);
+  if (entry === undefined) {
+    entry = { url: URL.createObjectURL(blob), holders: 0 };
+    objectUrls.set(key, entry);
+  }
+  const held = entry;
+  held.holders += 1;
+  let released = false;
+  return {
+    url: held.url,
+    release: () => {
+      if (released) return;
+      released = true;
+      held.holders -= 1;
+      setTimeout(() => revokeUnusedObjectUrl(key), OBJECT_URL_RELEASE_GRACE_MS);
+    },
+  };
+}
+
+/** Stored bytes for `key`, without a network request; null when nothing is stored. */
+export async function readCachedAssetBlob(key: string): Promise<Blob | null> {
+  const memory = memoryCache.get(key);
+  if (memory !== undefined) return memory;
+  const pending = pendingLoads.get(key);
+  if (pending !== undefined) return pending.promise.catch(() => null);
+  const generation = generationFor(key);
+  return readStored(key, await openCache(), generation);
+}
+
+/**
+ * Signed asset URLs change on every mint, so asset bytes are cached under a
  * stable file-revision key instead of the URL the browser would otherwise see.
  */
-export function loadModelBytes(
-  key: string,
-  url: string,
-  signal: AbortSignal,
-): Promise<ArrayBuffer> {
+export function loadAssetBlob(key: string, url: string, signal: AbortSignal): Promise<Blob> {
   const memory = memoryCache.get(key);
   if (memory !== undefined) {
     remember(key, memory);

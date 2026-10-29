@@ -29,6 +29,7 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -486,7 +487,11 @@ function QueueAttachmentThumbnail(props: {
     mimeType: props.attachment.mimeType,
     disposition: "inline",
   } as const;
-  const url = useAssetUrl(props.environmentId, resource);
+  const url = useCachedAssetImageUri(
+    props.environmentId,
+    resource,
+    useAssetUrl(props.environmentId, resource),
+  );
   if (url === null) {
     return <View className="h-6 w-6 rounded bg-subtle" />;
   }

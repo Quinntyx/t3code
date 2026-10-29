@@ -17,7 +17,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { ModelViewer } from "~/components/chat/ModelViewer";
-import { createModelCacheKey } from "~/components/chat/modelCache";
+import { createAssetCacheKey } from "~/assets/assetBytesCache";
 import { maskMarkdownFrontmatter } from "@t3tools/shared/markdownFrontmatter";
 import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -175,7 +175,7 @@ export function AttachmentFilePreview(props: {
   const url = props.file ? localUrl : remoteUrl;
   const modelCacheKey =
     !props.file && resource !== null
-      ? createModelCacheKey({
+      ? createAssetCacheKey({
           environmentId: props.asset?.environmentId,
           threadId: props.threadRef?.threadId,
           resource,
