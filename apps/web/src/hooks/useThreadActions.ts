@@ -23,6 +23,7 @@ import { AsyncResult } from "effect/reactivity";
 import { useRouter } from "@tanstack/react-router";
 
 import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
+import { evictModelCacheForThreads } from "../components/chat/modelCache";
 import { threadContinuationRunId } from "../components/threadActionMenu.logic";
 import { newMessageId } from "../lib/utils";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -763,6 +764,10 @@ export function useThreadActions() {
       action.finish();
       return result;
     }
+    // Re-settling a thread that is already settled emits no state transition.
+    void evictModelCacheForThreads([
+      { environmentId: target.environmentId, threadId: target.threadId },
+    ]);
     if (wokeAt !== null) {
       markThreadVisited(scopedThreadKey(target), wokeAt);
     }

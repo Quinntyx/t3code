@@ -51,6 +51,15 @@ const IMAGE_MIME_TYPE_BY_EXTENSION = new Map([
   [".webp", "image/webp"],
 ]);
 
+const WORKSPACE_MODEL_PREVIEW_EXTENSIONS = [".glb", ".obj", ".stl"] as const;
+
+// GLB is the only single-file glTF container; .gltf would need sibling .bin and texture URLs.
+const MODEL_MIME_TYPE_BY_EXTENSION = new Map([
+  [".glb", "model/gltf-binary"],
+  [".obj", "model/obj"],
+  [".stl", "model/stl"],
+]);
+
 const AUDIO_MIME_TYPE_BY_EXTENSION = new Map([
   [".mp3", "audio/mpeg"],
   [".wav", "audio/wav"],
@@ -64,6 +73,11 @@ const AUDIO_MIME_TYPE_BY_EXTENSION = new Map([
   [".webm-audio", "audio/webm"],
   [".weba", "audio/webm"],
 ]);
+
+export function modelMimeTypeFromExtension(extension: string): string | null {
+  if (!/^\.[a-z0-9]+$/i.test(extension)) return null;
+  return MODEL_MIME_TYPE_BY_EXTENSION.get(extension.toLowerCase()) ?? null;
+}
 
 export function audioMimeTypeFromExtension(extension: string): string | null {
   if (!/^\.[a-z0-9-]+$/i.test(extension)) return null;
@@ -102,22 +116,30 @@ export function mediaMimeType(path: string): string | null {
   return extensionIndex < 0
     ? null
     : (mediaMimeTypeFromExtension(basename.slice(extensionIndex)) ??
-        audioMimeTypeFromExtension(basename.slice(extensionIndex)));
+        audioMimeTypeFromExtension(basename.slice(extensionIndex)) ??
+        modelMimeTypeFromExtension(basename.slice(extensionIndex)));
 }
 
-export function mediaKindFromPath(path: string): "image" | "video" | "audio" | null {
+export function mediaKindFromPath(path: string): "image" | "video" | "audio" | "model" | null {
   const mimeType = mediaMimeType(path);
   if (mimeType === null) return null;
   return mimeType.startsWith("audio/")
     ? "audio"
     : mimeType.startsWith("video/")
       ? "video"
-      : "image";
+      : mimeType.startsWith("model/")
+        ? "model"
+        : "image";
 }
 
 export function isWorkspaceImagePreviewPath(path: string): boolean {
   const literalPath = path.toLowerCase();
   return WORKSPACE_IMAGE_PREVIEW_EXTENSIONS.some((extension) => literalPath.endsWith(extension));
+}
+
+export function isWorkspaceModelPreviewPath(path: string): boolean {
+  const literalPath = path.toLowerCase();
+  return WORKSPACE_MODEL_PREVIEW_EXTENSIONS.some((extension) => literalPath.endsWith(extension));
 }
 
 export function isWorkspaceAudioPreviewPath(path: string): boolean {

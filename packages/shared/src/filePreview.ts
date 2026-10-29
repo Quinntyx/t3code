@@ -1,11 +1,14 @@
 import {
   audioMimeTypeFromExtension,
   isWorkspaceImagePreviewPath,
+  isWorkspaceModelPreviewPath,
   mediaMimeTypeFromExtension,
+  modelMimeTypeFromExtension,
 } from "./mediaPreview.ts";
 export {
   isWorkspaceAudioPreviewPath,
   isWorkspaceImagePreviewPath,
+  isWorkspaceModelPreviewPath,
   mediaKindFromPath,
   mediaMimeTypeFromExtension,
 } from "./mediaPreview.ts";
@@ -15,6 +18,7 @@ export type FilePreviewKind =
   | "image"
   | "video"
   | "audio"
+  | "model"
   | "pdf"
   | "html"
   | "markdown"
@@ -63,6 +67,7 @@ export function filePreviewKind(
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("video/")) return "video";
   if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("model/") || isWorkspaceModelPreviewPath(name)) return "model";
   if (generic) {
     if (extension === ".pdf") return "pdf";
     if (/^\.html?$/.test(extension)) return "html";
@@ -74,6 +79,7 @@ export function filePreviewKind(
     if (media?.startsWith("image/")) return "image";
     if (media?.startsWith("video/")) return "video";
     if (audioMimeTypeFromExtension(extension) !== null) return "audio";
+    if (isWorkspaceModelPreviewPath(name)) return "model";
     if (
       /^\.(txt|log|json|jsonc|jsonl|ndjson|yaml|yml|toml|ini|conf|config|env|csv|tsv|xml|css|scss|sass|less|js|jsx|mjs|cjs|ts|tsx|mts|cts|py|pyi|rb|go|rs|swift|kt|kts|java|c|h|cc|cpp|hpp|cs|php|sh|bash|zsh|fish|sql|graphql|gql|vue|svelte|r|lua|ex|exs|erl|hs|clj|dart|diff|patch|lock|properties|gradle)$/.test(
         extension,
@@ -204,6 +210,7 @@ export function isWorkspaceFontPreviewPath(path: string): boolean {
 export function hostPreviewMimeTypeFromExtension(extension: string): string | null {
   if (!/^\.[a-z0-9-]+$/i.test(extension)) return null;
   return (
+    modelMimeTypeFromExtension(extension) ??
     mediaMimeTypeFromExtension(extension) ??
     audioMimeTypeFromExtension(extension) ??
     BROWSER_MIME_TYPE_BY_EXTENSION.get(extension.toLowerCase()) ??
@@ -234,6 +241,7 @@ export function isWorkspacePreviewEntryPath(path: string): boolean {
   return (
     isWorkspaceBrowserPreviewPath(path) ||
     isWorkspaceImagePreviewPath(path) ||
+    isWorkspaceModelPreviewPath(path) ||
     isWorkspaceFontPreviewPath(path) ||
     officePreviewKind({ name: path }) !== null ||
     binaryPreviewKind({ name: path }) !== null

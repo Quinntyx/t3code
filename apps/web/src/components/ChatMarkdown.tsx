@@ -200,10 +200,12 @@ import {
   ChatMarkdownAssetImage,
   ChatMarkdownImage,
   ChatMarkdownImageFallback,
+  ChatMarkdownModel,
   ChatMarkdownVideo,
   MarkdownLinkContext,
   markdownImageCopy,
 } from "./chat/ChatMarkdownMedia";
+import { createModelCacheKey } from "./chat/modelCache";
 import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
@@ -1464,6 +1466,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={environmentId}
+          threadId={threadRef?.threadId ?? null}
           resource={{ _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd, url: hostMediaUrl }}
           alt={altText}
           kind={kind}
@@ -1491,6 +1494,26 @@ const CHAT_MARKDOWN_COMPONENTS = {
         src: mediaSrc,
         ...(reference ? { reference } : {}),
       };
+      if (kind === "model") {
+        const modelCacheKey =
+          environmentId !== null && threadRef !== null && threadRef !== undefined
+            ? createModelCacheKey({
+                environmentId,
+                threadId: threadRef.threadId,
+                resource: mediaSrc,
+                revision: mediaSrc,
+              })
+            : undefined;
+        return (
+          <ChatMarkdownModel
+            src={mediaSrc}
+            alt={altText}
+            copyMarkdown={copyMarkdown}
+            actionsSource={actionsSource}
+            cacheKey={modelCacheKey}
+          />
+        );
+      }
       if (kind === "video") {
         return (
           <ChatMarkdownVideo
@@ -1541,6 +1564,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={threadRef.environmentId}
+          threadId={threadRef.threadId}
           resource={{
             _tag: "media-file",
             threadId: threadRef.threadId,
