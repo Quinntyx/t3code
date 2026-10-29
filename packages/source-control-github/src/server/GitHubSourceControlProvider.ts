@@ -464,10 +464,15 @@ export const make = Effect.gen(function* () {
       readonly cwd: string;
       readonly host?: string | undefined;
       readonly context?: SourceControlProvider.SourceControlProviderContext | undefined;
+      readonly targetRepository?: string | undefined;
     }) {
       const envRepository = environment.GH_REPO?.trim();
       const hostHint = input.host ?? contextHost(input.context);
       const defaultHost = (hostHint ?? environment.GH_HOST ?? "github.com").toLowerCase();
+      if (input.targetRepository) {
+        const locator = parseGitHubRepositorySelector(input.targetRepository, defaultHost);
+        if (locator !== null) return locator;
+      }
       if (envRepository) {
         const locator = parseGitHubRepositorySelector(envRepository, defaultHost);
         if (locator !== null) return locator;
@@ -539,6 +544,7 @@ export const make = Effect.gen(function* () {
     readonly limit: number;
     readonly context?: SourceControlProvider.SourceControlProviderContext | undefined;
     readonly host?: string | undefined;
+    readonly targetRepository?: string | undefined;
     readonly allowReserve: boolean;
   }) {
     const locator = yield* resolveRepository(input);
@@ -869,38 +875,19 @@ export const make = Effect.gen(function* () {
         return GitHubChangeRequestTemplate.detect(cwd, treeish, git.execute);
       },
     ),
-    // `createChangeRequest` targets what `resolveRepository` picks: GH_REPO when it parses, else
-    // the remote `gh repo set-default` marked (`gh-resolved`). An HTTPS remote keeps a
-    // non-default port in the context's host, and the mark is then ignored.
+    // `createChangeRequest` targets what `resolveRepository` picks across all remotes: GH_REPO
+    // when it parses, else the `gh-resolved` mark, else gh's ranking (upstream over origin).
     createsChangeRequestsIn: Effect.fn("GitHubSourceControlProvider.createsChangeRequestsIn")(
       function* ({ cwd, context, repository }) {
-        const host = URL.canParse(context.provider.baseUrl)
-          ? new URL(context.provider.baseUrl).host
-          : null;
-        const target = repository?.toLowerCase();
-        const fromEnvironment = parseGitHubRepositorySelector(
-          environment.GH_REPO ?? "",
-          host ?? "",
+        if (!URL.canParse(context.provider.baseUrl)) return true;
+        const locator = yield* resolveRepository({ cwd, context }).pipe(
+          Effect.orElseSucceed(() => null),
         );
-        if (fromEnvironment !== null) {
-          const { host: targetHost, owner, name } = fromEnvironment;
-          return (
-            host !== null &&
-            URL.canParse(`https://${targetHost}`) &&
-            new URL(`https://${targetHost}`).host === host &&
-            `${owner}/${name}`.toLowerCase() === target
-          );
-        }
-        const mark = yield* git
-          .readConfigValue(cwd, `remote.${context.remoteName}.gh-resolved`)
-          .pipe(Effect.orElseSucceed(() => null));
-        const { locator } = resolveGitHubRepository({
-          remotes: `${context.remoteName}\t${context.remoteUrl} (fetch)`,
-          resolved: mark === null ? "" : `remote.${context.remoteName}.gh-resolved ${mark}`,
-          hostHint: host ?? undefined,
-          defaultHost: host ?? "github.com",
-        });
-        return locator === null || `${locator.owner}/${locator.name}`.toLowerCase() === target;
+        return (
+          locator === null ||
+          (locator.host === contextHost(context)?.toLowerCase() &&
+            `${locator.owner}/${locator.name}`.toLowerCase() === repository?.toLowerCase())
+        );
       },
     ),
     // `gh pr create` run in the checkout, as an agent in a T3 worktree often does, takes its base
@@ -940,6 +927,7 @@ export const make = Effect.gen(function* () {
               limit: input.limit ?? (input.state === "open" ? 1 : 20),
               host: contextHost(input.context),
               context: input.context,
+              targetRepository: input.targetRepository,
               allowReserve,
             }),
           ),
@@ -960,7 +948,10 @@ export const make = Effect.gen(function* () {
     }),
     createChangeRequest: Effect.fn("GitHubSourceControlProvider.createChangeRequest")(
       function* (input) {
-        const locator = yield* resolveRepository(input);
+        const locator = yield* resolveRepository({
+          ...input,
+          targetRepository: input.target?.repository,
+        });
         const body = yield* fileSystem
           .readFileString(input.bodyFile)
           .pipe(

@@ -1070,30 +1070,101 @@ it.effect.each([
   },
 );
 
-it.effect("says a GH_REPO naming an unparseable host targets no remote rather than failing", () => {
-  const { layer } = harness({
-    remotes: remotesOutput(["upstream", "git@github.com:acme/web.git"]),
+it.effect("lists and creates in a named target repository over gh's default", () => {
+  const rest: string[] = [];
+  const { layer, graphqlCalls } = harness({
+    remotes: remotesOutput(
+      ["origin", "git@github.com:me/web.git"],
+      ["upstream", "git@github.com:acme/web.git"],
+    ),
     resolved: "",
-    api: {},
+    api: {
+      rest: (input) =>
+        Effect.sync(() => {
+          rest.push(input.path);
+          return restResponse({});
+        }),
+    },
+    graphql: () => ({ pullRequests: { nodes: [] } }),
   });
   return Effect.gen(function* () {
     const provider = yield* GitHubSourceControlProvider.make;
-    const targets = yield* provider.createsChangeRequestsIn!({
+    const fs = yield* FileSystem.FileSystem;
+    const bodyFile = yield* fs.makeTempFileScoped();
+    yield* fs.writeFileString(bodyFile, "Body");
+    const listing = yield* provider
+      .listChangeRequests({
+        cwd: "/repo",
+        targetRepository: "me/web",
+        headSelector: "feature",
+        state: "open",
+      })
+      .pipe(Effect.forkChild);
+    yield* TestClock.adjust("50 millis");
+    yield* Fiber.join(listing);
+    yield* provider.createChangeRequest({
       cwd: "/repo",
-      context: {
-        provider: {
-          kind: SourceControlProviderKind.make("github"),
-          name: "GitHub",
-          baseUrl: "https://github.com",
-        },
-        remoteName: "upstream",
-        remoteUrl: "git@github.com:acme/web.git",
-      },
-      repository: "acme/web",
+      target: { refName: "main", repository: "me/web" },
+      baseRefName: "main",
+      headSelector: "feature",
+      title: "PR",
+      bodyFile,
     });
-    assert.isFalse(targets);
-  }).pipe(
-    Effect.provide(layer),
-    Effect.provideService(HostProcess.Environment, { GH_REPO: "bad host/acme/web" }),
-  );
+    assert.deepStrictEqual(
+      graphqlCalls.flatMap((call) => call.lookups.map(({ owner, name }) => `${owner}/${name}`)),
+      ["me/web"],
+    );
+    assert.deepStrictEqual(rest, ["repos/me/web/pulls"]);
+  }).pipe(Effect.provide(layer), Effect.provideService(HostProcess.Environment, {}), Effect.scoped);
 });
+
+const forkRemotes = remotesOutput(
+  ["origin", "git@github.com:me/web.git"],
+  ["upstream", "git@github.com:acme/web.git"],
+);
+
+it.effect.each([
+  // gh ranks upstream above origin when no remote is marked.
+  { remotes: forkRemotes, resolved: "", envRepository: "", remote: "origin", expected: false },
+  {
+    remotes: forkRemotes,
+    resolved: "remote.origin.gh-resolved base",
+    envRepository: "",
+    remote: "origin",
+    expected: true,
+  },
+  // Like `createChangeRequest`, an unparseable GH_REPO is ignored and the remotes decide.
+  {
+    remotes: remotesOutput(["upstream", "git@github.com:acme/web.git"]),
+    resolved: "",
+    envRepository: "bad host/acme/web",
+    remote: "upstream",
+    expected: true,
+  },
+] as const)(
+  "says whether change requests are created in $remote ($resolved, GH_REPO $envRepository)",
+  ({ remotes, resolved, envRepository, remote, expected }) => {
+    const { layer } = harness({ remotes, resolved, api: {} });
+    const repository = remote === "origin" ? "me/web" : "acme/web";
+    return Effect.gen(function* () {
+      const provider = yield* GitHubSourceControlProvider.make;
+      const targets = yield* provider.createsChangeRequestsIn!({
+        cwd: "/repo",
+        context: {
+          provider: {
+            kind: SourceControlProviderKind.make("github"),
+            name: "GitHub",
+            baseUrl: "https://github.com",
+          },
+          remoteName: remote,
+          remoteUrl: `git@github.com:${repository}.git`,
+        },
+        repository,
+      });
+      assert.strictEqual(targets, expected);
+    }).pipe(
+      Effect.provide(layer),
+      Effect.provideService(HostProcess.Environment, { GH_REPO: envRepository }),
+    );
+  },
+);
