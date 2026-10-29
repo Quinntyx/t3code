@@ -28,8 +28,18 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function addSkillPath(path: string, skills: Set<string>) {
-  const match = /(?:^|\/)([^/]+)\/SKILL\.md$/u.exec(path.replaceAll("\\", "/"));
-  if (match?.[1]) skills.add(match[1]);
+  const segments = path.replaceAll("\\", "/").split("/").filter(Boolean);
+  if (segments.at(-1) !== "SKILL.md" || segments.length < 2) return;
+  const parentIndex = segments.length - 2;
+  // Nested skills are addressed by their path below the nearest skills root.
+  let rootIndex = parentIndex;
+  for (let index = parentIndex - 1; index >= 0; index -= 1) {
+    if (segments[index]!.toLowerCase() === "skills") {
+      rootIndex = index + 1;
+      break;
+    }
+  }
+  skills.add(segments.slice(rootIndex, parentIndex + 1).join("/"));
 }
 
 function addCommandSkills(command: string, skills: Set<string>) {

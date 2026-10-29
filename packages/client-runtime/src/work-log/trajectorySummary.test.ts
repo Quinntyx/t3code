@@ -78,6 +78,9 @@ describe("summarizeAgentTrajectory", () => {
         tool("read", "functions.read", { path: "/home/user/skills/git/SKILL.md" }),
         tool("read2", "Read", { file_path: "C:\\skills\\design\\SKILL.md" }),
         command("shell", "sed -n '1,200p' '/home/user/skills/review/SKILL.md'"),
+        tool("nested", "read", { path: "/home/user/skills/3d/non-parametric/SKILL.md" }),
+        tool("nested-dup", "read", { path: "/home/user/skills/3d/non-parametric/SKILL.md" }),
+        tool("nested-win", "read", { file_path: "C:\\skills\\3d\\SKILL.md" }),
         tool("search", "Grep", { pattern: "skills/unused/SKILL.md" }),
         command("mention", "echo /skills/unused/SKILL.md"),
         command("sed-edit", "sed -i 's/old/new/' /skills/unused/SKILL.md"),
@@ -85,9 +88,9 @@ describe("summarizeAgentTrajectory", () => {
       ])[0],
     ).toEqual({
       kind: "skills",
-      label: "Used 3 skills",
+      label: "Used 5 skills",
       title: "Skills used",
-      details: ["design", "git", "review"],
+      details: ["3d", "3d/non-parametric", "design", "git", "review"],
     });
   });
 
