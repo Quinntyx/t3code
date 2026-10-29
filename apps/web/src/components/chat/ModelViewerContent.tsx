@@ -29,7 +29,7 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 
-import { loadModelBytes } from "./modelCache";
+import { loadAssetBlob } from "~/assets/assetBytesCache";
 import { hasGlbSignature, modelExtension } from "./modelFormat";
 
 export interface ModelViewerContentProps {
@@ -190,7 +190,9 @@ export function ModelViewerContent(props: ModelViewerContentProps) {
         resize();
 
         const object = await loadModel(
-          await loadModelBytes(props.cacheKey ?? props.src, props.src, abort.signal),
+          await (
+            await loadAssetBlob(props.cacheKey ?? props.src, props.src, abort.signal)
+          ).arrayBuffer(),
           modelExtension(props.name, props.src),
           props.name,
         );

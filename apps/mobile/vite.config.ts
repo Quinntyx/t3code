@@ -5,6 +5,7 @@ import "vite-plus/test/config";
 
 const reactTests = [
   "src/features/files/useFileTreeEntries.test.tsx",
+  "src/state/cached-asset-image.test.tsx",
   "src/features/projects/AddProjectScreen.test.ts",
   "src/lib/useMediaVideoPlayback.test.tsx",
   "src/features/pull-requests/usePullRequestEnvironmentFallback.test.tsx",

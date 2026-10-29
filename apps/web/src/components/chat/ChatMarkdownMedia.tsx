@@ -17,14 +17,15 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
+import { cacheLoadedAsset, createAssetCacheKey } from "../../assets/assetBytesCache";
 import { useAssetUrlRefresh, useAssetUrlState } from "../../assets/assetUrls";
+import { useCachedAssetSrc } from "../../assets/useCachedAssetSrc";
 import { cn } from "../../lib/utils";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ModelViewer } from "./ModelViewer";
-import { createModelCacheKey } from "./modelCache";
 import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
 
 const CHAT_MARKDOWN_MEDIA_MAX_WIDTH_CLASS_NAME = "max-w-[min(100%,30rem)]";
@@ -175,6 +176,7 @@ export function ChatMarkdownImage(props: {
   readonly actionsSource: MediaActionSource;
   readonly originalUrl?: string | undefined;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  readonly onSourceLoad?: ((src: string) => void) | undefined;
 }) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -196,6 +198,7 @@ export function ChatMarkdownImage(props: {
     onLoad: () => {
       setLoadedSrc(loadingSrc);
       setFailedSrc(null);
+      props.onSourceLoad?.(loadingSrc);
     },
     onError: () => {
       setFailedSrc(loadingSrc);
@@ -420,7 +423,7 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
   const knownSize = assetUrl._tag === "Success" ? assetUrl.imageDimensions : undefined;
   const modelCacheKey =
     props.kind === "model" && assetUrl._tag === "Success"
-      ? createModelCacheKey({
+      ? createAssetCacheKey({
           environmentId: props.environmentId,
           threadId: props.threadId,
           resource: props.resource,
@@ -428,6 +431,37 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
             assetUrl.fileRevision ?? (props.resource._tag === "attachment" ? null : assetUrl.url),
         })
       : undefined;
+  // Only thread-owned bytes with a stable revision: settling the thread evicts them.
+  const imageThreadId = "threadId" in resource ? resource.threadId : props.threadId;
+  const imageRevision =
+    resource._tag === "attachment" || resource._tag === "tool-output-image"
+      ? null
+      : assetUrl._tag === "Success"
+        ? assetUrl.fileRevision
+        : undefined;
+  const imageCacheKey =
+    (props.kind ?? "image") === "image" &&
+    fallbackSrc === undefined &&
+    imageThreadId != null &&
+    imageRevision !== undefined
+      ? createAssetCacheKey({
+          environmentId: props.environmentId,
+          threadId: imageThreadId,
+          resource,
+          revision: imageRevision,
+        })
+      : undefined;
+  // Bytes are keyed without the fragment; each consumer keeps its own (an SVG view).
+  const cachedImageSrc = useCachedAssetSrc(
+    imageCacheKey,
+    assetUrl._tag === "Success" ? assetUrl.url : null,
+  );
+  const imageSrc =
+    imageCacheKey === undefined
+      ? src
+      : cachedImageSrc === null
+        ? null
+        : cachedImageSrc + (props.srcFragment ?? "");
   const maxHeightRem = props.maxHeightRem ?? 30;
   const style =
     props.style ??
@@ -498,8 +532,8 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
   return (
     <ChatMarkdownImage
       key={JSON.stringify([props.environmentId, props.resource, props.srcFragment])}
-      src={src}
-      sourceFailed={assetUrl._tag === "Failure" && fallbackSrc === undefined}
+      src={imageSrc}
+      sourceFailed={assetUrl._tag === "Failure" && fallbackSrc === undefined && imageSrc === null}
       unavailableDetail={
         assetUrl._tag === "Failure" &&
         assetUrl.reason === "missing-file-access" &&
@@ -519,6 +553,11 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
       actionsSource={actionsSource}
       originalUrl={props.originalUrl}
       onImageExpand={props.onImageExpand}
+      onSourceLoad={
+        imageCacheKey === undefined
+          ? undefined
+          : (loadedSrc) => cacheLoadedAsset(imageCacheKey, loadedSrc)
+      }
     />
   );
 });

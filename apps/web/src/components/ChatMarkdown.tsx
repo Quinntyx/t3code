@@ -205,7 +205,7 @@ import {
   MarkdownLinkContext,
   markdownImageCopy,
 } from "./chat/ChatMarkdownMedia";
-import { createModelCacheKey } from "./chat/modelCache";
+import { createAssetCacheKey } from "../assets/assetBytesCache";
 import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
@@ -1497,7 +1497,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       if (kind === "model") {
         const modelCacheKey =
           environmentId !== null && threadRef !== null && threadRef !== undefined
-            ? createModelCacheKey({
+            ? createAssetCacheKey({
                 environmentId,
                 threadId: threadRef.threadId,
                 resource: mediaSrc,

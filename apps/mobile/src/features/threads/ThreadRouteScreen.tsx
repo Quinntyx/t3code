@@ -76,6 +76,7 @@ import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment, useThreadFamily } from "../../state/threads";
+import { ThreadPullRequestPrefetch } from "../pull-requests/ThreadPullRequestPrefetch";
 import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/threads";
 import { useProjects } from "../../state/entities";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
@@ -281,6 +282,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
           {...props.inspectorPresentation}
         />
       ) : null}
+      {selectedThread ? <ThreadPullRequestPrefetch thread={selectedThread} /> : null}
       {content}
     </>
   );

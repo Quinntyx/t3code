@@ -1314,6 +1314,20 @@ export function resolvePullRequestReferenceHost(
   return host === null ? reference : { ...reference, host };
 }
 
+export function resolvePullRequestReference(
+  requestedReference: PullRequestRef,
+  repositoryIdentity: RepositoryIdentity | null | undefined,
+  supportsThreadPullRequests: boolean,
+): PullRequestRef {
+  return supportsThreadPullRequests
+    ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
+    : {
+        projectId: requestedReference.projectId,
+        repository: requestedReference.repository,
+        number: requestedReference.number,
+      };
+}
+
 interface PullRequestDetailSnapshotRef {
   readonly host?: string | undefined;
   readonly projectId: string;

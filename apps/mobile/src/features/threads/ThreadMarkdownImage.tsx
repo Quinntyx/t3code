@@ -17,8 +17,10 @@ import type { FilePreviewSource } from "../../components/FilePreviewModal";
 import { MediaActionsMenu } from "../../components/MediaActionsMenu";
 import { PresentationSource } from "../../components/ui/NativePresentation";
 import { useMediaActions } from "../../state/mediaActions";
+import { assetImageCacheKey } from "../../lib/assetImageSource";
 import type { MediaActionsSource } from "../../lib/mediaActionsSource";
 import { useAssetUrlState } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import {
   MARKDOWN_IMAGE_MAX_WIDTH,
   type MarkdownImageDisplaySize,
@@ -83,6 +85,8 @@ const noSvgDocumentAtom = Atom.make(AsyncResult.initial<SvgDocument, SvgLoadErro
 
 export function ThreadMarkdownImageView(props: {
   readonly uri: string | null;
+  /** Disk cache identity that outlives the signed URL. */
+  readonly cacheKey?: string | undefined;
   readonly sourceKey: string;
   readonly unavailable: boolean;
   readonly unavailableDetail?: string | undefined;
@@ -189,6 +193,7 @@ export function ThreadMarkdownImageView(props: {
                   <ThreadMarkdownImageRequest
                     key={props.sourceKey}
                     uri={props.uri}
+                    cacheKey={props.cacheKey}
                     onLoad={(size) => setDecoded({ sourceKey: props.sourceKey, size })}
                     onError={() => setFailure({ uri: props.uri, failed: true })}
                   />
@@ -209,6 +214,7 @@ export function ThreadMarkdownImageView(props: {
 
 function ThreadMarkdownImageRequest(props: {
   readonly uri: string;
+  readonly cacheKey?: string | undefined;
   readonly onLoad: (sourceSize: ImageSize) => void;
   readonly onError: () => void;
 }) {
@@ -217,7 +223,11 @@ function ThreadMarkdownImageRequest(props: {
   return (
     <>
       <Image
-        source={{ uri: props.uri }}
+        source={
+          props.cacheKey === undefined
+            ? { uri: props.uri }
+            : { uri: props.uri, cacheKey: props.cacheKey }
+        }
         contentFit="contain"
         cachePolicy="memory-disk"
         accessible={false}
@@ -265,10 +275,20 @@ export function ThreadMarkdownImage(props: {
 }) {
   const withGallery = useFilePreviewGallery();
   const assetUrl = useAssetUrlState(props.environmentId, props.resource);
+  const uri = useCachedAssetImageUri(
+    props.environmentId,
+    props.resource,
+    assetUrl._tag === "Success" ? assetUrl.url + (props.srcFragment ?? "") : null,
+  );
 
   return (
     <ThreadMarkdownImageView
-      uri={assetUrl._tag === "Success" ? assetUrl.url + (props.srcFragment ?? "") : null}
+      uri={uri}
+      cacheKey={assetImageCacheKey(
+        props.environmentId,
+        props.resource,
+        assetUrl._tag === "Success" ? assetUrl.fileRevision : undefined,
+      )}
       sourceKey={
         props.resource._tag === "attachment"
           ? `attachment:${props.resource.attachmentId}`
@@ -276,7 +296,7 @@ export function ThreadMarkdownImage(props: {
             ? `tool-output:${props.resource.itemId}:${props.resource.index}`
             : `workspace:${props.resource.path}`
       }
-      unavailable={assetUrl._tag === "Failure"}
+      unavailable={assetUrl._tag === "Failure" && uri === null}
       unavailableDetail={
         assetUrl._tag === "Failure" && assetUrl.reason === "missing-file-access"
           ? MISSING_FILE_ACCESS_MESSAGE

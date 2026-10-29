@@ -6,6 +6,7 @@ import { Pressable, ScrollView, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { assetImageSource } from "../../lib/assetImageSource";
 
 export function ComposerQueuedEditBanner(props: {
@@ -72,7 +73,11 @@ function QueuedEditAttachmentChip(props: {
     mimeType: attachment.mimeType,
     disposition: "inline",
   } as const;
-  const url = useAssetUrl(props.environmentId, isImage ? resource : null);
+  const url = useCachedAssetImageUri(
+    props.environmentId,
+    isImage ? resource : null,
+    useAssetUrl(props.environmentId, isImage ? resource : null),
+  );
 
   return (
     <View className="max-w-[180px] flex-row items-center gap-2 rounded-xl border border-border bg-card py-1 pl-1 pr-2">

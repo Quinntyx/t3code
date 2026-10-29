@@ -38,7 +38,9 @@ import {
 } from "lucide-react";
 import { Link as LinkIconNode } from "lucide";
 import { Button, InlineButton } from "../ui/button";
+import { cacheLoadedAsset, createAssetCacheKey } from "../../assets/assetBytesCache";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
+import { useCachedAssetSrcs } from "../../assets/useCachedAssetSrc";
 import { AttachmentImage } from "../media/AttachmentImage";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import {
@@ -296,7 +298,30 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const { onImageExpand, onFileOpen } = ctx;
   const senderThreadId = row.message.senderThreadId;
   const resources = selectMessageImageResources(row.message.attachments);
-  const previewUrls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
+  const signedPreviewUrls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
+  const previewCacheKeys = new Map(
+    resources.flatMap((resource) =>
+      ctx.threadRef
+        ? [
+            [
+              resource.attachmentId,
+              createAssetCacheKey({
+                environmentId: ctx.activeThreadEnvironmentId,
+                threadId: ctx.threadRef.threadId,
+                resource,
+                revision: null,
+              }),
+            ] as const,
+          ]
+        : [],
+    ),
+  );
+  const previewUrls = useCachedAssetSrcs(
+    resources.map((resource, index) => ({
+      key: previewCacheKeys.get(resource.attachmentId),
+      url: signedPreviewUrls[index] ?? null,
+    })),
+  );
   const [projectPreviews] = useState(createMessageAttachmentPreviewProjector);
   const previewUrlsById = new Map(
     resources.flatMap((resource, index) => {
@@ -536,6 +561,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                           mimeType={image.mimeType}
                           src={image.previewUrl}
                           alt={image.name}
+                          onLoad={() => {
+                            const key = previewCacheKeys.get(image.id);
+                            if (key !== undefined && image.previewUrl)
+                              cacheLoadedAsset(key, image.previewUrl);
+                          }}
                           decoding="async"
                           loading="lazy"
                           className="block size-full transform-gpu object-cover"
