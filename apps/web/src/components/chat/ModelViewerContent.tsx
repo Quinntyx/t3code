@@ -30,6 +30,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 
 import { loadModelBytes } from "./modelCache";
+import { hasGlbSignature, modelExtension } from "./modelFormat";
 
 export interface ModelViewerContentProps {
   readonly src: string;
@@ -47,16 +48,8 @@ type Renderable = Object3D & {
   readonly material?: Material | Material[];
 };
 
-function modelExtension(name: string, src: string): string {
-  for (const candidate of [name, src]) {
-    const path = candidate.split(/[?#]/, 1)[0] ?? "";
-    const extension = path.split(".").at(-1)?.toLowerCase();
-    if (extension === "glb" || extension === "obj" || extension === "stl") return extension;
-  }
-  return "";
-}
-
 function disposeObject(object: Object3D): void {
+  const bitmaps = new Set<ImageBitmap>();
   object.traverse((child) => {
     const renderable = child as Renderable;
     renderable.geometry?.dispose();
@@ -65,26 +58,32 @@ function disposeObject(object: Object3D): void {
       ? renderable.material
       : [renderable.material]) {
       for (const value of Object.values(material)) {
-        if (value instanceof Texture) value.dispose();
+        if (!(value instanceof Texture)) continue;
+        if (typeof ImageBitmap !== "undefined" && value.image instanceof ImageBitmap) {
+          bitmaps.add(value.image);
+        }
+        value.dispose();
       }
       material.dispose();
     }
   });
+  for (const bitmap of bitmaps) bitmap.close();
 }
 
 async function loadModel(source: ArrayBuffer, extension: string, name: string): Promise<Object3D> {
-  if (extension === "glb") {
+  const format = hasGlbSignature(source) ? "glb" : extension;
+  if (format === "glb") {
     const gltf = await new GLTFLoader().parseAsync(source, "");
     return gltf.scene;
   }
-  if (extension === "stl") {
+  if (format === "stl") {
     const geometry = new STLLoader().parse(source);
     return new Mesh(
       geometry,
       new MeshStandardMaterial({ color: 0x9fb3c8, metalness: 0.15, roughness: 0.6 }),
     );
   }
-  if (extension === "obj") {
+  if (format === "obj") {
     const object = new OBJLoader().parse(new TextDecoder().decode(source));
     object.traverse((child) => {
       if (!(child instanceof Mesh)) return;

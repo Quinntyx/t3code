@@ -243,7 +243,11 @@ function WorkspaceModelPreview(props: {
     workspaceRoot: props.workspaceRoot,
     absolutePath: props.absolutePath,
   });
-  const assetUrl = useAssetUrlState(props.environmentId, resource);
+  const assetUrl = useAssetUrlState(
+    props.environmentId,
+    resource,
+    props.workspaceMutationId ?? undefined,
+  );
   const revisionSuffix =
     props.workspaceMutationId === null
       ? ""
