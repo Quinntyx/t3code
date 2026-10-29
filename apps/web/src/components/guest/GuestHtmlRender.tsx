@@ -11,8 +11,10 @@ import {
 } from "@t3tools/shared/htmlRender";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { Skeleton } from "~/components/ui/skeleton";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { observeResize } from "~/lib/observeResize";
+import { cn } from "~/lib/utils";
 
 /**
  * A visual the agent published, as the guest sees it. The server sends it with a sandbox CSP and
@@ -33,6 +35,7 @@ export function GuestHtmlRender({
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
   const [contentHeight, setContentHeight] = useState<number>();
+  const [loaded, setLoaded] = useState(false);
   // The theme rides in the fragment for the first paint; later changes are posted.
   const [src] = useState(
     () =>
@@ -80,16 +83,26 @@ export function GuestHtmlRender({
   return (
     <div
       ref={boxRef}
+      className="relative"
       style={{
         height: htmlRenderFrameHeight(reference, width, contentHeight),
       }}
     >
+      {loaded ? null : (
+        <Skeleton
+          role="status"
+          aria-label="Loading page"
+          shape="card"
+          className="absolute inset-0"
+        />
+      )}
       <iframe
         ref={frameRef}
         src={src}
         title={reference.title}
         sandbox="allow-scripts allow-forms allow-popups allow-downloads"
-        className="block size-full rounded-lg border border-border"
+        onLoad={() => setLoaded(true)}
+        className={cn("block size-full rounded-lg border border-border", !loaded && "opacity-0")}
       />
     </div>
   );

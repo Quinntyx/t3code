@@ -13,6 +13,7 @@ import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { Button } from "../ui/button";
+import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { HtmlRenderDialog } from "./HtmlRenderDialog";
@@ -120,7 +121,9 @@ export function HtmlRenderFrame(props: {
         <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
           Unable to load {title}
         </p>
-      ) : null}
+      ) : (
+        <Skeleton role="status" aria-label="Loading page" className="size-full" />
+      )}
     </div>
   );
 }
