@@ -16,6 +16,7 @@ describe("buildLiquidGlassFilterMarkup", () => {
       field,
       LIQUID_GLASS_DEFAULT_TUNING,
       "blob:test",
+      0,
     );
 
     expect(count(markup, "<feDisplacementMap")).toBe(3);
@@ -30,6 +31,7 @@ describe("buildLiquidGlassFilterMarkup", () => {
       field,
       { ...LIQUID_GLASS_DEFAULT_TUNING, dispersion: 0 },
       "blob:test",
+      0,
     );
 
     expect(count(markup, "<feDisplacementMap")).toBe(1);
@@ -42,6 +44,7 @@ describe("buildLiquidGlassFilterMarkup", () => {
       field,
       LIQUID_GLASS_DEFAULT_TUNING,
       "blob:test",
+      0,
     );
 
     expect(markup).toContain('<feImage href="blob:test"');
@@ -55,14 +58,37 @@ describe("buildLiquidGlassFilterMarkup", () => {
       field,
       LIQUID_GLASS_DEFAULT_TUNING,
       'blob:test?a=1&b="2"',
+      0,
     );
 
     expect(markup).toContain("&amp;b=&quot;2&quot;");
   });
 
-  it("keeps the frost in the backdrop value", () => {
-    expect(liquidGlassBackdropFilter("liquid-glass-5")).toBe(
-      "url(#liquid-glass-5) blur(var(--glass-blur)) saturate(var(--glass-saturation))",
+  it("softens the backdrop before displacing it", () => {
+    const sharp = buildLiquidGlassFilterMarkup(
+      "liquid-glass-5",
+      field,
+      LIQUID_GLASS_DEFAULT_TUNING,
+      "blob:test",
+      0,
+    );
+    const softened = buildLiquidGlassFilterMarkup(
+      "liquid-glass-6",
+      field,
+      LIQUID_GLASS_DEFAULT_TUNING,
+      "blob:test",
+      6,
+    );
+
+    expect(count(sharp, "<feGaussianBlur")).toBe(0);
+    expect(count(softened, "<feGaussianBlur")).toBe(1);
+    expect(softened).toContain('stdDeviation="6"');
+    expect(softened).toContain('in="soft" in2="map"');
+  });
+
+  it("hands the filter the whole backdrop job", () => {
+    expect(liquidGlassBackdropFilter("liquid-glass-7")).toBe(
+      "url(#liquid-glass-7) saturate(var(--glass-saturation))",
     );
   });
 });

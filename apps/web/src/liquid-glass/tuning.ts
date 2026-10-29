@@ -30,7 +30,7 @@ export const LIQUID_GLASS_KNOBS: readonly LiquidGlassKnob[] = [
   knob("refractionFactor", "Refraction factor", 1, 8, 0.1, 1),
   knob("dispersion", "Dispersion", 0, 60, 1),
   knob("fresnelRange", "Fresnel range", 1, 100, 0.25, 2),
-  knob("fresnelHardness", "Fresnel hardness", 0, 100, 0.5, 2),
+  knob("fresnelHardness", "Fresnel hardness", 0, 100, 0.5, 1),
   knob("fresnelFactor", "Fresnel strength", 0, 100, 1),
   knob("glareRange", "Glare range", 1, 100, 1),
   knob("glareHardness", "Glare hardness", 0, 100, 0.25, 2),

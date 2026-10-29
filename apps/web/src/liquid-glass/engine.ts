@@ -8,6 +8,8 @@ const GLASS_SELECTOR =
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MIN_SIZE = 16;
 const MAX_AREA = 2_000_000;
+const SOFTEN_FACTOR = 0.5;
+const MAX_SOFTEN = 8;
 
 interface Surface {
   key: string;
@@ -23,6 +25,12 @@ function supportsLiquidGlass(): boolean {
   if (typeof window === "undefined" || typeof OffscreenCanvas === "undefined") return false;
   if (!/Chrome\/|Chromium\/|Edg\//.test(navigator.userAgent)) return false;
   return window.CSS?.supports("backdrop-filter", "url(#liquid-glass)") === true;
+}
+
+function softenRadius(element: Element): number {
+  const amount = Number.parseFloat(getComputedStyle(element).getPropertyValue("--glass-blur"));
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return Math.min(MAX_SOFTEN, Math.round(amount * SOFTEN_FACTOR * 10) / 10);
 }
 
 function cornerRadius(element: Element, width: number, height: number): number {
@@ -93,7 +101,8 @@ export function startLiquidGlass(
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
     const radius = cornerRadius(element, width, height);
-    const key = `${width}x${height}x${Math.round(radius)}`;
+    const soften = softenRadius(element);
+    const key = `${width}x${height}x${Math.round(radius)}x${soften}`;
     const existing = surfaces.get(element);
     if (existing?.key === key && existing.filter) return;
 
@@ -110,7 +119,7 @@ export function startLiquidGlass(
     const filterId = `liquid-glass-${++sequence}`;
     root.insertAdjacentHTML(
       "beforeend",
-      buildLiquidGlassFilterMarkup(filterId, field, active, imageUrl),
+      buildLiquidGlassFilterMarkup(filterId, field, active, imageUrl, soften),
     );
     const filter = root.lastElementChild;
     if (!filter) {
