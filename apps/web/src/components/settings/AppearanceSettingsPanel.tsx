@@ -37,6 +37,7 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { BuddySection } from "./BuddySettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
+import { LiquidGlassPreview } from "./LiquidGlassPreview";
 import { LiquidGlassSettings } from "./LiquidGlassSettings";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -295,9 +296,11 @@ export function AppearanceSettingsPanel() {
             searchableSetting("setting-glass-opacity").id,
             searchableSetting("setting-liquid-glass").id,
             searchableSetting("setting-liquid-glass-blur").id,
+            searchableSetting("setting-liquid-glass-center-blur").id,
             searchableSetting("setting-liquid-glass-saturation").id,
             searchableSetting("setting-liquid-glass-refraction").id,
             searchableSetting("setting-liquid-glass-dispersion").id,
+            searchableSetting("setting-liquid-glass-glare").id,
             searchableSetting("panel-animations").id,
             searchableSetting("environment-identification").id,
             // Environment identification's search result lands on this section.
@@ -391,7 +394,9 @@ export function AppearanceSettingsPanel() {
                 }
               />
             }
-          />
+          >
+            {settings.liquidGlassEnabled ? <LiquidGlassPreview /> : null}
+          </SettingsRow>
           <LiquidGlassSettings />
           <SettingsRow
             {...searchableSetting("panel-animations")}

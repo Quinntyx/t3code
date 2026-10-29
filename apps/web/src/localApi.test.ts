@@ -71,4 +71,26 @@ describe("LocalApi", () => {
 
     await expect(createLocalApi().dialogs.confirm("Delete this thread?")).resolves.toBe(false);
   });
+
+  it.each([
+    ["darwin", true],
+    ["linux", false],
+    ["win32", false],
+  ] as const)("on %s desktop, uses the native context menu: %s", async (platform, native) => {
+    const showContextMenu = vi.fn(async () => "native");
+    Object.defineProperty(testWindow(), "desktopBridge", {
+      configurable: true,
+      value: { getClientPlatform: () => platform, showContextMenu },
+    });
+    showContextMenuFallbackMock.mockResolvedValue("fallback");
+    const { createLocalApi } = await import("./localApi");
+    const api = createLocalApi();
+
+    await expect(api.contextMenu.show([{ id: "rename", label: "Rename" }])).resolves.toBe(
+      native ? "native" : "fallback",
+    );
+    await api.contextMenu.close();
+    expect(showContextMenu).toHaveBeenCalledTimes(native ? 1 : 0);
+    expect(dismissContextMenuMock).toHaveBeenCalledTimes(native ? 0 : 1);
+  });
 });

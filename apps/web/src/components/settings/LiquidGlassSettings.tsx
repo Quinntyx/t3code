@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   MAX_LIQUID_GLASS_BLUR,
+  MAX_LIQUID_GLASS_DISPERSION,
   MAX_LIQUID_GLASS_PERCENT,
 } from "@t3tools/contracts/settings";
 
@@ -14,7 +15,16 @@ const controls = [
     key: "liquidGlassBlur",
     searchId: "setting-liquid-glass-blur",
     description:
-      "Blur radius after refraction. The reference uses 1px; higher values soften the backdrop. Only affects liquid glass.",
+      "Blur along the refracting rim. The reference uses 1px; higher values soften the bent edge. Only affects liquid glass.",
+    max: MAX_LIQUID_GLASS_BLUR,
+    step: 1,
+    unit: "px",
+  },
+  {
+    key: "liquidGlassCenterBlur",
+    searchId: "setting-liquid-glass-center-blur",
+    description:
+      "Blur inside the rim, for readable text over busy backdrops while the edge stays crisp. Never less than the edge blur.",
     max: MAX_LIQUID_GLASS_BLUR,
     step: 1,
     unit: "px",
@@ -41,7 +51,16 @@ const controls = [
     key: "liquidGlassDispersion",
     searchId: "setting-liquid-glass-dispersion",
     description:
-      "Color separation in the refracted edges. 100% matches the reference; 0% keeps all color channels aligned.",
+      "How far the color channels split in the refracted edges. 100% matches the CSS reference; 0% keeps them aligned.",
+    max: MAX_LIQUID_GLASS_DISPERSION,
+    step: 50,
+    unit: "%",
+  },
+  {
+    key: "liquidGlassGlare",
+    searchId: "setting-liquid-glass-glare",
+    description:
+      "Light caught along the rim of liquid glass, strongest on the edges facing the light. 0% turns it off.",
     max: MAX_LIQUID_GLASS_PERCENT,
     step: 5,
     unit: "%",

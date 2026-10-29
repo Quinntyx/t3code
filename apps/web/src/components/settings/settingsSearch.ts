@@ -323,9 +323,15 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "setting-liquid-glass-blur",
-    title: "Liquid glass blur",
+    title: "Liquid glass edge blur",
     to: "/settings/appearance",
-    searchTerms: ["frost radius pixels softness backdrop advanced"],
+    searchTerms: ["frost radius pixels softness backdrop rim advanced"],
+  },
+  {
+    id: "setting-liquid-glass-center-blur",
+    title: "Liquid glass center blur",
+    to: "/settings/appearance",
+    searchTerms: ["frost radius pixels softness backdrop middle readability legibility advanced"],
   },
   {
     id: "setting-liquid-glass-saturation",
@@ -344,6 +350,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Color dispersion",
     to: "/settings/appearance",
     searchTerms: ["glass chromatic aberration rgb rainbow fringe advanced"],
+  },
+  {
+    id: "setting-liquid-glass-glare",
+    title: "Edge glare",
+    to: "/settings/appearance",
+    searchTerms: ["glass specular highlight rim shine light reflection advanced"],
   },
   {
     id: "diff-color-scheme",

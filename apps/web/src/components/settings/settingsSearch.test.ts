@@ -77,9 +77,11 @@ describe("searchSettings", () => {
       "setting-glass-opacity",
       "setting-liquid-glass",
       "setting-liquid-glass-blur",
+      "setting-liquid-glass-center-blur",
       "setting-liquid-glass-saturation",
       "setting-liquid-glass-refraction",
       "setting-liquid-glass-dispersion",
+      "setting-liquid-glass-glare",
     ]);
     expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
     expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");

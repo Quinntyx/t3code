@@ -50,12 +50,13 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
   return (
     <div
-      className="@container/changed-files mt-4 rounded-lg bg-secondary dark:bg-input/20"
+      className="@container/changed-files mt-4 rounded-glass bg-(color:--changed-files-fill) glass-glare liquid-frost [--changed-files-fill:color-mix(in_srgb,var(--secondary)_var(--glass-opacity),transparent)] dark:[--changed-files-fill:color-mix(in_srgb,var(--input)_20%,transparent)]"
       data-changed-files-state="tree"
+      data-liquid-glass=""
     >
       <div
         data-changed-files-header=""
-        className="sticky top-2 z-10 flex items-center justify-between gap-2 rounded-t-lg bg-secondary px-3 py-2 dark:bg-background dark:bg-linear-to-b dark:from-input/20 dark:to-input/20"
+        className="sticky top-2 z-10 flex items-center justify-between gap-2 rounded-t-glass bg-(color:--changed-files-fill) px-3 py-2 backdrop-blur-md dark:bg-transparent"
       >
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-foreground">
           <span>
