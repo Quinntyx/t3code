@@ -2464,8 +2464,18 @@ const make = Effect.gen(function* () {
       }),
     );
     let screencastStarted = false;
+    let previousFrame: string | null = null;
     session.on("Page.screencastFrame", (frame) => {
       screencastStarted = true;
+      // A capture can repaint an unchanged page. Sending that frame would only cost bandwidth,
+      // and for video it would schedule another still, whose capture repaints again.
+      if (frame.data === previousFrame) {
+        void session
+          .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+          .then(constVoid, constVoid);
+        return;
+      }
+      previousFrame = frame.data;
       if (framesInFlight > 0) mayHaveDropped = true;
       framesInFlight += 1;
       const arrivedAt = Date.now();

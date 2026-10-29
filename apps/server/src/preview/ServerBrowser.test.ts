@@ -93,7 +93,7 @@ function makeSession(frame?: ReturnType<typeof makeFrame>) {
   const events = new NodeEvents.EventEmitter();
   return {
     on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
-    emit: (name: string) => events.emit(name),
+    emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
     detach: vi.fn(async () => {}),
     send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
       if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
@@ -592,6 +592,35 @@ it.live("a rendering change relaunches the browser and reopens its tabs at their
         url,
         expect.objectContaining({ waitUntil: "commit" }),
       );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("viewers skip a screencast frame identical to the one before it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, false));
+      const session = contexts[0]!.sessions.at(-1)!;
+      const frames: string[] = [];
+      const nextFrame = Effect.gen(function* () {
+        let output = yield* Queue.take(viewer.output);
+        while (output._tag !== "frame") output = yield* Queue.take(viewer.output);
+        if (!(output.data instanceof Uint8Array)) throw new Error("expected a JPEG frame");
+        frames.push(Buffer.from(output.data).toString());
+      });
+      yield* nextFrame;
+      // A still capture repaints the page, and Chromium sends the same picture again.
+      for (const [index, data] of ["first", "first", "second"].entries()) {
+        session.emit("Page.screencastFrame", {
+          data: Buffer.from(data).toString("base64"),
+          sessionId: index,
+        });
+      }
+      yield* nextFrame;
+      yield* nextFrame;
+      expect(frames.slice(1)).toEqual(["first", "second"]);
+      expect(session.send).toHaveBeenCalledWith("Page.screencastFrameAck", { sessionId: 1 });
     }),
   ).pipe(Effect.provide(layer)),
 );
