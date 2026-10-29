@@ -1,13 +1,20 @@
 import type { Buddy } from "@t3tools/contracts/settings";
 import type { CSSProperties } from "react";
 
-import angryUrl from "~/assets/buddy/whale-chan/angry.webm";
-import errorUrl from "~/assets/buddy/whale-chan/error.webm";
-import idleUrl from "~/assets/buddy/whale-chan/idle.webm";
-import successUrl from "~/assets/buddy/whale-chan/success.webm";
-import thinkingUrl from "~/assets/buddy/whale-chan/thinking.webm";
-import waitingUrl from "~/assets/buddy/whale-chan/waiting.webm";
-import workingUrl from "~/assets/buddy/whale-chan/working.webm";
+import clawdAngryUrl from "~/assets/buddy/clawd/angry.webm";
+import clawdErrorUrl from "~/assets/buddy/clawd/error.webm";
+import clawdIdleUrl from "~/assets/buddy/clawd/idle.webm";
+import clawdSuccessUrl from "~/assets/buddy/clawd/success.webm";
+import clawdThinkingUrl from "~/assets/buddy/clawd/thinking.webm";
+import clawdWaitingUrl from "~/assets/buddy/clawd/waiting.webm";
+import clawdWorkingUrl from "~/assets/buddy/clawd/working.webm";
+import whaleAngryUrl from "~/assets/buddy/whale-chan/angry.webm";
+import whaleErrorUrl from "~/assets/buddy/whale-chan/error.webm";
+import whaleIdleUrl from "~/assets/buddy/whale-chan/idle.webm";
+import whaleSuccessUrl from "~/assets/buddy/whale-chan/success.webm";
+import whaleThinkingUrl from "~/assets/buddy/whale-chan/thinking.webm";
+import whaleWaitingUrl from "~/assets/buddy/whale-chan/waiting.webm";
+import whaleWorkingUrl from "~/assets/buddy/whale-chan/working.webm";
 
 import type { BuddyAnimation } from "./buddy.logic";
 
@@ -39,16 +46,31 @@ export const BUDDY_CHARACTERS: Readonly<Record<BuddyCharacterId, BuddyCharacter>
     label: "Whale-chan",
     description: "DeepSeek",
     clips: {
-      idle: idleUrl,
-      thinking: thinkingUrl,
-      working: workingUrl,
-      waiting: waitingUrl,
-      success: successUrl,
-      error: errorUrl,
-      angry: angryUrl,
+      idle: whaleIdleUrl,
+      thinking: whaleThinkingUrl,
+      working: whaleWorkingUrl,
+      waiting: whaleWaitingUrl,
+      success: whaleSuccessUrl,
+      error: whaleErrorUrl,
+      angry: whaleAngryUrl,
     },
     clipStyle: cropStyle({ width: 640, height: 360 }, { x: 155, y: 6, width: 313, height: 331 }),
     aspectRatio: 313 / 331,
+  },
+  clawd: {
+    label: "Clawd",
+    description: "Claude",
+    clips: {
+      idle: clawdIdleUrl,
+      thinking: clawdThinkingUrl,
+      working: clawdWorkingUrl,
+      waiting: clawdWaitingUrl,
+      success: clawdSuccessUrl,
+      error: clawdErrorUrl,
+      angry: clawdAngryUrl,
+    },
+    clipStyle: cropStyle({ width: 480, height: 480 }, { x: 0, y: 0, width: 480, height: 480 }),
+    aspectRatio: 1,
   },
 };
 
