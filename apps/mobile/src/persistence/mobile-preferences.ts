@@ -17,6 +17,7 @@ import {
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
+import { isLiquidGlassValue } from "../lib/liquidGlass";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
@@ -107,6 +108,12 @@ export interface Preferences {
   readonly codeFontId?: string | null;
   readonly terminalFontId?: string | null;
   readonly mathRenderingEnabled?: boolean;
+  readonly liquidGlassEnabled?: boolean;
+  readonly glassOpacity?: number;
+  readonly liquidGlassBlur?: number;
+  readonly liquidGlassSaturation?: number;
+  readonly liquidGlassRefraction?: number;
+  readonly liquidGlassDispersion?: number;
   /** Unset means on: crash reports are sent unless the user turns them off. */
   readonly crashReportsEnabled?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
@@ -193,6 +200,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     codeFontId?: string | null;
     terminalFontId?: string | null;
     mathRenderingEnabled?: boolean;
+    liquidGlassEnabled?: boolean;
+    glassOpacity?: number;
+    liquidGlassBlur?: number;
+    liquidGlassSaturation?: number;
+    liquidGlassRefraction?: number;
+    liquidGlassDispersion?: number;
     crashReportsEnabled?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
@@ -302,6 +315,24 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.mathRenderingEnabled === "boolean")
     preferences.mathRenderingEnabled = parsed.mathRenderingEnabled;
+  if (typeof parsed.liquidGlassEnabled === "boolean") {
+    preferences.liquidGlassEnabled = parsed.liquidGlassEnabled;
+  }
+  if (isLiquidGlassValue("glassOpacity", parsed.glassOpacity)) {
+    preferences.glassOpacity = parsed.glassOpacity;
+  }
+  if (isLiquidGlassValue("blur", parsed.liquidGlassBlur)) {
+    preferences.liquidGlassBlur = parsed.liquidGlassBlur;
+  }
+  if (isLiquidGlassValue("saturation", parsed.liquidGlassSaturation)) {
+    preferences.liquidGlassSaturation = parsed.liquidGlassSaturation;
+  }
+  if (isLiquidGlassValue("refraction", parsed.liquidGlassRefraction)) {
+    preferences.liquidGlassRefraction = parsed.liquidGlassRefraction;
+  }
+  if (isLiquidGlassValue("dispersion", parsed.liquidGlassDispersion)) {
+    preferences.liquidGlassDispersion = parsed.liquidGlassDispersion;
+  }
   if (typeof parsed.crashReportsEnabled === "boolean") {
     preferences.crashReportsEnabled = parsed.crashReportsEnabled;
   }

@@ -18,6 +18,10 @@ import {
   type ResolvedAppearance,
 } from "../../../lib/appearancePreferences";
 import { defaultCodeFontFamily } from "../../../lib/fontFamilies";
+import {
+  DEFAULT_LIQUID_GLASS_PREFERENCES,
+  type LiquidGlassPreferences,
+} from "../../../lib/liquidGlass";
 import { appAtomRegistry } from "../../../state/atom-registry";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../../state/preferences";
 import type { Preferences } from "../../../persistence/mobile-preferences";
@@ -76,6 +80,8 @@ interface AppearancePreferencesContextValue {
   readonly setTerminalFontId: (value: string | null) => void;
   readonly mathRenderingEnabled: boolean;
   readonly setMathRenderingEnabled: (value: boolean) => void;
+  readonly liquidGlass: LiquidGlassPreferences;
+  readonly setLiquidGlass: (patch: Partial<LiquidGlassPreferences>) => void;
 }
 
 const AppearancePreferencesContext = createContext<AppearancePreferencesContextValue | null>(null);
@@ -347,6 +353,32 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   const setMathRenderingEnabled = (value: boolean) =>
     updatePreferences({ mathRenderingEnabled: value });
 
+  const liquidGlass = useMemo(
+    (): LiquidGlassPreferences => ({
+      enabled: storedPreferences?.liquidGlassEnabled ?? DEFAULT_LIQUID_GLASS_PREFERENCES.enabled,
+      glassOpacity:
+        storedPreferences?.glassOpacity ?? DEFAULT_LIQUID_GLASS_PREFERENCES.glassOpacity,
+      blur: storedPreferences?.liquidGlassBlur ?? DEFAULT_LIQUID_GLASS_PREFERENCES.blur,
+      saturation:
+        storedPreferences?.liquidGlassSaturation ?? DEFAULT_LIQUID_GLASS_PREFERENCES.saturation,
+      refraction:
+        storedPreferences?.liquidGlassRefraction ?? DEFAULT_LIQUID_GLASS_PREFERENCES.refraction,
+      dispersion:
+        storedPreferences?.liquidGlassDispersion ?? DEFAULT_LIQUID_GLASS_PREFERENCES.dispersion,
+    }),
+    [storedPreferences],
+  );
+  // Undefined keys would overwrite the stored values they leave out.
+  const setLiquidGlass = (patch: Partial<LiquidGlassPreferences>) =>
+    updatePreferences({
+      ...(patch.enabled === undefined ? {} : { liquidGlassEnabled: patch.enabled }),
+      ...(patch.glassOpacity === undefined ? {} : { glassOpacity: patch.glassOpacity }),
+      ...(patch.blur === undefined ? {} : { liquidGlassBlur: patch.blur }),
+      ...(patch.saturation === undefined ? {} : { liquidGlassSaturation: patch.saturation }),
+      ...(patch.refraction === undefined ? {} : { liquidGlassRefraction: patch.refraction }),
+      ...(patch.dispersion === undefined ? {} : { liquidGlassDispersion: patch.dispersion }),
+    });
+
   const value = useMemo(
     (): AppearancePreferencesContextValue => ({
       appearance,
@@ -374,6 +406,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontId,
       mathRenderingEnabled,
       setMathRenderingEnabled,
+      liquidGlass,
+      setLiquidGlass,
     }),
     [
       appearance,
@@ -400,6 +434,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontId,
       mathRenderingEnabled,
       setMathRenderingEnabled,
+      liquidGlass,
+      setLiquidGlass,
     ],
   );
 

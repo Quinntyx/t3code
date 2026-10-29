@@ -23,6 +23,7 @@ import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2"
 import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
 import IconBan from "@tabler/icons-react-native/IconBan";
 import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
+import IconBlur from "@tabler/icons-react-native/IconBlur";
 import IconBolt from "@tabler/icons-react-native/IconBolt";
 import IconBox from "@tabler/icons-react-native/IconBox";
 import IconBrain from "@tabler/icons-react-native/IconBrain";
@@ -40,6 +41,7 @@ import IconCircleFilled from "@tabler/icons-react-native/IconCircleFilled";
 import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
 import IconCircleDashed from "@tabler/icons-react-native/IconCircleDashed";
 import IconCircleDot from "@tabler/icons-react-native/IconCircleDot";
+import IconCircleHalf2 from "@tabler/icons-react-native/IconCircleHalf2";
 import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
 import IconMoodPlus from "@tabler/icons-react-native/IconMoodPlus";
 import IconTag from "@tabler/icons-react-native/IconTag";
@@ -47,6 +49,7 @@ import IconTicket from "@tabler/icons-react-native/IconTicket";
 import IconClock from "@tabler/icons-react-native/IconClock";
 import IconCode from "@tabler/icons-react-native/IconCode";
 import IconCopy from "@tabler/icons-react-native/IconCopy";
+import IconDropletHalf2 from "@tabler/icons-react-native/IconDropletHalf2";
 import IconDatabase from "@tabler/icons-react-native/IconDatabase";
 import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
 import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
@@ -94,6 +97,7 @@ import IconMinus from "@tabler/icons-react-native/IconMinus";
 import IconMoon from "@tabler/icons-react-native/IconMoon";
 import IconNetwork from "@tabler/icons-react-native/IconNetwork";
 import IconPalette from "@tabler/icons-react-native/IconPalette";
+import IconPrism from "@tabler/icons-react-native/IconPrism";
 import IconPencil from "@tabler/icons-react-native/IconPencil";
 import IconPlug from "@tabler/icons-react-native/IconPlug";
 import IconPhoto from "@tabler/icons-react-native/IconPhoto";
@@ -284,6 +288,10 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "wifi.slash": IconWifiOff,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
+  "aqi.medium": IconBlur,
+  "circle.lefthalf.filled": IconCircleHalf2,
+  "drop.halffull": IconDropletHalf2,
+  rainbow: IconPrism,
 } satisfies Partial<
   Record<
     SFSymbol | "git.pull-request.closed" | "git.pull-request.draft" | "git.commit" | "file.diff",
