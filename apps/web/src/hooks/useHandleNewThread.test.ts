@@ -107,6 +107,7 @@ const testState = vi.hoisted(() => {
       draftStore.setDraftThreadContext.mockClear();
       draftStore.setLogicalProjectDraftThreadId.mockClear();
       draftStore.setPrompt.mockClear();
+      draftStore.setModelSelection.mockClear();
       projectFileRead = new Promise<null>((resolve) => {
         completeProjectFileRead = resolve;
       });
@@ -278,11 +279,12 @@ describe.each([
     expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
   });
 
-  it("sets the prompt before the draft shows", async () => {
+  it("sets the prompt and model before the draft shows", async () => {
     testState.reset(draft);
+    const modelSelection = { instanceId: "claude", model: "claude-opus-5-5" };
     const pendingOpen = useNewThreadHandler()(
       { environmentId: "environment-ssh", projectId: "project-remote" } as never,
-      { prompt: "Read the playbook. " },
+      { prompt: "Read the playbook. ", modelSelection: modelSelection as never },
     );
 
     testState.completeProjectFileRead(null);
@@ -291,6 +293,14 @@ describe.each([
     expect(testState.draftStore.setPrompt).toHaveBeenCalledWith(
       opened?.draftId,
       "Read the playbook. ",
+    );
+    expect(testState.draftStore.setModelSelection).toHaveBeenLastCalledWith(
+      opened?.draftId,
+      modelSelection,
+      { explicit: true, replaceOptions: true },
+    );
+    expect(testState.draftStore.setModelSelection.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      testState.router.navigate.mock.invocationCallOrder[0] ?? 0,
     );
     expect(testState.draftStore.setPrompt.mock.invocationCallOrder[0]).toBeLessThan(
       testState.router.navigate.mock.invocationCallOrder[0] ?? 0,

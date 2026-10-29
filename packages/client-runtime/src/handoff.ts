@@ -5,6 +5,8 @@ import type {
   ProviderInstanceId,
   ServerProvider,
 } from "@t3tools/contracts";
+import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { fileBasename } from "@t3tools/shared/path";
 
 import type { ThreadStructure } from "./state/models.ts";
 
@@ -79,4 +81,13 @@ function latestRunModelBefore(
     if (latest === undefined || run.ordinal > latest.ordinal) latest = run;
   }
   return latest?.modelSelection.model;
+}
+
+export function isHandoffFile(path: string): boolean {
+  return fileBasename(path).toLowerCase() === "handoff.md";
+}
+
+/** The trailing space lets the composer render the link as a file chip. */
+export function handoffFilePrompt(path: string): string {
+  return `Continue from ${serializeComposerFileLink(path)} `;
 }

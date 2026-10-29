@@ -1,3 +1,4 @@
+import { isHandoffFile } from "@t3tools/client-runtime/handoff";
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { fileBasename } from "@t3tools/shared/path";
 import type { ThreadId } from "@t3tools/contracts";
@@ -71,6 +72,9 @@ export function fileChipMenu(target: FileChipTarget): MarkdownFileContextMenu {
   return {
     title: target.fullPath ?? target.relativePath ?? "",
     actions: [
+      ...(target.fullPath && isHandoffFile(target.fullPath)
+        ? [{ id: "hand-off", title: "Hand off to new thread" }]
+        : []),
       ...(target.fullPath ? [{ id: "copy-full-path", title: "Copy full path" }] : []),
       ...(target.relativePath ? [{ id: "copy-relative-path", title: "Copy relative path" }] : []),
       { id: "open-file", title: "Open in file viewer" },
