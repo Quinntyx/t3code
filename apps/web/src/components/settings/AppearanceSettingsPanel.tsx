@@ -410,8 +410,8 @@ export function AppearanceSettingsPanel() {
             }
             description={
               <>
-                Drift soft bands of the theme&apos;s colors behind the chat, strongest on the new
-                thread page and faint behind conversations. Gives liquid glass something to bend.
+                Drift soft bands of the theme&apos;s colors behind the chat, slowing down behind
+                conversations. Gives liquid glass something to bend.
                 <span className="mt-1 block text-warning-foreground">
                   Performance warning: animates continuously, which keeps the GPU busy, may reduce
                   frame rates, and uses more battery.
