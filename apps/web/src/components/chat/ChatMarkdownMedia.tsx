@@ -245,6 +245,7 @@ export function ChatMarkdownImage(props: {
           CHAT_MARKDOWN_MEDIA_LAYOUT_CLASS_NAME,
           CHAT_MARKDOWN_IMAGE_FRAME_CLASS_NAME,
           "relative",
+          !failed && "motion-safe:animate-skeleton",
         )}
         style={props.style}
         {...(failed
