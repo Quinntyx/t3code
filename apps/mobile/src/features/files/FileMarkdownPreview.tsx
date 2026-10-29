@@ -8,7 +8,6 @@ import { StackActions, useNavigation } from "@react-navigation/native";
 import { RefreshControl, ScrollView, View } from "react-native";
 
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
-import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import {
@@ -49,8 +48,6 @@ export function useMarkdownPreviewStyles(): MarkdownPreviewStyles {
   const codeBackground = theme["--color-md-code-bg"];
   const codeText = theme["--color-md-code-text"];
   const horizontalRule = theme["--color-md-hr"];
-  const regularFontFamily = FONT_FAMILIES.regular;
-  const boldFontFamily = FONT_FAMILIES.bold;
 
   return {
     nativeTextStyle: {
@@ -68,9 +65,11 @@ export function useMarkdownPreviewStyles(): MarkdownPreviewStyles {
       fontSize: nativeMarkdownTypography.fontSize,
       lineHeight: nativeMarkdownTypography.lineHeight,
       headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-      fontFamily: regularFontFamily,
-      headingFontFamily: boldFontFamily,
-      boldFontFamily,
+      fontFamily: appearance.uiFont.regular,
+      headingFontFamily: appearance.uiFont.bold,
+      boldFontFamily: appearance.uiFont.bold,
+      boldByWeight: appearance.uiFont.boldByWeight,
+      codeFontFamily: appearance.codeFontFamily,
     },
   };
 }

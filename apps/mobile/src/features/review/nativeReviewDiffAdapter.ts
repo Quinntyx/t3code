@@ -85,6 +85,7 @@ export function createNativeReviewDiffStyle(
     fileHeaderPathRightPadding: 118,
     fileHeaderCountColumnWidth: 38,
     fileHeaderCountGap: 5,
+    codeFontFamily: codeSurface.fontFamily,
     codeFontSize: codeSurface.fontSize,
     codeFontWeight: "regular",
     lineNumberFontSize: codeSurface.lineNumberFontSize,

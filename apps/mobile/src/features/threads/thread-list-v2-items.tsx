@@ -82,6 +82,7 @@ import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -389,6 +390,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }) {
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
+  const monoFont = useAppearancePreferences().appearance.codeFontFamily ?? MONO_FONT;
   const { width: windowWidth } = useWindowDimensions();
   const swipeRowSide = useSwipeRowSide();
   const dormant = useSwipeRowDormant(props.activationKey);
@@ -509,7 +511,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
                   "text-xs text-foreground-muted",
                   sidebarPane && "text-drawer-foreground-muted",
                 )}
-                style={{ fontFamily: MONO_FONT }}
+                style={{ fontFamily: monoFont }}
               >
                 {branch}
               </Text>
@@ -661,6 +663,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 }) {
   const swipeRowSide = useSwipeRowSide();
   const { width: windowWidth, fontScale } = useWindowDimensions();
+  const monoFont = useAppearancePreferences().appearance.codeFontFamily ?? MONO_FONT;
   const titleTypography = useScaledTextRole("body");
   const metadataTypography = useScaledTextRole("label");
   const projectIconSize = titleTypography.fontSize * 1.25 * fontScale;
@@ -1303,7 +1306,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             <Text
               accessibilityLabel={pr.accessibilityLabel}
               className={cn("text-xs", pr.textClassName)}
-              style={{ fontFamily: MONO_FONT }}
+              style={{ fontFamily: monoFont }}
             >
               {pr.label}
             </Text>
@@ -1446,7 +1449,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ? rowAppearance.mutedForegroundClassName
                   : rowAppearance.tertiaryForegroundClassName,
             )}
-            style={{ fontFamily: MONO_FONT }}
+            style={{ fontFamily: monoFont }}
           >
             {snoozedRow && props.snoozeWakeLabelText !== undefined
               ? props.snoozeWakeLabelText
