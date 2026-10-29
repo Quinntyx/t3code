@@ -14,8 +14,8 @@ function Shell({
       data-context-row={contextRow || undefined}
       className={cn(
         "@container/composer-surface group/composer-surface relative isolate mx-auto w-full max-w-(--chat-content-max-width)",
-        "[--chat-composer-action-radius:1.25rem] [--chat-composer-action-inset:0.75rem] sm:[--chat-composer-action-inset:1rem]",
-        "has-data-[chat-composer-action-size=large]:[--chat-composer-action-radius:1.375rem] sm:has-data-[chat-composer-action-size=large]:[--chat-composer-action-radius:1.25rem] sm:has-data-[chat-composer-action-size=small]:[--chat-composer-action-radius:1.125rem]",
+        "[--chat-composer-action-radius:1rem] [--chat-composer-action-inset:1rem] sm:[--chat-composer-action-inset:1.25rem]",
+        "has-data-[chat-composer-action-size=large]:[--chat-composer-action-radius:1.125rem] sm:has-data-[chat-composer-action-size=large]:[--chat-composer-action-radius:1rem] sm:has-data-[chat-composer-action-size=small]:[--chat-composer-action-radius:0.875rem]",
         // The outer corner and inset action share a center, including the one-pixel surface border.
         "[--chat-composer-radius:calc(var(--chat-composer-action-radius)+var(--chat-composer-action-inset)+1px)] [--chat-composer-inner-radius:calc(var(--chat-composer-radius)-1px)]",
         "has-data-[chat-composer-resting=true]:[--chat-composer-action-inset:calc(1.75rem-var(--chat-composer-action-radius))] has-data-[chat-composer-mobile-collapsed=true]:[--chat-composer-action-inset:calc(1.75rem-var(--chat-composer-action-radius))]",
