@@ -294,9 +294,11 @@ export function AppearanceSettingsPanel() {
             searchableSetting("setting-glass-opacity").id,
             searchableSetting("setting-liquid-glass").id,
             searchableSetting("setting-liquid-glass-blur").id,
+            searchableSetting("setting-liquid-glass-center-blur").id,
             searchableSetting("setting-liquid-glass-saturation").id,
             searchableSetting("setting-liquid-glass-refraction").id,
             searchableSetting("setting-liquid-glass-dispersion").id,
+            searchableSetting("setting-liquid-glass-glare").id,
             searchableSetting("panel-animations").id,
             searchableSetting("environment-identification").id,
             // Environment identification's search result lands on this section.

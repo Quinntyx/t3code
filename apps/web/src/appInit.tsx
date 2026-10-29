@@ -69,9 +69,11 @@ function startClientAppearance(): void {
     }
     const options = {
       blur: settings.liquidGlassBlur,
+      centerBlur: settings.liquidGlassCenterBlur,
       saturation: settings.liquidGlassSaturation,
       refraction: settings.liquidGlassRefraction,
       dispersion: settings.liquidGlassDispersion,
+      glare: settings.liquidGlassGlare,
     };
     if (liquidGlass) liquidGlass.update(options);
     else liquidGlass = startLiquidGlass(options);
@@ -91,6 +93,7 @@ function startClientAppearance(): void {
     }
     if (previous?.glassOpacity !== settings.glassOpacity) {
       root.style.setProperty("--glass-opacity", `${settings.glassOpacity}%`);
+      root.style.setProperty("--glass-alpha", `${settings.glassOpacity / 100}`);
       if (settings.glassOpacity === 100) {
         root.style.setProperty("--glass-blur", "0px");
       } else {

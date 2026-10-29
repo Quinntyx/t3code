@@ -100,7 +100,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    * Compact UI geometry. Keep these values semantic so sidebar, palette,
    * tooltip, and toolbar controls cannot quietly drift apart.
    */
-  --control-radius: 0.5rem;
+  --control-radius: var(--radius);
   --sidebar-content-inset: 0.5rem;
   --sidebar-control-gap: 0.5rem;
   --sidebar-icon-color: color-mix(
@@ -118,6 +118,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --z-sheet: 46;
   --glass-blur: 12px;
   --glass-opacity: 80%;
+  --glass-alpha: 0.8;
   --glass-saturation: 1.14;
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
@@ -257,6 +258,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--contrast-accent-foreground);
   --color-accent: var(--accent);
+  /* Row highlights inside glass never cover the backdrop more than the glass does; themes
+     whose accent is already a faint overlay keep it. */
+  --color-accent-glass: rgb(from var(--accent) r g b / min(alpha, var(--glass-alpha)));
   --color-muted-foreground: var(--contrast-muted-foreground);
   --color-muted: var(--muted);
   --color-placeholder: var(--contrast-placeholder);
@@ -292,8 +296,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
-  --radius-glass: calc(var(--radius) + 1rem);
-  --radius-glass-item: calc(var(--radius-glass) - 5px);
+  /* Half a standard 1.75rem row, so a row never clamps it; glass lists pad rows 0.375rem
+     inside a 1px border, which puts the outer corner on the same center. */
+  --radius-glass-item: 0.875rem;
+  --radius-glass: calc(var(--radius-glass-item) + 0.375rem + 1px);
   --radius-glass-list-item: calc(var(--radius-glass) - 0.5rem);
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
@@ -366,6 +372,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility surface-glass {
   background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -383,6 +393,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 @utility alert-glass {
   --alert-glass-tint: transparent;
   background:
+    var(--glass-liquid-glare, none) border-box 0 0 / 100% 100% no-repeat,
     linear-gradient(
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent),
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent)
@@ -439,6 +450,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility dialog-glass {
   background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -474,6 +489,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility dropdown-glass {
   background: color-mix(in srgb, var(--popover) var(--glass-opacity), transparent);
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
@@ -499,6 +518,20 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --glass-liquid-filter,
     blur(var(--glass-blur)) saturate(var(--glass-saturation))
   );
+}
+
+/* The liquid glass rim light, for glass drawn outside the glass utilities above. */
+@utility glass-glare {
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+/* Frost only while liquid glass is on; a plain blur of the flat chat canvas costs GPU for nothing. */
+@utility liquid-frost {
+  -webkit-backdrop-filter: var(--glass-liquid-filter);
+  backdrop-filter: var(--glass-liquid-filter);
 }
 
 @utility topbar-scroll-fade {
@@ -1147,7 +1180,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 :root {
   color-scheme: light;
-  --radius: 0.5rem;
+  --radius: 0.625rem;
   --background: var(--color-zinc-25);
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
@@ -1578,10 +1611,16 @@ html[data-theme-id] :is(.chat-markdown, .composer-tiptap) .chat-markdown-codeblo
    secondary tokens are substantially darker than those visible pixels. */
 html[data-theme-id="t3-chat"] {
   @variant light {
-    & .chat-markdown :not(pre) > code,
-    & [data-changed-files-state],
-    & [data-changed-files-header] {
+    & .chat-markdown :not(pre) > code {
       background-color: var(--message-surface);
+    }
+
+    & [data-changed-files-state] {
+      --changed-files-fill: color-mix(
+        in srgb,
+        var(--message-surface) var(--glass-opacity),
+        transparent
+      );
     }
 
     & .chat-markdown :not(pre) > code,
