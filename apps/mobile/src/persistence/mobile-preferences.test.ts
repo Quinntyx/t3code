@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Layer from "effect/Layer";
 import { vi } from "vite-plus/test";
 
 vi.mock("expo-secure-store", () => ({}));
@@ -32,9 +33,15 @@ function fixture(payload?: unknown) {
     setItem: () => Effect.void,
     removeItem: () => Effect.void,
   });
-  return MobilePreferences.make().pipe(
-    Effect.provideService(MobileDatabase.MobileDatabase, database),
-    Effect.provideService(MobileSecureStorage.MobileSecureStorage, secureStorage),
+  return Effect.gen(function* () {
+    return yield* MobilePreferences.MobilePreferencesStore;
+  }).pipe(
+    Effect.provide(
+      MobilePreferences.layer.pipe(
+        Layer.provide(Layer.succeed(MobileDatabase.MobileDatabase, database)),
+        Layer.provide(Layer.succeed(MobileSecureStorage.MobileSecureStorage, secureStorage)),
+      ),
+    ),
   );
 }
 

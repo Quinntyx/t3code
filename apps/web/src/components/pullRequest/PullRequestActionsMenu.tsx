@@ -1,5 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  canEditPullRequestMaintainerEdits,
+  maintainerEditsChoiceInForce,
+  type MaintainerEditsChoice,
+} from "@t3tools/client-runtime/pull-request-editing";
 import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   PullRequestAction,
@@ -20,13 +26,17 @@ import {
   SparklesIcon,
   Trash2Icon,
 } from "lucide-react";
+import { useId, useState } from "react";
 
 import { shortcutLabelForCommand } from "~/keybindings";
 import { readLocalApi } from "~/localApi";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { primaryServerKeybindingsAtom } from "~/state/server";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
@@ -36,11 +46,13 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { RefreshIcon } from "../ui/refresh-icon";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ActOnEnvironmentPicker, type PerformPullRequestAction } from "./PullRequestDetailActions";
 import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   pullRequestActionMenuHasGroup,
+  readableFailure,
 } from "./pullRequestDetail.logic";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import type { PickableEnvironment } from "./pullRequestProjectAssignment.logic";
@@ -83,7 +95,8 @@ export function PullRequestActionsMenu({
   onSelectMergeMethod,
   showsDeleteBranch,
   environmentConnected,
-  confirmDeleteBranch,
+  canWriteSourceControl,
+  onMaintainerEditsSaved,
   pendingAction,
   perform,
   openOnHostText,
@@ -92,7 +105,19 @@ export function PullRequestActionsMenu({
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   pullRequestKey: string;
-  detail: Pick<PullRequestDetail, "url" | "state" | "isDraft" | "headBranch">;
+  detail: Pick<
+    PullRequestDetail,
+    | "url"
+    | "state"
+    | "isDraft"
+    | "headBranch"
+    | "headRepositoryNameWithOwner"
+    | "repository"
+    | "capabilities"
+    | "viewerPermissions"
+    | "maintainerCanModify"
+    | "observedAt"
+  >;
   terminology: ChangeRequestTerminology;
   linkThreadRef: ScopedThreadRef | null;
   onThreadPickerOpenChange: (open: boolean) => void;
@@ -123,7 +148,8 @@ export function PullRequestActionsMenu({
   onSelectMergeMethod: (method: PullRequestMergeMethod) => void;
   showsDeleteBranch: boolean;
   environmentConnected: boolean;
-  confirmDeleteBranch: () => Promise<void>;
+  canWriteSourceControl: boolean;
+  onMaintainerEditsSaved: () => void;
   pendingAction: PullRequestAction | null;
   perform: PerformPullRequestAction;
   openOnHostText: string;
@@ -132,6 +158,47 @@ export function PullRequestActionsMenu({
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   const actionPending = pendingAction !== null;
+  const maintainerEditsHintId = useId();
+  const updatePullRequest = useAtomCommand(pullRequestEnvironment.update, {
+    reportFailure: false,
+  });
+  const [maintainerEditsChoice, setMaintainerEditsChoice] = useState<MaintainerEditsChoice | null>(
+    null,
+  );
+  const [maintainerEditsSaving, setMaintainerEditsSaving] = useState(false);
+  const maintainerEditsChoiceKept = maintainerEditsChoiceInForce(
+    maintainerEditsChoice,
+    pullRequestKey,
+    detail.observedAt,
+    maintainerEditsSaving,
+  );
+  if (maintainerEditsChoiceKept !== maintainerEditsChoice) {
+    setMaintainerEditsChoice(maintainerEditsChoiceKept);
+  }
+  const maintainerCanModify = maintainerEditsChoiceKept?.value ?? detail.maintainerCanModify;
+  const canSaveMaintainerEdits =
+    canWriteSourceControl && environmentConnected && !maintainerEditsSaving;
+  const saveMaintainerEdits = async (value: boolean) => {
+    if (!canSaveMaintainerEdits) return;
+    const previousChoice = maintainerEditsChoice;
+    setMaintainerEditsChoice({ key: pullRequestKey, observedAt: detail.observedAt, value });
+    setMaintainerEditsSaving(true);
+    const result = await updatePullRequest({
+      environmentId,
+      input: { ...reference, maintainerCanModify: value },
+    });
+    setMaintainerEditsSaving(false);
+    if (result._tag === "Failure") {
+      setMaintainerEditsChoice(previousChoice);
+      toastManager.add({
+        type: "error",
+        title: "Could not save maintainer access",
+        description: readableFailure(squashAtomCommandFailure(result), "Try again."),
+      });
+      return;
+    }
+    onMaintainerEditsSaved();
+  };
   return (
     <Menu>
       <Tooltip>
@@ -218,6 +285,33 @@ export function PullRequestActionsMenu({
           />
         ) : null}
         <MenuSeparator />
+        {canEditPullRequestMaintainerEdits(detail) ? (
+          <>
+            <MenuCheckboxItem
+              variant="icon"
+              checked={maintainerCanModify === true}
+              disabled={!canSaveMaintainerEdits}
+              closeOnClick={false}
+              aria-label="Allow edits from maintainers"
+              aria-describedby={maintainerEditsHintId}
+              onCheckedChange={(value) => void saveMaintainerEdits(value)}
+            >
+              <span className="flex max-w-xs flex-col gap-0.5">
+                <span>Allow edits from maintainers</span>
+                <span id={maintainerEditsHintId} className="text-xs text-muted-foreground">
+                  Maintainers can push to this branch. If your fork has workflows, this can also
+                  give access to its secrets.
+                </span>
+                {maintainerEditsSaving ? (
+                  <span role="status" className="text-xs text-muted-foreground">
+                    Saving…
+                  </span>
+                ) : null}
+              </span>
+            </MenuCheckboxItem>
+            <MenuSeparator />
+          </>
+        ) : null}
         {detail.state === "open" ? (
           <>
             {showsDraftToggle ? (
@@ -364,17 +458,30 @@ export function PullRequestActionsMenu({
           <>
             <MenuSeparator />
             <MenuItem
+              closeOnClick={inlineConfirm.isArmed("delete-branch")}
+              aria-label={
+                inlineConfirm.isArmed("delete-branch")
+                  ? `Confirm delete branch ${detail.headBranch}?`
+                  : `Delete branch ${detail.headBranch}`
+              }
+              aria-description={`This deletes ${detail.headBranch} from ${detail.headRepositoryNameWithOwner ?? detail.repository}. Local branches and worktrees are not changed.`}
               variant="destructive"
               disabled={actionPending || !environmentConnected}
-              onClick={() => void confirmDeleteBranch()}
+              {...inlineConfirm.props("delete-branch", () => void perform("delete-branch"))}
             >
               <Trash2Icon className="mt-1 size-3.5 shrink-0 self-start" />
               <span className="flex min-w-0 flex-col">
                 <span>
-                  {pendingAction === "delete-branch" ? "Deleting branch..." : "Delete branch"}
+                  {pendingAction === "delete-branch"
+                    ? "Deleting branch..."
+                    : inlineConfirm.isArmed("delete-branch")
+                      ? "Confirm delete?"
+                      : "Delete branch"}
                 </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {environmentConnected ? detail.headBranch : "Reconnect to delete this branch"}
+                <span className="text-xs whitespace-normal text-muted-foreground">
+                  {environmentConnected
+                    ? `Deletes ${detail.headBranch} from ${detail.headRepositoryNameWithOwner ?? detail.repository}. Local branches and worktrees are not changed.`
+                    : "Reconnect to delete this branch"}
                 </span>
               </span>
             </MenuItem>

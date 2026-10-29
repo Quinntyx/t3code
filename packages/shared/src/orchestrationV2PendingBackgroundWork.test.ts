@@ -4,6 +4,7 @@ import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
   findPullRequestForWatchTask,
+  waitingOnAgents,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
 describe("backgroundWorkHoldsCompletion", () => {
@@ -14,6 +15,21 @@ describe("backgroundWorkHoldsCompletion", () => {
     ["a subagent", true, [{ taskId: "review", kind: "subagent" }]],
   ] as const)("with %s pending, holds completion: %s", (_case, holds, tasks) => {
     expect(backgroundWorkHoldsCompletion(tasks)).toBe(holds);
+  });
+});
+
+describe("waitingOnAgents", () => {
+  it.each([
+    ["a pull request watch", false, { pendingBackgroundTasks: [{ kind: "monitor" }] }],
+    ["an awaited command", false, { pendingBackgroundTasks: [{ kind: "command" }] }],
+    [
+      "a subagent beside a watch",
+      true,
+      { pendingBackgroundTasks: [{ kind: "monitor" }, { kind: "subagent" }] },
+    ],
+    ["a blocking thread wait", true, { blockedOnThreadWait: true }],
+  ] as const)("with %s, waits on agents: %s", (_case, expected, thread) => {
+    expect(waitingOnAgents(thread)).toBe(expected);
   });
 });
 
@@ -375,19 +391,26 @@ describe("derivePendingBackgroundWork kinds", () => {
     };
     const link = (
       number: number,
-      extra: { source?: "agent" | "stack-dismissed"; watched?: boolean },
+      extra: {
+        source?: "agent" | "stack-dismissed";
+        watched?: boolean;
+        state?: "open" | "closed" | "merged";
+      },
     ) => ({
       host: "github.com",
       repository: "acme/app",
       number,
       url: `https://github.com/acme/app/pull/${number}`,
       source: extra.source ?? "agent",
+      snapshot: extra.state === undefined ? null : { state: extra.state },
       ...(extra.watched === false ? {} : { watch }),
     });
     const pullRequests = [
       link(1, {}),
       link(2, { watched: false }),
       link(3, { source: "stack-dismissed" }),
+      link(4, { state: "merged" }),
+      link(5, { state: "closed" }),
     ];
 
     it("keeps a settled run waiting on each visible watch, as an awaited monitor", () => {
@@ -404,6 +427,12 @@ describe("derivePendingBackgroundWork kinds", () => {
           kind: "monitor",
           awaited: true,
         },
+        {
+          taskId: "pull-request-watch:github.com/acme/app#5",
+          description: "Watching pull request #5",
+          kind: "monitor",
+          awaited: true,
+        },
       ]);
       expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
     });
@@ -416,7 +445,10 @@ describe("derivePendingBackgroundWork kinds", () => {
           turnItems: [],
           pullRequests,
         }).map((task) => task.taskId),
-      ).toEqual(["pull-request-watch:github.com/acme/app#1"]);
+      ).toEqual([
+        "pull-request-watch:github.com/acme/app#1",
+        "pull-request-watch:github.com/acme/app#5",
+      ]);
     });
 
     it("maps a watch monitor's task id back to its linked pull request", () => {

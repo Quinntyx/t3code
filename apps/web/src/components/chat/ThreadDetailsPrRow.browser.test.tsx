@@ -1,7 +1,9 @@
+import "~/index.css";
 import { EnvironmentId, ProjectId, ThreadId, type PullRequestCheck } from "@t3tools/contracts";
 import { DraftId } from "~/composerDraftStore";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   status: "success" as PullRequestCheck["status"],
@@ -80,7 +82,7 @@ vi.mock(import("~/hooks/useHandleNewThread"), async (original) => ({
   ...(await original()),
   useNewThreadHandler: (() => state.newThread) as never,
 }));
-vi.mock(import("~/lib/sourceControlActions"), async (original) => ({
+vi.mock(import("~/state/sourceControlActions"), async (original) => ({
   ...(await original()),
   usePreparePullRequestThreadAction: (() => ({
     run: state.prepareThread,
@@ -123,22 +125,21 @@ it("merges with the last selected merge method", async () => {
       />,
     );
   });
-  const clickMerge = async (scope: ParentNode) =>
-    await act(async () => {
-      [...scope.querySelectorAll("button")]
-        .find((button) => button.textContent?.trim() === "Merge")!
-        .click();
-    });
-  await clickMerge(container);
-  const dialog = document.querySelector('[role="alertdialog"]')!;
-  expect(dialog.textContent).toContain("using squash");
-  await clickMerge(dialog);
-  expect(state.perform).toHaveBeenCalledWith("merge", "squash");
+  const merge = screen.getByRole("button", { name: "Merge", exact: true });
+  await merge.click();
+  const confirm = screen.getByRole("button", { name: "Confirm merge?", exact: true });
+  await expect.element(confirm).toBeVisible();
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(state.perform).not.toHaveBeenCalled();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(merge).toBeVisible();
+  await merge.click();
+  await confirm.click();
+  expect(state.perform).toHaveBeenCalledExactlyOnceWith("merge", "squash");
 });
 
 it("requires a new merge click after passing checks become pending and pass again", async () => {
   await using screen = await setup();
-  const { container } = screen;
   const render = () => (
     <ThreadDetailsPrRow
       environmentId={EnvironmentId.make("environment")}
@@ -152,28 +153,24 @@ it("requires a new merge click after passing checks become pending and pass agai
     />
   );
   const clickMerge = async () =>
-    await act(async () => {
-      [...container.querySelectorAll("button")]
-        .find((button) => button.textContent?.trim() === "Merge")!
-        .click();
-    });
-  const dialogs = () => [...document.querySelectorAll('[role="alertdialog"]')];
+    await screen.getByRole("button", { name: "Merge", exact: true }).click();
+  const confirm = screen.getByRole("button", { name: "Confirm merge?", exact: true });
 
   await act(async () => await screen.rerender(render()));
   await clickMerge();
-  expect(dialogs()).toHaveLength(1);
+  await expect.element(confirm).toBeVisible();
   await act(async () => {
     state.status = "pending";
     await screen.rerender(render());
   });
-  expect(dialogs()).toHaveLength(0);
+  await expect.element(confirm).not.toBeInTheDocument();
   await act(async () => {
     state.status = "success";
     await screen.rerender(render());
   });
-  expect(dialogs()).toHaveLength(0);
+  await expect.element(confirm).not.toBeInTheDocument();
   await clickMerge();
-  expect(dialogs()).toHaveLength(1);
+  await expect.element(confirm).toBeVisible();
   expect(state.perform).not.toHaveBeenCalled();
 });
 

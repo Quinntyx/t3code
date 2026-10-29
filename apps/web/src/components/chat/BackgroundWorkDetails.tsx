@@ -199,7 +199,6 @@ function BackgroundWorkSection(
             sourceItemId: turnItem.id,
             item: turnItem,
           }}
-          onOpenThread={props.onOpenThread}
         />
       ) : null}
       {turnItem === undefined && pullRequest === undefined ? (

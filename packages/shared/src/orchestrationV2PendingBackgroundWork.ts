@@ -94,6 +94,19 @@ export function backgroundWorkHoldsCompletion(
   );
 }
 
+/** Waiting on agents (subagents, workflows, delegates) is work in progress, unlike a CI watch. */
+export function waitingOnAgents(thread: {
+  readonly blockedOnThreadWait?: boolean | undefined;
+  readonly pendingBackgroundTasks?:
+    | ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind">>
+    | undefined;
+}): boolean {
+  return (
+    thread.blockedOnThreadWait === true ||
+    (thread.pendingBackgroundTasks ?? []).some((task) => task.kind === "subagent")
+  );
+}
+
 // Commands and monitors are as often a dev server or its watchdog as a wait, so they hold
 // only when the agent marks them awaited.
 function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind"]): boolean {
@@ -112,7 +125,9 @@ type PendingBackgroundWorkRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "sta
 type PendingBackgroundWorkPullRequest = Pick<
   ThreadPullRequestLink,
   "host" | "repository" | "number" | "url" | "source" | "watch"
->;
+> & {
+  readonly snapshot: Pick<NonNullable<ThreadPullRequestLink["snapshot"]>, "state"> | null;
+};
 
 type PendingBackgroundWorkProviderThread = Pick<
   OrchestrationV2ProviderThread,
@@ -287,13 +302,17 @@ export function derivePendingBackgroundWork(input: {
   return Array.from(byTaskId.values());
 }
 
-type WatchStateFields = Pick<ThreadPullRequestLink, "source" | "watch">;
+type WatchStateFields = Pick<ThreadPullRequestLink, "source" | "watch"> & {
+  readonly snapshot?: Pick<NonNullable<ThreadPullRequestLink["snapshot"]>, "state"> | null;
+};
 
 type PullRequestWatchLink = Pick<ThreadPullRequestLink, "host" | "repository" | "number"> &
   WatchStateFields;
 
 const isWatchedLink = (link: WatchStateFields) =>
-  link.watch !== undefined && link.source !== "stack-dismissed";
+  link.watch !== undefined &&
+  link.source !== "stack-dismissed" &&
+  link.snapshot?.state !== "merged";
 
 // Links store their normalized identity, and this id only has to be unique within the
 // thread, so it reads those fields instead of parsing the URL.
