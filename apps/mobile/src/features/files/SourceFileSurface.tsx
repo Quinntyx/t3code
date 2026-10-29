@@ -21,7 +21,7 @@ import {
   resolveNativeReviewDiffView,
 } from "../diffs/nativeReviewDiffSurface";
 import { createNativeReviewDiffTheme } from "../review/nativeReviewDiffAdapter";
-import { REVIEW_MONO_FONT_FAMILY, renderVisibleWhitespace } from "../review/reviewDiffRendering";
+import { renderVisibleWhitespace } from "../review/reviewDiffRendering";
 import type { HighlightedToken } from "../../lib/highlights";
 import { cn } from "../../lib/cn";
 import type { ResolvedMobileCodeSurface } from "../../lib/appearancePreferences";
@@ -68,7 +68,7 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
         className="select-none pr-3 text-right text-foreground-tertiary"
         style={{
           width: props.codeSurface.gutterWidth,
-          fontFamily: REVIEW_MONO_FONT_FAMILY,
+          fontFamily: props.codeSurface.fontFamily,
           fontSize: props.codeSurface.lineNumberFontSize,
           lineHeight: props.codeSurface.rowHeight,
         }}
@@ -81,7 +81,7 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
         numberOfLines={props.wordBreak ? undefined : 1}
         className="flex-1 font-normal text-foreground"
         style={{
-          fontFamily: REVIEW_MONO_FONT_FAMILY,
+          fontFamily: props.codeSurface.fontFamily,
           fontSize: props.codeSurface.fontSize,
           lineHeight: props.codeSurface.rowHeight,
           minWidth: props.wordBreak ? undefined : 320,
@@ -112,7 +112,7 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
                     }
                     style={{
                       color: token.color ?? undefined,
-                      fontFamily: REVIEW_MONO_FONT_FAMILY,
+                      fontFamily: props.codeSurface.fontFamily,
                       fontWeight,
                       fontStyle,
                     }}
@@ -277,7 +277,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
       selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
       style={{
         color: foreground,
-        fontFamily: REVIEW_MONO_FONT_FAMILY,
+        fontFamily: codeSurface.fontFamily,
         fontSize: codeSurface.fontSize,
         lineHeight: codeSurface.rowHeight,
       }}

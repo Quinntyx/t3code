@@ -93,6 +93,8 @@ export interface NativeReviewDiffStyle {
   readonly fileHeaderCountGap?: number;
   readonly codeFontSize?: number;
   readonly codeFontWeight?: string;
+  /** `ui-monospace` selects the system monospace face. */
+  readonly codeFontFamily?: string;
   readonly lineNumberFontSize?: number;
   readonly lineNumberFontWeight?: string;
   readonly hunkFontSize?: number;

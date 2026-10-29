@@ -36,6 +36,8 @@ export interface NativeTerminalSurfaceProps extends ViewProps {
   readonly terminalKey: string;
   readonly initialBuffer: string;
   readonly fontSize: number;
+  /** Android only; empty keeps the bundled font. iOS reads the family from `themeConfig`. */
+  readonly fontFamily?: string;
   /** `[cols, rows]` of the shared PTY, or empty before the server reports one. */
   readonly sharedGrid?: ReadonlyArray<number>;
   readonly onInput?: (event: NativeSyntheticEvent<TerminalInputEvent>) => void;

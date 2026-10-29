@@ -9,7 +9,6 @@ import { formatComposerContextReference } from "@t3tools/shared/composerContextR
 import { useState } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { REVIEW_MONO_FONT_FAMILY } from "../review/reviewDiffRendering";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Sheet } from "../../components/ui/Sheet";
 import { Button } from "../../components/ui/Button";
@@ -89,18 +88,10 @@ export function TerminalContextSheet(props: {
                     : "flex-row gap-3 px-3 py-2"
                 }
               >
-                <Text
-                  className="w-8 text-right text-sm text-foreground-muted"
-                  style={{ fontFamily: REVIEW_MONO_FONT_FAMILY }}
-                >
+                <Text className="w-8 text-right font-mono text-sm text-foreground-muted">
                   {index + 1}
                 </Text>
-                <Text
-                  className="flex-1 text-sm text-foreground"
-                  style={{ fontFamily: REVIEW_MONO_FONT_FAMILY }}
-                >
-                  {line || " "}
-                </Text>
+                <Text className="flex-1 font-mono text-sm text-foreground">{line || " "}</Text>
               </Pressable>
             ) /* oxlint-enable react/no-array-index-key */,
           )}

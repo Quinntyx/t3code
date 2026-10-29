@@ -124,6 +124,17 @@ const dmSansFonts = {
   bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
 } as const;
 
+const atkinsonFonts = {
+  regular:
+    "@expo-google-fonts/atkinson-hyperlegible/400Regular/AtkinsonHyperlegible_400Regular.ttf",
+  bold: "@expo-google-fonts/atkinson-hyperlegible/700Bold/AtkinsonHyperlegible_700Bold.ttf",
+} as const;
+
+const firaCodeNerdFonts = {
+  regular: "./assets/fonts/FiraCodeNerdFont-Regular.ttf",
+  bold: "./assets/fonts/FiraCodeNerdFont-Bold.ttf",
+} as const;
+
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-widgets",
   {
@@ -311,7 +322,15 @@ const config: ExpoConfig = {
       "expo-font",
       {
         ios: {
-          fonts: [dmSansFonts.regular, dmSansFonts.medium, dmSansFonts.bold],
+          fonts: [
+            dmSansFonts.regular,
+            dmSansFonts.medium,
+            dmSansFonts.bold,
+            atkinsonFonts.regular,
+            atkinsonFonts.bold,
+            firaCodeNerdFonts.regular,
+            firaCodeNerdFonts.bold,
+          ],
         },
         android: {
           fonts: [
@@ -326,6 +345,22 @@ const config: ExpoConfig = {
             {
               fontFamily: "DMSans-Bold",
               fontDefinitions: [{ path: dmSansFonts.bold, weight: 700 }],
+            },
+            {
+              fontFamily: "AtkinsonHyperlegible-Regular",
+              fontDefinitions: [{ path: atkinsonFonts.regular, weight: 400 }],
+            },
+            {
+              fontFamily: "AtkinsonHyperlegible-Bold",
+              fontDefinitions: [{ path: atkinsonFonts.bold, weight: 700 }],
+            },
+            // Code surfaces bold tokens by weight, so this family keeps both weights; iOS uses the same family name.
+            {
+              fontFamily: "FiraCode Nerd Font",
+              fontDefinitions: [
+                { path: firaCodeNerdFonts.regular, weight: 400 },
+                { path: firaCodeNerdFonts.bold, weight: 700 },
+              ],
             },
           ],
         },

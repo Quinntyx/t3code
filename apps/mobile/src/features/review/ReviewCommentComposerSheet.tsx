@@ -213,6 +213,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
                                 fallback={line.content}
                                 tokens={highlightedLinesById[line.id] ?? null}
                                 change={line.change}
+                                fontFamily={codeSurface.fontFamily}
                                 fontSize={codeSurface.fontSize}
                                 lineHeight={codeSurface.rowHeight}
                               />

@@ -4,12 +4,12 @@ import type { LinkPillContent, MarkdownStyle } from "react-native-enriched-markd
 import type { ComposerContextRecord } from "@t3tools/contracts";
 import { contextChipAccent, contextChipPresentation } from "../lib/composerChipPresentation";
 import { CONTEXT_CHIP_ICON_SOURCES } from "../lib/contextChipIcons.generated";
-import { FONT_FAMILIES } from "../lib/fontFamilies";
 import { contextChipIconSource } from "../lib/contextChipIconSource";
 import { markdownFileIconSource } from "../lib/markdownFileIcons";
 import { markdownLinkIcon } from "../lib/markdownLinkIcons";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
 import { resolveMarkdownFileIcon, resolveMarkdownLinkPresentation } from "../lib/markdownLinks";
+import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import type {
   MarkdownLinkCustomization,
   SelectableMarkdownTextProps,
@@ -96,6 +96,7 @@ export function useEnrichedLinkVariants(
 ) {
   const { linkCustomization, skills, textStyle, fileEmbedLabel } = props;
   const theme = useUniwindTheme();
+  const uiFont = useAppearancePreferences().appearance.uiFont;
   const links = useMemo(() => {
     const byUrl = new Map<string, MarkdownLinkCustomization>();
     for (const url of urls) {
@@ -139,7 +140,7 @@ export function useEnrichedLinkVariants(
                 paddingHorizontal: 5,
                 paddingVertical: 2,
               },
-              fontFamily: chipForeground ? FONT_FAMILIES.medium : textStyle.fontFamily,
+              fontFamily: chipForeground ? uiFont.medium : textStyle.fontFamily,
               color: chipForeground ?? link.color ?? textStyle.fileTextColor,
               underline: false,
               backgroundColor: "transparent",
@@ -147,7 +148,7 @@ export function useEnrichedLinkVariants(
           ];
         }),
       ),
-    [chipForegrounds, links, textStyle],
+    [chipForegrounds, links, textStyle, uiFont],
   );
   const linkPillContent = useMemo<Record<string, LinkPillContent>>(
     () =>

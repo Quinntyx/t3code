@@ -152,6 +152,7 @@ private struct ReviewDiffNativeStylePayload: Decodable {
   let fileHeaderPathRightPadding: Double?
   let fileHeaderCountColumnWidth: Double?
   let fileHeaderCountGap: Double?
+  let codeFontFamily: String?
   let codeFontSize: Double?
   let codeFontWeight: String?
   let lineNumberFontSize: Double?
@@ -186,6 +187,7 @@ private struct ReviewDiffNativeStyle: Equatable {
   let fileHeaderPathRightPadding: CGFloat
   let fileHeaderCountColumnWidth: CGFloat
   let fileHeaderCountGap: CGFloat
+  let codeFontFamily: String?
   let codeFontSize: CGFloat
   let codeFontWeight: UIFont.Weight
   let lineNumberFontSize: CGFloat
@@ -220,6 +222,7 @@ private struct ReviewDiffNativeStyle: Equatable {
       fileHeaderPathRightPadding: metric(payload?.fileHeaderPathRightPadding, fallback: 128),
       fileHeaderCountColumnWidth: metric(payload?.fileHeaderCountColumnWidth, fallback: 42),
       fileHeaderCountGap: metric(payload?.fileHeaderCountGap, fallback: 6),
+      codeFontFamily: payload?.codeFontFamily,
       codeFontSize: metric(payload?.codeFontSize, fallback: 12),
       codeFontWeight: fontWeight(payload?.codeFontWeight, fallback: .bold),
       lineNumberFontSize: metric(payload?.lineNumberFontSize, fallback: 11),
@@ -295,6 +298,7 @@ private struct ReviewDiffNativeStyle: Equatable {
       fileHeaderPathRightPadding: fileHeaderPathRightPadding,
       fileHeaderCountColumnWidth: fileHeaderCountColumnWidth,
       fileHeaderCountGap: fileHeaderCountGap,
+      codeFontFamily: codeFontFamily,
       codeFontSize: codeFontSize,
       codeFontWeight: codeFontWeight,
       lineNumberFontSize: lineNumberFontSize,
@@ -1131,6 +1135,7 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
   }
   var style = ReviewDiffNativeStyle.resolve(nil) {
     didSet {
+      codeFont = Self.resolveCodeFont(for: style)
       codeDecorationVersion += 1
       tokenAttributedStringsByRowId.removeAll()
       rebuildRowLayout()
@@ -1409,8 +1414,19 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     contentHeight = geometry.height
   }
 
-  private var codeFont: UIFont {
-    UIFont.monospacedSystemFont(ofSize: style.codeFontSize, weight: style.codeFontWeight)
+  // Rows read this per draw; descriptor matching is too slow to repeat there.
+  private lazy var codeFont = Self.resolveCodeFont(for: style)
+
+  private static func resolveCodeFont(for style: ReviewDiffNativeStyle) -> UIFont {
+    let systemFont = UIFont.monospacedSystemFont(ofSize: style.codeFontSize, weight: style.codeFontWeight)
+    guard let family = style.codeFontFamily, family != "ui-monospace" else { return systemFont }
+    let descriptor = UIFontDescriptor(fontAttributes: [
+      .family: family,
+      .traits: [UIFontDescriptor.TraitKey.weight: style.codeFontWeight],
+    ])
+    let font = UIFont(descriptor: descriptor, size: style.codeFontSize)
+    // Descriptor lookup falls back to the system font when the family is missing.
+    return font.familyName == family ? font : systemFont
   }
 
   private var lineNumberFont: UIFont {
