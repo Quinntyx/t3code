@@ -23,6 +23,8 @@ export const GitStackedAction = Schema.Literals([
   "commit_push_pr",
 ]);
 export type GitStackedAction = typeof GitStackedAction.Type;
+export const actionOpensPullRequest = (action: GitStackedAction): boolean =>
+  action === "create_pr" || action === "commit_push_pr";
 export const GitActionProgressPhase = Schema.Literals(["branch", "commit", "push", "pr"]);
 export type GitActionProgressPhase = typeof GitActionProgressPhase.Type;
 export const GitActionProgressKind = Schema.Literals([

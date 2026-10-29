@@ -32,7 +32,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
   createInboxReturnTracker,
-  isThreadWorking,
+  isThreadWorkingInShelf,
 } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
@@ -628,7 +628,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const working: EnvironmentThreadShell[] = [];
   const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) =>
     workingShelfEnabled &&
-    (manuallyMoved ? isThreadWorking(thread) : inboxObservation.isWorking(thread))
+    (manuallyMoved ? isThreadWorkingInShelf(thread) : inboxObservation.isWorking(thread))
       ? working
       : active;
   const snoozed: EnvironmentThreadShell[] = [];
