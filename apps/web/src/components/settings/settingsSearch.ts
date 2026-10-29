@@ -887,6 +887,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "browser-render-gpu",
+    title: "Browser GPU",
+    to: "/settings/browser",
+    scope: "environment-defaults",
+    searchTerms: [
+      "graphics card hardware acceleration render node nvidia amd intel software swiftshader",
+    ],
+  },
+  {
+    id: "browser-render-scale",
+    title: "Browser render scale",
+    to: "/settings/browser",
+    scope: "environment-defaults",
+    searchTerms: ["device pixel ratio dpr resolution sharp hidpi retina 1x 2x"],
+  },
+  {
     id: "device-sources",
     title: "Device sources",
     to: "/settings/devices",

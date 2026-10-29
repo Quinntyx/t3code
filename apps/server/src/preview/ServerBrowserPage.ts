@@ -899,6 +899,89 @@ export const parseNetError = (errorText: string) => {
   return { description, code: NET_ERROR_CODES[description] ?? -2 };
 };
 
+export interface VideoEncoderWindow {
+  __t3Video: {
+    pick(codecs: ReadonlyArray<string>): Promise<string | null>;
+    requestKeyFrame(): void;
+    encode(jpeg: string): Promise<{
+      key: boolean;
+      data: string;
+      width: number;
+      height: number;
+    } | null>;
+  };
+}
+
+// WebCodecs only exists in secure contexts, and a scratch page starts on about:blank.
+export const VIDEO_ENCODER_URL = "https://video-encoder.t3.invalid/";
+
+/** Re-encodes a viewer's JPEG screencast as video; resolves null when rate control drops a frame. */
+export const videoEncoderScript = `(() => {
+  let encoder = null;
+  let size = null;
+  let key = true;
+  let sink = null;
+  let codec = null;
+  const configFor = (codec, width, height) => ({
+    codec,
+    width,
+    height,
+    bitrate: Math.round(Math.min(12e6, Math.max(2e6, width * height * 2))),
+    framerate: 30,
+    latencyMode: "realtime",
+    ...(codec.startsWith("avc1") ? { avc: { format: "annexb" } } : {}),
+  });
+  window.__t3Video = {
+    async pick(codecs) {
+      for (const candidate of codecs) {
+        const support = await VideoEncoder.isConfigSupported(configFor(candidate, 1280, 720)).catch(() => null);
+        if (support && support.supported) return (codec = candidate);
+      }
+      return null;
+    },
+    requestKeyFrame() {
+      key = true;
+    },
+    async encode(jpeg) {
+      const decoder = new ImageDecoder({ data: Uint8Array.fromBase64(jpeg), type: "image/jpeg" });
+      const { image } = await decoder.decode().finally(() => decoder.close());
+      // 4:2:0 video needs even dimensions; the odd edge pixel is dropped.
+      const width = image.displayWidth & ~1;
+      const height = image.displayHeight & ~1;
+      try {
+        if (!encoder || encoder.state === "closed" || size.width !== width || size.height !== height) {
+          if (encoder && encoder.state !== "closed") encoder.close();
+          encoder = new VideoEncoder({ output: (chunk) => sink && sink.push(chunk), error: () => {} });
+          encoder.configure(configFor(codec, width, height));
+          size = { width, height };
+          key = true;
+        }
+        const chunks = [];
+        sink = chunks;
+        const frame = new VideoFrame(image, {
+          timestamp: Math.round(performance.now() * 1000),
+          visibleRect: { x: 0, y: 0, width, height },
+        });
+        encoder.encode(frame, { keyFrame: key });
+        frame.close();
+        await encoder.flush();
+        sink = null;
+        if (chunks.length === 0) return null;
+        key = false;
+        const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+        let offset = 0;
+        for (const chunk of chunks) {
+          chunk.copyTo(bytes.subarray(offset));
+          offset += chunk.byteLength;
+        }
+        return { key: chunks[0].type === "key", data: bytes.toBase64(), width, height };
+      } finally {
+        image.close();
+      }
+    },
+  };
+})()`;
+
 export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => `(() => {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");

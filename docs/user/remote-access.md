@@ -243,6 +243,12 @@ On a phone, tap the floating preview's corner dot to show its controls, then
 **Pop into separate window** to keep watching in picture-in-picture over other
 apps.
 
+The host draws tabs on its CPU at 2× by default. If scrolling or animation is
+choppy and the host has a GPU, pick it under **Settings → Browser → Browser GPU**
+for that environment; Linux hosts list each GPU, other hosts offer
+**Automatic**. **Browser render scale** trades sharpness for speed. Changing
+either reloads the environment's open tabs.
+
 ### Browser host setup
 
 macOS, Windows, and Linux desktops run the browser as is. Some Linux hosts need

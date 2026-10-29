@@ -89,8 +89,8 @@ export async function openServerPictureInPicture(input: {
     "position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none";
   document.body.append(video);
 
-  const painter = createPreviewFramePainter(canvas);
   let client: PreviewStreamClient | null = null;
+  const painter = createPreviewFramePainter(canvas, undefined, () => client?.requestKeyFrame());
   let stopped = false;
   let refusals = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -115,9 +115,9 @@ export async function openServerPictureInPicture(input: {
         interactive: false,
       },
       {
-        onFrame: (jpeg) => {
+        onFrame: (frame) => {
           refusals = 0;
-          painter.paint(jpeg);
+          painter.paint(frame);
         },
         onViewport: () => undefined,
         onConnectedChange: () => undefined,

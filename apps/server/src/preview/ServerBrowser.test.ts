@@ -14,7 +14,9 @@ import {
   ThreadId,
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
@@ -31,6 +33,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettingsService from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -63,6 +66,9 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       desktopConnections.push({ endpoint, context });
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
     }
+    async relaunch() {
+      relaunches.count += 1;
+    }
     async close() {
       for (const context of contexts) await context.close();
     }
@@ -93,10 +99,8 @@ function makeSession(
 ) {
   const events = new NodeEvents.EventEmitter();
   return {
-    on: vi.fn((name: string, callback: (...args: unknown[]) => void) => events.on(name, callback)),
+    on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
     emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
-    emitAsync: (name: string, ...args: unknown[]) =>
-      Promise.all(events.listeners(name).map((listener) => listener(...args))),
     detach: vi.fn(async () => {}),
     send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
       if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
@@ -290,6 +294,8 @@ function makeEncoderPage() {
 }
 
 const contexts: ReturnType<typeof makeContext>[] = [];
+const relaunches = { count: 0 };
+const settingsChanges = new NodeEvents.EventEmitter();
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
@@ -381,6 +387,19 @@ const dependencies = Layer.mergeAll(
     turn: (threadId, active) => Effect.sync(() => desktopTurns.emit("turn", threadId, active)),
   }),
   PreviewAgentActivity.layer,
+  Layer.mock(ServerSettingsService.ServerSettingsService, {
+    getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+    streamChanges: Stream.callback<ServerSettings>((queue) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const onChange = (settings: ServerSettings) => Queue.offerUnsafe(queue, settings);
+          settingsChanges.on("change", onChange);
+          return onChange;
+        }),
+        (onChange) => Effect.sync(() => settingsChanges.off("change", onChange)),
+      ),
+    ),
+  }),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-server-browser-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -607,6 +626,117 @@ it.live.each([
       committed.resolve();
       yield* Fiber.join(navigation);
       yield* Fiber.join(correction);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a rendering change relaunches the browser and reopens its tabs at their page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const url = "http://localhost:5173/settings";
+      yield* manager.reportStatus({
+        threadId: scope.thread.threadId,
+        tabId,
+        serverControlled: true,
+        navStatus: { _tag: "Success", url, title: "Settings" },
+        canGoBack: false,
+        canGoForward: false,
+      });
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      const relaunchesBefore = relaunches.count;
+      settingsChanges.emit("change", { ...DEFAULT_SERVER_SETTINGS, serverBrowserGpu: "auto" });
+      let output = yield* Queue.take(viewer.output);
+      while (output._tag !== "reconnect" && output._tag !== "gone") {
+        output = yield* Queue.take(viewer.output);
+      }
+      // Viewers reconnect rather than lose the tab, and it reopens where it was.
+      expect(output._tag).toBe("reconnect");
+      yield* browser.attachViewer(viewerInput(tabId, true));
+      expect(relaunches.count).toBe(relaunchesBefore + 1);
+      expect(contexts.at(-1)!.page.goto).toHaveBeenLastCalledWith(
+        url,
+        expect.objectContaining({ waitUntil: "commit" }),
+      );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("viewers skip a screencast frame identical to the one before it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, false));
+      const session = contexts[0]!.sessions.at(-1)!;
+      const frames: string[] = [];
+      const nextFrame = Effect.gen(function* () {
+        let output = yield* Queue.take(viewer.output);
+        while (output._tag !== "frame") output = yield* Queue.take(viewer.output);
+        if (!(output.data instanceof Uint8Array)) throw new Error("expected a JPEG frame");
+        frames.push(Buffer.from(output.data).toString());
+      });
+      yield* nextFrame;
+      // A still capture repaints the page, and Chromium sends the same picture again.
+      for (const [index, data] of ["first", "first", "second"].entries()) {
+        session.emit("Page.screencastFrame", {
+          data: Buffer.from(data).toString("base64"),
+          sessionId: index,
+        });
+      }
+      yield* nextFrame;
+      yield* nextFrame;
+      expect(frames.slice(1)).toEqual(["first", "second"]);
+      expect(session.send).toHaveBeenCalledWith("Page.screencastFrameAck", { sessionId: 1 });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("wheels and pointer moves waiting behind a slow page merge into one dispatch", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const cdp = contexts[0]!.sessions.at(-1)!;
+      const send = cdp.send.getMockImplementation()!;
+      const dispatched: Array<string> = [];
+      const started = Promise.withResolvers<void>();
+      const handled = Promise.withResolvers<void>();
+      cdp.send.mockImplementation(async (operation, input) => {
+        const event = input as { type?: string; deltaY?: number; x?: number; key?: string };
+        if (operation === "Input.dispatchMouseEvent") {
+          dispatched.push(`${event.type} ${event.type === "mouseWheel" ? event.deltaY : event.x}`);
+        } else if (operation === "Input.dispatchKeyEvent")
+          dispatched.push(`${event.type} ${event.key}`);
+        if (dispatched.length === 1) {
+          started.resolve();
+          await handled.promise;
+        }
+        return send(operation, input);
+      });
+      const wheel = (deltaY: number) => ({ type: "wheel", x: 10, y: 20, deltaX: 0, deltaY });
+      const move = (x: number) => ({ type: "mouse", action: "move", x, y: 5, button: "none" });
+      const key = { type: "key", action: "up", key: "a", code: "KeyA" };
+      const first = yield* viewer
+        .input(wheel(10))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.promise(() => started.promise);
+      // A key between wheels keeps its place; only neighbouring motion merges.
+      const rest = yield* Effect.forEach(
+        [wheel(20), wheel(30), key, wheel(40), move(1), move(7)],
+        (input) => viewer.input(input).pipe(Effect.forkChild({ startImmediately: true })),
+      );
+      handled.resolve();
+      yield* Fiber.join(first);
+      yield* Effect.forEach(rest, Fiber.join);
+      expect(dispatched).toEqual([
+        "mouseWheel 10",
+        "mouseWheel 50",
+        "keyUp a",
+        "mouseWheel 40",
+        "mouseMoved 7",
+      ]);
     }),
   ).pipe(Effect.provide(layer)),
 );
