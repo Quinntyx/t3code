@@ -94,6 +94,19 @@ export function backgroundWorkHoldsCompletion(
   );
 }
 
+/** Waiting on agents (subagents, workflows, delegates) is work in progress, unlike a CI watch. */
+export function waitingOnAgents(thread: {
+  readonly blockedOnThreadWait?: boolean | undefined;
+  readonly pendingBackgroundTasks?:
+    | ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind">>
+    | undefined;
+}): boolean {
+  return (
+    thread.blockedOnThreadWait === true ||
+    (thread.pendingBackgroundTasks ?? []).some((task) => task.kind === "subagent")
+  );
+}
+
 // Commands and monitors are as often a dev server or its watchdog as a wait, so they hold
 // only when the agent marks them awaited.
 function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind"]): boolean {

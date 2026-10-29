@@ -5,6 +5,7 @@ import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
+import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -732,11 +733,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           className: "text-info-foreground",
         }
       : status === "waiting"
-        ? {
-            label: "Waiting",
-            icon: "waiting" as const,
-            className: "text-muted-foreground",
-          }
+        ? waitingOnAgents(thread)
+          ? {
+              label: "Delegating",
+              icon: "working" as const,
+              className: "text-info-foreground",
+            }
+          : {
+              label: "Waiting",
+              icon: "waiting" as const,
+              className: "text-muted-foreground",
+            }
         : status === "approval"
           ? {
               label: "Approval",

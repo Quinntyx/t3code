@@ -489,11 +489,11 @@ describe("resolveThreadStatusPill", () => {
     },
   };
 
-  it("shows an active thread wait without a pulse and resumes Working when it ends", () => {
+  it("shows an active thread wait as Delegating and resumes Working when it ends", () => {
     const blocked = { ...baseThread, blockedOnThreadWait: true };
     expect(resolveSidebarThreadStatus(blocked)).toBe("waiting");
     expect(resolveThreadStatusPill({ thread: blocked })).toMatchObject({
-      label: "Waiting",
+      label: "Delegating",
       pulse: false,
     });
 
