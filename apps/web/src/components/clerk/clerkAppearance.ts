@@ -30,7 +30,7 @@ export const clerkAppearance = {
   },
   elements: {
     modalBackdrop: "dialog-backdrop",
-    cardBox: "dialog-glass rounded-2xl border",
+    cardBox: "dialog-glass rounded-glass border",
     card: "border-0 bg-transparent shadow-none",
     footer: "bg-transparent bg-none",
     header: "items-start text-start",

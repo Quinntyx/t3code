@@ -398,6 +398,21 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Contrast"]
       : []),
     ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? ["Glass opacity"] : []),
+    ...(settings.liquidGlassEnabled !== DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled
+      ? ["Liquid glass"]
+      : []),
+    ...(settings.liquidGlassBlur !== DEFAULT_UNIFIED_SETTINGS.liquidGlassBlur
+      ? ["Liquid glass blur"]
+      : []),
+    ...(settings.liquidGlassSaturation !== DEFAULT_UNIFIED_SETTINGS.liquidGlassSaturation
+      ? ["Liquid glass saturation"]
+      : []),
+    ...(settings.liquidGlassRefraction !== DEFAULT_UNIFIED_SETTINGS.liquidGlassRefraction
+      ? ["Refraction strength"]
+      : []),
+    ...(settings.liquidGlassDispersion !== DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion
+      ? ["Color dispersion"]
+      : []),
     ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
       ? ["Diff colors"]
       : []),
@@ -603,6 +618,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
+      liquidGlassEnabled: DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled,
+      liquidGlassBlur: DEFAULT_UNIFIED_SETTINGS.liquidGlassBlur,
+      liquidGlassSaturation: DEFAULT_UNIFIED_SETTINGS.liquidGlassSaturation,
+      liquidGlassRefraction: DEFAULT_UNIFIED_SETTINGS.liquidGlassRefraction,
+      liquidGlassDispersion: DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,

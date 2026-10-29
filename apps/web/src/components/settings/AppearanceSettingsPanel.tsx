@@ -24,6 +24,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Badge } from "../ui/badge";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
   SettingResetButton,
@@ -36,6 +37,7 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { BuddySection } from "./BuddySettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
+import { LiquidGlassSettings } from "./LiquidGlassSettings";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -198,52 +200,6 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("setting-glass-opacity")}
-          description="Higher values make menus, dialogs, and the composer more solid."
-          resetAction={
-            settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
-              <SettingResetButton
-                label="glass opacity"
-                onClick={() =>
-                  updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex w-full items-center gap-3 sm:w-52">
-              <output
-                className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
-                htmlFor="glass-opacity"
-              >
-                {settings.glassOpacity}%
-              </output>
-              <input
-                aria-label="Glass opacity"
-                className="settings-slider min-w-0 flex-1"
-                id="glass-opacity"
-                max={MAX_GLASS_OPACITY}
-                min={MIN_GLASS_OPACITY}
-                onChange={(event) => {
-                  const glassOpacity = Number(event.currentTarget.value);
-                  if (
-                    Number.isInteger(glassOpacity) &&
-                    glassOpacity >= MIN_GLASS_OPACITY &&
-                    glassOpacity <= MAX_GLASS_OPACITY
-                  ) {
-                    updateSettings({ glassOpacity });
-                  }
-                }}
-                step={5}
-                style={glassOpacitySliderStyle}
-                type="range"
-                value={settings.glassOpacity}
-              />
-            </div>
-          }
-        />
-
-        <SettingsRow
           {...searchableSetting("chat-width")}
           description="Set how wide messages and the composer can grow on large screens."
           resetAction={
@@ -335,6 +291,12 @@ export function AppearanceSettingsPanel() {
         />
         <AdvancedSettings
           targetIds={[
+            searchableSetting("setting-glass-opacity").id,
+            searchableSetting("setting-liquid-glass").id,
+            searchableSetting("setting-liquid-glass-blur").id,
+            searchableSetting("setting-liquid-glass-saturation").id,
+            searchableSetting("setting-liquid-glass-refraction").id,
+            searchableSetting("setting-liquid-glass-dispersion").id,
             searchableSetting("panel-animations").id,
             searchableSetting("environment-identification").id,
             // Environment identification's search result lands on this section.
@@ -342,6 +304,94 @@ export function AppearanceSettingsPanel() {
             searchableSetting("composer-context").id,
           ]}
         >
+          <SettingsRow
+            {...searchableSetting("setting-glass-opacity")}
+            description="Adjust the opacity of the theme tint on menus, dialogs, and the composer, including liquid glass. Higher values make the surfaces more solid."
+            resetAction={
+              settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
+                <SettingResetButton
+                  label="glass opacity"
+                  onClick={() =>
+                    updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-3 sm:w-52">
+                <output
+                  className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+                  htmlFor="glass-opacity"
+                >
+                  {settings.glassOpacity}%
+                </output>
+                <input
+                  aria-label="Glass opacity"
+                  className="settings-slider min-w-0 flex-1"
+                  id="glass-opacity"
+                  max={MAX_GLASS_OPACITY}
+                  min={MIN_GLASS_OPACITY}
+                  onChange={(event) => {
+                    const glassOpacity = Number(event.currentTarget.value);
+                    if (
+                      Number.isInteger(glassOpacity) &&
+                      glassOpacity >= MIN_GLASS_OPACITY &&
+                      glassOpacity <= MAX_GLASS_OPACITY
+                    ) {
+                      updateSettings({ glassOpacity });
+                    }
+                  }}
+                  step={5}
+                  style={glassOpacitySliderStyle}
+                  type="range"
+                  value={settings.glassOpacity}
+                />
+              </div>
+            }
+          />
+          <SettingsRow
+            {...searchableSetting("setting-liquid-glass")}
+            title={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                Liquid glass
+                <Badge variant="warning" size="sm">
+                  Experimental
+                </Badge>
+              </span>
+            }
+            description={
+              <>
+                Refract the backdrop behind the composer, menus, and dialogs using the selected
+                theme and glass opacity. Chromium-only; other browsers keep the flat frost.
+                <span className="mt-1 block text-warning-foreground">
+                  Performance warning: may increase GPU usage, reduce frame rates, and use more
+                  battery.
+                </span>
+              </>
+            }
+            resetAction={
+              settings.liquidGlassEnabled !== DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled ? (
+                <SettingResetButton
+                  label="liquid glass"
+                  onClick={() =>
+                    updateSettings({
+                      liquidGlassEnabled: DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Liquid glass"
+                checked={settings.liquidGlassEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ liquidGlassEnabled: Boolean(checked) })
+                }
+              />
+            }
+          />
+          <LiquidGlassSettings />
           <SettingsRow
             {...searchableSetting("panel-animations")}
             description="Set how fast panels open and close."

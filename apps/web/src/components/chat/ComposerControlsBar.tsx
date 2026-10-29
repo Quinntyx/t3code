@@ -283,9 +283,7 @@ export function ComposerControlsBar(props: {
       terminalOpen={terminalOpen}
       open={modelPickerOpen}
       instanceIndicatorBackground={
-        composerControlsCollapsed
-          ? "color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent)"
-          : "var(--contrast-input)"
+        composerControlsCollapsed ? "var(--chat-composer-glass-fill)" : "var(--contrast-input)"
       }
       {...(modelPickerIconClassName
         ? { activeProviderIconClassName: modelPickerIconClassName }
