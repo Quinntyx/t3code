@@ -428,6 +428,7 @@ const config: ExpoConfig = {
     "./plugins/withAndroidNetworkSecurityConfig.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
     "./plugins/withAndroidInputBackground.cjs",
+    "./plugins/withAndroidTransparentNavigationBar.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",
