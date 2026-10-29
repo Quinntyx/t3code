@@ -23,6 +23,7 @@ import {
   paceRemainingPercent,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
+  summarizeProviderLimits,
 } from "./usageLimits.ts";
 
 const now = Date.parse("2026-09-03T12:00:00.000Z");
@@ -1299,6 +1300,99 @@ describe("/usage-limits", () => {
     expect(
       withUsageLimitsCommands([selected], [])[0]?.slashCommands.map((command) => command.name),
     ).toEqual(["usage-limits"]);
+  });
+});
+
+describe("model picker limits", () => {
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+  const personal = provider({
+    usageLimits: { checkedAt, windows: [window] },
+    auth: { status: "authenticated", email: "same@example.com" },
+  });
+  const work = provider({
+    instanceId: ProviderInstanceId.make("codex-work"),
+    usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 90 }] },
+    auth: { status: "authenticated", email: "work@example.com" },
+  });
+  const hub = [
+    {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Accounts",
+      checkedAt,
+      accounts: [
+        {
+          id: "duplicate",
+          driver: personal.driver,
+          email: "SAME@example.com",
+          usageLimits: { checkedAt, windows: [window] },
+        },
+        {
+          id: "spare",
+          driver: personal.driver,
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 20, resetsAt: "2026-09-03T13:00:00.000Z" }],
+          },
+        },
+        {
+          id: "spent",
+          driver: personal.driver,
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 100, resetsAt: "2026-09-03T12:30:00.000Z" }],
+          },
+        },
+        {
+          id: "other-provider",
+          driver: ProviderDriverKind.make("claude"),
+          usageLimits: { checkedAt, windows: [window] },
+        },
+      ],
+    },
+  ];
+
+  it("keeps each login on its own card and pools the hub's other accounts of that driver", () => {
+    const summary = summarizeProviderLimits(personal, [personal, work], hub, now);
+    expect(summary).toMatchObject({
+      windows: [
+        {
+          remainingPercent: 60,
+          timeLeftPercent: 40,
+          accounts: 1,
+          resetsAt: window.resetsAt,
+          restoresPercent: null,
+        },
+      ],
+      sources: [
+        {
+          id: "hub",
+          label: "Accounts",
+          windows: [
+            {
+              remainingPercent: 40,
+              accounts: 2,
+              readyAccounts: 1,
+              resetsAt: "2026-09-03T12:30:00.000Z",
+              restoresPercent: 50,
+            },
+          ],
+        },
+      ],
+      exhausted: false,
+    });
+    expect(
+      summarizeProviderLimits(work, [personal, work], hub, now)?.windows[0]?.remainingPercent,
+    ).toBe(10);
+  });
+
+  it("dims a card only while its own window is spent, and skips providers without limits", () => {
+    const spent = provider({
+      usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 100 }] },
+    });
+    expect(summarizeProviderLimits(spent, [spent], [], now)?.exhausted).toBe(true);
+    const unlimited = provider({ instanceId: ProviderInstanceId.make("plain") });
+    expect(summarizeProviderLimits(unlimited, [unlimited], [], now)).toBeNull();
   });
 });
 
