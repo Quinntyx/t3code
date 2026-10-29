@@ -84,6 +84,7 @@ import {
 } from "./features/workspace/workspace-selection-store";
 import { workspaceDetailLinkAction } from "./features/workspace/workspace-detail-selection";
 import { NativeLayoutMetricsProvider } from "./native/native-layout-metrics";
+import { useNavigationBarAppearance } from "./native/useNavigationBarAppearance";
 import {
   attachRootNavigation,
   flushRootNavigationQueue,
@@ -221,6 +222,7 @@ export default function App() {
 function AppContent() {
   const { themeAppearance } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
+  useNavigationBarAppearance(themeAppearance);
 
   return (
     <>
