@@ -270,6 +270,7 @@ import {
   PreviewEvent,
   PreviewListInput,
   PreviewListResult,
+  ServerBrowserGpuList,
   PreviewClearProfileError,
   PreviewClearProfileInput,
   PreviewReportProfilesInput,
@@ -468,6 +469,7 @@ export const WS_METHODS = {
   previewClose: "preview.close",
   previewList: "preview.list",
   previewClearProfile: "preview.clearProfile",
+  previewListGpus: "preview.listGpus",
   previewReportProfiles: "preview.reportProfiles",
   previewReportStatus: "preview.reportStatus",
   previewStopLocalServer: "preview.stopLocalServer",
@@ -1569,6 +1571,12 @@ const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsPreviewListGpusRpc = Rpc.make(WS_METHODS.previewListGpus, {
+  payload: Schema.Struct({}),
+  success: ServerBrowserGpuList,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsPreviewClearProfileRpc = Rpc.make(WS_METHODS.previewClearProfile, {
   payload: PreviewClearProfileInput,
   error: Schema.Union([PreviewClearProfileError, EnvironmentAuthorizationError]),
@@ -2088,6 +2096,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAdjustRpc,
   WsPreviewCloseRpc,
   WsPreviewListRpc,
+  WsPreviewListGpusRpc,
   WsPreviewClearProfileRpc,
   WsPreviewReportProfilesRpc,
   WsPreviewReportStatusRpc,

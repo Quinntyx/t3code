@@ -110,6 +110,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
+import { BrowserRenderingSettings } from "./BrowserRenderingSettings";
 import { searchableSetting } from "./settingsSearch";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -1554,6 +1555,9 @@ export function BrowserSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="browser-agent-access" title="Agent access">
         <AgentBrowserAccessSetting />
+      </SettingsSection>
+      <SettingsSection id="browser-rendering" title="Rendering">
+        <BrowserRenderingSettings />
       </SettingsSection>
       <SettingsSection id="browser" title="Browsing">
         <SettingsUnavailableGroup message={desktopOnlyMessage}>

@@ -359,17 +359,21 @@ export function ServerBrowserSurface(props: {
     const canvas = canvasRef.current;
     if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const painter = createPreviewFramePainter(canvas, () => {
-      if (hasFrameRef.current) return;
-      hasFrameRef.current = true;
-      firstFrame();
-    });
+    const painter = createPreviewFramePainter(
+      canvas,
+      () => {
+        if (hasFrameRef.current) return;
+        hasFrameRef.current = true;
+        firstFrame();
+      },
+      () => client.requestKeyFrame(),
+    );
     const client = createPreviewStreamClient(
       { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
       {
-        onFrame: (jpeg) => {
+        onFrame: (frame) => {
           unauthorizedRef.current = 0;
-          painter.paint(jpeg);
+          painter.paint(frame);
         },
         onProbe: (result) => {
           if (controlRef.current?.controller !== "you") return;

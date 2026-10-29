@@ -53,6 +53,7 @@ const options = () => ({
   profilesDir: "/test/profiles",
   executable: vi.fn(async () => "/test/chromium"),
   env: {},
+  rendering: async () => ({ args: ["--disable-gpu"], scale: 2 }),
 });
 
 beforeEach(() => {
@@ -206,6 +207,41 @@ describe("ServerBrowserContexts", () => {
     expect(launches.launch).toHaveBeenCalledTimes(2);
     expect(launches.launch).toHaveBeenLastCalledWith(
       expect.objectContaining({ chromiumSandbox: true }),
+    );
+    await pool.close();
+  });
+
+  it("relaunches every browser with the rendering options current at the next launch", async () => {
+    const human = makeContext();
+    const browsers = [makeBrowser(), makeBrowser()];
+    launches.launch
+      .mockResolvedValueOnce(browsers[0] as unknown as Browser)
+      .mockResolvedValueOnce(browsers[1] as unknown as Browser);
+    launches.persistent.mockResolvedValue(human as unknown as BrowserContext);
+    let rendering = { args: ["--disable-gpu"], scale: 2 };
+    const onContextClose = vi.fn();
+    const pool = new ServerBrowserContexts({
+      ...options(),
+      rendering: async () => rendering,
+      onContextClose,
+    });
+    await pool.contextFor("default");
+    await pool.contextFor("default", "agent");
+
+    rendering = { args: ["--enable-gpu"], scale: 1 };
+    await pool.relaunch();
+    expect(human.close).toHaveBeenCalledTimes(1);
+    expect(browsers[0]!.close).toHaveBeenCalledTimes(1);
+    expect(onContextClose).toHaveBeenCalledTimes(2);
+
+    await pool.contextFor("default", "agent");
+    expect(launches.launch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args: ["--enable-gpu", "--force-device-scale-factor=1", expect.any(String)],
+      }),
+    );
+    expect(browsers[1]!.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceScaleFactor: 1 }),
     );
     await pool.close();
   });
