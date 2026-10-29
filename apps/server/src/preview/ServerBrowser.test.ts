@@ -542,6 +542,55 @@ it.live.each([
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("wheels and pointer moves waiting behind a slow page merge into one dispatch", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const cdp = contexts[0]!.sessions.at(-1)!;
+      const send = cdp.send.getMockImplementation()!;
+      const dispatched: Array<string> = [];
+      const started = Promise.withResolvers<void>();
+      const handled = Promise.withResolvers<void>();
+      cdp.send.mockImplementation(async (operation, input) => {
+        const event = input as { type?: string; deltaY?: number; x?: number; key?: string };
+        if (operation === "Input.dispatchMouseEvent") {
+          dispatched.push(`${event.type} ${event.type === "mouseWheel" ? event.deltaY : event.x}`);
+        } else if (operation === "Input.dispatchKeyEvent")
+          dispatched.push(`${event.type} ${event.key}`);
+        if (dispatched.length === 1) {
+          started.resolve();
+          await handled.promise;
+        }
+        return send(operation, input);
+      });
+      const wheel = (deltaY: number) => ({ type: "wheel", x: 10, y: 20, deltaX: 0, deltaY });
+      const move = (x: number) => ({ type: "mouse", action: "move", x, y: 5, button: "none" });
+      const key = { type: "key", action: "up", key: "a", code: "KeyA" };
+      const first = yield* viewer
+        .input(wheel(10))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.promise(() => started.promise);
+      // A key between wheels keeps its place; only neighbouring motion merges.
+      const rest = yield* Effect.forEach(
+        [wheel(20), wheel(30), key, wheel(40), move(1), move(7)],
+        (input) => viewer.input(input).pipe(Effect.forkChild({ startImmediately: true })),
+      );
+      handled.resolve();
+      yield* Fiber.join(first);
+      yield* Effect.forEach(rest, Fiber.join);
+      expect(dispatched).toEqual([
+        "mouseWheel 10",
+        "mouseWheel 50",
+        "keyUp a",
+        "mouseWheel 40",
+        "mouseMoved 7",
+      ]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 // The fake encoder decodes every frame at 1280x800, so 30 fps hits the bitrate floor.
 it.live.each([
   { reports: [], frameRate: 30, bitsPerSecond: 2.5e6 },

@@ -39,6 +39,7 @@ import {
   type PreviewNavStatus,
   type PreviewSessionSnapshot,
   type PreviewViewportSetting,
+  encodePreviewStreamVideoFrame,
   ThreadId,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   type PreviewAppearancePreference,
@@ -94,6 +95,10 @@ const SCREENCAST_SETTLE_MS = 200;
 const SCREENCAST_MOTION_FRAMES = 4;
 const SCREENCAST_MOTION_WINDOW_MS = 300;
 const SCREENCAST_MOTION_QUALITY = 50;
+// Video frames are tiny, so they pace only Chromium's capture: three in flight allow 60 fps.
+const VIDEO_ACK_PACE_MS = 50;
+// Video blurs text, so a JPEG still follows once the page stops changing.
+const VIDEO_SETTLE_MS = 400;
 const HOST_RECONNECT_DELAY = "1 second";
 const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
@@ -156,7 +161,8 @@ export class ServerBrowserLaunchError extends Schema.TaggedError<ServerBrowserLa
 export type ServerBrowserViewerOutput =
   | {
       readonly _tag: "frame";
-      readonly data: Uint8Array;
+      /** Video frames encode only when sent, so frames superseded on a slow link cost nothing. */
+      readonly data: Uint8Array | Effect.Effect<Uint8Array | null>;
       readonly ack: Effect.Effect<void>;
     }
   | { readonly _tag: "viewport"; readonly width: number; readonly height: number }
@@ -205,6 +211,8 @@ export type ServerBrowserViewerOutput =
 export interface ServerBrowserViewer {
   readonly output: Queue.Dequeue<ServerBrowserViewerOutput>;
   readonly input: (message: unknown) => Effect.Effect<void>;
+  /** Read-only viewers decode video too, so this is not gated on control. */
+  readonly requestKeyFrame: Effect.Effect<void>;
 }
 
 export class ServerBrowser extends Context.Service<
@@ -217,6 +225,8 @@ export class ServerBrowser extends Context.Service<
       readonly maxHeight: number;
       readonly quality: number;
       readonly canOperate: boolean;
+      /** Codecs the viewer decodes, preferred first; empty keeps JPEG frames. */
+      readonly videoCodecs?: ReadonlyArray<string>;
     }) => Effect.Effect<
       ServerBrowserViewer,
       ServerBrowserTabNotFoundError | ServerBrowserLaunchError,
@@ -256,6 +266,8 @@ interface ViewerState {
   scrolledAt: number;
 
   requestedSize: { width: number; height: number; order: number } | null;
+  /** A wheel or pointer move still waiting for earlier input, which later ones merge into. */
+  waitingMotion: Record<string, unknown> | null;
 }
 
 interface EncoderWindow {
@@ -1467,6 +1479,28 @@ const make = Effect.gen(function* () {
     return run;
   };
 
+  const openVideoEncoder = async (codecs: ReadonlyArray<string>) => {
+    const page = await contexts.scratchPage().catch(() => null);
+    if (!page) return null;
+    try {
+      await page.route(ServerBrowserPage.VIDEO_ENCODER_URL, (route) =>
+        route.fulfill({ contentType: "text/html", body: "<!doctype html>" }),
+      );
+      await page.goto(ServerBrowserPage.VIDEO_ENCODER_URL);
+      await page.evaluate(ServerBrowserPage.videoEncoderScript);
+      const codec = await page.evaluate(
+        (candidates) =>
+          (globalThis as unknown as ServerBrowserPage.VideoEncoderWindow).__t3Video.pick(
+            candidates,
+          ),
+        codecs,
+      );
+      if (codec !== null) return { page, codec };
+    } catch {}
+    await page.close().catch(constVoid);
+    return null;
+  };
+
   const startRecording = (tab: ServerTab): Promise<Recording> => {
     const started = withCaptureLock(tab, async () => {
       if (tab.recording) return tab.recording;
@@ -2108,6 +2142,13 @@ const make = Effect.gen(function* () {
     viewer.requestedSize = null;
   };
 
+  const motionKind = (message: Record<string, unknown>) =>
+    message.type === "wheel"
+      ? "wheel"
+      : message.type === "mouse" && message.action === "move"
+        ? "move"
+        : null;
+
   const dispatchViewerInput = async (
     tab: ServerTab,
     session: CDPSession,
@@ -2267,9 +2308,46 @@ const make = Effect.gen(function* () {
         ),
     );
     const quality = Math.min(100, Math.max(1, Math.round(input.quality)));
+    const video =
+      input.videoCodecs && input.videoCodecs.length > 0
+        ? yield* Effect.acquireRelease(
+            Effect.promise(() => openVideoEncoder(input.videoCodecs ?? [])),
+            (opened) => Effect.promise(async () => opened?.page.close().catch(constVoid)),
+          )
+        : null;
+    let videoEncoder = video;
+    const encodeFrame = async (jpeg: string) => {
+      const current = videoEncoder;
+      if (!current) return Buffer.from(jpeg, "base64");
+      try {
+        const encoded = await current.page.evaluate(
+          (data) =>
+            (globalThis as unknown as ServerBrowserPage.VideoEncoderWindow).__t3Video.encode(data),
+          jpeg,
+        );
+        if (!encoded) return null;
+        const data = Buffer.from(encoded.data, "base64");
+        return encodePreviewStreamVideoFrame(
+          encoded.key
+            ? {
+                type: "key",
+                codec: current.codec,
+                width: encoded.width,
+                height: encoded.height,
+                data,
+              }
+            : { type: "delta", data },
+        );
+      } catch {
+        // A failed encoder, e.g. past the codec's size limit, leaves this viewer on JPEG.
+        videoEncoder = null;
+        return Buffer.from(jpeg, "base64");
+      }
+    };
     // Chromium may drop the final frame during a burst; send a still when it settles.
     let framesInFlight = 0;
     let mayHaveDropped = false;
+    let videoSinceStill = false;
     let motion = false;
     const recentFrames: Array<number> = [];
     let screencastParams = Promise.resolve();
@@ -2320,6 +2398,7 @@ const make = Effect.gen(function* () {
       resume: () => startScreencast(screencastScale),
       scrolledAt: 0,
       requestedSize: null,
+      waitingMotion: null,
     };
     yield* Effect.acquireRelease(
       Effect.sync(() => {
@@ -2357,43 +2436,62 @@ const make = Effect.gen(function* () {
       if (framesInFlight > 0) mayHaveDropped = true;
       framesInFlight += 1;
       const arrivedAt = Date.now();
-      recentFrames.push(arrivedAt);
-      while (recentFrames[0]! < arrivedAt - SCREENCAST_MOTION_WINDOW_MS) recentFrames.shift();
-      if (
-        !motion &&
-        recentFrames.length >= SCREENCAST_MOTION_FRAMES &&
-        arrivedAt - viewer.scrolledAt < SCREENCAST_MOTION_WINDOW_MS
-      ) {
-        motion = true;
-        void startScreencast(0.5);
-      } else if (motion && arrivedAt - viewer.scrolledAt > SCREENCAST_SETTLE_MS) {
-        motion = false;
-        recentFrames.length = 0;
-        void startScreencast(1);
-      }
-      if (settleTimer !== null) clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        settleTimer = null;
-        if (!motion && !mayHaveDropped) return;
-        mayHaveDropped = false;
-        if (motion) {
+      // Video already keeps moving frames small, so only JPEG viewers drop resolution.
+      if (!video) {
+        recentFrames.push(arrivedAt);
+        while (recentFrames[0]! < arrivedAt - SCREENCAST_MOTION_WINDOW_MS) recentFrames.shift();
+        if (
+          !motion &&
+          recentFrames.length >= SCREENCAST_MOTION_FRAMES &&
+          arrivedAt - viewer.scrolledAt < SCREENCAST_MOTION_WINDOW_MS
+        ) {
+          motion = true;
+          void startScreencast(0.5);
+        } else if (motion && arrivedAt - viewer.scrolledAt > SCREENCAST_SETTLE_MS) {
           motion = false;
           recentFrames.length = 0;
           void startScreencast(1);
         }
-        void pushStill();
-      }, SCREENCAST_SETTLE_MS);
+      }
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      settleTimer = setTimeout(
+        () => {
+          settleTimer = null;
+          if (!motion && !mayHaveDropped && !videoSinceStill) return;
+          mayHaveDropped = false;
+          videoSinceStill = false;
+          if (motion) {
+            motion = false;
+            recentFrames.length = 0;
+            void startScreencast(1);
+          }
+          void pushStill();
+        },
+        video ? VIDEO_SETTLE_MS : SCREENCAST_SETTLE_MS,
+      );
+      let released: Promise<void> | null = null;
+      const release = () =>
+        (released ??= sleepUntil(
+          arrivedAt + (video ? VIDEO_ACK_PACE_MS : SCREENCAST_ACK_PACE_MS),
+        ).then(() => {
+          framesInFlight -= 1;
+          return session
+            .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+            .then(constVoid, constVoid);
+        }));
+      if (videoEncoder) videoSinceStill = true;
       viewer.push({
         _tag: "frame",
-        data: Buffer.from(frame.data, "base64"),
-        ack: Effect.promise(() =>
-          sleepUntil(arrivedAt + SCREENCAST_ACK_PACE_MS).then(() => {
-            framesInFlight -= 1;
-            return session
-              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-              .catch(constVoid);
-          }),
-        ),
+        // The window between server and viewer bounds video, so Chromium is released once a
+        // frame is encoded rather than when the viewer acks it.
+        data: video
+          ? Effect.promise(() =>
+              encodeFrame(frame.data).finally(() => {
+                void release();
+              }),
+            )
+          : Buffer.from(frame.data, "base64"),
+        ack: Effect.promise(release),
       });
     });
     broadcastViewport(tab);
@@ -2403,6 +2501,15 @@ const make = Effect.gen(function* () {
     if (!screencastStarted) yield* Effect.promise(pushStill);
     return {
       output,
+      requestKeyFrame: Effect.promise(async () => {
+        await videoEncoder?.page
+          .evaluate(() =>
+            (
+              globalThis as unknown as ServerBrowserPage.VideoEncoderWindow
+            ).__t3Video.requestKeyFrame(),
+          )
+          .catch(constVoid);
+      }),
       input: (raw: unknown) =>
         Effect.promise(async () => {
           if (!viewer.canOperate) return;
@@ -2432,9 +2539,26 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else {
-              await tab.control.human(viewer.id, () =>
-                dispatchViewerInput(tab, session, viewer, message),
-              );
+              // Each dispatch waits for the page to handle it, so a slow page would replay seconds
+              // of queued wheels and moves. Ones arriving while another waits merge into it.
+              const waiting = viewer.waitingMotion;
+              if (waiting && motionKind(waiting) === motionKind(message)) {
+                const deltas =
+                  message.type === "wheel"
+                    ? {
+                        deltaX: num(waiting.deltaX) + num(message.deltaX),
+                        deltaY: num(waiting.deltaY) + num(message.deltaY),
+                      }
+                    : {};
+                Object.assign(waiting, message, deltas);
+                return;
+              }
+              const input = motionKind(message) === null ? message : { ...message };
+              viewer.waitingMotion = input === message ? null : input;
+              await tab.control.human(viewer.id, () => {
+                if (viewer.waitingMotion === input) viewer.waitingMotion = null;
+                return dispatchViewerInput(tab, session, viewer, input);
+              });
             }
           } catch {
             broadcastControl(tab);

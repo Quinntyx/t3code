@@ -148,6 +148,61 @@ export const PreviewStreamHostSetup = Schema.Struct({
 export type PreviewStreamHostSetup = typeof PreviewStreamHostSetup.Type;
 export const PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE = 4503;
 
+/** WebCodecs strings the stream can encode, preferred first; clients send the ones they decode. */
+export const PREVIEW_STREAM_VIDEO_CODECS = ["avc1.42E034", "vp8"] as const;
+
+// A JPEG frame starts with 0xFF, so these first bytes mark the binary message as video.
+const VIDEO_KEY_FRAME = 1;
+const VIDEO_DELTA_FRAME = 2;
+
+export type PreviewStreamFrame =
+  | { readonly type: "jpeg"; readonly data: Uint8Array }
+  | {
+      readonly type: "key";
+      readonly codec: string;
+      readonly width: number;
+      readonly height: number;
+      readonly data: Uint8Array;
+    }
+  | { readonly type: "delta"; readonly data: Uint8Array };
+
+export const encodePreviewStreamVideoFrame = (
+  frame: Exclude<PreviewStreamFrame, { readonly type: "jpeg" }>,
+): Uint8Array => {
+  if (frame.type === "delta") {
+    const bytes = new Uint8Array(1 + frame.data.byteLength);
+    bytes[0] = VIDEO_DELTA_FRAME;
+    bytes.set(frame.data, 1);
+    return bytes;
+  }
+  const codec = new TextEncoder().encode(frame.codec);
+  const header = 6 + codec.byteLength;
+  const bytes = new Uint8Array(header + frame.data.byteLength);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = VIDEO_KEY_FRAME;
+  view.setUint16(1, frame.width);
+  view.setUint16(3, frame.height);
+  bytes[5] = codec.byteLength;
+  bytes.set(codec, 6);
+  bytes.set(frame.data, header);
+  return bytes;
+};
+
+export const decodePreviewStreamFrame = (bytes: Uint8Array): PreviewStreamFrame | null => {
+  if (bytes[0] === VIDEO_DELTA_FRAME) return { type: "delta", data: bytes.subarray(1) };
+  if (bytes[0] !== VIDEO_KEY_FRAME) return bytes[0] === 0xff ? { type: "jpeg", data: bytes } : null;
+  if (bytes.byteLength < 6) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const header = 6 + bytes[5]!;
+  return {
+    type: "key",
+    width: view.getUint16(1),
+    height: view.getUint16(3),
+    codec: new TextDecoder().decode(bytes.subarray(6, header)),
+    data: bytes.subarray(header),
+  };
+};
+
 export const PreviewSessionSnapshot = Schema.Struct({
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
