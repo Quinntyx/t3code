@@ -3,7 +3,8 @@ export type ComposerTriggerKind =
   | "pull-request"
   | "slash-command"
   | "slash-model"
-  | "skill";
+  | "skill"
+  | "thread";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -136,6 +137,16 @@ export function detectComposerTrigger(
       rangeStart: tokenStart,
       rangeEnd: cursor,
     };
+  // A second `%` makes the word text, such as `%APPDATA%`.
+  const threadMatch = /^%([^%]*)$/u.exec(token);
+  if (threadMatch) {
+    return {
+      kind: "thread",
+      query: threadMatch[1] ?? "",
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
   const skillPrefix = /^\p{Sc}/u.exec(token);
   if (skillPrefix) {
     if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;

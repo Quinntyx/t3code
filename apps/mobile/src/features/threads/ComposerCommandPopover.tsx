@@ -136,6 +136,8 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
       return "Skills";
     case "path":
       return "Files";
+    case "thread":
+      return "Threads";
     default:
       return null;
   }
@@ -154,6 +156,8 @@ function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean):
       return "No skills found.";
     case "slash-command":
       return "No matching commands.";
+    case "thread":
+      return "No matching threads.";
     default:
       return "No results.";
   }
