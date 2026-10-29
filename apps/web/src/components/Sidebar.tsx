@@ -1,6 +1,7 @@
 import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
+import { resolveFocusProjectKeys } from "@t3tools/client-runtime/state/project-grouping";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
@@ -1107,6 +1108,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             ),
           ),
         );
+  const focusProjectKeys = resolveFocusProjectKeys(
+    projectGroups.map((group) => group.memberProjectRefs),
+    (routeRowThreadKey === null
+      ? null
+      : threads.find((candidate) => threadShellKey(candidate) === routeRowThreadKey)) ??
+      routeDraftThread ??
+      null,
+  );
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
 
   // History, the palette and links can open a thread the scope hides or the list
@@ -3319,6 +3328,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                             isActive={routeRowThreadKey === threadKey}
+                            isOffFocusProject={
+                              focusProjectKeys !== null &&
+                              (section === "active" || section === "pinned") &&
+                              !focusProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)
+                            }
                             revealRef={
                               routeRowThreadKey === threadKey ? revealActiveRow : undefined
                             }
