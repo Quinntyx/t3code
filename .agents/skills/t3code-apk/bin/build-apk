@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: build-apk CHECKOUT OUTPUT_DIRECTORY [--prebuild]\n'
+}
+die() { printf 'build-apk: %s\n' "$*" >&2; exit 1; }
+if [[ ${1:-} == --help ]]; then usage; exit 0; fi
+if (( $# < 2 || $# > 3 )); then usage >&2; exit 2; fi
+prebuild=0
+if (( $# == 3 )); then
+  [[ $3 == --prebuild ]] || { usage >&2; exit 2; }
+  prebuild=1
+fi
+checkout=$(cd -- "$1" && pwd -P)
+[[ $(git -C "$checkout" rev-parse --show-toplevel) == "$checkout" ]] ||
+  die 'CHECKOUT must be the repository root, not its container.'
+mobile="$checkout/apps/mobile"
+[[ -x "$mobile/node_modules/.bin/expo" ]] || die 'Installed mobile dependencies are required.'
+mkdir -p -- "$2"
+output=$(cd -- "$2" && pwd -P)
+[[ $output != "$checkout" && $output != "$checkout/"* ]] ||
+  die 'OUTPUT_DIRECTORY must be outside the checkout.'
+apk_output="$output/t3code-preview.apk"
+[[ ! -e $apk_output ]] || die 'Use a fresh output directory; the existing APK is preserved.'
+
+tool_root="$HOME/android-build-tools"
+if [[ -z ${JAVA_HOME:-} ]]; then
+  jdks=()
+  for path in "$tool_root"/jdk-*; do
+    [[ ! -x "$path/bin/java" ]] || jdks+=("$path")
+  done
+  (( ${#jdks[@]} == 1 )) || die 'Set JAVA_HOME to one installed JDK 21.'
+  JAVA_HOME=${jdks[0]}
+fi
+export JAVA_HOME
+export ANDROID_HOME=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-"$tool_root/android-sdk"}}
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export GRADLE_USER_HOME=${GRADLE_USER_HOME:-"$tool_root/gradle-home"}
+export PATH="$JAVA_HOME/bin:$checkout/node_modules/.bin:$PATH"
+export APP_VARIANT=preview T3CODE_MOBILE_UPDATES_ENABLED=0 EXPO_NO_GIT_STATUS=1 CI=1
+[[ -x "$JAVA_HOME/bin/java" ]] || die 'JAVA_HOME does not contain java.'
+[[ -d $GRADLE_USER_HOME ]] || die 'The configured Gradle dependency cache is absent.'
+build_tools="$ANDROID_HOME/build-tools/${T3_APK_BUILD_TOOLS:-36.0.0}"
+for tool in apksigner aapt; do
+  [[ -x "$build_tools/$tool" ]] || die "Missing installed Android tool: $build_tools/$tool"
+done
+
+if (( prebuild )); then
+  (
+    cd -- "$mobile"
+    ./node_modules/.bin/expo prebuild --platform android --no-install
+  ) 2>&1 | tee "$output/prebuild.log"
+fi
+android="$mobile/android"
+[[ -x "$android/gradlew" ]] || die 'Generated Android project absent; pass --prebuild.'
+manifest=$(<"$android/app/src/main/AndroidManifest.xml")
+[[ $manifest == *'android:name="expo.modules.updates.ENABLED" android:value="false"'* ]] ||
+  die 'Private-fork OTA updates are enabled; rerun with --prebuild to disable them.'
+revision=$(git -C "$checkout" rev-parse HEAD)
+status=$(git -C "$checkout" status --porcelain)
+diff_hash=$(git -C "$checkout" diff --binary HEAD -- . | sha256sum | awk '{print $1}')
+gradle_args=(:app:assembleRelease --no-daemon -x lint)
+gradle_args+=("--max-workers=${T3_APK_MAX_WORKERS:-4}")
+[[ ${T3_APK_OFFLINE:-1} == 0 ]] || gradle_args+=(--offline)
+(
+  cd -- "$android"
+  ./gradlew "${gradle_args[@]}"
+) 2>&1 | tee "$output/gradle.log"
+[[ $(git -C "$checkout" rev-parse HEAD) == "$revision" ]] ||
+  die 'HEAD changed during the build; do not publish this artifact.'
+[[ $(git -C "$checkout" status --porcelain) == "$status" ]] ||
+  die 'Source status changed during the build; inspect before publishing.'
+[[ $(git -C "$checkout" diff --binary HEAD -- . | sha256sum | awk '{print $1}') == \
+  "$diff_hash" ]] || die 'Tracked source changed during the build; do not publish.'
+
+apk="$android/app/build/outputs/apk/release/app-release.apk"
+[[ -s $apk ]] || die 'Gradle did not produce the release APK.'
+"$build_tools/apksigner" verify --print-certs "$apk" | tee "$output/signature.txt"
+cert=$(awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}' "$output/signature.txt")
+[[ -n $cert ]] || die 'No signing certificate found.'
+[[ -z ${T3_APK_EXPECTED_CERT_SHA256:-} || $cert == "$T3_APK_EXPECTED_CERT_SHA256" ]] ||
+  die 'The APK signing certificate does not match the expected installation.'
+"$build_tools/aapt" dump badging "$apk" > "$output/package.txt"
+package=$(awk -F"'" '/^package: name=/ {print $2; exit}' "$output/package.txt")
+[[ $package == com.t3tools.t3code.preview ]] || die "Unexpected application ID: $package"
+if awk '/^application-debuggable/ {found=1} END {exit !found}' "$output/package.txt"; then
+  die 'A debuggable application was built instead of the standalone release.'
+fi
+"$build_tools/aapt" list "$apk" > "$output/apk-files.txt"
+awk '$0 == "assets/index.android.bundle" {found=1} END {exit !found}' \
+  "$output/apk-files.txt" || die 'The APK has no embedded JavaScript bundle.'
+cp -- "$apk" "$apk_output"
+(cd -- "$output" && sha256sum t3code-preview.apk > t3code-preview.apk.sha256)
+sha=$(awk '{print $1}' "$output/t3code-preview.apk.sha256")
+metadata="$android/app/build/outputs/apk/release/output-metadata.json"
+node - "$apk_output" "$revision" "$status" "$diff_hash" "$cert" "$sha" "$metadata" <<'NODE'
+const fs = require('node:fs');
+const [apk, revision, status, diff, certificate, sha256, metadata] = process.argv.slice(2);
+const native = JSON.parse(fs.readFileSync(metadata, 'utf8'));
+fs.writeFileSync(`${apk}.build-info.json`, JSON.stringify({
+  createdAt: new Date().toISOString(),
+  sourceCommit: revision,
+  workingTreeStatus: status,
+  trackedDiffSha256: diff,
+  sha256,
+  signingCertificateSha256: certificate,
+  packageName: native.applicationId,
+  variant: native.variantName,
+  versionName: native.elements[0].versionName,
+  versionCode: native.elements[0].versionCode,
+  nativeUpdatesDisabled: true,
+  deviceVerification: 'not performed by this helper',
+}, null, 2) + '\n');
+NODE
+printf '\nAPK=%s\nSHA256=%s\nCERTIFICATE=%s\n' "$apk_output" "$sha" "$cert"
