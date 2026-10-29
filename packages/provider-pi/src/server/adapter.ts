@@ -1849,9 +1849,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               Math.trunc(recordNumber(event, "maxAttempts") ?? attempt),
             );
             const retryDelayMs = Math.max(0, Math.trunc(recordNumber(event, "delayMs") ?? 0));
+            const errorMessage =
+              recordString(event, "errorMessage") ?? "Pi provider request failed.";
             const failure = makeProviderFailure({
-              message: recordString(event, "errorMessage") ?? "Pi provider request failed.",
-              class: "provider_error",
+              message: errorMessage,
+              ...piFailureClassification(errorMessage, emittedAt),
               retryable: true,
             });
             const current = turn.activeProviderRetry;
@@ -1971,9 +1973,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 return;
               }
               if (!compactTurn.sawCompaction) {
+                const errorMessage = recordString(event, "error") ?? "Pi compact failed.";
                 compactTurn.failure = makeProviderFailure({
-                  message: recordString(event, "error") ?? "Pi compact failed.",
-                  class: "provider_error",
+                  message: errorMessage,
+                  ...piFailureClassification(errorMessage, yield* DateTime.now),
                 });
                 if (state !== null) yield* finalizeTurn(state);
                 return;
