@@ -292,7 +292,10 @@ export const make = Effect.gen(function* () {
     getChangeRequest: getPull,
     listChangeRequests: Effect.fn("GitCafeSourceControlProvider.listChangeRequests")(
       function* (input) {
-        const target = yield* resolveTarget("listChangeRequests", input);
+        const target = yield* resolveTarget("listChangeRequests", {
+          ...input,
+          ...(input.targetRepository ? { repository: input.targetRepository } : {}),
+        });
         const source = SourceControlProvider.sourceControlRefFromInput(input);
         const branch = SourceControlProvider.sourceBranch(input);
         const limit = input.limit ?? 20;

@@ -158,6 +158,12 @@ Use a thread's Git actions to commit, push, and create a pull request. T3 Code c
 messages, review titles, and descriptions from your changes. Descriptions also draw on the work in
 the thread, including the checks it ran.
 
+A pull request targets the repository of the branch you started from. In a fork, a worktree
+created from your fork's `main` opens its PR in your fork, and one created from `upstream/main`
+opens it upstream. A branch with no recorded starting point, such as `main` itself, opens its PR
+in the repository the host picks by default. On GitHub that is the one `gh repo set-default`
+chose, or the parent repository if no default is set.
+
 An existing fork PR can appear beside the branch even if you pushed without setting an upstream.
 If its badge is missing because several remotes hold that branch, set the branch's upstream to
 the intended remote with `git branch --set-upstream-to=<remote>/<branch>`.

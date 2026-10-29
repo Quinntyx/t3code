@@ -237,6 +237,8 @@ interface BranchHeadContext {
   remoteName: string | null;
   headRemoteUrlKey: string | null;
   targetRemoteUrlKey: string | null;
+  /** Null when change requests go to the host's default repository. */
+  targetRepositoryNameWithOwner: string | null;
   headRepositoryNameWithOwner: string | null;
   headRepositoryOwnerLogin: string | null;
   isCrossRepository: boolean;
@@ -1420,22 +1422,22 @@ export const make = Effect.gen(function* () {
   const readConfigValueNullable = (cwd: string, key: string) =>
     gitCore.readConfigValue(cwd, key).pipe(Effect.orElseSucceed(() => null));
 
-  // Whether the remote's host creates change requests in the only remote. A host's tools can let
-  // configuration outside the remotes name another repository; the remote itself otherwise.
-  const targetsOnlyRemote = Effect.fn("targetsOnlyRemote")(function* (
+  // Whether the remote's host creates change requests in the remote's repository, for a host whose
+  // tools can pick another one (gh ranks `upstream` above `origin`). Null when the host doesn't say.
+  const createsChangeRequestsInRemote = Effect.fn("createsChangeRequestsInRemote")(function* (
     cwd: string,
     remoteName: string,
     remote: { readonly remoteUrl: string | null; readonly repositoryNameWithOwner: string | null },
   ) {
     const provider =
       remote.remoteUrl === null ? null : sourceControlDefinitions.recognizeRemote(remote.remoteUrl);
-    if (remote.remoteUrl === null || provider === null) return true;
+    if (remote.remoteUrl === null || provider === null) return null;
     const context = { provider, remoteName, remoteUrl: remote.remoteUrl };
     const handle = yield* sourceControlProviders
       .resolveHandle({ cwd, context })
       .pipe(Effect.orElseSucceed(() => null));
     const createsChangeRequestsIn = handle?.provider.createsChangeRequestsIn;
-    if (createsChangeRequestsIn === undefined) return true;
+    if (createsChangeRequestsIn === undefined) return null;
     return yield* createsChangeRequestsIn({
       cwd,
       context: handle?.context ?? context,
@@ -1503,15 +1505,35 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const resolveHeadAndOriginContexts = (cwd: string, remoteName: string | null) =>
-    remoteName === "origin"
-      ? resolveRemoteRepositoryContext(cwd, "origin").pipe(
-          Effect.map((origin) => [origin, origin] as const),
+  // Change requests target the repository of the remote the branch's recorded base is on. Remote
+  // names can contain slashes, so the longest prefix that names a configured remote wins.
+  const readBaseRemoteName = Effect.fn("readBaseRemoteName")(function* (
+    branch: string,
+    readConfig: (key: string) => Effect.Effect<string | null>,
+  ) {
+    const baseRef = yield* readConfig(`branch.${branch}.t3-merge-base-ref`);
+    if (!baseRef?.startsWith("refs/remotes/")) return null;
+    const parts = baseRef.slice("refs/remotes/".length).split("/");
+    for (let end = parts.length - 1; end > 0; end--) {
+      const remoteName = parts.slice(0, end).join("/");
+      if ((yield* readConfig(`remote.${remoteName}.url`)) !== null) return remoteName;
+    }
+    return null;
+  });
+
+  const resolveHeadAndTargetContexts = (
+    cwd: string,
+    remoteName: string | null,
+    targetRemoteName: string,
+  ) =>
+    remoteName === targetRemoteName
+      ? resolveRemoteRepositoryContext(cwd, targetRemoteName).pipe(
+          Effect.map((target) => [target, target] as const),
         )
       : Effect.all(
           [
             resolveRemoteRepositoryContext(cwd, remoteName),
-            resolveRemoteRepositoryContext(cwd, "origin"),
+            resolveRemoteRepositoryContext(cwd, targetRemoteName),
           ],
           { concurrency: "unbounded" },
         );
@@ -1530,18 +1552,32 @@ export const make = Effect.gen(function* () {
     const shouldProbeLocalBranchSelector =
       headBranchFromUpstream.length === 0 || headBranch === details.branch;
 
-    const [remoteRepository, originRepository] = yield* resolveHeadAndOriginContexts(
+    const baseRemoteName = yield* readBaseRemoteName(details.branch, (key) =>
+      readConfigValueNullable(cwd, key),
+    );
+    const targetRemoteName = baseRemoteName ?? "origin";
+    const [remoteRepository, targetRepository] = yield* resolveHeadAndTargetContexts(
       cwd,
       remoteName,
+      targetRemoteName,
     );
 
+    // Without a recorded base, a host that names its default target decides; otherwise origin.
+    const targetsHeadRemote =
+      baseRemoteName !== null ||
+      remoteName === null ||
+      remoteRepository.repositoryNameWithOwner === null
+        ? null
+        : yield* createsChangeRequestsInRemote(cwd, remoteName, remoteRepository);
+
     // With no origin to compare against, the only remote is the repository change requests
-    // are created in unless the host's own configuration names another, so a branch on it is
-    // not a fork. With several remotes, or with that other target, it may still be a fork.
+    // are created in, so a branch on it is not a fork.
     const isOnlyRemote =
+      baseRemoteName === null &&
+      targetsHeadRemote === null &&
       remoteName !== null &&
       remoteName !== "origin" &&
-      originRepository.remoteUrlKey === null &&
+      targetRepository.remoteUrlKey === null &&
       (yield* gitCore
         .execute({
           operation: "GitManager.resolveBranchHeadContext.remotes",
@@ -1554,16 +1590,21 @@ export const make = Effect.gen(function* () {
             (result) => result.stdout.split("\n").filter((name) => name.trim().length > 0).length,
           ),
           Effect.orElseSucceed(() => 0),
-        )) === 1 &&
-      (yield* targetsOnlyRemote(cwd, remoteName, remoteRepository));
-    const isForeignRemote = remoteName !== null && remoteName !== "origin" && !isOnlyRemote;
+        )) === 1;
+    const isForeignRemote =
+      remoteName !== null &&
+      remoteName !== targetRemoteName &&
+      targetsHeadRemote !== true &&
+      !isOnlyRemote;
 
     const isCrossRepository =
-      remoteRepository.repositoryNameWithOwner !== null &&
-      originRepository.repositoryNameWithOwner !== null
-        ? remoteRepository.repositoryNameWithOwner.toLowerCase() !==
-          originRepository.repositoryNameWithOwner.toLowerCase()
-        : isForeignRemote && remoteRepository.repositoryNameWithOwner !== null;
+      targetsHeadRemote !== null
+        ? !targetsHeadRemote
+        : remoteRepository.repositoryNameWithOwner !== null &&
+            targetRepository.repositoryNameWithOwner !== null
+          ? remoteRepository.repositoryNameWithOwner.toLowerCase() !==
+            targetRepository.repositoryNameWithOwner.toLowerCase()
+          : isForeignRemote && remoteRepository.repositoryNameWithOwner !== null;
 
     const ownerHeadSelector =
       remoteRepository.ownerLogin && headBranch.length > 0
@@ -1602,8 +1643,10 @@ export const make = Effect.gen(function* () {
       remoteName,
       headRemoteUrlKey:
         remoteRepository.remoteUrlKey ??
-        (remoteName === null ? originRepository.remoteUrlKey : null),
-      targetRemoteUrlKey: originRepository.remoteUrlKey,
+        (remoteName === null ? targetRepository.remoteUrlKey : null),
+      targetRemoteUrlKey: targetRepository.remoteUrlKey,
+      targetRepositoryNameWithOwner:
+        baseRemoteName === null ? null : targetRepository.repositoryNameWithOwner,
       headRepositoryNameWithOwner: remoteRepository.repositoryNameWithOwner,
       headRepositoryOwnerLogin: remoteRepository.ownerLogin,
       isCrossRepository,
@@ -1818,6 +1861,13 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.orElseSucceed(() => false));
   });
 
+  const targetRepositoryInput = (
+    headContext: Pick<BranchHeadContext, "targetRepositoryNameWithOwner">,
+  ) =>
+    headContext.targetRepositoryNameWithOwner === null
+      ? {}
+      : { targetRepository: headContext.targetRepositoryNameWithOwner };
+
   const findOpenPr = Effect.fn("findOpenPr")(function* (
     cwd: string,
     headContext: Pick<
@@ -1827,6 +1877,7 @@ export const make = Effect.gen(function* () {
       | "headRepositoryNameWithOwner"
       | "headRepositoryOwnerLogin"
       | "isCrossRepository"
+      | "targetRepositoryNameWithOwner"
     >,
   ) {
     const provider = yield* sourceControlProvider(cwd);
@@ -1834,6 +1885,7 @@ export const make = Effect.gen(function* () {
     for (const headSelector of probe.headSelectors) {
       const pullRequests = yield* provider.listChangeRequests({
         cwd,
+        ...targetRepositoryInput(headContext),
         headSelector,
         state: "open",
         limit: probe.limit,
@@ -1866,6 +1918,7 @@ export const make = Effect.gen(function* () {
     for (const headSelector of probe.headSelectors) {
       const pullRequests = yield* provider.listChangeRequests({
         cwd,
+        ...targetRepositoryInput(headContext),
         headSelector,
         state: "all",
         limit: probe.limit,
@@ -2330,6 +2383,14 @@ export const make = Effect.gen(function* () {
       .createChangeRequest({
         cwd,
         baseRefName: baseBranch,
+        ...(headContext.targetRepositoryNameWithOwner === null
+          ? {}
+          : {
+              target: {
+                refName: baseBranch,
+                repository: headContext.targetRepositoryNameWithOwner,
+              },
+            }),
         headSelector: headContext.preferredHeadSelector,
         title: generated.title,
         bodyFile,
@@ -2446,10 +2507,11 @@ export const make = Effect.gen(function* () {
               ),
             );
       const remoteName = remoteNameOverride ?? (yield* readConfig(`branch.${branch}.remote`));
+      const targetRemoteName = (yield* readBaseRemoteName(branch, readConfig)) ?? "origin";
       const [headRemoteUrlKey, targetRemoteUrlKey] =
-        remoteName === "origin"
-          ? yield* readRemoteUrlKey("origin").pipe(Effect.map((key) => [key, key] as const))
-          : yield* Effect.all([readRemoteUrlKey(remoteName), readRemoteUrlKey("origin")], {
+        remoteName === targetRemoteName
+          ? yield* readRemoteUrlKey(targetRemoteName).pipe(Effect.map((key) => [key, key] as const))
+          : yield* Effect.all([readRemoteUrlKey(remoteName), readRemoteUrlKey(targetRemoteName)], {
               concurrency: "unbounded",
             });
       return {
