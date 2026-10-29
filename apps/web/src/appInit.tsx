@@ -4,6 +4,7 @@ import { createBrowserHistory, createHashHistory } from "@tanstack/react-router"
 
 import { applyAppearanceContrast } from "./appearanceContrast";
 import { applyAppearanceFontVariables } from "./appearanceFonts";
+import { startLiquidGlass, type LiquidGlassController } from "./liquid-glass/engine";
 import { startElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { startBrowserProfileReporting } from "./browser/BrowserProfileReporter";
 import { startPreviewTitleRecording } from "./browserHistoryStore";
@@ -52,6 +53,24 @@ import { resolveThreadRouteTarget } from "./threadRoutes";
 function startClientAppearance(): void {
   const root = document.documentElement;
   let applied: ClientSettings | null = null;
+  let liquidGlass: LiquidGlassController | null = null;
+  let liquidGlassKey = "";
+  const applyLiquidGlass = (settings: ClientSettings) => {
+    const enabled = settings.liquidGlassEnabled && document.body !== null;
+    const key = enabled ? JSON.stringify(settings.liquidGlassTuning) : "";
+    if (key === liquidGlassKey) return;
+    liquidGlassKey = key;
+    if (!enabled) {
+      liquidGlass?.stop();
+      liquidGlass = null;
+      return;
+    }
+    if (liquidGlass) {
+      liquidGlass.update(settings.liquidGlassTuning);
+      return;
+    }
+    liquidGlass = startLiquidGlass(settings.liquidGlassTuning);
+  };
   const apply = () => {
     const settings = getClientSettings();
     const previous = applied;
@@ -73,6 +92,7 @@ function startClientAppearance(): void {
         root.style.removeProperty("--glass-blur");
       }
     }
+    applyLiquidGlass(settings);
     if (
       previous?.fontFamilySans !== settings.fontFamilySans ||
       previous.fontFamilyCode !== settings.fontFamilyCode ||
