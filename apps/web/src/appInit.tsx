@@ -4,6 +4,7 @@ import { createBrowserHistory, createHashHistory } from "@tanstack/react-router"
 
 import { applyAppearanceContrast } from "./appearanceContrast";
 import { applyAppearanceFontVariables } from "./appearanceFonts";
+import { startLiquidGlass, type LiquidGlassController } from "./liquid-glass/engine";
 import { startElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { startBrowserProfileReporting } from "./browser/BrowserProfileReporter";
 import { startPreviewTitleRecording } from "./browserHistoryStore";
@@ -48,10 +49,29 @@ import { registerOpenFavoriteEditorCommand } from "./components/chat/OpenInPicke
 import { environmentThreadShells } from "./state/threads";
 import { resolveThreadRouteTarget } from "./threadRoutes";
 
+const LIQUID_GLASS_TINT_SCALE = 0.55;
+
+function renderedGlassOpacity(settings: ClientSettings): number {
+  // Refraction is only visible through a thinner tint, so liquid glass scales the slider down
+  // instead of letting an opaque surface hide the effect it was just switched on for.
+  return settings.liquidGlassEnabled
+    ? Math.round(settings.glassOpacity * LIQUID_GLASS_TINT_SCALE)
+    : settings.glassOpacity;
+}
+
 /** Writes appearance settings onto the document, touching only the groups that changed. */
 function startClientAppearance(): void {
   const root = document.documentElement;
   let applied: ClientSettings | null = null;
+  let liquidGlass: LiquidGlassController | null = null;
+  const applyLiquidGlass = (enabled: boolean) => {
+    if (!enabled) {
+      liquidGlass?.stop();
+      liquidGlass = null;
+      return;
+    }
+    liquidGlass ??= startLiquidGlass();
+  };
   const apply = () => {
     const settings = getClientSettings();
     const previous = applied;
@@ -65,14 +85,18 @@ function startClientAppearance(): void {
     if (previous?.appearanceContrast !== settings.appearanceContrast) {
       applyAppearanceContrast(root, settings.appearanceContrast);
     }
-    if (previous?.glassOpacity !== settings.glassOpacity) {
-      root.style.setProperty("--glass-opacity", `${settings.glassOpacity}%`);
+    if (
+      previous?.glassOpacity !== settings.glassOpacity ||
+      previous.liquidGlassEnabled !== settings.liquidGlassEnabled
+    ) {
+      root.style.setProperty("--glass-opacity", `${renderedGlassOpacity(settings)}%`);
       if (settings.glassOpacity === 100) {
         root.style.setProperty("--glass-blur", "0px");
       } else {
         root.style.removeProperty("--glass-blur");
       }
     }
+    applyLiquidGlass(settings.liquidGlassEnabled);
     if (
       previous?.fontFamilySans !== settings.fontFamilySans ||
       previous.fontFamilyCode !== settings.fontFamilyCode ||

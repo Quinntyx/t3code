@@ -200,6 +200,32 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
+          {...searchableSetting("setting-liquid-glass")}
+          description="Bend what is behind the composer, menus, and dialogs instead of only blurring it, at a much thinner tint. Chromium-only; other browsers keep the flat frost."
+          resetAction={
+            settings.liquidGlassEnabled ? (
+              <SettingResetButton
+                label="liquid glass"
+                onClick={() =>
+                  updateSettings({
+                    liquidGlassEnabled: DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              aria-label="Liquid glass"
+              checked={settings.liquidGlassEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ liquidGlassEnabled: Boolean(checked) })
+              }
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("chat-width")}
           description="Set how wide messages and the composer can grow on large screens."
           resetAction={
