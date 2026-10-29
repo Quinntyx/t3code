@@ -48,6 +48,14 @@ The main sidebar, right panel, and terminal drawer open and close immediately by
 in your operating system. Moving between threads always snaps to the selected thread's panel state
 without replaying its transitions.
 
+## Buddy
+
+Pick a buddy under **Settings → Appearance → Buddy** to add an animated companion that floats
+above the app. It reacts to the agent in the thread you have open: thinking, running tools,
+waiting on an approval or answer, and finishing or failing a turn. Drag it anywhere on screen;
+click it to tease it. The choice and position are saved on each device. Buddies are not available
+in the mobile app, and Safari may show them on a solid background.
+
 ## Custom themes
 
 On web and desktop, choose **Create theme** to adjust a palette, or import a T3 Code or VS Code
