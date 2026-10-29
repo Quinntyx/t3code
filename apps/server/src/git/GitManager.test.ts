@@ -104,12 +104,14 @@ type FakeProviderCall =
       readonly headSelector: string;
       readonly state: string;
       readonly limit: number | undefined;
+      readonly targetRepository?: string;
     }
   | {
       readonly operation: "createChangeRequest";
       readonly baseRefName: string;
       readonly headSelector: string;
       readonly title: string;
+      readonly targetRepository?: string;
     }
   | { readonly operation: "getChangeRequest"; readonly reference: string }
   | {
@@ -448,6 +450,7 @@ function createFakeSourceControlProvider(scenario: FakeProviderScenario = {}): {
           headSelector: input.headSelector,
           state: input.state,
           limit: input.limit,
+          ...(input.targetRepository ? { targetRepository: input.targetRepository } : {}),
         }).pipe(
           Effect.map(() =>
             (
@@ -472,6 +475,7 @@ function createFakeSourceControlProvider(scenario: FakeProviderScenario = {}): {
           baseRefName: input.baseRefName,
           headSelector: input.headSelector,
           title: input.title,
+          ...(input.target?.repository ? { targetRepository: input.target.repository } : {}),
         }),
       getDefaultBranch: (input) =>
         record(input.cwd, { operation: "getDefaultBranch" }).pipe(
@@ -3847,6 +3851,98 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         ),
       ).toBe(false);
     }),
+  );
+
+  // With no recorded base the host's default decides; here, like gh without
+  // `gh repo set-default`, that is upstream. A recorded base's remote decides otherwise.
+  it.effect.each([
+    { headRemote: "origin", base: null, headSelector: "octocat:statemachine", target: undefined },
+    { headRemote: "upstream", base: null, headSelector: "statemachine", target: undefined },
+    {
+      headRemote: "origin",
+      base: "origin",
+      headSelector: "statemachine",
+      target: "octocat/codething-mvp",
+    },
+    {
+      headRemote: "origin",
+      base: "upstream",
+      headSelector: "octocat:statemachine",
+      target: "pingdotgg/codething-mvp",
+    },
+  ] as const)(
+    "creates PRs for a branch on $headRemote against the repository of its base ($base)",
+    ({ headRemote, base, headSelector, target }) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        for (const [remoteName, owner] of [
+          ["origin", "octocat"],
+          ["upstream", "pingdotgg"],
+        ] as const) {
+          const remoteDir = yield* createBareRemote();
+          yield* runGit(repoDir, ["remote", "add", remoteName, remoteDir]);
+          yield* configureVisibleRemoteUrlWithLocalRewrite(
+            repoDir,
+            remoteName,
+            `git@github.com:${owner}/codething-mvp.git`,
+            remoteDir,
+          );
+          yield* runGit(repoDir, ["push", remoteName, "main"]);
+        }
+        yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
+        if (base !== null) {
+          yield* runGit(repoDir, [
+            "config",
+            "branch.statemachine.t3-merge-base-ref",
+            `refs/remotes/${base}/main`,
+          ]);
+        }
+        NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
+        yield* runGit(repoDir, ["add", "changes.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+        yield* runGit(repoDir, ["push", "-u", headRemote, "statemachine"]);
+
+        const headOwner = headRemote === "origin" ? "octocat" : "pingdotgg";
+        const { service, calls } = createFakeSourceControlProvider({
+          prListSequenceByHeadSelector: {
+            statemachine: [
+              [],
+              [
+                {
+                  number: 188,
+                  title: "Add stacked git actions",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/188",
+                  baseRefName: "main",
+                  headRefName: "statemachine",
+                  state: "open",
+                  isCrossRepository: headSelector.includes(":"),
+                  headRepositoryNameWithOwner: `${headOwner}/codething-mvp`,
+                  headRepositoryOwnerLogin: headOwner,
+                },
+              ],
+            ],
+          },
+        });
+        const { manager } = yield* makeManager({
+          sourceControlProvider: {
+            ...service,
+            createsChangeRequestsIn: ({ repository }) =>
+              Effect.succeed(repository === "pingdotgg/codething-mvp"),
+          },
+        });
+
+        const result = yield* runStackedAction(manager, { cwd: repoDir, action: "create_pr" });
+
+        expect(created(calls)).toEqual([{ baseRefName: "main", headSelector }]);
+        expect(result.pr.number).toBe(188);
+        const targets = calls.flatMap((call) =>
+          call.operation === "listChangeRequests" || call.operation === "createChangeRequest"
+            ? [call.targetRepository]
+            : [],
+        );
+        expect(targets).toEqual(targets.map(() => target));
+      }),
   );
 
   it.effect("rejects push/pr actions from detached HEAD", () =>

@@ -151,8 +151,8 @@ export class SourceControlProvider extends Context.Service<
     readonly resolveLink?: ResolveSourceControlLink;
     /**
      * Whether `createChangeRequest` from `cwd` targets `repository`, the `owner/name` of the
-     * context's remote, for a host whose tools let configuration outside the remotes name another
-     * repository. Absent means it does.
+     * context's remote when no `target` repository is given, for a host whose tools can pick
+     * another remote or name another repository. Absent means `origin`, or the only remote.
      */
     readonly createsChangeRequestsIn?: (input: {
       readonly cwd: string;
@@ -171,6 +171,8 @@ export class SourceControlProvider extends Context.Service<
     readonly listChangeRequests: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      /** The repository, as in `createChangeRequest`'s `target`, to search; absent is the host's default. */
+      readonly targetRepository?: string;
       readonly source?: SourceControlRefSelector;
       readonly headSelector: string;
       readonly state: ChangeRequestState | "all";

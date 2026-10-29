@@ -772,6 +772,42 @@ it.effect("names the web server behind an SSH alias from the login that serves i
   ),
 );
 
+it.effect("lists Forgejo pull requests in the target repository it is given", () => {
+  const paths: string[] = [];
+  return Effect.gen(function* () {
+    const provider = yield* ForgejoSourceControlProvider.make;
+    yield* provider.listChangeRequests({
+      cwd: "/repo",
+      targetRepository: "team/project",
+      headSelector: "maria:feature",
+      state: "open",
+    });
+    assert.deepStrictEqual(
+      paths.map((path) => path.split("?")[0]),
+      ["repos/team/project/pulls"],
+    );
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        TestSourceControlHost.layer({ process: {} }),
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          resolveRepository: () =>
+            Effect.succeed({
+              login: "work",
+              repository: "maria/project",
+              baseUrl: "https://forgejo.test",
+            }),
+          api: (input) => {
+            paths.push(input.path);
+            return encodeJsonEffect([]).pipe(Effect.orDie, Effect.map(processOutput));
+          },
+        }),
+      ),
+    ),
+  );
+});
+
 it.effect("loads Forgejo pull request references from files and commits views", () =>
   Effect.gen(function* () {
     const provider = yield* ForgejoSourceControlProvider.make;
