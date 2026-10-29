@@ -224,7 +224,8 @@ export function ComposerControlsBar(props: {
               !showInlineRestingControls &&
                 "@max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:w-0 @max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:flex-none",
             )
-          : "-ms-2 min-w-13"
+          : // Concentric with the composer corner: both share the footer inset.
+            "min-w-13 rounded-bl-(--chat-composer-action-radius)"
       }
       terminalOpen={terminalOpen}
       open={modelPickerOpen}
