@@ -132,6 +132,15 @@ export const GlassOpacity = Schema.Int.check(
 export type GlassOpacity = typeof GlassOpacity.Type;
 const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
 
+export const MAX_LIQUID_GLASS_BLUR = 24;
+const LiquidGlassBlur = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: MAX_LIQUID_GLASS_BLUR }),
+);
+export const MAX_LIQUID_GLASS_PERCENT = 200;
+const LiquidGlassPercent = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: MAX_LIQUID_GLASS_PERCENT }),
+);
+
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
 export const AppearanceContrast = Schema.Int.check(
@@ -433,6 +442,10 @@ export const ClientSettingsSchema = Schema.Struct({
   // Chromium-only: the effect bends the backdrop with an SVG filter, which no other engine
   // runs over `backdrop-filter`.
   liquidGlassEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  liquidGlassBlur: LiquidGlassBlur.pipe(Schema.withDecodingDefault(Effect.succeed(1))),
+  liquidGlassSaturation: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
+  liquidGlassRefraction: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
+  liquidGlassDispersion: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
   fontSizeInterface: InterfaceFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
   ),
@@ -1704,6 +1717,10 @@ export const ClientSettingsPatch = Schema.Struct({
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   liquidGlassEnabled: Schema.optionalKey(Schema.Boolean),
+  liquidGlassBlur: Schema.optionalKey(LiquidGlassBlur),
+  liquidGlassSaturation: Schema.optionalKey(LiquidGlassPercent),
+  liquidGlassRefraction: Schema.optionalKey(LiquidGlassPercent),
+  liquidGlassDispersion: Schema.optionalKey(LiquidGlassPercent),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),

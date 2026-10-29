@@ -121,8 +121,8 @@ function errorDescriptionClampClass(type: unknown, description: unknown): string
 const toastDismissClass =
   "absolute top-[calc(--spacing(2)-1px)] right-[calc(--spacing(2)-1px)] z-20";
 const toastCloseClass = cn(
-  "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[calc(var(--radius-glass)-0.5rem)] border border-border/60 bg-muted/40 text-muted-foreground outline-none",
-  "transition-[color,background-color,box-shadow] hover:bg-accent hover:text-foreground",
+  "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[calc(var(--radius-glass)-0.5rem)] border border-border/60 bg-muted/20 text-muted-foreground outline-none",
+  "transition-[color,background-color,box-shadow] hover:bg-accent/35 hover:text-foreground",
   "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
 );
 
@@ -286,7 +286,6 @@ type ToastIconComponent = (typeof TOAST_ICONS)[keyof typeof TOAST_ICONS];
 
 interface ToastBodyDescriptor {
   readonly Icon: ToastIconComponent | null | undefined;
-  readonly stackedActionLayout: boolean;
   readonly actionVariant: NonNullable<ThreadToastData["actionVariant"]>;
   readonly secondaryActionVariant: NonNullable<ThreadToastData["secondaryActionVariant"]>;
   readonly copyErrorText: string | null;
@@ -300,8 +299,6 @@ function deriveToastBodyDescriptor(toast: {
   readonly data?: ThreadToastData | undefined;
 }): ToastBodyDescriptor {
   const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
-  const stackedActionLayout =
-    hasVisibleToastAction(toast.actionProps) && toast.data?.actionLayout === "stacked-end";
   const actionVariant: NonNullable<ThreadToastData["actionVariant"]> =
     toast.data?.actionVariant ?? "default";
   const secondaryActionVariant: NonNullable<ThreadToastData["secondaryActionVariant"]> =
@@ -319,7 +316,6 @@ function deriveToastBodyDescriptor(toast: {
     hasSecondaryAction;
   return {
     Icon,
-    stackedActionLayout,
     actionVariant,
     secondaryActionVariant,
     copyErrorText,
@@ -335,7 +331,6 @@ interface ToastBodyContentProps extends ToastBodyDescriptor {
 }
 
 function ToastBodyContent({
-  stackedActionLayout,
   Icon,
   copyErrorText,
   actionProps,
@@ -354,9 +349,7 @@ function ToastBodyContent({
 
   return (
     <>
-      <div
-        className={cn("flex min-h-0 min-w-0 flex-col gap-0.5", !stackedActionLayout && "flex-1")}
-      >
+      <div className="flex min-h-8 min-w-0 flex-col gap-0.5 px-1.5 pt-1 pr-10">
         <div className="flex min-w-0 gap-2">
           {leadingIcon ? (
             <div
@@ -383,10 +376,8 @@ function ToastBodyContent({
       </div>
       {hasTrailingControls ? (
         <div
-          className={cn(
-            "flex items-center gap-1.5",
-            stackedActionLayout ? "w-full justify-end" : "shrink-0",
-          )}
+          className="flex w-full flex-wrap items-center justify-end gap-2 [--control-radius:calc(var(--radius-glass)-0.5rem)]"
+          data-slot="toast-actions"
         >
           {copyErrorText !== null ? <CopyErrorButton text={copyErrorText} /> : null}
           {additionalActions.map(({ id, props: { className, ...props } }) => (
@@ -394,7 +385,7 @@ function ToastBodyContent({
               {...props}
               className={className}
               key={id}
-              size="xs"
+              size="default"
               type="button"
               variant={secondaryActionVariant}
             />
@@ -403,14 +394,14 @@ function ToastBodyContent({
             <Button
               {...secondaryActionRest}
               className={secondaryActionClassName}
-              size="xs"
+              size="default"
               type="button"
               variant={secondaryActionVariant}
             />
           ) : null}
           {hasVisibleToastAction(actionProps) ? (
             <Toast.Action
-              className={cn(buttonVariants({ size: "xs", variant: actionVariant }), "shrink-0")}
+              className={buttonVariants({ size: "default", variant: actionVariant })}
               data-slot="toast-action"
             >
               {actionProps?.children}
@@ -584,7 +575,6 @@ function Toasts({ position }: { position: ToastPosition }) {
             visibleToastLayout.items.length,
           );
           const bodyDescriptor = deriveToastBodyDescriptor(toast);
-          const { stackedActionLayout } = bodyDescriptor;
 
           return (
             <Toast.Root
@@ -666,10 +656,7 @@ function Toasts({ position }: { position: ToastPosition }) {
                 className={cn(
                   // overflow-x:clip preserves visible vertical overflow; hidden would force overflow-y:auto
                   // and clip detail panels.
-                  "pointer-events-auto min-h-12 overflow-y-visible pl-3.5 pr-12 text-sm transition-opacity duration-250 [overflow-x:clip] data-expanded:opacity-100",
-                  stackedActionLayout
-                    ? "flex flex-col gap-2 py-2.5"
-                    : "flex items-center justify-between gap-1.5 py-3",
+                  "pointer-events-auto flex min-h-12 flex-col gap-3 overflow-y-visible p-[calc(--spacing(2)-1px)] text-sm transition-opacity duration-250 [overflow-x:clip] data-expanded:opacity-100",
                   hideCollapsedContent &&
                     "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
                 )}
@@ -712,7 +699,6 @@ function AnchoredToasts() {
             const tooltipStyle = toast.data?.tooltipStyle ?? false;
             const positionerProps = toast.positionerProps;
             const bodyDescriptor = deriveToastBodyDescriptor(toast);
-            const { stackedActionLayout } = bodyDescriptor;
 
             if (!positionerProps?.anchor) {
               return null;
@@ -758,14 +744,7 @@ function AnchoredToasts() {
                           <XIcon className="size-3" strokeWidth={2.25} />
                         </button>
                       </div>
-                      <Toast.Content
-                        className={cn(
-                          "pointer-events-auto min-h-12 overflow-y-visible pl-3.5 pr-12 text-sm [overflow-x:clip]",
-                          stackedActionLayout
-                            ? "flex flex-col gap-2 py-2.5"
-                            : "flex items-center justify-between gap-1.5 py-3",
-                        )}
-                      >
+                      <Toast.Content className="pointer-events-auto flex min-h-12 flex-col gap-3 overflow-y-visible p-[calc(--spacing(2)-1px)] text-sm [overflow-x:clip]">
                         <ToastBodyContent
                           {...bodyDescriptor}
                           actionProps={toast.actionProps}

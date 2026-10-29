@@ -35,6 +35,7 @@ import { searchableSetting } from "./settingsSearch";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
+import { LiquidGlassSettings } from "./LiquidGlassSettings";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -290,6 +291,10 @@ export function AppearanceSettingsPanel() {
           targetIds={[
             searchableSetting("setting-glass-opacity").id,
             searchableSetting("setting-liquid-glass").id,
+            searchableSetting("setting-liquid-glass-blur").id,
+            searchableSetting("setting-liquid-glass-saturation").id,
+            searchableSetting("setting-liquid-glass-refraction").id,
+            searchableSetting("setting-liquid-glass-dispersion").id,
             searchableSetting("panel-animations").id,
             searchableSetting("environment-identification").id,
             // Environment identification's search result lands on this section.
@@ -384,6 +389,7 @@ export function AppearanceSettingsPanel() {
               />
             }
           />
+          <LiquidGlassSettings />
           <SettingsRow
             {...searchableSetting("panel-animations")}
             description="Set how fast panels open and close."

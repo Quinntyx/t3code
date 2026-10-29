@@ -2,7 +2,9 @@ import { observeResize } from "~/lib/observeResize";
 
 import {
   buildLiquidGlassFilter,
+  DEFAULT_LIQUID_GLASS_OPTIONS,
   liquidGlassBackdropFilter,
+  type LiquidGlassOptions,
   type LiquidGlassSurface,
 } from "./filter";
 
@@ -15,6 +17,7 @@ const RESIZE_SETTLE_MS = 120;
 
 interface Surface {
   element: Element;
+  id: string;
   filter?: Element;
   key: string;
   timer: number;
@@ -22,6 +25,7 @@ interface Surface {
 }
 
 export interface LiquidGlassController {
+  update(options: LiquidGlassOptions): void;
   stop(): void;
 }
 
@@ -44,8 +48,11 @@ function measure(element: Element): LiquidGlassSurface | null {
  * Gives every frosted surface a generated displacement map, so its backdrop bends instead of
  * only blurring. Chromium-only: no other engine runs an SVG filter over the backdrop.
  */
-export function startLiquidGlass(): LiquidGlassController {
-  if (!supportsLiquidGlass()) return { stop: () => {} };
+export function startLiquidGlass(
+  initialOptions: LiquidGlassOptions = DEFAULT_LIQUID_GLASS_OPTIONS,
+): LiquidGlassController {
+  if (!supportsLiquidGlass()) return { update: () => {}, stop: () => {} };
+  let options = initialOptions;
 
   const root = document.createElementNS(SVG_NAMESPACE, "svg");
   root.setAttribute("aria-hidden", "true");
@@ -73,12 +80,18 @@ export function startLiquidGlass(): LiquidGlassController {
       release(element);
       return;
     }
-    const key = `${geometry.width}x${geometry.height}`;
+    const key = `${geometry.width}x${geometry.height}:${options.refraction}:${options.dispersion}`;
     const existing = surfaces.get(element);
-    if (existing?.key === key && existing.filter) return;
+    if (existing?.key === key && existing.filter) {
+      (element as HTMLElement).style.setProperty(
+        "--glass-liquid-filter",
+        liquidGlassBackdropFilter(existing.id, options),
+      );
+      return;
+    }
 
     const id = `liquid-glass-${++sequence}`;
-    const { markup } = buildLiquidGlassFilter(id, geometry);
+    const { markup } = buildLiquidGlassFilter(id, geometry, options);
     root.insertAdjacentHTML("beforeend", markup);
     const filter = root.lastElementChild;
     if (!filter) return;
@@ -88,6 +101,7 @@ export function startLiquidGlass(): LiquidGlassController {
       existing ??
       ({
         element,
+        id,
         key,
         timer: 0,
         unobserve: observeResize(element, () => {
@@ -95,12 +109,13 @@ export function startLiquidGlass(): LiquidGlassController {
           surface.timer = window.setTimeout(() => schedule(element), RESIZE_SETTLE_MS);
         }),
       } satisfies Surface);
+    surface.id = id;
     surface.key = key;
     surface.filter = filter;
     surfaces.set(element, surface);
     (element as HTMLElement).style.setProperty(
       "--glass-liquid-filter",
-      liquidGlassBackdropFilter(id),
+      liquidGlassBackdropFilter(id, options),
     );
   };
 
@@ -144,6 +159,17 @@ export function startLiquidGlass(): LiquidGlassController {
   observer.observe(document.body, { childList: true, subtree: true });
 
   return {
+    update: (next) => {
+      if (
+        options.blur === next.blur &&
+        options.saturation === next.saturation &&
+        options.refraction === next.refraction &&
+        options.dispersion === next.dispersion
+      )
+        return;
+      options = next;
+      for (const element of surfaces.keys()) schedule(element);
+    },
     stop: () => {
       observer.disconnect();
       if (frame) cancelAnimationFrame(frame);

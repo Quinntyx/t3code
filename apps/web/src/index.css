@@ -293,6 +293,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-glass: calc(var(--radius) + 1rem);
+  --radius-glass-item: calc(var(--radius-glass) - 5px);
+  --radius-glass-list-item: calc(var(--radius-glass) - 0.5rem);
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
        per container, stepped so however many bars sit under it, the compositor

@@ -1,3 +1,19 @@
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+
+export interface LiquidGlassOptions {
+  blur: number;
+  saturation: number;
+  refraction: number;
+  dispersion: number;
+}
+
+export const DEFAULT_LIQUID_GLASS_OPTIONS: LiquidGlassOptions = {
+  blur: DEFAULT_UNIFIED_SETTINGS.liquidGlassBlur,
+  saturation: DEFAULT_UNIFIED_SETTINGS.liquidGlassSaturation,
+  refraction: DEFAULT_UNIFIED_SETTINGS.liquidGlassRefraction,
+  dispersion: DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion,
+};
+
 // Filter parameters from https://blade04208.github.io/css/liquid-glass.css (lyra rebane).
 const MAP_NEUTRAL = "#808080";
 const RIM_WIDTH = 12;
@@ -31,22 +47,26 @@ function buildMap(id: string, { height, width }: LiquidGlassSurface) {
   ].join("");
 }
 
-function buildPasses() {
+function buildPasses({ refraction, dispersion }: LiquidGlassOptions) {
   return [RED_CHANNEL, GREEN_CHANNEL, BLUE_CHANNEL]
     .map(
       (matrix, index) =>
-        `<feDisplacementMap in="SourceGraphic" in2="map" scale="${-19 - index}" xChannelSelector="B" yChannelSelector="G" result="displaced-${index}"/>` +
+        `<feDisplacementMap in="SourceGraphic" in2="map" scale="${((-20 + ((1 - index) * dispersion) / 100) * refraction) / 100}" xChannelSelector="B" yChannelSelector="G" result="displaced-${index}"/>` +
         `<feColorMatrix in="displaced-${index}" type="matrix" values="${matrix}" result="channel-${index}"/>`,
     )
     .join("");
 }
 
-export function buildLiquidGlassFilter(id: string, surface: LiquidGlassSurface) {
+export function buildLiquidGlassFilter(
+  id: string,
+  surface: LiquidGlassSurface,
+  options: Partial<LiquidGlassOptions> = {},
+) {
   const map = buildMap(id, surface);
   const markup = [
     `<svg xmlns="http://www.w3.org/2000/svg"><filter id="${id}" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">`,
     `<feImage href="data:image/svg+xml,${encodeURIComponent(map)}" preserveAspectRatio="none" result="map"/>`,
-    buildPasses(),
+    buildPasses({ ...DEFAULT_LIQUID_GLASS_OPTIONS, ...options }),
     `<feBlend in="channel-2" in2="channel-1" mode="screen" result="blended"/>`,
     `<feBlend in="blended" in2="channel-0" mode="screen"/>`,
     // Reconstruct straight RGB first; screening three copies of edge alpha creates a dark rim.
@@ -57,6 +77,10 @@ export function buildLiquidGlassFilter(id: string, surface: LiquidGlassSurface) 
   return { markup };
 }
 
-export function liquidGlassBackdropFilter(id: string): string {
-  return `blur(0px) url(#${id}) blur(1px)`;
+export function liquidGlassBackdropFilter(
+  id: string,
+  options: Partial<LiquidGlassOptions> = {},
+): string {
+  const { blur, saturation } = { ...DEFAULT_LIQUID_GLASS_OPTIONS, ...options };
+  return `blur(0px) url(#${id}) blur(${blur}px)${saturation === 100 ? "" : ` saturate(${saturation / 100})`}`;
 }

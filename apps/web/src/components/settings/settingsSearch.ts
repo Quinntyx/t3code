@@ -312,6 +312,30 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "setting-liquid-glass-blur",
+    title: "Liquid glass blur",
+    to: "/settings/appearance",
+    searchTerms: ["frost radius pixels softness backdrop advanced"],
+  },
+  {
+    id: "setting-liquid-glass-saturation",
+    title: "Liquid glass saturation",
+    to: "/settings/appearance",
+    searchTerms: ["color colour intensity vivid grayscale backdrop advanced"],
+  },
+  {
+    id: "setting-liquid-glass-refraction",
+    title: "Refraction strength",
+    to: "/settings/appearance",
+    searchTerms: ["glass displacement bend distortion lens advanced"],
+  },
+  {
+    id: "setting-liquid-glass-dispersion",
+    title: "Color dispersion",
+    to: "/settings/appearance",
+    searchTerms: ["glass chromatic aberration rgb rainbow fringe advanced"],
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/diffs",

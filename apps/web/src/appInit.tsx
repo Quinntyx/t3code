@@ -60,13 +60,20 @@ function startClientAppearance(): void {
   const root = document.documentElement;
   let applied: ClientSettings | null = null;
   let liquidGlass: LiquidGlassController | null = null;
-  const applyLiquidGlass = (enabled: boolean) => {
-    if (!enabled) {
+  const applyLiquidGlass = (settings: ClientSettings) => {
+    if (!settings.liquidGlassEnabled) {
       liquidGlass?.stop();
       liquidGlass = null;
       return;
     }
-    liquidGlass ??= startLiquidGlass();
+    const options = {
+      blur: settings.liquidGlassBlur,
+      saturation: settings.liquidGlassSaturation,
+      refraction: settings.liquidGlassRefraction,
+      dispersion: settings.liquidGlassDispersion,
+    };
+    if (liquidGlass) liquidGlass.update(options);
+    else liquidGlass = startLiquidGlass(options);
   };
   const apply = () => {
     const settings = getClientSettings();
@@ -89,7 +96,7 @@ function startClientAppearance(): void {
         root.style.removeProperty("--glass-blur");
       }
     }
-    applyLiquidGlass(settings.liquidGlassEnabled);
+    applyLiquidGlass(settings);
     if (
       previous?.fontFamilySans !== settings.fontFamilySans ||
       previous.fontFamilyCode !== settings.fontFamilyCode ||

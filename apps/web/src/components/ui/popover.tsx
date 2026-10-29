@@ -108,6 +108,9 @@ function PopoverPopup({
                 ? "py-1 [--viewport-inline-padding:--spacing(2)]"
                 : popoverViewportPaddingClassName[padding],
               !tooltipStyle && "not-data-transitioning:overflow-y-auto",
+              variant !== "panel" &&
+                padding !== "none" &&
+                "[--control-radius:max(0.5rem,calc(var(--radius-glass)-var(--viewport-inline-padding)-1px))]",
               variant === "panel" &&
                 "overflow-visible rounded-none py-2 [--viewport-inline-padding:--spacing(2)]",
             )}
