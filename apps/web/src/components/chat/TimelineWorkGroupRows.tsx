@@ -296,7 +296,7 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
       <div className="flex min-h-6 min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
         <span
           ref={shimmer ? observeVisibleAnimation : undefined}
-          className="relative shrink-0 overflow-hidden whitespace-nowrap"
+          className="relative shrink-0 overflow-hidden whitespace-nowrap pe-1"
         >
           {label}
           {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
