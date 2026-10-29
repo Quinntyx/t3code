@@ -1268,6 +1268,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerDraftFile(attachmentDraftTarget, fileId);
   };
 
+  const clearComposerAttachments = (): boolean => {
+    if (questionAttachmentTarget && activePendingIsResponding) return false;
+    const imageIds = composerImagesRef.current.map((image) => image.id);
+    const fileIds = composerFilesRef.current.map((file) => file.id);
+    if (imageIds.length === 0 && fileIds.length === 0) return false;
+    for (const imageId of imageIds) removeComposerImageFromDraft(imageId);
+    for (const fileId of fileIds) removeComposerFileFromDraft(fileId);
+    return true;
+  };
+
   const addComposerDraftReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const addComposerDraftPreviewAnnotation = useComposerDraftStore(
     (store) => store.addPreviewAnnotation,
@@ -2192,6 +2202,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       readComposerSnapshot,
       applyPromptReplacement,
       submitComposer,
+      clearComposerAttachments,
     })(key, event, isTaskItem);
 
   const {
