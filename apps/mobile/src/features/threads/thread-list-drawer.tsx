@@ -153,7 +153,7 @@ function useThreadDrawer(side: ThreadDrawerSide) {
  */
 function useRegisteredPanTags(key: string, gesture: { readonly handlerTag: number }) {
   const { registerPanTags } = useThreadDrawer("left");
-  // oxlint-disable-next-line t3code/react-effect-budget -- detector mount order is the only source for the native handler tag
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Register the native gesture handler after the detector mounts it.
   useLayoutEffect(() => {
     if (gesture.handlerTag > 0) registerPanTags(key, [gesture.handlerTag]);
   }, [gesture.handlerTag, key, registerPanTags]);
@@ -228,7 +228,7 @@ export function ThreadListDrawerHost({
   const { open: isOpen, setOpen, closeDrawer, progress } = drawer;
   const open = enabled && isOpen;
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- rotation must close the phone overlay before split view takes ownership
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Rotation must close the phone overlay before split view takes ownership.
   useEffect(() => {
     if (!enabled && isOpen) setOpen(false);
   }, [enabled, isOpen, setOpen]);

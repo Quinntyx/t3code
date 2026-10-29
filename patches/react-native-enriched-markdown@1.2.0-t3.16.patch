@@ -126,3 +126,1426 @@ diff --git a/android/src/main/java/com/swmansion/enriched/markdown/utils/text/vi
    // Undo only our own request: a long-press drag selection relies on the Editor's
    // request staying in place until ACTION_UP, or a scrolling parent steals the drag.
    private fun releaseParentIntercept(widget: TextView) {
+
+diff --git a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerDelegate.java b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerDelegate.java
+--- a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerDelegate.java
++++ b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerDelegate.java
+@@ -65,6 +65,9 @@
+       case "md4cFlags":
+         mViewManager.setMd4cFlags(view, (ReadableMap) value);
+         break;
++      case "blockingGestureTags":
++        mViewManager.setBlockingGestureTags(view, (ReadableArray) value);
++        break;
+       case "isGFM":
+         mViewManager.setIsGFM(view, value == null ? true : (boolean) value);
+         break;
+
+diff --git a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerInterface.java b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerInterface.java
+--- a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerInterface.java
++++ b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownManagerInterface.java
+@@ -29,6 +29,7 @@
+   void setSelectionColor(T view, @Nullable Integer value);
+   void setSelectionHandleColor(T view, @Nullable Integer value);
+   void setMd4cFlags(T view, @Nullable ReadableMap value);
++  void setBlockingGestureTags(T view, @Nullable ReadableArray value);
+   void setIsGFM(T view, boolean value);
+   void setAllowFontScaling(T view, boolean value);
+   void setMaxFontSizeMultiplier(T view, float value);
+
+diff --git a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerDelegate.java b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerDelegate.java
+--- a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerDelegate.java
++++ b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerDelegate.java
+@@ -62,6 +62,9 @@
+       case "md4cFlags":
+         mViewManager.setMd4cFlags(view, (ReadableMap) value);
+         break;
++      case "blockingGestureTags":
++        mViewManager.setBlockingGestureTags(view, (ReadableArray) value);
++        break;
+       case "isGFM":
+         mViewManager.setIsGFM(view, value == null ? false : (boolean) value);
+         break;
+
+diff --git a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerInterface.java b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerInterface.java
+--- a/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerInterface.java
++++ b/android/generated/java/com/facebook/react/viewmanagers/EnrichedMarkdownTextManagerInterface.java
+@@ -28,6 +28,7 @@
+   void setSelectionColor(T view, @Nullable Integer value);
+   void setSelectionHandleColor(T view, @Nullable Integer value);
+   void setMd4cFlags(T view, @Nullable ReadableMap value);
++  void setBlockingGestureTags(T view, @Nullable ReadableArray value);
+   void setIsGFM(T view, boolean value);
+   void setAllowFontScaling(T view, boolean value);
+   void setMaxFontSizeMultiplier(T view, float value);
+
+diff --git a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h
+--- a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h
++++ b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EnrichedMarkdownTextSpecJSI.h
+@@ -265,7 +265,7 @@
+ 
+ #pragma mark - NativeEnrichedMarkdownParserNativeMd4cFlags
+ 
+-template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7, typename P8>
++template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7>
+ struct NativeEnrichedMarkdownParserNativeMd4cFlags {
+   P0 underline{};
+   P1 latexMath{};
+
+diff --git a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp
+--- a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp
++++ b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.cpp
+@@ -61,6 +61,7 @@
+     selectionColor(convertRawProp(context, rawProps, "selectionColor", sourceProps.selectionColor, {})),
+     selectionHandleColor(convertRawProp(context, rawProps, "selectionHandleColor", sourceProps.selectionHandleColor, {})),
+     md4cFlags(convertRawProp(context, rawProps, "md4cFlags", sourceProps.md4cFlags, {})),
++    blockingGestureTags(convertRawProp(context, rawProps, "blockingGestureTags", sourceProps.blockingGestureTags, {})),
+     isGFM(convertRawProp(context, rawProps, "isGFM", sourceProps.isGFM, {true})),
+     allowFontScaling(convertRawProp(context, rawProps, "allowFontScaling", sourceProps.allowFontScaling, {true})),
+     maxFontSizeMultiplier(convertRawProp(context, rawProps, "maxFontSizeMultiplier", sourceProps.maxFontSizeMultiplier, {0.0})),
+@@ -150,6 +151,10 @@
+     result["md4cFlags"] = toDynamic(md4cFlags);
+   }
+     
++  if (blockingGestureTags != oldProps->blockingGestureTags) {
++    result["blockingGestureTags"] = toDynamic(blockingGestureTags);
++  }
++    
+   if (isGFM != oldProps->isGFM) {
+     result["isGFM"] = isGFM;
+   }
+@@ -393,6 +398,7 @@
+     selectionColor(convertRawProp(context, rawProps, "selectionColor", sourceProps.selectionColor, {})),
+     selectionHandleColor(convertRawProp(context, rawProps, "selectionHandleColor", sourceProps.selectionHandleColor, {})),
+     md4cFlags(convertRawProp(context, rawProps, "md4cFlags", sourceProps.md4cFlags, {})),
++    blockingGestureTags(convertRawProp(context, rawProps, "blockingGestureTags", sourceProps.blockingGestureTags, {})),
+     isGFM(convertRawProp(context, rawProps, "isGFM", sourceProps.isGFM, {false})),
+     allowFontScaling(convertRawProp(context, rawProps, "allowFontScaling", sourceProps.allowFontScaling, {true})),
+     maxFontSizeMultiplier(convertRawProp(context, rawProps, "maxFontSizeMultiplier", sourceProps.maxFontSizeMultiplier, {0.0})),
+@@ -477,6 +483,10 @@
+     result["md4cFlags"] = toDynamic(md4cFlags);
+   }
+     
++  if (blockingGestureTags != oldProps->blockingGestureTags) {
++    result["blockingGestureTags"] = toDynamic(blockingGestureTags);
++  }
++    
+   if (isGFM != oldProps->isGFM) {
+     result["isGFM"] = isGFM;
+   }
+
+diff --git a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
+--- a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
++++ b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
+@@ -3747,6 +3741,7 @@
+   SharedColor selectionColor{};
+   SharedColor selectionHandleColor{};
+   EnrichedMarkdownMd4cFlagsStruct md4cFlags{};
++  std::vector<int> blockingGestureTags{};
+   bool isGFM{true};
+   bool allowFontScaling{true};
+   Float maxFontSizeMultiplier{0.0};
+@@ -8353,6 +8342,7 @@
+   SharedColor selectionColor{};
+   SharedColor selectionHandleColor{};
+   EnrichedMarkdownTextMd4cFlagsStruct md4cFlags{};
++  std::vector<int> blockingGestureTags{};
+   bool isGFM{false};
+   bool allowFontScaling{true};
+   Float maxFontSizeMultiplier{0.0};
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
+@@ -187,6 +187,12 @@
+       dynamicProps.enableCodeBlockPress = value
+     }
+ 
++  fun setBlockingGestureTags(tags: IntArray) {
++    if (dynamicProps.blockingGestureTags.contentEquals(tags)) return
++    dynamicProps.blockingGestureTags = tags
++    scrollableBlockViews().forEach { it.onBlockingGestureTagsChanged() }
++  }
++
+   private val codeBlockWrapState =
+     CodeBlockWrapState(viewTag = { id }, codeBlockViews = ::codeBlockViews, onHeightChanged = ::onImageLayoutChanged)
+ 
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt
+@@ -28,6 +28,7 @@
+ import com.swmansion.enriched.markdown.utils.common.emitTaskListItemPress
+ import com.swmansion.enriched.markdown.utils.common.markdownEventTypeConstants
+ import com.swmansion.enriched.markdown.utils.common.parseAccessibilityLabels
++import com.swmansion.enriched.markdown.utils.common.parseBlockingGestureTags
+ import com.swmansion.enriched.markdown.utils.common.parseContextMenuItems
+ import com.swmansion.enriched.markdown.utils.common.parseImageRequestHeaders
+ import com.swmansion.enriched.markdown.utils.common.parseImageSources
+@@ -415,6 +416,15 @@
+     view.setLinkPillContent(parseLinkPillContent(value))
+   }
+ 
++  @ReactProp(name = "blockingGestureTags")
++  override fun setBlockingGestureTags(
++    view: EnrichedMarkdown?,
++    value: ReadableArray?,
++  ) {
++    if (view == null) return
++    view.setBlockingGestureTags(parseBlockingGestureTags(value))
++  }
++
+   @ReactProp(name = "selectionMenuConfig")
+   override fun setSelectionMenuConfig(
+     view: EnrichedMarkdown?,
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownTextManager.kt b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownTextManager.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownTextManager.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownTextManager.kt
+@@ -348,6 +348,15 @@
+     view.setLinkPillContent(parseLinkPillContent(value))
+   }
+ 
++  @ReactProp(name = "blockingGestureTags")
++  override fun setBlockingGestureTags(
++    view: EnrichedMarkdownText?,
++    value: ReadableArray?,
++  ) {
++    // No-op on Android — the CommonMark path has no scrollable panes; the GFM
++    // block view (EnrichedMarkdownManager) owns the native scrolls.
++  }
++
+   @ReactProp(name = "selectionMenuConfig")
+   override fun setSelectionMenuConfig(
+     view: EnrichedMarkdownText?,
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/gestures/BlockingGestureYielder.kt b/android/src/main/java/com/swmansion/enriched/markdown/gestures/BlockingGestureYielder.kt
+new file mode 100644
+--- /dev/null
++++ b/android/src/main/java/com/swmansion/enriched/markdown/gestures/BlockingGestureYielder.kt
+@@ -0,0 +1,260 @@
++package com.swmansion.enriched.markdown.gestures
++
++import android.view.View
++import android.widget.HorizontalScrollView
++import com.facebook.react.bridge.Arguments
++import com.facebook.react.bridge.ReactContext
++import com.facebook.react.bridge.ReadableMap
++import java.lang.reflect.Method
++
++/**
++ * The root notifies a scrollable block container through this marker when the
++ * blockingGestureTags prop changed, so an attached yielder re-runs its
++ * relations (nothing else is needed when nothing is attached yet).
++ */
++internal interface BlockingGestureYielderHost {
++  fun onBlockingGestureTagsChanged()
++}
++
++/**
++ * Why the handler: the app's root Pan drawer (whose handler tags arrive as the
++ * blockingGestureTags prop, see DynamicBlockProps) cancels native touches it
++ * activates, so an overflowing table or code block could never scroll
++ * horizontally. This binding registers a plain RNGH NativeViewGestureHandler
++ * on the block's scroll view with `blocksHandlers` = the drawer tags, making
++ * those handlers wait for the scroll to fail: while the block overflows, its
++ * own scrolling wins a touch started on it; without overflow no handler may be
++ * registered and touches stream to the drawer normally.
++ *
++ * Handler tags are the negative view tag, RNGestureHandlerRootHelper's
++ * convention for native-side helpers, and cannot collide with JS handler tags
++ * (positive). RNGH is a peer module rather than a library dependency, so the
++ * bridge is resolved reflectively once, the way RNGH itself reaches its
++ * optional classes; absent at runtime, every call degrades to a no-op.
++ */
++internal class BlockingGestureYielder(
++  private val scrollView: HorizontalScrollView,
++  private val blockingGestureTags: () -> IntArray,
++) {
++  private var overflowing = false
++  private var registered = false
++  private var configuredTags: IntArray? = null
++  private var handlerTag = 0
++
++  private var gestureHandlerModule: Any? = null
++  private var bridgeMissing = false
++
++  fun setOverflowing(overflowing: Boolean) {
++    if (this.overflowing == overflowing) return
++    this.overflowing = overflowing
++    sync()
++  }
++
++  // The registry entry survives window detach, so a reattached block must
++  // re-register here (onLayout runs after this and re-arms overflow too).
++  fun onWindowAttached() {
++    sync()
++  }
++
++  fun onWindowDetached() {
++    drop()
++  }
++
++  // An attached handler keeps its relations across re-configuration because
++  // configureRelations drops the tag's stale ones first (see the module).
++  fun onBlockingGestureTagsChanged() {
++    if (!overflowing) return
++    sync()
++  }
++
++  // One pass re-evaluates every input (overflow, tags, attach, relations) and
++  // skips native and reflective work whenever nothing changed.
++  private fun sync() {
++    if (!overflowing) {
++      drop()
++      return
++    }
++    if (!scrollView.isAttachedToWindow) return
++    val tags = blockingGestureTags()
++    // No blocking gesture at all: with nothing to yield to, a registered
++    // handler would only shadow the usual touch dispatch.
++    if (tags.isEmpty()) {
++      drop()
++      return
++    }
++    if (registered && configuredTags?.contentEquals(tags) == true) return
++
++    val module = gestureHandlerModule() ?: return
++    if (!registered) registered = register(module)
++    if (!registered) return
++    if (configuredTags?.contentEquals(tags) != true) {
++      if (bridge.configureRelations(module, handlerTag.toDouble(), relationsMap(tags))) {
++        configuredTags = tags
++      }
++    }
++  }
++
++  private fun register(module: Any): Boolean {
++    // RNGH resolves handlers by the receiving view's id; native child views are
++    // born without one, so mint a tag when RN never assigned it.
++    if (scrollView.id == View.NO_ID) scrollView.id = View.generateViewId()
++    val tag = -scrollView.id
++    if (bridge.createGestureHandler(module, HANDLER_NAME, tag.toDouble(), Arguments.createMap()) &&
++      bridge.attachGestureHandler(module, tag.toDouble(), scrollView.id.toDouble(), ACTION_TYPE_NONE.toDouble())
++    ) {
++      handlerTag = tag
++      configuredTags = null
++      return true
++    }
++    // A half-registered handler must not linger in the registry.
++    bridge.dropGestureHandler(module, tag.toDouble())
++    return false
++  }
++
++  private fun drop() {
++    if (!registered) return
++    val tag = handlerTag
++    registered = false
++    configuredTags = null
++    handlerTag = 0
++    gestureHandlerModule()?.let { module -> bridge.dropGestureHandler(module, tag.toDouble()) }
++  }
++
++  private fun gestureHandlerModule(): Any? {
++    if (bridgeMissing) return null
++    gestureHandlerModule?.let { return it }
++    val context = scrollView.context as? ReactContext
++    if (context == null || !bridge.available) {
++      // RNGH absent or the view runs without a ReactContext: the feature is
++      // off, permanently for this binding.
++      bridgeMissing = true
++      return null
++    }
++    val resolved = bridge.module(context)
++    if (resolved == null) {
++      // A missing module here means it has not registered yet, which can still
++      // happen, so the lookup is retried on the next sync rather than latched.
++      return null
++    }
++    gestureHandlerModule = resolved
++    return resolved
++  }
++
++  private fun relationsMap(tags: IntArray): ReadableMap =
++    Arguments.createMap().apply {
++      val array = Arguments.createArray()
++      tags.forEach { array.pushInt(it) }
++      putArray(KEY_BLOCKS_HANDLERS, array)
++    }
++
++  companion object {
++    // NativeViewGestureHandler.Factory.name
++    private const val HANDLER_NAME = "NativeViewGestureHandler"
++
++    // RNGestureHandlerInteractionManager KEY_BLOCKS_HANDLERS
++    private const val KEY_BLOCKS_HANDLERS = "blocksHandlers"
++
++    // GestureHandler.ACTION_TYPE_NONE
++    private const val ACTION_TYPE_NONE = 0
++
++    private val bridge = NativeGestureBridge()
++
++    // RNGestureHandlerModule reached through its own public methods; the class
++    // is unavailable whenever RNGH is not installed, which turns the feature
++    // off. Calls run from the UI thread (mount, layout, window callbacks).
++    private class NativeGestureBridge {
++      // Kotlin compiles non-null Double parameters to primitives, so reflection
++      // lookups need double.class; invoke still takes the boxed value.
++      private val doubleType = Double::class.javaPrimitiveType!!
++
++      private val moduleClass: Class<*>? =
++        try {
++          Class.forName("com.swmansion.gesturehandler.react.RNGestureHandlerModule")
++        } catch (_: ClassNotFoundException) {
++          null
++        }
++
++      private val getNativeModule: Method? =
++        methodOrNull(ReactContext::class.java, "getNativeModule", Class::class.java)
++
++      private val createMethod: Method? =
++        moduleMethod("createGestureHandler", String::class.java, doubleType, ReadableMap::class.java)
++
++      private val attachMethod: Method? =
++        moduleMethod(
++          "attachGestureHandler",
++          doubleType,
++          doubleType,
++          doubleType,
++        )
++
++      private val configureRelationsMethod: Method? =
++        moduleMethod("configureRelations", doubleType, ReadableMap::class.java)
++
++      private val dropMethod: Method? =
++        moduleMethod("dropGestureHandler", doubleType)
++
++      private fun moduleMethod(
++        name: String,
++        vararg parameterTypes: Class<*>,
++      ): Method? = methodOrNull(moduleClass, name, *parameterTypes)
++
++      private fun methodOrNull(
++        declaringClass: Class<*>?,
++        name: String,
++        vararg parameterTypes: Class<*>,
++      ): Method? =
++        try {
++          declaringClass?.getMethod(name, *parameterTypes)
++        } catch (_: NoSuchMethodException) {
++          null
++        }
++
++      val available: Boolean =
++        moduleClass != null &&
++          getNativeModule != null &&
++          createMethod != null &&
++          attachMethod != null &&
++          configureRelationsMethod != null &&
++          dropMethod != null
++
++      fun module(context: ReactContext): Any? = getNativeModule?.invoke(context, moduleClass)
++
++      fun createGestureHandler(
++        module: Any,
++        name: String,
++        handlerTag: Double,
++        config: ReadableMap,
++      ): Boolean = invoke(module, createMethod, name, handlerTag, config)
++
++      fun attachGestureHandler(
++        module: Any,
++        handlerTag: Double,
++        viewTag: Double,
++        actionType: Double,
++      ): Boolean = invoke(module, attachMethod, handlerTag, viewTag, actionType)
++
++      fun configureRelations(
++        module: Any,
++        handlerTag: Double,
++        relations: ReadableMap,
++      ): Boolean = invoke(module, configureRelationsMethod, handlerTag, relations)
++
++      fun dropGestureHandler(
++        module: Any,
++        handlerTag: Double,
++      ): Boolean = invoke(module, dropMethod, handlerTag)
++
++      private fun invoke(
++        module: Any,
++        method: Method?,
++        vararg args: Any?,
++      ): Boolean =
++        if (method == null) {
++          false
++        } else {
++          runCatching { method.invoke(module, *args) }.isSuccess
++        }
++    }
++  }
++}
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/segments/CodeBlockContainerView.kt b/android/src/main/java/com/swmansion/enriched/markdown/segments/CodeBlockContainerView.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/segments/CodeBlockContainerView.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/segments/CodeBlockContainerView.kt
+@@ -26,6 +26,8 @@
+ import androidx.appcompat.widget.AppCompatImageButton
+ import androidx.appcompat.widget.AppCompatTextView
+ import com.swmansion.enriched.markdown.accessibility.AccessibilityLabels
++import com.swmansion.enriched.markdown.gestures.BlockingGestureYielder
++import com.swmansion.enriched.markdown.gestures.BlockingGestureYielderHost
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode
+ import com.swmansion.enriched.markdown.spans.LineHeightSpan
+ import com.swmansion.enriched.markdown.styles.CodeBlockStyle
+@@ -57,7 +59,8 @@
+   context: Context,
+   styleConfig: StyleConfig,
+ ) : FrameLayout(context),
+-  BlockSegmentView {
++  BlockSegmentView,
++  BlockingGestureYielderHost {
+   private val codeBlockStyle: CodeBlockStyle = styleConfig.codeBlockStyle
+ 
+   private val inset = contentInset(codeBlockStyle)
+@@ -150,6 +153,9 @@
+       addView(textView, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+     }
+ 
++  private val gestureYielder =
++    BlockingGestureYielder(scrollView) { dynamicProps.blockingGestureTags }
++
+   private val languageView =
+     AppCompatTextView(context).apply {
+       includeFontPadding = false
+@@ -319,6 +325,11 @@
+     wrapButton.layout(wrapLeft, buttonTop, wrapLeft + wrapButton.measuredWidth, buttonTop + wrapButton.measuredHeight)
+ 
+     scrollView.layout(borderW, headerH, width - borderW, bottom - top - borderW)
++
++    // The pane only scrolls when unwrapped text is wider than the pane (a
++    // wrapped block never does), so the registration follows the measured
++    // layout pass here rather than onMeasure.
++    gestureYielder.setOverflowing(!wrapped && textView.width > scrollView.width)
+   }
+ 
+   // Divider between the header and the code, centered in the gap the code
+@@ -330,6 +341,21 @@
+     canvas.drawLine(borderWidth, y, width - borderWidth, y, dividerPaint)
+   }
+ 
++  override fun onAttachedToWindow() {
++    super.onAttachedToWindow()
++    // Registry entries survive detach, so reattaching re-arms registration too.
++    gestureYielder.onWindowAttached()
++  }
++
++  override fun onDetachedFromWindow() {
++    gestureYielder.onWindowDetached()
++    super.onDetachedFromWindow()
++  }
++
++  override fun onBlockingGestureTagsChanged() {
++    gestureYielder.onBlockingGestureTagsChanged()
++  }
++
+   // Returns whether a menu was shown, so the long-press listener only consumes
+   // the event when there is one (a pending block has no menu yet).
+   private fun showContextMenu(anchor: View): Boolean {
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/segments/ContainerNodeView.kt b/android/src/main/java/com/swmansion/enriched/markdown/segments/ContainerNodeView.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/segments/ContainerNodeView.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/segments/ContainerNodeView.kt
+@@ -4,6 +4,7 @@
+ import android.view.View
+ import android.view.ViewGroup
+ import android.widget.FrameLayout
++import com.swmansion.enriched.markdown.gestures.BlockingGestureYielderHost
+ import kotlin.math.ceil
+ import kotlin.math.max
+ 
+@@ -46,6 +47,18 @@
+         }
+       }
+     }
++
++  // The horizontally scrollable blocks BlockingGestureYielder binds to, in
++  // document order, descending into nested blockquotes.
++  internal fun scrollableBlockViews(): Sequence<BlockingGestureYielderHost> =
++    sequence {
++      segmentViews.forEach { view ->
++        when {
++          view is BlockingGestureYielderHost -> yield(view)
++          view is ContainerNodeView -> yieldAll(view.scrollableBlockViews())
++        }
++      }
++    }
+ 
+   /**
+    * Pushes the slot heights the shadow node measured into every placeholder,
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt b/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt
+@@ -39,6 +39,11 @@
+   var copyAsMarkdownLabel: String = ""
+   var onCopyPress: ((code: String, language: String) -> Unit)? = null
+   var onCodeBlockPress: ((code: String, language: String) -> Unit)? = null
++
++  // Handler tags of the host app's drawer Pan (blockingGestureTags prop): read
++  // live by BlockingGestureYielder, pushed to attached handlers by the root on
++  // prop change.
++  var blockingGestureTags: IntArray = IntArray(0)
+ }
+ 
+ /**
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt b/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt
+@@ -22,6 +22,8 @@
+ import android.widget.HorizontalScrollView
+ import androidx.core.view.ViewCompat
+ import com.swmansion.enriched.markdown.accessibility.AccessibilityLabels
++import com.swmansion.enriched.markdown.gestures.BlockingGestureYielder
++import com.swmansion.enriched.markdown.gestures.BlockingGestureYielderHost
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode.NodeType
+ import com.swmansion.enriched.markdown.renderer.Renderer
+@@ -46,7 +48,8 @@
+   context: Context,
+   private val styleConfig: StyleConfig,
+ ) : FrameLayout(context),
+-  BlockSegmentView {
++  BlockSegmentView,
++  BlockingGestureYielderHost {
+   internal val tableStyle: TableStyle = styleConfig.tableStyle
+ 
+   override val segmentMarginTop: Int get() = tableStyle.marginTop.toInt()
+@@ -79,6 +82,9 @@
+         },
+       )
+     }
++  private val gestureYielder =
++    BlockingGestureYielder(scrollView) { dynamicProps.blockingGestureTags }
++
+   private val gridContainer get() = scrollView.getChildAt(0) as GridContainerView
+ 
+   val rowCount: Int get() = rows.size
+@@ -365,6 +371,7 @@
+     scrollView.setPadding(overhang, 0, overhang, 0)
+     scrollView.clipToPadding = !tableOverflows
+     scrollView.isHorizontalScrollBarEnabled = tableOverflows
++    gestureYielder.setOverflowing(tableOverflows)
+ 
+     scrollView.layout(0, 0, viewWidth, bottom - top)
+ 
+@@ -391,6 +398,21 @@
+     }
+   }
+ 
++  override fun onAttachedToWindow() {
++    super.onAttachedToWindow()
++    // Registry entries survive detach, so reattaching re-arms registration too.
++    gestureYielder.onWindowAttached()
++  }
++
++  override fun onDetachedFromWindow() {
++    gestureYielder.onWindowDetached()
++    super.onDetachedFromWindow()
++  }
++
++  override fun onBlockingGestureTagsChanged() {
++    gestureYielder.onBlockingGestureTagsChanged()
++  }
++
+   private fun showContextMenu(anchor: View): Boolean {
+     if (!dynamicProps.enableBlockContextMenu) return false
+     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/utils/common/MarkdownViewManagerUtils.kt b/android/src/main/java/com/swmansion/enriched/markdown/utils/common/MarkdownViewManagerUtils.kt
+--- a/android/src/main/java/com/swmansion/enriched/markdown/utils/common/MarkdownViewManagerUtils.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/utils/common/MarkdownViewManagerUtils.kt
+@@ -178,6 +177,11 @@
+       url to LinkPillContent.fromReadableMap(entry)
+     }.toMap()
+ 
++fun parseBlockingGestureTags(value: ReadableArray?): IntArray {
++  value ?: return IntArray(0)
++  return IntArray(value.size()) { value.getInt(it) }
++}
++
+ fun parseSelectionMenuConfig(value: ReadableMap?): SelectionMenuConfig {
+   if (value == null) return SelectionMenuConfig()
+   return SelectionMenuConfig(
+
+diff --git a/ios/EnrichedMarkdown.mm b/ios/EnrichedMarkdown.mm
+--- a/ios/EnrichedMarkdown.mm
++++ b/ios/EnrichedMarkdown.mm
+@@ -29,9 +29,11 @@
+ #import "ENRMBlockSlotLayerView.h"
+ #import "ENRMBlockSlotRevealController.h"
+ #import "ENRMBlockSlotSegmentView.h"
++#import "ENRMBlockingGestureYielder.h"
+ #import "ENRMBlockquoteContainerView.h"
+ #import "ENRMCodeBlockContainerView.h"
+ #import "ENRMCodeBlockWrapState.h"
++#import "ENRMContainerNodeView.h"
+ #import "ENRMDynamicBlockProps.h"
+ #import "ENRMSpoilerCapable.h"
+ #import "ENRMSpoilerOverlayView.h"
+@@ -86,6 +88,31 @@
+ 
+ static char kENRMSegmentFadeAnimatorKey;
+ 
++// The iOS counterpart of Android's ContainerNodeView.scrollableBlockViews:
++// walks the segment tree in document order, descending into nested containers,
++// and notifies every scrollable block host that carries a yielder.
++static void ENRMNotifyBlockingGestureYielders(NSArray<RCTUIView *> *views)
++{
++  for (RCTUIView *view in views) {
++    if ([view isKindOfClass:[ENRMContainerNodeView class]]) {
++      ENRMNotifyBlockingGestureYielders(((ENRMContainerNodeView *)view).segmentViews);
++    } else if ([view conformsToProtocol:@protocol(ENRMBlockingGestureYielderHost)]) {
++      [(id<ENRMBlockingGestureYielderHost>)view blockingGestureTagsChanged];
++    }
++  }
++}
++
++// Codegen carries the prop as int32s; the shared dynamicProps box keeps
++// NSNumbers so block containers can read it from plain Objective-C.
++static NSArray<NSNumber *> *ENRMBlockingGestureTagsFromArray(const std::vector<int32_t> &tags)
++{
++  NSMutableArray<NSNumber *> *result = [NSMutableArray arrayWithCapacity:tags.size()];
++  for (int32_t tag : tags) {
++    [result addObject:@(tag)];
++  }
++  return result;
++}
++
+ @interface EnrichedMarkdown () <RCTEnrichedMarkdownViewProtocol, UITextViewDelegate, ENRMImageLayoutObserver>
+ + (ENRMMd4cFlags *)flagsFromProps:(const EnrichedMarkdownMd4cFlagsStruct &)props;
+ - (void)emitLinkPress:(NSString *)url;
+@@ -1522,6 +1547,14 @@
+   _dynamicBlockProps.enableBlockContextMenu = newViewProps.enableBlockContextMenu;
+   _dynamicBlockProps.enableCodeBlockPress = newViewProps.enableCodeBlockPress;
+ 
++  if (newViewProps.blockingGestureTags != oldViewProps.blockingGestureTags) {
++    NSArray<NSNumber *> *tags = ENRMBlockingGestureTagsFromArray(newViewProps.blockingGestureTags);
++    if (![tags isEqualToArray:_dynamicBlockProps.blockingGestureTags ?: @[]]) {
++      _dynamicBlockProps.blockingGestureTags = tags;
++      ENRMNotifyBlockingGestureYielders(_segmentViews);
++    }
++  }
++
+   if ([_codeBlockWrapState updateEnabled:newViewProps.enableCodeBlockWrapToggle]) {
+     [self setNeedsLayout];
+     [self requestHeightUpdate];
+
+diff --git a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.cpp b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.cpp
+--- a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.cpp
++++ b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.cpp
+@@ -61,6 +61,7 @@
+     selectionColor(convertRawProp(context, rawProps, "selectionColor", sourceProps.selectionColor, {})),
+     selectionHandleColor(convertRawProp(context, rawProps, "selectionHandleColor", sourceProps.selectionHandleColor, {})),
+     md4cFlags(convertRawProp(context, rawProps, "md4cFlags", sourceProps.md4cFlags, {})),
++    blockingGestureTags(convertRawProp(context, rawProps, "blockingGestureTags", sourceProps.blockingGestureTags, {})),
+     isGFM(convertRawProp(context, rawProps, "isGFM", sourceProps.isGFM, {true})),
+     allowFontScaling(convertRawProp(context, rawProps, "allowFontScaling", sourceProps.allowFontScaling, {true})),
+     maxFontSizeMultiplier(convertRawProp(context, rawProps, "maxFontSizeMultiplier", sourceProps.maxFontSizeMultiplier, {0.0})),
+@@ -150,6 +151,10 @@
+     result["md4cFlags"] = toDynamic(md4cFlags);
+   }
+     
++  if (blockingGestureTags != oldProps->blockingGestureTags) {
++    result["blockingGestureTags"] = toDynamic(blockingGestureTags);
++  }
++    
+   if (isGFM != oldProps->isGFM) {
+     result["isGFM"] = isGFM;
+   }
+@@ -393,6 +398,7 @@
+     selectionColor(convertRawProp(context, rawProps, "selectionColor", sourceProps.selectionColor, {})),
+     selectionHandleColor(convertRawProp(context, rawProps, "selectionHandleColor", sourceProps.selectionHandleColor, {})),
+     md4cFlags(convertRawProp(context, rawProps, "md4cFlags", sourceProps.md4cFlags, {})),
++    blockingGestureTags(convertRawProp(context, rawProps, "blockingGestureTags", sourceProps.blockingGestureTags, {})),
+     isGFM(convertRawProp(context, rawProps, "isGFM", sourceProps.isGFM, {false})),
+     allowFontScaling(convertRawProp(context, rawProps, "allowFontScaling", sourceProps.allowFontScaling, {true})),
+     maxFontSizeMultiplier(convertRawProp(context, rawProps, "maxFontSizeMultiplier", sourceProps.maxFontSizeMultiplier, {0.0})),
+@@ -477,6 +483,10 @@
+     result["md4cFlags"] = toDynamic(md4cFlags);
+   }
+     
++  if (blockingGestureTags != oldProps->blockingGestureTags) {
++    result["blockingGestureTags"] = toDynamic(blockingGestureTags);
++  }
++    
+   if (isGFM != oldProps->isGFM) {
+     result["isGFM"] = isGFM;
+   }
+
+diff --git a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
+--- a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
++++ b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
+@@ -3747,6 +3741,7 @@
+   SharedColor selectionColor{};
+   SharedColor selectionHandleColor{};
+   EnrichedMarkdownMd4cFlagsStruct md4cFlags{};
++  std::vector<int> blockingGestureTags{};
+   bool isGFM{true};
+   bool allowFontScaling{true};
+   Float maxFontSizeMultiplier{0.0};
+@@ -8353,6 +8342,7 @@
+   SharedColor selectionColor{};
+   SharedColor selectionHandleColor{};
+   EnrichedMarkdownTextMd4cFlagsStruct md4cFlags{};
++  std::vector<int> blockingGestureTags{};
+   bool isGFM{false};
+   bool allowFontScaling{true};
+   Float maxFontSizeMultiplier{0.0};
+
+diff --git a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h
+--- a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h
++++ b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpecJSI.h
+@@ -265,7 +265,7 @@
+ 
+ #pragma mark - NativeEnrichedMarkdownParserNativeMd4cFlags
+ 
+-template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7, typename P8>
++template <typename P0, typename P1, typename P2, typename P3, typename P4, typename P5, typename P6, typename P7>
+ struct NativeEnrichedMarkdownParserNativeMd4cFlags {
+   P0 underline{};
+   P1 latexMath{};
+
+diff --git a/ios/segments/ENRMCodeBlockContainerView.m b/ios/segments/ENRMCodeBlockContainerView.m
+--- a/ios/segments/ENRMCodeBlockContainerView.m
++++ b/ios/segments/ENRMCodeBlockContainerView.m
+@@ -1,5 +1,6 @@
+ #import "ENRMCodeBlockContainerView.h"
+ #import "ENRMAccessibilityLabels.h"
++#import "ENRMBlockingGestureYielder.h"
+ #import "ENRMCodeBlockContent.h"
+ #import "ENRMCodeBlockHighlighter.h"
+ #import "ENRMHorizontalScrollView.h"
+@@ -268,7 +269,8 @@
+ @end
+ 
+ #if !TARGET_OS_OSX
+-@interface ENRMCodeBlockContainerView () <UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate>
++@interface ENRMCodeBlockContainerView () <UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate,
++                                          ENRMBlockingGestureYielderHost>
+ @end
+ #endif
+ 
+@@ -279,6 +281,7 @@
+   NSString *_displayLanguage;
+   NSString *_fenceChar;
+   ENRMHorizontalScrollView *_scrollView;
++  ENRMBlockingGestureYielder *_gestureYielder;
+   ENRMCodeBlockContentView *_codeContentView;
+   CGSize _codeSize;
+   CGFloat _headerLabelLineHeight;
+@@ -372,6 +375,14 @@
+   _scrollView = [[ENRMHorizontalScrollView alloc] init];
+   _scrollView.showsVerticalScrollIndicator = NO;
+   _scrollView.showsHorizontalScrollIndicator = YES;
++#if !TARGET_OS_OSX
++  __weak ENRMCodeBlockContainerView *weakSelfForYielder = self;
++  _gestureYielder = [[ENRMBlockingGestureYielder alloc]
++      initWithScrollView:_scrollView
++      blockingGestureTags:^NSArray<NSNumber *> *_Nullable {
++        return weakSelfForYielder.dynamicProps.blockingGestureTags;
++      }];
++#endif
+   _codeContentView = [[ENRMCodeBlockContentView alloc] initWithFrame:CGRectZero];
+   BOOL darkBackground = ENRMColorIsDark([_config codeBlockBackgroundColor]);
+ #if !TARGET_OS_OSX
+@@ -409,6 +420,11 @@
+   _codeContentView.wrapWidth = _wrapped ? MAX(ENRMCodeBlockWrapWidth(self.bounds.size.width, _config), 1) : 0;
+   CGFloat codeWidth = _wrapped ? 0 : _codeSize.width;
+   CGFloat contentWidth = MAX(codeWidth + horizontalPad * 2, frame.size.width);
++#if !TARGET_OS_OSX
++  // Same gate as the pane's own scrollability: unwrapped text wider than the
++  // pane (a wrapped block never scrolls).
++  [_gestureYielder setOverflowing:!_wrapped && contentWidth > frame.size.width];
++#endif
+   _codeContentView.textOrigin = CGPointMake(horizontalPad, inset);
+   _codeContentView.frame = CGRectMake(0, 0, contentWidth, frame.size.height);
+ #if !TARGET_OS_OSX
+@@ -540,6 +556,23 @@
+ }
+ #endif
+ 
++- (void)didMoveToWindow
++{
++  [super didMoveToWindow];
++#if !TARGET_OS_OSX
++  if (self.window) {
++    [_gestureYielder onWindowAttached];
++  } else {
++    [_gestureYielder onWindowDetached];
++  }
++#endif
++}
++
++- (void)blockingGestureTagsChanged
++{
++  [_gestureYielder onBlockingGestureTagsChanged];
++}
++
+ #if TARGET_OS_OSX
+ - (BOOL)isFlipped
+ {
+
+diff --git a/ios/segments/ENRMDynamicBlockProps.h b/ios/segments/ENRMDynamicBlockProps.h
+--- a/ios/segments/ENRMDynamicBlockProps.h
++++ b/ios/segments/ENRMDynamicBlockProps.h
+@@ -30,6 +30,9 @@
+ @property (nonatomic, assign) BOOL enableCodeBlockPress;
+ @property (nonatomic, copy, nullable, getter=menuCopyLabel) NSString *copyLabel;
+ @property (nonatomic, copy, nullable, getter=menuCopyAsMarkdownLabel) NSString *copyAsMarkdownLabel;
++// Root drawer pan handler tags carried from the blockingGestureTags prop; read
++// live by an ENRMBlockingGestureYielder at every use-time.
++@property (nonatomic, copy, nullable) NSArray<NSNumber *> *blockingGestureTags;
+ @end
+ 
+ NS_ASSUME_NONNULL_END
+
+diff --git a/ios/segments/TableContainerView.m b/ios/segments/TableContainerView.m
+--- a/ios/segments/TableContainerView.m
++++ b/ios/segments/TableContainerView.m
+@@ -1,4 +1,5 @@
+ #import "TableContainerView.h"
++#import "ENRMBlockingGestureYielder.h"
+ #import "AttributedRenderer.h"
+ #import "ENRMAccessibilityLabels.h"
+ #import "ENRMHorizontalScrollView.h"
+@@ -235,7 +236,7 @@
+ }
+ 
+ #if !TARGET_OS_OSX
+-@interface TableContainerView () <UIContextMenuInteractionDelegate>
++@interface TableContainerView () <UIContextMenuInteractionDelegate, ENRMBlockingGestureYielderHost>
+ @end
+ #else
+ @interface TableContainerView ()
+@@ -244,6 +245,7 @@
+ 
+ @implementation TableContainerView {
+   ENRMHorizontalScrollView *_scrollView;
++  ENRMBlockingGestureYielder *_gestureYielder;
+   RCTUIView *_gridContainer;
+   NSArray<NSArray<TableCellData *> *> *_rows;
+   NSUInteger _colCount;
+@@ -285,6 +287,14 @@
+ {
+   _scrollView = [[ENRMHorizontalScrollView alloc] init];
+   _scrollView.showsVerticalScrollIndicator = NO;
++#if !TARGET_OS_OSX
++  __weak TableContainerView *weakSelfForYielder = self;
++  _gestureYielder = [[ENRMBlockingGestureYielder alloc]
++      initWithScrollView:_scrollView
++      blockingGestureTags:^NSArray<NSNumber *> *_Nullable {
++        return weakSelfForYielder.dynamicProps.blockingGestureTags;
++      }];
++#endif
+   _scrollView.showsHorizontalScrollIndicator = YES;
+ #if !TARGET_OS_OSX
+   _scrollView.alwaysBounceHorizontal = NO;
+@@ -344,6 +354,25 @@
+   return _rows.count;
+ }
+ 
++- (void)didMoveToWindow
++{
++  [super didMoveToWindow];
++#if !TARGET_OS_OSX
++  if (self.window) {
++    [_gestureYielder onWindowAttached];
++  } else {
++    [_gestureYielder onWindowDetached];
++  }
++#endif
++}
++
++- (void)blockingGestureTagsChanged
++{
++#if !TARGET_OS_OSX
++  [_gestureYielder onBlockingGestureTagsChanged];
++#endif
++}
++
+ #if !TARGET_OS_OSX
+ - (void)animateNewRowsFromPreviousCount:(NSUInteger)previousRowCount duration:(NSTimeInterval)duration
+ {
+@@ -787,6 +816,9 @@
+   [super layoutSubviews];
+   _scrollView.frame = self.bounds;
+ #if !TARGET_OS_OSX
++  // The yielder follows scrollability, which each branch derives from
++  // _totalTableWidth vs the container width.
++  [_gestureYielder setOverflowing:_totalTableWidth > self.bounds.size.width];
+   CGFloat overhang = MAX(self.config.tableHorizontalOverflow, 0);
+   CGFloat containerWidth = self.bounds.size.width;
+   BOOL tableOverflows = (overhang > 0 && _totalTableWidth > containerWidth);
+
+diff --git a/ios/utils/ENRMBlockingGestureYielder.h b/ios/utils/ENRMBlockingGestureYielder.h
+new file mode 100644
+--- /dev/null
++++ b/ios/utils/ENRMBlockingGestureYielder.h
+@@ -0,0 +1,57 @@
++#pragma once
++#import "ENRMUIKit.h"
++
++@class ENRMHorizontalScrollView;
++
++NS_ASSUME_NONNULL_BEGIN
++
++/**
++ * The root notifies a scrollable block container through this protocol when the
++ * blockingGestureTags prop changed, so an attached yielder re-runs its
++ * relations (nothing else is needed when nothing is attached yet). The iOS
++ * counterpart of Android's BlockingGestureYielderHost.
++ */
++@protocol ENRMBlockingGestureYielderHost <NSObject>
++- (void)blockingGestureTagsChanged;
++@end
++
++/**
++ * Why the handler: the app's root Pan drawer (whose tags arrive as the
++ * blockingGestureTags prop on ENRMDynamicBlockProps) cancels native touches it
++ * activates, so an overflowing table or code block could never scroll
++ * horizontally. This binding registers a plain RNGH NativeViewGestureHandler on
++ * the block's scroll view with `blocksHandlers` = the drawer tags, making the
++ * drawer's handlers wait for that native scroll to fail instead: while the
++ * block overflows, its own scrolling wins a touch started on it; without
++ * overflow no handler exists and touches stream to the drawer normally.
++ *
++ * Handler tags are the negative of the scroll view's synthetic reactTag,
++ * mirroring the RNGH native-side helper convention, and cannot collide with JS
++ * handler tags (positive). RNGH is a peer module rather than a library
++ * dependency, so the module class is resolved through NSClassFromString once
++ * and its manager is looked up per call; the pod's own classes are never
++ * linked into this pod. Absent at
++ * runtime (an app without RNGH, or before its first initialize), every call
++ * degrades to a no-op. Calls run from the main thread (mount, layout, window
++ * callbacks), so no extra serialization is needed.
++ */
++@interface ENRMBlockingGestureYielder : NSObject
++
++// The tags getter is consulted at use-time (the shared, never-copied
++// ENRMDynamicBlockProps), so an attached yielder always sees the current prop.
++- (instancetype)initWithScrollView:(ENRMHorizontalScrollView *)scrollView
++              blockingGestureTags:(NSArray<NSNumber *> *_Nullable (^)(void))blockingGestureTags;
++
++- (void)setOverflowing:(BOOL)overflowing;
++
++// The registry entry survives window detach, so a reattached block must
++// re-register here (layout runs after this and re-arms overflow too).
++- (void)onWindowAttached;
++- (void)onWindowDetached;
++
++// Forwards from the ENRMBlockingGestureYielderHost callback.
++- (void)onBlockingGestureTagsChanged;
++
++@end
++
++NS_ASSUME_NONNULL_END
+
+diff --git a/ios/utils/ENRMBlockingGestureYielder.m b/ios/utils/ENRMBlockingGestureYielder.m
+new file mode 100644
+--- /dev/null
++++ b/ios/utils/ENRMBlockingGestureYielder.m
+@@ -0,0 +1,186 @@
++#import "ENRMBlockingGestureYielder.h"
++#import <React/UIView+React.h>
++#import <objc/message.h>
++
++// The exact slice of RNGestureHandlerManager (the react-native-gesture-handler
++// pod) this feature uses, declared on a private protocol so the pod's headers
++// are never linked into this one. Read back from the vendored RNGH 3.3.0
++// sources: managers receive create/attach/drop directly (RNGH's own
++// native-detached buttons do the same, with RNGestureHandlerActionTypeNone);
++// the module-level wrappers differ, and those stage work for the view
++// registry, which plain subviews like ours never register in.
++@protocol ENRMRNGestureHandlerManager <NSObject>
++- (void)createGestureHandler:(NSString *)handlerName
++                         tag:(NSNumber *)handlerTag
++                      config:(NSDictionary *)config;
++- (void)attachHandlerForDetectorWithTag:(NSNumber *)handlerTag
++                                 toView:(UIView *)view
++                         withActionType:(NSInteger)actionType
++                       withHostDetector:(nullable UIView *)hostDetector;
++- (void)updateGestureHandlerRelations:(NSNumber *)handlerTag relations:(NSDictionary *)relations;
++- (void)dropGestureHandler:(NSNumber *)handlerTag;
++@end
++
++// Keyed to the vendored RNGH 3.3.0 APIs.
++static NSString *const ENRMYielderHandlerName = @"NativeViewGestureHandler";
++static NSString *const ENRMYielderBlocksHandlersKey = @"blocksHandlers";
++// RNGestureHandlerActionTypeNone: a native-detached helper dispatches no events.
++static NSInteger const ENRMYielderActionTypeNone = 0;
++
++@implementation ENRMBlockingGestureYielder {
++  __weak ENRMHorizontalScrollView *_scrollView;
++  NSArray<NSNumber *> *_Nullable (^_blockingGestureTags)(void);
++  BOOL _overflowing;
++  BOOL _registered;
++  // The shared dynamicProps box copies its arrays on write, so pointer
++  // equality between tag arrays never holds; contents are compared instead.
++  NSArray<NSNumber *> *_configuredTags;
++  NSNumber *_handlerTag;
++}
++
++- (instancetype)initWithScrollView:(ENRMHorizontalScrollView *)scrollView
++              blockingGestureTags:(NSArray<NSNumber *> *_Nullable (^)(void))blockingGestureTags
++{
++  self = [super init];
++  if (self) {
++    _scrollView = scrollView;
++    _blockingGestureTags = blockingGestureTags;
++  }
++  return self;
++}
++
++- (void)dealloc
++{
++  [self drop];
++}
++
++- (void)setOverflowing:(BOOL)overflowing
++{
++  if (_overflowing == overflowing) {
++    return;
++  }
++  _overflowing = overflowing;
++  [self sync];
++}
++
++- (void)onWindowAttached
++{
++  [self sync];
++}
++
++- (void)onWindowDetached
++{
++  [self drop];
++}
++
++- (void)onBlockingGestureTagsChanged
++{
++  if (!_overflowing) {
++    return;
++  }
++  [self sync];
++}
++
++// One pass re-evaluates every input (overflow, tags, attach, relations) and
++// skips native and reflective work whenever nothing changed.
++- (void)sync
++{
++  if (!_overflowing) {
++    [self drop];
++    return;
++  }
++  if (_scrollView.window == nil) {
++    return;
++  }
++  NSArray<NSNumber *> *tags = _blockingGestureTags() ?: @[];
++  // No blocking gesture at all: with nothing to yield to, a registered
++  // handler would only shadow the usual touch dispatch.
++  if (tags.count == 0) {
++    [self drop];
++    return;
++  }
++  if (_registered && [_configuredTags isEqualToArray:tags]) {
++    return;
++  }
++
++  id<ENRMRNGestureHandlerManager> manager = [self gestureHandlerManager];
++  if (manager == nil) {
++    return;
++  }
++  if (!_registered) {
++    [self registerWithGestureHandlerManager:manager];
++  }
++  if (![_configuredTags isEqualToArray:tags]) {
++    // An attached handler keeps its relations across re-configuration because
++    // updateRelations replaces the blocksHandlers array whole (see RNGH).
++    [manager updateGestureHandlerRelations:_handlerTag
++                                 relations:@{ENRMYielderBlocksHandlersKey : tags}];
++    _configuredTags = tags;
++  }
++}
++
++- (void)registerWithGestureHandlerManager:(id<ENRMRNGestureHandlerManager>)manager
++{
++  // RNGH's relation and event paths touch the attached view's reactTag once
++  // the recognizer fires; native subviews are born without one, so mint a tag
++  // from a holder range far above any real React view tag (the scroll view is
++  // not a Fabric component view, so there is no real tag to reuse).
++  // ActionTypeNone consumes the events that would carry the minted one.
++  static NSInteger nextYielderViewTag = 0x40000000;
++  _handlerTag = @(-(nextYielderViewTag++));
++  _scrollView.reactTag = @(-_handlerTag.longLongValue);
++  [manager createGestureHandler:ENRMYielderHandlerName tag:_handlerTag config:@{}];
++  [manager attachHandlerForDetectorWithTag:_handlerTag
++                                    toView:_scrollView
++                            withActionType:ENRMYielderActionTypeNone
++                         withHostDetector:nil];
++  _configuredTags = nil;
++  _registered = YES;
++}
++
++- (void)drop
++{
++  if (!_registered) {
++    return;
++  }
++  _registered = NO;
++  _configuredTags = nil;
++  id<ENRMRNGestureHandlerManager> manager = [self gestureHandlerManager];
++  if (manager != nil) {
++    [manager dropGestureHandler:_handlerTag];
++  }
++  _handlerTag = nil;
++}
++
++// The RNGestureHandlerModule class is unavailable whenever the pod is not
++// installed, which turns the feature permanently off for this binding; a
++// missing manager only means the module has not been initialized yet, so that
++// case is retried on the next sync rather than latched. The manager is never
++// cached: an RN reload nulls its registry entry and deallocates it.
++- (nullable id<ENRMRNGestureHandlerManager>)gestureHandlerManager
++{
++  static Class moduleClass;
++  static dispatch_once_t onceToken;
++  dispatch_once(&onceToken, ^{
++    moduleClass = NSClassFromString(@"RNGestureHandlerModule");
++  });
++  if (moduleClass == nil ||
++      ![moduleClass respondsToSelector:@selector(handlerManagerForModuleId:)]) {
++    return nil;
++  }
++  // The managers are keyed by an internal, incrementing module id on a static
++  // map of the module class; a bounded scan over the ids is the only public
++  // route to one. Nulled entries (an RN reload) read here as nil and are
++  // skipped.
++  static const int kENRMYielderMaxModuleIds = 16;
++  IMP lookup = [moduleClass methodForSelector:@selector(handlerManagerForModuleId:)];
++  for (int moduleId = 0; moduleId < kENRMYielderMaxModuleIds; moduleId++) {
++    id manager = ((id (*)(Class, SEL, int))lookup)(moduleClass, @selector(handlerManagerForModuleId:), moduleId);
++    if (manager != nil) {
++      return manager;
++    }
++  }
++  return nil;
++}
++
++@end
+
+diff --git a/lib/module/EnrichedMarkdownNativeComponent.ts b/lib/module/EnrichedMarkdownNativeComponent.ts
+--- a/lib/module/EnrichedMarkdownNativeComponent.ts
++++ b/lib/module/EnrichedMarkdownNativeComponent.ts
+@@ -598,6 +597,11 @@
+    * Controls how the markdown parser interprets certain syntax.
+    */
+   md4cFlags: Md4cFlagsInternal;
++  /**
++   * Gesture-handler tags that wait for this document's over-wide, horizontally
++   * scrolled blocks (tables, code blocks) to release the touch.
++   */
++  blockingGestureTags?: ReadonlyArray<CodegenTypes.Int32>;
+   /** Enables the GFM table, strikethrough, and task-list extensions. */
+   isGFM?: CodegenTypes.WithDefault<boolean, true>;
+   /**
+
+diff --git a/lib/module/EnrichedMarkdownTextNativeComponent.ts b/lib/module/EnrichedMarkdownTextNativeComponent.ts
+--- a/lib/module/EnrichedMarkdownTextNativeComponent.ts
++++ b/lib/module/EnrichedMarkdownTextNativeComponent.ts
+@@ -586,6 +585,11 @@
+    * Controls how the markdown parser interprets certain syntax.
+    */
+   md4cFlags: Md4cFlagsInternal;
++  /**
++   * Gesture-handler tags that wait for this document's over-wide, horizontally
++   * scrolled blocks (tables, code blocks) to release the touch.
++   */
++  blockingGestureTags?: ReadonlyArray<CodegenTypes.Int32>;
+   /** Enables the GFM table, strikethrough, and task-list extensions. */
+   isGFM?: CodegenTypes.WithDefault<boolean, false>;
+   /**
+
+diff --git a/lib/module/native/EnrichedMarkdownText.js b/lib/module/native/EnrichedMarkdownText.js
+--- a/lib/module/native/EnrichedMarkdownText.js
++++ b/lib/module/native/EnrichedMarkdownText.js
+@@ -364,6 +362,7 @@
+     allowFontScaling,
+     maxFontSizeMultiplier,
+     allowTrailingMargin,
++    blockingGestureTags,
+     streamingAnimation,
+     streamingConfig: normalizedStreamingConfig,
+     spoilerOverlay,
+
+diff --git a/lib/module/web/nativeProps.js b/lib/module/web/nativeProps.js
+--- a/lib/module/web/nativeProps.js
++++ b/lib/module/web/nativeProps.js
+@@ -39,6 +39,7 @@
+   spoilerOverlay: true,
+   contextMenuItems: true,
+   imageRequestHeaders: true,
++  blockingGestureTags: true,
+   linkPillContent: true,
+   linkContextMenuItems: true,
+   selectionMenuConfig: true,
+
+diff --git a/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts b/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
+--- a/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
++++ b/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
+@@ -535,6 +534,11 @@
+      * Controls how the markdown parser interprets certain syntax.
+      */
+     md4cFlags: Md4cFlagsInternal;
++    /**
++     * Gesture-handler tags that wait for this document's over-wide, horizontally
++     * scrolled blocks (tables, code blocks) to release the touch.
++     */
++    blockingGestureTags?: ReadonlyArray<CodegenTypes.Int32>;
+     /** Enables the GFM table, strikethrough, and task-list extensions. */
+     isGFM?: CodegenTypes.WithDefault<boolean, true>;
+     /**
+
+diff --git a/lib/typescript/src/EnrichedMarkdownTextNativeComponent.d.ts b/lib/typescript/src/EnrichedMarkdownTextNativeComponent.d.ts
+--- a/lib/typescript/src/EnrichedMarkdownTextNativeComponent.d.ts
++++ b/lib/typescript/src/EnrichedMarkdownTextNativeComponent.d.ts
+@@ -524,6 +523,11 @@
+      * Controls how the markdown parser interprets certain syntax.
+      */
+     md4cFlags: Md4cFlagsInternal;
++    /**
++     * Gesture-handler tags that wait for this document's over-wide, horizontally
++     * scrolled blocks (tables, code blocks) to release the touch.
++     */
++    blockingGestureTags?: ReadonlyArray<CodegenTypes.Int32>;
+     /** Enables the GFM table, strikethrough, and task-list extensions. */
+     isGFM?: CodegenTypes.WithDefault<boolean, false>;
+     /**
+
+diff --git a/lib/typescript/src/native/EnrichedMarkdownText.d.ts b/lib/typescript/src/native/EnrichedMarkdownText.d.ts
+--- a/lib/typescript/src/native/EnrichedMarkdownText.d.ts
++++ b/lib/typescript/src/native/EnrichedMarkdownText.d.ts
+@@ -4,6 +4,6 @@
+ export type { MarkdownStyle, Md4cFlags };
+ export type { EnrichedMarkdownTextProps, StreamingConfig, ContextMenuItem, SelectionMenuConfig, SelectionMenuPluralLabels, MarkdownBlockPlacement, MarkdownSlotBlock, MarkdownMediaBlock, MarkdownImageBlock, MarkdownVideoBlock, MarkdownLinkBlock, MarkdownBlock, MarkdownRenderers, MarkdownImagePlacement, MarkdownImageOccurrence, MarkdownImageSource, MarkdownLinkOccurrence, };
+ export type { LinkPressEvent, LinkLongPressEvent, ImagePressEvent, TaskListItemPressEvent, CopyPressEvent, LatexErrorEvent, CodeBlockPressEvent, };
+-export declare const EnrichedMarkdownText: ({ markdown, markdownStyle, containerStyle, onLinkPress, onLinkLongPress, onImagePress, selectionClipboard, onTaskListItemPress, enableTaskListItemToggle, onCopyPress, onLatexError, onCodeBlockPress, enableCodeBlockWrapToggle, enableBlockContextMenu, enableLinkPreview, selectable, md4cFlags, allowFontScaling, maxFontSizeMultiplier, allowTrailingMargin, flavor, streamingAnimation, streamingConfig, spoilerOverlay, contextMenuItems, linkContextMenuItems, imageRequestHeaders, renderers, resolveImageSource, onLinksChange, linkPillContent, linkRecognition, selectionMenuConfig, accessibilityLabels, selectionColor, selectionHandleColor, textBreakStrategy, lineBreakStrategyIOS, writingDirection, numberOfLines, ellipsizeMode, ...rest }: EnrichedMarkdownTextProps) => import("react/jsx-runtime").JSX.Element;
++export declare const EnrichedMarkdownText: ({ markdown, markdownStyle, containerStyle, blockingGestureTags, onLinkPress, onLinkLongPress, onImagePress, selectionClipboard, onTaskListItemPress, enableTaskListItemToggle, onCopyPress, onLatexError, onCodeBlockPress, enableCodeBlockWrapToggle, enableBlockContextMenu, enableLinkPreview, selectable, md4cFlags, allowFontScaling, maxFontSizeMultiplier, allowTrailingMargin, flavor, streamingAnimation, streamingConfig, spoilerOverlay, contextMenuItems, linkContextMenuItems, imageRequestHeaders, renderers, resolveImageSource, onLinksChange, linkPillContent, linkRecognition, selectionMenuConfig, accessibilityLabels, selectionColor, selectionHandleColor, textBreakStrategy, lineBreakStrategyIOS, writingDirection, numberOfLines, ellipsizeMode, ...rest }: EnrichedMarkdownTextProps) => import("react/jsx-runtime").JSX.Element;
+ export default EnrichedMarkdownText;
+ //# sourceMappingURL=EnrichedMarkdownText.d.ts.map
+\ No newline at end of file
+
+diff --git a/lib/typescript/src/types/MarkdownTextProps.d.ts b/lib/typescript/src/types/MarkdownTextProps.d.ts
+--- a/lib/typescript/src/types/MarkdownTextProps.d.ts
++++ b/lib/typescript/src/types/MarkdownTextProps.d.ts
+@@ -144,6 +144,16 @@
+ }
+ export interface EnrichedMarkdownTextProps extends Omit<ViewProps, 'style'> {
+     /**
++     * React Native Gesture Handler tags whose handlers must wait for this
++     * document's over-wide, horizontally scrolled blocks (tables, code blocks)
++     * to release the touch. Scroll inside those blocks wins when a touch starts
++     * on them, so callers pass constraint-free swipe-pan tags used by
++     * screen-level overlays, such as drawer swipes.
++     * Blocks without an attached pan-gesture relation are not affected.
++     * @platform ios, android
++     */
++    blockingGestureTags?: ReadonlyArray<number>;
++    /**
+      * Markdown content to render.
+      * @platform ios, android, web
+      */
+
+diff --git a/src/EnrichedMarkdownNativeComponent.ts b/src/EnrichedMarkdownNativeComponent.ts
+--- a/src/EnrichedMarkdownNativeComponent.ts
++++ b/src/EnrichedMarkdownNativeComponent.ts
+@@ -598,6 +597,11 @@
+    * Controls how the markdown parser interprets certain syntax.
+    */
+   md4cFlags: Md4cFlagsInternal;
++  /**
++   * Gesture-handler tags that wait for this document's over-wide, horizontally
++   * scrolled blocks (tables, code blocks) to release the touch.
++   */
++  blockingGestureTags?: ReadonlyArray<CodegenTypes.Int32>;
+   /** Enables the GFM table, strikethrough, and task-list extensions. */
+   isGFM?: CodegenTypes.WithDefault<boolean, true>;
+   /**
+
+diff --git a/src/EnrichedMarkdownTextNativeComponent.ts b/src/EnrichedMarkdownTextNativeComponent.ts
+--- a/src/EnrichedMarkdownTextNativeComponent.ts
++++ b/src/EnrichedMarkdownTextNativeComponent.ts
+@@ -586,6 +585,11 @@
+    * Controls how the markdown parser interprets certain syntax.
+    */
+   md4cFlags: Md4cFlagsInternal;
++  /**
++   * Gesture-handler tags that wait for this document's over-wide, horizontally
++   * scrolled blocks (tables, code blocks) to release the touch.
++   */
++  blockingGestureTags?: ReadonlyArray<CodegenTypes.Int32>;
+   /** Enables the GFM table, strikethrough, and task-list extensions. */
+   isGFM?: CodegenTypes.WithDefault<boolean, false>;
+   /**
+
+diff --git a/src/native/EnrichedMarkdownText.tsx b/src/native/EnrichedMarkdownText.tsx
+--- a/src/native/EnrichedMarkdownText.tsx
++++ b/src/native/EnrichedMarkdownText.tsx
+@@ -168,6 +167,7 @@
+   markdown,
+   markdownStyle = {},
+   containerStyle,
++  blockingGestureTags,
+   onLinkPress,
+   onLinkLongPress,
+   onImagePress,
+@@ -530,6 +527,7 @@
+     allowFontScaling,
+     maxFontSizeMultiplier,
+     allowTrailingMargin,
++    blockingGestureTags,
+     streamingAnimation,
+     streamingConfig: normalizedStreamingConfig,
+     spoilerOverlay,
+
+diff --git a/src/types/MarkdownTextProps.ts b/src/types/MarkdownTextProps.ts
+--- a/src/types/MarkdownTextProps.ts
++++ b/src/types/MarkdownTextProps.ts
+@@ -171,6 +171,16 @@
+ 
+ export interface EnrichedMarkdownTextProps extends Omit<ViewProps, 'style'> {
+   /**
++   * React Native Gesture Handler tags whose handlers must wait for this
++   * document's over-wide, horizontally scrolled blocks (tables, code blocks)
++   * to release the touch. Scroll inside those blocks wins when a touch starts
++   * on them, so callers pass constraint-free swipe-pan tags used by
++   * screen-level overlays, such as drawer swipes.
++   * Blocks without an attached pan-gesture relation are not affected.
++   * @platform ios, android
++   */
++  blockingGestureTags?: ReadonlyArray<number>;
++  /**
+    * Markdown content to render.
+    * @platform ios, android, web
+    */
+
+diff --git a/src/web/nativeProps.ts b/src/web/nativeProps.ts
+--- a/src/web/nativeProps.ts
++++ b/src/web/nativeProps.ts
+@@ -45,6 +45,7 @@
+   spoilerOverlay: true,
+   contextMenuItems: true,
+   imageRequestHeaders: true,
++  blockingGestureTags: true,
+   linkPillContent: true,
+   linkContextMenuItems: true,
+   selectionMenuConfig: true,
