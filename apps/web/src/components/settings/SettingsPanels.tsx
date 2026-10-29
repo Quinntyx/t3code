@@ -402,7 +402,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Liquid glass"]
       : []),
     ...(settings.liquidGlassBlur !== DEFAULT_UNIFIED_SETTINGS.liquidGlassBlur
-      ? ["Liquid glass blur"]
+      ? ["Liquid glass edge blur"]
+      : []),
+    ...(settings.liquidGlassCenterBlur !== DEFAULT_UNIFIED_SETTINGS.liquidGlassCenterBlur
+      ? ["Liquid glass center blur"]
       : []),
     ...(settings.liquidGlassSaturation !== DEFAULT_UNIFIED_SETTINGS.liquidGlassSaturation
       ? ["Liquid glass saturation"]
@@ -412,6 +415,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.liquidGlassDispersion !== DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion
       ? ["Color dispersion"]
+      : []),
+    ...(settings.liquidGlassGlare !== DEFAULT_UNIFIED_SETTINGS.liquidGlassGlare
+      ? ["Edge glare"]
       : []),
     ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
       ? ["Diff colors"]
@@ -620,9 +626,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       liquidGlassEnabled: DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled,
       liquidGlassBlur: DEFAULT_UNIFIED_SETTINGS.liquidGlassBlur,
+      liquidGlassCenterBlur: DEFAULT_UNIFIED_SETTINGS.liquidGlassCenterBlur,
       liquidGlassSaturation: DEFAULT_UNIFIED_SETTINGS.liquidGlassSaturation,
       liquidGlassRefraction: DEFAULT_UNIFIED_SETTINGS.liquidGlassRefraction,
       liquidGlassDispersion: DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion,
+      liquidGlassGlare: DEFAULT_UNIFIED_SETTINGS.liquidGlassGlare,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,

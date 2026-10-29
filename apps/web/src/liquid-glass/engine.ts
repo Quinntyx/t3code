@@ -2,8 +2,10 @@ import { observeResize } from "~/lib/observeResize";
 
 import {
   buildLiquidGlassFilter,
+  buildLiquidGlassGlare,
   DEFAULT_LIQUID_GLASS_OPTIONS,
   liquidGlassBackdropFilter,
+  liquidGlassCenterBlurExtra,
   type LiquidGlassOptions,
   type LiquidGlassSurface,
 } from "./filter";
@@ -19,6 +21,7 @@ interface Surface {
   element: Element;
   id: string;
   filter?: Element;
+  glare: string | null;
   key: string;
   timer: number;
   unobserve: () => void;
@@ -41,7 +44,19 @@ function measure(element: Element): LiquidGlassSurface | null {
   if (rect.width * rect.height > MAX_AREA) return null;
   const width = Math.round(rect.width);
   const height = Math.round(rect.height);
-  return { width, height };
+  // The composer draws its rounded surface on ::before, leaving the shell itself square.
+  const radius =
+    parseFloat(getComputedStyle(element).borderTopLeftRadius) ||
+    parseFloat(getComputedStyle(element, "::before").borderTopLeftRadius) ||
+    0;
+  return { width, height, radius };
+}
+
+function paint(element: Element, id: string, glare: string | null, options: LiquidGlassOptions) {
+  const style = (element as HTMLElement).style;
+  style.setProperty("--glass-liquid-filter", liquidGlassBackdropFilter(id, options));
+  if (glare) style.setProperty("--glass-liquid-glare", glare);
+  else style.removeProperty("--glass-liquid-glare");
 }
 
 /**
@@ -71,6 +86,7 @@ export function startLiquidGlass(
     window.clearTimeout(surface.timer);
     surface.filter?.remove();
     (element as HTMLElement).style.removeProperty("--glass-liquid-filter");
+    (element as HTMLElement).style.removeProperty("--glass-liquid-glare");
     surfaces.delete(element);
   };
 
@@ -80,17 +96,15 @@ export function startLiquidGlass(
       release(element);
       return;
     }
-    const key = `${geometry.width}x${geometry.height}:${options.refraction}:${options.dispersion}`;
+    const key = `${geometry.width}x${geometry.height}r${geometry.radius}:${options.refraction}:${options.dispersion}:${options.glare}:${liquidGlassCenterBlurExtra(options)}`;
     const existing = surfaces.get(element);
     if (existing?.key === key && existing.filter) {
-      (element as HTMLElement).style.setProperty(
-        "--glass-liquid-filter",
-        liquidGlassBackdropFilter(existing.id, options),
-      );
+      paint(element, existing.id, existing.glare, options);
       return;
     }
 
     const id = `liquid-glass-${++sequence}`;
+    const glare = buildLiquidGlassGlare(geometry, options);
     const { markup } = buildLiquidGlassFilter(id, geometry, options);
     root.insertAdjacentHTML("beforeend", markup);
     const filter = root.lastElementChild;
@@ -102,6 +116,7 @@ export function startLiquidGlass(
       ({
         element,
         id,
+        glare,
         key,
         timer: 0,
         unobserve: observeResize(element, () => {
@@ -110,13 +125,11 @@ export function startLiquidGlass(
         }),
       } satisfies Surface);
     surface.id = id;
+    surface.glare = glare;
     surface.key = key;
     surface.filter = filter;
     surfaces.set(element, surface);
-    (element as HTMLElement).style.setProperty(
-      "--glass-liquid-filter",
-      liquidGlassBackdropFilter(id, options),
-    );
+    paint(element, id, glare, options);
   };
 
   function schedule(element: Element) {
@@ -162,9 +175,11 @@ export function startLiquidGlass(
     update: (next) => {
       if (
         options.blur === next.blur &&
+        options.centerBlur === next.centerBlur &&
         options.saturation === next.saturation &&
         options.refraction === next.refraction &&
-        options.dispersion === next.dispersion
+        options.dispersion === next.dispersion &&
+        options.glare === next.glare
       )
         return;
       options = next;

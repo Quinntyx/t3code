@@ -31,16 +31,20 @@ describe("liquid glass settings", () => {
   it("keeps the reference defaults for older clients and persists validated custom controls", () => {
     const defaults = {
       liquidGlassBlur: 1,
+      liquidGlassCenterBlur: 6,
       liquidGlassSaturation: 100,
       liquidGlassRefraction: 100,
-      liquidGlassDispersion: 100,
+      liquidGlassDispersion: 400,
+      liquidGlassGlare: 100,
     };
     expect(decodeClientSettings({})).toMatchObject(defaults);
     const custom = {
       liquidGlassBlur: 8,
+      liquidGlassCenterBlur: 16,
       liquidGlassSaturation: 140,
       liquidGlassRefraction: 50,
       liquidGlassDispersion: 0,
+      liquidGlassGlare: 160,
     };
     expect(decodeClientSettingsPatch(custom)).toEqual(custom);
     expect(decodeClientSettings(encodeClientSettings(decodeClientSettings(custom)))).toMatchObject(
@@ -48,9 +52,11 @@ describe("liquid glass settings", () => {
     );
     for (const [key, max] of [
       ["liquidGlassBlur", 24],
+      ["liquidGlassCenterBlur", 24],
       ["liquidGlassSaturation", 200],
       ["liquidGlassRefraction", 200],
-      ["liquidGlassDispersion", 200],
+      ["liquidGlassDispersion", 2000],
+      ["liquidGlassGlare", 200],
     ] as const) {
       for (const value of [-1, max + 1, 0.5]) {
         expect(() => decodeClientSettingsPatch({ [key]: value })).toThrow();

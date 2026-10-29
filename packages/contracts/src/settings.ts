@@ -146,6 +146,11 @@ export const MAX_LIQUID_GLASS_PERCENT = 200;
 const LiquidGlassPercent = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: MAX_LIQUID_GLASS_PERCENT }),
 );
+// 100% is the CSS reference's channel split; 2000% is liquid-glass-studio's widest.
+export const MAX_LIQUID_GLASS_DISPERSION = 2000;
+const LiquidGlassDispersion = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: MAX_LIQUID_GLASS_DISPERSION }),
+);
 
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
@@ -453,9 +458,13 @@ export const ClientSettingsSchema = Schema.Struct({
   // runs over `backdrop-filter`.
   liquidGlassEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   liquidGlassBlur: LiquidGlassBlur.pipe(Schema.withDecodingDefault(Effect.succeed(1))),
+  liquidGlassCenterBlur: LiquidGlassBlur.pipe(Schema.withDecodingDefault(Effect.succeed(6))),
   liquidGlassSaturation: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
   liquidGlassRefraction: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
-  liquidGlassDispersion: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
+  liquidGlassDispersion: LiquidGlassDispersion.pipe(
+    Schema.withDecodingDefault(Effect.succeed(400)),
+  ),
+  liquidGlassGlare: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
   fontSizeInterface: InterfaceFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
   ),
@@ -1741,9 +1750,11 @@ export const ClientSettingsPatch = Schema.Struct({
   glassOpacity: Schema.optionalKey(GlassOpacity),
   liquidGlassEnabled: Schema.optionalKey(Schema.Boolean),
   liquidGlassBlur: Schema.optionalKey(LiquidGlassBlur),
+  liquidGlassCenterBlur: Schema.optionalKey(LiquidGlassBlur),
   liquidGlassSaturation: Schema.optionalKey(LiquidGlassPercent),
   liquidGlassRefraction: Schema.optionalKey(LiquidGlassPercent),
-  liquidGlassDispersion: Schema.optionalKey(LiquidGlassPercent),
+  liquidGlassDispersion: Schema.optionalKey(LiquidGlassDispersion),
+  liquidGlassGlare: Schema.optionalKey(LiquidGlassPercent),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),
