@@ -93,7 +93,7 @@ const make = Effect.gen(function* () {
   const start = Effect.gen(function* () {
     const afterSequence = yield* events.latestApplicationSequence;
     const pending = yield* recover;
-    yield* Effect.logInfo("Deus durable intents loaded; coordinator execution is unavailable", {
+    yield* Effect.logInfo("Deus durable intents loaded", {
       pendingIntentCount: pending.length,
     });
     yield* events

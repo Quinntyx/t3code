@@ -30,6 +30,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { Command, CommandResult, PendingIntent, decide, project } from "./decide.ts";
+import { Continuation, TEXT_LIMITS, checkBytes } from "./textProtocol.ts";
 
 export class DeusPersistenceError extends Schema.TaggedError<DeusPersistenceError>()(
   "DeusPersistenceError",
@@ -57,6 +58,10 @@ export class DeusRepository extends Context.Service<
     readonly readSource: (ref: DeusSourceRef) => Effect.Effect<DeusDelta, DeusRepositoryError>;
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly pending: Effect.Effect<ReadonlyArray<PendingIntent>, DeusRepositoryError>;
+    readonly saveContinuation: (
+      pending: PendingIntent,
+      next: Continuation,
+    ) => Effect.Effect<void, DeusRepositoryError>;
     readonly workerSessions: Effect.Effect<ReadonlyArray<DeusSessionRef>, DeusRepositoryError>;
     readonly findWorker: (
       threadId: ThreadId,
@@ -69,6 +74,7 @@ const decodeSnapshot = Schema.decodeEffect(Schema.fromJsonString(DeusSnapshot));
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CommandResult));
 const decodeDelta = Schema.decodeEffect(Schema.fromJsonString(DeusDelta));
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(PendingIntent));
+const decodeContinuation = Schema.decodeEffect(Continuation);
 const decodeSessionRef = Schema.decodeEffect(DeusSessionRef);
 const decodeSourceRef = Schema.decodeEffect(DeusSourceRef);
 const encodeSnapshot = Schema.encodeSync(Schema.fromJsonString(DeusSnapshot));
@@ -266,6 +272,17 @@ const make = Effect.gen(function* () {
                   source,
                 );
                 if (isStateError(planned)) return yield* planned;
+                if (command.type === "respond") {
+                  const rows = yield* sql<{ input_id: string }>`SELECT input_id FROM deus_outbox
+                    WHERE session_id = ${input.sessionId} AND input_id = ${command.input.humanInputId}
+                    AND status = 'pending' AND json_extract(intent_json, '$.intent.type') = 'coordinate-input'`;
+                  if (!rows[0])
+                    return yield* new DeusStateError({
+                      reason: "conflict",
+                      message: "Human input has no pending reply.",
+                    });
+                  yield* sql`UPDATE deus_outbox SET status = 'acknowledged' WHERE session_id = ${input.sessionId} AND input_id = ${command.input.humanInputId}`;
+                }
                 if (command.type === "acknowledge-launch") {
                   const ack = command.input;
                   const links = yield* sql<{
@@ -364,6 +381,50 @@ const make = Effect.gen(function* () {
       }),
     )
     .pipe(mapError("pending"));
+  const saveContinuation = Effect.fn("DeusRepository.saveContinuation")(function (
+    pending: PendingIntent,
+    raw: Continuation,
+  ) {
+    return lane
+      .withPermits(1)(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* readSnapshot(pending);
+            const next = yield* decodeContinuation(raw);
+            yield* Effect.try({
+              try: () => checkBytes(next, TEXT_LIMITS.continuationBytes),
+              catch: () =>
+                new DeusStateError({
+                  reason: "conflict",
+                  message: "Text continuation exceeds its bound.",
+                }),
+            });
+            const rows = yield* sql<{
+              intent_json: string;
+            }>`SELECT intent_json FROM deus_outbox WHERE session_id = ${pending.sessionId} AND input_id = ${pending.inputId} AND status = 'pending'`;
+            if (!rows[0])
+              return yield* new DeusStateError({
+                reason: "conflict",
+                message: "Text continuation is no longer pending.",
+              });
+            const current = yield* decodePending(rows[0].intent_json);
+            if (
+              current.intent.type !== "coordinate-input" ||
+              pending.intent.type !== "coordinate-input" ||
+              !NodeUtil.isDeepStrictEqual(current, pending) ||
+              next.revision !== (current.intent.continuation?.revision ?? 0) + 1
+            )
+              return yield* new DeusStateError({
+                reason: "conflict",
+                message: "Text continuation changed concurrently.",
+              });
+            const updated = { ...current, intent: { ...current.intent, continuation: next } };
+            yield* sql`UPDATE deus_outbox SET intent_json = ${encodePending(updated)} WHERE session_id = ${pending.sessionId} AND input_id = ${pending.inputId}`;
+          }),
+        ),
+      )
+      .pipe(mapError("save-continuation"));
+  });
   const findWorker = Effect.fn("DeusRepository.findWorker")(function* (threadId: ThreadId) {
     const rows = yield* sql<{
       session_id: string;
@@ -406,6 +467,7 @@ const make = Effect.gen(function* () {
     readDeltas,
     readSource,
     pending,
+    saveContinuation,
     subscribe: PubSub.subscribe(changes),
     projectDeleted: Effect.fn("DeusRepository.projectDeleted")(function (_projectId) {
       return PubSub.publish(changes, undefined).pipe(Effect.asVoid);

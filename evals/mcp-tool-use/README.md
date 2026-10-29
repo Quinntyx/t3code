@@ -107,6 +107,11 @@ Raw-route checks inspect possible literal invocations; managed capture and recor
 Commands built at run time, external script files and full shell/interpreter semantics (including complex quoting, dynamic control flow and exception handling) are outside the bounded parser. Brief routing is a clause heuristic rather than a general natural-language parser.
 
 This API replay measures routing and recovery decisions. Screenshots return product text and metadata without rendered image blocks, and Codex code cells have no `image` helper, so a cell that calls it fails with `image is not defined`. The shell remains simulated, children are not executed, and `priorTurns` is synthetic context rather than native resume or compaction. It does not test launcher execution, binding, pruning, actual device state, transport failures or resource cleanup, and it models agent-device's session check rather than running it. DEL-02 checks managed recording start/stop and the final filename; it does not inspect video bytes, required flow, transforms, codec or size. Screenshots and final text do not establish delivered artifacts or honesty. Keep local real-harness results separate; their scores and costs are not API-replay results. Offline validation costs $0. Record fresh per-model baseline and candidate costs before using device-case scores as release evidence.
+## Internal Deus text coordinator
+
+`deus-text.ndjson` covers direct answers, provisional research, explicit unavailable selections, silent spawn receipts, untrusted evidence, and immutable worker query. It is separate from `cases/`: Deus has a restricted internal tool surface, not the public MCP toolkit.
+
+From `evals/`, `node mcp-tool-use/deusText.ts --dry-run` prints bounded requests using the production coordinator policy and tool declarations; `--context` prints their sizes. Both paths are strictly local and make no provider calls. `deusText.test.ts` reuses `gradeSample` to check positive and negative synthetic fixtures. These prove request/grader wiring, not Gemini behavioral compliance; paid evaluation remains a separate gate.
 
 ## Where T3's text lives
 
@@ -114,6 +119,7 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 - `packages/provider-core/src/server/orchestrationInstructions.ts`
 - `apps/server/src/provider/CodexDeveloperInstructions.ts`
 - `apps/server/src/mcp/toolkits/*/tools.ts` (tool descriptions)
+- `apps/server/src/deus/prompts/text.ts` and `apps/server/src/deus/DeusTools.ts` (internal coordinator policy and restricted tools)
 - `packages/contracts/src/*Mcp.ts` (parameter descriptions and result text)
 
 ## Templates

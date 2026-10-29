@@ -53,6 +53,16 @@ import * as Bridge from "./DeusThreadBridge.ts";
 import * as Sink from "../orchestration-v2/EventSink.ts";
 import * as DateTime from "effect/DateTime";
 import * as Documents from "../provider/DocumentText.ts";
+import * as Coordinator from "./DeusCoordinator.ts";
+import * as Tools from "./DeusTools.ts";
+import * as Adapter from "./GeminiTextAdapter.ts";
+import * as Memory from "./DeusMemoryService.ts";
+import * as Working from "./DeusContextService.ts";
+import * as Git from "../vcs/GitVcsDriver.ts";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import { DeusTextError, TEXT_LIMITS, encodeJson, type TextReply } from "./textProtocol.ts";
 
 const environmentId = EnvironmentId.make("deus-bridge-environment");
 const projectId = ProjectId.make("deus-bridge-project");
@@ -130,9 +140,12 @@ function harness(
     readonly enabled?: boolean;
     readonly ceiling?: "approval-required" | "full-access";
     readonly externalFixture?: boolean;
+    readonly database?: ReturnType<typeof Sqlite.layerFromPath>;
+    readonly text?: Adapter.GeminiTextAdapter["Service"]["generate"];
+    readonly authority?: Authority.DeusAuthority["Service"]["authorize"];
   } = {},
 ) {
-  const database = Sqlite.layerMemory;
+  const database = (options.database ?? Sqlite.layerMemory).pipe(Layer.provide(NodeServices.layer));
   const registry = ProviderAdapters.layerFromAdapters([
     { ...adapter, ...(options.externalFixture ? { openSession: openFixtureSession } : {}) },
   ]);
@@ -172,14 +185,16 @@ function harness(
     Layer.mock(Setup.ProjectSetupScriptRunner)({}),
     Layer.mock(TextGeneration.TextGeneration)({}),
     Layer.succeed(Authority.DeusAuthority, {
-      authorize: () =>
-        options.deny
-          ? Effect.fail(new Authority.DeusAuthorityError({ reason: "inactive" }))
-          : Effect.succeed({
-              runtimeMode: options.ceiling ?? "full-access",
-              interactionMode: "default",
-              allowWorktree: false,
-            }),
+      authorize:
+        options.authority ??
+        (() =>
+          options.deny
+            ? Effect.fail(new Authority.DeusAuthorityError({ reason: "inactive" }))
+            : Effect.succeed({
+                runtimeMode: options.ceiling ?? "full-access",
+                interactionMode: "default",
+                allowWorktree: false,
+              })),
     }),
   );
   const launches = ThreadLaunch.layer.pipe(
@@ -191,7 +206,7 @@ function harness(
     Layer.provide(external),
     Layer.provide(database),
   );
-  return Bridge.layer.pipe(
+  const bridge = Bridge.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         sessions,
@@ -204,6 +219,20 @@ function harness(
         database,
         orchestrator,
       ),
+    ),
+  );
+  return Coordinator.layer.pipe(
+    Layer.provideMerge(Tools.layer),
+    Layer.provideMerge(
+      Working.layer.pipe(
+        Layer.provideMerge(Memory.layer.pipe(Layer.provide(Git.layer))),
+        Layer.provideMerge(bridge),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(Adapter.GeminiTextAdapter, {
+        generate: options.text ?? (() => Effect.die("unscripted text call")),
+      }),
     ),
   );
 }
@@ -970,4 +999,487 @@ it.effect("rejects disabled providers", () =>
     const { bridge, input } = yield* setup;
     assert.equal((yield* bridge.launch(input).pipe(Effect.flip))._tag, "DeusStateError");
   }).pipe(Effect.provide(harness({ enabled: false }))),
+);
+
+const answer = (text: string): TextReply => ({ parts: [{ text }] });
+const spawnCall = (args: Record<string, unknown>): TextReply => ({
+  parts: [{ functionCall: { name: "spawn", args }, thoughtSignature: "opaque-provider-signature" }],
+});
+const workerArgs = {
+  prompt: "Research the uncertain claim; plan before implementation.",
+  kind: "research",
+  model,
+};
+function scripted(replies: ReadonlyArray<TextReply>) {
+  const requests: Adapter.TextRequest[] = [];
+  let next = 0;
+  return {
+    requests,
+    generate: Effect.fn("DeusCoordinator.test.generate")((request: Adapter.TextRequest) =>
+      Effect.suspend(() => {
+        requests.push(request);
+        const reply = replies[next++];
+        return reply ? Effect.succeed(reply) : Effect.fail(new DeusTextError({ code: "provider" }));
+      }),
+    ),
+  };
+}
+
+it.effect("coordinator answers known questions once across concurrent duplicate inputs", () => {
+  const script = scripted([answer("Two plus two is four.")]);
+  return Effect.gen(function* () {
+    const { input, sessions, sql } = yield* setup;
+    const coordinator = yield* Coordinator.DeusCoordinator;
+    const human = { ...input, text: "What is two plus two?" };
+    const receipts = yield* Effect.all([coordinator.submit(human), coordinator.submit(human)], {
+      concurrency: "unbounded",
+    });
+    yield* coordinator.recover;
+    assert.deepEqual(receipts.map((receipt) => receipt.status).toSorted(), [
+      "accepted",
+      "replayed",
+    ]);
+    const snapshot = yield* sessions.snapshot(input);
+    assert.deepEqual(
+      snapshot.transcripts.map((entry) => [entry.role, entry.inputId, entry.text]),
+      [
+        ["human", human.inputId, human.text],
+        ["assistant", human.inputId, "Two plus two is four."],
+      ],
+    );
+    assert.lengthOf(script.requests, 1);
+    assert.equal(
+      (yield* sql<{
+        count: number;
+      }>`SELECT count(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+      0,
+    );
+    assert.lengthOf(yield* sessions.pending, 0);
+  }).pipe(Effect.provide(harness({ text: script.generate })));
+});
+
+it.effect(
+  "coordinator recovers malformed tools and unavailable explicit models then replies after silent research spawn",
+  () => {
+    const script = scripted([
+      {
+        parts: [
+          {
+            functionCall: {
+              name: "spawn",
+              args: { ...workerArgs, environmentId: "escape", runtimeMode: "full-access" },
+            },
+          },
+          {
+            functionCall: {
+              name: "spawn",
+              args: { ...workerArgs, model: { ...model, model: "not-installed" } },
+            },
+          },
+          {
+            functionCall: { name: "spawn", args: workerArgs },
+            thoughtSignature: "opaque-provider-signature",
+          },
+        ],
+      },
+      answer(
+        "My answer is provisional. I delegated research to an ordinary worker and will use its evidence, not assume completion.",
+      ),
+    ]);
+    return Effect.gen(function* () {
+      const { input, sessions, sql } = yield* setup;
+      yield* (yield* Coordinator.DeusCoordinator).submit({
+        ...input,
+        text: "Research this uncertain claim.",
+      });
+      const snapshot = yield* sessions.snapshot(input);
+      assert.lengthOf(snapshot.tasks, 1);
+      assert.equal(snapshot.tasks[0]?.status, "running");
+      assert.include(snapshot.transcripts[1]!.text, "provisional");
+      assert.equal(
+        (yield* sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+        1,
+      );
+      const continued = encodeJson(script.requests[1]);
+      assert.include(continued, "invalid-arguments");
+      assert.include(continued, "unavailable-or-out-of-scope");
+      assert.include(continued, "opaque-provider-signature");
+      assert.notInclude(continued, '"model":"fixture-model","substituted"');
+      assert.lengthOf(yield* sessions.pending, 0);
+    }).pipe(Effect.provide(harness({ text: script.generate })));
+  },
+);
+
+it.effect(
+  "coordinator query uses immutable real bridge evidence with no tools, dispatch or worker wake",
+  () => {
+    const script = scripted([
+      answer("The immutable snapshot records the original request; no completion evidence yet."),
+      spawnCall(workerArgs),
+    ]);
+    return Effect.gen(function* () {
+      const { input, bridge, sql } = yield* setup;
+      const task = yield* bridge.launch(input);
+      const tools = yield* Tools.DeusTools;
+      const before =
+        yield* sql`SELECT command_id FROM orchestration_v2_command_receipts ORDER BY command_id`;
+      const call = {
+        input: { ...input, text: "What does the worker know?" },
+        runtimeMode: "full-access" as const,
+        actionId: "immutable-query",
+        name: "query",
+        args: { threadId: task.workers[0]!.threadId, question: "What is known?" },
+      };
+      const result = yield* tools.execute(call);
+      assert.equal(result.ok, true);
+      assert.isUndefined(script.requests[0]?.tools);
+      assert.include(encodeJson(result), task.workers[0]!.runId!);
+      assert.include(encodeJson(result), task.workers[0]!.threadId);
+      assert.include(encodeJson(script.requests[0]), "evidenceOnly");
+      assert.include(encodeJson(script.requests[0]), "bounded-preview");
+      assert.equal((yield* tools.execute({ ...call, actionId: "unsolicited-function" })).ok, false);
+      assert.deepEqual(
+        yield* sql`SELECT command_id FROM orchestration_v2_command_receipts ORDER BY command_id`,
+        before,
+      );
+      assert.equal(
+        (yield* sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+        1,
+      );
+    }).pipe(Effect.provide(harness({ text: script.generate })));
+  },
+);
+
+it.effect(
+  "coordinator rejects inactive new requests and durably fails accepted input when authority is lost",
+  () => {
+    let active = true;
+    const script = scripted([spawnCall(workerArgs)]);
+    return Effect.gen(function* () {
+      const { input, sessions } = yield* setup;
+      const coordinator = yield* Coordinator.DeusCoordinator;
+      yield* coordinator.submit({ ...input, text: "Research this." });
+      const snapshot = yield* sessions.snapshot(input);
+      assert.equal(snapshot.transcripts[1]?.error?.code, "authority");
+      assert.equal(snapshot.transcripts[1]?.inputId, input.inputId);
+      assert.lengthOf(snapshot.tasks, 0);
+      assert.lengthOf(yield* sessions.pending, 0);
+      const denied = yield* coordinator
+        .submit({
+          ...input,
+          inputId: DeusInputId.make("unauthorized-new"),
+          text: "No new request.",
+        })
+        .pipe(Effect.flip);
+      assert.equal(denied._tag, "DeusAuthorityError");
+      assert.lengthOf((yield* sessions.snapshot(input)).transcripts, 2);
+    }).pipe(
+      Effect.provide(
+        harness({
+          authority: () =>
+            active
+              ? Effect.succeed({
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  allowWorktree: false,
+                })
+              : Effect.fail(new Authority.DeusAuthorityError({ reason: "inactive" })),
+          text: (request) =>
+            script.generate(request).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  active = false;
+                }),
+              ),
+            ),
+        }),
+      ),
+    );
+  },
+);
+
+it.effect(
+  "coordinator missing configuration yields a durable redacted recoverable answer, never a stranded input",
+  () =>
+    Effect.gen(function* () {
+      const { input, sessions } = yield* setup;
+      yield* (yield* Coordinator.DeusCoordinator).submit({
+        ...input,
+        text: "No configured text model or credential.",
+      });
+      const snapshot = yield* sessions.snapshot(input);
+      assert.deepEqual(snapshot.transcripts[1]?.error, {
+        code: "configuration",
+        recoverable: true,
+      });
+      assert.equal(snapshot.transcripts[1]?.inputId, input.inputId);
+      assert.include(snapshot.transcripts[1]!.text, "configuration");
+      assert.lengthOf(yield* sessions.pending, 0);
+    }).pipe(
+      Effect.provide(
+        harness({ text: () => Effect.fail(new DeusTextError({ code: "configuration" })) }),
+      ),
+    ),
+);
+
+it.effect(
+  "coordinator tools reject unavailable efforts, unknown tools and scope overrides without side effects",
+  () =>
+    Effect.gen(function* () {
+      const { input, sessions } = yield* setup;
+      const tools = yield* Tools.DeusTools;
+      const call = {
+        input: { ...input, text: "Bound tools" },
+        runtimeMode: "full-access" as const,
+        actionId: "negative-tools",
+      };
+      for (const [name, args] of [
+        ["list", { projectId: "different-project" }],
+        ["models", { environmentId: "different-environment" }],
+        [
+          "spawn",
+          {
+            ...workerArgs,
+            model: { ...model, options: [{ id: "effort", value: "not-installed" }] },
+          },
+        ],
+        ["read", { threadId: "not-a-registered-worker" }],
+        ["shell", { command: "arbitrary command" }],
+      ] as const)
+        assert.equal((yield* tools.execute({ ...call, name, args })).ok, false, name);
+      const catalog = encodeJson(yield* tools.execute({ ...call, name: "models", args: {} }));
+      assert.include(catalog, model.instanceId);
+      assert.include(catalog, model.model);
+      assert.lengthOf((yield* sessions.snapshot(input)).tasks, 0);
+      assert.lengthOf(yield* sessions.pending, 0);
+    }).pipe(Effect.provide(harness())),
+);
+
+it.effect(
+  "coordinator resumes the original accepted input after transport interruption without duplicate final replies",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      let calls = 0;
+      yield* Effect.gen(function* () {
+        const { input, sessions } = yield* setup;
+        const coordinator = yield* Coordinator.DeusCoordinator;
+        const human = { ...input, text: "Keep this input across disconnect." };
+        const disconnected = yield* coordinator.submit(human).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(disconnected);
+        assert.lengthOf(yield* sessions.pending, 1);
+        yield* coordinator.recover;
+        yield* coordinator.submit(human);
+        const snapshot = yield* sessions.snapshot(input);
+        assert.deepEqual(
+          snapshot.transcripts.map((entry) => [entry.role, entry.inputId]),
+          [
+            ["human", human.inputId],
+            ["assistant", human.inputId],
+          ],
+        );
+        assert.lengthOf(yield* sessions.pending, 0);
+        assert.equal(calls, 2);
+      }).pipe(
+        Effect.provide(
+          harness({
+            text: () =>
+              ++calls === 1
+                ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.succeed(answer("The original input was recovered.")),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "coordinator bounds complete history and reply debt without silently stranding accepted input",
+  () => {
+    const script = scripted(Array.from({ length: TEXT_LIMITS.rounds }, () => answer("")));
+    return Effect.gen(function* () {
+      const { input, sessions } = yield* setup;
+      const coordinator = yield* Coordinator.DeusCoordinator;
+      yield* coordinator.submit({ ...input, text: "Do not leave me without an answer." });
+      const snapshot = yield* sessions.snapshot(input);
+      assert.equal(snapshot.transcripts[1]?.error?.code, "reply-debt");
+      assert.lengthOf(script.requests, TEXT_LIMITS.rounds);
+      assert.lengthOf(yield* sessions.pending, 0);
+      for (let index = 0; index < 8; index++)
+        yield* sessions.acceptInput({
+          ...input,
+          inputId: DeusInputId.make(`large-${index}`),
+          text: "x".repeat(14000),
+        });
+      yield* coordinator.submit({
+        ...input,
+        inputId: DeusInputId.make("bounded-history"),
+        text: "Answer from a bounded complete request.",
+      });
+      assert.equal((yield* sessions.snapshot(input)).transcripts.at(-1)?.error?.code, "bounds");
+      assert.lengthOf(script.requests, TEXT_LIMITS.rounds);
+    }).pipe(Effect.provide(harness({ text: script.generate })));
+  },
+);
+
+it.effect(
+  "coordinator retains a saved model call and real external receipt through SQLite restart and conversation reset",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "deus-text-restart-" });
+      const database = Sqlite.layerFromPath(`${home}/statev2.sqlite`);
+      const originalArgs = {
+        ...workerArgs,
+        model: { ...model, options: [{ id: "effort", value: "previously-enabled" }] },
+      };
+      const original = yield* Effect.gen(function* () {
+        const { input, sessions, bridge } = yield* setup;
+        const repository = yield* Repository.DeusRepository;
+        const human = { ...input, text: "Research and tell me what is provisional." };
+        yield* sessions.acceptInput(human);
+        const pending = (yield* sessions.pending)[0]!;
+        yield* repository.saveContinuation(pending, {
+          revision: 1,
+          steps: [
+            {
+              reply: spawnCall(originalArgs),
+              runtimeMode: "full-access",
+              actionIds: ["persisted-original-action"],
+              results: [],
+            },
+          ],
+        });
+        const task = yield* bridge.launch({
+          ...input,
+          ...originalArgs,
+          kind: "research",
+          inputId: DeusInputId.make("persisted-original-action"),
+          workspace: "project",
+        });
+        yield* sessions.resetConversation({
+          ...input,
+          inputId: DeusInputId.make("reset-after-external-ack"),
+        });
+        return {
+          human,
+          threadId: task.workers[0]!.threadId,
+          taskId: task.id,
+          runId: task.workers[0]!.runId,
+        };
+      }).pipe(Effect.provide(harness({ database })), Effect.scoped);
+      const script = scripted([
+        answer("This is provisional; the original research worker remains active."),
+      ]);
+      yield* Effect.gen(function* () {
+        const sessions = yield* Sessions.DeusSessionService;
+        const coordinator = yield* Coordinator.DeusCoordinator;
+        yield* coordinator.recover;
+        yield* coordinator.recover;
+        yield* coordinator.submit(original.human);
+        const snapshot = yield* sessions.snapshot(original.human);
+        assert.equal(snapshot.session.conversation, 2);
+        assert.lengthOf(snapshot.tasks, 1);
+        assert.equal(snapshot.tasks[0]?.id, original.taskId);
+        assert.equal(snapshot.tasks[0]?.workers[0]?.threadId, original.threadId);
+        assert.equal(snapshot.tasks[0]?.workers[0]?.runId, original.runId);
+        assert.deepEqual(
+          snapshot.transcripts.map((entry) => [entry.role, entry.conversation, entry.inputId]),
+          [
+            ["human", 1, original.human.inputId],
+            ["assistant", 1, original.human.inputId],
+          ],
+        );
+        assert.isUndefined(snapshot.transcripts[1]?.error);
+        assert.lengthOf(script.requests, 1);
+        assert.include(encodeJson(script.requests[0]), '"ok":true');
+        assert.notInclude(encodeJson(script.requests[0]), "unavailable-or-out-of-scope");
+        const sql = yield* SqlClient.SqlClient;
+        assert.equal(
+          (yield* sql<{
+            count: number;
+          }>`SELECT count(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+          1,
+        );
+        assert.lengthOf(yield* sessions.pending, 0);
+      }).pipe(Effect.provide(harness({ database, text: script.generate })), Effect.scoped);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "coordinator refreshes correction-aware context before every model input, preserving original human sources",
+  () => {
+    const script = scripted([
+      { parts: [{ functionCall: { name: "context_search", args: { query: "correction" } } }] },
+      answer("The corrected value is authoritative; the older claim is superseded."),
+    ]);
+    let correction: Effect.Effect<void, Repository.DeusRepositoryError> = Effect.void;
+    return Effect.gen(function* () {
+      const { input, sessions } = yield* setup;
+      const working = yield* Working.DeusContextService;
+      const first = yield* sessions.acceptInput({
+        ...input,
+        inputId: DeusInputId.make("old-source"),
+        text: "Old value",
+      });
+      yield* working.recordObservation({
+        ...input,
+        inputId: DeusInputId.make("old-observation"),
+        sourceCursor: first.cursor,
+        kind: "context",
+        text: "Old value",
+        supersedes: null,
+      });
+      const previous = (yield* sessions.snapshot(input)).observations[0]!;
+      const corrected = yield* sessions.acceptInput({
+        ...input,
+        inputId: DeusInputId.make("correction-source"),
+        text: "Correction: new value",
+      });
+      correction = working
+        .recordObservation({
+          ...input,
+          inputId: DeusInputId.make("corrected-observation"),
+          sourceCursor: corrected.cursor,
+          kind: "correction",
+          text: "Correction: new value",
+          supersedes: previous.id,
+        })
+        .pipe(Effect.asVoid);
+      const coordinator = yield* Coordinator.DeusCoordinator;
+      yield* coordinator.submit({
+        ...input,
+        inputId: DeusInputId.make("question"),
+        text: "What is the correction?",
+      });
+      const source = yield* working.readObservation({
+        ...input,
+        observationId: (yield* sessions.snapshot(input)).observations.at(-1)!.id,
+      });
+      assert.equal(source.source.cursor, corrected.cursor);
+      assert.equal(source.observation.supersedes, previous.id);
+      assert.include(encodeJson(script.requests[0]), previous.id);
+      const nextInput = script.requests[1]?.contents[0]?.parts[0]?.text ?? "";
+      assert.include(nextInput, source.observation.id);
+      assert.notInclude(nextInput, `"id":"${previous.id}"`);
+    }).pipe(
+      Effect.provide(
+        harness({
+          text: (request) =>
+            script
+              .generate(request)
+              .pipe(
+                Effect.tap(() =>
+                  script.requests.length === 1 ? correction.pipe(Effect.orDie) : Effect.void,
+                ),
+              ),
+        }),
+      ),
+    );
+  },
 );

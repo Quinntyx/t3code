@@ -22,6 +22,7 @@ import {
   type IsoDateTime,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { Continuation, TextFailureCode } from "./textProtocol.ts";
 
 export const LaunchAcknowledgment = Schema.Struct({
   ...DeusSessionRef.fields,
@@ -53,6 +54,17 @@ export const ObservationInput = Schema.Struct({
 });
 export type ObservationInput = typeof ObservationInput.Type;
 export const Command = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("respond"),
+    input: Schema.Struct({
+      ...DeusSessionRef.fields,
+      inputId: DeusInputId,
+      humanInputId: DeusInputId,
+      conversation: DeusConversation,
+      text: Schema.Trimmed.check(Schema.isMinLength(1), Schema.isMaxLength(16000)),
+      error: Schema.optional(TextFailureCode),
+    }),
+  }),
   Schema.Struct({ type: Schema.Literal("observe"), input: ObservationInput }),
   Schema.Struct({ type: Schema.Literal("input"), input: DeusInput }),
   Schema.Struct({ type: Schema.Literal("reset"), input: DeusResetConversationInput }),
@@ -66,7 +78,11 @@ export const Command = Schema.Union([
 ]);
 export type Command = typeof Command.Type;
 export const Intent = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("coordinate-input"), input: DeusInput }),
+  Schema.Struct({
+    type: Schema.Literal("coordinate-input"),
+    input: DeusInput,
+    continuation: Schema.optional(Continuation),
+  }),
   Schema.Struct({
     type: Schema.Literal("launch-thread"),
     input: DeusTaskLaunchInput,
@@ -105,10 +121,48 @@ export function decide(
   | { readonly changes: ReadonlyArray<DeusDurableChange>; readonly intent?: Intent }
   | DeusStateError {
   const { input } = command;
-  if ("conversation" in input && input.conversation !== snapshot.session.conversation) {
+  if (
+    command.type !== "respond" &&
+    "conversation" in input &&
+    input.conversation !== snapshot.session.conversation
+  ) {
     return new DeusStateError({ reason: "conflict", message: "The conversation has changed." });
   }
   switch (command.type) {
+    case "respond": {
+      const human = snapshot.transcripts.find(
+        (entry) => entry.role === "human" && entry.inputId === command.input.humanInputId,
+      );
+      if (
+        !human ||
+        human.conversation !== command.input.conversation ||
+        snapshot.transcripts.some(
+          (entry) => entry.role === "assistant" && entry.inputId === human.inputId,
+        )
+      )
+        return new DeusStateError({
+          reason: "conflict",
+          message: "Response must complete one original human input.",
+        });
+      return {
+        changes: [
+          {
+            type: "transcript",
+            transcript: {
+              id: ids.transcriptId,
+              conversation: human.conversation,
+              inputId: human.inputId,
+              role: "assistant",
+              text: command.input.text,
+              createdAt: now,
+              ...(command.input.error
+                ? { error: { code: command.input.error, recoverable: true as const } }
+                : {}),
+            },
+          },
+        ],
+      };
+    }
     case "observe": {
       if (
         !source ||

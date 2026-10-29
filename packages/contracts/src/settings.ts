@@ -1214,6 +1214,9 @@ export const DeusSettingsPatch = Schema.Struct({
 export type DeusSettingsPatch = typeof DeusSettingsPatch.Type;
 
 export const ServerSettings = Schema.Struct({
+  deus: DeusSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(DeusSettings)({}))),
+  ),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1562,6 +1565,7 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  deus: Schema.optionalKey(DeusSettingsPatch),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),

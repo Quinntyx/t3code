@@ -110,6 +110,43 @@ function launch(ref: DeusSessionRef) {
   };
 }
 
+it.effect("completes an accepted input once in its original conversation after reset", () =>
+  Effect.gen(function* () {
+    const snapshot = yield* open;
+    const sessions = yield* DeusSessionService.DeusSessionService;
+    const repository = yield* DeusRepository.DeusRepository;
+    yield* sessions.acceptInput(text(snapshot.session));
+    yield* sessions.resetConversation({
+      ...snapshot.session,
+      inputId: inputId("reset"),
+      conversation: DeusConversation.make(1),
+    });
+    const command = {
+      type: "respond" as const,
+      input: {
+        ...snapshot.session,
+        inputId: inputId("answer"),
+        humanInputId: inputId("text"),
+        conversation: DeusConversation.make(1),
+        text: "Recoverable error: authority unavailable. Please reconnect and retry.",
+        error: "authority" as const,
+      },
+    };
+    yield* repository.commit(command);
+    yield* repository.commit(command);
+    const current = yield* sessions.snapshot(snapshot.session);
+    assert.equal(current.session.conversation, 2);
+    assert.deepEqual(
+      current.transcripts.map((entry) => [entry.role, entry.conversation, entry.inputId]),
+      [
+        ["human", 1, inputId("text")],
+        ["assistant", 1, inputId("text")],
+      ],
+    );
+    assert.equal((yield* sessions.pending).length, 0);
+  }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect(
   "opens one standalone session without a thread and replays compatible commands only",
   () =>

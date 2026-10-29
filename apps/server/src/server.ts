@@ -47,6 +47,10 @@ import * as DeusRepository from "./deus/DeusRepository.ts";
 import * as DeusSessionService from "./deus/DeusSessionService.ts";
 import * as DeusThreadBridge from "./deus/DeusThreadBridge.ts";
 import * as DeusAuthority from "./deus/DeusAuthority.ts";
+import * as DeusConfiguration from "./deus/DeusConfiguration.ts";
+import * as DeusCoordinator from "./deus/DeusCoordinator.ts";
+import * as DeusTools from "./deus/DeusTools.ts";
+import * as GeminiTextAdapter from "./deus/GeminiTextAdapter.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -610,7 +614,12 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  Layer.merge(DeusThreadBridge.layer, DeusContextService.layer).pipe(
+  DeusCoordinator.layer.pipe(
+    Layer.provideMerge(DeusTools.layer),
+    Layer.provideMerge(
+      Layer.mergeAll(DeusThreadBridge.layer, DeusContextService.layer, GeminiTextAdapter.layer),
+    ),
+    Layer.provideMerge(DeusConfiguration.layer),
     Layer.provideMerge(DeusMemoryService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
     Layer.provideMerge(DeusSessionService.layer.pipe(Layer.provideMerge(DeusRepository.layer))),
     Layer.provide(DeusAuthority.layerUnavailable),
@@ -1127,9 +1136,11 @@ const layerMakeServer = Layer.unwrap(
           const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
           const deus = yield* DeusSessionService.DeusSessionService;
           const bridge = yield* DeusThreadBridge.DeusThreadBridge;
+          const coordinator = yield* DeusCoordinator.DeusCoordinator;
           yield* startup.awaitCommandReady.pipe(
             Effect.andThen(deus.start),
             Effect.andThen(bridge.start),
+            Effect.andThen(coordinator.recover),
             Effect.orDie,
             Effect.forkScoped,
           );

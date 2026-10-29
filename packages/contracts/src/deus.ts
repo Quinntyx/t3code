@@ -123,6 +123,19 @@ export const DeusTranscript = Schema.Struct({
   conversation: DeusConversation,
   inputId: DeusInputId,
   role: Schema.Literals(["human", "assistant"]),
+  error: Schema.optional(
+    Schema.Struct({
+      code: Schema.Literals([
+        "authority",
+        "configuration",
+        "provider",
+        "bounds",
+        "continuation",
+        "reply-debt",
+      ]),
+      recoverable: Schema.Literal(true),
+    }),
+  ),
   text: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
 });
