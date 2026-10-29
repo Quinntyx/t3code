@@ -331,7 +331,7 @@ export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
 /** The animated companion drawn above the app, or none. */
-export const Buddy = Schema.Literals(["none", "whale-chan"]);
+export const Buddy = Schema.Literals(["none", "whale-chan", "clawd"]);
 export type Buddy = typeof Buddy.Type;
 
 export const ModelFavorite = Schema.Struct({
