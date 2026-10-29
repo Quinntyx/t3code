@@ -44,6 +44,7 @@ import {
 } from "../../lib/composerImages";
 import { appendComposerDraftAttachments } from "../../state/use-composer-drafts";
 import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentDocumentBody";
+import { ATTACHMENT_VIEWER_PAGE_CLASS_NAME, AttachmentViewerCard } from "./AttachmentViewerCard";
 import { FilePreviewLoading } from "./FilePreviewFeedback";
 import {
   buildZipTree,
@@ -309,6 +310,7 @@ function ZipArchiveHeader(props: {
         <AndroidScreenHeader
           title={props.name}
           subtitle={props.subtitle}
+          floating
           onBack={() => {
             if (navigation.canGoBack()) navigation.goBack();
           }}
@@ -524,7 +526,7 @@ export function ZipArchiveView(props: {
   const columnMetrics = useNativeColumnLayoutMetrics();
   const headerInset = Platform.OS === "ios" ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
   return (
-    <View className="flex-1 bg-sheet">
+    <View className={ATTACHMENT_VIEWER_PAGE_CLASS_NAME}>
       {entryOpen ? null : (
         <ZipArchiveHeader
           name={props.name}
@@ -538,33 +540,35 @@ export function ZipArchiveView(props: {
           onRemove={props.onRemove}
         />
       )}
-      {state.status === "ready" ? (
-        <ZipArchiveList
-          archive={state.archive}
-          headerInset={headerInset}
-          onOpen={(entry) => {
-            Keyboard.dismiss();
-            setSelection({ archive: state.archive, entry });
-          }}
-        />
-      ) : (
-        <View className="flex-1" style={{ paddingTop: headerInset }}>
-          {state.status === "loading" ? (
-            props.isLocal || state.receivedBytes === 0 ? (
-              <FilePreviewLoading message="Opening ZIP..." />
+      <AttachmentViewerCard>
+        {state.status === "ready" ? (
+          <ZipArchiveList
+            archive={state.archive}
+            headerInset={headerInset}
+            onOpen={(entry) => {
+              Keyboard.dismiss();
+              setSelection({ archive: state.archive, entry });
+            }}
+          />
+        ) : (
+          <View className="flex-1" style={{ paddingTop: headerInset }}>
+            {state.status === "loading" ? (
+              props.isLocal || state.receivedBytes === 0 ? (
+                <FilePreviewLoading message="Opening ZIP..." />
+              ) : (
+                <ZipArchiveProgress
+                  receivedBytes={state.receivedBytes}
+                  totalBytes={props.sizeBytes}
+                  timeLeft={state.timeLeft}
+                  onCancel={cancel}
+                />
+              )
             ) : (
-              <ZipArchiveProgress
-                receivedBytes={state.receivedBytes}
-                totalBytes={props.sizeBytes}
-                timeLeft={state.timeLeft}
-                onCancel={cancel}
-              />
-            )
-          ) : (
-            <ZipArchiveFailure failure={state.failure} onRetry={retry} onSave={props.onSave} />
-          )}
-        </View>
-      )}
+              <ZipArchiveFailure failure={state.failure} onRetry={retry} onSave={props.onSave} />
+            )}
+          </View>
+        )}
+      </AttachmentViewerCard>
       {selected ? (
         <View className="absolute inset-0">
           <ZipEntryView
@@ -746,7 +750,7 @@ function ZipEntryView(props: {
   const subtitle = `${[props.archiveName, ...folders].join(" / ")} · ${formatAttachmentSize(entry.sizeBytes)}`;
   const isAndroid = Platform.OS === "android";
   return (
-    <View className="flex-1 bg-sheet">
+    <View className={ATTACHMENT_VIEWER_PAGE_CLASS_NAME}>
       <NativeStackScreenOptions
         options={{
           headerShown: !isAndroid,
@@ -759,6 +763,7 @@ function ZipEntryView(props: {
         <AndroidScreenHeader
           title={entry.name}
           subtitle={subtitle}
+          floating
           onBack={props.onBack}
           actions={[
             ...(renderedMode
@@ -810,48 +815,50 @@ function ZipEntryView(props: {
           </Toolbar.Menu>
         </Toolbar>
       )}
-      {content.status === "failed" ? (
-        <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
-          <EmptyState
-            variant="plain"
-            title={content.title}
-            detail={content.message}
-            action={
-              <Button tone="primary" label="Save file" loading={busy === "save"} onPress={save} />
-            }
+      <AttachmentViewerCard>
+        {content.status === "failed" ? (
+          <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
+            <EmptyState
+              variant="plain"
+              title={content.title}
+              detail={content.message}
+              action={
+                <Button tone="primary" label="Save file" loading={busy === "save"} onPress={save} />
+              }
+            />
+          </ScrollView>
+        ) : viewerKind && uri && !viewerOpen ? (
+          // Closing the viewer stays here so Save and Add to chat remain reachable.
+          <View className="flex-1 items-center justify-center bg-sheet px-6">
+            <EmptyState
+              title={viewerError ? "No preview for this file" : entry.name}
+              detail={viewerError ?? "Open it in the file viewer, save it, or add it to chat."}
+              actionLabel="Open in file viewer"
+              onAction={openViewer}
+            />
+          </View>
+        ) : (
+          <AttachmentDocumentBody
+            document={{
+              kind,
+              activeMode,
+              uri,
+              content: text,
+              table,
+              error: null,
+              needsText: isText,
+              retry: () => setRevision((value) => value + 1),
+              revision,
+            }}
+            name={entry.name}
+            environmentId={props.environmentId}
+            htmlRender={false}
+            nativeViewer={viewerKind ? (uri ? "open" : "pending") : null}
+            nativeError={null}
+            onOpenNative={openViewer}
           />
-        </ScrollView>
-      ) : viewerKind && uri && !viewerOpen ? (
-        // Closing the viewer stays here so Save and Add to chat remain reachable.
-        <View className="flex-1 items-center justify-center bg-sheet px-6">
-          <EmptyState
-            title={viewerError ? "No preview for this file" : entry.name}
-            detail={viewerError ?? "Open it in the file viewer, save it, or add it to chat."}
-            actionLabel="Open in file viewer"
-            onAction={openViewer}
-          />
-        </View>
-      ) : (
-        <AttachmentDocumentBody
-          document={{
-            kind,
-            activeMode,
-            uri,
-            content: text,
-            table,
-            error: null,
-            needsText: isText,
-            retry: () => setRevision((value) => value + 1),
-            revision,
-          }}
-          name={entry.name}
-          environmentId={props.environmentId}
-          htmlRender={false}
-          nativeViewer={viewerKind ? (uri ? "open" : "pending") : null}
-          nativeError={null}
-          onOpenNative={openViewer}
-        />
-      )}
+        )}
+      </AttachmentViewerCard>
       {viewerKind && uri && viewerOpen ? (
         <FilePreviewModal
           source={{ kind: viewerKind, name: entry.name, mimeType, uri }}

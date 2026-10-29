@@ -32,8 +32,11 @@ export function AndroidHeaderIconButton(props: {
   readonly onPress?: () => void;
   readonly disabled?: boolean;
   readonly selected?: boolean;
+  readonly floating?: boolean;
 }) {
-  return <IconButton {...props} tintColorClassName="accent-header-foreground" />;
+  const { floating, ...buttonProps } = props;
+  const button = <IconButton {...buttonProps} tintColorClassName="accent-header-foreground" />;
+  return floating ? <View className="rounded-full bg-sheet">{button}</View> : button;
 }
 
 export function AndroidScreenHeader(props: {
@@ -48,9 +51,12 @@ export function AndroidScreenHeader(props: {
   readonly hideBottomBorder?: boolean;
   /** One row with the subtitle after the title, for screens short on height. */
   readonly compact?: boolean;
+  /** Borderless bar over a grouped page background, with sheet-filled round buttons. */
+  readonly floating?: boolean;
 }) {
   const { colors } = useControlTheme();
-  const titleTypography = useScaledTextRole("title");
+  const titleRole = useScaledTextRole("title");
+  const titleTypography = props.floating ? { ...titleRole, fontWeight: "600" as const } : titleRole;
   const subtitleTypography = useScaledTextRole("label");
   const inFormSheet = use(RoutedFormSheetContext);
   const { paddingTop, paddingBottom } = useToolbarLayout(props.embedded || inFormSheet);
@@ -63,7 +69,7 @@ export function AndroidScreenHeader(props: {
   return (
     <View
       onLayout={(event) => setHeaderWidth(event.nativeEvent.layout.width)}
-      className="border-b border-header-border bg-header"
+      className={props.floating ? undefined : "border-b border-header-border bg-header"}
       style={{
         paddingTop,
         paddingBottom,
@@ -78,14 +84,15 @@ export function AndroidScreenHeader(props: {
       ) : null}
       <NativeAppBar
         singleLine={props.compact}
+        containerColor={props.floating ? "transparent" : undefined}
         navigationIcon={
           props.onBack || props.leading ? (
             <View collapsable={false} className="flex-row items-center">
               {props.onBack ? (
-                <IconButton
+                <AndroidHeaderIconButton
                   accessibilityLabel="Navigate up"
                   icon="arrow.left"
-                  tintColorClassName="accent-header-foreground"
+                  floating={props.floating}
                   onPress={props.onBack}
                 />
               ) : null}
@@ -153,7 +160,10 @@ export function AndroidScreenHeader(props: {
         }
         actions={
           visibleActions.length > 0 || overflowActions.length > 0 || props.trailing ? (
-            <View collapsable={false} className="flex-row items-center">
+            <View
+              collapsable={false}
+              className={props.floating ? "flex-row items-center gap-2" : "flex-row items-center"}
+            >
               {visibleActions.map((action) =>
                 action.loading ? (
                   <View
@@ -170,6 +180,7 @@ export function AndroidScreenHeader(props: {
                     disabled={action.disabled}
                     selected={action.selected}
                     icon={action.icon}
+                    floating={props.floating}
                     onPress={action.onPress}
                   />
                 ),
@@ -191,10 +202,10 @@ export function AndroidScreenHeader(props: {
                   }
                 >
                   {(open) => (
-                    <IconButton
+                    <AndroidHeaderIconButton
                       accessibilityLabel="More actions"
                       icon="ellipsis"
-                      tintColorClassName="accent-header-foreground"
+                      floating={props.floating}
                       onPress={open}
                     />
                   )}
