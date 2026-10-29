@@ -15,7 +15,6 @@ import { sourceControlClients } from "@t3tools/client-runtime/source-control-cli
 import { videoMimeType } from "@t3tools/shared/video";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { REVIEW_MONO_FONT_FAMILY } from "../features/review/reviewDiffRendering";
 import { ReviewCommentCard, useReviewCommentColors } from "../features/review/ReviewCommentCard";
 import {
   composerAttachmentInlineUri,
@@ -50,8 +49,7 @@ function ContextField(props: { label: string; value: string | null | undefined; 
       ) : (
         <Text
           selectable
-          className={props.code ? "text-sm text-foreground" : "text-base text-foreground"}
-          style={props.code ? { fontFamily: REVIEW_MONO_FONT_FAMILY } : undefined}
+          className={props.code ? "font-mono text-sm text-foreground" : "text-base text-foreground"}
         >
           {props.value}
         </Text>
@@ -230,9 +228,8 @@ export function ComposerContextSheet(props: {
                 >
                   <Text
                     selectable
-                    className="text-sm text-foreground"
+                    className="font-mono text-sm text-foreground"
                     style={{
-                      fontFamily: REVIEW_MONO_FONT_FAMILY,
                       fontSize: 13,
                       lineHeight: 20,
                       color: terminalTheme.foreground,

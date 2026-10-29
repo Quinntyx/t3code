@@ -57,6 +57,12 @@ it.effect(
         baseFontSize: 18,
         hiddenThreadKeys: ["first:same", "second:same"],
       });
+      yield* reloaded.savePatch({ uiFontId: "system", codeFontId: null });
+      expect(yield* (yield* makeStore).load).toMatchObject({
+        uiFontId: "system",
+        codeFontId: null,
+      });
+      yield* reloaded.savePatch({ uiFontId: undefined, codeFontId: undefined });
       yield* reloaded.update((current) => ({
         hiddenThreadKeys: current.hiddenThreadKeys?.filter((key) => key !== "first:same"),
       }));

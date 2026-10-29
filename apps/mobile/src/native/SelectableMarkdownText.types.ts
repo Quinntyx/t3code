@@ -18,6 +18,9 @@ export interface NativeMarkdownTextStyle {
   readonly fontFamily: string;
   readonly headingFontFamily: string;
   readonly boldFontFamily: string;
+  /** Set when the bold family also covers regular text, so bold must request the weight. */
+  readonly boldByWeight?: boolean;
+  readonly codeFontFamily?: string | null;
   readonly headingFontSizes?: ReadonlyArray<number>;
 }
 

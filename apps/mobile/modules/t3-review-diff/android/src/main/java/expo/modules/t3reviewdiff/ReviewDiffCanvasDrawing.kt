@@ -1,6 +1,7 @@
 package expo.modules.t3reviewdiff
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -10,6 +11,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.text.TextPaint
+import com.facebook.react.common.assets.ReactFontManager
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -31,15 +33,11 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
     clearShadowLayer()
   }
 
-  private val italicCodeTypeface by lazy {
-    Typeface.create(ReviewDiffTypefaces.regular, Typeface.ITALIC)
-  }
-  private val boldItalicCodeTypeface by lazy {
-    Typeface.create(ReviewDiffTypefaces.bold, Typeface.ITALIC)
-  }
+  private val assets = context.assets
+  private var codeTypefaces = ReviewDiffTypefaces.DEFAULT
 
   init {
-    textPaint.typeface = ReviewDiffTypefaces.regular
+    textPaint.typeface = ReviewDiffTypefaces.DEFAULT.regular
     uiPaint.typeface = Typeface.DEFAULT_BOLD
   }
 
@@ -162,18 +160,22 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
   }
 
   fun configureMonospacePaint(color: Int, size: Float, weight: String) {
-    textPaint.typeface = ReviewDiffTypefaces.forWeight(weight)
+    textPaint.typeface = ReviewDiffTypefaces.DEFAULT.forWeight(weight)
     configureTextPaint(textPaint, color, size)
   }
 
   fun configureCodePaint(color: Int, fontStyle: Int, style: DiffStyle) {
     val tokenBold = fontStyle and 2 != 0
     val italic = fontStyle and 1 != 0
+    if (codeTypefaces.family != style.codeFontFamily) {
+      codeTypefaces = ReviewDiffTypefaces(style.codeFontFamily, assets)
+    }
+    val faces = codeTypefaces
     textPaint.typeface = when {
-      tokenBold && italic -> boldItalicCodeTypeface
-      tokenBold -> ReviewDiffTypefaces.bold
-      italic -> italicCodeTypeface
-      else -> ReviewDiffTypefaces.forWeight(style.codeFontWeight)
+      tokenBold && italic -> faces.boldItalic
+      tokenBold -> faces.bold
+      italic -> faces.italic
+      else -> faces.forWeight(style.codeFontWeight)
     }
     configureTextPaint(textPaint, color, style.codeFontSizePx)
     textPaint.isUnderlineText = fontStyle and 4 != 0
@@ -521,14 +523,24 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
     Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
 }
 
-private object ReviewDiffTypefaces {
-  val regular: Typeface = Typeface.create("monospace", Typeface.NORMAL)
-  private val medium: Typeface = Typeface.create("monospace-medium", Typeface.NORMAL)
-  val bold: Typeface = Typeface.create("monospace", Typeface.BOLD)
+internal const val DEFAULT_CODE_FONT_FAMILY = "monospace"
+
+/** Resolves app-bundled families as well as system names. */
+private class ReviewDiffTypefaces(val family: String, assets: AssetManager? = null) {
+  val regular: Typeface = ReactFontManager.getInstance().getTypeface(family, Typeface.NORMAL, assets)
+  private val medium: Typeface =
+    if (family == DEFAULT_CODE_FONT_FAMILY) Typeface.create("monospace-medium", Typeface.NORMAL) else regular
+  val bold: Typeface = ReactFontManager.getInstance().getTypeface(family, Typeface.BOLD, assets)
+  val italic: Typeface by lazy { Typeface.create(regular, Typeface.ITALIC) }
+  val boldItalic: Typeface by lazy { Typeface.create(bold, Typeface.ITALIC) }
 
   fun forWeight(weight: String): Typeface = when (weight.lowercase()) {
     "medium", "semibold", "semi-bold" -> medium
     "bold", "heavy", "black" -> bold
     else -> regular
+  }
+
+  companion object {
+    val DEFAULT = ReviewDiffTypefaces(DEFAULT_CODE_FONT_FAMILY)
   }
 }

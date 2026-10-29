@@ -278,6 +278,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   sparkles: IconSparkles,
   "plus.bubble": IconMessagePlus,
   "text.word.spacing": IconLetterSpacing,
+  textformat: IconTypography,
   "textformat.size": IconTypography,
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,

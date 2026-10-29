@@ -938,6 +938,7 @@ function ThreadTerminal(props: {
                   buffer={terminal.version === 0 ? null : terminal.buffer}
                   output={terminal.version === 0 ? null : terminal.output}
                   fontSize={fontSize}
+                  fontFamily={appearance.terminalFontFamily}
                   grid={terminal.grid}
                   isRunning={isRunning}
                   keyboardFocusRequest={keyboardFocusRequest}
