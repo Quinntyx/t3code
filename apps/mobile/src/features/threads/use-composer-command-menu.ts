@@ -11,6 +11,7 @@ import {
   type ComposerEnvironmentCandidate,
   matchComposerEnvironmentItems,
   matchComposerThreadItems,
+  matchComposerThreadTriggerItems,
 } from "@t3tools/client-runtime/composerThreadItems";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
@@ -301,10 +302,11 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
+  const mentionsThreads = trigger?.kind === "path" || trigger?.kind === "thread";
   // Mounts older settled threads matching the mention, which shells may leave out.
   useThreadSearch(
-    trigger?.kind === "path" && environmentId ? [environmentId] : [],
-    trigger?.kind === "path" ? trigger.query : "",
+    mentionsThreads && environmentId ? [environmentId] : [],
+    mentionsThreads ? trigger.query : "",
     { titlesOnly: true },
   );
   const pullRequestSearch = useComposerPullRequestSearch({
@@ -457,6 +459,19 @@ export function useComposerCommandMenu({
       }));
     }
 
+    if (trigger.kind === "thread") {
+      return environmentId
+        ? matchComposerThreadTriggerItems({
+            shells: threadShells,
+            environmentId,
+            linkedEnvironments,
+            excludeThreadId: currentThreadId,
+            query: trigger.query,
+            now,
+          })
+        : [];
+    }
+
     if (trigger.kind === "path") {
       const threadItems = environmentId
         ? matchComposerThreadItems({
@@ -520,7 +535,7 @@ export function useComposerCommandMenu({
       return;
     }
     if (item.type === "thread") {
-      if (!ownerKey || trigger.kind !== "path") return;
+      if (!ownerKey || (trigger.kind !== "path" && trigger.kind !== "thread")) return;
       const shell = threadShells.find(
         (candidate) =>
           candidate.environmentId === item.thread.environmentId &&
