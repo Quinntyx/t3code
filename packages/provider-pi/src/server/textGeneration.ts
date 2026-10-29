@@ -10,6 +10,7 @@ import type { PiSettings } from "../settings.ts";
 import { makePiRpcConnection, parsePiModelSlug, piRecordString } from "./rpc.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
+import { buildStructuredOutputRepairPrompt } from "@t3tools/provider-core/server/textGenerationPrompts";
 
 const PI_TIMEOUT_MS = 180_000;
 
@@ -87,37 +88,60 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           );
       }
 
-      yield* connection.request({ type: "prompt", message: prompt });
-      // Provider failures (bad key, rate limit, 5xx) arrive on the assistant
-      // `message_end`. Keep only the latest, since Pi can retry and still answer.
-      let turnError: string | undefined;
-      yield* Effect.gen(function* () {
-        while (true) {
-          const event = yield* Queue.take(connection.events);
-          if (event["type"] === "agent_settled") return;
-          const message = event["message"];
-          if (event["type"] === "message_end" && piRecordString(message, "role") === "assistant") {
-            turnError =
-              piRecordString(message, "stopReason") === "error"
-                ? piTurnErrorDetail(piRecordString(message, "errorMessage"))
-                : undefined;
+      const ask = Effect.fn("PiTextGeneration.ask")(function* (message: string) {
+        yield* connection.request({ type: "prompt", message });
+        yield* Effect.gen(function* () {
+          while (true) {
+            const event = yield* Queue.take(connection.events);
+            if (event["type"] === "agent_settled") return;
           }
-        }
-      });
-      const data = yield* connection.request({ type: "get_last_assistant_text" });
-      const text =
-        typeof data === "object" &&
-        data !== null &&
-        typeof (data as { text?: unknown }).text === "string"
+        });
+        const data = yield* connection.request({ type: "get_last_assistant_text" });
+        return typeof data === "object" &&
+          data !== null &&
+          typeof (data as { text?: unknown }).text === "string"
           ? (data as { text: string }).text.trim()
           : "";
-      if (!text) {
+      });
+
+      const reply = yield* ask(prompt);
+      if (!reply) {
         return yield* new TextGenerationError({
           operation,
           detail: turnError ?? "Pi returned empty output.",
         });
       }
-      return yield* TextGenerationOperations.decodeJsonReply(request, "Pi", text);
+
+      const first = yield* TextGenerationOperations.decodeJsonReplyDetailed(request, reply).pipe(
+        Effect.result,
+      );
+      if (first._tag === "Success") return first.success;
+
+      yield* Effect.logDebug("Pi reply did not decode; asking for a repair").pipe(
+        Effect.annotateLogs({ operation, replyLength: reply.length, reason: first.failure.reason }),
+      );
+      const repaired = yield* ask(
+        buildStructuredOutputRepairPrompt({
+          failure: first.failure.reason,
+          outputSchema: request.outputSchema,
+        }),
+      );
+      if (!repaired) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: `Pi returned invalid structured output: ${first.failure.reason} (the repair reply was empty).`,
+        });
+      }
+      return yield* TextGenerationOperations.decodeJsonReplyDetailed(request, repaired).pipe(
+        Effect.mapError(
+          (failure) =>
+            new TextGenerationError({
+              operation,
+              detail: `Pi returned invalid structured output: ${failure.reason} (after one repair attempt).`,
+              cause: failure.cause,
+            }),
+        ),
+      );
     },
     (effect, request) => {
       const { operation } = request;

@@ -14,14 +14,12 @@ import { makePiTextGeneration } from "./textGeneration.ts";
 const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const makeFakePi = (
-  reply: string,
-  setModelError?: string,
-  turnEvents: ReadonlyArray<Record<string, unknown>> = [],
-) =>
-  Effect.gen(function* () {
+const makeFakePi = (replies: string | ReadonlyArray<string>, setModelError?: string) => {
+  const answers = typeof replies === "string" ? [replies] : replies;
+  return Effect.gen(function* () {
     const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
     const received: Array<Record<string, unknown>> = [];
+    let textIndex = 0;
     const emit = (record: Record<string, unknown>) =>
       Queue.offer(stdout, new TextEncoder().encode(`${encodeJsonLine(record)}\n`));
     let buffered = "";
@@ -39,6 +37,7 @@ const makeFakePi = (
             for (const event of turnEvents) yield* emit(event);
             yield* emit({ type: "agent_settled" });
           } else if (record["type"] === "get_last_assistant_text") {
+            const reply = answers[textIndex++] ?? answers.at(-1) ?? "";
             yield* emit({ ...response, success: true, data: { text: reply } });
           } else if (record["type"] === "set_model" && setModelError !== undefined) {
             yield* emit({ ...response, success: false, error: setModelError });
@@ -67,6 +66,7 @@ const makeFakePi = (
     );
     return { spawner, received };
   });
+};
 
 it.effect("names the model and the disabled extensions when Pi cannot load it", () =>
   Effect.gen(function* () {
@@ -94,69 +94,64 @@ it.effect("names the model and the disabled extensions when Pi cannot load it", 
   }),
 );
 
-const failedTurnWith = (errorMessage: string) => ({
-  type: "message_end",
-  message: { role: "assistant", stopReason: "error", errorMessage },
-});
-
-const failedTurn = failedTurnWith(
-  '401: {"error":{"message":"Incorrect API key provided: sk-test-SECRET123"}}',
-);
-
-const generateCommitMessage = (turnEvents: ReadonlyArray<Record<string, unknown>>, reply = "") =>
+it.effect("asks Pi to repair a reply that has no JSON object", () =>
   Effect.gen(function* () {
-    const pi = yield* makeFakePi(reply, undefined, turnEvents);
+    const pi = yield* makeFakePi([
+      "I could not inspect the diff.",
+      '{"title":"Fix the empty reply","body":"Handles a reply with no JSON."}',
+    ]);
     const textGeneration = yield* makePiTextGeneration(
       { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
       {},
     ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
-    return yield* textGeneration.generateCommitMessage({
-      cwd: process.cwd(),
-      branch: "main",
-      stagedSummary: "M README.md",
-      stagedPatch: "diff --git a/README.md b/README.md",
-      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "default"),
-    });
-  });
 
-it.effect("reports Pi's turn error when the reply is empty", () =>
+    const result = yield* textGeneration.generatePrContent({
+      cwd: process.cwd(),
+      baseBranch: "main",
+      headBranch: "fix/demo",
+      commitSummary: "fix: handle an empty reply",
+      diffSummary: "1 file changed",
+      diffPatch: "diff --git a/README.md b/README.md",
+      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+    });
+
+    assert.equal(result.title, "Fix the empty reply");
+    const prompts = pi.received.filter((record) => record["type"] === "prompt");
+    assert.lengthOf(prompts, 2);
+    const repairPrompt = String(prompts[1]?.["message"]);
+    assert.include(repairPrompt, "the reply contained no JSON object");
+    assert.include(repairPrompt, "JSON Schema");
+  }),
+);
+
+it.effect("reports why the repaired reply also failed", () =>
   Effect.gen(function* () {
-    const error = yield* generateCommitMessage([failedTurn]).pipe(Effect.flip);
+    const pi = yield* makeFakePi(["I could not inspect the diff.", "Still not JSON."]);
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+    const error = yield* textGeneration
+      .generatePrContent({
+        cwd: process.cwd(),
+        baseBranch: "main",
+        headBranch: "fix/demo",
+        commitSummary: "fix: handle an empty reply",
+        diffSummary: "1 file changed",
+        diffPatch: "diff --git a/README.md b/README.md",
+        modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+      })
+      .pipe(Effect.flip);
 
     assert.equal(error._tag, "TextGenerationError");
-    assert.equal(error.detail, "Pi could not generate text: the model provider returned HTTP 401.");
-  }),
-);
-
-it.effect("keeps Pi's raw error text out of the error", () =>
-  Effect.gen(function* () {
-    const error = yield* generateCommitMessage([
-      failedTurnWith("Invalid API key sk-test-SECRET123"),
-    ]).pipe(Effect.flip);
-
-    assert.equal(error.detail, "Pi could not generate text: the model provider reported an error.");
-    assert.notInclude(error.message, "SECRET123");
-  }),
-);
-
-it.effect("keeps the reply when Pi answers after a failed attempt", () =>
-  Effect.gen(function* () {
-    const result = yield* generateCommitMessage(
-      [failedTurn, { type: "message_end", message: { role: "assistant", stopReason: "stop" } }],
-      JSON.stringify({ subject: "Update README", body: "" }),
+    assert.include(
+      error.detail,
+      "Pi returned invalid structured output: the reply contained no JSON object (after one repair attempt).",
     );
-
-    assert.equal(result.subject, "Update README");
-  }),
-);
-
-it.effect("drops an earlier error once a later attempt succeeds", () =>
-  Effect.gen(function* () {
-    const error = yield* generateCommitMessage([
-      failedTurn,
-      { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
-    ]).pipe(Effect.flip);
-
-    assert.equal(error.detail, "Pi returned empty output.");
+    assert.lengthOf(
+      pi.received.filter((record) => record["type"] === "prompt"),
+      2,
+    );
   }),
 );
