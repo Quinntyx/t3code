@@ -1,5 +1,10 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { matchingMachineHandoffProjects } from "@t3tools/client-runtime/handoff";
+import {
+  matchingMachineHandoffProjects,
+  machineHandoffBlocker,
+  relayMachineHandoff,
+  sourceProjectSubdirectory,
+} from "@t3tools/client-runtime/handoff";
 import { buildProjectCreateCommand } from "@t3tools/client-runtime/operations/projects";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -46,11 +51,6 @@ import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail"
 import { ChoiceRow } from "./ThreadSettingsRows";
 import { ThreadHandoffDivider } from "./thread-handoff-row";
 import { selectableChoices } from "./thread-settings-options";
-import {
-  machineHandoffBlocker,
-  relayMachineHandoff,
-  sourceProjectSubdirectory,
-} from "./machine-handoff";
 
 function Section(props: { readonly title: string; readonly children: ReactNode }) {
   return (

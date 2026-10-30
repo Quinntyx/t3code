@@ -1,6 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
-import { matchingMachineHandoffProjects } from "@t3tools/client-runtime/handoff";
+import {
+  matchingMachineHandoffProjects,
+  machineHandoffBlocker,
+  relayMachineHandoff,
+} from "@t3tools/client-runtime/handoff";
 import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -9,15 +13,18 @@ import {
   type EnvironmentId,
   type ModelSelection,
 } from "@t3tools/contracts";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useAddProjectTargets } from "../hooks/useAddProjectTargets";
-import { newThreadId } from "../lib/utils";
+import { newThreadId, randomUUID } from "../lib/utils";
 import { providerInstanceEntriesFor, isProviderInstancePickerReady } from "../providerInstances";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useProject, useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 import { useEnvironments, useEnvironmentProviders } from "../state/environments";
-import { threadEnvironment } from "../state/threads";
+import { environmentPresentations } from "../state/presentation";
+import { environmentProjects } from "../state/projects";
+import { serverEnvironment } from "../state/server";
+import { environmentThreadShells, threadEnvironment } from "../state/threads";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { openAddProjectToMachine } from "./AddProjectToMachineDialog";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -136,78 +143,137 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
   );
   const [ids] = useState(() => ({
     threadId: newThreadId(),
-    commandId: CommandId.make(crypto.randomUUID()),
+    commandId: CommandId.make(randomUUID()),
   }));
+  const executing = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const active =
-    thread && ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status);
-  const supported =
-    source?.serverConfig?.environment.capabilities.machineHandoff === true &&
-    target?.serverConfig?.environment.capabilities.machineHandoff === true;
-  const unavailable =
-    !thread || !sourceProject
-      ? "The source thread is no longer available."
-      : active
-        ? "Stop the current turn before handing off this thread."
-        : !canExport || (destinationProject && !canImport)
-          ? "Permission to transfer threads and working files is required on both machines."
-          : target && !supported
-            ? "Update both machines to a version that supports machine handoffs."
-            : null;
+  const unavailable = machineHandoffBlocker({
+    sourceAvailable: thread !== null && sourceProject !== null,
+    sourceStatus: thread?.source.status,
+    sourceConnected: source?.connection.phase === "connected",
+    targetConnected: target?.connection.phase === "connected",
+    sourceSupported: source?.serverConfig?.environment.capabilities.machineHandoff === true,
+    targetSupported: target?.serverConfig?.environment.capabilities.machineHandoff === true,
+    canExport,
+    canImport,
+    projectSelected: destinationProject !== null,
+    modelReady: selectionReady === true,
+  });
+  const eligibility = () => {
+    const currentThread = appAtomRegistry.get(
+      environmentThreadShells.threadShellAtom(request.threadRef),
+    );
+    const presentations = appAtomRegistry.get(environmentPresentations.presentationsAtom);
+    const currentSource = presentations.get(request.threadRef.environmentId);
+    const currentTarget = targetId ? presentations.get(targetId) : null;
+    const currentConfig = targetId
+      ? appAtomRegistry.get(serverEnvironment.configValueAtom(targetId))
+      : null;
+    const currentProject =
+      destinationProject && targetId
+        ? appAtomRegistry.get(
+            environmentProjects.projectAtom({
+              environmentId: targetId,
+              projectId: destinationProject.id,
+            }),
+          )
+        : null;
+    const currentEntries = currentConfig
+      ? providerInstanceEntriesFor(
+          currentConfig.providers,
+          currentConfig.settings,
+          currentProject?.id ?? null,
+        ).filter(isProviderInstancePickerReady)
+      : [];
+    return machineHandoffBlocker({
+      sourceAvailable:
+        currentThread !== null &&
+        sourceRef !== null &&
+        appAtomRegistry.get(environmentProjects.projectAtom(sourceRef)) !== null &&
+        currentThread.projectId === sourceRef.projectId,
+      sourceStatus: currentThread?.source.status,
+      sourceConnected: currentSource?.connection.phase === "connected",
+      targetConnected: currentTarget?.connection.phase === "connected",
+      sourceSupported:
+        currentSource?.serverConfig?.environment.capabilities.machineHandoff === true,
+      targetSupported:
+        currentTarget?.serverConfig?.environment.capabilities.machineHandoff === true,
+      canExport: appAtomRegistry.get(
+        threadEnvironment.exportMachineHandoff.permissionAtom(request.threadRef.environmentId),
+      ),
+      canImport:
+        targetId !== null &&
+        appAtomRegistry.get(threadEnvironment.importMachineHandoff.permissionAtom(targetId)),
+      projectSelected: currentProject !== null,
+      modelReady:
+        selection !== undefined &&
+        currentEntries.some(
+          (entry) =>
+            entry.instanceId === selection.instanceId &&
+            entry.models.some((model) => model.slug === selection.model),
+        ),
+    });
+  };
 
   const submit = async () => {
-    if (!target || !destinationProject || !selection || !selectionReady || busy || unavailable)
-      return;
+    if (!target || !destinationProject || !selection || executing.current || unavailable) return;
+    executing.current = true;
     setBusy(true);
     setError(null);
-    const exported = await runAtomCommand(
-      appAtomRegistry,
-      threadEnvironment.exportMachineHandoff,
-      {
-        environmentId: request.threadRef.environmentId,
-        input: { threadId: request.threadRef.threadId },
-      },
-      { label: "Prepare machine handoff", reportFailure: false },
-    );
-    if (exported._tag === "Failure") {
-      const cause = squashAtomCommandFailure(exported);
-      setError(cause instanceof Error ? cause.message : "Could not prepare the handoff.");
-      setBusy(false);
-      return;
-    }
-    const imported = await runAtomCommand(
-      appAtomRegistry,
-      threadEnvironment.importMachineHandoff,
-      {
-        environmentId: target.environmentId,
-        input: {
-          ...ids,
-          projectId: destinationProject.id,
-          modelSelection: selection,
-          snapshot: exported.value,
+    try {
+      const imported = await relayMachineHandoff({
+        eligibility,
+        exportSnapshot: async () => {
+          const result = await runAtomCommand(
+            appAtomRegistry,
+            threadEnvironment.exportMachineHandoff,
+            {
+              environmentId: request.threadRef.environmentId,
+              input: { threadId: request.threadRef.threadId },
+            },
+            { label: "Prepare machine handoff", reportFailure: false },
+          );
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          return result.value;
         },
-      },
-      { label: "Hand off thread to machine", reportFailure: false },
-    );
-    setBusy(false);
-    if (imported._tag === "Failure") {
-      const cause = squashAtomCommandFailure(imported);
+        importSnapshot: async (snapshot) => {
+          const result = await runAtomCommand(
+            appAtomRegistry,
+            threadEnvironment.importMachineHandoff,
+            {
+              environmentId: target.environmentId,
+              input: {
+                ...ids,
+                projectId: destinationProject.id,
+                modelSelection: selection,
+                snapshot,
+              },
+            },
+            { label: "Hand off thread to machine", reportFailure: false },
+          );
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          return result.value;
+        },
+      });
+      close();
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams({
+          environmentId: target.environmentId,
+          threadId: imported.threadId,
+        }),
+      });
+    } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Could not import the handoff. Your source is unchanged.",
+          : "Could not hand off the thread. Your source is unchanged.",
       );
-      return;
+    } finally {
+      executing.current = false;
+      setBusy(false);
     }
-    close();
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams({
-        environmentId: target.environmentId,
-        threadId: imported.value.threadId,
-      }),
-    });
   };
 
   const clone = () => {
@@ -273,8 +339,9 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
             cloneTargets.some((candidate) => candidate.environmentId === target.environmentId) ? (
               <div className="flex flex-col items-start gap-2">
                 <p className="text-sm text-muted-foreground">
-                  Set up this project on {target.label} first. The existing clone flow lets you
-                  bring ignored files such as .env; handoff resumes after setup finishes.
+                  Set up this project on {target.label} first. Handoff resumes after cloning and any
+                  selected file copies finish. Ignored files still need to be set up in the
+                  destination worktree.
                 </p>
                 <Button variant="outline" disabled={busy} onClick={clone}>
                   Clone project to {target.label}

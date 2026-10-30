@@ -1,7 +1,7 @@
 # Context in portable handoffs
 
-T3 Code transfers conversation context when you switch providers, continue through a portable
-restart, or use a fork that the provider cannot resume itself.
+T3 Code transfers conversation context when you switch providers, hand a thread off to another
+machine, continue through a portable restart, or use a fork that the provider cannot resume itself.
 
 Short conversations transfer intact. For longer conversations, T3 Code favors recent requests and
 answers, the original request, and relevant activity such as command outcomes. Selected messages
@@ -16,6 +16,29 @@ The handoff includes references to omitted history. The agent can use T3 Code's 
 to retrieve saved messages and activity, including the remainder of a long item. For an important
 constraint, you can still repeat it in your next message. A handoff is a budgeted selection, not an
 agent-written summary.
+
+## Continuing on another machine
+
+Connect both machines, then open the thread's provider/model picker and choose **Hand off to another
+machine**. On mobile, open the existing thread's settings and choose **Machine handoff**. Stop active
+turns, queued work, approvals, and background tasks first.
+
+Choose the destination machine and its project, then a provider and model available there. If the
+project is missing, clone it from the handoff flow; return to review the transfer after cloning
+finishes. When T3 Code cannot identify a matching repository, explicitly select the corresponding
+project on the destination. A different repository is not a substitute.
+
+The destination receives a new thread and isolated worktree at the source revision, including
+unpushed history, staged and unstaged changes, and non-ignored untracked files. The source can be a
+T3-managed worktree or an ordinary Git checkout. Neither checkout is overwritten, and no commits are
+added to your branch. Your original thread stays available; to return, open it or hand the destination
+thread back after stopping its work. No agent starts until you send a message.
+
+Ignored files, attachments, provider sessions, approvals, and authentication do not travel with the
+working-state snapshot. Prepare dependencies and ignored configuration in the destination worktree
+before continuing. The normal clone flow's optional file copies populate the destination project,
+not the newly isolated worktree. Transfers that exceed the size limit or use unsupported Git states
+are rejected without changing your source. Both servers need machine-handoff support.
 
 ## Context limits
 
