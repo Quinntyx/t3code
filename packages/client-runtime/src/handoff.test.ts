@@ -1,5 +1,7 @@
 import {
   ContextHandoffId,
+  EnvironmentId,
+  ProjectId,
   ProviderInstanceId,
   RunId,
   type OrchestrationV2ThreadProjection,
@@ -7,10 +9,61 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  matchingMachineHandoffProjects,
   resolveHandoffEndpoints,
   resolvePendingHandoff,
   type HandoffTimelineRun,
 } from "./handoff.ts";
+
+describe("machine handoff project matching", () => {
+  const project = (
+    environment: string,
+    root: string,
+    workspaceRoot = root,
+    canonicalKey = "github.com/org/repo",
+  ) => ({
+    id: ProjectId.make(`${environment}:${workspaceRoot}`),
+    environmentId: EnvironmentId.make(environment),
+    workspaceRoot,
+    repositoryIdentity: {
+      canonicalKey,
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: `https://${canonicalKey}`,
+      },
+      rootPath: root,
+    },
+  });
+
+  it("matches repository and project-relative folder, not machine-local absolute paths or titles", () => {
+    const source = project("source", "/home/me/repo", "/home/me/repo/apps/web");
+    const matching = project("target", "C:\\work\\repo", "C:\\work\\repo\\apps\\web");
+    expect(
+      matchingMachineHandoffProjects(source, [
+        source,
+        project("target", "/work/repo"),
+        project("target", "/work/repo", "/work/repo/apps/mobile"),
+        project("target", "/work/another", "/work/another/apps/web", "github.com/org/other"),
+        matching,
+      ]),
+    ).toEqual([matching]);
+  });
+
+  it("does not guess matches for an unidentified repository or ambiguous root", () => {
+    const source = project("source", "/repo");
+    expect(
+      matchingMachineHandoffProjects({ ...source, repositoryIdentity: null }, [
+        project("target", "/repo"),
+      ]),
+    ).toEqual([]);
+    expect(
+      matchingMachineHandoffProjects(project("source", "/repo", "/repo-other"), [
+        project("target", "/repo"),
+      ]),
+    ).toEqual([]);
+  });
+});
 
 const from = ProviderInstanceId.make("codex_personal");
 const to = ProviderInstanceId.make("claudeAgent");

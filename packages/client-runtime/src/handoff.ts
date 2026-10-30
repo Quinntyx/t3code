@@ -5,10 +5,45 @@ import type {
   ProviderInstanceId,
   ServerProvider,
 } from "@t3tools/contracts";
+import { repositoryGroupingKeyOf } from "@t3tools/contracts";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { fileBasename } from "@t3tools/shared/path";
 
-import type { ThreadStructure } from "./state/models.ts";
+import type { EnvironmentProject, ThreadStructure } from "./state/models.ts";
+
+type MachineHandoffProject = Pick<
+  EnvironmentProject,
+  "environmentId" | "workspaceRoot" | "repositoryIdentity"
+>;
+
+function machineHandoffProjectSubdirectory(
+  project: Pick<MachineHandoffProject, "workspaceRoot" | "repositoryIdentity">,
+): string | null {
+  const root = project.repositoryIdentity?.rootPath?.replaceAll("\\", "/").replace(/\/+$/, "");
+  const workspace = project.workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (root === undefined) return null;
+  return workspace === root
+    ? ""
+    : workspace.startsWith(`${root}/`)
+      ? workspace.slice(root.length + 1)
+      : null;
+}
+
+export function matchingMachineHandoffProjects<T extends MachineHandoffProject>(
+  source: MachineHandoffProject,
+  projects: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const identity = source.repositoryIdentity;
+  const subdirectory = machineHandoffProjectSubdirectory(source);
+  if (!identity || subdirectory === null) return [];
+  return projects.filter(
+    (project) =>
+      project.environmentId !== source.environmentId &&
+      project.repositoryIdentity &&
+      repositoryGroupingKeyOf(project.repositoryIdentity) === repositoryGroupingKeyOf(identity) &&
+      machineHandoffProjectSubdirectory(project) === subdirectory,
+  );
+}
 
 export type HandoffTimelineRun = Pick<
   OrchestrationV2Run,

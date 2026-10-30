@@ -56,6 +56,7 @@ import { Toggle, ToggleGroup } from "./ui/toggle-group";
 interface AddProjectToMachineRequest {
   readonly projectRef: ScopedProjectRef;
   readonly targetEnvironmentId: EnvironmentId | null;
+  readonly onReady?: (project: ScopedProjectRef) => void;
 }
 
 const useRequest = create<{ request: AddProjectToMachineRequest | null; session: number }>(() => ({
@@ -196,6 +197,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
         remoteUrl,
         destinationPath: destinationPath.trim(),
         files: files.filter((file) => selectedFiles.has(file.path)).map((file) => file.path),
+        ...(request.onReady ? { onReady: request.onReady } : {}),
       });
       close();
       openClonedProject(scopeProjectRef(target.environmentId, projectId));

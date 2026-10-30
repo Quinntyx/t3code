@@ -18,6 +18,36 @@ import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../provi
 import { ComposerControl, type ComposerControlSize } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
+import { openMachineHandoff } from "../machineHandoffRequest";
+import { useParams } from "@tanstack/react-router";
+import { resolveThreadRouteRef } from "../../threadRoutes";
+import { InlineButton } from "../ui/button";
+import { ArrowRightLeftIcon } from "lucide-react";
+
+function MachineHandoffPickerAction({
+  environmentId,
+  onSelect,
+}: {
+  environmentId: EnvironmentId | null;
+  onSelect: () => void;
+}) {
+  const params = useParams({ strict: false });
+  const threadRef = resolveThreadRouteRef(params);
+  if (!threadRef || threadRef.environmentId !== environmentId) return null;
+  return (
+    <div className="border-t border-border px-3 py-2">
+      <InlineButton
+        onClick={() => {
+          onSelect();
+          openMachineHandoff({ threadRef });
+        }}
+      >
+        <ArrowRightLeftIcon className="size-3.5" />
+        Hand off to another machine
+      </InlineButton>
+    </div>
+  );
+}
 
 /** Holds the page still behind the open picker; its lifetime is the popup element's. */
 function lockBackgroundScroll(popup: HTMLElement | null) {
@@ -309,6 +339,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           }
           onInstanceModelChange={handleInstanceModelChange}
         />
+        {props.isComposerOwned ? (
+          <MachineHandoffPickerAction
+            environmentId={props.environmentId}
+            onSelect={() => setIsMenuOpen(false)}
+          />
+        ) : null}
         {props.selectedModels === undefined ? (
           <ChatGptSharingControl provider={activeEntry?.snapshot ?? null} />
         ) : null}

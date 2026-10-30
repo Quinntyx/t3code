@@ -24,6 +24,8 @@ import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
 import { ThreadUsagePanel } from "./ThreadUsagePanel";
+import { openMachineHandoff } from "../machineHandoffRequest";
+import { InlineButton } from "../ui/button";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -142,6 +144,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
+              {props.isServerThread ? (
+                <div className="px-3 py-2">
+                  <InlineButton onClick={() => openMachineHandoff({ threadRef: activeThreadRef })}>
+                    Hand off to another machine
+                  </InlineButton>
+                </div>
+              ) : null}
               {props.activeProjectScripts ? (
                 <ProjectScriptsControl
                   environmentId={props.environmentId}

@@ -39,6 +39,7 @@ export interface AddProjectToMachineInput {
   readonly remoteUrl: string;
   readonly destinationPath: string;
   readonly files: ReadonlyArray<string>;
+  readonly onReady?: (project: ScopedProjectRef) => void;
 }
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0]): string {
@@ -145,7 +146,7 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
     throw new Error(failureMessage(started));
   }
   void suggestAppAccessForRemote(input.target.environmentId, input.remoteUrl);
-  if (reads.length === 0) return;
+  if (reads.length === 0 && !input.onReady) return;
 
   void (async () => {
     const clone = await waitForClone(input.target.environmentId, input.projectId);
@@ -187,5 +188,6 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
             failures: failed,
           },
     );
+    if (failed.length === 0) input.onReady?.(targetRef);
   })();
 }
