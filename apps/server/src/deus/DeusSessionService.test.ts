@@ -20,6 +20,8 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
+import { Command } from "./decide.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -34,6 +36,7 @@ import * as DeusSessionService from "./DeusSessionService.ts";
 const environmentId = EnvironmentId.make("deus-test-environment");
 const projectId = ProjectId.make("deus-test-project");
 const scope = { environmentId, projectId };
+const decodeCommand = Schema.decodeUnknownEffect(Command);
 const inputId = (id: string) => DeusInputId.make(id);
 const services = DeusSessionService.layer.pipe(
   Layer.provideMerge(DeusRepository.layer),
@@ -109,6 +112,42 @@ function launch(ref: DeusSessionRef) {
     workspace: "project" as const,
   };
 }
+
+it.effect("keeps spoken reply ownership durable and separate from typed generation", () =>
+  Effect.gen(function* () {
+    const { session } = yield* open;
+    const repository = yield* DeusRepository.DeusRepository;
+    const input = {
+      ...text(session, "spoken", "Delegate that, then answer me."),
+      origin: { type: "live", attachmentId: "fixture-attachment", generation: 1, turnId: "turn-1" },
+    };
+    const command = yield* decodeCommand({ type: "spoken-input", input });
+    yield* repository.commit(command);
+    yield* repository.commit(command);
+    assert.equal(yield* repository.currentConversation(session), 1);
+    const pending = yield* repository.pending;
+    assert.equal(pending[0]?.intent.type, "spoken-input");
+    assert.deepEqual((yield* repository.snapshot(session)).transcripts[0]?.origin, input.origin);
+    assert.equal(
+      (yield* repository.commit({ type: "input", input }).pipe(Effect.flip))._tag,
+      "DeusStateError",
+    );
+    yield* repository.commit({
+      type: "respond",
+      input: {
+        ...input,
+        inputId: inputId("spoken-answer"),
+        humanInputId: input.inputId,
+        text: "The attachment was lost; please reconnect.",
+        error: "provider",
+      },
+    });
+    assert.lengthOf(yield* repository.pending, 0);
+    const transcript = (yield* repository.snapshot(session)).transcripts[1];
+    assert.deepEqual(transcript?.origin, input.origin);
+    assert.equal(transcript?.inputId, input.inputId);
+  }).pipe(Effect.provide(testLayer)),
+);
 
 it.effect("completes an accepted input once in its original conversation after reset", () =>
   Effect.gen(function* () {

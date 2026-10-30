@@ -27,6 +27,9 @@ export class DeusConfiguration extends Context.Service<
       readonly projectId: ProjectId;
     }) => Effect.Effect<void, DeusTextError, Requests.SecretRequests>;
     readonly removeCredential: Effect.Effect<void, DeusTextError>;
+    readonly withLiveCredential: <A, E>(
+      use: (model: string, voice: string, key: string) => Effect.Effect<A, E>,
+    ) => Effect.Effect<A, E | DeusTextError>;
     readonly withTextCredential: <A, E>(
       use: (model: string, key: string) => Effect.Effect<A, E>,
     ) => Effect.Effect<A, E | DeusTextError>;
@@ -56,6 +59,16 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(configurationError));
     }),
     removeCredential: store.remove(credentialName).pipe(Effect.mapError(configurationError)),
+    withLiveCredential: Effect.fn("DeusConfiguration.withLiveCredential")(function* <A, E>(
+      use: (model: string, voice: string, key: string) => Effect.Effect<A, E>,
+    ) {
+      const current = (yield* settings.getSettings.pipe(Effect.mapError(configurationError))).deus;
+      if (!current.enabled || !current.liveModel || !current.voice)
+        return yield* configurationError();
+      const key = yield* read;
+      if (Option.isNone(key) || key.value.byteLength === 0) return yield* configurationError();
+      return yield* use(current.liveModel, current.voice, new TextDecoder().decode(key.value));
+    }),
     withTextCredential: Effect.fn("DeusConfiguration.withTextCredential")(function* <A, E>(
       use: (model: string, key: string) => Effect.Effect<A, E>,
     ) {

@@ -5,6 +5,7 @@ import {
   DeusInput,
   DeusInputId,
   DeusInputReceipt,
+  DeusLiveOrigin,
   DeusObservationId,
   DeusDelta,
   DeusResetConversationInput,
@@ -53,7 +54,20 @@ export const ObservationInput = Schema.Struct({
   supersedes: Schema.NullOr(DeusObservationId),
 });
 export type ObservationInput = typeof ObservationInput.Type;
+export const SpokenInput = Schema.Struct({ ...DeusInput.fields, origin: DeusLiveOrigin });
+export type SpokenInput = typeof SpokenInput.Type;
 export const Command = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("spoken-input"), input: SpokenInput }),
+  Schema.Struct({
+    type: Schema.Literal("report-response"),
+    input: Schema.Struct({
+      ...DeusSessionRef.fields,
+      inputId: DeusInputId,
+      sourceCursor: DeusCursor,
+      origin: DeusLiveOrigin,
+      text: Schema.Trimmed.check(Schema.isMinLength(1), Schema.isMaxLength(16000)),
+    }),
+  }),
   Schema.Struct({
     type: Schema.Literal("respond"),
     input: Schema.Struct({
@@ -78,6 +92,7 @@ export const Command = Schema.Union([
 ]);
 export type Command = typeof Command.Type;
 export const Intent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("spoken-input"), input: SpokenInput }),
   Schema.Struct({
     type: Schema.Literal("coordinate-input"),
     input: DeusInput,
@@ -129,6 +144,45 @@ export function decide(
     return new DeusStateError({ reason: "conflict", message: "The conversation has changed." });
   }
   switch (command.type) {
+    case "report-response": {
+      if (
+        !source ||
+        source.change.type !== "report" ||
+        source.cursor !== command.input.sourceCursor ||
+        source.sessionId !== input.sessionId ||
+        source.environmentId !== input.environmentId ||
+        source.projectId !== input.projectId ||
+        !source.change.report.conversation
+      )
+        return new DeusStateError({
+          reason: "not-found",
+          message: "Spoken report source was not found.",
+        });
+      const report = source.change.report;
+      return {
+        changes: [
+          {
+            type: "transcript",
+            transcript: {
+              id: ids.transcriptId,
+              conversation: report.conversation!,
+              inputId: input.inputId,
+              role: "assistant",
+              text: command.input.text,
+              createdAt: now,
+              origin: {
+                ...command.input.origin,
+                type: "report",
+                sourceCursor: source.cursor,
+                taskId: report.taskId,
+                threadId: report.threadId,
+                runId: report.runId,
+              },
+            },
+          },
+        ],
+      };
+    }
     case "respond": {
       const human = snapshot.transcripts.find(
         (entry) => entry.role === "human" && entry.inputId === command.input.humanInputId,
@@ -153,6 +207,7 @@ export function decide(
               conversation: human.conversation,
               inputId: human.inputId,
               role: "assistant",
+              ...(human.origin ? { origin: human.origin } : {}),
               text: command.input.text,
               createdAt: now,
               ...(command.input.error
@@ -229,6 +284,7 @@ export function decide(
         ],
       };
     }
+    case "spoken-input":
     case "input":
       return {
         changes: [
@@ -239,12 +295,16 @@ export function decide(
               conversation: command.input.conversation,
               inputId: input.inputId,
               role: "human",
+              ...(command.type === "spoken-input" ? { origin: command.input.origin } : {}),
               text: command.input.text,
               createdAt: now,
             },
           },
         ],
-        intent: { type: "coordinate-input", input: command.input },
+        intent:
+          command.type === "spoken-input"
+            ? { type: "spoken-input", input: command.input }
+            : { type: "coordinate-input", input: command.input },
       };
     case "reset":
       return {

@@ -50,6 +50,9 @@ export class DeusRepository extends Context.Service<
   {
     readonly open: (input: DeusOpenInput) => Effect.Effect<DeusSnapshot, DeusRepositoryError>;
     readonly snapshot: (ref: DeusSessionRef) => Effect.Effect<DeusSnapshot, DeusRepositoryError>;
+    readonly currentConversation: (
+      ref: DeusSessionRef,
+    ) => Effect.Effect<DeusConversation, DeusRepositoryError>;
     readonly commit: (command: Command) => Effect.Effect<CommandResult, DeusRepositoryError>;
     readonly readDeltas: (
       ref: DeusSessionRef,
@@ -70,6 +73,7 @@ export class DeusRepository extends Context.Service<
   }
 >()("t3/deus/DeusRepository") {}
 
+const decodeConversation = Schema.decodeEffect(DeusConversation);
 const decodeSnapshot = Schema.decodeEffect(Schema.fromJsonString(DeusSnapshot));
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CommandResult));
 const decodeDelta = Schema.decodeEffect(Schema.fromJsonString(DeusDelta));
@@ -255,7 +259,7 @@ const make = Effect.gen(function* () {
                 }
                 const now = DateTime.formatIso(yield* DateTime.now);
                 const source =
-                  command.type === "observe"
+                  command.type === "observe" || command.type === "report-response"
                     ? yield* sourceAt({ ...input, cursor: command.input.sourceCursor })
                     : undefined;
                 const planned = decide(
@@ -275,7 +279,7 @@ const make = Effect.gen(function* () {
                 if (command.type === "respond") {
                   const rows = yield* sql<{ input_id: string }>`SELECT input_id FROM deus_outbox
                     WHERE session_id = ${input.sessionId} AND input_id = ${command.input.humanInputId}
-                    AND status = 'pending' AND json_extract(intent_json, '$.intent.type') = 'coordinate-input'`;
+                    AND status = 'pending' AND json_extract(intent_json, '$.intent.type') IN ('coordinate-input', 'spoken-input')`;
                   if (!rows[0])
                     return yield* new DeusStateError({
                       reason: "conflict",
@@ -463,6 +467,20 @@ const make = Effect.gen(function* () {
     ),
     open,
     snapshot,
+    currentConversation: Effect.fn("DeusRepository.currentConversation")(function* (ref) {
+      yield* validateScope(ref);
+      const rows = yield* sql<{
+        conversation: number;
+      }>`SELECT json_extract(snapshot_json, '$.session.conversation') AS conversation
+        FROM deus_sessions WHERE session_id = ${ref.sessionId} AND environment_id = ${environmentId}
+        AND project_id = ${ref.projectId} AND closed_at IS NULL`;
+      if (!rows[0])
+        return yield* new DeusStateError({
+          reason: "scope-mismatch",
+          message: "Deus session does not belong to this scope.",
+        });
+      return yield* decodeConversation(rows[0].conversation);
+    }, mapError("current-conversation")),
     commit,
     readDeltas,
     readSource,

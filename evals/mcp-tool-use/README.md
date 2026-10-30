@@ -113,13 +113,15 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 From `evals/`, `node mcp-tool-use/deusText.ts --dry-run` prints bounded requests using the production coordinator policy and tool declarations; `--context` prints their sizes. Both paths are strictly local and make no provider calls. `deusText.test.ts` reuses `gradeSample` to check positive and negative synthetic fixtures. These prove request/grader wiring, not Gemini behavioral compliance; paid evaluation remains a separate gate.
 
+`node mcp-tool-use/deusLive.ts --dry-run` and `--context` build the corresponding native Live setup with the production policy and shared non-blocking declarations. They use explicit synthetic model/voice names and never connect to Gemini. `deusLive.test.ts` checks this wiring, not selected-model support, scheduling behavior, or physical audio acceptance.
+
 ## Where T3's text lives
 
 - `packages/provider-core/src/server/runtimeInstructions.ts`
 - `packages/provider-core/src/server/orchestrationInstructions.ts`
 - `apps/server/src/provider/CodexDeveloperInstructions.ts`
 - `apps/server/src/mcp/toolkits/*/tools.ts` (tool descriptions)
-- `apps/server/src/deus/prompts/text.ts` and `apps/server/src/deus/DeusTools.ts` (internal coordinator policy and restricted tools)
+- `apps/server/src/deus/prompts/text.ts`, `apps/server/src/deus/GeminiLiveAdapter.ts`, and `apps/server/src/deus/DeusTools.ts` (internal text/Live policies and restricted tools)
 - `packages/contracts/src/*Mcp.ts` (parameter descriptions and result text)
 
 ## Templates

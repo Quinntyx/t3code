@@ -51,6 +51,8 @@ import * as DeusConfiguration from "./deus/DeusConfiguration.ts";
 import * as DeusCoordinator from "./deus/DeusCoordinator.ts";
 import * as DeusTools from "./deus/DeusTools.ts";
 import * as GeminiTextAdapter from "./deus/GeminiTextAdapter.ts";
+import * as GeminiLiveAdapter from "./deus/GeminiLiveAdapter.ts";
+import * as DeusLiveService from "./deus/DeusLiveService.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -614,7 +616,9 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  DeusCoordinator.layer.pipe(
+  Layer.merge(DeusCoordinator.layer, DeusLiveService.layer).pipe(
+    Layer.provide(DeusLiveService.layerAuthorityUnavailable),
+    Layer.provideMerge(GeminiLiveAdapter.layer.pipe(Layer.provide(DeusConfiguration.layer))),
     Layer.provideMerge(DeusTools.layer),
     Layer.provideMerge(
       Layer.mergeAll(DeusThreadBridge.layer, DeusContextService.layer, GeminiTextAdapter.layer),

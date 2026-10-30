@@ -118,11 +118,30 @@ export const DeusError = Schema.Union([
 ]);
 export type DeusError = typeof DeusError.Type;
 
+export const DeusLiveOrigin = Schema.Struct({
+  type: Schema.Literal("live"),
+  attachmentId: DeusAttachmentId,
+  generation: PositiveInt,
+  turnId: TrimmedNonEmptyString,
+});
+export const DeusTranscriptOrigin = Schema.Union([
+  DeusLiveOrigin,
+  Schema.Struct({
+    ...DeusLiveOrigin.fields,
+    type: Schema.Literal("report"),
+    sourceCursor: DeusCursor,
+    taskId: DeusTaskId,
+    threadId: ThreadId,
+    runId: RunId,
+  }),
+]);
+
 export const DeusTranscript = Schema.Struct({
   id: DeusTranscriptId,
   conversation: DeusConversation,
   inputId: DeusInputId,
   role: Schema.Literals(["human", "assistant"]),
+  origin: Schema.optional(DeusTranscriptOrigin),
   error: Schema.optional(
     Schema.Struct({
       code: Schema.Literals([

@@ -64,6 +64,12 @@ it.effect(
       });
       yield* seedCredential;
       assert.equal(
+        (yield* configuration
+          .withLiveCredential(() => Effect.succeed("unreachable"))
+          .pipe(Effect.flip)).code,
+        "configuration",
+      );
+      assert.equal(
         (yield* configuration.setCredential({ secretRef, projectId }).pipe(Effect.flip)).code,
         "configuration",
       );
@@ -84,8 +90,20 @@ it.effect(
         liveModel: "explicit-future-live-model",
       });
       assert.equal((yield* configuration.status).settings.textModel, "explicit-local-text-model");
+      assert.deepEqual(
+        yield* configuration.withLiveCredential((model, voice, key) =>
+          Effect.succeed([model, voice, key === syntheticKey]),
+        ),
+        ["explicit-future-live-model", "configured-voice", true],
+      );
       yield* configuration.removeCredential;
       assert.equal((yield* configuration.status).credentialPresent, false);
+      assert.equal(
+        (yield* configuration
+          .withLiveCredential(() => Effect.succeed("unreachable"))
+          .pipe(Effect.flip)).code,
+        "configuration",
+      );
       assert.equal(
         (yield* configuration
           .withTextCredential(() => Effect.succeed("unreachable"))
