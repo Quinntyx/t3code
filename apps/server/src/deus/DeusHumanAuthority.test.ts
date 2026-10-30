@@ -78,51 +78,49 @@ const finalizerCount = (scope: Scope.Scope) =>
     ? (scope.state.finalizers?.size ?? (scope.state.finalizer ? 1 : 0))
     : 0;
 
-for (const derived of [false, true]) {
-  it.effect(
-    `does not install a grant after its connection closes during ${derived ? "derivation" : "binding"}`,
-    () =>
-      Effect.gen(function* () {
-        const ref = yield* open;
-        const authenticated = yield* principal;
-        const repository = yield* Repository.DeusRepository;
-        const entered = yield* Deferred.make<void>();
-        const resume = yield* Deferred.make<void>();
-        let paused = false;
-        yield* Effect.gen(function* () {
-          const human = yield* Human.DeusHumanAuthority;
-          const connection = yield* human.connect(authenticated);
-          if (derived) yield* connection.bind(ref, ceiling);
-          paused = true;
-          const input = derived ? { ...ref, inputId: DeusInputId.make("closing-derived") } : ref;
-          const binding = yield* (
-            derived
-              ? human.authorize(input).pipe(Effect.provideService(DeusActionSource, ref))
-              : connection.bind(input, ceiling)
-          ).pipe(Effect.forkScoped);
-          yield* Deferred.await(entered);
-          yield* Scope.close(connection.scope, Exit.void);
-          yield* Deferred.succeed(resume, undefined);
-          expect(Exit.isFailure(yield* Fiber.await(binding))).toBe(true);
-          expect((yield* Fiber.join(binding).pipe(Effect.flip)).reason).toBe("inactive");
-          expect((yield* human.authorize(input).pipe(Effect.flip)).reason).toBe("inactive");
-        }).pipe(
-          Effect.scoped,
-          Effect.provide(Layer.fresh(Human.layer)),
-          Effect.provideService(Repository.DeusRepository, {
-            ...repository,
-            snapshot: (input) =>
-              paused
-                ? Deferred.succeed(entered, undefined).pipe(
-                    Effect.andThen(Deferred.await(resume)),
-                    Effect.andThen(repository.snapshot(input)),
-                  )
-                : repository.snapshot(input),
-          }),
-        );
-      }).pipe(Effect.scoped, Effect.provide(base)),
-  );
-}
+it.effect.each([false, true])(
+  "does not install a grant after its connection closes (derived: %s)",
+  (derived) =>
+    Effect.gen(function* () {
+      const ref = yield* open;
+      const authenticated = yield* principal;
+      const repository = yield* Repository.DeusRepository;
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let paused = false;
+      yield* Effect.gen(function* () {
+        const human = yield* Human.DeusHumanAuthority;
+        const connection = yield* human.connect(authenticated);
+        if (derived) yield* connection.bind(ref, ceiling);
+        paused = true;
+        const input = derived ? { ...ref, inputId: DeusInputId.make("closing-derived") } : ref;
+        const binding = yield* (
+          derived
+            ? human.authorize(input).pipe(Effect.provideService(DeusActionSource, ref))
+            : connection.bind(input, ceiling)
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Scope.close(connection.scope, Exit.void);
+        yield* Deferred.succeed(resume, undefined);
+        expect(Exit.isFailure(yield* Fiber.await(binding))).toBe(true);
+        expect((yield* Fiber.join(binding).pipe(Effect.flip)).reason).toBe("inactive");
+        expect((yield* human.authorize(input).pipe(Effect.flip)).reason).toBe("inactive");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.fresh(Human.layer)),
+        Effect.provideService(Repository.DeusRepository, {
+          ...repository,
+          snapshot: (input) =>
+            paused
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(resume)),
+                  Effect.andThen(repository.snapshot(input)),
+                )
+              : repository.snapshot(input),
+        }),
+      );
+    }).pipe(Effect.scoped, Effect.provide(base)),
+);
 
 it.effect("reclaims completed root and derived grants beyond the historical binding cap", () =>
   Effect.gen(function* () {
