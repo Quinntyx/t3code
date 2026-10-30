@@ -142,7 +142,7 @@ const harness = Effect.gen(function* () {
       }),
     ),
     Layer.provide(
-      Layer.succeed(Tools.DeusTools, {
+      Layer.mock(Tools.DeusTools)({
         execute: (call) =>
           Effect.gen(function* () {
             executions.push(call);

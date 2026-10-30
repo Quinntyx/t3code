@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 export class DeusAuthorityError extends Schema.TaggedError<DeusAuthorityError>()(
   "DeusAuthorityError",
   {
-    reason: Schema.Literals(["inactive", "mode-limit", "worktree-not-authorized"]),
+    reason: Schema.Literals(["inactive", "mode-limit", "worktree-not-authorized", "capacity"]),
   },
 ) {}
 

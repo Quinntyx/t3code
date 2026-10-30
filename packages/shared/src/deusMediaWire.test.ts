@@ -55,7 +55,9 @@ describe("Deus complete JSON wire envelopes", () => {
       expect(() => parser.encode(request({ ...pcm, ...patch }))).toThrow();
     const padded = { ...request(pcm), headers: [["oversize", "x".repeat(DEUS_MEDIA_WIRE_BYTES)]] };
     expect(() => parser.encode(padded)).toThrow();
-    expect(() => parser.decode(JSON.stringify(padded))).toThrow();
+    expect(parser.decode(JSON.stringify(padded))).toMatchObject([
+      { ...padded, payload: { _tag: "DeusTransportError", reason: "invalid-pcm" } },
+    ]);
   });
   it("preserves official JSON bytes and decoding for unrelated requests, exits and streams", () => {
     const official = RpcSerialization.json.makeUnsafe();

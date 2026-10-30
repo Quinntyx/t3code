@@ -1,7 +1,30 @@
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as NetAddress from "effect/net/NetAddress";
+import * as Context from "effect/Context";
+import { RpcClient, RpcServer, RpcSerialization } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
+import { NodeWS } from "@effect/platform-node/NodeSocket";
+import { deusJson } from "@t3tools/shared/deusMediaWire";
+import * as Auth from "../auth/EnvironmentAuth.ts";
+import * as AuthSessions from "../auth/SessionStore.ts";
+import * as Authorization from "../auth/RpcAuthorization.ts";
+import * as Secrets from "../auth/ServerSecretStore.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as Human from "./DeusHumanAuthority.ts";
+import * as Lease from "./DeusMediaLease.ts";
+import * as Transport from "./DeusTransport.ts";
+import * as Live from "./DeusLiveService.ts";
+import * as Configuration from "./DeusConfiguration.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  AuthStandardClientScopes,
+  DeusRpcGroup,
+  RpcScopeAuthorization,
+  WS_METHODS,
   DeusConversation,
   RunId,
   EventId,
@@ -30,6 +53,9 @@ import * as ThreadEvents from "../orchestration-v2/EventStore.ts";
 import * as ProviderAdapters from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderSessions from "../orchestration-v2/ProviderSessionManager.ts";
 import * as Stream from "effect/Stream";
+import * as Schedule from "effect/Schedule";
+import { TaskActionRecord } from "./taskActionProtocol.ts";
+import * as Schema from "effect/Schema";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -64,6 +90,8 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import { DeusTextError, TEXT_LIMITS, encodeJson, type TextReply } from "./textProtocol.ts";
 
+const decodeTaskActionRecord = Schema.decodeEffect(Schema.fromJsonString(TaskActionRecord));
+const encodeTaskActionRecord = Schema.encodeEffect(Schema.fromJsonString(TaskActionRecord));
 const environmentId = EnvironmentId.make("deus-bridge-environment");
 const projectId = ProjectId.make("deus-bridge-project");
 const model = { instanceId: ProviderInstanceId.make("codex"), model: "fixture-model" };
@@ -136,6 +164,7 @@ const openFixtureSession: ProviderAdapter.ProviderAdapterV2["Service"]["openSess
 
 function harness(
   options: {
+    readonly authenticated?: boolean;
     readonly deny?: boolean;
     readonly enabled?: boolean;
     readonly ceiling?: "approval-required" | "full-access";
@@ -159,15 +188,31 @@ function harness(
   const threads = ThreadManagement.layer.pipe(
     Layer.provide(Layer.mergeAll(orchestrator, settings, receipts)),
   );
+  const identity = Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+    getEnvironmentId: Effect.succeed(environmentId),
+  });
+  const config = ServerConfig.layerTest(process.cwd(), { prefix: "deus-bridge-" }).pipe(
+    Layer.provide(NodeServices.layer),
+  );
+  const infrastructure = Layer.mergeAll(database, settings, config, identity, NodeServices.layer);
+  const authentication = Auth.layer.pipe(
+    Layer.provideMerge(Secrets.layer),
+    Layer.provideMerge(infrastructure),
+  );
+  const human = Human.layer.pipe(
+    Layer.provideMerge(Repository.layer),
+    Layer.provideMerge(authentication),
+  );
+  const humanAuthority = Layer.effect(
+    Authority.DeusAuthority,
+    Effect.map(Human.DeusHumanAuthority, (service) => ({ authorize: service.authorize })),
+  ).pipe(Layer.provideMerge(human));
   const external = Layer.mergeAll(
+    options.authenticated ? humanAuthority : Layer.empty,
     NodeServices.layer,
     McpSessions.layer,
-    ServerConfig.layerTest(process.cwd(), { prefix: "deus-bridge-" }).pipe(
-      Layer.provide(NodeServices.layer),
-    ),
-    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-      getEnvironmentId: Effect.succeed(environmentId),
-    }),
+    config,
+    identity,
     ProviderRegistryMock.layer([{ ...provider, enabled: options.enabled ?? true }]),
     Layer.mock(Projects.ProjectService)({
       getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
@@ -184,18 +229,20 @@ function harness(
     Layer.mock(GitWorkflow.GitWorkflowService)({}),
     Layer.mock(Setup.ProjectSetupScriptRunner)({}),
     Layer.mock(TextGeneration.TextGeneration)({}),
-    Layer.succeed(Authority.DeusAuthority, {
-      authorize:
-        options.authority ??
-        (() =>
-          options.deny
-            ? Effect.fail(new Authority.DeusAuthorityError({ reason: "inactive" }))
-            : Effect.succeed({
-                runtimeMode: options.ceiling ?? "full-access",
-                interactionMode: "default",
-                allowWorktree: false,
-              })),
-    }),
+    options.authenticated
+      ? Layer.empty
+      : Layer.succeed(Authority.DeusAuthority, {
+          authorize:
+            options.authority ??
+            (() =>
+              options.deny
+                ? Effect.fail(new Authority.DeusAuthorityError({ reason: "inactive" }))
+                : Effect.succeed({
+                    runtimeMode: options.ceiling ?? "full-access",
+                    interactionMode: "default",
+                    allowWorktree: false,
+                  })),
+        }),
   );
   const launches = ThreadLaunch.layer.pipe(
     Layer.provide(Layer.mergeAll(external, threads, receipts, IdAllocator.layer, settings)),
@@ -283,6 +330,375 @@ const authenticate = Effect.fn("DeusThreadBridge.test.authenticate")(function* (
     thread: { threadId, providerInstanceId: model.instanceId, providerSessionId },
   };
 });
+
+it.live(
+  "authenticates public task query, retry and explicit continue through real intake and durable receipts",
+  () => {
+    let queryCalls = 0;
+    return Effect.gen(function* () {
+      const { input, sql, bridge, sessions } = yield* setup;
+      const auth = yield* Auth.EnvironmentAuth;
+      const authSessions = yield* AuthSessions.SessionStore;
+      const issued = yield* authSessions.issue({
+        subject: "human",
+        method: "bearer-access-token",
+        scopes: AuthStandardClientScopes,
+      });
+      const services = yield* Layer.build(
+        Transport.layer.pipe(
+          Layer.provideMerge(Lease.layer.pipe(Layer.provide(Events.layer))),
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.mock(Live.DeusLiveService)({}),
+              Layer.mock(Configuration.DeusConfiguration)({}),
+              Layer.mock(SecretRequests.SecretRequests)({}),
+            ),
+          ),
+        ),
+      );
+      const transport = Context.get(services, Transport.DeusTransport);
+      const group = DeusRpcGroup.middleware(RpcScopeAuthorization);
+      const server = yield* HttpServer.HttpServer;
+      yield* server.serve(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const principal = yield* auth.authenticateWebSocketUpgrade(request, "rpc");
+          const handlers = yield* transport.connect(principal);
+          const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
+          yield* RpcServer.make(group, { disableTracing: true, disableFatalDefects: true }).pipe(
+            Effect.provideService(RpcServer.Protocol, protocol),
+            Effect.provide(
+              Layer.merge(group.toLayer(handlers), Authorization.layer(principal.scopes)),
+            ),
+            Effect.forkScoped,
+          );
+          return yield* httpEffect;
+        }).pipe(Effect.provideService(RpcSerialization.RpcSerialization, deusJson)),
+      );
+      if (!NetAddress.isInetAddress(server.address))
+        return assert.fail("Expected isolated loopback");
+      const url = `ws://127.0.0.1:${server.address.port}/ws`;
+      let ownedSocket: NodeWS.WebSocket | undefined;
+      const protocolContext = yield* Layer.build(
+        Layer.effect(
+          RpcClient.Protocol,
+          RpcClient.makeProtocolSocket({
+            retryTransientErrors: false,
+            retryPolicy: Schedule.recurs(0),
+          }),
+        ).pipe(
+          Layer.provide(
+            Layer.merge(
+              Socket.layerWebSocket(url).pipe(
+                Layer.provide(
+                  Layer.succeed(Socket.WebSocketConstructor, (address) => {
+                    const socket = new NodeWS.WebSocket(address, {
+                      headers: { Authorization: `Bearer ${issued.token}` },
+                    });
+                    ownedSocket = socket;
+                    return socket;
+                  }),
+                ),
+              ),
+              Layer.succeed(RpcSerialization.RpcSerialization, deusJson),
+            ),
+          ),
+        ),
+      );
+      const client = yield* RpcClient.make(DeusRpcGroup).pipe(
+        Effect.provideContext(protocolContext),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => ownedSocket?.terminate()));
+      const ceiling = {
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        allowWorktree: false,
+      };
+      const launched = yield* client[WS_METHODS.deusLaunchTask]({ ...input, authority: ceiling });
+      const task = launched.task;
+      const threadId = task.workers[0]!.threadId;
+      const query = {
+        ...input,
+        inputId: DeusInputId.make("wire-task-query"),
+        taskId: task.id,
+        authority: ceiling,
+        action: { type: "query" as const, text: "Read only the original worker" },
+      };
+      const answer = yield* client[WS_METHODS.deusTaskAction](query);
+      assert.equal(answer.answer, "Controlled public query answer");
+      assert.equal(queryCalls, 1);
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sink = yield* Sink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const stop = Effect.fn("DeusThreadBridge.test.stopActionRun")(function* (
+        runId: RunId,
+        id: string,
+      ) {
+        const run = (yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }))
+          .runs[0]!;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(id),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...run, status: "failed", completedAt: now },
+            },
+          ],
+        });
+        yield* bridge.reconcile(input);
+      });
+      yield* stop(task.workers[0]!.runId!, "public-original-failed");
+      const retry = {
+        ...query,
+        inputId: DeusInputId.make("wire-task-retry"),
+        action: { type: "retry" as const },
+      };
+      const underGrant = {
+        ...retry,
+        inputId: DeusInputId.make("wire-task-under-grant"),
+        authority: { ...ceiling, runtimeMode: "approval-required" as const },
+      };
+      assert.equal(
+        (yield* client[WS_METHODS.deusTaskAction](underGrant).pipe(Effect.flip))._tag,
+        "DeusPermissionError",
+      );
+      assert.equal(
+        (yield* client[WS_METHODS.deusTaskAction]({ ...underGrant, authority: ceiling }).pipe(
+          Effect.flip,
+        ))._tag,
+        "DeusStateError",
+      );
+      assert.lengthOf((yield* threads.getThreadRecords(threadId, ["runs"])).runs, 1);
+      const retried = yield* client[WS_METHODS.deusTaskAction](retry);
+      const retryRun = retried.task.workers.at(-1)!.runId!;
+      assert.notEqual(retryRun, task.workers[0]!.runId);
+      assert.equal(retried.task.id, task.id);
+      const messages = yield* threads.getThreadRecords(threadId, ["messages", "runs"]);
+      assert.lengthOf(messages.runs, 2);
+      assert.equal(messages.messages.at(-1)!.text, input.prompt);
+      assert.equal(messages.messages.at(-1)!.createdBy, "user");
+      yield* stop(retryRun, "public-retry-failed");
+      const missing = yield* client[WS_METHODS.deusTaskAction]({
+        ...query,
+        inputId: DeusInputId.make("continue-without-direction"),
+        action: { type: "continue" },
+      }).pipe(Effect.flip);
+      assert.equal(missing._tag, "DeusStateError");
+      const continuedInput = {
+        ...query,
+        inputId: DeusInputId.make("wire-task-continue"),
+        action: {
+          type: "continue" as const,
+          text: "Human explicitly requests the next bounded step",
+        },
+      };
+      const continued = yield* client[WS_METHODS.deusTaskAction](continuedInput);
+      assert.equal(continued.task.workers.at(-1)!.threadId, threadId);
+      const after = yield* threads.getThreadRecords(threadId, ["messages", "runs"]);
+      assert.lengthOf(after.runs, 3);
+      assert.equal(after.messages.at(-1)!.text, continuedInput.action.text);
+      const replay = yield* client[WS_METHODS.deusTaskAction](retry);
+      assert.deepEqual({ ...replay, receipt: retried.receipt }, retried);
+      assert.equal(replay.receipt.status, "replayed");
+      assert.deepEqual(
+        { ...(yield* client[WS_METHODS.deusTaskAction](query)), receipt: answer.receipt },
+        answer,
+      );
+      assert.equal(queryCalls, 1);
+      assert.equal(
+        (yield* client[WS_METHODS.deusTaskAction]({
+          ...continuedInput,
+          action: { type: "continue", text: "Changed direction" },
+        }).pipe(Effect.flip))._tag,
+        "DeusStateError",
+      );
+      const rows = yield* sql<{
+        result_json: string;
+      }>`SELECT result_json FROM deus_receipts WHERE input_id = ${continuedInput.inputId}`;
+      const record = yield* decodeTaskActionRecord(rows[0]!.result_json);
+      const unacknowledged = yield* encodeTaskActionRecord({ ...record, result: null });
+      yield* sql`UPDATE deus_receipts SET result_json = ${unacknowledged} WHERE input_id = ${continuedInput.inputId}`;
+      yield* sql`UPDATE deus_outbox SET status = 'pending' WHERE input_id = ${continuedInput.inputId}`;
+      const restarted = yield* Tools.DeusTools.pipe(Effect.provide(Layer.fresh(Tools.layer)));
+      const reconciled = yield* restarted.taskAction(continuedInput, ceiling);
+      assert.deepEqual({ ...reconciled, receipt: continued.receipt }, continued);
+      assert.lengthOf((yield* threads.getThreadRecords(threadId, ["runs"])).runs, 3);
+      assert.lengthOf((yield* sessions.snapshot(input)).tasks, 1);
+      assert.equal(
+        (yield* sql<{
+          count: number;
+        }>`SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+        1,
+      );
+      yield* authSessions.revoke(issued.sessionId);
+      assert.equal(
+        (yield* client[WS_METHODS.deusTaskAction]({
+          ...query,
+          inputId: DeusInputId.make("revoked-query"),
+        }).pipe(Effect.flip))._tag,
+        "DeusPermissionError",
+      );
+      yield* Effect.logInfo(
+        "authenticated task actions: one no-tools query, original-text retry, explicit-human continuation, same task/thread; exact receipt replay and accepted-before-ack recovery after later run; revocation denied; no external provider calls",
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(
+          harness({
+            authenticated: true,
+            text: (request) =>
+              Effect.sync(() => {
+                queryCalls++;
+                assert.isUndefined(request.tools);
+                return { parts: [{ text: "Controlled public query answer" }] };
+              }),
+          }),
+          NodeHttpServer.layerTest,
+        ),
+      ),
+    );
+  },
+);
+
+it.effect("durably replays an immutable no-tools task query after later runs", () => {
+  let calls = 0;
+  return Effect.gen(function* () {
+    const { bridge, input, sessions, sql } = yield* setup;
+    const task = yield* bridge.launch(input);
+    const tools = yield* Tools.DeusTools;
+    const action = {
+      ...input,
+      inputId: DeusInputId.make("public-query"),
+      taskId: task.id,
+      action: { type: "query" as const, text: "What is the original worker doing?" },
+    };
+    const ceiling = {
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      allowWorktree: false,
+    };
+    const first = yield* tools.taskAction(action, ceiling);
+    assert.equal(first.answer, "Immutable fixture answer");
+    assert.equal(calls, 1);
+    yield* bridge.send({
+      ...input,
+      threadId: task.workers[0]!.threadId,
+      commandId: CommandId.make("query-later-run"),
+      text: "Later unrelated direction",
+      mode: "queue",
+    });
+    yield* bridge.reconcile(input);
+    const restarted = yield* Tools.DeusTools.pipe(Effect.provide(Layer.fresh(Tools.layer)));
+    const replay = yield* restarted.taskAction(action, ceiling);
+    assert.deepEqual({ ...replay, receipt: first.receipt }, first);
+    assert.equal(replay.receipt.cursor, first.receipt.cursor);
+    assert.equal(replay.receipt.status, "replayed");
+    assert.equal(calls, 1);
+    assert.equal(
+      (yield* tools
+        .taskAction({ ...action, action: { type: "query", text: "Changed" } }, ceiling)
+        .pipe(Effect.flip))._tag,
+      "DeusStateError",
+    );
+    assert.lengthOf((yield* sessions.snapshot(input)).tasks, 1);
+    assert.equal(
+      (yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+      1,
+    );
+    yield* Effect.logInfo(
+      "task query: immutable captured worker evidence; no function tools; one controlled generation; original durable answer/cursor replayed after later run and service restart",
+    );
+  }).pipe(
+    Effect.provide(
+      harness({
+        text: (request) =>
+          Effect.sync(() => {
+            calls++;
+            assert.isUndefined(request.tools);
+            const evidence = JSON.parse(request.contents[0]!.parts![0]!.text!);
+            assert.equal(evidence.question, "What is the original worker doing?");
+            assert.isString(evidence.snapshot.runId);
+            return { parts: [{ text: "Immutable fixture answer" }] };
+          }),
+      }),
+    ),
+  );
+});
+
+it.effect(
+  "rejects concurrent task queries without dispatch and pins the original launch ceiling",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const { bridge, input } = yield* setup;
+        const task = yield* bridge.launch({
+          ...input,
+          runtimeMode: "approval-required",
+          kind: "research",
+        });
+        const tools = yield* Tools.DeusTools;
+        const ceiling = {
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          allowWorktree: false,
+        };
+        const action = {
+          ...input,
+          inputId: DeusInputId.make("concurrent-query"),
+          taskId: task.id,
+          action: { type: "query" as const, text: "Bounded original evidence" },
+        };
+        const first = yield* tools.taskAction(action, ceiling).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        assert.equal(
+          (yield* tools.taskAction(action, ceiling).pipe(Effect.flip))._tag,
+          "DeusStateError",
+        );
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const worker = task.workers[0]!;
+        assert.lengthOf(
+          (yield* threads.getThreadRecords(worker.threadId, ["runs", "messages"])).runs,
+          1,
+        );
+        yield* Deferred.succeed(resume, undefined);
+        assert.equal((yield* Fiber.join(first)).answer, "Read-only answer");
+        yield* threads.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make("broader-shell"),
+          threadId: worker.threadId,
+          runtimeMode: "full-access",
+        });
+        const changed = yield* tools
+          .taskAction({ ...action, inputId: DeusInputId.make("query-after-escalation") }, ceiling)
+          .pipe(Effect.flip);
+        assert.equal(changed._tag, "DeusStateError");
+        assert.include(changed.message, "original launch");
+        const shell = yield* threads.getThreadShell(worker.threadId);
+        assert.equal(shell?.interactionMode, "plan");
+        assert.lengthOf((yield* threads.getThreadRecords(worker.threadId, ["runs"])).runs, 1);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          harness({
+            text: (request) => {
+              assert.isUndefined(request.tools);
+              return Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(resume)),
+                Effect.as({ parts: [{ text: "Read-only answer" }] }),
+              );
+            },
+          }),
+        ),
+      );
+    }),
+);
 
 it.effect("launches one actual worker and initial message on duplicate accepted launch", () =>
   Effect.gen(function* () {

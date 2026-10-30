@@ -67,8 +67,22 @@ export const deusJson: RpcSerialization.RpcSerialization["Service"] = {
       },
       decode: (data) => {
         const messages = parser.decode(data);
-        for (const message of messages) validate(message, size(data));
-        return messages;
+        return messages.map((message) => {
+          try {
+            validate(message, size(data));
+            return message;
+          } catch (error) {
+            if (
+              isRecord(message) &&
+              message._tag === "Request" &&
+              message.tag === WS_METHODS.deusMediaPush &&
+              (typeof message.id === "string" || typeof message.id === "number") &&
+              Array.isArray(message.headers)
+            )
+              return { ...message, payload: invalid() };
+            throw error;
+          }
+        });
       },
     };
   },

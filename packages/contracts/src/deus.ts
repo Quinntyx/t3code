@@ -379,7 +379,11 @@ export const DeusTaskActionInput = Schema.Struct({
       type: Schema.Literals(["send", "queue", "steer", "query"]),
       text: TrimmedNonEmptyString,
     }),
-    Schema.Struct({ type: Schema.Literals(["interrupt", "retry", "continue"]) }),
+    Schema.Struct({ type: Schema.Literals(["interrupt", "retry"]) }),
+    Schema.Struct({
+      type: Schema.Literal("continue"),
+      text: Schema.optional(TrimmedNonEmptyString),
+    }),
   ]),
 });
 export type DeusTaskActionInput = typeof DeusTaskActionInput.Type;
@@ -471,6 +475,8 @@ export const DeusPcmInput = Schema.Struct({
   data: PcmBase64,
 });
 export type DeusPcmInput = typeof DeusPcmInput.Type;
+// The shared decoder correlates invalid media with its request instead of failing the socket.
+export const DeusPcmRequest = Schema.Union([DeusPcmInput, DeusTransportError]);
 
 export const DeusMediaOutput = Schema.Union([
   Schema.Struct({

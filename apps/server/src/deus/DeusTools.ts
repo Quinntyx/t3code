@@ -1,6 +1,10 @@
 import {
   CommandId,
   DeusCursor,
+  DeusHumanTaskActionInput,
+  type DeusTaskActionInput,
+  type DeusTaskActionResult,
+  type DeusHumanCeiling,
   DeusInputId,
   DeusStateError,
   DeusObservationId,
@@ -21,6 +25,8 @@ import * as Bridge from "./DeusThreadBridge.ts";
 import * as Working from "./DeusContextService.ts";
 import * as Memory from "./DeusMemoryService.ts";
 import * as Adapter from "./GeminiTextAdapter.ts";
+import * as Repository from "./DeusRepository.ts";
+import type { HumanConnection } from "./DeusHumanAuthority.ts";
 import * as Registry from "../provider/ProviderRegistry.ts";
 import { invalidOptionSelections } from "../provider/validateModelOptions.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -38,6 +44,7 @@ const ToolModel = Schema.Struct({
 const Limit = Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 })));
 const NoArgs = Schema.Record(Schema.String, Schema.Never);
 const rejectUnknownTool = Schema.decodeUnknownEffect(Schema.Never);
+const decodeTaskAction = Schema.decodeEffect(DeusHumanTaskActionInput);
 const definitions = {
   spawn: {
     description:
@@ -143,6 +150,18 @@ export interface ToolInvocation {
 export class DeusTools extends Context.Service<
   DeusTools,
   {
+    readonly taskAction: (
+      input: DeusTaskActionInput,
+      ceiling: DeusHumanCeiling,
+      connection?: HumanConnection,
+    ) => Effect.Effect<
+      DeusTaskActionResult,
+      | Repository.DeusRepositoryError
+      | Bridge.DeusBridgeError
+      | Authority.DeusAuthorityError
+      | DeusTextError
+      | Schema.SchemaError
+    >;
     readonly execute: (call: ToolInvocation) => Effect.Effect<Record<string, unknown>>;
   }
 >()("t3/deus/DeusTools") {}
@@ -154,6 +173,118 @@ const make = Effect.gen(function* () {
   const authority = yield* Authority.DeusAuthority;
   const registry = yield* Registry.ProviderRegistry;
   const threads = yield* Threads.ThreadManagementService;
+  const repository = yield* Repository.DeusRepository;
+  const active = new Set<string>();
+  const captureQuery = Effect.fn("DeusTools.captureQuery")(function* (
+    input: DeusInput,
+    threadId: ThreadId,
+    question: string,
+  ) {
+    const snapshot = yield* bridge.read({ ...input, threadId });
+    const evidence = yield* context.contextForInput({ ...input, query: "" });
+    return {
+      snapshot,
+      query: encodeJson({
+        question,
+        evidenceOnly: true,
+        sourceCompleteness: "bounded-preview",
+        snapshot,
+        context: evidence,
+      }),
+    };
+  });
+  const answerQuery = Effect.fn("DeusTools.answerQuery")(function* (query: string) {
+    const reply = yield* adapter.generate({
+      systemInstruction: DEUS_QUERY_POLICY,
+      contents: [{ role: "user", parts: [{ text: query }] }],
+    });
+    if (reply.parts.some((part) => part.functionCall || part.functionResponse))
+      return yield* new DeusTextError({ code: "provider" });
+    const answer = reply.parts
+      .filter((part) => !part.thought)
+      .map((part) => part.text ?? "")
+      .join("")
+      .trim();
+    if (!answer) return yield* new DeusTextError({ code: "provider" });
+    yield* Effect.try({
+      try: () => checkBytes(answer, 16000),
+      catch: () => new DeusTextError({ code: "bounds" }),
+    });
+    return answer;
+  });
+  const taskAction: DeusTools["Service"]["taskAction"] = Effect.fn("DeusTools.taskAction")(
+    function* (raw, ceiling, connection) {
+      const input = yield* decodeTaskAction({
+        ...raw,
+        authority: ceiling,
+      });
+      const key = encodeJson([input.environmentId, input.projectId, input.inputId]);
+      if (active.has(key))
+        return yield* new DeusStateError({
+          reason: "conflict",
+          message: "This task action is already executing.",
+        });
+      if (active.size >= 32) return yield* new Authority.DeusAuthorityError({ reason: "capacity" });
+      return yield* Effect.acquireUseRelease(
+        Effect.sync(() => active.add(key)),
+        () =>
+          Effect.gen(function* () {
+            const previous = yield* repository.action(input);
+            if (previous) {
+              const completed = previous.result
+                ? previous
+                : yield* Effect.gen(function* () {
+                    if (input.action.type === "query")
+                      return yield* new DeusStateError({
+                        reason: "conflict",
+                        message:
+                          "The original query has no durable answer; submit a new explicit query identity.",
+                      });
+                    const task = yield* bridge.executeAction(previous.plan, true);
+                    return yield* repository.completeAction(previous, { task, answer: null });
+                  });
+              return {
+                ...completed.result!,
+                receipt: { ...completed.receipt, status: "replayed" as const },
+              };
+            }
+            if (connection) yield* connection.bind(input, ceiling);
+            return yield* Effect.gen(function* () {
+              yield* authority.authorize(input);
+              let plan = yield* bridge.prepareAction(input);
+              if (input.action.type === "query") {
+                const captured = yield* captureQuery(
+                  { ...input, conversation: plan.task.conversation, text: input.action.text },
+                  plan.threadId,
+                  input.action.text,
+                );
+                if (captured.snapshot.runId !== plan.runId)
+                  return yield* new DeusStateError({
+                    reason: "conflict",
+                    message: "Worker changed before query capture.",
+                  });
+                plan = { ...plan, query: captured.query };
+              }
+              const record = yield* repository.prepareAction(plan);
+              return yield* Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  let answer: string | null = null;
+                  let task = plan.task;
+                  if (plan.query !== null) {
+                    yield* authority.authorize(input);
+                    answer = yield* restore(answerQuery(plan.query));
+                    yield* authority.authorize(input);
+                  } else task = yield* restore(bridge.executeAction(plan, false));
+                  const completed = yield* repository.completeAction(record, { task, answer });
+                  return { ...completed.result!, receipt: completed.receipt };
+                }),
+              );
+            }).pipe(Effect.ensuring(connection ? connection.release(input) : Effect.void));
+          }),
+        () => Effect.sync(() => active.delete(key)),
+      );
+    },
+  );
   const dispatch = Effect.fn("DeusTools.dispatch")(function* (call: ToolInvocation) {
     yield* Effect.try({
       try: () => checkBytes({ name: call.name, args: call.args }, 16000),
@@ -203,36 +334,9 @@ const make = Effect.gen(function* () {
       }
       case "query": {
         const args = yield* decode(definitions.query.schema);
-        const snapshot = yield* bridge.read({ ...call.input, threadId: args.threadId });
-        const evidence = yield* context.contextForInput({ ...call.input, query: "" });
+        const { snapshot, query } = yield* captureQuery(call.input, args.threadId, args.question);
         yield* authority.authorize(call.input);
-        const reply = yield* adapter.generate({
-          systemInstruction: DEUS_QUERY_POLICY,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: encodeJson({
-                    question: args.question,
-                    evidenceOnly: true,
-                    sourceCompleteness: "bounded-preview",
-                    snapshot,
-                    context: evidence,
-                  }),
-                },
-              ],
-            },
-          ],
-        });
-        if (reply.parts.some((part) => part.functionCall || part.functionResponse))
-          return yield* new DeusTextError({ code: "provider" });
-        const answer = reply.parts
-          .filter((part) => !part.thought)
-          .map((part) => part.text ?? "")
-          .join("")
-          .trim();
-        if (!answer) return yield* new DeusTextError({ code: "provider" });
+        const answer = yield* answerQuery(query);
         return { snapshot, sourceCompleteness: "bounded-preview", answer };
       }
       case "queue":
@@ -333,6 +437,7 @@ const make = Effect.gen(function* () {
     }
   });
   return DeusTools.of({
+    taskAction,
     execute: Effect.fn("DeusTools.execute")((call) =>
       dispatch(call).pipe(
         Effect.provideService(Authority.DeusActionSource, call.input),

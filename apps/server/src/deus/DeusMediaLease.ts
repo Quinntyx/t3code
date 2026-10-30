@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ApplicationEvents from "../persistence/OrchestrationEventStore.ts";
 import * as Repository from "./DeusRepository.ts";
 import {
@@ -85,8 +86,7 @@ const make = Effect.gen(function* () {
   const serviceScope = yield* Scope.Scope;
   const lane = yield* Semaphore.make(1);
   const current = new Map<string, State>();
-  const generations = new Map<string, number>();
-  const seen = new Map<string, string>();
+  const sql = yield* SqlClient.SqlClient;
   const view = (state: State): MediaLease => ({
     attachment: { ...state.attachment },
     scope: state.scope,
@@ -197,11 +197,7 @@ const make = Effect.gen(function* () {
       return Effect.gen(function* () {
         yield* connection.check(input);
         const existing = current.get(key(input));
-        const requestKey = encodeKey([key(input), input.inputId]);
-        const replay = seen.get(requestKey);
-        if (replay) {
-          if (!existing || existing.attachment.attachmentId !== replay)
-            return yield* leaseError("stale-generation");
+        if (existing?.input.inputId === input.inputId) {
           const owned = yield* owner(connection, existing.attachment);
           yield* connection.bind(input, ceiling);
           return view(owned);
@@ -213,13 +209,27 @@ const make = Effect.gen(function* () {
           !input.takeover
         )
           return yield* leaseError("occupied");
-        if (current.size >= 32 || seen.size >= 4096)
-          return yield* new DeusAuthorityError({ reason: "inactive" });
-        const scope = yield* Scope.make();
+        if (current.size >= 32 && !existing)
+          return yield* new DeusAuthorityError({ reason: "capacity" });
+        const consumed = yield* sql`SELECT input_id FROM deus_authority_claims
+          WHERE environment_id = ${input.environmentId} AND project_id = ${input.projectId}
+          AND input_id = ${input.inputId}`.pipe(
+          Effect.mapError(() => leaseError("stale-generation")),
+        );
+        if (consumed.length) return yield* leaseError("stale-generation");
+        const scope = yield* Scope.fork(connection.scope);
         yield* connection
           .bind(input, ceiling, scope)
           .pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
-        const generation = (generations.get(key(input)) ?? 0) + 1;
+        const generations = yield* sql<{
+          generation: number;
+        }>`INSERT INTO deus_media_generations (session_id, generation)
+          VALUES (${input.sessionId}, 1) ON CONFLICT(session_id)
+          DO UPDATE SET generation = generation + 1 RETURNING generation`.pipe(
+          Effect.mapError(() => leaseError("stale-generation")),
+          Effect.onError(() => Scope.close(scope, Exit.void)),
+        );
+        const generation = generations[0]!.generation;
         const expires = (yield* DateTime.now).epochMilliseconds + DEUS_LEASE_MS;
         const attachment: DeusAttachment = {
           environmentId: input.environmentId,
@@ -235,8 +245,6 @@ const make = Effect.gen(function* () {
           expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expires)),
         };
         const state: State = { attachment, input, connection, scope, expires, closed: false };
-        generations.set(key(input), generation);
-        seen.set(requestKey, attachment.attachmentId);
         current.set(key(input), state);
         yield* Scope.addFinalizer(
           scope,
@@ -245,7 +253,6 @@ const make = Effect.gen(function* () {
             if (current.get(key(input)) === state) current.delete(key(input));
           }),
         );
-        yield* Scope.addFinalizer(connection.scope, close(state));
         if (existing) yield* close(existing);
         yield* expiry(state).pipe(Effect.forkIn(scope));
         return view(state);

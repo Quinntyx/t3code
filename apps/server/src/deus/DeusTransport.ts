@@ -2,14 +2,12 @@
 import * as NodeSea from "node:sea";
 import {
   AuthOrchestrationOperateScope,
-  CommandId,
   DEUS_PROTOCOL_VERSION,
   DeusError,
   DeusMemoryId,
   DeusModelError,
   DeusPermissionError,
   DeusRpcGroup,
-  DeusStateError,
   DeusTransportError,
   DeusUnavailableError,
   WS_METHODS,
@@ -22,12 +20,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { AuthenticatedSession } from "../auth/EnvironmentAuth.ts";
-import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Secrets from "../secrets/SecretRequests.ts";
 import * as Authority from "./DeusAuthority.ts";
 import * as Human from "./DeusHumanAuthority.ts";
@@ -36,6 +32,7 @@ import * as Sessions from "./DeusSessionService.ts";
 import * as Repository from "./DeusRepository.ts";
 import * as Coordinator from "./DeusCoordinator.ts";
 import * as Bridge from "./DeusThreadBridge.ts";
+import * as Tools from "./DeusTools.ts";
 import * as Configuration from "./DeusConfiguration.ts";
 import * as Memory from "./DeusMemoryService.ts";
 import * as Live from "./DeusLiveService.ts";
@@ -59,7 +56,14 @@ const isText = Schema.is(DeusTextError);
 const isAuthority = Schema.is(Authority.DeusAuthorityError);
 const publicDeusError = (error: unknown): DeusError => {
   if (isPublic(error)) return error;
-  if (isAuthority(error)) return permission();
+  if (isAuthority(error))
+    return error.reason === "capacity"
+      ? new DeusTransportError({
+          reason: "backpressure",
+          message:
+            "Too many active human actions. Complete or detach an active action before retrying.",
+        })
+      : permission();
   if (isLive(error)) {
     if (error.code === "authority") return permission();
     if (error.code === "configuration") return unavailable("not-configured");
@@ -111,7 +115,7 @@ const make = Effect.gen(function* () {
   const memory = yield* Memory.DeusMemoryService;
   const live = yield* Live.DeusLiveService;
   const secrets = yield* Secrets.SecretRequests;
-  const receipts = yield* Receipts.CommandReceiptStoreV2;
+  const tools = yield* Tools.DeusTools;
   const capabilities = configuration.status.pipe(
     Effect.map(({ settings, credentialPresent }): DeusCapabilities => {
       if (!settings.enabled)
@@ -172,7 +176,9 @@ const make = Effect.gen(function* () {
               const available = yield* capabilities;
               if (!available.available) return yield* unavailable(available.reason);
               yield* connection.bind(input, authority);
-              return yield* coordinator.submit(input);
+              return yield* coordinator
+                .submit(input)
+                .pipe(Effect.ensuring(connection.release(input)));
             }),
           ),
         [WS_METHODS.deusResetConversation]: (input) =>
@@ -187,7 +193,9 @@ const make = Effect.gen(function* () {
           run(
             Effect.gen(function* () {
               yield* connection.bind(input, authority);
-              const task = yield* bridge.launch(input);
+              const task = yield* bridge
+                .launch(input)
+                .pipe(Effect.ensuring(connection.release(input)));
               const snapshot = yield* sessions.snapshot(input);
               return {
                 task,
@@ -203,70 +211,8 @@ const make = Effect.gen(function* () {
         [WS_METHODS.deusTaskAction]: ({ authority, ...input }) =>
           run(
             Effect.gen(function* () {
-              yield* connection.bind(input, authority);
-              const tasks = yield* bridge.list(input);
-              const task = tasks.find((candidate) => candidate.id === input.taskId);
-              const worker = task?.workers.at(-1);
-              if (!task || !worker)
-                return yield* new DeusStateError({
-                  reason: "not-found",
-                  message: "This task has no worker in this session.",
-                });
-              const commandId = CommandId.make(`deus-action:${input.sessionId}:${input.inputId}`);
-              const previous = yield* receipts.getByCommandId(commandId);
-              if (
-                input.action.type === "query" ||
-                input.action.type === "retry" ||
-                input.action.type === "continue"
-              )
-                return yield* new DeusUnavailableError({
-                  reason: "unsupported",
-                  message:
-                    "Task query is not exposed by this transport yet; read the durable worker.",
-                });
-              if (input.action.type === "interrupt") {
-                if (!worker.runId)
-                  return yield* new DeusStateError({
-                    reason: "conflict",
-                    message: "This task has no run to interrupt.",
-                  });
-                yield* bridge.interrupt({
-                  ...input,
-                  threadId: worker.threadId,
-                  commandId,
-                  runId: worker.runId,
-                });
-              } else {
-                if (!("text" in input.action)) return yield* unavailable();
-                yield* bridge.send({
-                  ...input,
-                  threadId: worker.threadId,
-                  commandId,
-                  text: input.action.text,
-                  mode:
-                    input.action.type === "queue"
-                      ? "queue"
-                      : input.action.type === "steer"
-                        ? "steer"
-                        : "auto",
-                });
-              }
-              const accepted = yield* receipts.getByCommandId(commandId);
-              if (Option.isNone(accepted) || accepted.value.status !== "accepted")
-                return yield* new DeusStateError({
-                  reason: "conflict",
-                  message: "The worker action has no accepted receipt.",
-                });
-              const snapshot = yield* sessions.snapshot(input);
-              return {
-                task: snapshot.tasks.find((item) => item.id === task.id) ?? task,
-                receipt: {
-                  inputId: input.inputId,
-                  cursor: snapshot.cursor,
-                  status: Option.isSome(previous) ? ("replayed" as const) : ("accepted" as const),
-                },
-                answer: null,
-              };
+              yield* connection.check(input);
+              return yield* tools.taskAction(input, authority, connection);
             }).pipe(Effect.provideService(Authority.DeusActionSource, input)),
           ),
         [WS_METHODS.deusMemorySearch]: (input) =>
@@ -336,6 +282,7 @@ const make = Effect.gen(function* () {
         [WS_METHODS.deusMediaPush]: (input) =>
           run(
             Effect.gen(function* () {
+              if ("_tag" in input) return yield* input;
               const { state } = yield* owned(input);
               if (state.sending)
                 return yield* new DeusTransportError({

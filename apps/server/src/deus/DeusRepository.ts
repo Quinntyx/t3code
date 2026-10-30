@@ -4,6 +4,7 @@ import {
   DeusConversation,
   DeusCursor,
   DeusDelta,
+  DeusHumanTaskActionInput,
   DeusOpenInput,
   DeusObservationId,
   DeusSourceRef,
@@ -31,6 +32,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { Command, CommandResult, PendingIntent, decide, project } from "./decide.ts";
 import { Continuation, TEXT_LIMITS, checkBytes } from "./textProtocol.ts";
+import { TaskActionPlan, TaskActionRecord } from "./taskActionProtocol.ts";
 
 export class DeusPersistenceError extends Schema.TaggedError<DeusPersistenceError>()(
   "DeusPersistenceError",
@@ -48,6 +50,16 @@ export type DeusRepositoryError = DeusStateError | DeusPersistenceError;
 export class DeusRepository extends Context.Service<
   DeusRepository,
   {
+    readonly action: (
+      input: typeof DeusHumanTaskActionInput.Type,
+    ) => Effect.Effect<TaskActionRecord | null, DeusRepositoryError>;
+    readonly prepareAction: (
+      plan: TaskActionPlan,
+    ) => Effect.Effect<TaskActionRecord, DeusRepositoryError>;
+    readonly completeAction: (
+      record: TaskActionRecord,
+      result: NonNullable<TaskActionRecord["result"]>,
+    ) => Effect.Effect<TaskActionRecord, DeusRepositoryError>;
     readonly validateScope: (input: DeusScope) => Effect.Effect<void, DeusRepositoryError>;
     readonly open: (input: DeusOpenInput) => Effect.Effect<DeusSnapshot, DeusRepositoryError>;
     readonly snapshot: (ref: DeusSessionRef) => Effect.Effect<DeusSnapshot, DeusRepositoryError>;
@@ -74,6 +86,10 @@ export class DeusRepository extends Context.Service<
   }
 >()("t3/deus/DeusRepository") {}
 
+const decodeAction = Schema.decodeEffect(Schema.fromJsonString(TaskActionRecord));
+const encodeAction = Schema.encodeSync(Schema.fromJsonString(TaskActionRecord));
+const encodeActionInput = Schema.encodeSync(DeusHumanTaskActionInput);
+const encodeActionCommand = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeConversation = Schema.decodeEffect(DeusConversation);
 const decodeSnapshot = Schema.decodeEffect(Schema.fromJsonString(DeusSnapshot));
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CommandResult));
@@ -352,6 +368,79 @@ const make = Effect.gen(function* () {
       )
       .pipe(mapError("commit"));
   });
+  const actionCommand = (input: typeof DeusHumanTaskActionInput.Type) => ({
+    type: "task-action",
+    input: encodeActionInput(input),
+  });
+  const readAction = Effect.fn("DeusRepository.readAction")(function* (
+    input: typeof DeusHumanTaskActionInput.Type,
+  ) {
+    yield* readSnapshot(input);
+    const previous = yield* receipt(input, input.inputId, actionCommand(input));
+    return previous ? yield* decodeAction(previous.result_json) : null;
+  });
+  const action = Effect.fn("DeusRepository.action")((input: typeof DeusHumanTaskActionInput.Type) =>
+    sql.withTransaction(readAction(input)).pipe(mapError("read-action")),
+  );
+  const prepareAction = Effect.fn("DeusRepository.prepareAction")((plan: TaskActionPlan) =>
+    lane
+      .withPermits(1)(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const input = plan.input;
+            const previous = yield* readAction(input);
+            if (previous) return previous;
+            const current = yield* readSnapshot(input);
+            if (
+              !NodeUtil.isDeepStrictEqual(
+                current.tasks.find((task) => task.id === input.taskId),
+                plan.task,
+              )
+            )
+              return yield* new DeusStateError({
+                reason: "conflict",
+                message: "Task changed before the action was accepted.",
+              });
+            const record: TaskActionRecord = {
+              receipt: { inputId: input.inputId, cursor: current.cursor, status: "accepted" },
+              plan,
+              result: null,
+            };
+            const command = yield* encodeActionCommand(actionCommand(input));
+            yield* sql`INSERT INTO deus_receipts (environment_id, project_id, input_id, session_id, command_json, result_json)
+      VALUES (${environmentId}, ${input.projectId}, ${input.inputId}, ${input.sessionId}, ${command}, ${encodeAction(record)})`;
+            const pending: PendingIntent = { ...input, cursor: current.cursor, intent: plan };
+            yield* sql`INSERT INTO deus_outbox (session_id, input_id, cursor, intent_json)
+      VALUES (${input.sessionId}, ${input.inputId}, ${current.cursor}, ${encodePending(pending)})`;
+            return record;
+          }),
+        ),
+      )
+      .pipe(mapError("prepare-action")),
+  );
+  const completeAction = Effect.fn("DeusRepository.completeAction")(
+    (record: TaskActionRecord, result: NonNullable<TaskActionRecord["result"]>) =>
+      lane
+        .withPermits(1)(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              const current = yield* readAction(record.plan.input);
+              if (!current || !NodeUtil.isDeepStrictEqual(current.plan, record.plan))
+                return yield* new DeusStateError({
+                  reason: "conflict",
+                  message: "Task action intent changed.",
+                });
+              if (current.result) return current;
+              const completed = { ...current, result };
+              yield* sql`UPDATE deus_receipts SET result_json = ${encodeAction(completed)} WHERE environment_id = ${environmentId}
+      AND project_id = ${record.plan.input.projectId} AND input_id = ${record.plan.input.inputId}`;
+              yield* sql`UPDATE deus_outbox SET status = 'acknowledged' WHERE session_id = ${record.plan.input.sessionId} AND input_id = ${record.plan.input.inputId}`;
+              return completed;
+            }),
+          ),
+        )
+        .pipe(mapError("complete-action")),
+  );
   const readDeltas = Effect.fn("DeusRepository.readDeltas")(function (
     ref: DeusSessionRef,
     after: DeusCursor,
@@ -446,6 +535,9 @@ const make = Effect.gen(function* () {
       : null;
   });
   return DeusRepository.of({
+    action,
+    prepareAction,
+    completeAction,
     validateScope: Effect.fn("DeusRepository.validateScope")((input) =>
       validateScope(input).pipe(mapError("validate-scope")),
     ),

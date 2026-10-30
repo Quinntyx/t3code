@@ -353,13 +353,22 @@ const connect = Effect.fn("DeusTransport.test.connect")(function* (
 ) {
   const frames: string[] = [];
   const receivedFrames: string[] = [];
+  let corrupt: ((frame: Record<string, unknown>) => unknown) | undefined;
   const construct: Socket.WebSocketConstructor["Service"] = (address) => {
     const socket = new NodeWS.WebSocket(address, { headers: { Authorization: `Bearer ${token}` } });
     socket.on("message", (data) => receivedFrames.push(data.toString()));
     const send = socket.send.bind(socket);
     Object.defineProperty(socket, "send", {
       value: (data: Parameters<typeof socket.send>[0]) => {
-        if (typeof data === "string") frames.push(data);
+        if (typeof data === "string") {
+          frames.push(data);
+          const frame: Record<string, unknown> = JSON.parse(data);
+          if (corrupt && frame.tag === WS_METHODS.deusMediaPush) {
+            const change = corrupt;
+            corrupt = undefined;
+            return send(JSON.stringify(change(frame)));
+          }
+        }
         return send(data);
       },
     });
@@ -444,8 +453,99 @@ const connect = Effect.fn("DeusTransport.test.connect")(function* (
       Stream.provideService(Supervisor.EnvironmentSupervisor, supervisor),
       Stream.provideService(ClientRpc.RpcPermissionGuard, permission),
     );
-  return { supervisor, call, frames, receivedFrames, permission, metadata };
+  return {
+    supervisor,
+    call,
+    frames,
+    receivedFrames,
+    permission,
+    metadata,
+    corruptNext: (change: (frame: Record<string, unknown>) => unknown) => {
+      corrupt = change;
+    },
+  };
 });
+
+it.live("isolates malformed authenticated media to its request on the same supervised socket", () =>
+  Effect.gen(function* () {
+    const h = yield* fixture;
+    const owner = yield* connect(yield* serve(h), h.issued.token, "direct");
+    const ref = h.snapshot.session;
+    const attachment = yield* owner.call(WS_METHODS.deusAttach, {
+      ...ref,
+      inputId: DeusInputId.make("malformed-owner"),
+      authority,
+      takeover: false,
+    });
+    const observed = yield* Queue.unbounded<DeusSubscriptionEvent>();
+    const subscription = yield* owner.metadata({ ...ref, after: h.snapshot.cursor }).pipe(
+      Stream.runForEach((event) => Queue.offer(observed, event)),
+      Effect.forkScoped,
+    );
+    expect((yield* Queue.take(observed)).type).toBe("snapshot");
+    const originalSession = yield* SubscriptionRef.get(owner.supervisor.session);
+    const pcm = {
+      ...attachment,
+      type: "pcm" as const,
+      encoding: "pcm16le" as const,
+      channels: 1 as const,
+      sampleRate: 16000 as const,
+      sequence: 1,
+      data: "AAA=",
+    };
+    for (const patch of [
+      { data: "AAAA" },
+      { data: "AAB=" },
+      { data: "not-base64" },
+      { sampleRate: 24000 },
+      { channels: 2 },
+      { sequence: -1 },
+      { data: "AAAA".repeat(11000) },
+    ]) {
+      owner.corruptNext((frame) => ({ ...frame, payload: { ...pcm, ...patch } }));
+      const failure = yield* owner.call(WS_METHODS.deusMediaPush, pcm).pipe(Effect.flip);
+      expect(failure._tag).toBe("DeusTransportError");
+      const request = JSON.parse(owner.frames.at(-1)!);
+      expect(
+        owner.receivedFrames.some((frame) => {
+          const response = JSON.parse(frame);
+          return response._tag === "Exit" && response.requestId === request.id;
+        }),
+      ).toBe(true);
+      expect(yield* owner.call(WS_METHODS.serverProbe, {})).toEqual({});
+    }
+    owner.corruptNext((frame) => ({ ...frame, headers: [["oversize", "x".repeat(48000)]] }));
+    expect((yield* owner.call(WS_METHODS.deusMediaPush, pcm).pipe(Effect.flip))._tag).toBe(
+      "DeusTransportError",
+    );
+    expect(Queue.sizeUnsafe(h.realtime)).toBe(0);
+    yield* owner.call(WS_METHODS.deusSendInput, {
+      ...ref,
+      authority,
+      inputId: DeusInputId.make("after-malformed"),
+      conversation: ref.conversation,
+      text: "Still connected",
+    });
+    expect((yield* Queue.take(observed)).type).toBe("delta");
+    expect((yield* owner.call(WS_METHODS.deusGetSnapshot, ref)).transcripts.length).toBeGreaterThan(
+      0,
+    );
+    expect(yield* SubscriptionRef.get(owner.supervisor.session)).toBe(originalSession);
+    yield* Deferred.succeed(h.sendGate, undefined);
+    yield* owner.call(WS_METHODS.deusMediaPush, pcm);
+    yield* Queue.take(h.realtime);
+    expect((yield* owner.call(WS_METHODS.deusMediaPush, pcm).pipe(Effect.flip))._tag).toBe(
+      "DeusTransportError",
+    );
+    expect(yield* owner.call(WS_METHODS.serverProbe, {})).toEqual({});
+    yield* owner.call(WS_METHODS.deusDetach, attachment);
+    yield* Fiber.interrupt(subscription);
+    yield* owner.supervisor.disconnect;
+    yield* Effect.logInfo(
+      "malformed media: 8 correlated PCM/envelope failures; same socket probe, snapshot, durable delta and valid PCM survived; duplicate sequence rejected",
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(base, NodeHttpServer.layerTest)), Effect.scoped),
+);
 
 const forward = Effect.fn("DeusTransport.test.forward")(function* (origin: string) {
   const listening = yield* Deferred.make<void>();

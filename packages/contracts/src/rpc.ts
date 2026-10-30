@@ -2081,7 +2081,7 @@ export const DeusRpcGroup = RpcGroup.make(
     error: DeusRpcError,
   }),
   Rpc.make(WS_METHODS.deusMediaPush, {
-    payload: Deus.DeusPcmInput,
+    payload: Deus.DeusPcmRequest,
     success: Schema.Void,
     error: DeusRpcError,
   }),

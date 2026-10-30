@@ -23,6 +23,7 @@ import {
   type IsoDateTime,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { TaskActionPlan } from "./taskActionProtocol.ts";
 import { Continuation, TextFailureCode } from "./textProtocol.ts";
 
 export const LaunchAcknowledgment = Schema.Struct({
@@ -92,6 +93,7 @@ export const Command = Schema.Union([
 ]);
 export type Command = typeof Command.Type;
 export const Intent = Schema.Union([
+  TaskActionPlan,
   Schema.Struct({ type: Schema.Literal("spoken-input"), input: SpokenInput }),
   Schema.Struct({
     type: Schema.Literal("coordinate-input"),

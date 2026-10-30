@@ -1,5 +1,7 @@
+import * as NodeUtil from "node:util";
 import {
   CommandId,
+  DeusHumanTaskActionInput,
   DeusInputId,
   DeusStateError,
   MessageId,
@@ -21,6 +23,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { TaskActionPlan } from "./taskActionProtocol.ts";
+import { PendingIntent as PendingIntentSchema } from "./decide.ts";
 import * as Mcp from "../mcp/McpInvocationContext.ts";
 import * as ApplicationEvents from "../persistence/OrchestrationEventStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -74,6 +79,13 @@ const rank = { "approval-required": 0, "auto-accept-edits": 1, auto: 2, "full-ac
 export class DeusThreadBridge extends Context.Service<
   DeusThreadBridge,
   {
+    readonly prepareAction: (
+      input: typeof DeusHumanTaskActionInput.Type,
+    ) => Effect.Effect<TaskActionPlan, Failure>;
+    readonly executeAction: (
+      plan: TaskActionPlan,
+      reconcileOnly: boolean,
+    ) => Effect.Effect<DeusTask, Failure>;
     readonly launch: (input: DeusTaskLaunchInput) => Effect.Effect<DeusTask, Failure>;
     readonly list: (ref: DeusSessionRef) => Effect.Effect<ReadonlyArray<DeusTask>, Failure>;
     readonly read: (ref: WorkerRef) => Effect.Effect<DeusWorkerSnapshot, Failure>;
@@ -101,9 +113,11 @@ export class DeusThreadBridge extends Context.Service<
   }
 >()("t3/deus/DeusThreadBridge") {}
 
+const decodeLaunchIntent = Schema.decodeEffect(Schema.fromJsonString(PendingIntentSchema));
 const make = Effect.gen(function* () {
   const intakeContext =
     yield* Effect.context<Effect.Services<ReturnType<typeof Intake.sendToThread>>>();
+  const sql = yield* SqlClient.SqlClient;
   const sessions = yield* Sessions.DeusSessionService;
   const repository = yield* Repository.DeusRepository;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
@@ -416,6 +430,210 @@ const make = Effect.gen(function* () {
     return (yield* sessions.snapshot(input)).tasks.find((task) => task.id === prepared.task.id)!;
   });
   return DeusThreadBridge.of({
+    prepareAction: Effect.fn("DeusThreadBridge.prepareAction")(function* (input) {
+      yield* authority.authorize(input);
+      const task = (yield* sessions.snapshot(input)).tasks.find((item) => item.id === input.taskId);
+      const worker = task?.workers.find((item) => item.parentThreadId === null);
+      if (!task || !worker) return yield* scopeError("Task has no registered root worker.");
+      const { shell } = yield* owned({ ...input, threadId: worker.threadId });
+      const rows = yield* sql<{
+        intent_json: string;
+      }>`SELECT intent_json FROM deus_outbox WHERE session_id = ${input.sessionId}
+        AND json_extract(intent_json, '$.intent.type') = 'launch-thread'
+        AND json_extract(intent_json, '$.intent.taskId') = ${task.id}`.pipe(
+        Effect.mapError(externalError),
+      );
+      if (!rows[0]) return yield* scopeError("Task has no original launch intent.");
+      const launch = yield* decodeLaunchIntent(rows[0].intent_json).pipe(
+        Effect.mapError(externalError),
+      );
+      if (launch.intent.type !== "launch-thread")
+        return yield* scopeError("Task launch is invalid.");
+      const history = yield* events
+        .readByCommandId({ commandId: launch.intent.commandId })
+        .pipe(Stream.runCollect, Effect.mapError(externalError));
+      const created = history.find((item) => item.event.type === "thread.created")?.event;
+      if (created?.type !== "thread.created" || created.threadId !== worker.threadId)
+        return yield* scopeError("Task has no original worker creation evidence.");
+      const original = created.payload;
+      if (
+        !NodeUtil.isDeepStrictEqual(shell.modelSelection, original.modelSelection) ||
+        shell.worktreePath !== original.worktreePath ||
+        rank[shell.runtimeMode] > rank[original.runtimeMode] ||
+        (original.interactionMode === "plan" && shell.interactionMode !== "plan")
+      )
+        return yield* scopeError("Worker settings exceed or differ from the original launch.");
+      const records = yield* threads
+        .getThreadRecords(worker.threadId, ["runs"])
+        .pipe(Effect.mapError(externalError));
+      const run = records.runs.reduce<(typeof records.runs)[number] | undefined>(
+        (current, item) => (!current || item.ordinal > current.ordinal ? item : current),
+        undefined,
+      );
+      if (!run) return yield* scopeError("Task has no original worker run.");
+      const kind = input.action.type;
+      let text = "text" in input.action ? (input.action.text ?? null) : null;
+      if (kind === "retry") {
+        if (!["failed", "cancelled", "interrupted"].includes(run.status) || shell.activeRunId)
+          return yield* new DeusStateError({
+            reason: "conflict",
+            message: "Retry requires a stopped failed or interrupted worker run.",
+          });
+        const source = yield* threads
+          .getThreadRecords(worker.threadId, ["messages"], { runIds: [run.id] })
+          .pipe(Effect.mapError(externalError));
+        const message = source.messages.find(
+          (item) => item.runId === run.id && item.role === "user",
+        );
+        if (
+          !message ||
+          message.attachments.length ||
+          !message.text.trim() ||
+          message.text.length > 8000
+        )
+          return yield* new DeusStateError({
+            reason: "conflict",
+            message:
+              "Retry requires one bounded original text-only worker request; send explicit direction otherwise.",
+          });
+        text = message.text;
+      }
+      if (
+        kind === "continue" &&
+        (!text ||
+          shell.activeRunId ||
+          !["completed", "failed", "cancelled", "interrupted"].includes(run.status))
+      )
+        return yield* new DeusStateError({
+          reason: "conflict",
+          message: "Continue requires explicit human text and a stopped worker run.",
+        });
+      if (text && text.length > 8000)
+        return yield* new DeusStateError({
+          reason: "conflict",
+          message: "Task action text exceeds 8000 characters.",
+        });
+      if (kind === "steer" && !shell.activeRunId)
+        return yield* new DeusStateError({
+          reason: "conflict",
+          message: "Steer requires an active worker run.",
+        });
+      return {
+        type: "task-action",
+        input,
+        task,
+        threadId: worker.threadId,
+        runId: run.id,
+        commandId: CommandId.make(`deus-action:${input.sessionId}:${input.inputId}`),
+        model: original.modelSelection,
+        runtimeMode: original.runtimeMode,
+        interactionMode: original.interactionMode,
+        worktreePath: original.worktreePath,
+        dispatchMode:
+          kind === "queue"
+            ? { type: "queue_after_active" }
+            : (kind === "steer" || kind === "send") && shell.activeRunId
+              ? { type: "steer_active", targetRunId: shell.activeRunId }
+              : { type: "start_immediately" },
+        text,
+        query: null,
+      };
+    }),
+    executeAction: Effect.fn("DeusThreadBridge.executeAction")(function* (plan, reconcileOnly) {
+      const { input } = plan;
+      yield* sessions.snapshot(input);
+      let receipt = yield* receipts
+        .getByCommandId(plan.commandId)
+        .pipe(Effect.mapError(externalError));
+      const expected = input.action.type === "interrupt" ? "run.interrupt" : "message.dispatch";
+      if (Option.isNone(receipt)) {
+        if (reconcileOnly) return yield* new Authority.DeusAuthorityError({ reason: "inactive" });
+        const grant = yield* authority.authorize(input);
+        const { shell } = yield* owned({ ...input, threadId: plan.threadId });
+        if (
+          rank[shell.runtimeMode] > rank[plan.runtimeMode] ||
+          rank[shell.runtimeMode] > rank[grant.runtimeMode] ||
+          (shell.interactionMode === "default" &&
+            (grant.interactionMode === "plan" || plan.interactionMode === "plan")) ||
+          shell.worktreePath !== plan.worktreePath ||
+          !NodeUtil.isDeepStrictEqual(shell.modelSelection, plan.model) ||
+          (shell.worktreePath !== null && (!input.authority.allowWorktree || !grant.allowWorktree))
+        )
+          return yield* new Authority.DeusAuthorityError({ reason: "mode-limit" });
+        const limit = {
+          runtimeMode:
+            rank[plan.runtimeMode] < rank[input.authority.runtimeMode]
+              ? plan.runtimeMode
+              : input.authority.runtimeMode,
+          interactionMode:
+            plan.interactionMode === "plan" || input.authority.interactionMode === "plan"
+              ? ("plan" as const)
+              : ("default" as const),
+        };
+        if (input.action.type === "interrupt") {
+          if (!plan.runId) return yield* scopeError("Action has no captured run.");
+          yield* threads
+            .interruptThread({
+              projectId: input.projectId,
+              threadId: plan.threadId,
+              runId: plan.runId,
+              commandId: plan.commandId,
+            })
+            .pipe(Effect.mapError(externalError));
+        } else {
+          if (!plan.text) return yield* scopeError("Action has no captured human request.");
+          yield* Intake.dispatchCommand({
+            type: "message.dispatch",
+            commandId: plan.commandId,
+            threadId: plan.threadId,
+            messageId: MessageId.make(`deus-action:${plan.commandId}`),
+            text: plan.text,
+            attachments: [],
+            modelSelection: plan.model,
+            dispatchMode: plan.dispatchMode,
+            createdBy: "user",
+            creationSource: "deus",
+          }).pipe(
+            Effect.provide(intakeContext),
+            Effect.provideService(DispatchModeLimit, limit),
+            Effect.mapError(externalError),
+          );
+        }
+        receipt = yield* receipts
+          .getByCommandId(plan.commandId)
+          .pipe(Effect.mapError(externalError));
+      }
+      if (
+        Option.isNone(receipt) ||
+        receipt.value.threadId !== plan.threadId ||
+        receipt.value.status !== "accepted" ||
+        receipt.value.commandType !== expected
+      )
+        return yield* scopeError("Task action receipt is incompatible with its original intent.");
+      const stored = yield* events
+        .readByCommandId({ commandId: plan.commandId })
+        .pipe(Stream.runCollect, Effect.mapError(externalError));
+      const message = stored.find((item) => item.event.type === "message.updated")?.event;
+      if (
+        input.action.type !== "interrupt" &&
+        (message?.type !== "message.updated" ||
+          message.threadId !== plan.threadId ||
+          message.payload.id !== `deus-action:${plan.commandId}` ||
+          message.payload.text !== plan.text ||
+          !message.payload.runId)
+      )
+        return yield* scopeError("Task action has no matching original durable message/run.");
+      const runId = message?.type === "message.updated" ? message.payload.runId : plan.runId;
+      const worker = plan.task.workers.find((item) => item.threadId === plan.threadId)!;
+      return {
+        ...plan.task,
+        workers:
+          runId &&
+          !plan.task.workers.some((item) => item.threadId === plan.threadId && item.runId === runId)
+            ? [...plan.task.workers, { ...worker, runId }]
+            : plan.task.workers,
+      };
+    }),
     launch,
     reconcile,
     report: Effect.fn("DeusThreadBridge.report")(function* (scope, input) {

@@ -73,6 +73,168 @@ const principal = Effect.gen(function* () {
   return yield* sessions.verify(issued.token);
 });
 
+const finalizerCount = (scope: Scope.Scope) =>
+  scope.state._tag === "Open"
+    ? (scope.state.finalizers?.size ?? (scope.state.finalizer ? 1 : 0))
+    : 0;
+
+for (const derived of [false, true]) {
+  it.effect(
+    `does not install a grant after its connection closes during ${derived ? "derivation" : "binding"}`,
+    () =>
+      Effect.gen(function* () {
+        const ref = yield* open;
+        const authenticated = yield* principal;
+        const repository = yield* Repository.DeusRepository;
+        const entered = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        let paused = false;
+        yield* Effect.gen(function* () {
+          const human = yield* Human.DeusHumanAuthority;
+          const connection = yield* human.connect(authenticated);
+          if (derived) yield* connection.bind(ref, ceiling);
+          paused = true;
+          const input = derived ? { ...ref, inputId: DeusInputId.make("closing-derived") } : ref;
+          const binding = yield* (
+            derived
+              ? human.authorize(input).pipe(Effect.provideService(DeusActionSource, ref))
+              : connection.bind(input, ceiling)
+          ).pipe(Effect.forkScoped);
+          yield* Deferred.await(entered);
+          yield* Scope.close(connection.scope, Exit.void);
+          yield* Deferred.succeed(resume, undefined);
+          expect(Exit.isFailure(yield* Fiber.await(binding))).toBe(true);
+          expect((yield* Fiber.join(binding).pipe(Effect.flip)).reason).toBe("inactive");
+          expect((yield* human.authorize(input).pipe(Effect.flip)).reason).toBe("inactive");
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(Layer.fresh(Human.layer)),
+          Effect.provideService(Repository.DeusRepository, {
+            ...repository,
+            snapshot: (input) =>
+              paused
+                ? Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(resume)),
+                    Effect.andThen(repository.snapshot(input)),
+                  )
+                : repository.snapshot(input),
+          }),
+        );
+      }).pipe(Effect.scoped, Effect.provide(base)),
+  );
+}
+
+it.effect("reclaims completed root and derived grants beyond the historical binding cap", () =>
+  Effect.gen(function* () {
+    const human = yield* Human.DeusHumanAuthority;
+    const ref = yield* open;
+    const authenticated = yield* principal;
+    const connection = yield* human.connect(authenticated);
+    const baseline = finalizerCount(connection.scope);
+    for (let index = 0; index < 2050; index++) {
+      const lifetime = yield* Scope.fork(connection.scope);
+      const input = { ...ref, inputId: DeusInputId.make(`completed:${index}`) };
+      const derived = { ...ref, inputId: DeusInputId.make(`derived:${index}`) };
+      yield* connection.bind(input, ceiling, lifetime);
+      expect(
+        yield* human.authorize(derived).pipe(Effect.provideService(DeusActionSource, input)),
+      ).toEqual(ceiling);
+      yield* Scope.close(lifetime, Exit.void);
+      expect((yield* human.authorize(derived).pipe(Effect.flip)).reason).toBe("inactive");
+    }
+    expect(finalizerCount(connection.scope)).toBe(baseline);
+    const second = yield* human.connect(authenticated);
+    const old = { ...ref, inputId: DeusInputId.make("completed:0") };
+    expect(
+      (yield* second.bind(old, { ...ceiling, runtimeMode: "auto" }).pipe(Effect.flip)).reason,
+    ).toBe("inactive");
+    const fresh = { ...ref, inputId: DeusInputId.make("fresh-broader") };
+    const resume = yield* Deferred.make<void>();
+    const delayed = yield* Deferred.await(resume).pipe(
+      Effect.andThen(human.authorize(fresh)),
+      Effect.provideService(DeusActionSource, old),
+      Effect.forkScoped,
+    );
+    yield* second.bind(fresh, { ...ceiling, runtimeMode: "auto" });
+    yield* Deferred.succeed(resume, undefined);
+    expect((yield* Fiber.join(delayed).pipe(Effect.flip)).reason).toBe("inactive");
+    const restarted = yield* Human.DeusHumanAuthority.pipe(
+      Effect.provide(Layer.fresh(Human.layer)),
+    );
+    const afterRestart = yield* restarted.connect(authenticated);
+    expect((yield* afterRestart.bind(old, ceiling).pipe(Effect.flip)).reason).toBe("inactive");
+    yield* Effect.logInfo(
+      "authority lifecycle: 2050 completed roots + 2050 derived grants reclaimed; no owner finalizers; consumed IDs denied across reconnect/restart",
+    );
+  }).pipe(Effect.scoped, Effect.provide(base)),
+);
+
+it.effect("bounds only concurrent grants and reclaims repeated closed connections", () =>
+  Effect.gen(function* () {
+    const human = yield* Human.DeusHumanAuthority;
+    const ref = yield* open;
+    const authenticated = yield* principal;
+    const connection = yield* human.connect(authenticated);
+    for (let index = 0; index < Human.DEUS_MAX_ACTIVE_BINDINGS; index++)
+      yield* connection.bind({ ...ref, inputId: DeusInputId.make(`active:${index}`) }, ceiling);
+    expect(
+      (yield* connection
+        .bind({ ...ref, inputId: DeusInputId.make("saturated") }, ceiling)
+        .pipe(Effect.flip)).reason,
+    ).toBe("capacity");
+    yield* connection.release({ ...ref, inputId: DeusInputId.make("active:0") });
+    yield* connection.bind({ ...ref, inputId: DeusInputId.make("capacity-reclaimed") }, ceiling);
+    yield* Scope.close(connection.scope, Exit.void);
+    const owner = yield* Scope.Scope;
+    const baseline = finalizerCount(owner);
+    for (let index = 0; index < 2050; index++) {
+      const next = yield* human.connect(authenticated);
+      const input = { ...ref, inputId: DeusInputId.make(`connection:${index}`) };
+      yield* next.bind(input, ceiling);
+      yield* human
+        .authorize({ ...ref, inputId: DeusInputId.make(`connection-derived:${index}`) })
+        .pipe(Effect.provideService(DeusActionSource, input));
+      yield* Scope.close(next.scope, Exit.void);
+    }
+    expect(finalizerCount(owner)).toBe(baseline);
+  }).pipe(Effect.scoped, Effect.provide(base)),
+);
+
+it.effect("reclaims more than 4096 released attachment requests on one connection", () =>
+  Effect.gen(function* () {
+    const human = yield* Human.DeusHumanAuthority;
+    const leases = yield* Lease.DeusMediaLease;
+    const ref = yield* open;
+    const connection = yield* human.connect(yield* principal);
+    const baseline = finalizerCount(connection.scope);
+    let generation = 0;
+    for (let index = 0; index < 4100; index++) {
+      const input = { ...ref, inputId: DeusInputId.make(`attachment:${index}`), takeover: false };
+      const lease = yield* leases.acquire(connection, input, ceiling);
+      expect(lease.attachment.generation).toBeGreaterThan(generation);
+      generation = lease.attachment.generation;
+      yield* leases.release(connection, lease.attachment);
+    }
+    expect(finalizerCount(connection.scope)).toBe(baseline);
+    expect(
+      (yield* leases
+        .acquire(
+          connection,
+          {
+            ...ref,
+            inputId: DeusInputId.make("attachment:0"),
+            takeover: false,
+          },
+          ceiling,
+        )
+        .pipe(Effect.flip)).reason,
+    ).toBe("stale-generation");
+    yield* Effect.logInfo(
+      "media lifecycle: 4100 attach/detach cycles; zero retained owner finalizers; original request cannot reopen",
+    );
+  }).pipe(Effect.scoped, Effect.provide(base)),
+);
+
 it.effect("authorizes only an authenticated original human action, not a session or receipt", () =>
   Effect.gen(function* () {
     const human = yield* Human.DeusHumanAuthority;

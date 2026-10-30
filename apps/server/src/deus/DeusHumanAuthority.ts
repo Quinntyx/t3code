@@ -24,12 +24,14 @@ import {
   type DeusAuthorityRef,
 } from "./DeusAuthority.ts";
 
+export const DEUS_MAX_ACTIVE_BINDINGS = 128;
 export type HumanCeiling = Effect.Success<ReturnType<DeusAuthority["Service"]["authorize"]>>;
 export type HumanInput = DeusSessionRef & { readonly inputId: DeusInputId };
 export interface HumanConnection {
   readonly id: string;
   readonly scope: Scope.Closeable;
   readonly check: (ref: DeusSessionRef) => Effect.Effect<void, DeusAuthorityError>;
+  readonly release: (input: HumanInput) => Effect.Effect<void>;
   readonly bind: (
     input: HumanInput,
     ceiling: HumanCeiling,
@@ -59,6 +61,8 @@ interface Binding {
   readonly connection: ConnectionState;
   readonly ceiling: HumanCeiling;
   readonly alive: { current: boolean };
+  readonly scope: Scope.Closeable;
+  readonly keys: Set<string>;
 }
 const make = Effect.gen(function* () {
   const repository = yield* Repository.DeusRepository;
@@ -67,7 +71,15 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const sql = yield* SqlClient.SqlClient;
   const lane = yield* Semaphore.make(1);
+  const serviceScope = yield* Scope.Scope;
   const bindings = new Map<string, Binding>();
+  const claim = Effect.fn("DeusHumanAuthority.claim")(function* (input: HumanInput) {
+    const rows =
+      yield* sql`INSERT INTO deus_authority_claims (environment_id, project_id, input_id, session_id)
+      VALUES (${input.environmentId}, ${input.projectId}, ${input.inputId}, ${input.sessionId})
+      ON CONFLICT DO NOTHING RETURNING input_id`.pipe(Effect.mapError(inactive));
+    if (!rows.length) return yield* inactive();
+  });
   const validate = Effect.fn("DeusHumanAuthority.validate")(function* (
     connection: ConnectionState,
     operate = true,
@@ -116,15 +128,18 @@ const make = Effect.gen(function* () {
       return yield* inactive();
     yield* validate(binding.connection);
     yield* repository.snapshot(ref).pipe(Effect.mapError(inactive));
+    if (!binding.alive.current || !binding.connection.active) return yield* inactive();
     if (ref.inputId && !direct) {
-      if (bindings.size >= 4096) return yield* inactive();
-      bindings.set(key({ ...ref, inputId: ref.inputId }), {
-        ...binding,
-        input: { ...ref, inputId: ref.inputId },
-      });
+      if (bindings.size >= DEUS_MAX_ACTIVE_BINDINGS)
+        return yield* new DeusAuthorityError({ reason: "capacity" });
+      const input = { ...ref, inputId: ref.inputId };
+      yield* claim(input);
+      if (!binding.alive.current || !binding.connection.active) return yield* inactive();
+      binding.keys.add(key(input));
+      bindings.set(key(input), { ...binding, input });
     }
     return { ...binding.ceiling };
-  });
+  }, lane.withPermits(1));
   return DeusHumanAuthority.of({
     authorize,
     connect: Effect.fn("DeusHumanAuthority.connect")(function* (principal) {
@@ -134,20 +149,30 @@ const make = Effect.gen(function* () {
         active: true,
       };
       yield* validate(connection, false);
-      const scope = yield* Scope.make();
-      const disconnect = Effect.sync(() => {
-        connection.active = false;
-      }).pipe(Effect.andThen(Scope.close(scope, Exit.void)));
-      yield* Effect.addFinalizer(() => disconnect);
+      const scope = yield* Scope.fork(yield* Scope.Scope);
+      yield* Scope.addFinalizer(
+        scope,
+        Effect.sync(() => {
+          connection.active = false;
+        }),
+      );
       yield* sessions
         .awaitInvalidation(principal.sessionId)
-        .pipe(Effect.ignore, Effect.andThen(disconnect), Effect.forkScoped);
+        .pipe(
+          Effect.ignore,
+          Effect.andThen(Scope.close(scope, Exit.void).pipe(Effect.forkIn(serviceScope))),
+          Effect.forkIn(scope),
+        );
       return {
         id: connection.id,
         scope,
         check: Effect.fn("DeusHumanAuthority.check")(function* (ref) {
           yield* validate(connection);
           yield* repository.snapshot(ref).pipe(Effect.mapError(inactive));
+        }),
+        release: Effect.fn("DeusHumanAuthority.release")(function* (input) {
+          const binding = bindings.get(key(input));
+          if (binding?.connection === connection) yield* Scope.close(binding.scope, Exit.void);
         }),
         bind: Effect.fn("DeusHumanAuthority.bind")(function (input, ceiling, lifetime) {
           return Effect.gen(function* () {
@@ -167,25 +192,33 @@ const make = Effect.gen(function* () {
                 return yield* inactive();
               return;
             }
-            if (bindings.size >= 4096) return yield* inactive();
+            if (bindings.size >= DEUS_MAX_ACTIVE_BINDINGS)
+              return yield* new DeusAuthorityError({ reason: "capacity" });
             const persisted =
               yield* sql`SELECT 1 FROM deus_receipts WHERE environment_id = ${input.environmentId} AND project_id = ${input.projectId} AND input_id = ${input.inputId} LIMIT 1`.pipe(
                 Effect.mapError(inactive),
               );
             if (persisted.length) return yield* inactive();
+            yield* claim(input);
             const alive = { current: true };
-            if (lifetime)
-              yield* Scope.addFinalizer(
-                lifetime,
-                Effect.sync(() => {
-                  alive.current = false;
-                }),
-              );
+            const keys = new Set([key(input)]);
+            const bindingScope = yield* Scope.fork(lifetime ?? scope);
+            yield* Scope.addFinalizer(
+              bindingScope,
+              Effect.sync(() => {
+                alive.current = false;
+                for (const bindingKey of keys) bindings.delete(bindingKey);
+                keys.clear();
+              }),
+            );
+            if (!alive.current || !connection.active) return yield* inactive();
             bindings.set(key(input), {
               input: { ...input },
               connection,
               ceiling: { ...ceiling },
               alive,
+              scope: bindingScope,
+              keys,
             });
           }).pipe(lane.withPermits(1));
         }),
