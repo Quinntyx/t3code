@@ -2,7 +2,75 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+## Quinntyx's Forgejo fork
+
+The authoritative source is [Forgejo](https://git.quinntyx.dev/quinntyx/t3code).
+Forgejo's server-side push mirror keeps `Quinntyx/t3code` on GitHub available for
+existing package sources; GitHub Actions is disabled on that mirror. Existing
+GitHub releases remain there, but new fork builds are Forgejo artifacts and
+packages, not GitHub releases.
+
+`.forgejo/workflows/ci.yml` runs changed-file checks and builds Linux x64 AppImages
+on the local `ubuntu-latest` runner. Successful pushes to `main` publish the stable
+update feed at
+`https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-desktop/stable/`.
+The runner needs an isolated Linux job container with root access for native build
+dependencies. `PACKAGES_TOKEN` is a Forgejo Actions secret scoped to `write:package`.
+Branch and pull-request builds upload artifacts but never advance the feed.
+Versions are `year.month.run-number`, independently of upstream versions.
+
+Download the first AppImage from Forgejo Actions, place it in a **user-writable**
+directory, make it executable, and launch that copy. Keep the stable update channel
+selected. The existing pacman-owned `/opt` installation cannot replace itself:
+keep it as a fallback, but do not point the updater at package-managed files.
+Subsequent AppImage updates use the normal in-app update controls. Both checks and
+downloads require Tailscale; the HTTPS endpoint is served only on the tailnet.
+
+`.forgejo/workflows/mobile.yml` exports Android and iOS updates with Expo's native
+fingerprint and publishes them to tailnet-only Forgejo package feeds on `main`.
+These feeds require a **new fork-native installation**; an upstream or existing
+EAS binary still points to Expo's original update service. JavaScript-only changes
+can update in-app; native dependency/config changes require a new native binary.
+Dispatch **Fork CI** with `build_android=true` to produce a signed ARM64 APK.
+The signing key uses alias `t3code`; `ANDROID_KEYSTORE` (base64) and
+`ANDROID_KEYSTORE_PASSWORD` are encrypted Actions secrets. The original key and
+password are backed up privately in `~/.local/share/t3code-fork/`; preserve that
+backup to keep Android upgrades installable.
+
+For native builds outside this workflow, set `APP_VARIANT=production`,
+`T3CODE_MOBILE_APP_ID=dev.quinntyx.t3code`, and `T3CODE_MOBILE_UPDATE_URL` to
+`https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-mobile/<android-or-ios>/manifest.json`.
+Use the exported manifest's `runtimeVersion` as
+`T3CODE_MOBILE_RUNTIME_VERSION` when building the matching native client.
+The mobile workflow is called by Fork CI after its quality gate, not independently.
+Publication is serialized, and an obsolete main revision cannot advance a feed.
+The Linux runner can export iOS JavaScript, but an installable iOS binary still
+requires a Mac runner and Apple signing/provisioning. Desktop macOS/Windows builds
+and upstream npm/AUR publishing are not enabled by the fork workflows.
+
+### Tailnet update endpoint
+
+The adapter in `.forgejo/hosting/` shares the existing `forgejo_default` Docker
+network without changing the Forgejo installation. It adds Expo's required response
+headers and selects the manifest using the client's `expo-runtime-version` header.
+Different native runtimes retain separate package versions and cannot overwrite
+each other's updates. Assets use immutable SHA-256 names.
+
+Deploy only the adapter's two files to a durable directory, not a temporary worktree:
+
+```sh
+mkdir -p ~/.local/share/t3code-fork/hosting
+cp .forgejo/hosting/docker-compose.yml .forgejo/hosting/nginx.conf ~/.local/share/t3code-fork/hosting/
+docker compose -p t3code-updates -f ~/.local/share/t3code-fork/hosting/docker-compose.yml up -d
+tailscale serve --bg --https=8443 http://127.0.0.1:3081
+```
+
+This leaves the existing HTTPS service on port 443 alone. The adapter listens on
+loopback only; Tailscale terminates HTTPS with the machine's trusted tailnet certificate.
+
+## Upstream release checklist
+
+The remaining sections describe upstream's unified stable and nightly releases.
 
 Beta is the product label, not a release channel or version suffix. Release channels
 remain stable and nightly. To ship 0.1.0 Beta, use `channel=stable` and

@@ -116,7 +116,7 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 const variant = VARIANT_CONFIG[APP_VARIANT];
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
-  : variant.iosBundleIdentifier;
+  : (repoEnv.T3CODE_MOBILE_APP_ID ?? variant.iosBundleIdentifier);
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
@@ -238,7 +238,7 @@ const config: ExpoConfig = {
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.2.0",
-  runtimeVersion: {
+  runtimeVersion: repoEnv.T3CODE_MOBILE_RUNTIME_VERSION ?? {
     // Skip costly fingerprinting on dev launches; preview and production OTAs require matching native projects.
     policy: runtimeVersionPolicy,
   },
@@ -247,7 +247,8 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   updates: {
     enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    url:
+      repoEnv.T3CODE_MOBILE_UPDATE_URL ?? "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
@@ -295,7 +296,7 @@ const config: ExpoConfig = {
   },
   android: {
     icon: variant.assets.appIcon,
-    package: variant.androidPackage,
+    package: repoEnv.T3CODE_MOBILE_APP_ID ?? variant.androidPackage,
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
       : {}),

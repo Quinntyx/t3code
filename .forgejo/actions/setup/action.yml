@@ -1,0 +1,16 @@
+name: Set up the fork toolchain
+description: Use the repository-pinned Node and pnpm without paid cache services.
+runs:
+  using: composite
+  steps:
+    - uses: https://data.forgejo.org/actions/setup-node@v4
+      with:
+        node-version-file: package.json
+    - name: Install the pinned package manager
+      shell: bash
+      run: |
+        npm install --prefix "$RUNNER_TEMP/t3-tools" "$(node -p 'require("./package.json").packageManager')"
+        echo "$RUNNER_TEMP/t3-tools/node_modules/.bin" >> "$GITHUB_PATH"
+    - name: Install workspace dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile --prod=false
