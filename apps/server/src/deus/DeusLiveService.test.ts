@@ -575,6 +575,169 @@ it.effect(
 );
 
 it.effect(
+  "delivers a later INTERRUPT during an active turn without losing an earlier deferred WHEN_IDLE report",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* attach;
+      yield* h.send({
+        serverContent: { inputTranscription: { text: "Start", finished: true } },
+        toolCall: { functionCalls: [{ id: "mixed-stream", name: "spawn", args: {} }] },
+      });
+      yield* Queue.take(h.responses);
+      yield* h.next;
+      yield* h.send({ serverContent: { outputTranscription: { text: "Still answering." } } });
+      yield* h.next;
+      yield* h.report(h.accepted[0]!, "WHEN_IDLE", "deferred-idle");
+      yield* h.report(h.accepted[0]!, "INTERRUPT", "later-urgent");
+      const stored = (yield* h.repository.snapshot(h.attachment)).reports;
+      const delivered = yield* h.reportResponse;
+      assert.equal(delivered.scheduling, "INTERRUPT");
+      assert.equal(delivered.id, "mixed-stream");
+      assert.include(JSON.stringify(delivered.response), `"cursor":${stored[1]!.cursor}`);
+      assert.equal((yield* h.next).attachment.responseEpoch, 1);
+      yield* h.send({ serverContent: { turnComplete: true } });
+      assert.equal((yield* h.next).type, "turn-end");
+      const deferred = yield* h.reportResponse;
+      assert.equal(deferred.scheduling, "WHEN_IDLE");
+      assert.include(JSON.stringify(deferred.response), `"cursor":${stored[0]!.cursor}`);
+      const current = yield* h.repository.snapshot(h.attachment);
+      assert.deepEqual(
+        current.reports.map((report) => [report.mode, report.runId]),
+        [
+          ["WHEN_IDLE", h.accepted[0]!.workers[0]!.runId],
+          ["INTERRUPT", h.accepted[0]!.workers[0]!.runId],
+        ],
+      );
+      assert.equal(Queue.sizeUnsafe(h.responses), 0);
+      assert.equal(current.tasks[0]?.status, "running");
+      yield* h.send({
+        serverContent: { outputTranscription: { text: "Deferred evidence." }, turnComplete: true },
+      });
+      yield* h.next;
+      assert.equal((yield* h.next).type, "turn-end");
+      yield* h.report(h.accepted[0]!, "SILENT", "after-catch-up");
+      const subsequent = yield* h.reportResponse;
+      assert.include(JSON.stringify(subsequent.response), "after-catch-up");
+      assert.equal(Queue.sizeUnsafe(h.responses), 0);
+      const spoken = (yield* h.repository.snapshot(h.attachment)).transcripts.at(-1);
+      assert.equal(spoken?.origin?.type, "report");
+      if (spoken?.origin?.type === "report")
+        assert.equal(spoken.origin.sourceCursor, stored[0]!.cursor);
+      yield* h.live.detach(h.attachment);
+    }).pipe(Effect.provide(base)),
+);
+
+it.effect(
+  "keeps a completed root channel open until every earlier deferred report is delivered",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* attach;
+      yield* h.send({
+        serverContent: { inputTranscription: { text: "Start", finished: true } },
+        toolCall: { functionCalls: [{ id: "terminal-stream", name: "spawn", args: {} }] },
+      });
+      yield* Queue.take(h.responses);
+      yield* h.next;
+      const task = h.accepted[0]!;
+      yield* h.send({ serverContent: { outputTranscription: { text: "I started the work." } } });
+      yield* h.next;
+      yield* h.report(task, "WHEN_IDLE", "first-deferred");
+      yield* h.report(task, "WHEN_IDLE", "second-deferred");
+      yield* h.report(task, "INTERRUPT", "terminal-urgent");
+      const urgent = yield* h.reportResponse;
+      assert.isTrue(urgent.willContinue);
+      yield* h.next;
+      yield* h.repository.commit({
+        type: "synchronize-task",
+        input: {
+          ...h.attachment,
+          inputId: DeusInputId.make("root-completed"),
+          task: { ...task, status: "completed" },
+        },
+      });
+      assert.isDefined((yield* Queue.take(h.responses)).response?.task);
+      yield* h.send({ serverContent: { turnComplete: true } });
+      yield* h.next;
+      const first = yield* Queue.take(h.responses);
+      assert.include(JSON.stringify(first.response), "first-deferred");
+      assert.isTrue(first.willContinue);
+      const second = yield* Queue.take(h.responses);
+      assert.include(JSON.stringify(second.response), "second-deferred");
+      assert.isFalse(second.willContinue);
+      assert.equal(first.id, "terminal-stream");
+      assert.equal(second.id, "terminal-stream");
+      assert.equal(Queue.sizeUnsafe(h.responses), 0);
+      yield* h.live.detach(h.attachment);
+    }).pipe(Effect.provide(base)),
+);
+
+it.effect(
+  "does not let a report with no channel block an unrelated root and later recovers it exactly once",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* attach;
+      yield* h.send({
+        serverContent: { inputTranscription: { text: "Start two", finished: true } },
+        toolCall: { functionCalls: [{ id: "cancelled-root", name: "spawn", args: { root: 1 } }] },
+      });
+      yield* Queue.take(h.responses);
+      yield* h.next;
+      yield* h.send({
+        toolCall: { functionCalls: [{ id: "urgent-root", name: "spawn", args: { root: 2 } }] },
+      });
+      yield* Queue.take(h.responses);
+      yield* h.send({
+        toolCallCancellation: { ids: ["cancelled-root"] },
+        serverContent: { outputTranscription: { text: "Working." } },
+      });
+      yield* h.next;
+      yield* h.report(h.accepted[0]!, "SILENT", "channel-less-prefix");
+      yield* h.report(h.accepted[1]!, "INTERRUPT", "unrelated-urgent");
+      const urgent = yield* h.reportResponse;
+      assert.equal(urgent.id, "urgent-root");
+      assert.include(JSON.stringify(urgent.response), "unrelated-urgent");
+      yield* h.send({
+        toolCall: { functionCalls: [{ id: "recover-prefix", name: "recover", args: {} }] },
+      });
+      const recovered = yield* h.reportResponse;
+      assert.equal(recovered.id, "recover-prefix");
+      assert.include(JSON.stringify(recovered.response), "channel-less-prefix");
+      assert.equal(Queue.sizeUnsafe(h.responses), 0);
+      assert.lengthOf((yield* h.repository.snapshot(h.attachment)).tasks, 2);
+      yield* h.live.detach(h.attachment);
+    }).pipe(Effect.provide(base)),
+);
+
+it.effect(
+  "bounds deferred report catch-up without discarding durable reports or stopping workers",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* attach;
+      yield* h.send({
+        serverContent: { inputTranscription: { text: "Start", finished: true } },
+        toolCall: { functionCalls: [{ id: "bounded-stream", name: "spawn", args: {} }] },
+      });
+      yield* Queue.take(h.responses);
+      yield* h.next;
+      for (let index = 0; index <= Adapter.LIVE_LIMITS.callHistory; index++)
+        yield* h.report(h.accepted[0]!, "WHEN_IDLE", `pending-${index}`);
+      yield* Deferred.await(h.connectionClosed);
+      const event = yield* h.next;
+      assert.equal(event.type, "error");
+      if (event.type === "error") assert.equal(event.error.code, "backpressure");
+      const current = yield* h.repository.snapshot(h.attachment);
+      assert.lengthOf(current.reports, Adapter.LIVE_LIMITS.callHistory + 1);
+      assert.equal(current.tasks[0]?.status, "running");
+      assert.isTrue(
+        (yield* Queue.clear(h.responses)).every(
+          (response) => response.response?.event === undefined,
+        ),
+      );
+      yield* h.live.detach(h.attachment);
+    }).pipe(Effect.provide(base)),
+);
+
+it.effect(
   "copies silent bootstrap without a synthetic human and never reuses old call IDs on reconnect",
   () =>
     Effect.gen(function* () {

@@ -93,6 +93,7 @@ interface AttachmentState {
   readonly conversation: DeusConversation;
   readonly snapshotCursor: DeusCursor;
   cursor: DeusCursor;
+  readonly delivered: Set<DeusCursor>;
   bootstrap?: Call | undefined;
   source?: SpeechSource | undefined;
   human?: SpokenInput | undefined;
@@ -369,12 +370,24 @@ const make = Effect.gen(function* () {
   const pump = Effect.fn("DeusLiveService.pump")(function* (state: AttachmentState) {
     if (state.closed) return;
     yield* guard(state);
+    let scan = state.cursor;
+    let blocked = false;
+    let deferred = 0;
+    const deferredTasks = new Set<string>();
     while (!state.closed) {
       const page = yield* repository
-        .readDeltas(state.attachment, state.cursor)
+        .readDeltas(state.attachment, scan)
         .pipe(Effect.mapError(failure));
       if (!page.length) return;
       for (const delta of page) {
+        scan = delta.cursor;
+        if (state.delivered.has(delta.cursor)) {
+          if (!blocked) {
+            state.cursor = delta.cursor;
+            state.delivered.delete(delta.cursor);
+          }
+          continue;
+        }
         if (delta.change.type === "conversation-reset") return yield* close(state, stale());
         if (delta.change.type === "report") {
           const report = delta.change.report;
@@ -382,8 +395,21 @@ const make = Effect.gen(function* () {
             const candidate = state.streams.get(report.taskId);
             const stream = candidate?.runId === report.runId ? candidate : undefined;
             const call = stream?.call ?? state.bootstrap;
-            if (!call || state.spawning) return;
-            if (report.mode === "WHEN_IDLE" && (state.active || state.debt)) return;
+            if (
+              !call ||
+              state.spawning ||
+              (report.mode === "WHEN_IDLE" && (state.active || state.debt))
+            ) {
+              blocked = true;
+              if (++deferred > LIVE_LIMITS.callHistory)
+                return yield* new DeusLiveError({
+                  code: "backpressure",
+                  message:
+                    "Live deferred report history is full; reconnect. Reports remain durable.",
+                });
+              deferredTasks.add(report.taskId);
+              continue;
+            }
             if (report.mode === "INTERRUPT") {
               yield* finish(state);
               yield* invalidate(state);
@@ -398,7 +424,15 @@ const make = Effect.gen(function* () {
               task &&
               ["completed", "failed", "cancelled"].includes(task.status) &&
               task.workers[0]?.threadId === report.threadId &&
-              stream.runId === report.runId;
+              stream.runId === report.runId &&
+              !deferredTasks.has(report.taskId) &&
+              !snapshot.reports.some(
+                (next) =>
+                  next.taskId === report.taskId &&
+                  next.runId === report.runId &&
+                  next.cursor > report.cursor &&
+                  !state.delivered.has(next.cursor),
+              );
             yield* response(state, call, { event: delta }, report.mode, !terminal);
             if (terminal) state.streams.delete(report.taskId);
             if (report.mode !== "SILENT") state.source = { type: "report", report };
@@ -409,7 +443,15 @@ const make = Effect.gen(function* () {
           const stream = state.streams.get(task.id);
           if (stream) yield* response(state, stream.call, { task }, "SILENT", true);
         }
-        state.cursor = delta.cursor;
+        if (!blocked) state.cursor = delta.cursor;
+        else {
+          if (state.delivered.size >= LIVE_LIMITS.callHistory)
+            return yield* new DeusLiveError({
+              code: "backpressure",
+              message: "Live report catch-up is full; reconnect. Deferred reports remain durable.",
+            });
+          state.delivered.add(delta.cursor);
+        }
       }
     }
   });
@@ -761,6 +803,7 @@ const make = Effect.gen(function* () {
         conversation: snapshot.session.conversation,
         snapshotCursor: snapshot.cursor,
         cursor: snapshot.cursor,
+        delivered: new Set(),
         inputText: "",
         outputText: "",
         turnId: yield* uuid,

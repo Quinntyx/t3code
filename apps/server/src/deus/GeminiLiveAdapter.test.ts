@@ -1,10 +1,15 @@
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import { assert, it } from "@effect/vitest";
-import { FunctionResponseScheduling, GoogleGenAI } from "@google/genai";
+import { FunctionResponseScheduling } from "@google/genai";
+import { createLiveClient } from "./geminiLiveProcess.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
+import * as TestClock from "effect/testing/TestClock";
+import type { LiveClient, LiveSession } from "./geminiLiveProcess.ts";
 import * as Configuration from "./DeusConfiguration.ts";
 import * as Adapter from "./GeminiLiveAdapter.ts";
 import { DEUS_TOOL_DECLARATIONS } from "./DeusTools.ts";
@@ -45,18 +50,22 @@ const fixture = Effect.gen(function* () {
       }
     });
   });
-  const layer = Adapter.layerWithClient(
-    (apiKey) =>
-      new GoogleGenAI({
-        apiKey,
-        vertexai: false,
-        httpOptions: { baseUrl: `http://127.0.0.1:${address.port}`, apiVersion: "v1beta" },
-      }),
-  ).pipe(Layer.provide(config));
+  const owners: ReturnType<typeof createLiveClient>[] = [];
+  const layer = Adapter.layerWithClient((apiKey) => {
+    const client = createLiveClient({
+      apiKey,
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      ...(process.env.T3_TEST_DEUS_ENTRY ? { entry: process.env.T3_TEST_DEUS_ENTRY } : {}),
+    });
+    owners.push(client);
+    return client;
+  }).pipe(Layer.provide(config));
   return {
     frames,
     sockets,
     layer,
+    owners,
+    server,
     reject: () => {
       reject = true;
     },
@@ -74,8 +83,55 @@ it("redacts known credentials and quoted authorization/header/token causes", () 
     assert.notInclude(safe, secret);
 });
 
+it.live("closes the actual SDK socket when cancelled before setup ever completes", () =>
+  Effect.gen(function* () {
+    const h = yield* fixture;
+    h.hold();
+    yield* Effect.gen(function* () {
+      const adapter = yield* Adapter.GeminiLiveAdapter;
+      const acquiring = yield* adapter.connect({}).pipe(Effect.forkScoped);
+      yield* Queue.take(h.frames);
+      const socket = yield* Queue.take(h.sockets);
+      const ended = Promise.withResolvers<void>();
+      socket.once("close", () => ended.resolve());
+      yield* Fiber.interrupt(acquiring);
+      yield* Effect.promise(() => ended.promise);
+      assert.equal(Queue.sizeUnsafe(h.frames), 0);
+      assert.equal(h.server.clients.size, 0);
+      assert.lengthOf(h.owners, 1);
+      assert.equal(h.owners[0]!.owner.signalCode, "SIGKILL");
+      assert.equal(h.owners[0]!.owner.connected, false);
+      assert.lengthOf(h.owners[0]!.owner.eventNames(), 0);
+    }).pipe(Effect.provide(h.layer));
+  }),
+);
+
+it.live("closes a never-ready SDK socket when its acquisition scope closes", () =>
+  Effect.gen(function* () {
+    const h = yield* fixture;
+    h.hold();
+    yield* Effect.gen(function* () {
+      const adapter = yield* Adapter.GeminiLiveAdapter;
+      const scope = yield* Scope.make();
+      const acquiring = yield* adapter
+        .connect({})
+        .pipe(Effect.provideService(Scope.Scope, scope), Effect.forkIn(scope));
+      yield* Queue.take(h.frames);
+      const socket = yield* Queue.take(h.sockets);
+      const ended = Promise.withResolvers<void>();
+      socket.once("close", () => ended.resolve());
+      yield* Scope.close(scope, Exit.void);
+      assert.equal((yield* Fiber.await(acquiring))._tag, "Failure");
+      yield* Effect.promise(() => ended.promise);
+      assert.equal(h.server.clients.size, 0);
+      assert.lengthOf(h.owners[0]!.owner.eventNames(), 0);
+      assert.equal(Queue.sizeUnsafe(h.frames), 0);
+    }).pipe(Effect.provide(h.layer));
+  }),
+);
+
 it.live(
-  "closes a late SDK session after acquisition is cancelled without dispatching media or tools",
+  "setup timeout terminates the real SDK owner and a peer that never sends setupComplete",
   () =>
     Effect.gen(function* () {
       const h = yield* fixture;
@@ -84,14 +140,137 @@ it.live(
         const adapter = yield* Adapter.GeminiLiveAdapter;
         const acquiring = yield* adapter.connect({}).pipe(Effect.forkScoped);
         yield* Queue.take(h.frames);
-        yield* Fiber.interrupt(acquiring);
         const socket = yield* Queue.take(h.sockets);
         const ended = Promise.withResolvers<void>();
         socket.once("close", () => ended.resolve());
-        socket.send(JSON.stringify({ setupComplete: {} }));
+        yield* TestClock.adjust("30 seconds");
+        const result = yield* Fiber.join(acquiring).pipe(Effect.flip);
+        assert.include(result.message, "timed out");
         yield* Effect.promise(() => ended.promise);
+        assert.equal(h.server.clients.size, 0);
+        assert.lengthOf(h.owners[0]!.owner.eventNames(), 0);
+        assert.equal(Queue.sizeUnsafe(h.frames), 0);
       }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect(
+  "contains late setup rejection and a throwing late Session.close after cancellation",
+  () =>
+    Effect.gen(function* () {
+      for (const late of ["reject", "close"] as const) {
+        const started = Promise.withResolvers<void>();
+        const pending = Promise.withResolvers<LiveSession>();
+        const attempted = Promise.withResolvers<void>();
+        let disposals = 0;
+        const layer = Adapter.layerWithClient(() => ({
+          connect: () => {
+            started.resolve();
+            return pending.promise;
+          },
+          dispose: () => {
+            disposals++;
+            return Promise.resolve();
+          },
+        })).pipe(Layer.provide(config));
+        yield* Effect.gen(function* () {
+          const adapter = yield* Adapter.GeminiLiveAdapter;
+          const acquiring = yield* adapter.connect({}).pipe(Effect.forkScoped);
+          yield* Effect.promise(() => started.promise);
+          yield* Fiber.interrupt(acquiring);
+          assert.isAtLeast(disposals, 1);
+          if (late === "reject") {
+            pending.reject(new Error("Late SDK setup rejection"));
+            yield* Effect.promise(() => pending.promise.catch(() => undefined));
+          } else {
+            pending.resolve({
+              sendRealtimeInput: () => undefined,
+              sendToolResponse: () => undefined,
+              sendContextUpdate: () => undefined,
+              close: () => {
+                attempted.resolve();
+                throw new Error("Late SDK close failed");
+              },
+            });
+            yield* Effect.promise(() => attempted.promise);
+          }
+          assert.equal((yield* Fiber.await(acquiring))._tag, "Failure");
+        }).pipe(Effect.provide(layer));
+      }
     }),
+);
+
+it.effect(
+  "preserves an acquisition callback failure when an already-resolved late Session.close throws",
+  () =>
+    Effect.gen(function* () {
+      let disposed = 0;
+      const layer = Adapter.layerWithClient(() => ({
+        connect: (parameters) => {
+          parameters.callbacks.onerror?.({ message: "Original acquisition callback cause" });
+          return Promise.resolve({
+            sendRealtimeInput: () => undefined,
+            sendToolResponse: () => undefined,
+            sendContextUpdate: () => undefined,
+            close: () => {
+              throw new Error("Secondary late close cause");
+            },
+          });
+        },
+        dispose: () => {
+          disposed++;
+          throw new Error("Secondary disposal cause");
+        },
+      })).pipe(Layer.provide(config));
+      yield* Effect.gen(function* () {
+        const adapter = yield* Adapter.GeminiLiveAdapter;
+        const result = yield* adapter.connect({}).pipe(Effect.flip);
+        assert.include(result.message, "Original acquisition callback cause");
+        assert.notInclude(result.message, "Secondary late close cause");
+        assert.isAtLeast(disposed, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("preserves setup rejection and established close errors even when disposal fails", () =>
+  Effect.gen(function* () {
+    for (const phase of ["setup", "established"] as const) {
+      let disposals = 0;
+      const layer = Adapter.layerWithClient(
+        () =>
+          ({
+            connect: () =>
+              phase === "setup"
+                ? Promise.reject(new Error("Original setup cause"))
+                : Promise.resolve({
+                    sendRealtimeInput: () => undefined,
+                    sendToolResponse: () => undefined,
+                    sendContextUpdate: () => undefined,
+                    close: () => {
+                      throw new Error("Original close cause");
+                    },
+                  }),
+            dispose: () => {
+              disposals++;
+              return Promise.reject(new Error("Secondary disposal cause"));
+            },
+          }) satisfies LiveClient,
+      ).pipe(Layer.provide(config));
+      yield* Effect.gen(function* () {
+        const adapter = yield* Adapter.GeminiLiveAdapter;
+        const error = yield* (
+          phase === "setup"
+            ? adapter.connect({}).pipe(Effect.asVoid)
+            : adapter.connect({}).pipe(Effect.flatMap((connection) => connection.close))
+        ).pipe(Effect.flip);
+        assert.include(
+          error.message,
+          phase === "setup" ? "Original setup cause" : "Original close cause",
+        );
+        assert.isAtLeast(disposals, 1);
+      }).pipe(Effect.provide(layer));
+    }
+  }),
 );
 
 it.live(
@@ -160,7 +339,23 @@ it.live(
         const event = yield* Queue.take(connection.events);
         assert.equal(event.type, "message");
         if (event.type === "message") assert.equal(event.message.serverContent?.turnComplete, true);
+        const ended = Promise.withResolvers<void>();
+        socket.once("close", () => ended.resolve());
         yield* connection.close;
+        yield* Effect.promise(() => ended.promise);
+        assert.equal(h.server.clients.size, 0);
+        assert.lengthOf(h.owners[0]!.owner.eventNames(), 0);
+        assert.equal(
+          (yield* connection.realtime({ text: "must not send" }).pipe(Effect.flip)).code,
+          "provider",
+        );
+        assert.equal(
+          (yield* connection
+            .respond({ id: "stale", name: "spawn", response: {} })
+            .pipe(Effect.flip)).code,
+          "provider",
+        );
+        assert.equal(Queue.sizeUnsafe(h.frames), 0);
       }).pipe(Effect.provide(h.layer));
     }),
 );

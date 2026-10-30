@@ -1,12 +1,10 @@
 import {
   Behavior,
-  GoogleGenAI,
   Modality,
   type FunctionResponse,
   type LiveConnectConfig,
   type LiveServerMessage,
   type LiveSendRealtimeInputParameters,
-  type Session,
 } from "@google/genai";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -18,6 +16,7 @@ import * as Configuration from "./DeusConfiguration.ts";
 import { DEUS_TOOL_DECLARATIONS } from "./DeusTools.ts";
 import { DEUS_TEXT_POLICY } from "./prompts/text.ts";
 import { checkBytes, encodeJson } from "./textProtocol.ts";
+import { createLiveClient, type LiveClient, type LiveSession } from "./geminiLiveProcess.ts";
 
 export const LIVE_LIMITS = {
   setupBytes: 96_000,
@@ -95,17 +94,20 @@ export class GeminiLiveAdapter extends Context.Service<
 >()("t3/deus/GeminiLiveAdapter") {}
 
 const isLiveError = Schema.is(DeusLiveError);
-export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live">) =>
+export const layerWithClient = (client: (key: string) => LiveClient) =>
   Layer.effect(
     GeminiLiveAdapter,
     Effect.gen(function* () {
       const configuration = yield* Configuration.DeusConfiguration;
       return GeminiLiveAdapter.of({
         connect: Effect.fn("GeminiLiveAdapter.connect")(function* (evidence) {
+          const scope = yield* Scope.Scope;
           const events = yield* Queue.bounded<LiveEvent>(LIVE_LIMITS.queue);
-          let session: Session | undefined;
+          let session: LiveSession | undefined;
           let closed = false;
+          let stopped: DeusLiveError | undefined;
           const ended = Promise.withResolvers<never>();
+          void ended.promise.catch(() => undefined);
           const connection = yield* configuration
             .withLiveCredential((model, voice, key) =>
               Effect.gen(function* () {
@@ -117,10 +119,25 @@ export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live
                       key,
                     ).slice(0, 2000),
                   });
+                const config = liveConfig(voice, evidence);
+                yield* Effect.try({
+                  try: () => checkBytes({ model, config }, LIVE_LIMITS.setupBytes),
+                  catch: (cause) => error(cause, "bounds"),
+                });
+                const owned = yield* Effect.acquireRelease(
+                  Effect.try({ try: () => client(key), catch: error }),
+                  (value) =>
+                    Effect.tryPromise({ try: value.dispose, catch: error }).pipe(Effect.ignore),
+                );
+                const dispose = Effect.tryPromise({ try: owned.dispose, catch: error });
                 const stop = (failure: DeusLiveError) => {
                   if (closed) return;
                   closed = true;
+                  stopped = failure;
                   ended.reject(failure);
+                  void Promise.resolve()
+                    .then(owned.dispose)
+                    .catch(() => undefined);
                   for (let index = 0; index < LIVE_LIMITS.queue; index++) {
                     if (!Queue.takeUnsafe(events)) break;
                   }
@@ -137,16 +154,11 @@ export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live
                   }
                   Queue.offerUnsafe(events, { type: "failure", error: failure });
                 };
-                const config = liveConfig(voice, evidence);
-                yield* Effect.try({
-                  try: () => checkBytes({ model, config }, LIVE_LIMITS.setupBytes),
-                  catch: (cause) => error(cause, "bounds"),
-                });
                 session = yield* Effect.tryPromise({
                   try: async (signal) => {
                     const aborted = () => stop(error("Live setup was cancelled"));
                     signal.addEventListener("abort", aborted, { once: true });
-                    const connecting = client(key).live.connect({
+                    const connecting = owned.connect({
                       model,
                       config,
                       callbacks: {
@@ -168,11 +180,15 @@ export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live
                           stop(error(`Connection closed (${event.code}): ${event.reason}`)),
                       },
                     });
-                    // SDK 2.31 exposes Session only after setup and has no Live abort hook.
-                    // A peer that never completes setup cannot be forcibly closed through this API.
                     void connecting.then(
                       (value) => {
-                        if (closed) value.close();
+                        if (closed) {
+                          try {
+                            value.close();
+                          } catch {
+                            /* The owned boundary still disposes independently. */
+                          }
+                        }
                       },
                       () => undefined,
                     );
@@ -188,13 +204,10 @@ export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live
                   Effect.mapError((cause) =>
                     isLiveError(cause) ? cause : error("Live setup timed out"),
                   ),
+                  Effect.onError(() => dispose.pipe(Effect.ignore)),
                 );
-                void ended.promise.catch(() => undefined);
-                if (closed) {
-                  session.close();
-                  return yield* error("Connection closed during setup");
-                }
-                const send = (use: (value: Session) => void) =>
+                if (closed) return yield* stopped ?? error("Connection closed during setup");
+                const send = (use: (value: LiveSession) => void) =>
                   Effect.try({
                     try: () => {
                       if (closed || !session) throw new Error("Attachment is closed");
@@ -226,15 +239,26 @@ export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live
                       value.sendContextUpdate(update);
                     }),
                   ),
-                  close: Effect.try({
-                    try: () => {
+                  close: Effect.tryPromise({
+                    try: async () => {
                       closed = true;
-                      session?.close();
+                      let original: unknown;
+                      try {
+                        session?.close();
+                      } catch (cause) {
+                        original = cause;
+                      }
+                      try {
+                        await owned.dispose();
+                      } catch (cause) {
+                        original ??= cause;
+                      }
+                      if (original) throw original;
                     },
-                    catch: (cause) => error(cause),
+                    catch: error,
                   }),
                 } satisfies LiveConnection;
-              }),
+              }).pipe(Effect.provideService(Scope.Scope, scope)),
             )
             .pipe(
               Effect.mapError((cause) =>
@@ -253,6 +277,4 @@ export const layerWithClient = (client: (key: string) => Pick<GoogleGenAI, "live
       });
     }),
   );
-export const layer = layerWithClient(
-  (apiKey) => new GoogleGenAI({ apiKey, vertexai: false, apiVersion: "v1beta" }),
-);
+export const layer = layerWithClient((apiKey) => createLiveClient({ apiKey }));
