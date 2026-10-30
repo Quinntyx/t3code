@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { type DeusScope, type DeusSnapshot, DeusInputId, DeusCursor } from "@t3tools/contracts";
+import { type DeusScope, type DeusSessionId, DeusInputId, DeusCursor } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { deusEnvironment } from "../../state/deus";
 import { useEnvironmentQuery } from "../../state/query";
@@ -28,7 +28,7 @@ export function useDeusConversation({
   const open = useAtomCommand(deusEnvironment.open, { reportFailure: false });
   const send = useAtomCommand(deusEnvironment.sendInput, { reportFailure: false });
   const openConversation = useEffectEvent(open);
-  const [snapshot, setSnapshot] = useState<DeusSnapshot | null>(null);
+  const [sessionId, setSessionId] = useState<DeusSessionId | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [openId, setOpenId] = useState(() => DeusInputId.make(randomUUID()));
   const [text, setText] = useState("");
@@ -37,10 +37,10 @@ export function useDeusConversation({
   const pending = useRef<{ id: DeusInputId; text: string; conversation: number } | null>(null);
   const permitted = available && canRead;
   const query = useEnvironmentQuery(
-    permitted && snapshot
+    permitted && sessionId
       ? deusEnvironment.conversation({
           environmentId: target.environmentId,
-          input: { ...target, sessionId: snapshot.session.sessionId, after: DeusCursor.make(0) },
+          input: { ...target, sessionId, after: DeusCursor.make(0) },
         })
       : null,
   );
@@ -56,7 +56,7 @@ export function useDeusConversation({
     }).then((result) => {
       if (!active) return;
       if (result._tag === "Success") {
-        setSnapshot(result.value);
+        setSessionId(result.value.session.sessionId);
         setOpenError(null);
       } else setOpenError(failureMessage(result));
     });
@@ -121,7 +121,7 @@ export function useDeusConversation({
           ? "Permission required to read this project's Deus conversation."
           : !available
             ? "Conversation unavailable at this destination."
-            : !canOpen && !snapshot
+            : !canOpen && !sessionId
               ? "Permission required to open this project's Deus conversation."
               : (openError ??
                 query.error ??
