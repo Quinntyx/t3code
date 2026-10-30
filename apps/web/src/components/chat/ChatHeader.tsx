@@ -41,6 +41,7 @@ import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
+import { ProjectDeusEntry } from "../deus/ProjectDeusEntry";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -423,6 +424,12 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {activeProject ? (
+        <ProjectDeusEntry
+          projectRefs={[{ environmentId: activeThreadEnvironmentId, projectId: activeProject.id }]}
+          navigateToProject={false}
+        />
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

@@ -2,6 +2,7 @@ import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { resolveFocusProjectKeys } from "@t3tools/client-runtime/state/project-grouping";
+import { ProjectDeusEntry } from "./deus/ProjectDeusEntry";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
@@ -3089,6 +3090,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 primaryEnvironmentId={primaryEnvironmentId}
                                 machineByEnvironmentId={environmentMachineById}
                               />
+                            ) : null}
+                            {project ? (
+                              <ProjectDeusEntry projectRefs={project.memberProjectRefs} />
                             ) : null}
                             {project ? (
                               <Button

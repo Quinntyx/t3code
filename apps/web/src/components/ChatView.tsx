@@ -149,6 +149,7 @@ import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
+import { useDeusPanelStore } from "../deusPanelStore";
 import { PopoverCreateHandle } from "./ui/popover";
 import {
   selectActiveRightPanel,
@@ -1030,7 +1031,8 @@ export default function ChatView(props: ChatViewProps) {
   );
   const canReuseTerminal = activeThreadKnownSessionsRaw !== null;
   const previewPanelOpen = activeRightPanelKind === "preview" && browserAvailable;
-  const rightPanelOpen = rightPanelState.isOpen;
+  const projectPanelOpen = useDeusPanelStore((state) => state.target !== null);
+  const rightPanelOpen = rightPanelState.isOpen && !projectPanelOpen;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const rightPanelPresenceValue = {
@@ -1044,7 +1046,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
     panelAnimationDurationMs,
   );
-  const rightPanelPresent = rightPanelPresence.present;
+  const rightPanelPresent = rightPanelPresence.present && !projectPanelOpen;
   const rightPanelControlsInPanel =
     shouldUsePlanSidebarSheet && rightPanelPresent && rightPanelOpen;
   const rightPanelControlsAtRoot = rightPanelPresent && !shouldUsePlanSidebarSheet;
@@ -3202,7 +3204,10 @@ export default function ChatView(props: ChatViewProps) {
     threadPanelPresentation,
     threadPanelPopoverHandle,
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
-    rightPanelAvailable: activeProject !== null,
+    rightPanelAvailable: activeProject !== null && !projectPanelOpen,
+    rightPanelUnavailableLabel: projectPanelOpen
+      ? "Close Deus to use thread tools"
+      : "Right panel is unavailable",
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
     onToggleTerminal: toggleTerminalVisibilityStable,
