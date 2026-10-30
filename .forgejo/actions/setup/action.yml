@@ -11,6 +11,14 @@ runs:
       run: |
         npm install --prefix "$RUNNER_TEMP/t3-tools" "$(node -p 'require("./package.json").packageManager')"
         echo "$RUNNER_TEMP/t3-tools/node_modules/.bin" >> "$GITHUB_PATH"
+    - name: Locate the dependency store
+      id: store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - uses: https://data.forgejo.org/actions/cache@v3
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
     - name: Install workspace dependencies
       shell: bash
       run: pnpm install --frozen-lockfile --prod=false
