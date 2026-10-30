@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   ProjectMutation,
   ProjectId,
+  ProjectFolderLayout,
   ServerConfig,
   SourceControlDiscoveryResult,
   SourceControlRepositoryInfo,
@@ -199,8 +200,22 @@ export function getCloneDestinationPath(
   return `${ensureBrowseDirectoryPath(directoryPath)}${name}`;
 }
 
-export function getNewProjectPathPreview(newProjectsRoot: string, name: string): string {
-  return getCloneDestinationPath(newProjectsRoot, newProjectFolderName(name));
+function getProjectCheckoutPath(
+  path: string,
+  projectLayout: ProjectFolderLayout = "direct",
+): string {
+  return projectLayout === "worktree-folder" ? getCloneDestinationPath(path, "main") : path;
+}
+
+export function getNewProjectPathPreview(
+  newProjectsRoot: string,
+  name: string,
+  projectLayout: ProjectFolderLayout = "direct",
+): string {
+  return getProjectCheckoutPath(
+    getCloneDestinationPath(newProjectsRoot, newProjectFolderName(name)),
+    projectLayout,
+  );
 }
 
 export interface NewProjectPublishTarget {
@@ -234,8 +249,11 @@ export function getNewProjectPublishTarget(
 export function getNewProjectRepository(
   target: Pick<NewProjectPublishTarget, "owner">,
   workspaceRoot: string,
+  projectLayout: ProjectFolderLayout = "direct",
 ): string {
-  const folderName = workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  const segments = workspaceRoot.split(/[\\/]/).filter(Boolean);
+  const folderName =
+    segments.at(projectLayout === "worktree-folder" && segments.at(-1) === "main" ? -2 : -1) ?? "";
   return target.owner ? `${target.owner}/${folderName}` : folderName;
 }
 

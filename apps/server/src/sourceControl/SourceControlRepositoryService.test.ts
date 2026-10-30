@@ -146,57 +146,66 @@ it.effect("keeps a host's raw response text out of a failed repository lookup", 
   }),
 );
 
-it.effect("clones a looked-up repository after creating missing parent directories", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const temporaryDirectory = yield* fs.makeTempDirectoryScoped({
-      prefix: "t3-source-control-clone-parent-",
-    });
-    const parent = path.join(temporaryDirectory, "missing", "nested");
-    const destinationPath = path.join(parent, "t3code");
-    const cloneCalls: Array<{ cwd: string; args: ReadonlyArray<string> }> = [];
-
-    yield* Effect.gen(function* () {
-      const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
-      const result = yield* service.cloneRepository({
-        provider: SourceControlProviderKind.make("github"),
-        repository: "octocat/t3code",
-        destinationPath,
-        protocol: "https",
+it.effect.each(["direct", "worktree-folder"] as const)(
+  "clones a looked-up repository with %s layout after creating missing parent directories",
+  (projectLayout) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryDirectory = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-source-control-clone-parent-",
       });
+      const parent = path.join(temporaryDirectory, "missing", "nested");
+      const destinationPath = path.join(parent, "t3code");
+      const checkoutPath =
+        projectLayout === "worktree-folder" ? path.join(destinationPath, "main") : destinationPath;
+      const cloneCalls: Array<{ cwd: string; args: ReadonlyArray<string> }> = [];
 
-      assert.deepStrictEqual(result, {
-        cwd: destinationPath,
-        remoteUrl: CLONE_URLS.url,
-        repository: { provider: SourceControlProviderKind.make("github"), ...CLONE_URLS },
-      });
-      assert.deepStrictEqual(cloneCalls, [
-        {
-          cwd: parent,
-          args: ["clone", "--progress", "--", CLONE_URLS.url, "t3code"],
-        },
-      ]);
-    }).pipe(
-      Effect.provide(
-        layer({
-          git: {
-            execute: (input) =>
-              Effect.gen(function* () {
-                assert.isTrue(yield* fs.exists(parent).pipe(Effect.orDie));
-                cloneCalls.push({ cwd: input.cwd, args: input.args });
-                return processOutput();
-              }),
+      yield* Effect.gen(function* () {
+        const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+        const result = yield* service.cloneRepository({
+          provider: SourceControlProviderKind.make("github"),
+          repository: "octocat/t3code",
+          destinationPath,
+          projectLayout,
+          protocol: "https",
+        });
+
+        assert.deepStrictEqual(result, {
+          cwd: checkoutPath,
+          remoteUrl: CLONE_URLS.url,
+          repository: { provider: SourceControlProviderKind.make("github"), ...CLONE_URLS },
+        });
+        assert.deepStrictEqual(cloneCalls, [
+          {
+            cwd: path.dirname(checkoutPath),
+            args: ["clone", "--progress", "--", CLONE_URLS.url, path.basename(checkoutPath)],
           },
-        }),
-      ),
-    );
-  }).pipe(Effect.provide(NodeServices.layer)),
+        ]);
+      }).pipe(
+        Effect.provide(
+          layer({
+            git: {
+              execute: (input) =>
+                Effect.gen(function* () {
+                  assert.isTrue(yield* fs.exists(path.dirname(checkoutPath)).pipe(Effect.orDie));
+                  cloneCalls.push({ cwd: input.cwd, args: input.args });
+                  return processOutput();
+                }),
+            },
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect.each(["--bare", "source.git"])(
-  "clones a local repository named %s as a working tree",
-  (repositoryName) =>
+it.effect.each([
+  { repositoryName: "--bare", projectLayout: "direct" },
+  { repositoryName: "source.git", projectLayout: "direct" },
+  { repositoryName: "source.git", projectLayout: "worktree-folder" },
+] as const)(
+  "clones a local repository as a working tree: %j",
+  ({ repositoryName, projectLayout }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -213,9 +222,30 @@ it.effect.each(["--bare", "source.git"])(
         const result = yield* service.cloneRepository({
           remoteUrl: repositoryName,
           destinationPath,
+          projectLayout,
         });
-        assert.strictEqual(result.cwd, destinationPath);
-        assert.isTrue(yield* fs.exists(path.join(destinationPath, ".git")));
+        const checkoutPath =
+          projectLayout === "worktree-folder"
+            ? path.join(destinationPath, "main")
+            : destinationPath;
+        assert.strictEqual(result.cwd, checkoutPath);
+        assert.isTrue(yield* fs.exists(path.join(checkoutPath, ".git")));
+        const prepared = yield* service.prepareClone({
+          remoteUrl: path.join(parent, repositoryName),
+          destinationPath: path.join(parent, "tracked"),
+          projectLayout,
+        });
+        const tracked = yield* service.cloneRepository({
+          remoteUrl: prepared.cloneUrl,
+          destinationPath: prepared.destinationPath,
+        });
+        assert.strictEqual(
+          tracked.cwd,
+          projectLayout === "worktree-folder"
+            ? path.join(parent, "tracked", "main")
+            : path.join(parent, "tracked"),
+        );
+        assert.isTrue(yield* fs.exists(path.join(tracked.cwd, ".git")));
       }).pipe(Effect.provide(layer({ git: { execute: git.execute } })));
     }).pipe(
       Effect.provide(

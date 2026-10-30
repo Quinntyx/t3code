@@ -10,6 +10,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ProjectFolderLayout,
   TrimmedNonEmptyString,
   TrimmedString,
   type UnknownUnionMember,
@@ -516,6 +517,7 @@ export type ProjectEnsureScratchResult = typeof ProjectEnsureScratchResult.Type;
 
 export const ProjectCreateNewInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  projectLayout: Schema.optional(ProjectFolderLayout),
 });
 export type ProjectCreateNewInput = typeof ProjectCreateNewInput.Type;
 

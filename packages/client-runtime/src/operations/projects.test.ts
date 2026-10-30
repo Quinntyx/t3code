@@ -6,6 +6,8 @@ import {
   findExistingAddProject,
   getCloneDirectoryName,
   getDefaultCloneUrl,
+  getNewProjectPathPreview,
+  getNewProjectRepository,
   normalizePastedCloneUrl,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
@@ -62,6 +64,25 @@ describe("add project shared logic", () => {
     expect(getCloneDirectoryName("git@github.com:repo.git")).toBe("repo");
     expect(getCloneDirectoryName("  https://github.com/owner/repo.git  ")).toBe("repo");
   });
+
+  it.each([
+    ["direct", "/projects/pinball-stats"],
+    ["worktree-folder", "/projects/pinball-stats/main"],
+  ] as const)(
+    "keeps the project name when previewing and publishing a %s layout",
+    (projectLayout, expected) => {
+      const preview = getNewProjectPathPreview("/projects", "Pinball Stats", projectLayout);
+      expect(preview).toBe(expected);
+      const target = { owner: "octocat" };
+      expect(getNewProjectRepository(target, "/projects/pinball-stats", projectLayout)).toBe(
+        "octocat/pinball-stats",
+      );
+      expect(getNewProjectRepository(target, preview, projectLayout)).toBe("octocat/pinball-stats");
+      expect(getNewProjectRepository(target, preview.replaceAll("/", "\\"), projectLayout)).toBe(
+        "octocat/pinball-stats",
+      );
+    },
+  );
 
   it("keeps a numeric repository name that sits on a path", () => {
     expect(getCloneDirectoryName("https://github.com/acme/123.git")).toBe("123");

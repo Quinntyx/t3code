@@ -337,49 +337,55 @@ const TEST_IDENTITY = {
 const gitOutput = (cwd: string, args: ReadonlyArray<string>) =>
   git(cwd, args).pipe(Effect.map((result) => result.stdout.trim()));
 
-it.effect("starts a named project as a committed repository, and suffixes a taken name", () =>
-  withScratch(({ baseDir }) =>
-    withGitEnv(
-      TEST_IDENTITY,
-      Effect.gen(function* () {
-        const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
-        const projects = yield* ProjectService.ProjectService;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const root = path.resolve(baseDir, "projects");
-        assert.equal(folders.namedProjectsRoot, root);
+it.effect.each(["direct", "worktree-folder"] as const)(
+  "starts a %s named project as a committed repository, and suffixes a taken name",
+  (projectLayout) =>
+    withScratch(({ baseDir }) =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const projects = yield* ProjectService.ProjectService;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const root = path.resolve(baseDir, "projects");
+          assert.equal(folders.namedProjectsRoot, root);
 
-        const first = yield* folders.createNamedProject({ name: "Pinball Stats" });
-        const second = yield* folders.createNamedProject({ name: "pinball stats" });
+          const first = yield* folders.createNamedProject({ name: "Pinball Stats", projectLayout });
+          const second = yield* folders.createNamedProject({
+            name: "pinball stats",
+            projectLayout,
+          });
+          const checkout = projectLayout === "worktree-folder" ? ["main"] : [];
 
-        assert.equal(first.workspaceRoot, path.join(root, "pinball-stats"));
-        assert.equal(second.workspaceRoot, path.join(root, "pinball-stats-2"));
-        assert.isUndefined(first.commitError);
-        const project = Option.getOrThrow(yield* projects.getById(first.projectId));
-        assert.equal(project.title, "Pinball Stats");
-        assert.equal(project.workspaceRoot, first.workspaceRoot);
+          assert.equal(first.workspaceRoot, path.join(root, "pinball-stats", ...checkout));
+          assert.equal(second.workspaceRoot, path.join(root, "pinball-stats-2", ...checkout));
+          assert.isUndefined(first.commitError);
+          const project = Option.getOrThrow(yield* projects.getById(first.projectId));
+          assert.equal(project.title, "Pinball Stats");
+          assert.equal(project.workspaceRoot, first.workspaceRoot);
 
-        const readme = yield* fileSystem.readFileString(
-          path.join(first.workspaceRoot, "README.md"),
-        );
-        assert.include(readme, "# Pinball Stats");
-        assert.include(readme, `src="assets/icon.svg"`);
-        const icon = yield* fileSystem.readFileString(
-          path.join(first.workspaceRoot, "assets", "icon.svg"),
-        );
-        assert.include(icon, ">PS</text>");
-        assert.equal(
-          yield* gitOutput(first.workspaceRoot, ["log", "--format=%s"]),
-          "Initial commit",
-        );
-        assert.equal(
-          yield* gitOutput(first.workspaceRoot, ["rev-parse", "--abbrev-ref", "HEAD"]),
-          "main",
-        );
-        assert.equal(yield* gitOutput(first.workspaceRoot, ["status", "--porcelain"]), "");
-      }),
+          const readme = yield* fileSystem.readFileString(
+            path.join(first.workspaceRoot, "README.md"),
+          );
+          assert.include(readme, "# Pinball Stats");
+          assert.include(readme, `src="assets/icon.svg"`);
+          const icon = yield* fileSystem.readFileString(
+            path.join(first.workspaceRoot, "assets", "icon.svg"),
+          );
+          assert.include(icon, ">PS</text>");
+          assert.equal(
+            yield* gitOutput(first.workspaceRoot, ["log", "--format=%s"]),
+            "Initial commit",
+          );
+          assert.equal(
+            yield* gitOutput(first.workspaceRoot, ["rev-parse", "--abbrev-ref", "HEAD"]),
+            "main",
+          );
+          assert.equal(yield* gitOutput(first.workspaceRoot, ["status", "--porcelain"]), "");
+        }),
+      ),
     ),
-  ),
 );
 
 it.effect("gives concurrent named projects with the same name distinct folders", () =>

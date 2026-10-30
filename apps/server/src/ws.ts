@@ -1796,6 +1796,7 @@ export const layerWsRpc = (
             onSome: (root) => ({ scratchWorkspaceRoot: root }),
           }),
           newProjectsRoot: managedFolders.namedProjectsRoot,
+          projectWorktreeFolder: true,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
         };
       });

@@ -288,7 +288,11 @@ export const make = Effect.gen(function* () {
   const prepareClone = Effect.fn("SourceControlRepositoryService.prepareClone")(function* (
     input: SourceControlCloneRepositoryInput,
   ) {
-    const preparedDestination = yield* prepareDestination(input.destinationPath);
+    const container = yield* prepareDestination(input.destinationPath);
+    const preparedDestination =
+      input.projectLayout === "worktree-folder"
+        ? yield* prepareDestination(path.join(container.destinationPath, "main"))
+        : container;
     let repository: SourceControlRepositoryInfo | null = null;
     let remoteUrl = input.remoteUrl?.trim() ?? null;
     let provider: SourceControlProviderKind =
@@ -310,6 +314,14 @@ export const make = Effect.gen(function* () {
         provider,
         detail: "Enter a repository path or clone URL before cloning.",
       });
+    }
+
+    if (
+      input.projectLayout === "worktree-folder" &&
+      !path.isAbsolute(remoteUrl) &&
+      !remoteUrl.includes(":")
+    ) {
+      remoteUrl = path.resolve(container.parentPath, remoteUrl);
     }
 
     return {

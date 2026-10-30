@@ -108,6 +108,7 @@ interface EnvironmentOption {
   readonly machine: EnvironmentMachineKind;
   readonly baseDirectory: string | null;
   readonly newProjectsRoot: string | null;
+  readonly supportsWorktreeFolder: boolean;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
   readonly connectionErrorTraceId: string | null;
@@ -398,6 +399,7 @@ function useEnvironmentOptions(
         machine: resolveEnvironmentMachineKind(config ?? null),
         baseDirectory: config?.settings.addProjectBaseDirectory ?? null,
         newProjectsRoot: config?.newProjectsRoot ?? null,
+        supportsWorktreeFolder: config?.projectWorktreeFolder === true,
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
@@ -987,6 +989,44 @@ function FolderBrowser(props: {
   );
 }
 
+function ProjectLayoutOption(props: {
+  readonly value: boolean;
+  readonly onValueChange: (value: boolean) => void;
+  readonly disabled: boolean;
+}) {
+  return (
+    <ListSection>
+      <ListRow
+        title="Use worktree folder"
+        icon={
+          <SymbolView
+            name="folder"
+            size={Platform.OS === "android" ? 24 : 17}
+            tintColorClassName="accent-icon-muted"
+            type="monochrome"
+          />
+        }
+        subtitle={
+          props.value
+            ? "Repository in main/; room for sibling worktrees"
+            : "Repository directly in the project folder"
+        }
+        disabled={props.disabled}
+        isFirst
+        right={
+          <ThemedSwitch
+            accessibilityLabel="Use worktree folder"
+            value={props.value}
+            onValueChange={props.onValueChange}
+            disabled={props.disabled}
+          />
+        }
+        onPress={() => props.onValueChange(!props.value)}
+      />
+    </ListSection>
+  );
+}
+
 export function AddProjectNewScreen(props: { readonly environmentId?: string | string[] }) {
   const openNewTaskDraft = useOpenNewTaskDraft();
   const navigation = useNavigation();
@@ -1016,6 +1056,9 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   const publishTargets = getNewProjectPublishTargets(discoveryState.data);
   const [name, setName] = useState("");
   const [publishes, setPublishes] = useState(false);
+  const [useWorktreeFolder, setUseWorktreeFolder] = useState(false);
+  const projectLayout =
+    useWorktreeFolder && environment?.supportsWorktreeFolder ? "worktree-folder" : "direct";
   const [publishKind, setPublishKind] = useState<SourceControlProviderKind | null>(null);
   const publishTarget = getNewProjectPublishTarget(publishTargets, publishKind);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1023,7 +1066,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   const trimmedName = name.trim();
   const pathPreview =
     environment?.newProjectsRoot != null
-      ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName)
+      ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName, projectLayout)
       : null;
 
   const showMachines =
@@ -1073,7 +1116,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     setIsSubmitting(true);
     const result = await createNew({
       environmentId: environment.environmentId,
-      input: { name: trimmedName },
+      input: { name: trimmedName, projectLayout },
     });
     if (AsyncResult.isFailure(result)) {
       submittingRef.current = false;
@@ -1091,7 +1134,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         input: {
           cwd: workspaceRoot,
           provider: publishTarget.definition.kind,
-          repository: getNewProjectRepository(publishTarget, workspaceRoot),
+          repository: getNewProjectRepository(publishTarget, workspaceRoot, projectLayout),
           visibility: "private",
         },
       }).then((publishResult) => {
@@ -1158,13 +1201,18 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
             </Text>
           ) : null}
           {machineRows}
+          <ProjectLayoutOption
+            value={projectLayout === "worktree-folder"}
+            onValueChange={setUseWorktreeFolder}
+            disabled={isSubmitting || !environment?.supportsWorktreeFolder}
+          />
           {publishTarget !== null ? (
             <ListSection>
               <ListRow
                 title={`Create private repository on ${publishTarget.definition.label}`}
                 subtitle={
                   trimmedName.length > 0 && pathPreview !== null
-                    ? getNewProjectRepository(publishTarget, pathPreview)
+                    ? getNewProjectRepository(publishTarget, pathPreview, projectLayout)
                     : publishTarget.owner
                 }
                 icon={
@@ -1341,6 +1389,7 @@ export function AddProjectDestinationScreen(props: {
     AuthOrchestrationOperateScope,
   );
   const canCloneProject = canWriteSourceControl && canCreateProject;
+  const [useWorktreeFolder, setUseWorktreeFolder] = useState(false);
   const remoteUrl = stringParam(props.remoteUrl);
   const repositoryTitle = stringParam(props.repositoryTitle);
   const prompt = stringParam(props.prompt);
@@ -1386,6 +1435,8 @@ export function AddProjectDestinationScreen(props: {
         createdAt: new Date().toISOString(),
         remoteUrl,
         destinationPath: resolved.path,
+        projectLayout:
+          useWorktreeFolder && environment.supportsWorktreeFolder ? "worktree-folder" : "direct",
       },
     });
     if (AsyncResult.isFailure(startResult)) {
@@ -1436,6 +1487,11 @@ export function AddProjectDestinationScreen(props: {
       {environment ? (
         <>
           <ProjectPathInput value={pathInput} onChangeText={setPathInput} onSubmit={submitPath} />
+          <ProjectLayoutOption
+            value={useWorktreeFolder && environment.supportsWorktreeFolder}
+            onValueChange={setUseWorktreeFolder}
+            disabled={isSubmitting || !environment.supportsWorktreeFolder}
+          />
           <PrimaryActionButton
             label="Clone project"
             disabled={!canCloneProject || isBrowseNavigating || isSubmitting || !remoteUrl}

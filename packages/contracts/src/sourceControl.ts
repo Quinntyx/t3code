@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PositiveInt, ProjectFolderLayout, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { VcsDriverKind } from "./vcs.ts";
 
 /** Accept unknown hosts so clients can fall back to generic presentation. */
@@ -71,6 +71,7 @@ export const SourceControlCloneRepositoryInput = Schema.Struct({
   repository: Schema.optional(TrimmedNonEmptyString),
   remoteUrl: Schema.optional(TrimmedNonEmptyString),
   destinationPath: TrimmedNonEmptyString,
+  projectLayout: Schema.optional(ProjectFolderLayout),
   protocol: Schema.optional(SourceControlCloneProtocol),
 });
 export type SourceControlCloneRepositoryInput = typeof SourceControlCloneRepositoryInput.Type;

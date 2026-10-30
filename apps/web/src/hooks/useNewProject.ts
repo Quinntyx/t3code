@@ -7,7 +7,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectFolderLayout } from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { waitForProject } from "~/state/entities";
@@ -34,6 +34,7 @@ export function useNewProject() {
     readonly environmentId: EnvironmentId;
     readonly workspaceRoot: string;
     readonly target: NewProjectPublishTarget;
+    readonly projectLayout: ProjectFolderLayout;
   }) => {
     const { label } = input.target.definition;
     const result = await publishRepository({
@@ -41,7 +42,7 @@ export function useNewProject() {
       input: {
         cwd: input.workspaceRoot,
         provider: input.target.definition.kind,
-        repository: getNewProjectRepository(input.target, input.workspaceRoot),
+        repository: getNewProjectRepository(input.target, input.workspaceRoot, input.projectLayout),
         visibility: "private",
       },
     });
@@ -70,11 +71,12 @@ export function useNewProject() {
   return async (input: {
     readonly environmentId: EnvironmentId;
     readonly name: string;
+    readonly projectLayout: ProjectFolderLayout;
     readonly publishTo: NewProjectPublishTarget | null;
   }): Promise<boolean> => {
     const result = await createNew({
       environmentId: input.environmentId,
-      input: { name: input.name },
+      input: { name: input.name, projectLayout: input.projectLayout },
     });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
@@ -106,6 +108,7 @@ export function useNewProject() {
         environmentId: input.environmentId,
         workspaceRoot,
         target: input.publishTo,
+        projectLayout: input.projectLayout,
       });
     }
 

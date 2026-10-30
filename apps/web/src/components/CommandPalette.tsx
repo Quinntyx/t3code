@@ -481,6 +481,14 @@ function OpenCommandPaletteDialog(props: {
     readonly sourcesEnvironmentId: EnvironmentId | null;
   } | null>(null);
   const [newProjectPublishes, setNewProjectPublishes] = useState(false);
+  const [useWorktreeFolder, setUseWorktreeFolder] = useState(false);
+  const supportsWorktreeFolder =
+    environments.find(
+      (environment) =>
+        environment.environmentId ===
+        (newProjectFlow?.environmentId ?? addProjectCloneFlow?.environmentId),
+    )?.serverConfig?.projectWorktreeFolder === true;
+  const projectLayout = useWorktreeFolder && supportsWorktreeFolder ? "worktree-folder" : "direct";
   const [newProjectPublishKind, setNewProjectPublishKind] =
     useState<SourceControlProviderKind | null>(null);
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
@@ -878,6 +886,7 @@ function OpenCommandPaletteDialog(props: {
     source: AddProjectRemoteSource,
   ): void => {
     setAddProjectEnvironmentId(environmentId);
+    setUseWorktreeFolder(false);
     setAddProjectCloneFlow({ step: "repository", environmentId, source });
     pushPaletteView({
       addonIcon: remoteProjectSourceIcon(source, ADDON_ICON_CLASS),
@@ -897,6 +906,7 @@ function OpenCommandPaletteDialog(props: {
     setAddProjectEnvironmentId(environmentId);
     setAddProjectCloneFlow(null);
     setNewProjectFlow({ environmentId, sourcesEnvironmentId });
+    setUseWorktreeFolder(false);
     setNewProjectPublishes(false);
     setNewProjectPublishKind(null);
     pushPaletteView({
@@ -1812,6 +1822,7 @@ function OpenCommandPaletteDialog(props: {
       createNewProject({
         environmentId: newProjectFlow.environmentId,
         name: newProjectName,
+        projectLayout,
         publishTo: newProjectPublishes ? newProjectPublishTarget : null,
       }),
     );
@@ -1965,6 +1976,7 @@ function OpenCommandPaletteDialog(props: {
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,
         destinationPath,
+        projectLayout,
       },
     });
     setIsRemoteProjectCloning(false);
@@ -2057,7 +2069,9 @@ function OpenCommandPaletteDialog(props: {
 
   const newProjectsRoot = newProjectFlow ? newProjectsRootFor(newProjectFlow.environmentId) : null;
   const newProjectPathPreview =
-    newProjectsRoot === null ? null : getNewProjectPathPreview(newProjectsRoot, newProjectName);
+    newProjectsRoot === null
+      ? null
+      : getNewProjectPathPreview(newProjectsRoot, newProjectName, projectLayout);
   const newProjectPublishToggleValue = "new-project:publish";
   const showExistingProjectSources = (environmentId: EnvironmentId) => {
     const sourcesEnvironmentId = newProjectFlow?.sourcesEnvironmentId ?? null;
@@ -2136,6 +2150,34 @@ function OpenCommandPaletteDialog(props: {
             },
           ],
         };
+  const layoutOptionGroup: CommandPaletteView["groups"][number] = {
+    value: "project-layout",
+    label: "Folder layout",
+    items: [
+      {
+        kind: "action",
+        value: "project-layout:worktree-folder",
+        searchTerms: [],
+        title: "Use worktree folder",
+        description: !supportsWorktreeFolder
+          ? "Update this server to choose a folder layout"
+          : projectLayout === "worktree-folder"
+            ? "Repository in main/; room for sibling worktrees"
+            : "Repository directly in the project folder",
+        icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+        titleTrailingContent: (
+          <span className="pointer-events-none ms-auto flex">
+            <Checkbox checked={projectLayout === "worktree-folder"} tabIndex={-1} aria-hidden />
+          </span>
+        ),
+        disabled: !supportsWorktreeFolder || isCreatingNewProject || isRemoteProjectCloning,
+        keepOpen: true,
+        run: async () => {
+          setUseWorktreeFolder((value) => !value);
+        },
+      },
+    ],
+  };
   const newProjectOptionGroups: CommandPaletteView["groups"] =
     newProjectPublishTarget === null || newProjectPathPreview === null
       ? []
@@ -2154,7 +2196,11 @@ function OpenCommandPaletteDialog(props: {
                     : `Create private repository on ${newProjectPublishTarget.definition.label}`,
                 description:
                   newProjectName.length > 0
-                    ? getNewProjectRepository(newProjectPublishTarget, newProjectPathPreview)
+                    ? getNewProjectRepository(
+                        newProjectPublishTarget,
+                        newProjectPathPreview,
+                        projectLayout,
+                      )
                     : (newProjectPublishTarget.owner ??
                       `Your ${newProjectPublishTarget.definition.label} account`),
                 icon: sourceControlHostIcon(newProjectPublishTarget.definition, ITEM_ICON_CLASS),
@@ -2187,13 +2233,17 @@ function OpenCommandPaletteDialog(props: {
   if (newProjectFlow !== null) {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),
+      layoutOptionGroup,
       ...newProjectOptionGroups,
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];
   } else if (addProjectCloneFlow?.step === "repository") {
     displayedGroups = [];
   } else if (addProjectCloneFlow?.step === "confirm") {
-    displayedGroups = relativePathNeedsActiveProject ? [] : cloneDestinationBrowseGroups;
+    displayedGroups = [
+      layoutOptionGroup,
+      ...(relativePathNeedsActiveProject ? [] : cloneDestinationBrowseGroups),
+    ];
   } else if (isBrowsing) {
     displayedGroups = relativePathNeedsActiveProject ? [] : browseGroups;
   }
@@ -2207,7 +2257,10 @@ function OpenCommandPaletteDialog(props: {
       : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
         getCommandPaletteInputPlaceholder(paletteMode));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
-  const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
+  const hasHighlightedBrowseItem =
+    highlightedItemValue !== null &&
+    (highlightedItemValue.startsWith("browse:") ||
+      highlightedItemValue === "project-layout:worktree-folder");
   const canWriteSourceControl = useEnvironmentScope(
     addProjectCloneFlow?.environmentId ?? null,
     AuthSourceControlWriteScope,

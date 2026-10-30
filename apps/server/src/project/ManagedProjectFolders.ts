@@ -1,6 +1,7 @@
 import {
   CommandId,
   type GitManagerServiceError,
+  type ProjectCreateNewInput,
   ProjectId,
   type ThreadId,
   VcsProcessSpawnError,
@@ -99,7 +100,7 @@ export class ManagedProjectFolders extends Context.Service<
     }) => Effect.Effect<Option.Option<string>, ScratchFolderError>;
     readonly namedProjectsRoot: string;
     /** Removes failed/cancelled creations' folders only while no project owns them. */
-    readonly createNamedProject: (input: { readonly name: string }) => Effect.Effect<
+    readonly createNamedProject: (input: ProjectCreateNewInput) => Effect.Effect<
       {
         readonly projectId: ProjectId;
         readonly workspaceRoot: string;
@@ -421,16 +422,28 @@ const make = Effect.gen(function* () {
   const createNamedProject: ManagedProjectFolders["Service"]["createNamedProject"] = Effect.fn(
     "ManagedProjectFolders.createNamedProject",
   )(function* (input) {
-    const workspaceRoot = yield* claimNamedFolder(input.name);
-    const removeFolder = fileSystem.remove(workspaceRoot, { recursive: true }).pipe(Effect.ignore);
-    const prepared = yield* Effect.all([
-      scaffoldRepository(workspaceRoot, input.name).pipe(
-        Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
+    const folder = yield* claimNamedFolder(input.name);
+    const workspaceRoot =
+      input.projectLayout === "worktree-folder" ? path.join(folder, "main") : folder;
+    const removeFolder = fileSystem.remove(folder, { recursive: true }).pipe(Effect.ignore);
+    const prepared = yield* fileSystem.makeDirectory(workspaceRoot, { recursive: true }).pipe(
+      Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
+      Effect.andThen(
+        Effect.all([
+          scaffoldRepository(workspaceRoot, input.name).pipe(
+            Effect.mapError(
+              (cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause }),
+            ),
+          ),
+          crypto
+            .randomUUIDv4()
+            .pipe(
+              Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })),
+            ),
+        ]),
       ),
-      crypto
-        .randomUUIDv4()
-        .pipe(Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause }))),
-    ]).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : removeFolder)));
+      Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : removeFolder)),
+    );
     const [commitError, id] = prepared;
     const project = yield* projects
       .create({
