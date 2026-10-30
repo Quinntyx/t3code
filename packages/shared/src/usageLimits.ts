@@ -6,6 +6,7 @@ import {
   resolveProjectProviderInstanceEnabled,
   type UsageLimitsReport,
   type ProviderInstanceId,
+  type ProviderDriverKind,
   type ProviderConsumeResetCreditInput,
   type ServerProviderSlashCommand,
   isProviderAvailable,
@@ -22,8 +23,10 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-export function exhaustedUsageWindow(
-  provider: ServerProvider | undefined,
+type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
+
+function exhaustedUsageWindows(
+  provider: UsageLimitProvider | undefined,
   now: number,
   model?: string,
 ) {
@@ -34,16 +37,22 @@ export function exhaustedUsageWindow(
         !Number.isFinite(Date.parse(window.resetsAt)) ||
         Date.parse(window.resetsAt) > now),
   );
-  if (model === undefined) return exhausted[0];
+  if (model === undefined) return exhausted;
   switch (provider?.driver) {
     case "cursor": {
       const api = exhausted.find((window) => window.id === "apiPercentUsed");
       const auto = exhausted.find((window) => window.id === "autoPercentUsed");
-      return /^(auto|default|grok|composer)/.test(model) ? auto && api : api;
+      return /^(auto|default|grok|composer)/.test(model)
+        ? auto && api
+          ? [api, auto]
+          : []
+        : api
+          ? [api]
+          : [];
     }
     case "antigravity": {
       const family = model.match(/^(gemini|claude|gpt)-/)?.[1];
-      return exhausted.find((window) => {
+      return exhausted.filter((window) => {
         const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
         return (
           pool === undefined ||
@@ -53,13 +62,75 @@ export function exhaustedUsageWindow(
         );
       });
     }
+    case "claudeAgent": {
+      const family = model.match(/(?:^|[-/])(opus|sonnet|haiku)(?:-|$)/)?.[1];
+      return exhausted.filter((window) => {
+        const scope = window.id.match(/^seven_day_(?:claude_)?(opus|sonnet|haiku)(?:_|$)/)?.[1];
+        return scope === undefined || family === undefined || scope === family;
+      });
+    }
     case "opencode":
-      return exhausted.find(
+      return exhausted.filter(
         (window) => !window.id.startsWith("go_") || model.startsWith("opencode-go/"),
       );
     default:
-      return exhausted[0];
+      return exhausted;
   }
+}
+
+export function exhaustedUsageWindow(
+  provider: ServerProvider | undefined,
+  now: number,
+  model?: string,
+) {
+  return exhaustedUsageWindows(provider, now, model)[0];
+}
+
+export function usageLimitResetAt(
+  provider: UsageLimitProvider | undefined,
+  now: number,
+  model?: string,
+): string | null {
+  if (provider?.usageLimits?.unavailable) return null;
+  const windows = exhaustedUsageWindows(provider, now, model);
+  if (windows.length === 0) return null;
+  const resets = windows.map((window) => Date.parse(window.resetsAt ?? ""));
+  // Cursor's own models can spend either pool; other limits must all reset.
+  const alternativePools =
+    provider?.driver === "cursor" &&
+    model !== undefined &&
+    /^(auto|default|grok|composer)/.test(model);
+  if (!alternativePools && resets.some((reset) => !Number.isFinite(reset))) return null;
+  const known = resets.filter(Number.isFinite);
+  if (known.length === 0) return null;
+  const reset = alternativePools ? Math.min(...known) : Math.max(...known);
+  return DateTime.formatIso(DateTime.makeUnsafe(reset));
+}
+
+export function usageLimitSourceResetAt(
+  sources: UsageLimitSourceSnapshots,
+  driver: ProviderDriverKind,
+  now: number,
+  model?: string,
+): string | null {
+  const modelId = model?.split(/[/:]/).at(-1);
+  const quotaDriver = modelId?.startsWith("claude-")
+    ? "claudeAgent"
+    : modelId !== undefined && /^(?:gpt-|codex(?:-|$)|o\d(?:-|$))/.test(modelId)
+      ? "codex"
+      : driver;
+  let earliest: string | null = null;
+  for (const source of sources) {
+    if (source.error) continue;
+    for (const account of source.accounts) {
+      if (account.driver !== quotaDriver) continue;
+      const resetAt = usageLimitResetAt(account, now, model);
+      if (resetAt !== null && (earliest === null || Date.parse(resetAt) < Date.parse(earliest))) {
+        earliest = resetAt;
+      }
+    }
+  }
+  return earliest;
 }
 
 export function resolveNewThreadModelSelection(input: {
