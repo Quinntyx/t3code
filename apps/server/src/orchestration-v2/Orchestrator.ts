@@ -459,6 +459,7 @@ const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLin
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
     case "thread.create":
+    case "thread.machine-import":
     case "thread.archive":
     case "thread.unarchive":
     case "thread.delete":
@@ -905,7 +906,9 @@ export function shouldPrepareLegacyImportHandoff(input: {
   readonly legacyImportItemCount: number;
 }): boolean {
   return (
-    input.historyOrigin === "v1_import" && !input.hasCompletedRun && input.legacyImportItemCount > 0
+    (input.historyOrigin === "v1_import" || input.historyOrigin === "machine_handoff") &&
+    !input.hasCompletedRun &&
+    input.legacyImportItemCount > 0
   );
 }
 
@@ -5825,7 +5828,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const latestCompletedRun = projection.runs.findLast((run) => run.status === "completed");
     const latestHandoffRun = projection.runs.findLast(isHandoffSourceRun);
     const legacyImportItems =
-      projection.thread.historyOrigin === "v1_import"
+      projection.thread.historyOrigin === "v1_import" ||
+      projection.thread.historyOrigin === "machine_handoff"
         ? yield* readHandoffItems(command.threadId, [null])
         : [];
     const isProviderSwitch =
@@ -5887,16 +5891,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         hasCompletedRun: latestCompletedRun !== undefined,
         legacyImportItemCount: legacyImportItems.length,
       })
-        ? yield* contextHandoffService
-            .prepareLegacyImport({
-              threadId: command.threadId,
-              targetRunId: runId,
-              toProviderThreadId: providerThreadId,
-              toProviderInstanceId: modelSelection.instanceId,
-              items: legacyImportItems,
-              createdAt: now,
-            })
-            .pipe(mapDispatchError(command))
+        ? yield* (
+            projection.thread.historyOrigin === "machine_handoff"
+              ? contextHandoffService.prepareProviderHandoff({
+                  threadId: command.threadId,
+                  targetRunId: runId,
+                  transferId: null,
+                  fromProviderThreadIds: [],
+                  toProviderThreadId: providerThreadId,
+                  fromProviderInstanceId: modelSelection.instanceId,
+                  toProviderInstanceId: modelSelection.instanceId,
+                  coveredRunOrdinals: { from: 1, to: 1 },
+                  strategy: "full_thread_summary",
+                  items: legacyImportItems,
+                  createdAt: now,
+                })
+              : contextHandoffService.prepareLegacyImport({
+                  threadId: command.threadId,
+                  targetRunId: runId,
+                  toProviderThreadId: providerThreadId,
+                  toProviderInstanceId: modelSelection.instanceId,
+                  items: legacyImportItems,
+                  createdAt: now,
+                })
+          ).pipe(mapDispatchError(command))
         : null;
       const providerThread: OrchestrationV2ProviderThread =
         activeProviderThread === undefined
@@ -12397,6 +12415,74 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
         break;
+      case "thread.machine-import": {
+        yield* dispatchThreadCreate({ ...command, type: "thread.create" }, events);
+        const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+        const now = yield* DateTime.now;
+        const emitEvent = emit(events, command);
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: { ...projection.thread, historyOrigin: "machine_handoff" },
+        });
+        for (const [ordinal, message] of command.context.entries()) {
+          const messageId = MessageId.make(`machine:${command.commandId}:${ordinal}`);
+          yield* emitEvent({
+            type: "message.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: {
+              id: messageId,
+              threadId: command.threadId,
+              runId: null,
+              nodeId: null,
+              createdBy: message.role === "user" ? "user" : "agent",
+              creationSource: "server",
+              ...message,
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+          const base = {
+            id: TurnItemId.make(`machine:${command.commandId}:${ordinal}`),
+            threadId: command.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal,
+            status: "completed" as const,
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            messageId,
+            text: message.text,
+          };
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload:
+              message.role === "user"
+                ? {
+                    ...base,
+                    type: "user_message",
+                    createdBy: "user",
+                    creationSource: "server",
+                    inputIntent: "turn_start",
+                    attachments: [],
+                  }
+                : { ...base, type: "assistant_message", streaming: false },
+          });
+        }
+        break;
+      }
       case "thread.visit":
         yield* dispatchThreadVisit(command, events);
         break;

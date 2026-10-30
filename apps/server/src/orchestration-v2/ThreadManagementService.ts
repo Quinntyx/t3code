@@ -681,6 +681,12 @@ const make = Effect.gen(function* () {
 
   const assertDispatchTargetEnabled = (command: OrchestrationV2ServerCommand) => {
     switch (command.type) {
+      case "thread.machine-import":
+        return assertProviderInstanceEnabled({
+          projectId: command.projectId,
+          commandId: command.commandId,
+          instanceId: command.modelSelection.instanceId,
+        });
       case "message.dispatch":
         return orchestrator.getThreadRecords(command.threadId, []).pipe(
           Effect.flatMap((projection) =>

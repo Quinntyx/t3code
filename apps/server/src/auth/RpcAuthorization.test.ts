@@ -12,7 +12,9 @@ import {
   AuthSourceControlWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  MachineHandoffError,
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -35,6 +37,8 @@ describe("RPC authorization scopes", () => {
 
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
     for (const method of [
+      ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff,
+      ORCHESTRATION_V2_WS_METHODS.importMachineHandoff,
       WS_METHODS.scheduledTasksListWebhookDeliveries,
       WS_METHODS.scheduledTasksGetWebhookDelivery,
       WS_METHODS.scheduledTasksRotateWebhookToken,
@@ -87,6 +91,43 @@ it("requires operate permission for tool updates even alongside a read-only chec
     AuthOrchestrationOperateScope,
   );
   expect(requiredScopeForDeviceList({ updateTool: "hub" })).toBe(AuthOrchestrationOperateScope);
+});
+
+describe("machine handoff authorization", () => {
+  const method = ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+    ),
+  );
+  it.effect.each([
+    { scopes: [AuthOrchestrationReadScope], missing: AuthOrchestrationOperateScope },
+    { scopes: [AuthOrchestrationOperateScope], missing: AuthSourceControlWriteScope },
+  ])("refuses export without $missing before touching Git", ({ scopes, missing }) =>
+    Effect.gen(function* () {
+      let handled = false;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(method, () =>
+              Effect.sync(() => {
+                handled = true;
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(new MachineHandoffError({ message: "handler reached" })),
+                ),
+              ),
+            ),
+            RpcAuthorization.layer(scopes),
+          ),
+        ),
+      );
+      expect(
+        yield* client[method]({ threadId: ThreadId.make("source") }).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "EnvironmentAuthorizationError", requiredPermission: missing });
+      expect(handled).toBe(false);
+    }).pipe(Effect.scoped),
+  );
 });
 
 describe("RPC scope middleware", () => {

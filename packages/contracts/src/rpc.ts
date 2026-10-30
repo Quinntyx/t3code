@@ -34,6 +34,13 @@ import {
   ChatGptHandoffState,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import {
+  MachineHandoffExportInput,
+  MachineHandoffSnapshot,
+  MachineHandoffImportInput,
+  MachineHandoffImportResult,
+  MachineHandoffError,
+} from "./machineHandoff.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -1799,6 +1806,17 @@ const WsOrchestrationV2GetTurnItemRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
   error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
 });
 
+const WsExportMachineHandoffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff, {
+  payload: MachineHandoffExportInput,
+  success: MachineHandoffSnapshot,
+  error: Schema.Union([MachineHandoffError, EnvironmentAuthorizationError]),
+});
+const WsImportMachineHandoffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.importMachineHandoff, {
+  payload: MachineHandoffImportInput,
+  success: MachineHandoffImportResult,
+  error: Schema.Union([MachineHandoffError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.launchThread, {
   payload: OrchestrationV2RpcSchemas.launchThread.input,
   success: OrchestrationV2RpcSchemas.launchThread.output,
@@ -1947,6 +1965,8 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const WsRpcGroup = RpcGroup.make(
+  WsExportMachineHandoffRpc,
+  WsImportMachineHandoffRpc,
   WsGuestShareCreateRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,

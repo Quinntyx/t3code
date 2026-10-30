@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import {
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
@@ -356,6 +357,18 @@ export function createThreadEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) =>
           `history:${JSON.stringify([environmentId, input.threadId])}`,
       },
+    }),
+    exportMachineHandoff: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:export-machine-handoff",
+      tag: ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff,
+      scheduler,
+      concurrency,
+    }),
+    importMachineHandoff: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:import-machine-handoff",
+      tag: ORCHESTRATION_V2_WS_METHODS.importMachineHandoff,
+      scheduler,
+      concurrency,
     }),
     uploadFeedback: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:commands:thread:upload-feedback",

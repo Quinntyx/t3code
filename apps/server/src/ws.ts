@@ -117,6 +117,8 @@ import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as MachineHandoffService from "./orchestration-v2/MachineHandoffService.ts";
+import { MachineHandoffError } from "@t3tools/contracts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -1230,6 +1232,7 @@ export const layerWsRpc = (
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
         | ThreadLaunchService.ThreadLaunchService
+        | MachineHandoffService.MachineHandoffService
         | FileSystem.FileSystem
         | ServerConfig.ServerConfig
         | ServerSettings.ServerSettingsService
@@ -1264,6 +1267,7 @@ export const layerWsRpc = (
         ).pipe(Effect.ignore);
       };
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+      const machineHandoff = yield* MachineHandoffService.MachineHandoffService;
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
@@ -2023,6 +2027,14 @@ export const layerWsRpc = (
                 ),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff]: (input) =>
+          startup
+            .enqueueCommand(machineHandoff.exportSnapshot(input))
+            .pipe(Effect.mapError((cause) => new MachineHandoffError({ message: cause.message }))),
+        [ORCHESTRATION_V2_WS_METHODS.importMachineHandoff]: (input) =>
+          startup
+            .enqueueCommand(machineHandoff.importSnapshot(input))
+            .pipe(Effect.mapError((cause) => new MachineHandoffError({ message: cause.message }))),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": input.commandId,
