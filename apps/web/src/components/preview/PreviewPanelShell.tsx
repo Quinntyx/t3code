@@ -165,7 +165,8 @@ function PreviewPanelShellFrame(
         <div
           className={cn(
             "flex h-full min-h-0 min-w-0 flex-col",
-            floating && "relative z-0 overflow-hidden rounded-glass shadow-float",
+            floating &&
+              "relative z-0 overflow-hidden rounded-(--floating-panel-radius) shadow-float [&_[data-right-panel-tabbar]]:pl-3.5",
             // Its shadow would otherwise peek in from beyond the window edge once closed.
             floating &&
               collapsible &&

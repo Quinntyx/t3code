@@ -383,8 +383,14 @@ function Sidebar({
             className={cn(
               "flex h-full w-full flex-col",
               variant === "floating"
-                ? // Rows keep a radius concentric with the card's corners.
-                  "relative z-0 overflow-hidden rounded-glass shadow-float [--control-radius:calc(var(--radius-glass)-var(--sidebar-content-inset)-1px)] [--panel-glass-tint:var(--sidebar)]"
+                ? cn(
+                    "relative z-0 overflow-hidden rounded-(--floating-panel-radius) shadow-float [--panel-glass-tint:var(--sidebar)]",
+                    // Rows and controls keep corners concentric with the card's.
+                    "[--sidebar-content-inset:0.625rem] [--sidebar-row-radius:calc(var(--floating-panel-radius)-var(--sidebar-content-inset))] [--control-radius:var(--sidebar-row-radius)] [&_[data-slot=sidebar-footer]]:pb-(--sidebar-content-inset)",
+                    // The window corner's sidebar toggle moves into the footer, so the brand
+                    // only clears window controls that overlap the card (macOS traffic lights).
+                    "[--workspace-titlebar-content-left:max(calc(var(--workspace-controls-left)-var(--floating-panel-gap)),calc(var(--sidebar-content-inset)+var(--sidebar-row-content-inset)))]",
+                  )
                 : "bg-sidebar surface-grain",
             )}
             data-sidebar="sidebar"

@@ -134,8 +134,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --glass-saturation: 1.14;
   /* One drop shadow for every floating surface: composer, details card, floating browser, and
      floating panels. Dark mode needs a deeper shadow to read against a dark canvas. */
-  --app-float-shadow: 0 12px 28px -12px rgb(0 0 0 / 20%);
+  --app-float-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 32px -8px rgb(0 0 0 / 12%);
   --floating-panel-gap: 0.5rem;
+  --floating-panel-radius: 1.75rem;
+  --sidebar-row-radius: calc(var(--radius) + 4px);
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
@@ -165,7 +167,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --app-scrollbar-thumb-hover: rgb(255 255 255 / 12%);
     --glass-blur: 16px;
     --glass-saturation: 1.08;
-    --app-float-shadow: 0 14px 32px -14px rgb(0 0 0 / 55%);
+    --app-float-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 10px 36px -10px rgb(0 0 0 / 50%);
   }
 }
 

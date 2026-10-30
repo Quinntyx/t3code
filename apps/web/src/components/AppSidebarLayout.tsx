@@ -319,7 +319,10 @@ function SidebarControl() {
   const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
+  // An open floating sidebar collapses from its own footer.
+  const handledBySidebarFooter = floatingPanels && !isMobile && isSidebarVisible;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
     context: { usagePageOpen },
   });
@@ -377,6 +380,7 @@ function SidebarControl() {
       className={cn(
         "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
         isMobile && mobileSheetMounted && "hidden",
+        handledBySidebarFooter && "hidden",
       )}
       data-sidebar-control=""
     >
@@ -384,7 +388,11 @@ function SidebarControl() {
         <TooltipTrigger
           render={
             <SidebarTrigger
-              variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
+              variant={
+                isSidebarVisible && stageBackdropVariant && !floatingPanels
+                  ? "media-navigation"
+                  : "ghost"
+              }
               className={cn(
                 "pointer-events-auto",
                 isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",

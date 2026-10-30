@@ -1450,7 +1450,7 @@ export default function ThreadTerminalDrawer({
     isPanel
       ? "h-full flex-1 bg-background"
       : floating
-        ? "z-45 mx-(--floating-panel-gap) mb-(--floating-panel-gap) shrink-0 rounded-glass shadow-float"
+        ? "z-45 mx-(--floating-panel-gap) mb-(--floating-panel-gap) shrink-0 rounded-(--floating-panel-radius) shadow-float"
         : "z-45 shrink-0 border-t border-border/80 bg-background",
   );
   const floatingGlass = floating ? <div aria-hidden className="panel-glass" /> : null;

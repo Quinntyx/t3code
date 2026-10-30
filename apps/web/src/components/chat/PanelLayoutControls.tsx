@@ -4,6 +4,7 @@ import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { useClientSettings } from "~/hooks/useSettings";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
@@ -182,9 +183,20 @@ export function WorkspaceTitlebarControls(props: {
   readonly onToggleMaximized: () => void;
   readonly children: ReactNode;
 }) {
+  // An open floating panel is inset from the window corner; its controls follow it in.
+  const insetForFloatingPanel =
+    useClientSettings((settings) => settings.floatingPanelsEnabled) &&
+    props.showMaximizeControl &&
+    props.rightPanelOpen;
   return (
     <div
-      className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
+      className={cn(
+        "pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        props.animationsActive &&
+          "motion-safe:transition-[margin] motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
+        insetForFloatingPanel &&
+          "mt-(--floating-panel-gap) mr-[calc(var(--floating-panel-gap)+0.25rem)]",
+      )}
       data-workspace-titlebar-controls
     >
       {props.showMaximizeControl ? (

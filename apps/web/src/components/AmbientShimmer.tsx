@@ -30,7 +30,7 @@ function AmbientShimmerCanvas() {
         ref={containerRef}
         className={cn(
           "absolute inset-0 transition-opacity duration-700 ease-out",
-          prominent ? "opacity-30" : "opacity-12",
+          prominent ? "opacity-18" : "opacity-6",
         )}
       />
     </div>
