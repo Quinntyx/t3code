@@ -101,6 +101,9 @@ function startClientAppearance(): void {
       }
     }
     applyLiquidGlass(settings);
+    if (previous?.ambientShimmerEnabled !== settings.ambientShimmerEnabled) {
+      root.toggleAttribute("data-ambient-shimmer", settings.ambientShimmerEnabled);
+    }
     if (
       previous?.fontFamilySans !== settings.fontFamilySans ||
       previous.fontFamilyCode !== settings.fontFamilyCode ||

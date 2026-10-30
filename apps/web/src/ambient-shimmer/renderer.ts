@@ -217,6 +217,8 @@ export function startAmbientShimmer(container: HTMLElement): AmbientShimmer {
 
   const themeObserver = new MutationObserver(() => {
     paletteStale = true;
+    // Repaint now: a throttled or paused frame loop would otherwise show the old theme.
+    draw();
     redraw();
   });
   themeObserver.observe(document.documentElement, {

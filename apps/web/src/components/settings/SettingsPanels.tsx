@@ -422,6 +422,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.ambientShimmerEnabled !== DEFAULT_UNIFIED_SETTINGS.ambientShimmerEnabled
       ? ["Ambient shimmer"]
       : []),
+    ...(settings.floatingPanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.floatingPanelsEnabled
+      ? ["Floating panels"]
+      : []),
     ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
       ? ["Diff colors"]
       : []),
@@ -635,6 +638,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       liquidGlassDispersion: DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion,
       liquidGlassGlare: DEFAULT_UNIFIED_SETTINGS.liquidGlassGlare,
       ambientShimmerEnabled: DEFAULT_UNIFIED_SETTINGS.ambientShimmerEnabled,
+      floatingPanelsEnabled: DEFAULT_UNIFIED_SETTINGS.floatingPanelsEnabled,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,

@@ -109,7 +109,7 @@ import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
 import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
-import { AmbientShimmer } from "./chat/AmbientShimmer";
+import { useAmbientShimmerProminence } from "~/ambient-shimmer/prominence";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -1596,8 +1596,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const backgroundThread = use(BackgroundThreadContext);
-  const ambientShimmer =
-    useClientSettings((settings) => settings.ambientShimmerEnabled) && !backgroundThread;
+  useAmbientShimmerProminence(isDraftHeroState && !backgroundThread);
   const scriptKeybindings =
     useAtomValue(serverEnvironment.configValueAtom(environmentId))?.keybindings ??
     DEFAULT_RESOLVED_KEYBINDINGS;
@@ -3180,7 +3179,7 @@ export default function ChatView(props: ChatViewProps) {
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background ambient-shimmer:bg-transparent"
     >
       <DeviceSetupDialogHost
         threadKey={activeThreadKey}
@@ -3190,14 +3189,13 @@ export default function ChatView(props: ChatViewProps) {
       {rightPanelControlsAtRoot ? panelLayoutControls : null}
       <div
         className={cn(
-          "relative flex min-h-0 min-w-0 flex-col overflow-x-hidden",
+          "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
         data-chat-column
         inert={rightPanelMaximized}
       >
-        {ambientShimmer ? <AmbientShimmer prominent={isDraftHeroState} /> : null}
         <header
           ref={threadPanelPopoverAnchorRef}
           data-chat-header
@@ -3212,7 +3210,7 @@ export default function ChatView(props: ChatViewProps) {
                 )
               : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-            !ambientShimmer && "bg-background",
+            "bg-background ambient-shimmer:bg-transparent",
           )}
         >
           {isElectron && rightPanelControlsAtRoot ? (
@@ -3280,10 +3278,7 @@ export default function ChatView(props: ChatViewProps) {
             />
             <div
               {...conversationArea}
-              className={cn(
-                "relative flex min-h-0 flex-1 flex-col",
-                !ambientShimmer && "bg-background",
-              )}
+              className="relative flex min-h-0 flex-1 flex-col bg-background ambient-shimmer:bg-transparent"
             >
               <ThreadTimeline
                 pendingApprovals={pendingApprovals}

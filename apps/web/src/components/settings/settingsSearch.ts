@@ -348,6 +348,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["glass specular highlight rim shine light reflection advanced"],
   },
   {
+    id: "setting-floating-panels",
+    title: "Floating panels",
+    to: "/settings/appearance",
+    searchTerms: ["sidebar right panel terminal drawer cards rounded margin layout"],
+  },
+  {
     id: "setting-ambient-shimmer",
     title: "Ambient shimmer",
     to: "/settings/appearance",

@@ -233,6 +233,31 @@ export function AppearanceSettingsPanel() {
           }
         />
         <SettingsRow
+          {...searchableSetting("setting-floating-panels")}
+          description="Float the sidebar, right panel, and terminal drawer as rounded glass cards with a margin from the window edges."
+          resetAction={
+            settings.floatingPanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.floatingPanelsEnabled ? (
+              <SettingResetButton
+                label="floating panels"
+                onClick={() =>
+                  updateSettings({
+                    floatingPanelsEnabled: DEFAULT_UNIFIED_SETTINGS.floatingPanelsEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              aria-label="Floating panels"
+              checked={settings.floatingPanelsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ floatingPanelsEnabled: Boolean(checked) })
+              }
+            />
+          }
+        />
+        <SettingsRow
           {...searchableSetting("effort-display")}
           description="Show reasoning effort in the composer as its name, such as High, or as bars."
           resetAction={
