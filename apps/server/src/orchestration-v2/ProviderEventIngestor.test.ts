@@ -15,6 +15,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
+  type ServerProvider,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
@@ -23,6 +24,7 @@ import {
   RunId,
   RuntimeRequestId,
   TurnItemId,
+  UsageLimitSourceId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -38,6 +40,7 @@ import * as Stream from "effect/Stream";
 
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as EventSink from "./EventSink.ts";
@@ -229,7 +232,7 @@ function threadCreatedEvent(
 
 const layer = it.layer(layerTest);
 
-it.effect("refreshes the failing instance snapshot after a committed usage_limit terminal", () =>
+it.effect("enriches quota failures and refreshes the failing instance", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const refreshed = yield* Deferred.make<void>();
@@ -241,6 +244,65 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
           }),
         ),
       );
+      const resetAt = "2026-09-03T14:00:00.000Z";
+      const snapshot: ServerProvider = {
+        instanceId: ProviderInstanceId.make("cursor-work"),
+        driver: ProviderDriverKind.make("cursor"),
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-09-03T12:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt: "2026-09-03T12:00:00.000Z",
+          windows: [
+            {
+              id: "apiPercentUsed",
+              kind: "monthly",
+              label: "Other models",
+              usedPercent: 100,
+              resetsAt: resetAt,
+            },
+          ],
+        },
+      };
+      let currentSnapshot = snapshot;
+      const sources = Layer.mock(UsageLimitSources.UsageLimitSources)({
+        current: Effect.succeed([
+          {
+            id: UsageLimitSourceId.make("hub"),
+            kind: "cliproxy",
+            label: "CLIProxyAPI",
+            checkedAt: snapshot.checkedAt,
+            accounts: (
+              [
+                ["codex", "2026-09-03T15:00:00.000Z"],
+                ["claudeAgent", "2026-09-03T16:00:00.000Z"],
+                ["claudeAgent", "2026-09-03T17:00:00.000Z"],
+              ] as const
+            ).map(([driver, resetsAt], index) => ({
+              id: `account-${index}`,
+              driver: ProviderDriverKind.make(driver),
+              usageLimits: {
+                checkedAt: snapshot.checkedAt,
+                windows: [
+                  {
+                    id: "five_hour",
+                    kind: "session",
+                    label: "Session",
+                    usedPercent: 100,
+                    resetsAt,
+                  },
+                ],
+              },
+            })),
+          },
+        ]),
+      });
       const instance: ProviderInstance = {
         instanceId: ProviderInstanceId.make("cursor-work"),
         driverKind: ProviderDriverKind.make("cursor"),
@@ -260,7 +322,7 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
         },
         snapshot: {
           refreshUsage: Deferred.succeed(refreshed, undefined).pipe(Effect.asVoid),
-          getSnapshot: Effect.die("unused"),
+          getSnapshot: Effect.sync(() => currentSnapshot),
           refresh: Effect.die("unused"),
           resolveMaintenance: () => Effect.die("unused"),
           applyUsageLimits: () => Effect.die("unused"),
@@ -290,9 +352,24 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
           providerInstanceId: instance.instanceId,
           threadId: threadEvent.threadId,
         };
-        for (const failureClass of ["validation_error", "usage_limit"] as const) {
+        for (const [failureClass, reportedResetAt, usageLimits, model, expectedResetAt] of [
+          ["validation_error", undefined, snapshot.usageLimits, "claude-opus-4-6", undefined],
+          ["usage_limit", undefined, snapshot.usageLimits, "claude-opus-4-6", resetAt],
+          [
+            "usage_limit",
+            "2026-09-04T12:00:00.000Z",
+            snapshot.usageLimits,
+            "claude-opus-4-6",
+            "2026-09-04T12:00:00.000Z",
+          ],
+          ["usage_limit", undefined, undefined, "claude-opus-4-6", "2026-09-03T16:00:00.000Z"],
+          ["usage_limit", undefined, undefined, "gpt-5-codex", "2026-09-03T15:00:00.000Z"],
+          ["usage_limit", undefined, undefined, "unknown-alias", undefined],
+        ] as const) {
+          currentSnapshot = { ...snapshot, usageLimits };
           const stored = yield* ingestor.ingestNormalized({
             ...input,
+            analyticsContext: { modelSelection: { instanceId: instance.instanceId, model } },
             event: {
               type: "turn.terminal",
               driver: instance.driverKind,
@@ -310,16 +387,51 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
               failure: makeProviderFailure({
                 class: failureClass,
                 message: "Provider rejected turn.",
+                resetAt: reportedResetAt ?? null,
               }),
               threadDisposition: "reusable",
             },
           });
           assert.equal(stored.length, 1);
           if (failureClass === "validation_error") assert.deepEqual(lookups, []);
+          const item = stored[0]?.event.payload;
+          assert.isTrue(item !== undefined && "type" in item && item.type === "error");
+          if (item !== undefined && "type" in item && item.type === "error") {
+            assert.equal(item.failure.resetAt, expectedResetAt);
+            const streamed = yield* ingestor.ingestNormalized({
+              ...input,
+              analyticsContext: { modelSelection: { instanceId: instance.instanceId, model } },
+              event: {
+                type: "turn_item.updated",
+                driver: instance.driverKind,
+                turnItem: {
+                  ...item,
+                  failure: makeProviderFailure({
+                    class: failureClass,
+                    message: "Provider rejected turn.",
+                    resetAt: reportedResetAt ?? null,
+                  }),
+                },
+              },
+            });
+            const streamedItem = streamed[0]?.event.payload;
+            assert.isTrue(
+              streamedItem !== undefined && "type" in streamedItem && streamedItem.type === "error",
+            );
+            if (
+              streamedItem !== undefined &&
+              "type" in streamedItem &&
+              streamedItem.type === "error"
+            ) {
+              assert.equal(streamedItem.failure.resetAt, expectedResetAt);
+            }
+          }
         }
-        assert.deepEqual(lookups, [instance.instanceId]);
+        assert.isTrue(lookups.every((id) => id === instance.instanceId));
         yield* Deferred.await(refreshed);
-      }).pipe(Effect.provide(makeLayerTest(layerTestEventSink, instances)));
+      }).pipe(
+        Effect.provide(makeLayerTest(layerTestEventSink, instances).pipe(Layer.provide(sources))),
+      );
     }),
   ),
 );

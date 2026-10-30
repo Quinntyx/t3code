@@ -19,6 +19,8 @@ import {
   collectLimitPools,
   elapsedShare,
   exhaustedUsageWindow,
+  usageLimitResetAt,
+  usageLimitSourceResetAt,
   paceOf,
   paceRemainingPercent,
   usesChatGptSharing,
@@ -151,6 +153,147 @@ describe("new thread model fallback", () => {
         ],
       }).selection,
     ).toEqual(usesFallback ? fallback : defaultSelection);
+  });
+});
+
+describe("usage limit recovery time", () => {
+  const session = { ...window, usedPercent: 100 };
+  const weekly = {
+    ...session,
+    id: "seven_day",
+    kind: "weekly" as const,
+    resetsAt: "2026-09-10T12:00:00.000Z",
+  };
+  it.each([
+    ["all exhausted windows", [session, weekly], weekly.resetsAt],
+    ["available weekly allowance", [session, { ...weekly, usedPercent: 40 }], session.resetsAt],
+    [
+      "expired window",
+      [{ ...weekly, resetsAt: "2026-09-03T11:00:00.000Z" }, session],
+      session.resetsAt,
+    ],
+    ["unknown blocking reset", [session, { ...weekly, resetsAt: undefined }], null],
+    ["invalid blocking reset", [session, { ...weekly, resetsAt: "invalid" }], null],
+    ["unspent allowance", [{ ...session, usedPercent: 99 }], null],
+    ["no usage windows", [], null],
+  ] as const)("resolves %s", (_name, windows, expected) => {
+    expect(
+      usageLimitResetAt(provider({ usageLimits: { checkedAt: window.resetsAt, windows } }), now),
+    ).toBe(expected);
+  });
+  it.each([
+    ["cursor", "composer-2.5", ["autoPercentUsed", "apiPercentUsed"], session.resetsAt],
+    ["cursor", "claude-opus-5-5", ["autoPercentUsed", "apiPercentUsed"], weekly.resetsAt],
+    ["cursor", "composer-2.5", ["autoPercentUsed", "unused"], null],
+    ["antigravity", "claude-opus-5-5", ["3p-5h", "gemini-weekly"], session.resetsAt],
+    ["opencode", "opencode/big-pickle", ["session", "go_weekly"], session.resetsAt],
+    ["claudeAgent", "claude-opus-4-6", ["five_hour", "seven_day_sonnet"], session.resetsAt],
+    ["claudeAgent", "claude-sonnet-4-6", ["five_hour", "seven_day_sonnet"], weekly.resetsAt],
+  ] as const)("resolves %s model %s", (driver, model, ids, expected) => {
+    expect(
+      usageLimitResetAt(
+        provider({
+          driver: ProviderDriverKind.make(driver),
+          usageLimits: {
+            checkedAt: window.resetsAt,
+            windows: [
+              { ...session, id: ids[0] },
+              { ...weekly, id: ids[1] },
+            ],
+          },
+        }),
+        now,
+        model,
+      ),
+    ).toBe(expected);
+  });
+});
+
+describe("hub usage limit recovery time", () => {
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+  const later = "2026-09-03T18:00:00.000Z";
+  const sources = [
+    {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "CLIProxyAPI",
+      checkedAt,
+      accounts: [
+        {
+          id: "codex-a",
+          driver: ProviderDriverKind.make("codex"),
+          usageLimits: {
+            checkedAt,
+            windows: [
+              { ...window, usedPercent: 100 },
+              { ...window, id: "weekly", usedPercent: 100, resetsAt: later },
+            ],
+          },
+        },
+        {
+          id: "codex-b",
+          driver: ProviderDriverKind.make("codex"),
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 100, resetsAt: "2026-09-03T15:00:00.000Z" }],
+          },
+        },
+        {
+          id: "claude-a",
+          driver: ProviderDriverKind.make("claudeAgent"),
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 100, resetsAt: "2026-09-03T16:00:00.000Z" }],
+          },
+        },
+        {
+          id: "claude-b",
+          driver: ProviderDriverKind.make("claudeAgent"),
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 100, resetsAt: "2026-09-03T17:00:00.000Z" }],
+          },
+        },
+      ],
+    },
+  ];
+  it.each([
+    ["codex", "gpt-5-codex", "2026-09-03T15:00:00.000Z"],
+    ["claudeAgent", "claude-opus-4-6", "2026-09-03T16:00:00.000Z"],
+    ["pi", "cliproxy/claude-opus-4-6", "2026-09-03T16:00:00.000Z"],
+    ["pi", "cliproxy/gpt-5-codex", "2026-09-03T15:00:00.000Z"],
+    ["pi", "unknown-alias", null],
+  ] as const)("matches %s model %s", (driver, model, expected) => {
+    expect(usageLimitSourceResetAt(sources, ProviderDriverKind.make(driver), now, model)).toBe(
+      expected,
+    );
+  });
+  it.each([
+    [
+      "wrong family",
+      sources.map((source) => ({ ...source, accounts: source.accounts.slice(0, 2) })),
+    ],
+    ["failed hub", sources.map((source) => ({ ...source, error: "Hub unavailable" }))],
+    [
+      "failed accounts",
+      sources.map((source) => ({
+        ...source,
+        accounts: source.accounts.map((account) => ({
+          ...account,
+          usageLimits: { ...account.usageLimits, unavailable: { reason: "probeFailed" as const } },
+        })),
+      })),
+    ],
+    ["no sources", []],
+  ] as const)("ignores %s", (_name, input) => {
+    expect(
+      usageLimitSourceResetAt(
+        input,
+        ProviderDriverKind.make("claudeAgent"),
+        now,
+        "claude-opus-4-6",
+      ),
+    ).toBeNull();
   });
 });
 
