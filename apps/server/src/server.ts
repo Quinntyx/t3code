@@ -47,11 +47,15 @@ import * as DeusRepository from "./deus/DeusRepository.ts";
 import * as DeusSessionService from "./deus/DeusSessionService.ts";
 import * as DeusThreadBridge from "./deus/DeusThreadBridge.ts";
 import * as DeusAuthority from "./deus/DeusAuthority.ts";
+import * as DeusHumanAuthority from "./deus/DeusHumanAuthority.ts";
+import * as DeusMediaLease from "./deus/DeusMediaLease.ts";
+import * as DeusTransport from "./deus/DeusTransport.ts";
 import * as DeusConfiguration from "./deus/DeusConfiguration.ts";
 import * as DeusCoordinator from "./deus/DeusCoordinator.ts";
 import * as DeusTools from "./deus/DeusTools.ts";
 import * as GeminiTextAdapter from "./deus/GeminiTextAdapter.ts";
 import * as GeminiLiveAdapter from "./deus/GeminiLiveAdapter.ts";
+import { DeusLiveError } from "./deus/GeminiLiveAdapter.ts";
 import * as DeusLiveService from "./deus/DeusLiveService.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
@@ -615,9 +619,33 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
   }),
 );
 
+const layerDeusAuthority = Layer.effect(
+  DeusAuthority.DeusAuthority,
+  Effect.map(DeusMediaLease.DeusMediaLease, (leases) => ({ authorize: leases.authorize })),
+).pipe(
+  Layer.provideMerge(DeusMediaLease.layer),
+  Layer.provideMerge(DeusHumanAuthority.layer),
+  Layer.provideMerge(DeusRepository.layer),
+);
+const layerDeusLiveAuthority = Layer.effect(
+  DeusLiveService.DeusLiveAuthority,
+  Effect.map(DeusMediaLease.DeusMediaLease, (leases) => ({
+    validate: (attachment) =>
+      leases.validate(attachment).pipe(
+        Effect.mapError(
+          () =>
+            new DeusLiveError({
+              code: "authority",
+              message: "The authenticated media lease is no longer current.",
+            }),
+        ),
+      ),
+  })),
+);
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  Layer.merge(DeusCoordinator.layer, DeusLiveService.layer).pipe(
-    Layer.provide(DeusLiveService.layerAuthorityUnavailable),
+  DeusTransport.layer.pipe(
+    Layer.provideMerge(Layer.merge(DeusCoordinator.layer, DeusLiveService.layer)),
+    Layer.provide(layerDeusLiveAuthority),
     Layer.provideMerge(GeminiLiveAdapter.layer.pipe(Layer.provide(DeusConfiguration.layer))),
     Layer.provideMerge(DeusTools.layer),
     Layer.provideMerge(
@@ -626,7 +654,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provideMerge(DeusConfiguration.layer),
     Layer.provideMerge(DeusMemoryService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
     Layer.provideMerge(DeusSessionService.layer.pipe(Layer.provideMerge(DeusRepository.layer))),
-    Layer.provide(DeusAuthority.layerUnavailable),
+    Layer.provideMerge(layerDeusAuthority),
     Layer.provide(CommandReceiptStoreV2.layer),
     Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
   ),

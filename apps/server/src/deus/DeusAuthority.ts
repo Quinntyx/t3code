@@ -1,7 +1,12 @@
-import { DeusSessionRef, type RuntimeMode, type ProviderInteractionMode } from "@t3tools/contracts";
+import {
+  DeusSessionRef,
+  type DeusInputId,
+  type DeusAttachmentId,
+  type RuntimeMode,
+  type ProviderInteractionMode,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 export class DeusAuthorityError extends Schema.TaggedError<DeusAuthorityError>()(
@@ -11,10 +16,21 @@ export class DeusAuthorityError extends Schema.TaggedError<DeusAuthorityError>()
   },
 ) {}
 
+export type DeusAuthorityRef = DeusSessionRef & {
+  readonly inputId?: DeusInputId;
+  readonly attachmentId?: DeusAttachmentId;
+  readonly origin?: { readonly attachmentId: DeusAttachmentId };
+};
+
+export class DeusActionSource extends Context.Reference<DeusAuthorityRef | undefined>(
+  "t3/deus/DeusActionSource",
+  { defaultValue: () => undefined },
+) {}
+
 export class DeusAuthority extends Context.Service<
   DeusAuthority,
   {
-    readonly authorize: (input: DeusSessionRef) => Effect.Effect<
+    readonly authorize: (input: DeusAuthorityRef) => Effect.Effect<
       {
         readonly runtimeMode: RuntimeMode;
         readonly interactionMode: ProviderInteractionMode;
@@ -24,10 +40,3 @@ export class DeusAuthority extends Context.Service<
     >;
   }
 >()("t3/deus/DeusAuthority") {}
-
-// Until a human transport owns renewable authority, persisted intents cannot authorize execution.
-export const layerUnavailable = Layer.succeed(DeusAuthority, {
-  authorize: Effect.fn("DeusAuthority.authorize")(() =>
-    Effect.fail(new DeusAuthorityError({ reason: "inactive" })),
-  ),
-});

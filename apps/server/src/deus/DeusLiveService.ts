@@ -46,16 +46,12 @@ const stale = () =>
     code: "stale",
     message: "This Live attachment or response epoch is no longer current.",
   });
-// Step07 supplies lease ownership; persisted sessions and intents cannot grant it.
 export class DeusLiveAuthority extends Context.Service<
   DeusLiveAuthority,
   {
     readonly validate: (attachment: DeusAttachment) => Effect.Effect<void, Adapter.DeusLiveError>;
   }
 >()("t3/deus/DeusLiveService/DeusLiveAuthority") {}
-export const layerAuthorityUnavailable = Layer.succeed(DeusLiveAuthority, {
-  validate: Effect.fn("DeusLiveAuthority.validate")(() => Effect.fail(unavailable())),
-});
 export type LiveOutput = {
   readonly attachment: DeusAttachment;
   readonly conversation: DeusConversation;
@@ -930,7 +926,6 @@ const make = Effect.gen(function* () {
     }),
     detach: Effect.fn("DeusLiveService.detach")(function* (input) {
       const state = yield* lookup(input);
-      yield* owner.validate(state.attachment);
       yield* state.lane.withPermits(1)(close(state));
       yield* Scope.close(state.scope, Exit.void);
       states.delete(state.attachment.attachmentId);

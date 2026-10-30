@@ -626,6 +626,31 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web" }))),
   );
 
+  it.effect("preserves a human runtime ceiling across HTTP and RPC socket tickets", () =>
+    Effect.gen(function* () {
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const issued = yield* sessions.issue({
+        subject: "human",
+        method: "bearer-access-token",
+        scopes: AuthStandardClientScopes,
+        runtimeModeCeiling: "approval-required",
+      });
+      const principal = yield* auth.authenticateHttpRequest(makeBearerRequest(issued.token));
+      expect(principal).toMatchObject({ runtimeModeCeiling: "approval-required" });
+      const ticket = yield* auth.issueWebSocketTicket(principal, { use: "rpc" });
+      const socket = yield* auth.authenticateWebSocketUpgrade(
+        {
+          url: `/ws?wsTicket=${ticket.ticket}`,
+          cookies: {},
+          headers: { host: "remote.test" },
+        } as never,
+        "rpc",
+      );
+      expect(socket).toMatchObject({ runtimeModeCeiling: "approval-required" });
+    }).pipe(Effect.provide(layerEnvironmentAuth())),
+  );
+
   it.effect("keeps bearer socket upgrades independent of the page origin", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

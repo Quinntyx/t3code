@@ -46,6 +46,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.deusPonder]: "deus",
   [WS_METHODS.deusAttach]: "deus",
   [WS_METHODS.deusDetach]: "deus",
+  [WS_METHODS.deusRenew]: "deus",
   [WS_METHODS.deusMediaPush]: "deus",
   [WS_METHODS.deusMediaControl]: "deus",
   [WS_METHODS.deusMediaSubscribe]: "deus",

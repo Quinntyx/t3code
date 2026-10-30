@@ -1,5 +1,6 @@
 import {
   EnvironmentAuthorizationError,
+  DEUS_PROTOCOL_VERSION,
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
   type EnvironmentId,
@@ -148,6 +149,36 @@ const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* () {
   );
 });
 
+const validateDeusDestination = Effect.fn("EnvironmentRpc.validateDeusDestination")(function* (
+  session: RpcSession,
+  environmentId: EnvironmentId,
+  method: string,
+  input: unknown,
+) {
+  if (!method.startsWith("deus.")) return;
+  const unavailable = (message: string) =>
+    new EnvironmentRpcUnavailableError({ environmentId, message });
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    "environmentId" in input &&
+    input.environmentId !== environmentId
+  )
+    return yield* unavailable("Deus destination does not match the connected environment.");
+  const config = yield* session.initialConfig.pipe(
+    Effect.mapError(() => unavailable("The connected environment configuration is unavailable.")),
+  );
+  if (
+    config.environment.environmentId !== environmentId ||
+    config.deus === undefined ||
+    config.deus.protocolVersion !== DEUS_PROTOCOL_VERSION ||
+    (!config.deus.available && config.deus.reason === "unsupported")
+  )
+    return yield* unavailable(
+      "This environment does not advertise compatible Deus support; no Deus request was sent.",
+    );
+});
+
 export const getInitialServerConfig = Effect.fn("EnvironmentRpc.getInitialServerConfig")(
   function* () {
     const session = yield* currentSession();
@@ -197,6 +228,7 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
     "rpc.method": tag,
   });
   const session = yield* currentSession();
+  yield* validateDeusDestination(session, supervisor.target.environmentId, tag, input);
   yield* authorizeRequest(tag, input);
   const observer = yield* EnvironmentRpcRequestObserver;
   const method = session.client[tag] as (
@@ -221,8 +253,13 @@ export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
   EnvironmentSupervisor.EnvironmentSupervisor
 > {
   return Stream.unwrap(
-    authorizeRequest(tag, input).pipe(
-      Effect.andThen(currentSession()),
+    Effect.gen(function* () {
+      const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+      const session = yield* currentSession();
+      yield* validateDeusDestination(session, supervisor.target.environmentId, tag, input);
+      yield* authorizeRequest(tag, input);
+      return session;
+    }).pipe(
       Effect.map((session) => {
         const method = session.client[tag] as (
           input: EnvironmentRpcInput<TTag>,
@@ -296,6 +333,13 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                   Stream.unwrap(
                     Effect.gen(function* () {
                       const input = yield* makeInput(session);
+                      const compatible = yield* validateDeusDestination(
+                        session,
+                        supervisor.target.environmentId,
+                        tag,
+                        input,
+                      ).pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }));
+                      if (!compatible) return Stream.empty;
                       const completeObservation = yield* observer.observe({
                         environmentId: supervisor.target.environmentId,
                         method: tag,

@@ -23,6 +23,7 @@ import type * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import { deusJson } from "@t3tools/shared/deusMediaWire";
 import * as Socket from "effect/socket/Socket";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
@@ -240,7 +241,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Layer.provide(
         Layer.mergeAll(
           layerSocket,
-          RpcSerialization.layerJson,
+          Layer.succeed(RpcSerialization.RpcSerialization, deusJson),
           Layer.succeed(RpcClient.ConnectionHooks, hooks),
         ),
       ),

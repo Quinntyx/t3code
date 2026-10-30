@@ -36,6 +36,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.deusPonder]: AuthOrchestrationOperateScope,
   [WS_METHODS.deusAttach]: AuthOrchestrationOperateScope,
   [WS_METHODS.deusDetach]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deusRenew]: AuthOrchestrationOperateScope,
   [WS_METHODS.deusMediaPush]: AuthOrchestrationOperateScope,
   [WS_METHODS.deusMediaControl]: AuthOrchestrationOperateScope,
   [WS_METHODS.deusMediaSubscribe]: AuthOrchestrationOperateScope,

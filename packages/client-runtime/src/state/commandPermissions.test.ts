@@ -99,6 +99,7 @@ describe("command permissions", () => {
 
   it.effect.each([
     { method: WS_METHODS.deusSendInput, scope: AuthOrchestrationOperateScope },
+    { method: WS_METHODS.deusRenew, scope: AuthOrchestrationOperateScope },
     { method: WS_METHODS.deusMediaSubscribe, scope: AuthOrchestrationOperateScope },
     { method: WS_METHODS.deusGetSnapshot, scope: AuthOrchestrationReadScope },
     { method: WS_METHODS.deusUpdateSettings, scope: AuthSettingsWriteScope },

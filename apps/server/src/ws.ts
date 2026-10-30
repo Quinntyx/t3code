@@ -1,4 +1,5 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { deusJson } from "@t3tools/shared/deusMediaWire";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -22,9 +23,8 @@ import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
   AcpRegistryOperationError,
-  DEUS_UNAVAILABLE,
-  DeusUnavailableError,
   CommandId,
+  DEUS_UNAVAILABLE,
   authScopeResponse,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
@@ -225,6 +225,7 @@ import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as DeusTransport from "./deus/DeusTransport.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
@@ -1231,6 +1232,8 @@ export const layerWsRpc = (
   Layer.effectContext(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const deus = yield* DeusTransport.DeusTransport;
+      const deusHandlers = yield* deus.connect(currentSession);
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
@@ -1794,7 +1797,7 @@ export const layerWsRpc = (
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
           },
           settings,
-          deus: DEUS_UNAVAILABLE,
+          deus: yield* deus.capabilities.pipe(Effect.orElseSucceed(() => DEUS_UNAVAILABLE)),
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
           shellOlderSettled: true,
@@ -1871,10 +1874,6 @@ export const layerWsRpc = (
         return result;
       });
 
-      const deusUnavailable = new DeusUnavailableError({
-        message: "Deus services are not implemented on this server.",
-        reason: "unsupported",
-      });
       const handlers = ServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
@@ -2197,26 +2196,7 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
-        [WS_METHODS.deusGetCapabilities]: (_input) => Effect.succeed(DEUS_UNAVAILABLE),
-        [WS_METHODS.deusOpen]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusGetSnapshot]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusSubscribe]: (_input) => Stream.fail(deusUnavailable),
-        [WS_METHODS.deusSendInput]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusResetConversation]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusLaunchTask]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusTaskAction]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusMemorySearch]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusMemoryRead]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusMemoryCorrect]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusPonder]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusAttach]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusDetach]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusMediaPush]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusMediaControl]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusMediaSubscribe]: (_input) => Stream.fail(deusUnavailable),
-        [WS_METHODS.deusGetSettings]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusUpdateSettings]: (_input) => Effect.fail(deusUnavailable),
-        [WS_METHODS.deusSetCredential]: (_input) => Effect.fail(deusUnavailable),
+        ...deusHandlers,
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) =>
           loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),
@@ -3369,7 +3349,7 @@ export const layer = Layer.unwrap(
         }).pipe(
           Effect.provide(
             layerWsRpc(session, clientAnalyticsProps, serverBrowser).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provideMerge(Layer.succeed(RpcSerialization.RpcSerialization, deusJson)),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),

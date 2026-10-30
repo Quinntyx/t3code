@@ -559,6 +559,7 @@ export const WS_METHODS = {
   deusPonder: "deus.ponder",
   deusAttach: "deus.attach",
   deusDetach: "deus.detach",
+  deusRenew: "deus.renew",
   deusMediaPush: "deus.mediaPush",
   deusMediaControl: "deus.mediaControl",
   deusMediaSubscribe: "deus.mediaSubscribe",
@@ -2025,7 +2026,7 @@ export const DeusRpcGroup = RpcGroup.make(
     stream: true,
   }),
   Rpc.make(WS_METHODS.deusSendInput, {
-    payload: Deus.DeusInput,
+    payload: Deus.DeusHumanInput,
     success: Deus.DeusInputReceipt,
     error: DeusRpcError,
   }),
@@ -2035,12 +2036,12 @@ export const DeusRpcGroup = RpcGroup.make(
     error: DeusRpcError,
   }),
   Rpc.make(WS_METHODS.deusLaunchTask, {
-    payload: Deus.DeusTaskLaunchInput,
+    payload: Deus.DeusHumanTaskLaunchInput,
     success: Deus.DeusTaskActionResult,
     error: DeusRpcError,
   }),
   Rpc.make(WS_METHODS.deusTaskAction, {
-    payload: Deus.DeusTaskActionInput,
+    payload: Deus.DeusHumanTaskActionInput,
     success: Deus.DeusTaskActionResult,
     error: DeusRpcError,
   }),
@@ -2065,7 +2066,12 @@ export const DeusRpcGroup = RpcGroup.make(
     error: DeusRpcError,
   }),
   Rpc.make(WS_METHODS.deusAttach, {
-    payload: Deus.DeusAttachInput,
+    payload: Deus.DeusHumanAttachInput,
+    success: Deus.DeusAttachment,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusRenew, {
+    payload: Deus.DeusAttachmentInput,
     success: Deus.DeusAttachment,
     error: DeusRpcError,
   }),

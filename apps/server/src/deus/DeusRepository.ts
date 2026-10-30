@@ -48,6 +48,7 @@ export type DeusRepositoryError = DeusStateError | DeusPersistenceError;
 export class DeusRepository extends Context.Service<
   DeusRepository,
   {
+    readonly validateScope: (input: DeusScope) => Effect.Effect<void, DeusRepositoryError>;
     readonly open: (input: DeusOpenInput) => Effect.Effect<DeusSnapshot, DeusRepositoryError>;
     readonly snapshot: (ref: DeusSessionRef) => Effect.Effect<DeusSnapshot, DeusRepositoryError>;
     readonly currentConversation: (
@@ -445,6 +446,9 @@ const make = Effect.gen(function* () {
       : null;
   });
   return DeusRepository.of({
+    validateScope: Effect.fn("DeusRepository.validateScope")((input) =>
+      validateScope(input).pipe(mapError("validate-scope")),
+    ),
     findWorker: Effect.fn("DeusRepository.findRegisteredWorker")((threadId) =>
       findWorker(threadId).pipe(mapError("findWorker")),
     ),

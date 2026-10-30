@@ -98,6 +98,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.deusPonder,
       WS_METHODS.deusAttach,
       WS_METHODS.deusDetach,
+      WS_METHODS.deusRenew,
       WS_METHODS.deusMediaPush,
       WS_METHODS.deusMediaControl,
       WS_METHODS.deusMediaSubscribe,

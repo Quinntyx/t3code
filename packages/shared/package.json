@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./deusMediaWire": {
+      "types": "./src/deusMediaWire.ts",
+      "import": "./src/deusMediaWire.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

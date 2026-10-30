@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   AuthSessionId,
   DEUS_UNAVAILABLE,
+  DeusUnavailableError,
   DeusRpcGroup,
   DeusSessionRef,
   DeusAttachmentId,
@@ -122,6 +123,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfigModule from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as DeusTransport from "./deus/DeusTransport.ts";
 
 import * as EventStore from "./orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
@@ -481,7 +483,40 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
 );
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
+const unavailableDeus = new DeusUnavailableError({
+  reason: "unsupported",
+  message: "Fixture service unavailable",
+});
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(DeusTransport.DeusTransport)({
+    capabilities: Effect.succeed(DEUS_UNAVAILABLE),
+    connect: () =>
+      Effect.succeed(
+        DeusRpcGroup.of({
+          [WS_METHODS.deusGetCapabilities]: () => Effect.succeed(DEUS_UNAVAILABLE),
+          [WS_METHODS.deusOpen]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusGetSnapshot]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusSubscribe]: () => Stream.fail(unavailableDeus),
+          [WS_METHODS.deusSendInput]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusResetConversation]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusLaunchTask]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusTaskAction]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusMemorySearch]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusMemoryRead]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusMemoryCorrect]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusPonder]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusAttach]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusRenew]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusDetach]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusMediaPush]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusMediaControl]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusMediaSubscribe]: () => Stream.fail(unavailableDeus),
+          [WS_METHODS.deusGetSettings]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusUpdateSettings]: () => Effect.fail(unavailableDeus),
+          [WS_METHODS.deusSetCredential]: () => Effect.fail(unavailableDeus),
+        }),
+      ),
+  }),
   Layer.mock(DocumentText.DocumentText)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
@@ -573,7 +608,7 @@ const layerConfigSources = Layer.mergeAll(
 );
 
 it.effect(
-  "advertises Deus as unavailable and returns typed errors from every placeholder RPC",
+  "forwards every Deus RPC to its scoped service and preserves typed unavailable errors",
   () =>
     Effect.gen(function* () {
       const client = yield* RpcTest.makeClient(DeusRpcGroup).pipe(
@@ -617,6 +652,11 @@ it.effect(
         ...ref,
         inputId: DeusInputId.make("input"),
         conversation: DeusConversation.make(1),
+        authority: {
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          allowWorktree: false,
+        },
       };
       const attachment = {
         ...ref,
@@ -666,6 +706,7 @@ it.effect(
         ),
         Effect.asVoid(client[WS_METHODS.deusAttach]({ ...input, takeover: false })),
         client[WS_METHODS.deusDetach](attachment),
+        Effect.asVoid(client[WS_METHODS.deusRenew](attachment)),
         client[WS_METHODS.deusMediaPush]({
           ...attachment,
           responseEpoch: 0,

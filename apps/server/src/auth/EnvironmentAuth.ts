@@ -13,6 +13,7 @@ import {
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
+  type RuntimeMode,
   type AuthSessionState,
   authScopeResponse,
   type ServerAuthDescriptor,
@@ -86,6 +87,7 @@ export interface AuthenticatedSession {
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
+  readonly runtimeModeCeiling?: RuntimeMode;
   readonly expiresAt?: DateTime.DateTime;
 }
 
@@ -526,7 +528,10 @@ export class EnvironmentAuth extends Context.Service<
       use: AuthWebSocketTicketUse,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
     readonly issueWebSocketTicket: (
-      session: Pick<AuthenticatedSession, "sessionId" | "proofKeyThumbprint">,
+      session: Pick<
+        AuthenticatedSession,
+        "sessionId" | "proofKeyThumbprint" | "runtimeModeCeiling"
+      >,
       input?: { readonly use?: AuthWebSocketTicketUse },
     ) => Effect.Effect<AuthWebSocketTicketResult, ServerAuthInternalError>;
     readonly issueStartupPairingUrl: (
@@ -729,6 +734,7 @@ export const make = Effect.gen(function* () {
         method: session.method,
         scopes: session.scopes,
         ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
+        ...(session.runtimeModeCeiling ? { runtimeModeCeiling: session.runtimeModeCeiling } : {}),
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
       })),
     );
@@ -1199,6 +1205,7 @@ export const make = Effect.gen(function* () {
     sessions
       .issueWebSocketToken(session.sessionId, {
         ...(input?.use ? { audience: input.use } : {}),
+        ...(session.runtimeModeCeiling ? { runtimeModeCeiling: session.runtimeModeCeiling } : {}),
         ...(input?.use === "rpc" && session.proofKeyThumbprint
           ? { proofKeyThumbprint: session.proofKeyThumbprint }
           : {}),
@@ -1265,6 +1272,9 @@ export const make = Effect.gen(function* () {
             scopes: session.scopes,
             ...(session.proofKeyThumbprint
               ? { proofKeyThumbprint: session.proofKeyThumbprint }
+              : {}),
+            ...(session.runtimeModeCeiling
+              ? { runtimeModeCeiling: session.runtimeModeCeiling }
               : {}),
             ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
           };

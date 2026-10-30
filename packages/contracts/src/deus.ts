@@ -21,7 +21,7 @@ import {
 } from "./baseSchemas.ts";
 import { AuthEnvironmentScope } from "./auth.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { RuntimeMode } from "./providerPolicy.ts";
+import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
 import { DeusSettings, DeusSettingsPatch } from "./settings.ts";
 
 export const DEUS_PROTOCOL_VERSION = 1;
@@ -253,6 +253,13 @@ export const DeusMemory = Schema.Struct({
   supersedes: Schema.NullOr(DeusMemoryId),
   removedAt: Schema.NullOr(IsoDateTime),
   updatedAt: IsoDateTime,
+  provenance: Schema.optional(
+    Schema.Struct({
+      scope: Schema.Literals(["project", "environment", "global"]),
+      sources: Schema.Array(DeusSourceRef),
+      commit: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type DeusMemory = typeof DeusMemory.Type;
 
@@ -335,6 +342,15 @@ export const DeusInput = Schema.Struct({
   text: TrimmedNonEmptyString,
 });
 export type DeusInput = typeof DeusInput.Type;
+export const DeusHumanCeiling = Schema.Struct({
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  allowWorktree: Schema.Boolean,
+});
+export type DeusHumanCeiling = typeof DeusHumanCeiling.Type;
+export const DeusHumanInput = Schema.Struct({ ...DeusInput.fields, authority: DeusHumanCeiling });
+export type DeusHumanInput = typeof DeusHumanInput.Type;
+
 export const DeusInputReceipt = Schema.Struct({
   inputId: DeusInputId,
   cursor: DeusCursor,
@@ -374,16 +390,30 @@ export const DeusTaskActionResult = Schema.Struct({
 });
 
 export type DeusTaskActionResult = typeof DeusTaskActionResult.Type;
+export const DeusHumanTaskLaunchInput = Schema.Struct({
+  ...DeusTaskLaunchInput.fields,
+  authority: DeusHumanCeiling,
+});
+export const DeusHumanTaskActionInput = Schema.Struct({
+  ...DeusTaskActionInput.fields,
+  authority: DeusHumanCeiling,
+});
 
 export const DeusMemorySearchInput = Schema.Struct({
   ...DeusSessionRef.fields,
   query: TrimmedNonEmptyString,
-  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(100)),
+  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(20)),
+  scopes: Schema.optional(
+    Schema.Array(Schema.Literals(["project", "environment", "global"])).check(
+      Schema.isMaxLength(3),
+    ),
+  ),
 });
 export type DeusMemorySearchInput = typeof DeusMemorySearchInput.Type;
 export const DeusMemoryReadInput = Schema.Struct({
   ...DeusSessionRef.fields,
   memoryId: DeusMemoryId,
+  scope: Schema.optional(Schema.Literals(["project", "environment", "global"])),
 });
 export type DeusMemoryReadInput = typeof DeusMemoryReadInput.Type;
 export const DeusMemoryCorrectionInput = Schema.Struct({
@@ -462,6 +492,8 @@ export const DeusMediaOutput = Schema.Union([
     role: Schema.Literals(["human", "assistant"]),
     text: Schema.String.check(Schema.isMaxLength(DEUS_MAX_TRANSIENT_TEXT_LENGTH)),
   }),
+  Schema.Struct({ ...AttachmentEnvelope, type: Schema.Literal("turn-end") }),
+  Schema.Struct({ ...AttachmentEnvelope, type: Schema.Literal("error"), error: DeusError }),
 ]);
 export type DeusMediaOutput = typeof DeusMediaOutput.Type;
 
@@ -471,6 +503,10 @@ export const DeusAttachInput = Schema.Struct({
   takeover: Schema.Boolean,
 });
 export type DeusAttachInput = typeof DeusAttachInput.Type;
+export const DeusHumanAttachInput = Schema.Struct({
+  ...DeusAttachInput.fields,
+  authority: DeusHumanCeiling,
+});
 export const DeusAttachmentInput = Schema.Struct({
   ...DeusSessionRef.fields,
   attachmentId: DeusAttachmentId,

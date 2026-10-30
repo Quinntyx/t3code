@@ -393,6 +393,7 @@ export class SessionStore extends Context.Service<
         readonly ttl?: Duration.Duration;
         readonly audience?: AuthWebSocketTicketUse;
         readonly proofKeyThumbprint?: string;
+        readonly runtimeModeCeiling?: RuntimeMode;
       },
     ) => Effect.Effect<
       {
@@ -449,6 +450,7 @@ const WebSocketClaims = Schema.Struct({
   sid: AuthSessionId,
   aud: Schema.optionalKey(AuthWebSocketTicketUse),
   jkt: Schema.optionalKey(Schema.String),
+  rtc: Schema.optionalKey(RuntimeMode),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -856,6 +858,7 @@ const make = Effect.gen(function* () {
       sid: sessionId,
       ...(input?.audience ? { aud: input.audience } : {}),
       ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
+      ...(input?.runtimeModeCeiling ? { rtc: input.runtimeModeCeiling } : {}),
       iat: issuedAt.epochMilliseconds,
       exp: expiresAt.epochMilliseconds,
     };
@@ -950,6 +953,7 @@ const make = Effect.gen(function* () {
       scopes: row.value.scopes,
       ...(claims.aud ? { audience: claims.aud } : {}),
       ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
+      ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
     } satisfies VerifiedWebSocketTicket;
   });
 

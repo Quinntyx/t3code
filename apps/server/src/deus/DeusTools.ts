@@ -335,6 +335,7 @@ const make = Effect.gen(function* () {
   return DeusTools.of({
     execute: Effect.fn("DeusTools.execute")((call) =>
       dispatch(call).pipe(
+        Effect.provideService(Authority.DeusActionSource, call.input),
         Effect.map((result): Record<string, unknown> => ({ ok: true, evidenceOnly: true, result })),
         Effect.flatMap((result) =>
           Effect.try({
