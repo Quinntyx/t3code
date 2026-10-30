@@ -3221,7 +3221,7 @@ export default function ChatView(props: ChatViewProps) {
     />
   );
   const threadPanelHeaderControl = <ThreadPanelHeaderControl {...panelToggleControlProps} />;
-  const floatingPanelControlsBubble = (
+  const floatingPanelControlsBubble = projectPanelOpen ? null : (
     <FloatingPanelControls
       {...panelToggleControlProps}
       maximize={
@@ -3235,7 +3235,7 @@ export default function ChatView(props: ChatViewProps) {
       }
     />
   );
-  const panelLayoutControls = (
+  const panelLayoutControls = projectPanelOpen ? null : (
     <WorkspaceTitlebarControls
       showMaximizeControl={!shouldUsePlanSidebarSheet}
       rightPanelOpen={rightPanelOpen}
