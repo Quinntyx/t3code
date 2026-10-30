@@ -56,6 +56,7 @@ import {
   ProjectId,
   resolveEnvironmentMachineKind,
   SourceControlProviderKind,
+  type ScopedProjectRef,
 } from "@t3tools/contracts";
 import {
   StackActions,
@@ -1321,6 +1322,7 @@ export function AddProjectDestinationScreen(props: {
   readonly repositoryTitle?: string | string[];
   readonly repositoryName?: string | string[];
   readonly prompt?: string | string[];
+  readonly onCloneStarted?: (project: ScopedProjectRef) => void;
 }) {
   const openNewTaskDraft = useOpenNewTaskDraft();
   const startProjectClone = useAtomCommand(sourceControlEnvironment.startProjectClone, {
@@ -1392,6 +1394,11 @@ export function AddProjectDestinationScreen(props: {
       setError(errorMessage(Cause.squash(startResult.cause)));
     } else {
       void suggestAppAccessForRemote(checkAppAccess, environment.environmentId, remoteUrl);
+      if (props.onCloneStarted) {
+        props.onCloneStarted({ environmentId: environment.environmentId, projectId });
+        setIsSubmitting(false);
+        return;
+      }
       // Wait for the create event; the client store otherwise falls back to the project picker and loses clone controls.
       const project = await waitForProject(
         { environmentId: environment.environmentId, projectId },

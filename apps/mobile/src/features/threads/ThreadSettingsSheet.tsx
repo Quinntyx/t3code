@@ -19,6 +19,7 @@ import type {
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
+  ScopedThreadRef,
   ServerSettings,
   ThreadId,
 } from "@t3tools/contracts";
@@ -57,6 +58,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { IconButton } from "../../components/ui/IconButton";
+import { Button } from "../../components/ui/Button";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
@@ -107,6 +109,7 @@ import {
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
+import { MachineHandoffScreen } from "./MachineHandoffScreen";
 import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
@@ -922,6 +925,7 @@ function ThreadSettingsOptionsItem(props: {
 
 function ThreadSettingsMainContent(props: {
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
+  readonly onMachineHandoff?: () => void;
 }) {
   const session = useThreadSettingsSession();
   const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -1019,6 +1023,16 @@ function ThreadSettingsMainContent(props: {
       maintainVisibleContentPosition={THREAD_SETTINGS_MAINTAIN_VISIBLE_CONTENT_POSITION}
       ListHeaderComponent={
         <>
+          {props.onMachineHandoff ? (
+            <View className="px-4 py-3">
+              <Button
+                label="Hand off to another machine"
+                icon="arrow.left.arrow.right"
+                fullWidth
+                onPress={props.onMachineHandoff}
+              />
+            </View>
+          ) : null}
           {Platform.OS === "android" ? (
             <View className="px-4 pb-2 pt-3">
               <View
@@ -1175,10 +1189,12 @@ function ThreadSettingsChoiceContent(props: {
 type ThreadSettingsPickerStackParams = {
   ThreadSettingsModels: undefined;
   ThreadSettingsChoice: ThreadSettingsSubmenuPage & { readonly title: string };
+  ThreadSettingsMachineHandoff: { readonly modelSelection: ModelSelection };
 };
 
 type ThreadSettingsPickerPresentation = {
   readonly onClose: () => void;
+  readonly machineHandoffThreadRef?: ScopedThreadRef;
 };
 
 const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
@@ -1338,6 +1354,17 @@ function ThreadSettingsModelsScreen() {
       />
       <ScreenContent>
         <ThreadSettingsMainContent
+          onMachineHandoff={
+            presentation.machineHandoffThreadRef && session.displayedModelSelection
+              ? () => {
+                  if (session.displayedModelSelection) {
+                    navigation.navigate("ThreadSettingsMachineHandoff", {
+                      modelSelection: session.displayedModelSelection,
+                    });
+                  }
+                }
+              : undefined
+          }
           onOpenSubmenu={(submenu) => {
             const title =
               submenu.kind === "runtime"
@@ -1435,12 +1462,35 @@ function ThreadSettingsChoiceScreen() {
   );
 }
 
+function ThreadSettingsMachineHandoffScreen() {
+  const theme = useUniwindTheme();
+  const presentation = useThreadSettingsPickerPresentation();
+  const route =
+    useRoute<RouteProp<ThreadSettingsPickerStackParams, "ThreadSettingsMachineHandoff">>();
+  const navigation = useNavigation();
+  if (!presentation.machineHandoffThreadRef) return null;
+  return (
+    <>
+      {Platform.OS === "android" ? (
+        <SheetHeader title="Machine handoff" onCancel={() => navigation.goBack()} />
+      ) : null}
+      <MachineHandoffScreen
+        sourceRef={presentation.machineHandoffThreadRef}
+        modelSelection={route.params.modelSelection}
+        iconColor={theme["--color-foreground-muted"]}
+        surfaceColor={theme["--color-grouped-card"]}
+      />
+    </>
+  );
+}
+
 function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) {
   const theme = useUniwindTheme();
   const solidSheetBackground = theme["--color-sheet-solid"];
   const foreground = theme["--color-foreground"];
   const presentation = {
     onClose: props.onClose,
+    machineHandoffThreadRef: props.machineHandoffThreadRef,
   };
 
   return (
@@ -1476,17 +1526,25 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
           component={ThreadSettingsChoiceScreen}
           options={({ route }) => ({ title: route.params.title })}
         />
+        <ThreadSettingsPickerStack.Screen
+          name="ThreadSettingsMachineHandoff"
+          component={ThreadSettingsMachineHandoffScreen}
+          options={{ title: "Machine handoff" }}
+        />
       </ThreadSettingsPickerStack.Navigator>
     </ThreadSettingsPickerPresentationContext.Provider>
   );
 }
 
 export function ThreadSettingsPickerScreen(
-  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
+  props: ThreadSettingsSessionProps & ThreadSettingsPickerPresentation,
 ) {
   return (
     <ThreadSettingsSessionProvider {...props}>
-      <ThreadSettingsPickerNavigator onClose={props.onClose} />
+      <ThreadSettingsPickerNavigator
+        onClose={props.onClose}
+        machineHandoffThreadRef={props.machineHandoffThreadRef}
+      />
     </ThreadSettingsSessionProvider>
   );
 }
@@ -1537,6 +1595,10 @@ export function ExistingThreadSettingsRouteScreen({
 
   return (
     <ThreadSettingsPickerScreen
+      machineHandoffThreadRef={{
+        environmentId: selectedThread.environmentId,
+        threadId: selectedThread.id,
+      }}
       environmentId={selectedThread.environmentId}
       projectId={selectedThread.projectId}
       providerInstanceId={modelSelection.instanceId}
