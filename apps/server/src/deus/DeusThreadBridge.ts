@@ -513,17 +513,17 @@ const make = Effect.gen(function* () {
           reason: "conflict",
           message: "Task action text exceeds 8000 characters.",
         });
-      if (kind === "steer" && !shell.activeRunId)
+      if ((kind === "steer" || kind === "interrupt") && !shell.activeRunId)
         return yield* new DeusStateError({
           reason: "conflict",
-          message: "Steer requires an active worker run.",
+          message: `${kind === "steer" ? "Steer" : "Interrupt"} requires an active worker run.`,
         });
       return {
         type: "task-action",
         input,
         task,
         threadId: worker.threadId,
-        runId: run.id,
+        runId: kind === "interrupt" ? shell.activeRunId : run.id,
         commandId: CommandId.make(`deus-action:${input.sessionId}:${input.inputId}`),
         model: original.modelSelection,
         runtimeMode: original.runtimeMode,

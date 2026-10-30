@@ -500,6 +500,7 @@ it.live("isolates malformed authenticated media to its request on the same super
       { sampleRate: 24000 },
       { channels: 2 },
       { sequence: -1 },
+      { generation: 0 },
       { data: "AAAA".repeat(11000) },
     ]) {
       owner.corruptNext((frame) => ({ ...frame, payload: { ...pcm, ...patch } }));
@@ -542,7 +543,7 @@ it.live("isolates malformed authenticated media to its request on the same super
     yield* Fiber.interrupt(subscription);
     yield* owner.supervisor.disconnect;
     yield* Effect.logInfo(
-      "malformed media: 8 correlated PCM/envelope failures; same socket probe, snapshot, durable delta and valid PCM survived; duplicate sequence rejected",
+      "malformed media: 9 correlated PCM/envelope failures; same socket probe, snapshot, durable delta and valid PCM survived; duplicate sequence rejected",
     );
   }).pipe(Effect.provide(Layer.mergeAll(base, NodeHttpServer.layerTest)), Effect.scoped),
 );

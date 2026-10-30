@@ -525,6 +525,99 @@ it.live(
       const reconciled = yield* restarted.taskAction(continuedInput, ceiling);
       assert.deepEqual({ ...reconciled, receipt: continued.receipt }, continued);
       assert.lengthOf((yield* threads.getThreadRecords(threadId, ["runs"])).runs, 3);
+      {
+        const active = yield* threads.getThreadRecords(threadId, [
+          "runs",
+          "attempts",
+          "providerThreads",
+        ]);
+        const activeRun = active.runs.find(
+          (run) => run.id === continued.task.workers.at(-1)!.runId,
+        )!;
+        const attempt = active.attempts.find((item) => item.id === activeRun.activeAttemptId)!;
+        const providerThread = active.providerThreads.find(
+          (item) => item.id === attempt.providerThreadId,
+        )!;
+        yield* (yield* ProviderSessions.ProviderSessionManagerV2).open({
+          threadId,
+          providerSessionId: providerThread.providerSessionId!,
+          modelSelection: model,
+          runtimePolicy: { cwd: null, runtimeMode: "full-access", interactionMode: "default" },
+        });
+        const now = yield* DateTime.now;
+        const turnId = ProviderTurnId.make("wire-active-continuation");
+        yield* (yield* Sink.EventSinkV2).write({
+          events: [
+            {
+              id: EventId.make("wire-active-run"),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...activeRun, status: "running" },
+            },
+            {
+              id: EventId.make("wire-active-turn"),
+              type: "provider-turn.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: turnId,
+                providerThreadId: providerThread.id,
+                nodeId: activeRun.rootNodeId!,
+                runAttemptId: attempt.id,
+                nativeTurnRef: null,
+                ordinal: 1,
+                status: "running",
+                startedAt: now,
+                completedAt: null,
+              },
+            },
+            {
+              id: EventId.make("wire-active-attempt"),
+              type: "run-attempt.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                ...attempt,
+                providerTurnId: turnId,
+                status: "running",
+                startedAt: now,
+                completedAt: null,
+              },
+            },
+          ],
+        });
+      }
+      for (const action of [
+        { type: "steer", text: "Human steers the active continuation" },
+        { type: "send", text: "Human sends another bounded direction" },
+        { type: "queue", text: "Human queues follow-up work" },
+        { type: "interrupt" },
+      ] as const) {
+        const control = {
+          ...query,
+          inputId: DeusInputId.make(`wire-control-${action.type}`),
+          action,
+        };
+        const accepted = yield* client[WS_METHODS.deusTaskAction](control);
+        assert.equal(accepted.task.id, task.id);
+        assert.equal(accepted.task.workers.at(-1)!.threadId, threadId);
+        assert.equal(accepted.receipt.status, "accepted");
+        assert.deepEqual(
+          { ...(yield* client[WS_METHODS.deusTaskAction](control)), receipt: accepted.receipt },
+          accepted,
+        );
+      }
+      const interrupted = yield* sql<{
+        result_json: string;
+      }>`SELECT result_json FROM deus_receipts WHERE input_id = ${"wire-control-interrupt"}`;
+      assert.equal(
+        (yield* decodeTaskActionRecord(interrupted[0]!.result_json)).plan.runId,
+        continued.task.workers.at(-1)!.runId,
+      );
+      const controlled = yield* threads.getThreadRecords(threadId, ["runs"]);
+      assert.lengthOf(controlled.runs, 4);
+      assert.equal(controlled.runs.find((run) => run.ordinal === 4)!.status, "queued");
       assert.lengthOf((yield* sessions.snapshot(input)).tasks, 1);
       assert.equal(
         (yield* sql<{
@@ -541,7 +634,7 @@ it.live(
         "DeusPermissionError",
       );
       yield* Effect.logInfo(
-        "authenticated task actions: one no-tools query, original-text retry, explicit-human continuation, same task/thread; exact receipt replay and accepted-before-ack recovery after later run; revocation denied; no external provider calls",
+        "authenticated task actions: one no-tools query, original-text retry, explicit-human continuation, same task/thread; send/queue/steer/interrupt preserved; exact receipt replay and accepted-before-ack recovery after later run; revocation denied; no external provider calls",
       );
     }).pipe(
       Effect.scoped,
@@ -549,6 +642,7 @@ it.live(
         Layer.merge(
           harness({
             authenticated: true,
+            externalFixture: true,
             text: (request) =>
               Effect.sync(() => {
                 queryCalls++;
