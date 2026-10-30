@@ -83,7 +83,7 @@ export const redactLiveText = (text: string, key = "") => {
       /((?:authorization|x-goog-api-key|api[_-]?key|access[_-]?token|cookie)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|(?:Bearer\s+)?[^\s,;"}]+)/gi,
       '$1"[REDACTED]"',
     )
-    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [REDACTED]");
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [REDACTED]");
 };
 export class GeminiLiveAdapter extends Context.Service<
   GeminiLiveAdapter,
