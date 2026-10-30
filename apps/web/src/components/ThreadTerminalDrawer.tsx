@@ -1450,7 +1450,8 @@ export default function ThreadTerminalDrawer({
     isPanel
       ? "h-full flex-1 bg-background"
       : floating
-        ? "z-45 mx-(--floating-panel-gap) mb-(--floating-panel-gap) shrink-0 rounded-(--floating-panel-radius) shadow-float"
+        ? // Inset so the first line and the toolbar clear the card's rounded corners.
+          "z-45 mx-(--floating-panel-gap) mb-(--floating-panel-gap) shrink-0 rounded-(--floating-panel-radius) px-3 pt-3 pb-2 shadow-float [--terminal-toolbar-inset:0.875rem]"
         : "z-45 shrink-0 border-t border-border/80 bg-background",
   );
   const floatingGlass = floating ? <div aria-hidden className="panel-glass" /> : null;
@@ -1791,7 +1792,7 @@ export default function ThreadTerminalDrawer({
       ) : null}
 
       {!hasTerminalSidebar && (
-        <div className="pointer-events-none absolute right-2 top-2 z-20">
+        <div className="pointer-events-none absolute top-[var(--terminal-toolbar-inset,0.5rem)] right-[var(--terminal-toolbar-inset,0.5rem)] z-20">
           <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
             <TerminalActionButton
               disabled={!canOperateTerminal}
