@@ -233,6 +233,31 @@ export function AppearanceSettingsPanel() {
           }
         />
         <SettingsRow
+          {...searchableSetting("setting-floating-panels")}
+          description="Float the sidebar, right panel, and terminal drawer as rounded glass cards with a margin from the window edges."
+          resetAction={
+            settings.floatingPanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.floatingPanelsEnabled ? (
+              <SettingResetButton
+                label="floating panels"
+                onClick={() =>
+                  updateSettings({
+                    floatingPanelsEnabled: DEFAULT_UNIFIED_SETTINGS.floatingPanelsEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              aria-label="Floating panels"
+              checked={settings.floatingPanelsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ floatingPanelsEnabled: Boolean(checked) })
+              }
+            />
+          }
+        />
+        <SettingsRow
           {...searchableSetting("effort-display")}
           description="Show reasoning effort in the composer as its name, such as High, or as bars."
           resetAction={
@@ -300,6 +325,7 @@ export function AppearanceSettingsPanel() {
             searchableSetting("setting-liquid-glass-refraction").id,
             searchableSetting("setting-liquid-glass-dispersion").id,
             searchableSetting("setting-liquid-glass-glare").id,
+            searchableSetting("setting-ambient-shimmer").id,
             searchableSetting("panel-animations").id,
             searchableSetting("environment-identification").id,
             // Environment identification's search result lands on this section.
@@ -397,6 +423,48 @@ export function AppearanceSettingsPanel() {
             {settings.liquidGlassEnabled ? <LiquidGlassPreview /> : null}
           </SettingsRow>
           <LiquidGlassSettings />
+          <SettingsRow
+            {...searchableSetting("setting-ambient-shimmer")}
+            title={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                Ambient shimmer
+                <Badge variant="warning" size="sm">
+                  Experimental
+                </Badge>
+              </span>
+            }
+            description={
+              <>
+                Drift soft bands of the theme&apos;s colors behind the chat, strongest on the new
+                thread page and faint behind conversations. Gives liquid glass something to bend.
+                <span className="mt-1 block text-warning-foreground">
+                  Performance warning: animates continuously, which keeps the GPU busy, may reduce
+                  frame rates, and uses more battery.
+                </span>
+              </>
+            }
+            resetAction={
+              settings.ambientShimmerEnabled !== DEFAULT_UNIFIED_SETTINGS.ambientShimmerEnabled ? (
+                <SettingResetButton
+                  label="ambient shimmer"
+                  onClick={() =>
+                    updateSettings({
+                      ambientShimmerEnabled: DEFAULT_UNIFIED_SETTINGS.ambientShimmerEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Ambient shimmer"
+                checked={settings.ambientShimmerEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ ambientShimmerEnabled: Boolean(checked) })
+                }
+              />
+            }
+          />
           <SettingsRow
             {...searchableSetting("panel-animations")}
             description="Set how fast panels open and close."

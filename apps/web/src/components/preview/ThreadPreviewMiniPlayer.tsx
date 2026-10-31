@@ -610,7 +610,7 @@ function MiniPlayerShell({
             </div>
           </div>
 
-          <div className="absolute inset-0 z-[47] rounded-[inherit] bg-muted shadow-2xl/35" />
+          <div className="absolute inset-0 z-[47] rounded-[inherit] bg-muted shadow-float" />
           {children(frame)}
           <div className="pointer-events-none absolute inset-0 z-[49] rounded-[inherit] ring-1 ring-inset ring-border/80" />
           {RESIZE_HANDLES.map(({ direction, className }) => (

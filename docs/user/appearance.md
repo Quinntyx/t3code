@@ -28,6 +28,19 @@ lists behind the composer, toolbars, and menus at their edges. It is available o
 Chromium browsers, and on Android 13 or newer. Blur, saturation, refraction, and dispersion sliders
 tune the effect; each device keeps its own values. It can increase GPU and battery use.
 
+The experimental **Ambient shimmer** setting drifts soft, never-repeating bands of your theme's
+colors behind the whole app on web and desktop. It is strongest on the new thread page and faint
+elsewhere, and gives liquid glass a backdrop to bend. It animates continuously, so it keeps the
+GPU busy and can cost battery; with reduced motion enabled it shows a still frame.
+
+## Floating panels
+
+Turn on **Floating panels** in **Settings → Appearance** to float the sidebar, right panel, and
+terminal drawer as rounded glass cards with a margin from the window edges, like the composer and
+thread details card. They slide in and out using the **Panel animations** duration, refract the
+backdrop when liquid glass is on, and show the ambient shimmer through them when that is on. This
+applies to web and desktop.
+
 ## Composer context
 
 Git-backed projects show branch and worktree controls below the composer while you create a thread.

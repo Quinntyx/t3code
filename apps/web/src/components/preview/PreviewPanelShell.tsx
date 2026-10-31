@@ -4,6 +4,7 @@ import {
   usePreviewPanelInlineSize,
 } from "~/hooks/usePreviewPanelInlineSize";
 import { RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
+import { useClientSettings } from "~/hooks/useSettings";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { cn } from "~/lib/utils";
 
@@ -47,6 +48,7 @@ function PreviewPanelShellFrame(
 ) {
   const panelArea = workspaceAreaProps("panel", 4, props.workspaceLabel ?? "Workspace panel");
   const isInline = props.mode === "inline";
+  const floating = useClientSettings((settings) => settings.floatingPanelsEnabled) && isInline;
   const collapsible = isInline && props.open !== undefined;
   const open = props.open ?? true;
   const maximized = props.maximized ?? false;
@@ -121,12 +123,13 @@ function PreviewPanelShellFrame(
       data-workspace-focus-key={props.workspaceFocusKey}
       data-workspace-unavailable={collapsible && !open ? "true" : undefined}
       className={cn(
-        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch bg-background",
+        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch",
+        !floating && "bg-background",
         isInline
           ? maximized
             ? // Maximizing meets the sidebar border or window edge; omit the duplicate border.
               "flex-1"
-            : "shrink-0 border-l border-border"
+            : cn("shrink-0", !floating && "border-l border-border")
           : "w-full",
         collapsible &&
           "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
@@ -150,15 +153,34 @@ function PreviewPanelShellFrame(
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >
       {isInline && !maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
-      <div className={cn("h-full min-h-0 w-full", collapsible && "overflow-clip")}>
+      <div
+        className={cn(
+          "h-full min-h-0 w-full",
+          // A floating card slides in past the window edge instead of being clipped like a curtain.
+          collapsible && !floating && "overflow-clip",
+          floating && "py-(--floating-panel-gap) pr-(--floating-panel-gap)",
+          floating && maximized && "pl-(--floating-panel-gap)",
+        )}
+      >
         <div
-          className="flex h-full min-h-0 min-w-0 flex-col"
+          className={cn(
+            "flex h-full min-h-0 min-w-0 flex-col",
+            floating && "relative z-0 overflow-hidden rounded-glass shadow-float",
+            // Its shadow would otherwise peek in from beyond the window edge once closed.
+            floating &&
+              collapsible &&
+              "[[data-panel-animations=true]_&]:transition-[visibility] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration)",
+            floating && collapsible && !open && "invisible",
+          )}
           style={
             collapsible && !maximized
-              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)` }
+              ? {
+                  width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - ${floating ? "var(--floating-panel-gap)" : "1px"})`,
+                }
               : undefined
           }
         >
+          {floating ? <div aria-hidden className="panel-glass" /> : null}
           {props.children}
         </div>
       </div>

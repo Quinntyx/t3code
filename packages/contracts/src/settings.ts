@@ -465,6 +465,8 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(400)),
   ),
   liquidGlassGlare: LiquidGlassPercent.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
+  ambientShimmerEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  floatingPanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   fontSizeInterface: InterfaceFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
   ),
@@ -1755,6 +1757,8 @@ export const ClientSettingsPatch = Schema.Struct({
   liquidGlassRefraction: Schema.optionalKey(LiquidGlassPercent),
   liquidGlassDispersion: Schema.optionalKey(LiquidGlassDispersion),
   liquidGlassGlare: Schema.optionalKey(LiquidGlassPercent),
+  ambientShimmerEnabled: Schema.optionalKey(Schema.Boolean),
+  floatingPanelsEnabled: Schema.optionalKey(Schema.Boolean),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),
