@@ -685,6 +685,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [isWorkspaceFileDragActive]);
   const prefersPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const isMobileViewport = useMediaQuery("max-sm");
+  const isSidebarSheetViewport = useMediaQuery("max-md");
   const [workspaceLayoutElement, setWorkspaceLayoutElement] = useState<HTMLDivElement | null>(null);
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const [terminalUiLaunchContext, setTerminalUiLaunchContext] =
@@ -1053,11 +1054,11 @@ export default function ChatView(props: ChatViewProps) {
   const canMaximizeRightPanel = rightPanelOpen;
   const rightPanelMaximized = canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
-  // Floating panels move the layout toggles beside the composer; narrow layouts keep the titlebar.
-  const floatingPanelControls =
-    useClientSettings((settings) => settings.floatingPanelsEnabled) &&
-    !prefersPlanSidebarSheet &&
-    !isMobileViewport;
+  // Floating panels move the layout toggles to a bottom-corner bubble; narrow layouts keep the
+  // titlebar. The sidebar's own bubble shows wherever its sheet does not.
+  const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
+  const floatingPanelControls = floatingPanels && !prefersPlanSidebarSheet && !isMobileViewport;
+  const floatingSidebarBubble = floatingPanels && !isSidebarSheetViewport;
   const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
@@ -3165,6 +3166,20 @@ export default function ChatView(props: ChatViewProps) {
     />
   );
   const threadPanelHeaderControl = <ThreadPanelHeaderControl {...panelToggleControlProps} />;
+  const floatingPanelControlsBubble = (
+    <FloatingPanelControls
+      {...panelToggleControlProps}
+      maximize={
+        rightPanelOpen ? (
+          <RightPanelMaximizeControl
+            maximized={rightPanelMaximized}
+            onToggle={toggleRightPanelMaximizedStable}
+            tooltipSide="left"
+          />
+        ) : null
+      }
+    />
+  );
   const panelLayoutControls = (
     <WorkspaceTitlebarControls
       showMaximizeControl={!shouldUsePlanSidebarSheet}
@@ -3185,7 +3200,12 @@ export default function ChatView(props: ChatViewProps) {
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background ambient-shimmer:bg-transparent"
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background ambient-shimmer:bg-transparent",
+        floatingPanelControls && "[--floating-bubble-inset-end:var(--floating-bubble-clearance)]",
+        floatingSidebarBubble &&
+          "[--floating-bubble-inset-start:var(--floating-bubble-clearance-start)]",
+      )}
     >
       <DeviceSetupDialogHost
         threadKey={activeThreadKey}
@@ -3195,7 +3215,7 @@ export default function ChatView(props: ChatViewProps) {
       {rightPanelControlsAtRoot && !floatingPanelControls ? panelLayoutControls : null}
       <div
         className={cn(
-          "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
+          "relative flex min-h-0 min-w-0 flex-col overflow-x-hidden",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
@@ -3416,20 +3436,6 @@ export default function ChatView(props: ChatViewProps) {
                   data-chat-composer-stack="true"
                   className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
                 >
-                  {floatingPanelControls ? (
-                    <FloatingPanelControls
-                      {...panelToggleControlProps}
-                      maximize={
-                        rightPanelOpen ? (
-                          <RightPanelMaximizeControl
-                            maximized={rightPanelMaximized}
-                            onToggle={toggleRightPanelMaximizedStable}
-                            tooltipSide="left"
-                          />
-                        ) : null
-                      }
-                    />
-                  ) : null}
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
@@ -3811,6 +3817,7 @@ export default function ChatView(props: ChatViewProps) {
           keybindings={keybindings}
           onAddTerminalContext={addTerminalContextToDraftStable}
         />
+        {floatingPanelControls && !rightPanelMaximized ? floatingPanelControlsBubble : null}
       </div>
 
       {rightPanelPresent && activeThreadRef ? (
@@ -3873,6 +3880,7 @@ export default function ChatView(props: ChatViewProps) {
           {rightPanelContent}
         </ChatRightPanel>
       ) : null}
+      {floatingPanelControls && rightPanelMaximized ? floatingPanelControlsBubble : null}
 
       <RevertConfirmHost threadKey={routeThreadKey} onConfirm={onConfirmRevertStable} />
       <LinkPullRequestDialogHost />

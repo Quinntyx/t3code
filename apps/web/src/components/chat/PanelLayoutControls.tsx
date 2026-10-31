@@ -5,6 +5,8 @@ import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
+import { FloatingControlBubble } from "../FloatingControlBubble";
+
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
 import { Toggle } from "../ui/toggle";
@@ -220,19 +222,18 @@ export function WorkspaceTitlebarControls(props: {
   );
 }
 
-/** With floating panels, the layout toggles stand beside the composer, clear of the cards. */
+/** With floating panels, the layout toggles float in the bottom-right corner, beside the right panel. */
 export function FloatingPanelControls({
   maximize,
   ...props
 }: PanelLayoutControlsProps & { maximize: ReactNode }) {
   return (
-    <div
-      className="absolute top-0 left-full isolate z-20 ml-1.5 flex flex-col items-center gap-0.5 rounded-full p-1 shadow-float [--radius:1rem]"
+    <FloatingControlBubble
+      className="absolute right-(--floating-panel-gap) bottom-(--floating-panel-gap) z-30"
       data-floating-panel-controls
     >
-      <div aria-hidden className="panel-glass" />
       {maximize}
       <PanelLayoutControls {...props} orientation="vertical" tooltipSide="left" />
-    </div>
+    </FloatingControlBubble>
   );
 }

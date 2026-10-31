@@ -1,9 +1,4 @@
-import {
-  ArrowLeftIcon,
-  ChartNoAxesColumnIcon,
-  PanelLeftCloseIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -139,18 +134,16 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
 }
 
 function SidebarUtilityItem({
-  className,
   icon,
   label,
   onClick,
 }: {
-  className?: string;
   icon: ReactNode;
   label: string;
   onClick: () => void;
 }) {
   return (
-    <SidebarMenuItem className={cn("shrink-0", className)}>
+    <SidebarMenuItem className="shrink-0">
       <Tooltip>
         <TooltipTrigger
           render={
@@ -168,13 +161,11 @@ function SidebarUtilityItem({
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
-  const { isMobile, setOpenMobile, toggleSidebar } = useSidebar();
+  const { isMobile, setOpenMobile } = useSidebar();
   const isOnUtilityPage = useLocation({
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
-  // The floating card carries its own collapse control; the corner one returns once it closes.
-  const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -235,14 +226,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </>
       )}
       <SidebarUpdatePill />
-      {floatingPanels && !isMobile ? (
-        <SidebarUtilityItem
-          className="ml-auto"
-          icon={<PanelLeftCloseIcon />}
-          label="Collapse sidebar"
-          onClick={toggleSidebar}
-        />
-      ) : null}
     </SidebarMenu>
   );
 });

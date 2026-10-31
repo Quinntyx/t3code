@@ -141,6 +141,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --floating-details-clearance: calc(
     var(--thread-details-panel-width) + var(--floating-panel-gap) * 2
   );
+  /* Round control bubbles sit in the bottom corners. Cards that reach the bottom (the terminal
+     drawer, a maximized right panel) stop short of them. */
+  --floating-bubble-size: 2.25rem;
+  --floating-bubble-clearance: calc(var(--floating-bubble-size) + var(--floating-panel-gap) * 2);
+  --floating-bubble-inset-start: var(--floating-panel-gap);
+  --floating-bubble-inset-end: var(--floating-panel-gap);
   --sidebar-row-radius: calc(var(--radius) + 4px);
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
@@ -1621,6 +1627,17 @@ html[data-theme-id] [data-chat-header] {
 /* The ambient shimmer runs behind the titlebar too, so the bar keeps only its text. */
 html[data-theme-id][data-ambient-shimmer] [data-chat-header] {
   background-color: transparent;
+}
+
+/* The sidebar's bubble sits just past the open card's corner, or in the window corner once the
+   card slides away. The open card's own margin already separates the two. */
+[data-slot="sidebar-wrapper"] {
+  --floating-sidebar-bubble-left: var(--floating-panel-gap);
+  --floating-bubble-clearance-start: var(--floating-bubble-clearance);
+}
+[data-slot="sidebar-wrapper"][data-sidebar-state="expanded"] {
+  --floating-sidebar-bubble-left: var(--sidebar-width);
+  --floating-bubble-clearance-start: calc(var(--floating-bubble-size) + var(--floating-panel-gap));
 }
 
 html[data-theme-id] [data-chat-header] [data-slot="button"],

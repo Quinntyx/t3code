@@ -1450,8 +1450,12 @@ export default function ThreadTerminalDrawer({
     isPanel
       ? "h-full flex-1 bg-background"
       : floating
-        ? // Inset so the first line and the toolbar clear the card's rounded corners.
-          "z-45 mx-(--floating-panel-gap) mb-(--floating-panel-gap) shrink-0 rounded-(--floating-panel-radius) px-3 pt-3 pb-2 shadow-float [--terminal-toolbar-inset:0.875rem]"
+        ? // Inset so the first line and the toolbar clear the card's rounded corners, and the
+          // card itself clears the corner bubbles.
+          cn(
+            "z-45 mr-(--floating-bubble-inset-end) mb-(--floating-panel-gap) ml-(--floating-bubble-inset-start) shrink-0 rounded-(--floating-panel-radius) px-3 pt-3 pb-2 shadow-float [--terminal-toolbar-inset:0.875rem]",
+            "[[data-panel-animations=true]_&]:transition-[margin] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
+          )
         : "z-45 shrink-0 border-t border-border/80 bg-background",
   );
   const floatingGlass = floating ? <div aria-hidden className="panel-glass" /> : null;

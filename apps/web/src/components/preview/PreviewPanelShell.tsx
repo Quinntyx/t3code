@@ -158,8 +158,12 @@ function PreviewPanelShellFrame(
           "h-full min-h-0 w-full",
           // A floating card slides in past the window edge instead of being clipped like a curtain.
           collapsible && !floating && "overflow-clip",
-          floating && "py-(--floating-panel-gap) pr-(--floating-panel-gap)",
-          floating && maximized && "pl-(--floating-panel-gap)",
+          floating && "py-(--floating-panel-gap)",
+          // Maximized, the card reaches the bottom corners, so it stops short of their bubbles.
+          floating &&
+            (maximized
+              ? "pr-(--floating-bubble-inset-end) pl-(--floating-bubble-inset-start)"
+              : "pr-(--floating-panel-gap)"),
         )}
       >
         <div
