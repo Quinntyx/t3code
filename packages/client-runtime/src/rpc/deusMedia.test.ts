@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   DeusAttachmentId,
+  DeusConversation,
   DeusSessionId,
   EnvironmentId,
   ProjectId,
@@ -23,7 +24,10 @@ const base = {
   generation: 1,
   responseEpoch: 0,
 };
-const fixture = Effect.fn("DeusMediaTest.fixture")(function* () {
+const fixture = Effect.fn("DeusMediaTest.fixture")(function* (
+  onEpoch?: (epoch: number) => void,
+  conversation?: DeusConversation,
+) {
   const disconnected = yield* Deferred.make<void>();
   const pushed = yield* Queue.unbounded<void>();
   const renewed = yield* Queue.unbounded<void>();
@@ -71,7 +75,7 @@ const fixture = Effect.fn("DeusMediaTest.fixture")(function* () {
     output: Stream.fromQueue(received),
     disconnected: Deferred.await(disconnected),
   };
-  const controller = yield* makeDeusMediaController(attachment, transport);
+  const controller = yield* makeDeusMediaController(attachment, transport, onEpoch, conversation);
   return {
     controller,
     disconnected,
@@ -84,6 +88,84 @@ const fixture = Effect.fn("DeusMediaTest.fixture")(function* () {
 });
 
 describe("bounded portable Deus media controller", () => {
+  it.effect("preserves canonical conversation/turn identity and rejects late or legacy media", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const conversation = DeusConversation.make(2);
+        const h = yield* fixture(undefined, conversation);
+        const pcm = {
+          ...base,
+          type: "pcm" as const,
+          encoding: "pcm16le" as const,
+          channels: 1 as const,
+          sampleRate: 24000 as const,
+          data: "AAA=",
+        };
+        yield* Queue.offer(h.received, { ...pcm, sequence: 0 });
+        yield* Queue.offer(h.received, {
+          ...pcm,
+          conversation: DeusConversation.make(1),
+          turnId: "old",
+          sequence: 1,
+        });
+        yield* Queue.offer(h.received, { ...pcm, conversation, turnId: "first", sequence: 2 });
+        expect(yield* h.controller.takeFrame).toMatchObject({
+          bytes: new Uint8Array(2),
+          epoch: 0,
+          conversation,
+          turnId: "first",
+        });
+        yield* Queue.offer(h.received, {
+          ...base,
+          conversation,
+          turnId: "first",
+          sequence: 3,
+          type: "turn-end",
+        });
+        yield* Queue.take(h.controller.events);
+        yield* Queue.offer(h.received, { ...pcm, conversation, turnId: "first", sequence: 4 });
+        yield* Queue.offer(h.received, { ...pcm, conversation, turnId: "second", sequence: 5 });
+        expect(yield* h.controller.takeFrame).toMatchObject({ turnId: "second" });
+        yield* Queue.offer(h.received, { ...pcm, conversation, turnId: "first", sequence: 6 });
+        yield* Queue.offer(h.received, { ...pcm, conversation, turnId: "second", sequence: 7 });
+        yield* h.controller.takeFrame;
+        expect(h.controller.stats().rejectedOutput).toBe(4);
+      }),
+    ),
+  );
+  it.effect("flushes external scheduled playback synchronously on local and remote epochs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const epochs: number[] = [];
+        const h = yield* fixture((epoch) => {
+          epochs.push(epoch);
+        });
+        yield* h.controller.control("interrupt-response");
+        expect(epochs).toEqual([1]);
+        yield* Queue.offer(h.received, {
+          ...base,
+          responseEpoch: 2,
+          sequence: 0,
+          type: "control",
+          state: "interrupted",
+        });
+        yield* Queue.take(h.controller.events);
+        expect(epochs).toEqual([1, 2]);
+        yield* Queue.offer(h.received, {
+          ...base,
+          responseEpoch: 2,
+          sequence: 1,
+          type: "pcm",
+          encoding: "pcm16le",
+          channels: 1,
+          sampleRate: 24000,
+          data: "AAA=",
+        });
+        expect(yield* h.controller.takeFrame).toEqual({ bytes: new Uint8Array(2), epoch: 2 });
+      }),
+    ),
+  );
+
   it.effect(
     "keeps one PCM request in flight and four pending, prioritizes mute/interrupt and never acquires audio",
     () =>

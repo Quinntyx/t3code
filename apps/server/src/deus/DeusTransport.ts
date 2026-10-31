@@ -319,10 +319,15 @@ const make = Effect.gen(function* () {
                   yield* leases.owner(connection, input);
                   const output = yield* live.next(input);
                   yield* leases.owner(connection, input);
-                  const envelope = { ...output.attachment, sequence: state.sequence++ };
+                  const envelope = {
+                    ...output.attachment,
+                    conversation: output.conversation,
+                    turnId: output.turnId,
+                    sequence: state.sequence++,
+                  };
                   const event: DeusMediaOutput =
                     output.type === "media"
-                      ? { ...output.media, sequence: envelope.sequence }
+                      ? { ...output.media, ...envelope }
                       : output.type === "turn-end"
                         ? { ...envelope, type: "turn-end" }
                         : { ...envelope, type: "error", error: publicDeusError(output.error) };

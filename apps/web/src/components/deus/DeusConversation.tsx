@@ -5,7 +5,6 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { deusEnvironment } from "../../state/deus";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useDeusPanelStore } from "../../deusPanelStore";
 import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -65,18 +64,6 @@ export function useDeusConversation({
     };
   }, [target, permitted, canOpen, openId]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Revocation/offline and unmount release only local media registered by the next migration step.
-  useEffect(() => {
-    const release = () => {
-      void useDeusPanelStore
-        .getState()
-        .releaseLocal(target)
-        .catch(() => {});
-    };
-    if (!permitted || !canWrite) release();
-    return release;
-  }, [target, permitted, canWrite]);
-
   const submit = async () => {
     if (!view || !canWrite || !permitted || sending || !text.trim()) return;
     const inputText = text.trim();
@@ -114,90 +101,94 @@ export function useDeusConversation({
     } else setSendError(failureMessage(result));
   };
 
-  return (
-    <>
-      <div className="border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status">
-        {!canRead
-          ? "Permission required to read this project's Deus conversation."
-          : !available
-            ? "Conversation unavailable at this destination."
-            : !canOpen && !sessionId
-              ? "Permission required to open this project's Deus conversation."
-              : (openError ??
-                query.error ??
-                (view
-                  ? "Text conversation connected. Voice is not attached."
-                  : "Loading conversation…"))}
-      </div>
-      {permitted && (openError || query.error) ? (
-        <div className="px-4 py-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setOpenError(null);
-              setOpenId(DeusInputId.make(randomUUID()));
-              query.refresh();
-            }}
-          >
-            Refresh conversation
-          </Button>
+  return {
+    session: view?.session ?? null,
+    content: (
+      <>
+        <div
+          className="border-b border-border px-4 py-2 text-xs text-muted-foreground"
+          role="status"
+        >
+          {!canRead
+            ? "Permission required to read this project's Deus conversation."
+            : !available
+              ? "Conversation unavailable at this destination."
+              : !canOpen && !sessionId
+                ? "Permission required to open this project's Deus conversation."
+                : (openError ??
+                  query.error ??
+                  (view ? "Text conversation connected." : "Loading conversation…"))}
         </div>
-      ) : null}
-      <ol
-        aria-label="Deus transcript"
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm"
-      >
-        {view?.transcripts.map((row) => (
-          <li key={row.id} data-transcript-id={row.id}>
-            <p className="mb-1 text-xs font-medium text-muted-foreground">
-              {row.role === "human" ? "You" : "Deus"} · Conversation {row.conversation}
+        {permitted && (openError || query.error) ? (
+          <div className="px-4 py-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setOpenError(null);
+                setOpenId(DeusInputId.make(randomUUID()));
+                query.refresh();
+              }}
+            >
+              Refresh conversation
+            </Button>
+          </div>
+        ) : null}
+        <ol
+          aria-label="Deus transcript"
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm"
+        >
+          {view?.transcripts.map((row) => (
+            <li key={row.id} data-transcript-id={row.id}>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">
+                {row.role === "human" ? "You" : "Deus"} · Conversation {row.conversation}
+              </p>
+              <p className="whitespace-pre-wrap break-words">{row.text}</p>
+            </li>
+          ))}
+          {view && view.transcripts.length === 0 ? (
+            <li className="text-muted-foreground">
+              No messages yet. This conversation belongs to the project, not a worker thread.
+            </li>
+          ) : null}
+        </ol>
+        <form
+          className="space-y-2 border-t border-border p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <label htmlFor="deus-message" className="text-sm font-medium">
+            Message Deus
+          </label>
+          <Textarea
+            id="deus-message"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            disabled={!view || !canWrite || sending}
+            placeholder="Coordinate work in this project…"
+            maxLength={16000}
+          />
+          <p className="text-xs text-muted-foreground">
+            Workers require approval. New worktrees are not allowed. Closing this panel does not
+            cancel workers.
+          </p>
+          {!canWrite ? (
+            <p role="status" className="text-xs text-muted-foreground">
+              Permission required to send messages.
             </p>
-            <p className="whitespace-pre-wrap break-words">{row.text}</p>
-          </li>
-        ))}
-        {view && view.transcripts.length === 0 ? (
-          <li className="text-muted-foreground">
-            No messages yet. This conversation belongs to the project, not a worker thread.
-          </li>
-        ) : null}
-      </ol>
-      <form
-        className="space-y-2 border-t border-border p-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <label htmlFor="deus-message" className="text-sm font-medium">
-          Message Deus
-        </label>
-        <Textarea
-          id="deus-message"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          disabled={!view || !canWrite || sending}
-          placeholder="Coordinate work in this project…"
-          maxLength={16000}
-        />
-        <p className="text-xs text-muted-foreground">
-          Workers require approval. New worktrees are not allowed. Closing this panel does not
-          cancel workers.
-        </p>
-        {!canWrite ? (
-          <p role="status" className="text-xs text-muted-foreground">
-            Permission required to send messages.
-          </p>
-        ) : null}
-        {sendError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {sendError}
-          </p>
-        ) : null}
-        <Button type="submit" size="sm" disabled={!view || !canWrite || sending || !text.trim()}>
-          {sending ? "Sending…" : "Send message"}
-        </Button>
-      </form>
-    </>
-  );
+          ) : null}
+          {sendError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {sendError}
+            </p>
+          ) : null}
+          <Button type="submit" size="sm" disabled={!view || !canWrite || sending || !text.trim()}>
+            {sending ? "Sending…" : "Send message"}
+          </Button>
+        </form>
+      </>
+    ),
+  };
 }

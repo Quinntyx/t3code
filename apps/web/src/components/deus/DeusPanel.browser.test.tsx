@@ -1,5 +1,6 @@
 import "../../index.css";
 import type { ThreadRouteTarget } from "../../threadRoutes";
+import type { VoicePlatform } from "../../deus/VoiceAudio";
 import { useSyncExternalStore } from "react";
 import { RegistryContext } from "@effect/atom-react";
 import { createDeusCommands } from "@t3tools/client-runtime/state/deus";
@@ -17,6 +18,12 @@ import {
   AuthOrchestrationOperateScope,
   DEFAULT_SERVER_SETTINGS,
   DeusConversation,
+  DeusAttachmentId,
+  type DeusAttachInput,
+  type DeusHumanCeiling,
+  type DeusPcmInput,
+  type DeusMediaControlInput,
+  type DeusMediaOutput,
   DeusCursor,
   DeusSessionId,
   DeusTranscriptId,
@@ -68,6 +75,7 @@ const state = vi.hoisted(() => ({
   >(),
   environments: new Map<EnvironmentId, EnvironmentPresentation>(),
   projects: [] as EnvironmentProject[],
+  audio: null as VoicePlatform | null,
   version: 0,
   listeners: new Set<() => void>(),
 }));
@@ -124,6 +132,15 @@ function useFixturePresentation() {
     () => state.version,
   );
 }
+vi.mock(import("../../deus/browserAudio"), () => ({
+  browserVoicePlatform: {
+    check: () => state.audio!.check(),
+    createContext: () => state.audio!.createContext(),
+    getUserMedia: () => state.audio!.getUserMedia(),
+    createCapture: (...args: Parameters<VoicePlatform["createCapture"]>) =>
+      state.audio!.createCapture(...args),
+  },
+}));
 vi.mock(import("../../state/environments"), () => ({
   useEnvironment: (id: EnvironmentId | null) => {
     useFixturePresentation();
@@ -211,7 +228,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup(path = "/projects/one/project") {
+async function setup(path = "/projects/one/project", voice = false) {
   state.supervisors.clear();
   state.environments.clear();
   state.sessions.clear();
@@ -225,6 +242,32 @@ async function setup(path = "/projects/one/project") {
     busy: false,
     error: null,
   });
+  const track = { stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() };
+  const capture = { stop: vi.fn() };
+  const context = {
+    state: "running",
+    currentTime: 0,
+    resume: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  const microphone = vi.fn(async () => ({ getTracks: () => [track] }) as unknown as MediaStream);
+  let onInput!: (bytes: Uint8Array) => Promise<boolean>;
+  state.audio = {
+    check: () => {},
+    createContext: () => context as unknown as AudioContext,
+    getUserMedia: microphone,
+    createCapture: async (_context, _stream, input) => {
+      onInput = input;
+      return capture;
+    },
+  };
+  const attachments: Array<DeusAttachInput & { authority: DeusHumanCeiling }> = [];
+  const inputs: DeusPcmInput[] = [];
+  const controls: DeusMediaControlInput[] = [];
+  const detached = deferred();
+  const mediaQueues = new Map<string, Queue.Enqueue<DeusMediaOutput>>();
   const snapshots = new Map<string, DeusSnapshot>();
   const queues = new Map<string, Queue.Enqueue<DeusSubscriptionEvent>>();
   const opened: string[] = [];
@@ -246,7 +289,7 @@ async function setup(path = "/projects/one/project") {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    const serverConfig = config(ref.environmentId);
+    const serverConfig = { ...config(ref.environmentId), deus: { ...supported, liveAudio: voice } };
     const target = new PrimaryConnectionTarget({
       environmentId: ref.environmentId,
       label: ref.environmentId,
@@ -266,7 +309,52 @@ async function setup(path = "/projects/one/project") {
       ref.environmentId,
       Atom.make<AsyncResult.AsyncResult<AuthSessionState, Error>>(AsyncResult.success(session())),
     );
+    const attachment = {
+      ...ref,
+      sessionId: DeusSessionId.make(`session-${scope}`),
+      attachmentId: DeusAttachmentId.make(`audio-${scope}`),
+      generation: 1,
+      responseEpoch: 0,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
     const client = {
+      [WS_METHODS.deusAttach]: (input: DeusAttachInput & { authority: DeusHumanCeiling }) =>
+        Effect.sync(() => {
+          attachments.push(input);
+          return attachment;
+        }),
+      [WS_METHODS.deusMediaPush]: (input: DeusPcmInput) =>
+        Effect.sync(() => {
+          inputs.push(input);
+        }),
+      [WS_METHODS.deusMediaControl]: (input: DeusMediaControlInput) =>
+        Effect.sync(() => {
+          controls.push(input);
+        }),
+      [WS_METHODS.deusDetach]: () =>
+        Effect.sync(() => {
+          detached.resolve();
+        }),
+      [WS_METHODS.deusRenew]: () => Effect.succeed(attachment),
+      [WS_METHODS.deusMediaSubscribe]: () =>
+        Stream.callback<DeusMediaOutput>((queue) =>
+          Effect.gen(function* () {
+            mediaQueues.set(scope, queue);
+            yield* Queue.offer(queue, {
+              ...attachment,
+              conversation: DeusConversation.make(1),
+              turnId: `turn-${scope}`,
+              sequence: 0,
+              type: "control",
+              state: "listening",
+            });
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                mediaQueues.delete(scope);
+              }),
+            );
+          }),
+        ),
       [WS_METHODS.deusOpen]: (input: DeusOpenInput) =>
         Effect.sync(() => {
           const destination = key(input);
@@ -414,6 +502,16 @@ async function setup(path = "/projects/one/project") {
   const resources = stack.move();
   return {
     screen,
+    microphone,
+    context,
+    track,
+    capture,
+    attachments,
+    inputs,
+    controls,
+    detached,
+    mediaQueues,
+    input: (bytes: Uint8Array) => onInput(bytes),
     router,
     registry,
     opened,
@@ -433,15 +531,88 @@ async function setup(path = "/projects/one/project") {
 }
 
 describe("project Deus runtime ownership", () => {
+  it("owns controlled voice above navigation and responsive frames, using guarded authority and distinct controls", async () => {
+    await page.viewport(1280, 800);
+    await using h = await setup("/projects/one/project", true);
+    await act(() => useDeusPanelStore.getState().requestOpen(first));
+    await expect.element(h.screen.getByRole("button", { name: "Connect voice" })).toBeEnabled();
+    expect(h.microphone).not.toHaveBeenCalled();
+    expect(h.attachments).toEqual([]);
+    await userEvent.click(h.screen.getByRole("button", { name: "Connect voice" }));
+    await expect
+      .element(h.screen.getByLabelText("Voice status"))
+      .toHaveTextContent("Voice: listening.");
+    expect(h.attachments).toHaveLength(1);
+    expect(h.attachments[0]).toMatchObject({
+      ...first,
+      takeover: false,
+      authority: {
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        allowWorktree: false,
+      },
+    });
+    await h.input(new Uint8Array(640));
+    await vi.waitFor(() => expect(h.inputs).toHaveLength(1));
+    for (const path of ["/one/worker-a", "/settings/general", "/projects/one/second"])
+      await act(() => h.router.navigate({ to: path }));
+    await page.viewport(600, 800);
+    await expect.element(page.getByRole("button", { name: "Mute microphone" })).toBeVisible();
+    expect(h.microphone).toHaveBeenCalledOnce();
+    expect(h.context.close).not.toHaveBeenCalled();
+    await userEvent.click(page.getByRole("button", { name: "Mute microphone" }));
+    await expect.element(page.getByRole("button", { name: "Resume microphone" })).toBeVisible();
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    await userEvent.click(page.getByRole("button", { name: "Interrupt speech" }));
+    await vi.waitFor(() =>
+      expect(h.controls.map((row) => row.action)).toEqual(["mute", "interrupt-response"]),
+    );
+    await userEvent.click(page.getByRole("button", { name: "Resume microphone" }));
+    await expect.element(page.getByRole("button", { name: "Mute microphone" })).toBeVisible();
+    expect(h.microphone).toHaveBeenCalledTimes(2);
+    await userEvent.fill(
+      page.getByRole("textbox", { name: "Message Deus" }),
+      "Typed while attached",
+    );
+    await userEvent.click(page.getByRole("button", { name: "Send message", exact: true }));
+    await expect
+      .element(
+        page.getByRole("list", { name: "Deus transcript" }).getByText("Typed while attached"),
+      )
+      .toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "Disconnect voice" }));
+    await h.detached.promise;
+    await expect.element(page.getByRole("button", { name: "Connect voice" })).toBeEnabled();
+    expect(h.context.close).toHaveBeenCalledOnce();
+    expect(h.controls.map((row) => row.action)).toEqual(["mute", "interrupt-response", "resume"]);
+    await userEvent.click(page.getByRole("button", { name: "Close Deus", exact: true }));
+    await page.viewport(1280, 800);
+  });
+
+  it("revokes actual controlled voice and blocks a new permission prompt at the destination", async () => {
+    await using h = await setup("/projects/one/project", true);
+    await act(() => useDeusPanelStore.getState().requestOpen(first));
+    await expect.element(h.screen.getByRole("button", { name: "Connect voice" })).toBeEnabled();
+    await userEvent.click(h.screen.getByRole("button", { name: "Connect voice" }));
+    await expect
+      .element(h.screen.getByLabelText("Voice status"))
+      .toHaveTextContent("Voice: listening.");
+    await act(() =>
+      h.registry.set(state.sessions.get(first.environmentId)!, AsyncResult.success(session(false))),
+    );
+    await expect.element(h.screen.getByRole("button", { name: "Connect voice" })).toBeDisabled();
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    expect(h.context.close).toHaveBeenCalledOnce();
+    expect(h.microphone).toHaveBeenCalledOnce();
+  });
+
   it("opens an empty project without worker/provider commands, preserves the mounted conversation through threads and Settings", async () => {
     await page.viewport(1280, 800);
     await using h = await setup();
     await expect.element(h.screen.getByRole("heading", { name: "one/project" })).toBeVisible();
     expect(h.opened).toEqual([]);
     await userEvent.click(h.screen.getByRole("button", { name: "Open Deus", exact: true }));
-    await expect
-      .element(h.screen.getByText("Text conversation connected. Voice is not attached."))
-      .toBeVisible();
+    await expect.element(h.screen.getByText("Text conversation connected.")).toBeVisible();
     const composer = h.screen.container.querySelector("textarea");
     await userEvent.fill(h.screen.getByRole("textbox", { name: "Message Deus" }), "Keep my draft");
     for (const path of [
@@ -469,9 +640,7 @@ describe("project Deus runtime ownership", () => {
     await page.viewport(1280, 800);
     await using h = await setup();
     await userEvent.click(h.screen.getByRole("button", { name: "Open Deus", exact: true }));
-    await expect
-      .element(h.screen.getByText("Text conversation connected. Voice is not attached."))
-      .toBeVisible();
+    await expect.element(h.screen.getByText("Text conversation connected.")).toBeVisible();
     const release = deferred();
     let localStops = 0;
     useDeusPanelStore.getState().localAttachment.register(first, () => {
@@ -535,9 +704,7 @@ describe("project Deus runtime ownership", () => {
   it("surfaces a service rejection, preserves draft and releases local media on revocation", async () => {
     await using h = await setup();
     await act(() => useDeusPanelStore.getState().requestOpen(first));
-    await expect
-      .element(h.screen.getByText("Text conversation connected. Voice is not attached."))
-      .toBeVisible();
+    await expect.element(h.screen.getByText("Text conversation connected.")).toBeVisible();
     h.failSend(true);
     await userEvent.fill(
       h.screen.getByRole("textbox", { name: "Message Deus" }),
@@ -570,9 +737,7 @@ describe("project Deus runtime ownership", () => {
     async (kind) => {
       await using h = await setup();
       await act(() => useDeusPanelStore.getState().requestOpen(first));
-      await expect
-        .element(h.screen.getByText("Text conversation connected. Voice is not attached."))
-        .toBeVisible();
+      await expect.element(h.screen.getByText("Text conversation connected.")).toBeVisible();
       const released = deferred();
       useDeusPanelStore.getState().localAttachment.register(first, () => {
         released.resolve();
@@ -610,9 +775,7 @@ describe("project Deus runtime ownership", () => {
     await page.viewport(1280, 800);
     await using h = await setup();
     await act(() => useDeusPanelStore.getState().requestOpen(first));
-    await expect
-      .element(h.screen.getByText("Text conversation connected. Voice is not attached."))
-      .toBeVisible();
+    await expect.element(h.screen.getByText("Text conversation connected.")).toBeVisible();
     await page.viewport(600, 800);
     await expect.element(page.getByRole("dialog")).toBeVisible();
     await act(() => h.router.navigate({ to: "/settings/general" }));

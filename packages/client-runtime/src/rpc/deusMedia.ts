@@ -5,6 +5,7 @@ import {
   DeusTransportError,
   WS_METHODS,
   type DeusAttachment,
+  type DeusConversation,
   type DeusMediaControlInput,
   type DeusPcmInput,
 } from "@t3tools/contracts";
@@ -101,8 +102,12 @@ const mediaError = (reason: DeusTransportError["reason"]) =>
 export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(function* (
   initial: DeusAttachment,
   transport: DeusMediaTransport,
+  onEpoch?: (epoch: number) => void,
+  conversation?: DeusConversation,
 ) {
   let attachment = initial;
+  let turnId: string | undefined;
+  let turnEnded = false;
   let closed = false,
     muted = false,
     controlBusy = false,
@@ -120,9 +125,15 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
   const pending = yield* Queue.dropping<{ readonly data: string; readonly revision: number }, Done>(
     DEUS_CLIENT_MEDIA_LIMITS.inputFrames,
   );
-  const audio = yield* Queue.dropping<{ readonly bytes: Uint8Array; readonly epoch: number }, Done>(
-    DEUS_CLIENT_MEDIA_LIMITS.outputFrames,
-  );
+  const audio = yield* Queue.dropping<
+    {
+      readonly bytes: Uint8Array;
+      readonly epoch: number;
+      readonly conversation?: DeusConversation;
+      readonly turnId?: string;
+    },
+    Done
+  >(DEUS_CLIENT_MEDIA_LIMITS.outputFrames);
   const events = yield* Queue.dropping<Exclude<DeusMediaOutput, { type: "pcm" }>, Done>(
     DEUS_CLIENT_MEDIA_LIMITS.controlEvents,
   );
@@ -216,6 +227,12 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
             event.sessionId !== attachment.sessionId ||
             event.attachmentId !== attachment.attachmentId ||
             event.generation !== attachment.generation ||
+            (conversation !== undefined &&
+              (event.conversation !== conversation || !event.turnId)) ||
+            (event.turnId !== undefined &&
+              turnId !== undefined &&
+              ((event.turnId === turnId && turnEnded) ||
+                (event.turnId !== turnId && !turnEnded))) ||
             event.sequence <= outputSequence ||
             event.responseEpoch < attachment.responseEpoch ||
             (event.responseEpoch > attachment.responseEpoch &&
@@ -228,8 +245,14 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
             rejectedOutput++;
             return;
           }
+          if (event.turnId !== undefined && event.turnId !== turnId) {
+            turnId = event.turnId;
+            turnEnded = false;
+          }
+          if (event.type === "turn-end") turnEnded = true;
           if (event.responseEpoch > attachment.responseEpoch) {
             attachment = { ...attachment, responseEpoch: event.responseEpoch };
+            onEpoch?.(attachment.responseEpoch);
             yield* clear;
           }
           if (event.type === "pcm") {
@@ -243,7 +266,14 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
             }
             const bytes = decodedPcm.value;
             outputSequence = event.sequence;
-            if (!Queue.offerUnsafe(audio, { bytes, epoch: event.responseEpoch }))
+            if (
+              !Queue.offerUnsafe(audio, {
+                bytes,
+                epoch: event.responseEpoch,
+                ...(event.conversation !== undefined ? { conversation: event.conversation } : {}),
+                ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
+              })
+            )
               return yield* stop(mediaError("backpressure"));
             outputQueued++;
             outputHighWater = Math.max(outputHighWater, outputQueued);
@@ -313,6 +343,14 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
   );
   const dispose = stop().pipe(Effect.andThen(Deferred.await(finished)));
   yield* Effect.addFinalizer(() => dispose);
+  const takeFrame = Queue.take(audio).pipe(
+    Effect.flatMap((frame) => {
+      outputQueued--;
+      return !closed && frame.epoch === attachment.responseEpoch
+        ? Effect.succeed(frame)
+        : Effect.interrupt;
+    }),
+  );
   return {
     offer: Effect.fn("DeusMedia.offer")((bytes: Uint8Array) =>
       Effect.sync(() => {
@@ -341,8 +379,10 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
       const input = { ...attachment, sequence: sequence++, action };
       yield* clear;
       if (action === "mute") muted = true;
-      if (action === "interrupt-response")
+      if (action === "interrupt-response") {
         attachment = { ...attachment, responseEpoch: attachment.responseEpoch + 1 };
+        onEpoch?.(attachment.responseEpoch);
+      }
       return yield* transport.control(input).pipe(
         Effect.as(true),
         Effect.tap(() =>
@@ -358,14 +398,8 @@ export const makeDeusMediaController = Effect.fn("DeusMedia.makeController")(fun
         ),
       );
     }),
-    takeAudio: Queue.take(audio).pipe(
-      Effect.flatMap((frame) => {
-        outputQueued--;
-        return !closed && frame.epoch === attachment.responseEpoch
-          ? Effect.succeed(frame.bytes)
-          : Effect.interrupt;
-      }),
-    ),
+    takeFrame,
+    takeAudio: takeFrame.pipe(Effect.map((frame) => frame.bytes)),
     events,
     closed: Deferred.await(finished),
     dispose,

@@ -478,9 +478,15 @@ export type DeusPcmInput = typeof DeusPcmInput.Type;
 // The shared decoder correlates invalid media with its request instead of failing the socket.
 export const DeusPcmRequest = Schema.Union([DeusPcmInput, DeusTransportError]);
 
+const MediaOutputEnvelope = {
+  ...AttachmentEnvelope,
+  conversation: Schema.optional(DeusConversation),
+  turnId: Schema.optional(TrimmedNonEmptyString),
+};
+
 export const DeusMediaOutput = Schema.Union([
   Schema.Struct({
-    ...AttachmentEnvelope,
+    ...MediaOutputEnvelope,
     type: Schema.Literal("pcm"),
     encoding: Schema.Literal("pcm16le"),
     channels: Schema.Literal(1),
@@ -488,18 +494,18 @@ export const DeusMediaOutput = Schema.Union([
     data: PcmBase64,
   }),
   Schema.Struct({
-    ...AttachmentEnvelope,
+    ...MediaOutputEnvelope,
     type: Schema.Literal("control"),
     state: Schema.Literals(["listening", "speaking", "interrupted", "disconnected"]),
   }),
   Schema.Struct({
-    ...AttachmentEnvelope,
+    ...MediaOutputEnvelope,
     type: Schema.Literal("partial-transcript"),
     role: Schema.Literals(["human", "assistant"]),
     text: Schema.String.check(Schema.isMaxLength(DEUS_MAX_TRANSIENT_TEXT_LENGTH)),
   }),
-  Schema.Struct({ ...AttachmentEnvelope, type: Schema.Literal("turn-end") }),
-  Schema.Struct({ ...AttachmentEnvelope, type: Schema.Literal("error"), error: DeusError }),
+  Schema.Struct({ ...MediaOutputEnvelope, type: Schema.Literal("turn-end") }),
+  Schema.Struct({ ...MediaOutputEnvelope, type: Schema.Literal("error"), error: DeusError }),
 ]);
 export type DeusMediaOutput = typeof DeusMediaOutput.Type;
 

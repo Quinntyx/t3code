@@ -692,7 +692,11 @@ it.live.each(["direct", "relay", "tunnel"] as const)(
         turnComplete: true,
       };
       yield* Queue.offer(h.incoming, { type: "message", message });
-      expect(yield* controller.takeAudio).toEqual(new Uint8Array(2));
+      expect(yield* controller.takeFrame).toMatchObject({
+        bytes: new Uint8Array(2),
+        conversation: ref.conversation,
+        turnId: expect.any(String),
+      });
       expect(owner.receivedFrames.some((frame) => frame.includes('"type":"pcm"'))).toBe(true);
       expect(observer.receivedFrames.some((frame) => frame.includes('"type":"pcm"'))).toBe(false);
       expect(controller.stats().maxInputInFlight).toBe(1);

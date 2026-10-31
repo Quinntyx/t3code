@@ -7,13 +7,22 @@ import {
   type DeusSession,
   type DeusCursor,
   type DeusTranscript,
+  type DeusAttachInput,
+  type DeusHumanCeiling,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { deusMetadata } from "../rpc/deus.ts";
+import { deusMetadata, deusRequest } from "../rpc/deus.ts";
+import { makeDeusMediaTransport } from "../rpc/deusMedia.ts";
+import {
+  makeDeusVoiceConnection,
+  type DeusVoiceHandlers,
+  type DeusVoiceConnection,
+} from "../deus/voice.ts";
+export type { DeusVoiceHandlers, DeusVoiceConnection } from "../deus/voice.ts";
 import type { EnvironmentUnaryRpcTag } from "../rpc/client.ts";
 import { createEnvironmentRpcCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
 
@@ -24,7 +33,37 @@ type DeusUnaryTag = Extract<EnvironmentUnaryRpcTag, `deus.${string}`>;
 export function createDeusCommands<R, E>(runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>) {
   const command = <T extends DeusUnaryTag>(tag: T) =>
     createEnvironmentRpcCommand(runtime, { label: tag, tag });
+  const attach = command(WS_METHODS.deusAttach);
+  const voice = createEnvironmentRpcCommand(runtime, {
+    label: "Deus voice connect",
+    tag: WS_METHODS.deusAttach,
+    execute: (
+      input: DeusAttachInput & {
+        readonly authority: DeusHumanCeiling;
+        readonly conversation: DeusSession["conversation"];
+        readonly handlers: DeusVoiceHandlers;
+        readonly connected: (connection: DeusVoiceConnection) => void;
+      },
+    ) => {
+      const { handlers, connected, conversation, ...request } = input;
+      return deusRequest(WS_METHODS.deusAttach, request).pipe(
+        Effect.flatMap((attachment) =>
+          makeDeusMediaTransport(attachment).pipe(
+            Effect.flatMap((transport) =>
+              makeDeusVoiceConnection(attachment, transport, handlers, conversation),
+            ),
+            Effect.tap((connection) => Effect.sync(() => connected(connection))),
+            Effect.as(attachment),
+            Effect.onError(() =>
+              deusRequest(WS_METHODS.deusDetach, attachment).pipe(Effect.ignore),
+            ),
+          ),
+        ),
+      );
+    },
+  });
   return {
+    voice,
     getCapabilities: command(WS_METHODS.deusGetCapabilities),
     open: command(WS_METHODS.deusOpen),
     getSnapshot: command(WS_METHODS.deusGetSnapshot),
@@ -36,7 +75,7 @@ export function createDeusCommands<R, E>(runtime: Atom.AtomRuntime<EnvironmentRe
     memoryRead: command(WS_METHODS.deusMemoryRead),
     memoryCorrect: command(WS_METHODS.deusMemoryCorrect),
     ponder: command(WS_METHODS.deusPonder),
-    attach: command(WS_METHODS.deusAttach),
+    attach,
     renew: command(WS_METHODS.deusRenew),
     detach: command(WS_METHODS.deusDetach),
     mediaPush: command(WS_METHODS.deusMediaPush),
