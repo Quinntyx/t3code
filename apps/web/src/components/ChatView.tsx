@@ -275,6 +275,7 @@ import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
+  FloatingPanelControls,
   PanelLayoutControls,
   type PanelLayoutControlsProps,
   RightPanelMaximizeControl,
@@ -1052,6 +1053,11 @@ export default function ChatView(props: ChatViewProps) {
   const canMaximizeRightPanel = rightPanelOpen;
   const rightPanelMaximized = canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
+  // Floating panels move the layout toggles beside the composer; narrow layouts keep the titlebar.
+  const floatingPanelControls =
+    useClientSettings((settings) => settings.floatingPanelsEnabled) &&
+    !prefersPlanSidebarSheet &&
+    !isMobileViewport;
   const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
@@ -3186,7 +3192,7 @@ export default function ChatView(props: ChatViewProps) {
         threadRef={activeThreadRef}
         state={deviceState}
       />
-      {rightPanelControlsAtRoot ? panelLayoutControls : null}
+      {rightPanelControlsAtRoot && !floatingPanelControls ? panelLayoutControls : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -3211,6 +3217,11 @@ export default function ChatView(props: ChatViewProps) {
               : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
             "bg-background ambient-shimmer:bg-transparent",
+            // The inline details card rises into the titlebar's right side.
+            floatingPanelControls &&
+              threadPanelOpen &&
+              threadPanelPresentation === "inline" &&
+              "pr-(--floating-details-clearance) sm:pr-(--floating-details-clearance)",
           )}
         >
           {isElectron && rightPanelControlsAtRoot ? (
@@ -3219,8 +3230,10 @@ export default function ChatView(props: ChatViewProps) {
               className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
             />
           ) : null}
-          {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
-          {inlineRightPanelOwnsTitleBar ? threadPanelHeaderControl : null}
+          {!rightPanelControlsAtRoot && !rightPanelControlsInPanel && !floatingPanelControls
+            ? panelLayoutControls
+            : null}
+          {inlineRightPanelOwnsTitleBar && !floatingPanelControls ? threadPanelHeaderControl : null}
           <ChatHeader
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadId={activeThread.id}
@@ -3403,6 +3416,20 @@ export default function ChatView(props: ChatViewProps) {
                   data-chat-composer-stack="true"
                   className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
                 >
+                  {floatingPanelControls ? (
+                    <FloatingPanelControls
+                      {...panelToggleControlProps}
+                      maximize={
+                        rightPanelOpen ? (
+                          <RightPanelMaximizeControl
+                            maximized={rightPanelMaximized}
+                            onToggle={toggleRightPanelMaximizedStable}
+                            tooltipSide="left"
+                          />
+                        ) : null
+                      }
+                    />
+                  ) : null}
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div

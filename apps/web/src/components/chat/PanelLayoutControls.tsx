@@ -4,7 +4,6 @@ import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { useClientSettings } from "~/hooks/useSettings";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
@@ -15,6 +14,8 @@ export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
+  orientation?: "horizontal" | "vertical";
+  tooltipSide?: "bottom" | "left";
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
@@ -35,6 +36,8 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
+  orientation = "horizontal",
+  tooltipSide = "bottom",
   terminalAvailable,
   terminalOpen,
   terminalShortcutLabel,
@@ -71,7 +74,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           threadPanelToggle
         )}
       </TooltipTrigger>
-      <TooltipPopup side="bottom">
+      <TooltipPopup side={tooltipSide}>
         Toggle thread details
         {threadPanelShortcutLabel ? ` (${threadPanelShortcutLabel})` : ""}
       </TooltipPopup>
@@ -80,7 +83,10 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 
   return (
     <div
-      className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
+      className={cn(
+        "flex shrink-0 items-center [-webkit-app-region:no-drag]",
+        orientation === "vertical" ? "flex-col gap-0.5" : "h-full gap-1",
+      )}
       data-panel-layout-controls
     >
       {showThreadPanelControl ? threadPanelControl : null}
@@ -99,7 +105,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               <PanelBottomIcon className="size-4" />
             </Toggle>
           </TooltipTrigger>
-          <TooltipPopup side="bottom">
+          <TooltipPopup side={tooltipSide}>
             {terminalAvailable
               ? `Toggle terminal drawer${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}`
               : "Terminal drawer is unavailable"}
@@ -122,7 +128,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               <PanelRightIcon className="size-4" />
             </Toggle>
           </TooltipTrigger>
-          <TooltipPopup side="bottom">
+          <TooltipPopup side={tooltipSide}>
             {rightPanelAvailable
               ? `Toggle right panel${rightPanelShortcutLabel ? ` (${rightPanelShortcutLabel})` : ""}`
               : rightPanelUnavailableLabel}
@@ -136,9 +142,11 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl({
   maximized,
   onToggle,
+  tooltipSide = "bottom",
 }: {
   maximized: boolean;
   onToggle: () => void;
+  tooltipSide?: "bottom" | "left";
 }) {
   const label = maximized ? "Restore panel size" : "Maximize panel";
   return (
@@ -157,7 +165,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
           </Toggle>
         }
       />
-      <TooltipPopup side="bottom">{label}</TooltipPopup>
+      <TooltipPopup side={tooltipSide}>{label}</TooltipPopup>
     </Tooltip>
   );
 });
@@ -183,20 +191,9 @@ export function WorkspaceTitlebarControls(props: {
   readonly onToggleMaximized: () => void;
   readonly children: ReactNode;
 }) {
-  // An open floating panel is inset from the window corner; its controls follow it in.
-  const insetForFloatingPanel =
-    useClientSettings((settings) => settings.floatingPanelsEnabled) &&
-    props.showMaximizeControl &&
-    props.rightPanelOpen;
   return (
     <div
-      className={cn(
-        "pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
-        props.animationsActive &&
-          "motion-safe:transition-[margin] motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
-        insetForFloatingPanel &&
-          "mt-(--floating-panel-gap) mr-[calc(var(--floating-panel-gap)+0.25rem)]",
-      )}
+      className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
       data-workspace-titlebar-controls
     >
       {props.showMaximizeControl ? (
@@ -219,6 +216,23 @@ export function WorkspaceTitlebarControls(props: {
         </span>
       ) : null}
       <div className="pointer-events-auto flex h-full items-center">{props.children}</div>
+    </div>
+  );
+}
+
+/** With floating panels, the layout toggles stand beside the composer, clear of the cards. */
+export function FloatingPanelControls({
+  maximize,
+  ...props
+}: PanelLayoutControlsProps & { maximize: ReactNode }) {
+  return (
+    <div
+      className="absolute top-0 left-full isolate z-20 ml-1.5 flex flex-col items-center gap-0.5 rounded-full p-1 shadow-float [--radius:1rem]"
+      data-floating-panel-controls
+    >
+      <div aria-hidden className="panel-glass" />
+      {maximize}
+      <PanelLayoutControls {...props} orientation="vertical" tooltipSide="left" />
     </div>
   );
 }
