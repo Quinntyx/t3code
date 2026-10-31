@@ -1,4 +1,9 @@
-import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
+import {
+  PanelBottomIcon,
+  PanelRightIcon,
+  PanelsRightBottomIcon,
+  SquareMenuIcon,
+} from "lucide-react";
 import { Maximize2, Minimize2 } from "lucide";
 import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactNode } from "react";
@@ -222,18 +227,30 @@ export function WorkspaceTitlebarControls(props: {
   );
 }
 
-/** With floating panels, the layout toggles float in the bottom-right corner, beside the right panel. */
+/**
+ * With floating panels, the layout toggles fold into one bubble in the bottom-right corner, a
+ * twin of the sidebar's, and unfold upward on hover or focus.
+ */
 export function FloatingPanelControls({
   maximize,
   ...props
 }: PanelLayoutControlsProps & { maximize: ReactNode }) {
   return (
     <FloatingControlBubble
-      className="absolute right-(--floating-panel-gap) bottom-(--floating-panel-gap) z-30"
+      className="group/floating-controls absolute right-(--floating-panel-gap) bottom-0 z-30 mb-(--floating-panel-gap) gap-0"
       data-floating-panel-controls
+      data-floating-dock-bubble
     >
-      {maximize}
-      <PanelLayoutControls {...props} orientation="vertical" tooltipSide="left" />
+      <div className="grid grid-rows-[0fr] group-focus-within/floating-controls:grid-rows-[1fr] group-hover/floating-controls:grid-rows-[1fr] group-has-data-popup-open/floating-controls:grid-rows-[1fr] [[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-150 [[data-panel-animations=true]_&]:ease-out">
+        <div className="flex min-h-0 flex-col items-center gap-0.5 overflow-hidden">
+          {maximize}
+          <PanelLayoutControls {...props} orientation="vertical" tooltipSide="left" />
+          <span aria-hidden className="h-0.5 shrink-0" />
+        </div>
+      </div>
+      <span aria-hidden className="flex size-7 items-center justify-center text-muted-foreground">
+        <PanelsRightBottomIcon className="size-4" />
+      </span>
     </FloatingControlBubble>
   );
 }

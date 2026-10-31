@@ -39,8 +39,8 @@ Turn on **Floating panels** in **Settings → Appearance** to float the sidebar,
 terminal drawer as rounded glass cards with a margin from the window edges, like the composer and
 thread details card. They slide in and out using the **Panel animations** duration, refract the
 backdrop when liquid glass is on, and show the ambient shimmer through them when that is on. The
-sidebar toggle and the panel toggles move into round bubbles in the window's bottom corners. This
-applies to web and desktop.
+sidebar toggle and the panel toggles move into round bubbles in the window's bottom corners; hover
+the right bubble to reach the panel toggles. This applies to web and desktop.
 
 ## Composer context
 

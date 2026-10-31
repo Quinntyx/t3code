@@ -405,11 +405,12 @@ function SidebarControl() {
       ref={appShellCommandsRef}
       className={cn(
         floatingBubble
-          ? "fixed bottom-(--floating-panel-gap) left-(--floating-sidebar-bubble-left) z-50 [[data-panel-animations=true]_&]:transition-[left] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out"
+          ? "fixed bottom-0 left-(--floating-sidebar-bubble-left) z-50 mb-(--floating-panel-gap) [[data-panel-animations=true]_&]:transition-[left] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out"
           : "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
         isMobile && mobileSheetMounted && "hidden",
       )}
       data-sidebar-control=""
+      data-floating-dock-bubble={floatingBubble ? "" : undefined}
     >
       {floatingBubble ? <FloatingControlBubble>{trigger}</FloatingControlBubble> : trigger}
     </div>

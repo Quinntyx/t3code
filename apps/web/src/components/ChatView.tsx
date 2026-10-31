@@ -3203,8 +3203,7 @@ export default function ChatView(props: ChatViewProps) {
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background ambient-shimmer:bg-transparent",
         floatingPanelControls && "[--floating-bubble-inset-end:var(--floating-bubble-clearance)]",
-        floatingSidebarBubble &&
-          "[--floating-bubble-inset-start:var(--floating-bubble-clearance-start)]",
+        floatingSidebarBubble && "[--floating-bubble-inset-start:var(--floating-bubble-clearance)]",
       )}
     >
       <DeviceSetupDialogHost

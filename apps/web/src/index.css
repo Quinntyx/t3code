@@ -136,13 +136,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      floating panels. Dark mode needs a deeper shadow to read against a dark canvas. */
   --app-float-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 32px -8px rgb(0 0 0 / 12%);
   --floating-panel-gap: 0.5rem;
-  --floating-panel-radius: 1.75rem;
+  /* The open composer's corner on desktop, so every floating card shares it. */
+  --floating-panel-radius: calc(2.25rem + 1px);
   /* Titlebar room for a details card risen to the top edge. */
   --floating-details-clearance: calc(
     var(--thread-details-panel-width) + var(--floating-panel-gap) * 2
   );
-  /* Round control bubbles sit in the bottom corners. Cards that reach the bottom (the terminal
-     drawer, a maximized right panel) stop short of them. */
+  /* Round control bubbles sit in the bottom corners and rise onto the terminal drawer. A
+     maximized right panel, which spans the full height, stops short of them instead. */
   --floating-bubble-size: 2.25rem;
   --floating-bubble-clearance: calc(var(--floating-bubble-size) + var(--floating-panel-gap) * 2);
   --floating-bubble-inset-start: var(--floating-panel-gap);
@@ -1630,14 +1631,24 @@ html[data-theme-id][data-ambient-shimmer] [data-chat-header] {
 }
 
 /* The sidebar's bubble sits just past the open card's corner, or in the window corner once the
-   card slides away. The open card's own margin already separates the two. */
+   card slides away, lined up with the terminal drawer's edge either way. */
 [data-slot="sidebar-wrapper"] {
   --floating-sidebar-bubble-left: var(--floating-panel-gap);
-  --floating-bubble-clearance-start: var(--floating-bubble-clearance);
 }
 [data-slot="sidebar-wrapper"][data-sidebar-state="expanded"] {
-  --floating-sidebar-bubble-left: var(--sidebar-width);
-  --floating-bubble-clearance-start: calc(var(--floating-bubble-size) + var(--floating-panel-gap));
+  --floating-sidebar-bubble-left: calc(var(--sidebar-width) + var(--floating-panel-gap));
+}
+
+/* Both corner bubbles rest on the open terminal drawer, following its open animation and resize.
+   With no drawer, anchor() falls back to the window's bottom edge. */
+[data-floating-terminal-dock] {
+  anchor-name: --floating-terminal;
+}
+[data-chat-column-maximized-away="true"] [data-floating-terminal-dock] {
+  anchor-name: none;
+}
+[data-floating-dock-bubble] {
+  bottom: anchor(--floating-terminal top, 0px);
 }
 
 html[data-theme-id] [data-chat-header] [data-slot="button"],
