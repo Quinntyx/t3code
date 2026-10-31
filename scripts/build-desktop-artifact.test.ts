@@ -537,6 +537,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           releaseType: "release",
         },
       ]);
+      const feedUrl = "https://fork.example/quinntyx/t3code/releases/latest/download/";
+      const withGenericFeed = (version: string) =>
+        createBuildConfig("linux", "AppImage", version, false, false, undefined, undefined).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_DESKTOP_UPDATE_URL: feedUrl,
+                  GITHUB_REPOSITORY: "pingdotgg/t3code",
+                },
+              }),
+            ),
+          ),
+        );
+      const genericRelease = yield* withGenericFeed("0.0.44");
+      assert.deepStrictEqual(genericRelease.publish, [{ provider: "generic", url: feedUrl }]);
+      const genericPreview = yield* withGenericFeed("0.0.44-pr.1.1");
+      assert.isNull(genericPreview.publish);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(

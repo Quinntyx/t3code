@@ -1,0 +1,86 @@
+name: Fork mobile
+on:
+  workflow_call:
+    inputs:
+      build_android:
+        description: Also build a signed Android APK for first install or a changed native runtime
+        type: boolean
+        default: false
+
+jobs:
+  updates:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [android, ios]
+    env:
+      APP_VARIANT: production
+      NODE_ENV: production
+      EXPO_NO_DOTENV: "1"
+      T3CODE_MOBILE_APP_ID: dev.quinntyx.t3code
+      T3CODE_MOBILE_UPDATE_URL: https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-mobile/${{ matrix.platform }}/manifest.json
+      MOBILE_ASSET_BASE_URL: https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-mobile/
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - uses: ./.forgejo/actions/setup
+      - name: Verify update publication
+        run: node --test .forgejo/scripts/*.test.cjs
+      - name: Export and prepare a native-runtime-bound update
+        run: |
+          pnpm --dir apps/mobile exec expo export --platform ${{ matrix.platform }} --output-dir dist-fork
+          node .forgejo/scripts/prepare-mobile.cjs ${{ matrix.platform }} apps/mobile/dist-fork mobile-feed
+      - uses: https://data.forgejo.org/actions/upload-artifact@v3
+        with:
+          name: t3code-mobile-${{ matrix.platform }}-update
+          path: mobile-feed/
+          if-no-files-found: error
+      - name: Advance the tailnet mobile feed
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          git fetch origin main --depth=1
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo 'A newer main revision exists; leaving the live feed unchanged.'
+            exit 0
+          fi
+          runtime="$(node -p 'require("./mobile-feed/manifest.json").runtimeVersion')"
+          node .forgejo/scripts/publish.cjs mobile-feed t3code-mobile "${{ matrix.platform }}-$runtime"
+      - name: Install Android build tools in the job container
+        if: inputs.build_android && matrix.platform == 'android'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends openjdk-17-jdk unzip build-essential
+          export ANDROID_HOME="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl --fail --location https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip -o "$RUNNER_TEMP/android-tools.zip"
+          unzip -q "$RUNNER_TEMP/android-tools.zip" -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          printf 'y\n%.0s' {1..100} | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0' platform-tools
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
+      - name: Build a signed standalone Android client
+        if: inputs.build_android && matrix.platform == 'android'
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE"
+          printf '%s' "$ANDROID_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/t3code.keystore"
+          export T3CODE_MOBILE_RUNTIME_VERSION="$(node -p 'require("./mobile-feed/manifest.json").runtimeVersion')"
+          pnpm --dir apps/mobile exec expo prebuild --platform android --no-install
+          cd apps/mobile/android
+          ./gradlew :app:assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/t3code.keystore" \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias=t3code \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEYSTORE_PASSWORD"
+      - uses: https://data.forgejo.org/actions/upload-artifact@v3
+        if: inputs.build_android && matrix.platform == 'android'
+        with:
+          name: t3code-android-arm64
+          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
