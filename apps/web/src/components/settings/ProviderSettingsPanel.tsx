@@ -1241,7 +1241,7 @@ function ProviderInstanceRow({
   readonly projectOverrideValue: boolean | undefined;
   readonly projectOverrideEffectiveEnabled: boolean;
   readonly modelPreferences:
-    | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
+    | UnifiedSettings["providerModelPreferences"][ProviderInstanceId]
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
@@ -1381,6 +1381,19 @@ function ProviderInstanceRow({
         ) : null
       }
       hiddenModels={hiddenModels}
+      newModelsEnabled={modelPreferences?.newModelsEnabled ?? true}
+      enabledModels={modelPreferences?.enabledModels ?? NO_MODELS}
+      onNewModelsEnabledChange={(enabled) => {
+        void actions.updateModelPreferences({
+          setProviderNewModelsEnabled: {
+            provider: instanceId,
+            enabled,
+            models: (liveProvider?.models ?? [])
+              .filter((model) => !model.isCustom)
+              .map((model) => model.slug),
+          },
+        });
+      }}
       favoriteModels={favoriteModels}
       modelOrder={modelOrder}
       onHiddenModelsChange={(next, affectedModels) => {

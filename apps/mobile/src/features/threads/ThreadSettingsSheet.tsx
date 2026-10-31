@@ -238,6 +238,7 @@ function SwitchRow(props: {
   readonly label: string;
   readonly value: boolean;
   readonly onValueChange: (value: boolean) => void;
+  readonly disabled?: boolean;
   readonly isLast?: boolean;
 }) {
   return (
@@ -250,6 +251,7 @@ function SwitchRow(props: {
       <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
       <ThemedSwitch
         accessibilityLabel={props.label}
+        disabled={props.disabled}
         onValueChange={props.onValueChange}
         value={props.value}
       />
@@ -720,17 +722,59 @@ function ThreadSettingsProviderListHeader(props: {
 }) {
   const session = useThreadSettingsSession();
   const onToggle = () => session.toggleProvider(props.provider.key);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const config = session.environmentId ? configs.get(session.environmentId) : undefined;
+  const provider = config?.providers.find(
+    (candidate) => candidate.instanceId === props.provider.key,
+  );
+  const permission = useAtomValue(
+    serverEnvironment.updateSettings.permissionAtom(session.environmentId),
+  );
+  const saveSettings = useAtomCommand(serverEnvironment.updateSettings, "new model default update");
+  const [pending, setPending] = useState(false);
 
   return (
-    <ProviderHeader
-      collapsible={props.provider.collapsible}
-      collapsed={props.provider.collapsed}
-      driver={props.provider.driver}
-      iconUrl={props.provider.iconUrl}
-      label={props.provider.label}
-      modelCount={props.provider.modelCount}
-      onToggle={onToggle}
-    />
+    <>
+      <ProviderHeader
+        collapsible={props.provider.collapsible}
+        collapsed={props.provider.collapsed}
+        driver={props.provider.driver}
+        iconUrl={props.provider.iconUrl}
+        label={props.provider.label}
+        modelCount={props.provider.modelCount}
+        onToggle={onToggle}
+      />
+      {session.manageHidden && !props.provider.collapsed && provider ? (
+        <View className="mx-3 overflow-hidden rounded-t-2xl">
+          <SwitchRow
+            label="Enable new models by default"
+            value={
+              config?.settings.providerModelPreferences?.[provider.instanceId]?.newModelsEnabled ??
+              true
+            }
+            disabled={pending || !permission}
+            onValueChange={(enabled) => {
+              if (!session.environmentId || pending) return;
+              setPending(true);
+              void saveSettings({
+                environmentId: session.environmentId,
+                input: {
+                  patch: {
+                    setProviderNewModelsEnabled: {
+                      provider: provider.instanceId,
+                      enabled,
+                      models: provider.models
+                        .filter((model) => !model.isCustom)
+                        .map((model) => model.slug),
+                    },
+                  },
+                },
+              }).then(() => setPending(false));
+            }}
+          />
+        </View>
+      ) : null}
+    </>
   );
 }
 

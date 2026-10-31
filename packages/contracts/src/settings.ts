@@ -364,6 +364,8 @@ export const ProviderModelPreferences = Schema.Record(
   Schema.Struct({
     hiddenModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+    newModelsEnabled: Schema.optionalKey(Schema.Boolean),
+    enabledModels: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 export type ModelPreferences = {
@@ -1532,6 +1534,13 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   setProviderModelOrder: Schema.optionalKey(
     Schema.Struct({ provider: ProviderInstanceId, modelOrder: Schema.Array(TrimmedString) }),
+  ),
+  setProviderNewModelsEnabled: Schema.optionalKey(
+    Schema.Struct({
+      provider: ProviderInstanceId,
+      enabled: Schema.Boolean,
+      models: Schema.Array(TrimmedNonEmptyString),
+    }),
   ),
   favorites: Schema.optionalKey(ModelFavorites),
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),

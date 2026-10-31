@@ -325,9 +325,85 @@ describe("instance-scoped model selection", () => {
         resolveAppModelSelectionForInstance(instanceId, settings, providers, missingModel, {
           preserveUnavailableSelection: true,
         }),
-      ).toBeNull();
+      ).toBe("");
     });
   });
+
+  it("keeps new catalog models out of opted-out instances and their saved selections", () => {
+    const instanceId = ProviderInstanceId.make("opencode_work");
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("opencode"),
+        instanceId,
+        models: ["existing", "new-model"],
+      }),
+    ];
+    const entry = deriveProviderInstanceEntries(providers)[0]!;
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerModelPreferences: {
+        [instanceId]: {
+          hiddenModels: [],
+          modelOrder: [],
+          newModelsEnabled: false,
+          enabledModels: ["existing"],
+        },
+      },
+    };
+    expect(
+      getAppModelOptionsForInstance(settings, entry, "new-model").map((option) => option.slug),
+    ).toEqual(["existing"]);
+    expect(
+      getAppModelOptionsForInstance(settings, entry, "missing").map((option) => option.slug),
+    ).toEqual(["existing"]);
+    expect(
+      resolveAppModelSelectionForInstance(instanceId, settings, providers, "new-model", {
+        preserveUnavailableSelection: true,
+      }),
+    ).toBe("existing");
+  });
+
+  it.each(["pi", "opencode", "codex"])(
+    "does not revive a disabled %s model when the enabled catalog disappears",
+    (kind) => {
+      const driver = ProviderDriverKind.make(kind);
+      const instanceId = ProviderInstanceId.make(`${kind}_work`);
+      const providers = [provider({ provider: driver, instanceId, models: ["new-model"] })];
+      const stored = createModelSelection(instanceId, "new-model");
+      const settings: UnifiedSettings = {
+        ...settingsWithProviderInstances(),
+        textGenerationModelSelection: stored,
+        providerModelPreferences: {
+          [instanceId]: {
+            hiddenModels: [],
+            modelOrder: [],
+            newModelsEnabled: false,
+            enabledModels: ["removed-model"],
+          },
+        },
+      };
+      expect(
+        resolveAppModelSelectionForInstance(instanceId, settings, providers, stored.model),
+      ).toBe("");
+      for (const draft of [
+        null,
+        { activeProvider: instanceId, modelSelectionByProvider: { [instanceId]: stored } },
+      ]) {
+        expect(
+          deriveEffectiveComposerModelState({
+            draft,
+            providers,
+            selectedProvider: driver,
+            selectedInstanceId: instanceId,
+            threadModelSelection: stored,
+            projectModelSelection: stored,
+            settings,
+          }).selectedModel,
+        ).toBe("");
+      }
+      expect(resolveAppModelSelectionState(settings, providers).model).toBe("");
+    },
+  );
 
   it("falls back from an explicit non-OpenCode draft with a missing model", () => {
     const instanceId = ProviderInstanceId.make("codex");
@@ -526,7 +602,7 @@ describe("instance-scoped model selection", () => {
         ANTIGRAVITY_DEFAULT_MODEL,
         { preserveUnavailableSelection: true },
       ),
-    ).toBeNull();
+    ).toBe("");
     expect(
       getAppModelOptionsForInstance(
         settings,
