@@ -14,7 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_SEARCH_QUERY_MAX_LENGTH } from "@t3tools/contracts";
 import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
-import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
+import { type VcsRefTarget, vcsRefTargetListInput } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
   OrchestrationV2GetTurnItemResult,
@@ -164,12 +164,19 @@ export function useThreadSearch(
 }
 
 function vcsRefPageAtom(targetKey: string, cursor: number | undefined) {
-  const [environmentId, cwd, query] = JSON.parse(targetKey) as [EnvironmentId, string, string];
+  const [environmentId, cwd, query, remoteName, remoteRefsOnly] = JSON.parse(targetKey) as [
+    EnvironmentId,
+    string,
+    string,
+    string | null,
+    boolean,
+  ];
   return vcsEnvironment.listRefs({
     environmentId,
     input: {
       cwd,
       ...(query.length > 0 ? { query } : {}),
+      ...vcsRefTargetListInput({ remoteName, remoteRefsOnly }),
       ...(cursor === undefined ? {} : { cursor }),
       limit: VCS_REF_LIST_LIMIT,
     },
@@ -200,7 +207,15 @@ export function usePaginatedBranches(target: VcsRefTarget) {
   const { environmentId, cwd } = target;
   const query = target.query?.trim() ?? "";
   const targetKey =
-    environmentId !== null && cwd !== null ? JSON.stringify([environmentId, cwd, query]) : null;
+    environmentId !== null && cwd !== null
+      ? JSON.stringify([
+          environmentId,
+          cwd,
+          query,
+          target.remoteName ?? null,
+          target.remoteRefsOnly === true,
+        ])
+      : null;
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_BRANCH_CURSORS;
   const pagesKey = targetKey === null ? null : JSON.stringify([targetKey, cursors]);
   const results = useAtomValue(
@@ -225,6 +240,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
           refs: [...refs.values()],
           isRepo: first.isRepo,
           hasPrimaryRemote: first.hasPrimaryRemote,
+          ...(first.remoteNames ? { remoteNames: first.remoteNames } : {}),
           nextCursor: last.nextCursor,
           totalCount: Math.max(...values.map((value) => value.totalCount)),
         };

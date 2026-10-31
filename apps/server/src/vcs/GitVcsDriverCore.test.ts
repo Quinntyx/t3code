@@ -3594,6 +3594,32 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.equal(remoteOnly.refs.length, 1);
         assert.equal(remoteOnly.refs[0]?.name, `origin/${initialBranch}`);
         assert.equal(remoteOnly.refs[0]?.isRemote, true);
+        assert.deepEqual(remoteOnly.remoteNames, ["origin", "team/upstream"]);
+
+        const otherRemote = yield* driver.listRefs({
+          cwd,
+          includeMatchingRemoteRefs: true,
+          refKind: "remote",
+          remoteName: "team/upstream",
+        });
+        assert.deepEqual(
+          otherRemote.refs.map((ref) => ref.name),
+          ["team/upstream/feature/a"],
+        );
+        // An unconfigured default remote falls back to origin and keeps local refs.
+        const defaultRemote = yield* driver.listRefs({
+          cwd,
+          includeMatchingRemoteRefs: true,
+          remoteName: "missing",
+        });
+        assert.deepEqual(
+          defaultRemote.refs.filter((ref) => ref.isRemote).map((ref) => ref.name),
+          [`origin/${initialBranch}`],
+        );
+        assert.equal(
+          defaultRemote.refs.some((ref) => ref.name === "local-only"),
+          true,
+        );
 
         const tracked = complete.refs.find((ref) => ref.name === "feature/a");
         assert.ok(tracked);

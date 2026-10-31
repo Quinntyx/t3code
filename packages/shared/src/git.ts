@@ -265,6 +265,15 @@ export function sanitizeNewRefName(rawName: string): string {
   return rawName.trim().replace(/[ \t\n\r\f\v]+/g, "-");
 }
 
+/** The remote a branch picker lists first: the preferred one when configured, else origin, else any. */
+export function resolveDefaultRefRemote(
+  remoteNames: ReadonlyArray<string>,
+  preferredRemoteName: string | undefined,
+): string | null {
+  if (preferredRemoteName && remoteNames.includes(preferredRemoteName)) return preferredRemoteName;
+  return remoteNames.includes("origin") ? "origin" : (remoteNames[0] ?? null);
+}
+
 export function dedupeRemoteBranchesWithLocalMatches(
   refs: ReadonlyArray<VcsRef>,
 ): ReadonlyArray<VcsRef> {

@@ -1452,6 +1452,7 @@ function ScheduledTaskEditorForm({
                 key={`${environmentId}:${selectedProjectId}`}
                 id="scheduled-task-base-ref"
                 environmentId={environmentId}
+                projectId={selectedProject?.id ?? null}
                 cwd={selectedProject?.workspaceRoot ?? null}
                 value={draft.baseRef}
                 onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}

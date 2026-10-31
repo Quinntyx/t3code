@@ -1070,6 +1070,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultThreadEnvMode",
   "newWorktreesBesideMain",
   "newWorktreesStartFromOrigin",
+  "defaultBranchRemote",
   "worktreeSubmodules",
   "defaultAutoPull",
   "defaultProjectScripts",
@@ -1108,6 +1109,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesBesideMain: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultBranchRemote: Schema.optionalKey(TrimmedString),
   worktreeSubmodules: ForwardCompatibleOptional(WorktreeSubmodules),
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
   defaultProjectScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
@@ -1345,6 +1347,8 @@ export const ServerSettings = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  /** Branch pickers list this remote with local branches; others sit behind "Other remotes". */
+  defaultBranchRemote: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("origin"))),
   /** Null inherits t3.json, then recursive; unknown values decode to null for older clients. */
   worktreeSubmodules: ForwardCompatibleNullable(WorktreeSubmodules).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1693,6 +1697,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
   newWorktreesBesideMain: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultBranchRemote: Schema.optionalKey(TrimmedString),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),

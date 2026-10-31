@@ -24,6 +24,7 @@ import {
   SettingsEnvironmentFilterHeader,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
+import { DefaultBranchRemoteSetting } from "./components/DefaultBranchRemoteSetting";
 import { BrowserRenderingSections } from "./components/BrowserRenderingSections";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
@@ -67,6 +68,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "newWorktreesBesideMain",
     "newWorktreesStartFromOrigin",
     "worktreeSubmodules",
+    "defaultBranchRemote",
     "branchNamingMode",
     "branchNamePrefix",
     "branchNameInstructions",
@@ -470,6 +472,12 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       />
                     ))}
                   </SettingsSection>
+                  <DefaultBranchRemoteSetting
+                    key={`remote:${targetsKey}`}
+                    value={uniform("defaultBranchRemote")}
+                    disabled={disabledFor("defaultBranchRemote")}
+                    onChange={write}
+                  />
                   <BranchNamingSettings
                     key={targetsKey}
                     mode={uniform("branchNamingMode")}

@@ -33,7 +33,7 @@ import {
   type ReviewDiffPreviewSource,
   type VcsRef,
 } from "@t3tools/contracts";
-import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
+import { dedupeRemoteBranchesWithLocalMatches, resolveDefaultRefRemote } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -178,6 +178,7 @@ interface GitRefsSnapshot {
   readonly localBranches: ReadonlyArray<VcsRef>;
   readonly remoteBranches: ReadonlyArray<VcsRef>;
   readonly hasPrimaryRemote: boolean;
+  readonly remoteNames: ReadonlyArray<string>;
 }
 
 interface ExecuteGitOptions {
@@ -3868,6 +3869,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       localBranches: localBranches.toSorted(byRecencyThenName).map(({ ref }) => ref),
       remoteBranches: remoteBranches.toSorted(byRecencyThenName).map(({ ref }) => ref),
       hasPrimaryRemote: remoteNames.includes("origin"),
+      remoteNames,
     } satisfies GitRefsSnapshot;
   });
 
@@ -4017,12 +4019,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         const rightPriority = right.current ? 0 : right.isDefault ? 1 : 2;
         return leftPriority - rightPriority;
       });
-      const branchesForKind =
-        input.refKind === "local"
-          ? allBranches.filter((ref) => !ref.isRemote)
-          : input.refKind === "remote"
-            ? allBranches.filter((ref) => ref.isRemote)
-            : allBranches;
+      const listedRemoteName =
+        input.remoteName === undefined
+          ? null
+          : resolveDefaultRefRemote(snapshot.remoteNames, input.remoteName);
+      const branchesForKind = allBranches.filter(
+        (ref) =>
+          (input.refKind === "local"
+            ? !ref.isRemote
+            : input.refKind === "remote"
+              ? ref.isRemote
+              : true) &&
+          (listedRemoteName === null || !ref.isRemote || ref.remoteName === listedRemoteName),
+      );
       const refs = paginateBranches({
         refs: filterBranchesForListQuery(branchesForKind, input.query),
         cursor: input.cursor,
@@ -4036,6 +4045,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         refs: [...refs.refs],
         isRepo: true,
         hasPrimaryRemote: snapshot.hasPrimaryRemote,
+        remoteNames: snapshot.remoteNames.toSorted(),
         nextCursor: refs.nextCursor,
         totalCount: refs.totalCount,
       };
