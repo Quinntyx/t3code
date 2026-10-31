@@ -128,6 +128,7 @@ function AccountSegment({
 }) {
   const patternId = useId().replace(/:/g, "");
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const refill = Math.min(100 - remaining, refillPercent);
   return (
     <View
       pointerEvents="none"
@@ -139,25 +140,36 @@ function AccountSegment({
         );
       }}
     >
-      {size.width > 0 && size.height > 0 ? (
-        // Numeric canvas dimensions clear Android SVG geometry cached before a segment resized.
-        <Svg width={size.width} height={size.height} accessible={false}>
-          <Defs>
-            <Pattern id={patternId} width={6} height={6} patternUnits="userSpaceOnUse">
-              <Path d="M-1 1L1 -1M0 6L6 0M5 7L7 5" stroke={color} strokeWidth={1} opacity={0.22} />
-            </Pattern>
-          </Defs>
-          {refillPercent > 0 ? (
-            <Rect
-              x={`${100 - Math.min(100 - remaining, refillPercent)}%`}
-              width={`${Math.min(100 - remaining, refillPercent)}%`}
-              height="100%"
-              fill={`url(#${patternId})`}
-            />
-          ) : null}
-          <Rect width={`${remaining}%`} height="100%" fill={color} opacity={0.35} />
-        </Svg>
+      {refill > 0 && size.width > 0 && size.height > 0 ? (
+        <View
+          className="absolute top-0 right-0 bottom-0 overflow-hidden"
+          style={{ width: `${refill}%` }}
+        >
+          <Svg
+            width={size.width}
+            height={size.height}
+            style={{ position: "absolute", right: 0 }}
+            accessible={false}
+          >
+            <Defs>
+              <Pattern id={patternId} width={6} height={6} patternUnits="userSpaceOnUse">
+                <Path
+                  d="M-1 1L1 -1M0 6L6 0M5 7L7 5"
+                  stroke={color}
+                  strokeWidth={1}
+                  opacity={0.22}
+                />
+              </Pattern>
+            </Defs>
+            <Rect width={size.width} height={size.height} fill={`url(#${patternId})`} />
+          </Svg>
+        </View>
       ) : null}
+      {/* Keep quota-dependent widths in native layout; SVG only paints the hatch. */}
+      <View
+        className="absolute top-0 bottom-0 left-0"
+        style={{ width: `${remaining}%`, backgroundColor: color, opacity: 0.35 }}
+      />
     </View>
   );
 }
@@ -181,6 +193,10 @@ function PoolWindowCard({
 }) {
   const navigation = useNavigation();
   const [barWidth, setBarWidth] = useState(0);
+  const columns = pool.columns.map((member) => ({
+    ...member,
+    remaining: member.window ? remainingPercent(member.window) : 0,
+  }));
   // Each segment needs room for its account, percent and reset to label itself.
   const segmentWidth = barWidth / Math.max(pool.columns.length, 1);
   const inlineLabels = wide && segmentWidth >= 96;
@@ -227,7 +243,7 @@ function PoolWindowCard({
       className="flex-row gap-1"
       onLayout={(event) => setBarWidth(event.nativeEvent.layout.width)}
     >
-      {pool.columns.map((member, index) => {
+      {columns.map((member, index) => {
         if (!member.window)
           return (
             <View
@@ -235,7 +251,7 @@ function PoolWindowCard({
               className={wide ? "h-9 min-w-0 flex-1" : "h-7 min-w-0 flex-1"}
             />
           );
-        const { account, window } = member;
+        const { account, window, remaining } = member;
         const timeLeft = paceRemainingPercent(window, now);
         const credits = account.limits.resetCredits?.availableCount ?? 0;
         const resetsIn = formatResetsIn(window, now)?.replace("resets in ", "");
@@ -243,7 +259,7 @@ function PoolWindowCard({
           <Pressable
             key={account.key}
             accessibilityRole="button"
-            accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remainingPercent(window)}% left${timeLeft === null ? "" : `, ${timeLeft}% of the window left`}`}
+            accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remaining}% left${timeLeft === null ? "" : `, ${timeLeft}% of the window left`}`}
             accessibilityHint="Show account details"
             onPress={() => openAccount(account)}
             className={wide ? "h-9 min-w-0 flex-1 rounded-md" : "h-7 min-w-0 flex-1 rounded-md"}
@@ -252,7 +268,7 @@ function PoolWindowCard({
               <View className="absolute inset-0 rounded-md bg-subtle" />
               <View className="absolute inset-0 overflow-hidden rounded-md">
                 <AccountSegment
-                  remaining={remainingPercent(window)}
+                  remaining={remaining}
                   color={color}
                   refillPercent={window.resetsAt ? member.refillPercent : 0}
                 />
@@ -274,7 +290,7 @@ function PoolWindowCard({
                     </Text>
                   )}
                   <Text className="text-sm font-t3-bold tabular-nums text-foreground">
-                    {remainingPercent(window)}%
+                    {remaining}%
                   </Text>
                 </View>
                 {inlineReset && (resetsIn || credits) ? (
@@ -322,7 +338,7 @@ function PoolWindowCard({
   );
   const legend = (
     <View>
-      {pool.columns.map(({ account, window }, index) => {
+      {columns.map(({ account, window, remaining }, index) => {
         if (!window) return null;
         const credits = account.limits.resetCredits?.availableCount ?? 0;
         const resetsIn = formatResetsIn(window, now);
@@ -330,7 +346,7 @@ function PoolWindowCard({
           <Pressable
             key={account.key}
             accessibilityRole="button"
-            accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remainingPercent(window)}% left${resetsIn ? `, ${resetsIn}` : ""}${credits ? `, ${credits} reset credits banked` : ""}`}
+            accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remaining}% left${resetsIn ? `, ${resetsIn}` : ""}${credits ? `, ${credits} reset credits banked` : ""}`}
             accessibilityHint="Show account details"
             onPress={() => openAccount(account)}
             className="min-h-[44px] flex-row items-center gap-2 active:opacity-60"
@@ -347,7 +363,7 @@ function PoolWindowCard({
               {accountName(account)}
             </Text>
             <Text className="text-sm font-t3-medium tabular-nums text-foreground">
-              {remainingPercent(window)}%
+              {remaining}%
             </Text>
             <View className="flex-row items-center gap-1">
               {resetsIn ? (
