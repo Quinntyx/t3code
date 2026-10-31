@@ -4,6 +4,7 @@ import {
   isProviderAvailable,
   MessageId,
   type ModelSelection,
+  type ModelPreferences,
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
   TurnItemId,
@@ -52,6 +53,7 @@ import {
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
   type ProviderInteractionMode,
+  type ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   ProviderRequestKind,
@@ -63,7 +65,7 @@ import {
   ThreadId,
   isOrchestrationV2WorkActive,
 } from "@t3tools/contracts";
-import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
+import { createModelHiddenPredicate, getProviderOptionCurrentValue } from "@t3tools/shared/model";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import {
@@ -295,14 +297,15 @@ const LISTED_MODEL_LIMIT = 8;
 function listCapabilityModels(input: {
   readonly provider: ServerProvider;
   readonly preferences:
-    | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
+    | ModelPreferences["providerModelPreferences"][ProviderInstanceId]
     | undefined;
   readonly isPinned: (model: ServerProviderModel) => boolean;
   readonly searchTerms: ReadonlyArray<string>;
 }) {
   const rank = new Map(input.preferences?.modelOrder.map((slug, index) => [slug, index]));
+  const isHidden = createModelHiddenPredicate(input.preferences);
   const visible = input.provider.models
-    .filter((model) => model.isCustom || !input.preferences?.hiddenModels.includes(model.slug))
+    .filter((model) => !isHidden(model))
     .toSorted((a, b) => (rank.get(a.slug) ?? rank.size) - (rank.get(b.slug) ?? rank.size));
   const { instanceId, driver, displayName } = input.provider;
   const providerText = `${instanceId} ${driver} ${displayName ?? ""}`.toLowerCase();

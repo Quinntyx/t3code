@@ -364,6 +364,8 @@ export const ProviderModelPreferences = Schema.Record(
   Schema.Struct({
     hiddenModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+    newModelsEnabled: Schema.optionalKey(Schema.Boolean),
+    enabledModels: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 export type ModelPreferences = {
@@ -1038,6 +1040,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultThreadEnvMode",
   "newWorktreesBesideMain",
   "newWorktreesStartFromOrigin",
+  "defaultBranchRemote",
   "worktreeSubmodules",
   "defaultAutoPull",
   "defaultProjectScripts",
@@ -1076,6 +1079,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesBesideMain: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultBranchRemote: Schema.optionalKey(TrimmedString),
   worktreeSubmodules: ForwardCompatibleOptional(WorktreeSubmodules),
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
   defaultProjectScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
@@ -1302,6 +1306,8 @@ export const ServerSettings = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  /** Branch pickers list this remote with local branches; others sit behind "Other remotes". */
+  defaultBranchRemote: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("origin"))),
   /** Null inherits t3.json, then recursive; unknown values decode to null for older clients. */
   worktreeSubmodules: ForwardCompatibleNullable(WorktreeSubmodules).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1533,6 +1539,13 @@ export const ServerSettingsPatch = Schema.Struct({
   setProviderModelOrder: Schema.optionalKey(
     Schema.Struct({ provider: ProviderInstanceId, modelOrder: Schema.Array(TrimmedString) }),
   ),
+  setProviderNewModelsEnabled: Schema.optionalKey(
+    Schema.Struct({
+      provider: ProviderInstanceId,
+      enabled: Schema.Boolean,
+      models: Schema.Array(TrimmedNonEmptyString),
+    }),
+  ),
   favorites: Schema.optionalKey(ModelFavorites),
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   // Applied under the settings service's write lock, only while still unset.
@@ -1637,6 +1650,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
   newWorktreesBesideMain: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultBranchRemote: Schema.optionalKey(TrimmedString),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),

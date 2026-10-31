@@ -22,6 +22,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.forgejo/actions/setup
+      - name: Install Chromium for browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
       - name: Check changed files
         env:
           BEFORE: ${{ github.event.before }}

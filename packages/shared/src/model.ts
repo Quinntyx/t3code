@@ -3,6 +3,7 @@ import {
   MODEL_SLUG_ALIASES_BY_PROVIDER,
   ModelCapabilities,
   type ModelSelection,
+  type ModelPreferences,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -13,6 +14,17 @@ import * as Schema from "effect/Schema";
 import { copySorted } from "./Array.ts";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
+
+export function createModelHiddenPredicate(
+  preferences: ModelPreferences["providerModelPreferences"][ProviderInstanceId] | undefined,
+) {
+  const hidden = new Set(preferences?.hiddenModels);
+  const enabled = new Set(preferences?.enabledModels);
+  return (model: { readonly slug: string; readonly isCustom?: boolean }) =>
+    !model.isCustom &&
+    (hidden.has(model.slug) ||
+      (preferences?.newModelsEnabled === false && !enabled.has(model.slug)));
+}
 
 export function modelSelectionCommandType(
   currentInstanceId: ProviderInstanceId,

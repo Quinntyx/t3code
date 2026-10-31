@@ -1343,6 +1343,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         }),
         models: [
           ...opencodeSlugs.map((slug) => model(slug, { isLegacy: slug === "oc/m03" })),
+          model("oc/new"),
           model("oc-custom", { isCustom: true }),
         ],
       },
@@ -1370,7 +1371,12 @@ describe("OrchestratorMcpService provider resolution", () => {
                     { provider: opencodeInstanceId, model: "oc/m10" },
                   ],
                   providerModelPreferences: {
-                    [opencodeInstanceId]: { hiddenModels: ["oc/m02"], modelOrder: ["oc/m12"] },
+                    [opencodeInstanceId]: {
+                      hiddenModels: ["oc/m02"],
+                      modelOrder: ["oc/m12"],
+                      newModelsEnabled: false,
+                      enabledModels: opencodeSlugs,
+                    },
                   },
                 }),
                 providerRegistryLayer(catalog),
