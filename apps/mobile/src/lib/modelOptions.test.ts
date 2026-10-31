@@ -758,6 +758,45 @@ describe("synchronized mobile model visibility", () => {
     ).toEqual(["hidden", "first", "second", "custom"]);
   });
 
+  it("hides newly discovered models without resurrecting them through the saved selection", () => {
+    const optedOut = {
+      ...config,
+      settings: {
+        ...config.settings,
+        providerModelPreferences: {
+          [provider]: {
+            hiddenModels: ["hidden", "custom"],
+            modelOrder: ["second", "first"],
+            newModelsEnabled: false,
+            enabledModels: ["first"],
+          },
+        },
+      },
+    };
+    expect(
+      buildModelOptions(optedOut, { instanceId: provider, model: "second" }, provider, null).map(
+        (option) => option.selection.model,
+      ),
+    ).toEqual(["first", "custom"]);
+    for (const model of ["second", "missing", "hidden"]) {
+      const saved = { instanceId: provider, model };
+      expect(resolveSelectableModelSelection(optedOut, saved, null)).toBeNull();
+      expect(resolveDefaultableModelSelection(optedOut, saved, null)).toBeNull();
+    }
+    for (const model of ["first", "custom"]) {
+      const saved = { instanceId: provider, model };
+      expect(resolveDefaultableModelSelection(optedOut, saved, null)).toBe(saved);
+    }
+    const management = buildModelOptions(optedOut, null, provider, null, true);
+    expect(management.find((option) => option.selection.model === "second")?.isHidden).toBe(true);
+    expect(management.find((option) => option.selection.model === "custom")?.isHidden).toBe(false);
+    expect(
+      buildModelOptions(optedOut, { instanceId: provider, model: "missing" }, provider, null).map(
+        (option) => option.selection.model,
+      ),
+    ).not.toContain("missing");
+  });
+
   it("exposes hidden built-ins for management without offering custom visibility controls", () => {
     const options = buildModelOptions(
       config,

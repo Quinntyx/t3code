@@ -26,7 +26,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
 import { fromLenientJson } from "./schemaJson.ts";
-import { createModelSelection, readCustomModelEntries } from "./model.ts";
+import {
+  createModelHiddenPredicate,
+  createModelSelection,
+  readCustomModelEntries,
+} from "./model.ts";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -346,6 +350,7 @@ export function applyServerSettingsPatch(
     setModelFavorites,
     setModelsHidden,
     setProviderModelOrder,
+    setProviderNewModelsEnabled,
     providerModelPreferences,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
@@ -434,9 +439,38 @@ export function applyServerSettingsPatch(
       };
       const hiddenModels = preferences.hiddenModels.filter((model) => model !== change.model);
       if (change.hidden) hiddenModels.push(change.model);
-      updated[change.provider] = { ...preferences, hiddenModels };
+      updated[change.provider] = {
+        ...preferences,
+        hiddenModels,
+        ...(preferences.newModelsEnabled === false && !change.hidden
+          ? { enabledModels: [...new Set([...(preferences.enabledModels ?? []), change.model])] }
+          : {}),
+      };
     }
     nextModelPreferences = updated;
+  }
+  if (setProviderNewModelsEnabled) {
+    const { provider, enabled, models } = setProviderNewModelsEnabled;
+    const preferences = (Object.hasOwn(nextModelPreferences ?? {}, provider)
+      ? nextModelPreferences?.[provider]
+      : undefined) ?? { hiddenModels: [], modelOrder: [] };
+    const isHidden = createModelHiddenPredicate(preferences);
+    nextModelPreferences = {
+      ...nextModelPreferences,
+      [provider]: {
+        ...preferences,
+        newModelsEnabled: enabled,
+        enabledModels: [
+          ...new Set([
+            ...(preferences.enabledModels ?? []),
+            ...models.filter((slug) => !isHidden({ slug })),
+          ]),
+        ],
+        hiddenModels: [
+          ...new Set([...preferences.hiddenModels, ...models.filter((slug) => isHidden({ slug }))]),
+        ],
+      },
+    };
   }
   if (setProviderModelOrder) {
     const preferences = nextModelPreferences?.[setProviderModelOrder.provider] ?? {
