@@ -97,8 +97,6 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    // Fork runners share their host with the live server and native builds.
-    ...(process.env.CI ? { maxWorkers: 4 } : {}),
     // Fixture subprocesses must not inherit the outer task runner’s cache policy.
     env: { VP_REMOTE_CACHE: "off", VP_REMOTE_CACHE_URL: "" },
     exclude: TEST_EXCLUDE,
