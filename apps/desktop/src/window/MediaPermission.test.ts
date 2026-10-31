@@ -92,6 +92,24 @@ describe("trusted app microphone permission", () => {
       expect(result).toBe(false);
     }
     expect(check(main, "display-capture", "t3code://app", { isMainFrame: true })).toBe(false);
+    for (const permission of [
+      "notifications",
+      "clipboard-read",
+      "clipboard-sanitized-write",
+      "fullscreen",
+    ] as const) {
+      result = false;
+      request(
+        main,
+        permission,
+        (value) => {
+          result = value;
+        },
+        { requestingUrl: "t3code://app/", isMainFrame: true },
+      );
+      expect(result).toBe(true);
+      expect(check(main, permission, "t3code://app", { isMainFrame: true })).toBe(true);
+    }
   });
   it("denies previews, subframes, navigation away and other media", () => {
     for (const override of [

@@ -46,11 +46,12 @@ export function installAppMediaPermissions(main: WebContents, appUrl: string) {
       mainFrame,
       mediaTypes,
     });
+  // The main window shares the default session, whose prior handler-less behavior granted the rest.
   main.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (permission !== "media") return callback(permission !== "display-capture");
     const mediaTypes = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
     callback(
-      permission === "media" &&
-        allowed(contents, details.requestingUrl, details.isMainFrame, mediaTypes) &&
+      allowed(contents, details.requestingUrl, details.isMainFrame, mediaTypes) &&
         allowed(
           contents,
           "securityOrigin" in details
@@ -61,15 +62,15 @@ export function installAppMediaPermissions(main: WebContents, appUrl: string) {
         ),
     );
   });
-  main.session.setPermissionCheckHandler(
-    (contents, permission, requestingOrigin, details) =>
-      permission === "media" &&
-      [
-        requestingOrigin,
-        details.securityOrigin ?? requestingOrigin,
-        details.requestingUrl ?? requestingOrigin,
-      ].every((url) =>
-        allowed(contents, url, details.isMainFrame, [details.mediaType ?? "unknown"]),
-      ),
+  main.session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
+    permission !== "media"
+      ? permission !== "display-capture"
+      : [
+          requestingOrigin,
+          details.securityOrigin ?? requestingOrigin,
+          details.requestingUrl ?? requestingOrigin,
+        ].every((url) =>
+          allowed(contents, url, details.isMainFrame, [details.mediaType ?? "unknown"]),
+        ),
   );
 }
