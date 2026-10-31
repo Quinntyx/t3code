@@ -79,6 +79,7 @@ function RestoreBranchHarness(props: {
     isWorking: false,
     pendingBackgroundTasks: [],
     turnItems: [],
+    onRunInTerminal: undefined,
     activePendingApproval: null as never,
     activePendingUserInput: null as never,
     gitStatusQuery: { refresh: props.refreshGitStatus },

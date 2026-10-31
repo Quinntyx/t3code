@@ -23,7 +23,19 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadDetailsUsage, type ThreadDetailsUsageInput } from "./ThreadDetailsUsage";
 import { ThreadUsagePanel } from "./ThreadUsagePanel";
+import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
+import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
+import { useClientSettings } from "../../hooks/useSettings";
+import { cn } from "../../lib/utils";
+import { SlidersHorizontalIcon } from "lucide-react";
+import { ThreadDetailsControl } from "./ThreadDetailsControl";
+import {
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_LABEL_CLASS,
+} from "./threadDetailsPanelStyles";
+import { Menu, MenuPopup } from "../ui/menu";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -241,6 +253,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
+              {density === "full" && !props.draftId && visible.usage ? (
+                <ThreadUsagePanel environmentId={props.environmentId} threadId={props.threadId} />
+              ) : null}
               {visible.usage ? <ThreadDetailsUsage {...props.usage} /> : null}
 
               {/* Shown only when no section above has content, so an emptied card can be refilled. */}
@@ -263,26 +278,28 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               </div>
             </div>
 
-          {density === "full" && !props.draftId ? (
-            <ThreadUsagePanel environmentId={props.environmentId} threadId={props.threadId} />
-          ) : null}
-
-          {density === "full" && !props.draftId ? (
-            <ThreadServersPanel environmentId={props.environmentId} threadId={props.threadId} />
-          ) : null}
-
-          {density === "full" && !props.draftId ? (
-            <ThreadAutomationsPanel environmentId={props.environmentId} threadId={props.threadId} />
-          ) : null}
-
-          {density === "full" && !props.draftId ? (
-            <ThreadRelationshipsPanel
-              environmentId={props.environmentId}
-              threadId={props.threadId}
-            />
-          ) : null}
-        </>
-      )}
+            <Menu
+              open={menuPosition !== null}
+              onOpenChange={(open) => !open && setMenuPosition(null)}
+            >
+              <MenuPopup
+                anchor={
+                  menuPosition
+                    ? {
+                        getBoundingClientRect: () =>
+                          new DOMRect(menuPosition.x, menuPosition.y, 0, 0),
+                      }
+                    : undefined
+                }
+                align="start"
+                side="bottom"
+              >
+                <ThreadDetailsItemsMenuItems />
+              </MenuPopup>
+            </Menu>
+          </>
+        );
+      }}
     </ThreadDetailsCard>
   );
 }

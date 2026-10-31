@@ -95,12 +95,16 @@ export const readOpenCodeGoUsageLimits = Effect.fn("readOpenCodeGoUsageLimits")(
     const databasePath = path.resolve(dataHome, "opencode", databaseFile);
     const storedKeys =
       env.OPENCODE_AUTH_CONTENT || databaseFile === ":memory:"
-        ? undefined
-        : yield* readConsoleApiKey(path.resolve(dataHome, "opencode", databaseFile));
-    const apiKey = consoleKey || goKey;
+        ? []
+        : [
+            yield* readStoredApiKey(databasePath, "opencode"),
+            yield* readStoredApiKey(databasePath, "opencode-go"),
+          ];
+    const keys = [...new Set([...storedKeys, goKey].filter((key): key is string => Boolean(key)))];
+    const apiKey = keys[0];
     if (!apiKey) return unsupported;
 
-    const usage = yield* readOpenCodeGoUsage({ apiKey, fallbackApiKey: goKey, checkedAt });
+    const usage = yield* readOpenCodeGoUsage({ apiKey, fallbackApiKeys: keys.slice(1), checkedAt });
     switch (usage._tag) {
       case "limits":
         return usage.limits;

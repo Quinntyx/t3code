@@ -260,7 +260,7 @@ export class ServerBrowser extends Context.Service<
 
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
-    readonly reportProfiles: (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+    readonly profileReporter: Effect.Effect<ProfileReporter, never, Scope.Scope>;
 
     /** GPUs this host's browser can render on, for the rendering setting. */
     readonly listGpus: Effect.Effect<ServerBrowserGpuList>;
@@ -278,8 +278,6 @@ interface ViewerState {
   scrolledAt: number;
 
   requestedSize: { width: number; height: number; order: number } | null;
-  /** A wheel or pointer move still waiting for earlier input, which later ones merge into. */
-  waitingMotion: Record<string, unknown> | null;
 }
 
 interface EncoderWindow {
@@ -489,6 +487,8 @@ const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const agentScope = yield* AgentScope;
+  const launchersDir = NodePath.join(config.stateDir, "server-browser", "launchers");
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const renderingOf = (settings: {
     readonly serverBrowserGpu: string;
@@ -2362,13 +2362,6 @@ const make = Effect.gen(function* () {
     viewer.requestedSize = null;
   };
 
-  const motionKind = (message: Record<string, unknown>) =>
-    message.type === "wheel"
-      ? "wheel"
-      : message.type === "mouse" && message.action === "move"
-        ? "move"
-        : null;
-
   const dispatchViewerInput = async (
     tab: ServerTab,
     session: CDPSession,
@@ -2625,7 +2618,6 @@ const make = Effect.gen(function* () {
       resume: () => startScreencast(screencastScale),
       scrolledAt: 0,
       requestedSize: null,
-      waitingMotion: null,
     };
     yield* Effect.acquireRelease(
       Effect.sync(() => {
@@ -2776,26 +2768,17 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else {
-              // Each dispatch waits for the page to handle it, so a slow page would replay seconds
-              // of queued wheels and moves. Ones arriving while another waits merge into it.
-              const waiting = viewer.waitingMotion;
-              if (waiting && motionKind(waiting) === motionKind(message)) {
-                const deltas =
-                  message.type === "wheel"
-                    ? {
-                        deltaX: num(waiting.deltaX) + num(message.deltaX),
-                        deltaY: num(waiting.deltaY) + num(message.deltaY),
-                      }
-                    : {};
-                Object.assign(waiting, message, deltas);
-                return;
+              const dispatch = () => dispatchViewerInput(tab, session, viewer, message);
+              if (
+                message.type === "mouse" &&
+                message.action === "move" &&
+                message.button === "none" &&
+                message.buttons === 0
+              ) {
+                await tab.control.humanLatest(viewer.id, `hover:${modifiersOf(message)}`, dispatch);
+              } else {
+                await tab.control.human(viewer.id, dispatch);
               }
-              const input = motionKind(message) === null ? message : { ...message };
-              viewer.waitingMotion = input === message ? null : input;
-              await tab.control.human(viewer.id, () => {
-                if (viewer.waitingMotion === input) viewer.waitingMotion = null;
-                return dispatchViewerInput(tab, session, viewer, input);
-              });
             }
           } catch {
             broadcastControl(tab);
@@ -2918,7 +2901,7 @@ const make = Effect.gen(function* () {
   return ServerBrowser.of({
     attachViewer,
     clearProfile,
-    reportProfiles,
+    profileReporter,
     listGpus,
     openDownload,
     answerFileChooser,

@@ -99,8 +99,10 @@ function makeSession(
 ) {
   const events = new NodeEvents.EventEmitter();
   return {
-    on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
+    on: vi.fn((name: string, listener: (...args: unknown[]) => void) => events.on(name, listener)),
     emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
+    emitAsync: (name: string, ...args: unknown[]) =>
+      Promise.all(events.listeners(name).map((listener) => listener(...args))),
     detach: vi.fn(async () => {}),
     send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
       if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
@@ -692,7 +694,7 @@ it.live("viewers skip a screencast frame identical to the one before it", () =>
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("wheels and pointer moves waiting behind a slow page merge into one dispatch", () =>
+it.live("preserves wheels and merges safe hover moves waiting behind a slow page", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { browser, tabId } = yield* ready;
@@ -716,13 +718,20 @@ it.live("wheels and pointer moves waiting behind a slow page merge into one disp
         return send(operation, input);
       });
       const wheel = (deltaY: number) => ({ type: "wheel", x: 10, y: 20, deltaX: 0, deltaY });
-      const move = (x: number) => ({ type: "mouse", action: "move", x, y: 5, button: "none" });
+      const move = (x: number) => ({
+        type: "mouse",
+        action: "move",
+        x,
+        y: 5,
+        button: "none",
+        buttons: 0,
+      });
       const key = { type: "key", action: "up", key: "a", code: "KeyA" };
       const first = yield* viewer
         .input(wheel(10))
         .pipe(Effect.forkChild({ startImmediately: true }));
       yield* Effect.promise(() => started.promise);
-      // A key between wheels keeps its place; only neighbouring motion merges.
+      // Wheel events preserve page handling; only unmodified hover motion can merge.
       const rest = yield* Effect.forEach(
         [wheel(20), wheel(30), key, wheel(40), move(1), move(7)],
         (input) => viewer.input(input).pipe(Effect.forkChild({ startImmediately: true })),
@@ -732,7 +741,8 @@ it.live("wheels and pointer moves waiting behind a slow page merge into one disp
       yield* Effect.forEach(rest, Fiber.join);
       expect(dispatched).toEqual([
         "mouseWheel 10",
-        "mouseWheel 50",
+        "mouseWheel 20",
+        "mouseWheel 30",
         "keyUp a",
         "mouseWheel 40",
         "mouseMoved 7",

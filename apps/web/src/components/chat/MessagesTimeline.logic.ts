@@ -1,5 +1,10 @@
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import {
+  summarizeAgentTrajectory,
+  trajectorySummariesEqual,
+  type AgentTrajectorySummary,
+} from "@t3tools/client-runtime/work-log/trajectory-summary";
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";

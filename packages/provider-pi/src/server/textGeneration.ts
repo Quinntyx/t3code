@@ -88,12 +88,24 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           );
       }
 
+      let turnError: string | undefined;
       const ask = Effect.fn("PiTextGeneration.ask")(function* (message: string) {
+        turnError = undefined;
         yield* connection.request({ type: "prompt", message });
         yield* Effect.gen(function* () {
           while (true) {
             const event = yield* Queue.take(connection.events);
             if (event["type"] === "agent_settled") return;
+            const assistantMessage = event["message"];
+            if (
+              event["type"] === "message_end" &&
+              piRecordString(assistantMessage, "role") === "assistant"
+            ) {
+              turnError =
+                piRecordString(assistantMessage, "stopReason") === "error"
+                  ? piTurnErrorDetail(piRecordString(assistantMessage, "errorMessage"))
+                  : undefined;
+            }
           }
         });
         const data = yield* connection.request({ type: "get_last_assistant_text" });

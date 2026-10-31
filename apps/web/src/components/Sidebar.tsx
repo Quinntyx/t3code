@@ -122,6 +122,7 @@ import {
 import {
   canTurnThreadIntoProject,
   useAcknowledgeThreadWoke,
+  useContinueThread,
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";

@@ -23,18 +23,32 @@ export function useHiddenThreads() {
 export function useSetThreadHidden() {
   const updatePreferences = useAtomSet(updateMobilePreferencesAtom, { mode: "promise" });
   return useCallback(
-    async function setHidden(thread: EnvironmentThreadShell, hidden: boolean): Promise<void> {
-      try {
+    async (thread: EnvironmentThreadShell, hidden: boolean): Promise<void> => {
+      const persistHidden = async (nextHidden: boolean) => {
         await updatePreferences({
           transform: (current) => ({
             hiddenThreadKeys: updateHiddenThreadKeys(
               current.hiddenThreadKeys ?? [],
               thread,
-              hidden,
+              nextHidden,
             ),
           }),
         });
-        if (hidden) showLocalThreadUndoNotice(() => setHidden(thread, false));
+      };
+      try {
+        await persistHidden(hidden);
+        if (hidden) {
+          showLocalThreadUndoNotice(async () => {
+            try {
+              await persistHidden(false);
+            } catch {
+              Dialog.alert(
+                "Could not restore thread",
+                "Your device could not save this change. Please try again.",
+              );
+            }
+          });
+        }
       } catch {
         Dialog.alert(
           hidden ? "Could not hide thread" : "Could not restore thread",

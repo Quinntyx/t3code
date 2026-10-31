@@ -110,7 +110,6 @@ export function goalNowItem(input: {
   };
 }
 
-/** A Stop the provider has not finished; Force stop once it stops answering. */
 export function runStopNowItem(input: {
   readonly threadId: ThreadId;
   readonly stop: RunStopPresentation;
@@ -148,6 +147,43 @@ export function runStopNowItem(input: {
       </>
     ),
   };
+}
+
+function BackgroundWorkPopover({
+  title,
+  ...props
+}: Parameters<typeof BackgroundWorkDetails>[0] & { readonly title: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={<InlineButton tone="muted" />}>{title}</PopoverTrigger>
+      <PopoverPopup
+        side="top"
+        align="start"
+        aria-label="Background work details"
+        className="w-[min(36rem,calc(100vw-2rem))]"
+        touchBackdrop
+      >
+        {open ? (
+          <BackgroundWorkDetails
+            {...props}
+            onOpenThread={(threadId) => {
+              setOpen(false);
+              props.onOpenThread(threadId);
+            }}
+            onRunInTerminal={
+              props.onRunInTerminal
+                ? (command) => {
+                    setOpen(false);
+                    props.onRunInTerminal?.(command);
+                  }
+                : undefined
+            }
+          />
+        ) : null}
+      </PopoverPopup>
+    </Popover>
+  );
 }
 
 /** Background commands and subagents, for the end of the timeline. */

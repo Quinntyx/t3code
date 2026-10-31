@@ -56,13 +56,11 @@ function openCodeGoUsageWindows(body: UsageResponse): ReadonlyArray<ServerProvid
   ];
 }
 
-/**
- * `fallbackApiKey` is the stored `opencode-go` credential: OpenCode prefers a
- * Console connection over it, so a rejected Console key gets one retry.
- */
+// OpenCode prefers Console credentials, then its stored Go key, then auth.json.
 const readUsage = Effect.fn("readOpenCodeGoUsage")(function* (input: {
   readonly apiKey: string;
   readonly fallbackApiKey?: string | undefined;
+  readonly fallbackApiKeys?: ReadonlyArray<string>;
   readonly checkedAt: string;
 }) {
   const client = yield* HttpClient.HttpClient;
@@ -74,12 +72,11 @@ const readUsage = Effect.fn("readOpenCodeGoUsage")(function* (input: {
 
   let apiKey = input.apiKey;
   let response = yield* readUsage(apiKey);
-  if (
-    (response.status === 401 || response.status === 403) &&
-    input.fallbackApiKey &&
-    input.fallbackApiKey !== apiKey
-  ) {
-    apiKey = input.fallbackApiKey;
+  const fallbackKeys = [...new Set([...(input.fallbackApiKeys ?? []), input.fallbackApiKey])];
+  for (const key of fallbackKeys) {
+    if (response.status !== 401 && response.status !== 403) break;
+    if (!key || key === apiKey) continue;
+    apiKey = key;
     response = yield* readUsage(apiKey);
   }
   if (response.status === 403) return { _tag: "noSubscription" } as const;
@@ -103,5 +100,6 @@ const readUsage = Effect.fn("readOpenCodeGoUsage")(function* (input: {
 export const readOpenCodeGoUsage = (input: {
   readonly apiKey: string;
   readonly fallbackApiKey?: string | undefined;
+  readonly fallbackApiKeys?: ReadonlyArray<string>;
   readonly checkedAt: string;
 }) => readUsage(input).pipe(Effect.orElseSucceed(() => ({ _tag: "failed" }) as const));

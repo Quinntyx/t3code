@@ -31,6 +31,7 @@ export function threadContinuationRunId(
 
 export type ThreadActionMenuId =
   | "find"
+  | "continue"
   | "new-thread-on-branch"
   | "filter-by-project"
   | "turn-into-project"
@@ -100,6 +101,7 @@ export function buildDraftActionMenuItems(options: {
 export interface ThreadActionMenuState {
   readonly canOperate: boolean;
   readonly canFind?: boolean;
+  readonly canContinue?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
     readonly label: string;
@@ -153,6 +155,10 @@ export function buildThreadActionMenuItems(
     ...(state.canFind
       ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
       : []),
+    ...(state.canContinue ? [{ id: "continue" as const, label: "Continue", icon: "play" }] : []),
+    state.isHidden
+      ? { id: "unhide", label: "Restore on this device", icon: "eye" }
+      : { id: "hide", label: "Hide on this device", icon: "eye-off" },
     ...(state.branch
       ? [
           {
