@@ -639,6 +639,9 @@ interface ProviderInstanceCardProps {
   readonly setup?: ReactNode;
   readonly runtime?: ReactNode;
   readonly hiddenModels: ReadonlyArray<string>;
+  readonly newModelsEnabled: boolean;
+  readonly enabledModels: ReadonlyArray<string>;
+  readonly onNewModelsEnabledChange: (enabled: boolean) => void;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
   readonly onHiddenModelsChange: (
@@ -686,6 +689,9 @@ export function ProviderInstanceCard({
   setup,
   runtime,
   hiddenModels,
+  newModelsEnabled,
+  enabledModels,
+  onNewModelsEnabledChange,
   favoriteModels,
   modelOrder,
   onHiddenModelsChange,
@@ -1334,6 +1340,9 @@ export function ProviderInstanceCard({
               models={modelsForDisplay}
               customModels={customModels}
               hiddenModels={hiddenModels}
+              newModelsEnabled={newModelsEnabled}
+              enabledModels={enabledModels}
+              onNewModelsEnabledChange={onNewModelsEnabledChange}
               favoriteModels={favoriteModels}
               modelOrder={modelOrder}
               onChange={updateCustomModels}

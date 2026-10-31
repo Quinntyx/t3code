@@ -5,7 +5,11 @@ import {
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { type CustomModelDefinition, normalizeCustomModelSlug } from "@t3tools/shared/model";
+import {
+  type CustomModelDefinition,
+  createModelHiddenPredicate,
+  normalizeCustomModelSlug,
+} from "@t3tools/shared/model";
 
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { cn } from "../../lib/utils";
@@ -98,6 +102,9 @@ interface ProviderModelsSectionProps {
   readonly canManageCustomModels: boolean;
   readonly canWritePreferences?: boolean;
   readonly hiddenModels: ReadonlyArray<string>;
+  readonly newModelsEnabled: boolean;
+  readonly enabledModels: ReadonlyArray<string>;
+  readonly onNewModelsEnabledChange: (enabled: boolean) => void;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
   readonly onChange: (next: ReadonlyArray<CustomModelDefinition>) => void;
@@ -117,7 +124,10 @@ export function ProviderModelsSection({
   customModels,
   canManageCustomModels,
   canWritePreferences = true,
-  hiddenModels,
+  hiddenModels: savedHiddenModels,
+  newModelsEnabled,
+  enabledModels,
+  onNewModelsEnabledChange,
   favoriteModels,
   modelOrder,
   onChange,
@@ -133,6 +143,15 @@ export function ProviderModelsSection({
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const scrollToSlugRef = useRef<string | null>(null);
+  const isHidden = createModelHiddenPredicate({
+    hiddenModels: savedHiddenModels,
+    modelOrder,
+    newModelsEnabled,
+    enabledModels,
+  });
+  const hiddenModels = [
+    ...new Set([...savedHiddenModels, ...models.filter(isHidden).map((model) => model.slug)]),
+  ];
   const hiddenModelSet = new Set(hiddenModels);
   const favoriteModelSet = new Set(favoriteModels);
   const displayModels = groupModelsForDisplay(models, {
@@ -293,6 +312,20 @@ export function ProviderModelsSection({
 
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+      <label className="mb-3 flex items-center justify-between gap-3">
+        <span>
+          <span className="block text-sm">Enable new models by default</span>
+          <span className="block text-xs text-muted-foreground">
+            Existing model choices stay unchanged. Custom models are always enabled.
+          </span>
+        </span>
+        <Switch
+          checked={newModelsEnabled}
+          disabled={!canWritePreferences}
+          onCheckedChange={onNewModelsEnabledChange}
+          aria-label="Enable new models by default"
+        />
+      </label>
       <div className="flex flex-wrap items-center justify-between gap-2">
         {showFilter ? (
           <Input

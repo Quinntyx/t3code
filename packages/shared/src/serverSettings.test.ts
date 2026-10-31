@@ -859,6 +859,37 @@ describe("synchronized model preferences", () => {
     ).toEqual({ hiddenModels: ["luna", "sol"], modelOrder: [] });
   });
 
+  it("preserves existing visibility while changing the default for newly discovered models", () => {
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, legacy);
+    const optedOut = applyServerSettingsPatch(initial, {
+      setProviderNewModelsEnabled: { provider, enabled: false, models: ["sol", "astra"] },
+    });
+    expect(optedOut.providerModelPreferences?.[provider]).toEqual({
+      hiddenModels: ["astra"],
+      modelOrder: ["sol"],
+      newModelsEnabled: false,
+      enabledModels: ["sol"],
+    });
+    const enabled = applyServerSettingsPatch(optedOut, {
+      setModelsHidden: [{ provider, model: "luna", hidden: false }],
+    });
+    expect(enabled.providerModelPreferences?.[provider]?.enabledModels).toEqual(["sol", "luna"]);
+    const optedIn = applyServerSettingsPatch(enabled, {
+      setProviderNewModelsEnabled: {
+        provider,
+        enabled: true,
+        models: ["sol", "astra", "luna", "new-model"],
+      },
+    });
+    expect(optedIn.providerModelPreferences?.[provider]?.hiddenModels).toEqual([
+      "astra",
+      "new-model",
+    ]);
+    expect(optedIn.providerModelPreferences?.[provider]?.newModelsEnabled).toBe(true);
+    expect(optedOut.providerModelPreferences?.[provider]?.enabledModels).toEqual(["sol"]);
+    expect(optedIn.favorites).toEqual(initial.favorites);
+  });
+
   it("migrates saved lists independently without claiming empty legacy lists", () => {
     expect(modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, {})).toBeNull();
     const patch = modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy)!;
