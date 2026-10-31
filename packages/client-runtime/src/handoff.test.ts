@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   matchingMachineHandoffProjects,
   machineHandoffBlocker,
+  machineHandoffCloneReady,
   relayMachineHandoff,
   sourceProjectSubdirectory,
   resolveHandoffEndpoints,
@@ -123,6 +124,29 @@ describe("machine handoff relay", () => {
     expect(importSnapshot.mock.calls[0]?.[0]).toBe(snapshot);
   });
 
+  it("retries the original import request without re-exporting or changing its destination", async () => {
+    const snapshot = { ref: "first-export" };
+    const exportSnapshot = vi.fn(async () => snapshot);
+    const importSnapshot = vi
+      .fn<(_: typeof snapshot) => Promise<string>>()
+      .mockRejectedValueOnce(new Error("Database unavailable"))
+      .mockResolvedValue("imported");
+    const attempt: { current: (() => Promise<string>) | null } = { current: null };
+    const input = { eligibility: () => null, exportSnapshot, importSnapshot, attempt };
+    await expect(relayMachineHandoff(input)).rejects.toThrow("Database unavailable");
+    const changedImport = vi.fn(async () => "wrong destination");
+    await expect(relayMachineHandoff({ ...input, importSnapshot: changedImport })).resolves.toBe(
+      "imported",
+    );
+    expect(exportSnapshot).toHaveBeenCalledTimes(1);
+    expect(importSnapshot.mock.calls.map(([value]) => value)).toEqual([snapshot, snapshot]);
+    expect(changedImport).not.toHaveBeenCalled();
+    await expect(
+      relayMachineHandoff({ ...input, eligibility: () => "Permission revoked" }),
+    ).rejects.toThrow("Permission revoked");
+    expect(importSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("does not export a blocked source or import after a failed export", async () => {
     const exportSnapshot = vi.fn(async () => {
       throw new Error("Export rejected");
@@ -140,6 +164,16 @@ describe("machine handoff relay", () => {
       relayMachineHandoff({ eligibility: () => null, exportSnapshot, importSnapshot }),
     ).rejects.toThrow("Export rejected");
     expect(importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps clone continuation available after successful clone status expires", () => {
+    expect(machineHandoffCloneReady({ phase: "done" }, false)).toBe(true);
+    expect(machineHandoffCloneReady(null, true)).toBe(true);
+    expect(machineHandoffCloneReady("pending", true)).toBe(false);
+    expect(machineHandoffCloneReady(null, false)).toBe(false);
+    for (const phase of ["running", "failed", "cancelled"] as const) {
+      expect(machineHandoffCloneReady({ phase }, true)).toBe(false);
+    }
   });
 
   it("preserves repository-relative project paths without accepting sibling prefixes", () => {

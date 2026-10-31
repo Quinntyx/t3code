@@ -105,13 +105,62 @@ describe("machine Git handoff", () => {
     expect(git(destination, "status", "--porcelain=v1")).toBe(before);
   });
 
-  it("refuses repository subprojects and symlinks instead of silently dropping them", async () => {
+  it("preserves committed, staged, and untracked in-repository symlinks without dereferencing", async () => {
+    const { root, source, destination } = fixture();
+    mkdirSync(join(source, ".claude"));
+    mkdirSync(join(source, ".agents"));
+    writeFileSync(join(source, ".agents", "skill"), "owned skill\n");
+    symlinkSync("../.agents", join(source, ".claude", "skills"));
+    git(source, "add", ".claude", ".agents");
+    git(source, "commit", "-m", "repository skill link");
+    symlinkSync("file", join(source, "staged-link"));
+    git(source, "add", "staged-link");
+    symlinkSync(".agents", join(source, "untracked-link"));
+    const submodule = join(root, "submodule");
+    git(root, "init", submodule);
+    git(submodule, "config", "user.name", "Test");
+    git(submodule, "config", "user.email", "test@example.test");
+    writeFileSync(join(submodule, "nested"), "submodule content\n");
+    git(submodule, "add", ".");
+    git(submodule, "commit", "-m", "submodule revision");
+    git(source, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "vendor");
+    git(source, "commit", "-m", "clean submodule");
+    const before = git(source, "status", "--porcelain=v1");
+    const snapshot = await exportGitSnapshot(source);
+    const target = join(root, "with-links");
+    await importGitSnapshot(destination, target, snapshot);
+    expect(NodeFS.readlinkSync(join(target, ".claude", "skills"))).toBe("../.agents");
+    expect(NodeFS.readlinkSync(join(target, "staged-link"))).toBe("file");
+    expect(NodeFS.readlinkSync(join(target, "untracked-link"))).toBe(".agents");
+    expect(git(target, "ls-files", "--stage", "staged-link")).toMatch(/^120000 /);
+    expect(git(target, "ls-files", "--stage", "vendor")).toBe(
+      git(source, "ls-files", "--stage", "vendor"),
+    );
+    expect(NodeFS.statSync(join(target, "vendor")).isDirectory()).toBe(true);
+    expect(NodeFS.existsSync(join(target, "vendor", "nested"))).toBe(false);
+    expect(git(target, "status", "--porcelain=v1")).toBe(before);
+    expect(git(source, "status", "--porcelain=v1")).toBe(before);
+    writeFileSync(join(source, "vendor", "nested"), "dirty submodule\n");
+    await expect(exportGitSnapshot(source)).rejects.toThrow("submodules");
+  });
+
+  it.each(["/outside", "../outside", "file/../../outside", ".git/config"])(
+    "refuses unsafe symlink target %s without dereferencing it",
+    async (target) => {
+      const { source } = fixture();
+      symlinkSync(target, join(source, "link"));
+      await expect(exportGitSnapshot(source)).rejects.toThrow("symlink target");
+      git(source, "add", "link");
+      git(source, "commit", "-m", "unsafe link");
+      await expect(exportGitSnapshot(source)).rejects.toThrow("symlink target");
+    },
+  );
+
+  it("refuses repository subprojects instead of silently losing their working directory", async () => {
     const { source } = fixture();
     const subproject = join(source, "subproject");
     mkdirSync(subproject);
     await expect(exportGitSnapshot(subproject)).rejects.toThrow("repository-root");
-    symlinkSync("file", join(source, "link"));
-    await expect(exportGitSnapshot(source)).rejects.toThrow("symlinks");
   });
 
   it("refuses unmerged and special-index states before exporting", async () => {

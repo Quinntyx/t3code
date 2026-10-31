@@ -4,6 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { scopedProjectKey } from "@t3tools/client-runtime/environment";
+import { CommandId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectCloneSnapshot,
@@ -17,6 +18,8 @@ import { suggestAppAccessForRemote } from "../components/sourceControlAppAccessT
 import { environmentProjectClonesAtom, silenceProjectCloneToasts } from "../state/projectClones";
 import { projectEnvironment } from "../state/projects";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { waitForProject } from "../state/entities";
+import { newProjectId, randomUUID } from "./utils";
 
 /** Matches the server's read cap: a larger file would arrive truncated. */
 export const COPYABLE_FILE_MAX_BYTES = 1024 * 1024;
@@ -188,6 +191,40 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
             failures: failed,
           },
     );
-    if (failed.length === 0) input.onReady?.(targetRef);
+    if (failed.length > 0 || !input.onReady) return;
+    let continuationRef = targetRef;
+    if (input.subdirectory) {
+      const projectId = newProjectId();
+      const registered = await runAtomCommand(
+        appAtomRegistry,
+        projectEnvironment.create,
+        {
+          environmentId: targetRef.environmentId,
+          input: {
+            commandId: CommandId.make(randomUUID()),
+            projectId,
+            title: input.title,
+            workspaceRoot: `${started.value.cwd.replace(/[/\\]+$/, "")}/${input.subdirectory}`,
+            createWorkspaceRootIfMissing: true,
+            defaultModelSelection: null,
+          },
+        },
+        { label: "Prepare cloned project folder", reportFailure: false },
+      );
+      continuationRef = { environmentId: targetRef.environmentId, projectId };
+      if (registered._tag === "Failure" || !(await waitForProject(continuationRef))) {
+        setFileCopy(copyKey, {
+          phase: "failed",
+          title: "Could not prepare the cloned project folder",
+          failures: [
+            registered._tag === "Failure"
+              ? failureMessage(registered)
+              : "The new project has not reached this client yet. Reopen handoff when it appears.",
+          ],
+        });
+        return;
+      }
+    }
+    input.onReady(continuationRef);
   })();
 }

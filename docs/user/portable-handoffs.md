@@ -40,6 +40,13 @@ before continuing. The normal clone flow's optional file copies populate the des
 not the newly isolated worktree. Transfers that exceed the size limit or use unsupported Git states
 are rejected without changing your source. Both servers need machine-handoff support.
 
+This currently supports repository-root projects on Linux and macOS with SHA-1 Git repositories.
+Safe relative symlinks stay symlinks; links outside the repository are rejected. Clean submodules
+keep their recorded revisions but need initialization on the destination. Commit or otherwise
+resolve changes inside submodules first. Repositories with in-progress merges or rebases, special
+index flags, or content filters need those states resolved before transfer. The transfer is limited
+to an 8 MiB snapshot, including a 5 MiB compressed Git bundle, and 64 MiB of changed file content.
+
 ## Context limits
 
 A handoff must leave room for existing provider context, your request and attachments, instructions,

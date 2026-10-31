@@ -12,6 +12,7 @@ import {
 
 import {
   buildModelOptions,
+  buildMachineHandoffModelOptions,
   describeUnavailableModelSelection,
   groupByProvider,
   isModelSelectionUnavailable,
@@ -357,6 +358,29 @@ describe("mobile model options", () => {
     expect(isModelSelectionUnavailable(config, disabled, null)).toBe(true);
     expect(isModelSelectionUnavailable(config, removed, null)).toBe(false);
     expect(resolveSelectableModelSelection(null, disabled, null)).toBe(disabled);
+    const handoffConfig = {
+      ...config,
+      providers: config.providers.map((provider) => ({
+        ...provider,
+        status: "ready" as const,
+        models: [{ slug: usable.model, name: "Test", isCustom: false, capabilities: null }],
+      })),
+    };
+    expect(buildMachineHandoffModelOptions(handoffConfig, usable, null)).toHaveLength(1);
+    expect(
+      buildMachineHandoffModelOptions(
+        {
+          ...handoffConfig,
+          providers: handoffConfig.providers.map((provider) => ({
+            ...provider,
+            status: "error" as const,
+            auth: { status: "unknown" as const },
+          })),
+        },
+        usable,
+        null,
+      ),
+    ).toEqual([]);
   });
 
   describe("Antigravity selections", () => {

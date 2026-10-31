@@ -3,6 +3,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
   ProviderInstanceId,
+  ProjectCloneSnapshot,
   ServerProvider,
 } from "@t3tools/contracts";
 import { repositoryGroupingKeyOf } from "@t3tools/contracts";
@@ -68,17 +69,32 @@ export function machineHandoffBlocker(input: {
   return null;
 }
 
+export function machineHandoffCloneReady(
+  clone: Pick<ProjectCloneSnapshot, "phase"> | "pending" | null,
+  hasRepositoryIdentity: boolean,
+): boolean {
+  return (
+    clone !== "pending" && (clone?.phase === "done" || (clone === null && hasRepositoryIdentity))
+  );
+}
+
 export async function relayMachineHandoff<Snapshot, Result>(input: {
   readonly eligibility: () => string | null;
   readonly exportSnapshot: () => Promise<Snapshot>;
   readonly importSnapshot: (snapshot: Snapshot) => Promise<Result>;
+  readonly attempt?: { current: (() => Promise<Result>) | null };
 }): Promise<Result> {
   const before = input.eligibility();
   if (before) throw new Error(before);
-  const snapshot = await input.exportSnapshot();
+  let importSnapshot = input.attempt?.current;
+  if (!importSnapshot) {
+    const snapshot = await input.exportSnapshot();
+    importSnapshot = () => input.importSnapshot(snapshot);
+    if (input.attempt) input.attempt.current = importSnapshot;
+  }
   const after = input.eligibility();
   if (after) throw new Error(after);
-  return input.importSnapshot(snapshot);
+  return importSnapshot();
 }
 
 export function sourceProjectSubdirectory(

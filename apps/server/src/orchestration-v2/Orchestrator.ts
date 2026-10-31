@@ -1718,7 +1718,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             );
       const needsFullContext = deliveryProviderThread.nativeThreadRef === null;
       const legacyImportItems =
-        projection.thread.historyOrigin === "v1_import"
+        projection.thread.historyOrigin === "v1_import" ||
+        projection.thread.historyOrigin === "machine_handoff"
           ? yield* readHandoffItems(threadId, [null])
           : [];
       const handoffStrategy = needsFullContext
@@ -6377,7 +6378,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...sourceProjection.runs
               .filter((run) => run.ordinal <= sourceRun.ordinal)
               .map((run) => run.id),
-            ...(sourceProjection.thread.historyOrigin === "v1_import" ? [null] : []),
+            ...(sourceProjection.thread.historyOrigin === "v1_import" ||
+            sourceProjection.thread.historyOrigin === "machine_handoff"
+              ? [null]
+              : []),
           ]);
     const portableForkHandoff =
       !requiresPortableFork ||

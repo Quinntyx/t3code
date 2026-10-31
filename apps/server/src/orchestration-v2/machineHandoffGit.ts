@@ -9,7 +9,7 @@ import { MACHINE_HANDOFF_MAX_BYTES, type MachineHandoffGitSnapshot } from "@t3to
 
 const { spawn } = NodeChildProcess;
 const { createHash, randomUUID } = NodeCrypto;
-const { chmod, lstat, mkdir, mkdtempDisposable, readFile, writeFile } = NodeFSP;
+const { chmod, lstat, mkdir, mkdtempDisposable, readFile, readlink, symlink, writeFile } = NodeFSP;
 const { tmpdir } = NodeOS;
 const { dirname, join, resolve } = NodePath;
 
@@ -91,15 +91,47 @@ function safePath(path: string) {
   }
   return path;
 }
+function safeSymlinkTarget(path: string, target: string) {
+  if (!target || target.startsWith("/") || target.includes("\\") || target.includes("\0"))
+    throw new Error("Unsafe machine handoff symlink target");
+  let depth = path.split("/").length - 1;
+  let namedSegment = false;
+  for (const part of target.split("/")) {
+    if (part === "..") {
+      // Traversal after a named segment could follow a symlink alias outside the repository.
+      if (namedSegment || --depth < 0) throw new Error("Unsafe machine handoff symlink target");
+    } else if (part !== "" && part !== ".") {
+      if (part.toLowerCase().replace(/[. ]+$/, "") === ".git" || part.includes(":"))
+        throw new Error("Unsafe machine handoff symlink target");
+      namedSegment = true;
+      depth++;
+    }
+  }
+  return target;
+}
 async function tree(cwd: string, revision: string) {
   const rows = (await git(cwd, ["ls-tree", "-rz", revision])).split("\0").filter(Boolean);
   if (rows.length > MAX_FILES) throw new Error("Machine handoff has too many files");
-  return rows.map((row) => {
-    const match = /^(100644|100755) blob ([a-f0-9]{40,64})\t(.+)$/s.exec(row);
-    if (!match)
-      throw new Error("Machine handoff refuses submodules, symlinks, and special file types");
-    return { mode: match[1]!, oid: match[2]!, path: safePath(match[3]!) };
+  const files = rows.map((row) => {
+    const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/s.exec(
+      row,
+    );
+    if (!match || (match[1] === "160000" ? match[2] !== "commit" : match[2] !== "blob"))
+      throw new Error("Machine handoff refuses special file types");
+    return { mode: match[1]!, oid: match[3]!, path: safePath(match[4]!) };
   });
+  const paths = new Set(files.map((file) => file.path));
+  if (paths.size !== files.length) throw new Error("Duplicate machine handoff path");
+  for (const file of files) {
+    const segments = file.path.split("/");
+    for (let length = 1; length < segments.length; length++) {
+      if (paths.has(segments.slice(0, length).join("/")))
+        throw new Error("Machine handoff refuses file or symlink ancestors");
+    }
+    if (file.mode === "120000")
+      safeSymlinkTarget(file.path, await gitInput(cwd, ["cat-file", "blob", file.oid], ""));
+  }
+  return files;
 }
 async function bundle(cwd: string, ref: string): Promise<Buffer> {
   return new Promise((accept, reject) => {
@@ -139,6 +171,7 @@ async function assertChangedBytes(
   const changed = new Set(
     (await tree(cwd, indexTree))
       .concat(await tree(cwd, worktreeTree))
+      .filter((file) => file.mode !== "160000")
       .map((file) => file.oid)
       .filter((oid) => !unchanged.has(oid)),
   );
@@ -180,8 +213,13 @@ async function materialize(cwd: string, target: string, files: Awaited<ReturnTyp
     buffered = buffered.subarray(chunk.length);
     return chunk;
   };
+  const links: Array<{ path: string; target: string }> = [];
   try {
     for (const file of files) {
+      if (file.mode === "160000") {
+        await mkdir(join(target, file.path), { recursive: true });
+        continue;
+      }
       child.stdin.write(`${file.oid}\n`);
       let header = "";
       while (!header.endsWith("\n")) {
@@ -194,6 +232,23 @@ async function materialize(cwd: string, target: string, files: Awaited<ReturnTyp
       if (!Number.isSafeInteger(remaining)) throw new Error("Invalid machine handoff object size");
       const absolute = join(target, file.path);
       await mkdir(dirname(absolute), { recursive: true });
+      if (file.mode === "120000") {
+        if (remaining > 4096) throw new Error("Machine handoff symlink target is too long");
+        const chunks: Buffer[] = [];
+        while (remaining > 0) {
+          const chunk = await read(remaining);
+          chunks.push(chunk);
+          remaining -= chunk.length;
+        }
+        const data = Buffer.concat(chunks);
+        const target = safeSymlinkTarget(file.path, data.toString("utf8"));
+        if (!Buffer.from(target).equals(data))
+          throw new Error("Invalid machine handoff symlink target");
+        if ((await read(1)).toString() !== "\n")
+          throw new Error("Invalid machine handoff object framing");
+        links.push({ path: absolute, target });
+        continue;
+      }
       const handle = await NodeFSP.open(absolute, "wx", file.mode === "100755" ? 0o755 : 0o644);
       try {
         while (remaining > 0) {
@@ -211,6 +266,7 @@ async function materialize(cwd: string, target: string, files: Awaited<ReturnTyp
     child.stdin.end();
     if ((await completion) !== 0)
       throw failure ?? new Error("Machine handoff object stream failed");
+    for (const link of links) await symlink(link.target, link.path);
   } finally {
     child.kill();
     await completion;
@@ -229,6 +285,7 @@ async function fingerprint(cwd: string) {
     "-c",
     "core.fsmonitor=false",
     "diff-files",
+    "--ignore-submodules=none",
     "--name-only",
     "-z",
     "--no-renames",
@@ -264,10 +321,17 @@ async function fingerprint(cwd: string) {
       files.push({ path, data: null, mode: "0" });
       continue;
     }
-    if (!stat.isFile())
-      throw new Error("Machine handoff refuses symlinks, submodules, and special files");
+    if (!stat.isFile() && !stat.isSymbolicLink())
+      throw new Error("Machine handoff refuses submodules and special files");
     bytes += stat.size;
     if (bytes > MAX_FILE_BYTES) throw new Error("Machine handoff exceeds working-file byte limit");
+    if (stat.isSymbolicLink()) {
+      const data = await readlink(absolute, { encoding: "buffer" });
+      safeSymlinkTarget(path, data.toString("utf8"));
+      hash.update("120000").update(data);
+      files.push({ path, data, mode: "120000" });
+      continue;
+    }
     const handle = await NodeFSP.open(absolute, "r");
     const buffer = Buffer.allocUnsafe(stat.size + 1);
     let length = 0;

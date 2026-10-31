@@ -2,6 +2,7 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   matchingMachineHandoffProjects,
   machineHandoffBlocker,
+  machineHandoffCloneReady,
   relayMachineHandoff,
   sourceProjectSubdirectory,
 } from "@t3tools/client-runtime/handoff";
@@ -11,6 +12,7 @@ import {
   CommandId,
   ProjectId,
   ThreadId,
+  type MachineHandoffImportResult,
   type ModelSelection,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -18,14 +20,14 @@ import {
 import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
 import { AsyncResult } from "effect/reactivity";
 import { use, useRef, useState, type ReactNode } from "react";
-import { View, type ColorValue } from "react-native";
+import { Alert, View, type ColorValue } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
-import { buildModelOptions } from "../../lib/modelOptions";
+import { buildMachineHandoffModelOptions as destinationModels } from "../../lib/modelOptions";
 import {
   applyProviderOptionSelection,
   resolveProviderOptionDescriptors,
@@ -61,27 +63,6 @@ function Section(props: { readonly title: string; readonly children: ReactNode }
       <View className="overflow-hidden rounded-2xl bg-grouped-card">{props.children}</View>
     </View>
   );
-}
-
-function destinationModels(
-  config: Parameters<typeof buildModelOptions>[0],
-  selection: ModelSelection,
-  projectId: ProjectId | null,
-) {
-  const available = new Set(
-    buildModelOptions(config, null, undefined, projectId).map((option) => option.key),
-  );
-  return buildModelOptions(config, selection, undefined, projectId).filter((option) => {
-    const provider = config?.providers.find(
-      (candidate) => candidate.instanceId === option.selection.instanceId,
-    );
-    return (
-      available.has(option.key) &&
-      !option.isUnavailable &&
-      provider?.availability !== "unavailable" &&
-      !provider?.updateRequiredModels?.some((model) => model.slug === option.selection.model)
-    );
-  });
 }
 
 export function MachineHandoffScreen(props: {
@@ -167,12 +148,15 @@ export function MachineHandoffScreen(props: {
     threadId: ThreadId.make(uuidv4()),
   }));
   const executing = useRef(false);
+  const attempt = useRef<(() => Promise<MachineHandoffImportResult>) | null>(null);
+  const [prepared, setPrepared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cloning, setCloning] = useState(false);
   const [clonedProject, setClonedProject] = useState<ScopedProjectRef | null>(null);
   const clone = useProjectClone(clonedProject);
   const cloneProject = useProject(clonedProject);
+  const cloneReady = machineHandoffCloneReady(clone, cloneProject?.repositoryIdentity != null);
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const cancelClone = useAtomCommand(sourceControlEnvironment.cancelProjectClone, {
     reportFailure: false,
@@ -267,12 +251,16 @@ export function MachineHandoffScreen(props: {
     try {
       const result = await relayMachineHandoff({
         eligibility,
+        attempt,
         exportSnapshot: async () => {
           const result = await exportHandoff({
             environmentId: props.sourceRef.environmentId,
             input: { threadId: props.sourceRef.threadId },
           });
           if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
+          setChosenProject({ environmentId: targetId, projectId: destinationProject.id });
+          setChosenModel(selection);
+          setPrepared(true);
           return result.value;
         },
         importSnapshot: async (snapshot) => {
@@ -289,10 +277,18 @@ export function MachineHandoffScreen(props: {
           return result.value;
         },
       });
-      selectDetail({
-        name: "Thread",
-        params: { environmentId: targetId, threadId: result.threadId },
-      });
+      const openThread = () =>
+        selectDetail({
+          name: "Thread",
+          params: { environmentId: targetId, threadId: result.threadId },
+        });
+      if (result.warnings?.length) {
+        Alert.alert("Thread transferred; workspace setup needed", result.warnings.join("\n"), [
+          { text: "Open thread", onPress: openThread },
+        ]);
+      } else {
+        openThread();
+      }
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -306,16 +302,7 @@ export function MachineHandoffScreen(props: {
   };
 
   const finishClone = async () => {
-    if (
-      busy ||
-      !clonedProject ||
-      !cloneProject ||
-      clone === null ||
-      clone === "pending" ||
-      clone.phase !== "done" ||
-      subdirectory === null
-    )
-      return;
+    if (busy || !clonedProject || !cloneProject || !cloneReady || subdirectory === null) return;
     setBusy(true);
     setError(null);
     try {
@@ -357,19 +344,17 @@ export function MachineHandoffScreen(props: {
         {clonedProject ? (
           <View className="px-4 gap-4">
             <Text>
-              {clone === null || clone === "pending"
-                ? "Waiting for clone status…"
-                : clone.phase === "done"
-                  ? "Clone complete. Continue to review the handoff; no agent will start."
+              {cloneReady
+                ? "Clone complete. Continue to review the handoff; no agent will start."
+                : clone === null || clone === "pending"
+                  ? "Waiting for clone status…"
                   : clone.phase === "running"
                     ? "Cloning repository…"
                     : (clone.error ?? "Clone did not complete.")}
             </Text>
             <Button
               label="Continue handoff"
-              disabled={
-                !cloneProject || clone === null || clone === "pending" || clone.phase !== "done"
-              }
+              disabled={!cloneProject || !cloneReady}
               loading={busy}
               onPress={() => void finishClone()}
             />
@@ -418,7 +403,7 @@ export function MachineHandoffScreen(props: {
         no agent turn started.
       </Text>
       {error ? <ErrorBanner message={error} /> : null}
-      <View pointerEvents={busy ? "none" : "auto"} className="gap-5">
+      <View pointerEvents={busy || prepared ? "none" : "auto"} className="gap-5">
         <Section title="Destination machine">
           {targets.map((environment, index) => (
             <ChoiceRow

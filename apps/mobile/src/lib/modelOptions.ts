@@ -48,6 +48,28 @@ type ProviderUpdateRequired = Pick<
   "driver" | "updateRequiredModels"
 >;
 
+export function buildMachineHandoffModelOptions(
+  config: T3ServerConfig | null | undefined,
+  selection: ModelSelection,
+  projectId: ProjectId | null,
+) {
+  const available = new Set(
+    buildModelOptions(config, null, undefined, projectId).map((option) => option.key),
+  );
+  return buildModelOptions(config, selection, undefined, projectId).filter((option) => {
+    const provider = config?.providers.find(
+      (candidate) => candidate.instanceId === option.selection.instanceId,
+    );
+    return (
+      available.has(option.key) &&
+      !option.isUnavailable &&
+      provider?.status === "ready" &&
+      provider.availability !== "unavailable" &&
+      !provider.updateRequiredModels?.some((model) => model.slug === option.selection.model)
+    );
+  });
+}
+
 export type ProviderGroup = {
   readonly providerKey: string;
   readonly providerLabel: string;

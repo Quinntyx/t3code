@@ -44,7 +44,7 @@ const error = (cause: unknown) =>
   new MachineHandoffError({ message: cause instanceof Error ? cause.message : String(cause) });
 const digest = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
 const importWarnings = [
-  "The imported isolated worktree does not include ignored files, .env links, or installed dependencies copied into the destination project checkout. No setup scripts were executed. Run the destination project's trusted worktree setup before continuing.",
+  "The imported isolated worktree does not include ignored files, .env links, or installed dependencies copied into the destination project checkout. No setup scripts were executed. Clean submodules retain their recorded revisions but must be initialized on the destination. Run the destination project's trusted worktree setup before continuing.",
 ];
 function assertBounded(snapshot: MachineHandoffSnapshot) {
   if (
@@ -87,12 +87,16 @@ const make = Effect.gen(function* () {
               ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
             ) ||
             projection.runtimeRequests.some((request) => request.status === "pending") ||
-            projection.providerThreads.some((thread) => thread.status === "active") ||
+            projection.providerThreads.some(
+              (thread) =>
+                thread.status === "active" || (thread.pendingBackgroundTasks?.length ?? 0) > 0,
+            ) ||
             projection.subagents.some((task) =>
               ["idle", "pending", "running", "waiting"].includes(task.status),
             ) ||
             projection.turnItems.some(
-              (item) => item.status === "running" || item.status === "pending",
+              (item) =>
+                item.status === "running" || item.status === "pending" || item.status === "waiting",
             )
           ) {
             return yield* new MachineHandoffError({

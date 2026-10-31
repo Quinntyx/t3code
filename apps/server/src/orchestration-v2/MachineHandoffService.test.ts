@@ -8,9 +8,15 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  EventId,
+  MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   ThreadId,
+  TurnItemId,
+  type OrchestrationV2ThreadProjection,
   type MachineHandoffImportInput,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -24,9 +30,125 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as MachineHandoffService from "./MachineHandoffService.ts";
 import { OrchestratorDispatchError } from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import { emptyProjection } from "./ProjectionStore.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import { exportGitSnapshot } from "./machineHandoffGit.ts";
+
+it.effect("refuses waiting items and background work even when the provider is idle", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("active-export");
+    const providerInstanceId = ProviderInstanceId.make("source");
+    const now = DateTime.makeUnsafe("2026-10-01T00:00:00Z");
+    const base = emptyProjection({
+      id: EventId.make("active-export-created"),
+      type: "thread.created",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: threadId,
+        createdBy: "user",
+        creationSource: "web",
+        projectId: ProjectId.make("source"),
+        title: "Active source",
+        providerInstanceId,
+        modelSelection: { instanceId: providerInstanceId, model: "test" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+    });
+    let projection: OrchestrationV2ThreadProjection = base;
+    const dependencies = Layer.mergeAll(
+      ServerConfig.layerTest("/tmp", "/tmp/t3-export-guard-test"),
+      ServerSettings.layerTest(),
+      ThreadCommandExecutor.layer,
+      Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("source")),
+      }),
+      Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({}),
+      Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeedNone }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadSnapshot: () =>
+          Effect.sync(() => ({ schemaVersion: 2, snapshotSequence: 0, projection })),
+      }),
+    );
+    const service = yield* MachineHandoffService.MachineHandoffService.pipe(
+      Effect.provide(
+        MachineHandoffService.layer.pipe(
+          Layer.provide(dependencies),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+    const cases: ReadonlyArray<OrchestrationV2ThreadProjection> = [
+      {
+        ...base,
+        providerThreads: [
+          {
+            id: ProviderThreadId.make("idle-with-task"),
+            driver: ProviderDriverKind.make("codex"),
+            providerInstanceId,
+            providerSessionId: null,
+            appThreadId: threadId,
+            ownerNodeId: null,
+            nativeThreadRef: null,
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: null,
+            lastRunOrdinal: null,
+            handoffIds: [],
+            forkedFrom: null,
+            pendingBackgroundTasks: [{ taskId: "review", kind: "subagent" }],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      },
+      {
+        ...base,
+        turnItems: [
+          {
+            id: TurnItemId.make("waiting-tool"),
+            threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "waiting",
+            title: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+            type: "assistant_message",
+            messageId: MessageId.make("waiting-message"),
+            text: "Waiting for a tool",
+            streaming: false,
+          },
+        ],
+      },
+    ];
+    for (const live of cases) {
+      projection = live;
+      const failure = yield* service.exportSnapshot({ threadId }).pipe(Effect.flip);
+      expect(failure.message).toContain("Stop live, queued, approval, and background work");
+    }
+  }),
+);
 
 it.effect(
   "recovers the same isolated workspace after a failed thread commit, then replays the accepted receipt",

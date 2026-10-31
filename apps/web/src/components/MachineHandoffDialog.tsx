@@ -11,6 +11,7 @@ import {
   CommandId,
   resolveEnvironmentMachineKind,
   type EnvironmentId,
+  type MachineHandoffImportResult,
   type ModelSelection,
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
@@ -31,6 +32,7 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import { Button } from "./ui/button";
+import { toastManager } from "./ui/toast";
 import {
   Dialog,
   DialogDescription,
@@ -146,6 +148,8 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
     commandId: CommandId.make(randomUUID()),
   }));
   const executing = useRef(false);
+  const attempt = useRef<(() => Promise<MachineHandoffImportResult>) | null>(null);
+  const [prepared, setPrepared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unavailable = machineHandoffBlocker({
@@ -224,6 +228,7 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
     try {
       const imported = await relayMachineHandoff({
         eligibility,
+        attempt,
         exportSnapshot: async () => {
           const result = await runAtomCommand(
             appAtomRegistry,
@@ -235,6 +240,9 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
             { label: "Prepare machine handoff", reportFailure: false },
           );
           if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          setProjectId(destinationProject.id);
+          setChosen({ environmentId: target.environmentId, selection });
+          setPrepared(true);
           return result.value;
         },
         importSnapshot: async (snapshot) => {
@@ -256,6 +264,13 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
           return result.value;
         },
       });
+      if (imported.warnings?.length) {
+        toastManager.add({
+          type: "warning",
+          title: "Thread transferred; workspace setup needed",
+          description: imported.warnings.join("\n"),
+        });
+      }
       close();
       void navigate({
         to: "/$environmentId/$threadId",
@@ -277,7 +292,7 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
   };
 
   const clone = () => {
-    if (!sourceRef || !target || busy) return;
+    if (!sourceRef || !target || busy || prepared) return;
     close();
     openAddProjectToMachine({
       projectRef: sourceRef,
@@ -316,7 +331,7 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
                   value: environment.environmentId,
                   label: environment.label,
                 }))}
-                disabled={busy}
+                disabled={busy || prepared}
               >
                 <SelectTrigger aria-label="Destination machine">
                   <SelectValue placeholder="Connect another machine" />
@@ -343,7 +358,7 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
                   selected file copies finish. Ignored files still need to be set up in the
                   destination worktree.
                 </p>
-                <Button variant="outline" disabled={busy} onClick={clone}>
+                <Button variant="outline" disabled={busy || prepared} onClick={clone}>
                   Clone project to {target.label}
                 </Button>
               </div>
@@ -359,7 +374,7 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
                     value: project.id,
                     label: project.workspaceRoot,
                   }))}
-                  disabled={busy}
+                  disabled={busy || prepared}
                 >
                   <SelectTrigger aria-label="Destination project folder">
                     <SelectValue placeholder="Choose a destination repository" />
@@ -386,7 +401,7 @@ function MachineHandoffDialog({ request }: { request: MachineHandoffRequest }) {
                   modelOptionsByInstance={
                     new Map(entries.map((entry) => [entry.instanceId, entry.models]))
                   }
-                  disabled={busy}
+                  disabled={busy || prepared}
                   onInstanceModelChange={(instanceId, model) => {
                     if (targetId)
                       setChosen({ environmentId: targetId, selection: { instanceId, model } });
