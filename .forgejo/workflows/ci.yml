@@ -1,0 +1,89 @@
+name: Fork CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: Also build a signed Android APK for first install or a changed native runtime
+        type: boolean
+        default: false
+
+concurrency:
+  group: t3code-fork-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.forgejo/actions/setup
+      - name: Check changed files
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          base=origin/main
+          if [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            base="$BEFORE"
+          fi
+          pnpm exec vp run check:changed "$base"
+      - name: Check publication behavior
+        run: node --test .forgejo/scripts/*.test.cjs
+
+  desktop-linux:
+    needs: changed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - uses: ./.forgejo/actions/setup
+      - name: Install native build prerequisites in the job container
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libasound2-dev libpipewire-0.3-dev libgbm-dev libnss3 libsecret-1-dev libxtst6 libxss1 libgtk-3-0 libfuse2 imagemagick curl xz-utils
+          export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+      - name: Build an updateable AppImage
+        env:
+          T3CODE_DESKTOP_UPDATE_URL: https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-desktop/stable/
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          version="$(date -u +%Y).$(date -u +%-m).${{ github.run_number }}"
+          pnpm exec vp run dist:desktop:artifact --platform linux --target AppImage --arch x64 --build-version "$version" --output-dir release --verbose
+          mkdir -p update-feed
+          cp release/*.AppImage release/latest-linux.yml update-feed/
+          for file in release/*.blockmap; do
+            if [ -f "$file" ]; then cp "$file" update-feed/; fi
+          done
+      - uses: https://data.forgejo.org/actions/upload-artifact@v3
+        with:
+          name: t3code-linux-x64
+          path: update-feed/
+          if-no-files-found: error
+      - name: Advance the tailnet update feed
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          git fetch origin main --depth=1
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo 'A newer main revision exists; leaving the live feed unchanged.'
+            exit 0
+          fi
+          node .forgejo/scripts/publish.cjs update-feed t3code-desktop stable
+
+  mobile:
+    needs: changed
+    uses: ./.forgejo/workflows/mobile.yml
+    secrets: inherit
+    with:
+      build_android: ${{ inputs.build_android || false }}
