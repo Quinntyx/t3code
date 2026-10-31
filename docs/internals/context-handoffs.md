@@ -28,10 +28,11 @@ commit leaves the isolated workspace available for that same retry rather than r
 an ambiguous commit outcome.
 
 Windows hosts cannot preserve POSIX executable modes and do not advertise this capability.
-Repository-subdirectory projects, unborn or SHA-256 repositories, symlinks, submodules, conflicted or
-special indexes (sparse, assume-unchanged, intent-to-add), Git content filters or working-tree encoding/newline
-conversions, and in-progress Git operations are explicitly
-refused. Ignored files are not included: clone/file-copy writes to the destination project root, not
+Repository-subdirectory projects, unborn or SHA-256 repositories, dirty submodules, conflicted or
+special indexes (sparse, assume-unchanged, intent-to-add), Git content filters, working-tree encoding/newline
+conversions, and in-progress Git operations are explicitly refused. Safe relative symlinks remain links;
+external targets and symlink ancestors are refused. Clean submodules retain their recorded revisions
+but are not initialized during import. Ignored files are not included: clone/file-copy writes to the destination project root, not
 the new isolated worktree. Import returns a warning that destination-trusted setup must run before
 continuing. It deliberately does not execute source-transferred setup scripts or link ignored data. The
 wire snapshot is capped at 8 MiB, its bundle at 5 MiB, and changed/untracked bytes at 64 MiB. Trees are
