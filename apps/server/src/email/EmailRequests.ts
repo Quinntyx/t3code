@@ -29,6 +29,14 @@ import * as Mailer from "./Mailer.ts";
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
 const POLL_INTERVAL = Duration.millis(500);
+const EDITABLE_FIELDS = [
+  ["from", "account"],
+  ["to", "to"],
+  ["cc", "cc"],
+  ["bcc", "bcc"],
+  ["subject", "subject"],
+  ["body", "body"],
+] as const;
 
 export class EmailRequests extends Context.Service<
   EmailRequests,
@@ -218,12 +226,18 @@ const make = Effect.gen(function* () {
     }
     yield* Effect.annotateCurrentSpan({ "email_request.status": "sent" });
     const from = findAercAccount(item.accounts, item.draft.account)?.from ?? item.draft.account;
+    const edited = EDITABLE_FIELDS.filter(
+      ([, field]) => JSON.stringify(initial[field]) !== JSON.stringify(item.draft[field]),
+    ).map(([name]) => name);
     return {
       status: "sent",
       message: "Email sent.",
       from,
       to: item.draft.to,
+      cc: item.draft.cc,
+      bcc: item.draft.bcc,
       subject: item.draft.subject,
+      edited,
     };
   });
 

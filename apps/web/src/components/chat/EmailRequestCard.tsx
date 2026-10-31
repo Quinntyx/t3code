@@ -59,11 +59,16 @@ function ComposerRow(props: {
   readonly trailing?: ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 border-t border-border/60 px-3">
+    <div className="flex min-w-0 items-start gap-2 border-t border-border/60 px-3">
       {props.htmlFor === undefined ? (
-        <span className="w-14 shrink-0 text-xs text-muted-foreground">{props.label}</span>
+        <span className="w-14 shrink-0 text-xs leading-6.5 text-muted-foreground max-sm:leading-7.5">
+          {props.label}
+        </span>
       ) : (
-        <label htmlFor={props.htmlFor} className="w-14 shrink-0 text-xs text-muted-foreground">
+        <label
+          htmlFor={props.htmlFor}
+          className="w-14 shrink-0 text-xs leading-6.5 text-muted-foreground max-sm:leading-7.5"
+        >
           {props.label}
         </label>
       )}
@@ -134,17 +139,22 @@ function PendingEmailComposer(props: {
   };
 
   const account = item.accounts.find((candidate) => candidate.name === fields.account);
+  // Wraps so every recipient stays visible for review.
   const addressInput = (id: string, field: "to" | "cc" | "bcc", placeholder?: string) => (
-    <Input
+    <Textarea
       id={id}
       unstyled
-      size="sm"
+      size="line"
+      rows={1}
       autoComplete="off"
       spellCheck={false}
       placeholder={placeholder}
       value={fields[field]}
       disabled={locked}
       onChange={(event) => update(field)(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) event.preventDefault();
+      }}
     />
   );
 
@@ -200,7 +210,7 @@ function PendingEmailComposer(props: {
         htmlFor={ids.to}
         trailing={
           showCc && showBcc ? null : (
-            <span className="flex shrink-0 items-center">
+            <span className="flex shrink-0 items-center py-px">
               {showCc ? null : (
                 <Button
                   type="button"

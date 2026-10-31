@@ -1,5 +1,6 @@
 import {
   EmailRequestError,
+  type EmailAccountsReport,
   type OrchestrationV2EmailAccount,
   type OrchestrationV2EmailDraft,
 } from "@t3tools/contracts";
@@ -16,7 +17,9 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Nodemailer from "nodemailer";
 
+import * as ServerSettings from "../serverSettings.ts";
 import {
+  describeAercAccounts,
   findAercAccount,
   parseAercAccounts,
   parseAercOutgoing,
@@ -33,6 +36,8 @@ export class Mailer extends Context.Service<
     /** Empty when this host has no aerc account that can send. */
     readonly accounts: Effect.Effect<ReadonlyArray<OrchestrationV2EmailAccount>>;
     readonly send: (draft: OrchestrationV2EmailDraft) => Effect.Effect<void, EmailRequestError>;
+    /** Every account in the configured accounts.conf and whether it can send, for settings. */
+    readonly report: Effect.Effect<EmailAccountsReport>;
   }
 >()("t3/email/Mailer") {}
 
@@ -44,17 +49,48 @@ const make = Effect.gen(function* () {
     home: Config.String("HOME").pipe(Config.withDefault("")),
     configHome: Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault("")),
   }).pipe(Effect.orDie);
-  const accountsFile = path.join(
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const defaultAccountsFile = path.join(
     env.configHome || path.join(env.home, ".config"),
     "aerc",
     "accounts.conf",
   );
+  const accountsFile = Option.match(serverSettings, {
+    onNone: () => Effect.succeed(defaultAccountsFile),
+    onSome: (service) =>
+      service.getSettings.pipe(
+        Effect.map(({ emailAccountsFile: file }) =>
+          file === ""
+            ? defaultAccountsFile
+            : file === "~" || file.startsWith("~/")
+              ? path.join(env.home, file.slice(1))
+              : file,
+        ),
+        Effect.orElseSucceed(() => defaultAccountsFile),
+      ),
+  });
 
   // Read on each use so edits to the mail client's config apply without a restart.
-  const loadAccounts = fileSystem.readFileString(accountsFile).pipe(
+  const loadAccounts = accountsFile.pipe(
+    Effect.flatMap((file) => fileSystem.readFileString(file)),
     Effect.map(parseAercAccounts),
     Effect.orElseSucceed((): ReadonlyArray<AercAccount> => []),
   );
+
+  const report = Effect.gen(function* () {
+    const file = yield* accountsFile;
+    return yield* fileSystem.readFileString(file).pipe(
+      Effect.map((text): EmailAccountsReport => ({ file, accounts: describeAercAccounts(text) })),
+      Effect.catch((error) =>
+        Effect.succeed<EmailAccountsReport>({
+          file,
+          fileProblem:
+            error.reason._tag === "NotFound" ? "No file at this path." : "Could not read the file.",
+          accounts: [],
+        }),
+      ),
+    );
+  }).pipe(Effect.withSpan("Mailer.report"));
 
   const credential = Effect.fn("Mailer.credential")(function* (command: string) {
     const output = yield* spawner
@@ -175,6 +211,7 @@ const make = Effect.gen(function* () {
       Effect.map((accounts) => accounts.map(({ name, from }) => ({ name, from }))),
     ),
     send,
+    report,
   });
 });
 

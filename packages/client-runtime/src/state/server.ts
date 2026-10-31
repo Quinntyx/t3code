@@ -1074,6 +1074,11 @@ export function createServerEnvironmentAtoms<R, E>(
       );
     }).pipe(Atom.withLabel(`environment-data:server:usage-prices:${environmentId}`)),
   );
+  const emailAccountsFileAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(settingsValueAtom(environmentId))?.emailAccountsFile ?? "").pipe(
+      Atom.withLabel(`environment-data:server:email-accounts-file:${environmentId}`),
+    ),
+  );
   const usageScanSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
@@ -1239,6 +1244,11 @@ export function createServerEnvironmentAtoms<R, E>(
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
+    }),
+    emailAccounts: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:email:accounts",
+      tag: WS_METHODS.emailListAccounts,
+      refreshTrigger: ({ environmentId }) => emailAccountsFileAtom(environmentId),
     }),
     processDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-diagnostics",

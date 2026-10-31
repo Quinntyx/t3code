@@ -1,5 +1,6 @@
 // Reads sending accounts from aerc's accounts.conf so T3 Code sends mail the way the user's own
 // mail client does, without a mail setup of its own.
+import type { EmailAccountStatus } from "@t3tools/contracts";
 
 export interface AercAccount {
   readonly name: string;
@@ -30,8 +31,15 @@ const unquote = (value: string) => {
   return quoted?.[1] ?? value;
 };
 
-/** Accounts in file order, which is aerc's tab order. Accounts that cannot send are left out. */
-export function parseAercAccounts(text: string): ReadonlyArray<AercAccount> {
+interface AercSection {
+  readonly name: string;
+  readonly from: string | undefined;
+  readonly outgoing: string | undefined;
+  readonly outgoingCredCmd: string | undefined;
+}
+
+/** Every account section in file order, which is aerc's tab order. */
+function parseAercSections(text: string): ReadonlyArray<AercSection> {
   const sections: Array<{ name: string; values: Map<string, string> }> = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -49,18 +57,51 @@ export function parseAercAccounts(text: string): ReadonlyArray<AercAccount> {
       unquote(line.slice(separator + 1).trim()),
     );
   }
-  return sections.flatMap(({ name, values }) => {
-    const from = values.get("from");
-    const outgoing = values.get("outgoing");
-    if (!from || !outgoing) return [];
-    return [
-      {
-        name,
-        from,
-        outgoing,
-        outgoingCredCmd: values.get("outgoing-cred-cmd") || undefined,
-      },
-    ];
+  return sections.map(({ name, values }) => ({
+    name,
+    from: values.get("from") || undefined,
+    outgoing: values.get("outgoing") || undefined,
+    outgoingCredCmd: values.get("outgoing-cred-cmd") || undefined,
+  }));
+}
+
+/** Accounts in aerc's tab order. Accounts without a From address or `outgoing` are left out. */
+export function parseAercAccounts(text: string): ReadonlyArray<AercAccount> {
+  return parseAercSections(text).flatMap(({ name, from, outgoing, outgoingCredCmd }) =>
+    from === undefined || outgoing === undefined ? [] : [{ name, from, outgoing, outgoingCredCmd }],
+  );
+}
+
+const SMTP_LOGIN = {
+  xoauth2: "OAuth2 token",
+  plain: "password",
+  login: "password (LOGIN)",
+} as const;
+
+/** How each account sends, or why it can't, without revealing a password. */
+export function describeAercAccounts(text: string): ReadonlyArray<EmailAccountStatus> {
+  return parseAercSections(text).map(({ name, from, outgoing, outgoingCredCmd }) => {
+    const account = { name, ...(from === undefined ? {} : { from }) };
+    if (from === undefined) return { ...account, problem: "No from address." };
+    if (outgoing === undefined) return { ...account, problem: "No outgoing setting." };
+    const parsed = parseAercOutgoing(outgoing);
+    switch (parsed.kind) {
+      case "unsupported":
+        return {
+          ...account,
+          problem: `T3 Code can't send with ${parsed.scheme ? `"${parsed.scheme}"` : "this outgoing setting"}.`,
+        };
+      case "sendmail":
+        return { ...account, sending: `Command: ${parsed.command}` };
+      case "smtp": {
+        const login =
+          parsed.auth === "none" || (parsed.user === undefined && outgoingCredCmd === undefined)
+            ? "no login"
+            : `${SMTP_LOGIN[parsed.auth]} ${outgoingCredCmd === undefined ? "in the URL" : "from outgoing-cred-cmd"}`;
+        const security = parsed.tls === "none" ? " · no TLS" : "";
+        return { ...account, sending: `SMTP ${parsed.host}:${parsed.port} · ${login}${security}` };
+      }
+    }
   });
 }
 

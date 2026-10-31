@@ -282,7 +282,8 @@ const layerSecretRequestsProvided = SecretRequests.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
 const layerEmailRequestsProvided = EmailRequests.layer.pipe(
-  Layer.provide(Layer.merge(layerThreadManagementProvided, Mailer.layer)),
+  Layer.provideMerge(Mailer.layer),
+  Layer.provide(layerThreadManagementProvided),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(

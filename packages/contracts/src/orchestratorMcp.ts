@@ -797,8 +797,11 @@ export const OrchestratorMcpSendEmailResult = Schema.Union([
     message: Schema.String,
     from: Schema.String,
     to: OrchestratorMcpEmailAddresses,
-    subject: Schema.String.annotate({
-      description: "As sent. The user may have edited the draft.",
+    cc: OrchestratorMcpEmailAddresses,
+    bcc: OrchestratorMcpEmailAddresses,
+    subject: Schema.String,
+    edited: Schema.Array(Schema.Literals(["from", "to", "cc", "bcc", "subject", "body"])).annotate({
+      description: "Fields the user changed from your draft before sending.",
     }),
   }),
   Schema.Struct({

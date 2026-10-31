@@ -14,6 +14,26 @@ export const EmailRequestAnswerInput = Schema.Struct({
 });
 export type EmailRequestAnswerInput = typeof EmailRequestAnswerInput.Type;
 
+/** One aerc account and whether T3 Code can send from it. */
+export const EmailAccountStatus = Schema.Struct({
+  name: Schema.String,
+  from: Schema.optionalKey(Schema.String),
+  /** How it sends, e.g. "SMTP smtp.gmail.com:587 · OAuth2 token from outgoing-cred-cmd". */
+  sending: Schema.optionalKey(Schema.String),
+  /** Why T3 Code can't send from it. */
+  problem: Schema.optionalKey(Schema.String),
+});
+export type EmailAccountStatus = typeof EmailAccountStatus.Type;
+
+export const EmailAccountsReport = Schema.Struct({
+  /** The accounts.conf that was read. */
+  file: Schema.String,
+  /** Could not read the file, e.g. "No such file". */
+  fileProblem: Schema.optionalKey(Schema.String),
+  accounts: Schema.Array(EmailAccountStatus),
+});
+export type EmailAccountsReport = typeof EmailAccountsReport.Type;
+
 const EMAIL_REQUEST_FAILURE_MESSAGES = {
   load_failed: "Could not load the email.",
   not_found: "This email no longer exists.",

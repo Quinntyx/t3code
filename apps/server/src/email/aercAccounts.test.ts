@@ -1,6 +1,11 @@
 import { assert, it } from "@effect/vitest";
 
-import { findAercAccount, parseAercAccounts, parseAercOutgoing } from "./aercAccounts.ts";
+import {
+  describeAercAccounts,
+  findAercAccount,
+  parseAercAccounts,
+  parseAercOutgoing,
+} from "./aercAccounts.ts";
 
 const ACCOUNTS_CONF = `
 # personal
@@ -103,4 +108,35 @@ it("finds an account by name or by its address", () => {
   assert.equal(findAercAccount(accounts, "ada@school.edu")?.name, "school");
   assert.equal(findAercAccount(accounts, "Someone <ADA@gmail.com>")?.name, "gmail");
   assert.isUndefined(findAercAccount(accounts, "ada@elsewhere.org"));
+});
+
+it("describes how each account sends, or why it can't, without its password", () => {
+  assert.deepEqual(
+    describeAercAccounts(
+      `${ACCOUNTS_CONF}
+[refresh]
+outgoing = smtp+xoauth2://ada@smtp.example.com?token_endpoint=https://example.com/token
+from = ada@example.com
+`,
+    ),
+    [
+      {
+        name: "school",
+        from: '"Lovelace, Ada" <ada@school.edu>',
+        sending: "SMTP smtp-mail.outlook.com:587 · OAuth2 token from outgoing-cred-cmd",
+      },
+      {
+        name: "gmail",
+        from: "Ada <ada@gmail.com>",
+        sending: "SMTP smtp.gmail.com:465 · password in the URL",
+      },
+      { name: "local", from: "ada@localhost", sending: "Command: /usr/bin/msmtp" },
+      { name: "read-only", from: "ada@example.com", problem: "No outgoing setting." },
+      {
+        name: "refresh",
+        from: "ada@example.com",
+        problem: 'T3 Code can\'t send with "xoauth2 with token_endpoint".',
+      },
+    ],
+  );
 });

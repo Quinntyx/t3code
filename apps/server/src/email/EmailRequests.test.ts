@@ -56,12 +56,14 @@ const withService = <A, E>(
     const dispatched: Array<OrchestrationV2ServerCommand> = [];
     let emailStatus: OrchestrationV2EmailRequestStatus = "pending";
     let cardId: string = turnItemId;
+    let cardDraft = drafted;
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Layer.succeed(
         Mailer.Mailer,
         Mailer.Mailer.of({
           accounts: Effect.succeed(accounts),
+          report: Effect.succeed({ file: "accounts.conf", accounts: [] }),
           send: (draft) =>
             Effect.gen(function* () {
               if (options.sendGate !== undefined) {
@@ -101,7 +103,7 @@ const withService = <A, E>(
                     nodeId: "node-root",
                     type: "email_request",
                     accounts,
-                    draft: drafted,
+                    draft: cardDraft,
                     emailStatus,
                   },
                 ],
@@ -114,6 +116,7 @@ const withService = <A, E>(
             cardId = command.turnItemId;
             if (emailRecordReplaces(emailStatus, command.emailStatus)) {
               emailStatus = command.emailStatus;
+              cardDraft = command.draft;
             }
             return {} as never;
           }),
@@ -270,29 +273,50 @@ it.effect("a draft nobody answers closes and reports that it timed out", () =>
   ),
 );
 
-it.effect("a send in flight when the wait times out is reported as sent", () =>
-  Effect.gen(function* () {
-    const sendGate = { started: yield* Deferred.make<void>(), open: yield* Deferred.make<void>() };
-    yield* withService(
-      ({ service, dispatched }) =>
-        Effect.gen(function* () {
-          const waiting = yield* Effect.forkChild(service.draft(draftInput));
-          yield* TestClock.adjust("600 millis");
-          const pending = dispatched[0] as { turnItemId: TurnItemId };
-          const sending = yield* Effect.forkChild(
-            service.answer({
-              threadId,
-              turnItemId: pending.turnItemId,
-              answer: { type: "send", draft: drafted },
-            }),
-          );
-          yield* Deferred.await(sendGate.started);
-          yield* TestClock.adjust("2 seconds");
-          yield* Deferred.succeed(sendGate.open, undefined);
-          yield* Fiber.join(sending);
-          assert.include(yield* Fiber.join(waiting), { status: "sent", message: "Email sent." });
-        }),
-      { sendGate },
-    );
-  }),
+it.effect(
+  "a send in flight when the wait times out is reported as sent, as the user edited it",
+  () =>
+    Effect.gen(function* () {
+      const sendGate = {
+        started: yield* Deferred.make<void>(),
+        open: yield* Deferred.make<void>(),
+      };
+      const edited = {
+        ...drafted,
+        account: "gmail",
+        to: ["prof@school.edu", "ta@school.edu"],
+        cc: ["advisor@school.edu"],
+        bcc: ["ada@gmail.com"],
+      };
+      yield* withService(
+        ({ service, dispatched }) =>
+          Effect.gen(function* () {
+            const waiting = yield* Effect.forkChild(service.draft(draftInput));
+            yield* TestClock.adjust("600 millis");
+            const pending = dispatched[0] as { turnItemId: TurnItemId };
+            const sending = yield* Effect.forkChild(
+              service.answer({
+                threadId,
+                turnItemId: pending.turnItemId,
+                answer: { type: "send", draft: edited },
+              }),
+            );
+            yield* Deferred.await(sendGate.started);
+            yield* TestClock.adjust("2 seconds");
+            yield* Deferred.succeed(sendGate.open, undefined);
+            yield* Fiber.join(sending);
+            assert.deepEqual(yield* Fiber.join(waiting), {
+              status: "sent",
+              message: "Email sent.",
+              from: "Ada <ada@gmail.com>",
+              to: edited.to,
+              cc: edited.cc,
+              bcc: edited.bcc,
+              subject: "Office hours",
+              edited: ["from", "to", "cc", "bcc", "body"],
+            });
+          }),
+        { sendGate },
+      );
+    }),
 );

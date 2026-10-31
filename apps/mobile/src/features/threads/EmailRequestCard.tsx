@@ -118,6 +118,9 @@ function PendingEmailComposer(props: {
       autoCorrect={false}
       autoCapitalize="none"
       keyboardType="email-address"
+      // Wraps so every recipient stays visible for review.
+      multiline
+      submitBehavior="blurAndSubmit"
       placeholder={field === "to" ? "name@example.com" : undefined}
     />
   );
