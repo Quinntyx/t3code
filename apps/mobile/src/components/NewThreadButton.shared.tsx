@@ -8,6 +8,7 @@ export function NewThreadButton(props: {
   readonly onPress: () => void;
   readonly extended?: boolean;
   readonly expanded?: boolean;
+  readonly round?: boolean;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
 }) {

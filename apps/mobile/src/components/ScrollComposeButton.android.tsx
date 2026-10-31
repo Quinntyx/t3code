@@ -17,6 +17,8 @@ import { resolveScaledTextRole } from "../lib/appearancePreferences";
 /** Keep the animated width and icon positioning entirely inside Compose, not Yoga. */
 export function ScrollComposeButton(props: {
   readonly expanded: boolean;
+  /** Match the floating tab bar's pill instead of Material's rounded square. */
+  readonly round?: boolean;
   readonly onPress: () => void;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
@@ -55,6 +57,9 @@ export function ScrollComposeButton(props: {
                   scaleY: scale,
                   transformOriginX: 1,
                   transformOriginY: 0,
+                  ...(props.round
+                    ? { shape: { type: "circle" }, clip: true, shadowElevation: 6 }
+                    : {}),
                 }),
                 onSizeChanged(rememberWidth),
               ]}
@@ -96,7 +101,7 @@ export function ScrollComposeButton(props: {
           top: 0,
           bottom: 0,
           width: props.expanded ? buttonWidth * scale : fabSize,
-          borderRadius: 16 * scale,
+          borderRadius: props.round ? fabSize / 2 : 16 * scale,
           overflow: "hidden",
         }}
       />
