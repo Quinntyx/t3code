@@ -345,6 +345,7 @@ it.effect.each([
         return yield* service.importSnapshot(input);
       }).pipe(Effect.provide(imported));
       expect((yield* runImport.pipe(Effect.flip))._tag).toBe("MachineHandoffError");
+      expect(attempts).toBe(1);
       NodeFS.writeFileSync(NodePath.join(workspace, "file"), "kept after failure\n");
       const result = yield* runImport;
       expect(result).toMatchObject({ threadId, sequence: 7 });
