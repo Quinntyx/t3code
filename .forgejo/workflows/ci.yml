@@ -33,7 +33,7 @@ jobs:
           if [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
             base="$BEFORE"
           fi
-          pnpm exec vp run check:changed "$base"
+          pnpm exec vp run check:changed "$base" --concurrency 1
       - name: Check publication behavior
         run: node --test .forgejo/scripts/*.test.cjs
 
