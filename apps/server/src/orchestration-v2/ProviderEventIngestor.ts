@@ -26,12 +26,15 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
+import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -339,6 +342,9 @@ export const layer: Layer.Layer<
     const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const usageSources = Option.getOrUndefined(
+      yield* Effect.serviceOption(UsageLimitSources.UsageLimitSources),
+    );
     const scope = yield* Effect.scope;
     const completedTurnAnalytics = new Set<string>();
 
@@ -361,6 +367,25 @@ export const layer: Layer.Layer<
           providerSessionId: input.providerSessionId,
         });
         const occurredAt = payloadInput.occurredAt ?? (yield* DateTime.now);
+        let payload = payloadInput.payload;
+        if (
+          payloadInput.type === "turn-item.updated" &&
+          "type" in payload &&
+          payload.type === "error" &&
+          payload.failure.class === "usage_limit" &&
+          payload.failure.resetAt === undefined
+        ) {
+          const instance = yield* instances.getInstance(input.providerInstanceId);
+          const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
+          const model = input.analyticsContext?.modelSelection.model;
+          const now = DateTime.toEpochMillis(occurredAt);
+          const resetAt =
+            usageLimitResetAt(snapshot, now, model) ??
+            (usageSources
+              ? usageLimitSourceResetAt(yield* usageSources.current, input.event.driver, now, model)
+              : null);
+          if (resetAt !== null) payload = { ...payload, failure: { ...payload.failure, resetAt } };
+        }
         return yield* decodeDomainEvent(
           compactUndefined({
             id: eventId,
@@ -372,7 +397,7 @@ export const layer: Layer.Layer<
             providerInstanceId: input.providerInstanceId,
             rawEventId: input.rawEventId,
             occurredAt,
-            payload: payloadInput.payload,
+            payload,
           }),
         );
       });
