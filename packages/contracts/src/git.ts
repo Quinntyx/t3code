@@ -143,6 +143,8 @@ export const VcsListRefsInput = Schema.Struct({
   cursor: Schema.optional(NonNegativeInt),
   includeMatchingRemoteRefs: Schema.optional(Schema.Boolean),
   refKind: Schema.optional(Schema.Literals(["all", "local", "remote"])),
+  /** Lists only this remote's remote refs; an unconfigured name falls back like the default remote. */
+  remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
   refresh: Schema.optional(Schema.Boolean),
   limit: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
@@ -284,6 +286,7 @@ export const VcsListRefsResult = Schema.Struct({
   refs: Schema.Array(VcsRef),
   isRepo: Schema.Boolean,
   hasPrimaryRemote: Schema.Boolean,
+  remoteNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
   nextCursor: NonNegativeInt.pipe(Schema.NullOr),
   totalCount: NonNegativeInt,
 });
