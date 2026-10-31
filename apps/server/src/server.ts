@@ -349,8 +349,12 @@ const layerRepositoryIdentityResolver = Layer.effect(
   RepositoryIdentityResolver.RepositoryIdentityResolver,
   Effect.gen(function* () {
     const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+    const git = yield* GitVcsDriver.GitVcsDriver;
     return yield* RepositoryIdentityResolver.make({
-      refine: Effect.fn(function* (identity: RepositoryIdentity) {
+      refine: Effect.fn("RepositoryIdentityResolver.refine")(function* (
+        identity: RepositoryIdentity,
+      ) {
+        let result = identity;
         for (const { kind } of BUILT_IN_SOURCE_CONTROL_DRIVER_LIST) {
           const provider = yield* registry.get(kind);
           if (provider.refineRepositoryIdentity === undefined) continue;
@@ -359,13 +363,30 @@ const layerRepositoryIdentityResolver = Layer.effect(
             resolveContext: (input) =>
               registry.resolveHandle(input).pipe(Effect.map((handle) => handle.context)),
           });
-          if (refined !== identity) return refined;
+          if (refined !== identity) {
+            result = refined;
+            break;
+          }
         }
-        return identity;
+        if (!result.rootPath) return result;
+        const placement = yield* git
+          .resolveWorktreePlacement({
+            cwd: result.rootPath,
+            path: null,
+            refName: "HEAD",
+          })
+          .pipe(Effect.option);
+        return Option.isSome(placement)
+          ? { ...result, cloneLayout: placement.value.layout }
+          : result;
       }),
     });
   }),
-).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
+).pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(GitVcsDriver.layer),
+  Layer.provide(ProcessRunner.layer),
+);
 
 const layerPullRequestService = PullRequestService.layer.pipe(
   Layer.provide(PullRequestProviderRegistry.layer),

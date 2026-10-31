@@ -468,7 +468,9 @@ export async function importGitSnapshot(
   cwd: string,
   target: string,
   snapshot: MachineHandoffGitSnapshot,
+  branch?: string,
 ): Promise<void> {
+  if (branch !== undefined) await git(cwd, ["check-ref-format", "--branch", branch]);
   if (await lstat(target).catch(() => null))
     throw new Error(
       "Machine handoff target already exists; existing checkouts are never overwritten",
@@ -524,7 +526,7 @@ export async function importGitSnapshot(
     await git(cwd, [
       "worktree",
       "add",
-      "--detach",
+      ...(branch === undefined ? ["--detach"] : ["-b", branch]),
       "--no-checkout",
       resolve(target),
       snapshot.head,
@@ -533,7 +535,10 @@ export async function importGitSnapshot(
     await materialize(cwd, target, files);
     await git(target, ["read-tree", snapshot.indexTree]);
   } catch (error) {
-    if (added) await git(cwd, ["worktree", "remove", "--force", resolve(target)]);
+    if (added) {
+      await git(cwd, ["worktree", "remove", "--force", resolve(target)]);
+      if (branch !== undefined) await git(cwd, ["branch", "-D", branch]);
+    }
     throw error;
   } finally {
     await git(cwd, ["update-ref", "-d", ref]);

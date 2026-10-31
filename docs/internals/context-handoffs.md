@@ -16,8 +16,11 @@ reconstructs provider-native session state, tool state, approvals, or omitted te
 ## Machine handoff safety boundary
 
 Machine handoffs relay a server-owned snapshot through the authenticated client, not a peer connection.
-Import always creates a detached managed worktree, even for an ordinary source checkout; an existing
-target is never overwritten. Hidden checkpoint commits capture the index and raw working files without
+Import creates a new local branch and isolated worktree without overwriting an existing target. Both
+handoffs and ordinary worktree creation use `GitManager.resolveWorktreePlacement`, which applies the
+destination project's settings before the Git driver chooses a path. `ProjectCloneLayout` describes
+on-disk topology, not a competing persisted preference: a verified `repo/main` checkout uses sibling
+worktrees unless destination settings override that placement. Hidden checkpoint commits capture the index and raw working files without
 moving the source branch, refreshing its index, or using its stash. Bundle prerequisites must already
 exist in the cloned destination, so mismatched or shallow clones can refuse import safely.
 

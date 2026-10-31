@@ -1,6 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Deterministic synchronous digests name retry-safe workspace paths.
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
 import {
   MACHINE_HANDOFF_MAX_BYTES,
   MachineHandoffError,
@@ -20,8 +21,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import * as GitManager from "../git/GitManager.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -61,12 +62,15 @@ const make = Effect.gen(function* () {
   const threadExecutor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const config = yield* ServerConfig.ServerConfig;
-  const settings = yield* ServerSettings.ServerSettingsService;
+  const git = yield* GitManager.GitManager;
+  const gitCore = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const home = yield* HostProcess.HomeDirectory;
   const hostPlatform = yield* HostProcess.Platform;
   const encodeImport = Schema.encodeEffect(Schema.fromJsonString(MachineHandoffImportInput));
+  const preparedImport = Schema.fromJsonString(
+    Schema.Struct({ identity: Schema.String, path: Schema.String, branch: Schema.String }),
+  );
   const imports = yield* KeyedLock.make<string>();
 
   const exportSnapshot = Effect.fn("MachineHandoffService.exportSnapshot")(function* (
@@ -150,7 +154,7 @@ const make = Effect.gen(function* () {
     yield* Effect.try({ try: () => assertBounded(input.snapshot), catch: error });
     return yield* imports
       .withLock(
-        input.threadId,
+        input.projectId,
         Effect.gen(function* () {
           const receipt = yield* receipts.getByCommandId(input.commandId);
           if (Option.isSome(receipt)) {
@@ -173,43 +177,57 @@ const make = Effect.gen(function* () {
             return yield* new MachineHandoffError({
               message: "Clone and register the destination project before importing",
             });
-          const directory = resolveWorktreesDirectory(
-            (yield* settings.getSettings).worktreesDirectory,
-            config.worktreesDir,
-            path,
-            home,
-          );
-          if (directory === null)
-            return yield* new MachineHandoffError({
-              message: "The destination worktrees directory must be absolute",
-            });
-          const target = path.join(
-            directory,
-            `machine-${digest(input.projectId).slice(0, 20)}`,
-            `handoff-${digest(input.threadId).slice(0, 20)}`,
-          );
-          const marker = path.join(target, ".git");
           const identity = digest(yield* encodeImport(input));
           const completedMarker = path.join(
-            directory,
-            `machine-${digest(input.projectId).slice(0, 20)}`,
+            config.worktreesDir,
+            "machine-imports",
+            digest(input.projectId).slice(0, 20),
             `${digest(input.threadId)}.json`,
           );
           const prior = (yield* fs.exists(completedMarker))
-            ? yield* fs.readFileString(completedMarker)
+            ? yield* Schema.decodeEffect(preparedImport)(yield* fs.readFileString(completedMarker))
             : null;
-          if (prior !== identity) {
-            if (prior !== null)
+          let target: string;
+          let branch: string;
+          if (prior !== null) {
+            if (prior.identity !== identity)
               return yield* new MachineHandoffError({
                 message: "Machine handoff destination belongs to a different import",
               });
+            target = prior.path;
+            branch = prior.branch;
+            yield* fs.readFile(path.join(target, ".git"));
+          } else {
+            const existing = yield* gitCore.listLocalBranchNames(project.value.workspaceRoot);
+            while (true) {
+              branch = resolveAutoFeatureBranchName(
+                existing,
+                input.snapshot.branch ?? input.snapshot.title,
+              );
+              const placement = yield* git.resolveWorktreePlacement({
+                cwd: project.value.workspaceRoot,
+                path: null,
+                refName: input.snapshot.git.head,
+                newRefName: branch,
+                projectId: input.projectId,
+              });
+              if (!(yield* fs.exists(placement.path))) {
+                target = placement.path;
+                break;
+              }
+              existing.push(branch);
+            }
             yield* Effect.tryPromise({
-              try: () => importGitSnapshot(project.value.workspaceRoot, target, input.snapshot.git),
+              try: () =>
+                importGitSnapshot(project.value.workspaceRoot, target, input.snapshot.git, branch),
               catch: error,
             });
-            yield* fs.writeFileString(completedMarker, identity, { flag: "wx" });
-          } else {
-            yield* fs.readFile(marker);
+            yield* fs.makeDirectory(path.dirname(completedMarker), { recursive: true });
+            yield* fs.writeFileString(
+              completedMarker,
+              yield* Schema.encodeEffect(preparedImport)({ identity, path: target, branch }),
+              { flag: "wx" },
+            );
           }
           const result = yield* threads.dispatch({
             type: "thread.machine-import",
@@ -222,7 +240,7 @@ const make = Effect.gen(function* () {
             modelSelection: input.modelSelection,
             runtimeMode: input.snapshot.runtimeMode,
             interactionMode: input.snapshot.interactionMode,
-            branch: null,
+            branch,
             worktreePath: target,
             context: input.snapshot.context,
           });

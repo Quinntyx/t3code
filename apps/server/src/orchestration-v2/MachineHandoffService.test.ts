@@ -26,6 +26,14 @@ import * as Option from "effect/Option";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as GitManager from "../git/GitManager.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as MachineHandoffService from "./MachineHandoffService.ts";
 import { OrchestratorDispatchError } from "./Orchestrator.ts";
@@ -77,6 +85,8 @@ it.effect("refuses waiting items and background work even when the provider is i
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(EnvironmentId.make("source")),
       }),
+      Layer.mock(GitManager.GitManager)({}),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeedNone }),
       Layer.mock(ThreadManagement.ThreadManagementService)({
@@ -150,13 +160,37 @@ it.effect("refuses waiting items and background work even when the provider is i
   }),
 );
 
-it.effect(
-  "recovers the same isolated workspace after a failed thread commit, then replays the accepted receipt",
-  () =>
+it.effect.each([
+  { layout: "standard", containerLayout: true, configuredDirectory: false, linkedSource: true },
+  {
+    layout: "worktree-container",
+    containerLayout: true,
+    configuredDirectory: false,
+    linkedSource: false,
+  },
+  {
+    layout: "worktree-container",
+    containerLayout: false,
+    configuredDirectory: false,
+    linkedSource: true,
+  },
+  {
+    layout: "worktree-container",
+    containerLayout: true,
+    configuredDirectory: true,
+    linkedSource: false,
+  },
+] as const)(
+  "recovers destination placement and branch collisions after a failed thread commit: %j",
+  ({ layout, containerLayout, configuredDirectory, linkedSource }) =>
     Effect.gen(function* () {
       const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-machine-retry-"));
-      const source = NodePath.join(root, "source");
-      const destination = NodePath.join(root, "destination");
+      const source = NodePath.join(root, "source", linkedSource ? "main" : "project");
+      const destination = NodePath.join(
+        root,
+        "destination",
+        layout === "worktree-container" ? "main" : "project",
+      );
       const git = (cwd: string, ...args: string[]) =>
         NodeChildProcess.execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
       git(root, "init", source);
@@ -167,9 +201,19 @@ it.effect(
       git(source, "add", ".");
       git(source, "commit", "-m", "base");
       git(root, "clone", source, destination);
+      if (configuredDirectory) git(destination, "branch", "feature");
+      if (layout === "standard") {
+        git(destination, "branch", "feature/transfer");
+        git(destination, "tag", "feature/transfer");
+      }
       NodeFS.writeFileSync(NodePath.join(destination, ".env"), "destination root ignored data\n");
-      NodeFS.writeFileSync(NodePath.join(source, "file"), "uncommitted\n");
-      const snapshot = yield* Effect.promise(() => exportGitSnapshot(source));
+      let sourceWorkspace = source;
+      if (linkedSource) {
+        sourceWorkspace = NodePath.join(NodePath.dirname(source), "source-linked");
+        git(source, "worktree", "add", "-b", "feature/source", sourceWorkspace);
+      }
+      NodeFS.writeFileSync(NodePath.join(sourceWorkspace, "file"), "uncommitted\n");
+      const snapshot = yield* Effect.promise(() => exportGitSnapshot(sourceWorkspace));
       const now = DateTime.makeUnsafe("2026-10-01T00:00:00Z");
       const projectId = ProjectId.make("destination-project");
       const threadId = ThreadId.make("destination-thread");
@@ -194,8 +238,8 @@ it.effect(
           },
           runtimeMode: "full-access",
           interactionMode: "default",
-          branch: "feature",
-          workspaceKind: "checkout",
+          branch: "feature/transfer",
+          workspaceKind: linkedSource ? "worktree" : "checkout",
           context: [{ role: "user", text: "Continue" }],
           git: snapshot,
         },
@@ -205,7 +249,10 @@ it.effect(
       let attempts = 0;
       const dependencies = Layer.mergeAll(
         ServerConfig.layerTest(root, NodePath.join(root, "server-state")),
-        ServerSettings.layerTest(),
+        ServerSettings.layerTest({
+          projectSettingsOverrides: { [projectId]: { newWorktreesBesideMain: containerLayout } },
+          worktreesDirectory: configuredDirectory ? NodePath.join(root, "configured") : "",
+        }),
         ThreadCommandExecutor.layer,
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(EnvironmentId.make("destination")),
@@ -238,6 +285,22 @@ it.effect(
               workspace = command.worktreePath!;
               attempts++;
               expect(command.modelSelection).toEqual(selection);
+              const expectedBranch = configuredDirectory
+                ? "feature-2/transfer"
+                : layout === "standard"
+                  ? "feature/transfer-2"
+                  : "feature/transfer";
+              expect(command.branch).toBe(expectedBranch);
+              expect(git(workspace, "branch", "--show-current")).toBe(command.branch);
+              const parent =
+                layout === "worktree-container" && containerLayout && !configuredDirectory
+                  ? NodePath.dirname(destination)
+                  : NodePath.join(
+                      root,
+                      configuredDirectory ? "configured" : "server-state/worktrees",
+                      NodePath.basename(destination),
+                    );
+              expect(workspace).toBe(NodePath.join(parent, expectedBranch.replaceAll("/", "-")));
               if (attempts === 1)
                 return yield* new OrchestratorDispatchError({
                   commandId,
@@ -257,8 +320,24 @@ it.effect(
             }),
         }),
       );
-      const imported = MachineHandoffService.layer.pipe(
+      const manager = GitManager.layer.pipe(
+        Layer.provideMerge(GitVcsDriver.layer.pipe(Layer.provide(VcsProcess.layer))),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => undefined,
+            }),
+            Layer.mock(TextGeneration.TextGeneration)({}),
+            Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+            Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+          ),
+        ),
         Layer.provide(dependencies),
+        Layer.provide(NodeServices.layer),
+      );
+      const imported = MachineHandoffService.layer.pipe(
+        Layer.provide(Layer.merge(dependencies, manager)),
         Layer.provide(NodeServices.layer),
       );
       const runImport = Effect.gen(function* () {
@@ -276,7 +355,8 @@ it.effect(
       expect(NodeFS.readFileSync(NodePath.join(workspace, "file"), "utf8")).toBe(
         "kept after failure\n",
       );
-      expect(git(source, "status", "--porcelain=v1")).toBe("M file");
+      expect(git(sourceWorkspace, "status", "--porcelain=v1")).toBe("M file");
+      if (linkedSource) expect(git(source, "status", "--porcelain=v1")).toBe("");
       expect(git(destination, "status", "--porcelain=v1")).toBe("");
     }),
 );

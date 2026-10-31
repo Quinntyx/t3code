@@ -32,6 +32,7 @@ import {
   type VcsStatusInput,
   type VcsStatusResult,
   type WorktreeSubmodules,
+  type ProjectCloneLayout,
 } from "@t3tools/contracts";
 import { isMissingExecutable } from "@t3tools/source-control-core/server/discovery";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -135,6 +136,11 @@ export interface CreateWorktreeProgress {
     ok: boolean;
     detail: string | null;
   }) => Effect.Effect<void, never>;
+}
+
+export interface WorktreePlacement {
+  readonly path: string;
+  readonly layout: ProjectCloneLayout;
 }
 
 export interface CreateWorktreeOptions {
@@ -356,6 +362,10 @@ export class GitVcsDriver extends Context.Service<
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
+    readonly resolveWorktreePlacement: (
+      input: VcsCreateWorktreeInput,
+      options?: CreateWorktreeOptions,
+    ) => Effect.Effect<WorktreePlacement, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
       options?: CreateWorktreeOptions,

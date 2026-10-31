@@ -3441,24 +3441,44 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const main = path.join(container, "main");
         yield* fs.makeDirectory(main);
         const { initialBranch } = yield* initRepoWithCommit(main);
+        const planned = yield* driver.resolveWorktreePlacement({
+          cwd: main,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/first",
+        });
+        assert.deepEqual(planned, {
+          path: path.join(container, "feature-first"),
+          layout: "worktree-container",
+        });
+        assert.isFalse(yield* fs.exists(planned.path));
         const first = yield* driver.createWorktree({
           cwd: main,
           path: null,
           refName: initialBranch,
           newRefName: "feature/first",
         });
+        assert.equal(first.worktree.path, planned.path);
         assert.equal(first.worktree.path, path.join(container, "feature-first"));
         assert.equal(
           yield* git(first.worktree.path, ["branch", "--show-current"]),
           "feature/first",
         );
 
+        const siblingPlan = yield* driver.resolveWorktreePlacement({
+          cwd: first.worktree.path,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/second",
+        });
+        assert.equal(siblingPlan.layout, "worktree-container");
         const second = yield* driver.createWorktree({
           cwd: first.worktree.path,
           path: null,
           refName: initialBranch,
           newRefName: "feature/second",
         });
+        assert.equal(second.worktree.path, siblingPlan.path);
         assert.equal(second.worktree.path, path.join(container, "feature-second"));
         assert.equal(
           yield* fs.readFileString(path.join(second.worktree.path, "README.md")),

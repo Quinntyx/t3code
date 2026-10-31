@@ -3802,17 +3802,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
-  const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
-    "createWorktree",
-  )(function* (input, options) {
-    yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.refName);
-    yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
-    const targetBranch = input.newRefName ?? input.refName;
-    const sanitizedBranch = targetBranch.replace(/\//g, "-");
-    // Resolve sub/.. before taking the basename.
-    const repoName = path.basename(path.resolve(input.cwd));
-    let worktreePath = input.path;
-    if (worktreePath == null) {
+  const resolveWorktreePlacement: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreePlacement"] =
+    Effect.fn("GitVcsDriver.resolveWorktreePlacement")(function* (input, options) {
+      yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.refName);
+      yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
+      const repository = yield* resolveRepositoryPaths(input.cwd);
+      const primaryCheckout =
+        repository === null
+          ? null
+          : path.basename(repository.gitCommonDir) === ".git"
+            ? path.dirname(repository.gitCommonDir)
+            : path.join(path.dirname(repository.gitCommonDir), "main");
+      const container = primaryCheckout ? path.dirname(primaryCheckout) : null;
+      const layout =
+        primaryCheckout !== null &&
+        path.basename(primaryCheckout) === "main" &&
+        container !== null &&
+        (yield* resolveMainCheckout(container)) === primaryCheckout &&
+        (yield* resolveRepositoryPaths(primaryCheckout))?.gitCommonDir === repository?.gitCommonDir
+          ? "worktree-container"
+          : "standard";
+      if (input.path != null) return { path: input.path, layout };
       const parentDir = resolveWorktreesDirectory(
         options?.worktreesDirectory ?? "",
         worktreesDir,
@@ -3827,27 +3837,24 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
         });
       }
-      const repository = options?.worktreesDirectory
-        ? null
-        : yield* resolveRepositoryPaths(input.cwd);
-      const primaryCheckout =
-        repository === null
-          ? null
-          : path.basename(repository.gitCommonDir) === ".git"
-            ? path.dirname(repository.gitCommonDir)
-            : path.join(path.dirname(repository.gitCommonDir), "main");
-      const container = primaryCheckout ? path.dirname(primaryCheckout) : null;
-      const useContainer =
-        (options?.containerLayout ?? true) &&
-        primaryCheckout !== null &&
-        path.basename(primaryCheckout) === "main" &&
-        container !== null &&
-        (yield* resolveMainCheckout(container)) === primaryCheckout &&
-        (yield* resolveRepositoryPaths(primaryCheckout))?.gitCommonDir === repository?.gitCommonDir;
-      worktreePath = useContainer
-        ? path.join(container, sanitizedBranch)
-        : path.join(parentDir, repoName, sanitizedBranch);
-    }
+      const branch = (input.newRefName ?? input.refName).replace(/\//g, "-");
+      const besideMain = !options?.worktreesDirectory && (options?.containerLayout ?? true);
+      switch (layout) {
+        case "worktree-container":
+          if (besideMain && container !== null)
+            return { path: path.join(container, branch), layout };
+          break;
+        case "standard":
+          break;
+      }
+      return { path: path.join(parentDir, path.basename(path.resolve(input.cwd)), branch), layout };
+    });
+
+  const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
+    "createWorktree",
+  )(function* (input, options) {
+    const { path: worktreePath } = yield* resolveWorktreePlacement(input, options);
+    const targetBranch = input.newRefName ?? input.refName;
     if (input.newRefName) {
       // Kept apart from the checkout so the shared-config lock only covers the tracking write.
       yield* createBranchAt(
@@ -4644,6 +4651,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readBranchBase,
     resolveBranchName,
     listRefs,
+    resolveWorktreePlacement,
     createWorktree: Effect.fnUntraced(function* (input, options) {
       return yield* withListRefsInvalidation(input.cwd, createWorktree(input, options));
     }),
