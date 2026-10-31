@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   ProjectMutation,
   ProjectId,
+  ProjectCloneLayout,
   ServerConfig,
   SourceControlDiscoveryResult,
   SourceControlRepositoryInfo,
@@ -197,6 +198,18 @@ export function getCloneDestinationPath(
     return directoryPath;
   }
   return `${ensureBrowseDirectoryPath(directoryPath)}${name}`;
+}
+
+export function getProjectCloneCheckoutPath(
+  repositoryPath: string,
+  layout: ProjectCloneLayout,
+): string {
+  switch (layout) {
+    case "standard":
+      return repositoryPath;
+    case "worktree-container":
+      return getCloneDestinationPath(repositoryPath, "main");
+  }
 }
 
 export function getNewProjectPathPreview(newProjectsRoot: string, name: string): string {
