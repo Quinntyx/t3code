@@ -38,8 +38,9 @@ GPU busy and can cost battery; with reduced motion enabled it shows a still fram
 Turn on **Floating panels** in **Settings → Appearance** to float the sidebar, right panel, and
 terminal drawer as rounded glass cards with a margin from the window edges, like the composer and
 thread details card. They slide in and out using the **Panel animations** duration, refract the
-backdrop when liquid glass is on, and show the ambient shimmer through them when that is on. This
-applies to web and desktop.
+backdrop when liquid glass is on, and show the ambient shimmer through them when that is on. The
+panel toggles move beside the composer, and the sidebar's collapse button sits at the right end of
+its footer. This applies to web and desktop.
 
 ## Composer context
 
