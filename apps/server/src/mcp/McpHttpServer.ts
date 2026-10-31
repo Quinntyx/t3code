@@ -57,6 +57,8 @@ import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
+import * as EmailHandlers from "./toolkits/email/handlers.ts";
+import { EmailToolkit } from "./toolkits/email/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
 import {
@@ -1094,6 +1096,8 @@ export const layerOrchestratorToolkit = toolkitRegistration(
 
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 
+const layerEmailToolkit = toolkitRegistration(EmailToolkit, EmailHandlers.layer);
+
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,
   WorktreeHandlers.layer,
@@ -1149,6 +1153,7 @@ export const layerTools = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
+  layerEmailToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,

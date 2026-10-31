@@ -1,0 +1,7 @@
+# Email drafts
+
+Ask an agent to email someone and it drafts the message in a card in the thread. Check the sender, recipients, subject, and message, edit anything, then press **Send** (or Ctrl/⌘+Enter). T3 Code sends it from your own mail account on the machine running the server, and the agent learns only that it was sent, plus the recipients and subject you used. **Discard** tells the agent you chose not to send it. Nothing is sent until you press Send. The card works on web, desktop, and mobile.
+
+T3 Code does not have its own mail settings. It sends with the accounts in [aerc](https://aerc-mail.org)'s `accounts.conf` (`~/.config/aerc/accounts.conf`, or under `$XDG_CONFIG_HOME`) on the server machine, in the same order as aerc's tabs. With more than one account, choose the sender in the card's **From** menu. An account can send if it has `from` and `outgoing` set. `smtp://` and `smtps://` URLs with `plain`, `login`, `xoauth2`, or no authentication work, and so does a sendmail-style command such as `msmtp`. If `outgoing-cred-cmd` is set, T3 Code runs it for the password or OAuth token each time it sends, the same way aerc does. Edits to `accounts.conf` take effect on the next draft without a restart.
+
+T3 Code does not save a copy of sent mail. Gmail and Outlook keep one in your Sent folder, and your next mail sync brings it down. If a send fails, the card stays open with the mail server's error so you can fix it and try again. A draft closes if its agent stops or waits more than 10 minutes.

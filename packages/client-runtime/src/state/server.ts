@@ -1532,6 +1532,15 @@ export function createServerEnvironmentAtoms<R, E>(
           JSON.stringify([environmentId, input.threadId, input.turnItemId]),
       },
     }),
+    answerEmailRequest: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:email:answer-request",
+      tag: WS_METHODS.emailAnswerRequest,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.turnItemId]),
+      },
+    }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",
       tag: WS_METHODS.serverRefreshUsageRates,

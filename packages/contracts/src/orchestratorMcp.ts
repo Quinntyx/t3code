@@ -769,6 +769,47 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
 
+const OrchestratorMcpEmailAddresses = Schema.Array(TrimmedNonEmptyString);
+
+export const OrchestratorMcpSendEmailInput = Schema.Struct({
+  to: OrchestratorMcpEmailAddresses.annotate({
+    description: "Addresses, e.g. 'Ada <ada@example.com>'. May be empty for the user to fill in.",
+  }),
+  cc: Schema.optional(OrchestratorMcpEmailAddresses),
+  bcc: Schema.optional(OrchestratorMcpEmailAddresses),
+  subject: Schema.String,
+  body: Schema.String.annotate({ description: "Plain text, with the signoff." }),
+  from: Schema.optional(TrimmedNonEmptyString).annotate({
+    description: "Account name or address to send from. Default: the first account.",
+  }),
+  timeoutMs: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
+  ).annotate({ description: "Default 10 min." }),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
+    description: "Retry key for this draft. New key after a timeout or cancel.",
+  }),
+});
+export type OrchestratorMcpSendEmailInput = typeof OrchestratorMcpSendEmailInput.Type;
+
+export const OrchestratorMcpSendEmailResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("sent"),
+    message: Schema.String,
+    from: Schema.String,
+    to: OrchestratorMcpEmailAddresses,
+    subject: Schema.String.annotate({
+      description: "As sent. The user may have edited the draft.",
+    }),
+  }),
+  Schema.Struct({
+    status: Schema.Literals(["discarded", "cancelled", "timed_out"]).annotate({
+      description:
+        "discarded: user chose not to send. cancelled: ended with the run. timed_out: not sent in time. Do not retry unless the user asks.",
+    }),
+  }),
+]);
+export type OrchestratorMcpSendEmailResult = typeof OrchestratorMcpSendEmailResult.Type;
+
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({
     description:

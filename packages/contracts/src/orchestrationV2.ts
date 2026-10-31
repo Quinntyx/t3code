@@ -1516,6 +1516,44 @@ const OrchestrationV2SecretRequestFields = {
   secretStatus: OrchestrationV2SecretRequestStatus,
 } as const;
 
+export const OrchestrationV2EmailRequestStatus = Schema.Literals([
+  "pending",
+  "sent",
+  "discarded",
+  "cancelled",
+]);
+export type OrchestrationV2EmailRequestStatus = typeof OrchestrationV2EmailRequestStatus.Type;
+
+/** A sending account from the server host's mail client config. */
+export const OrchestrationV2EmailAccount = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  /** The From header it sends as, such as `"Ada" <ada@example.com>`. */
+  from: TrimmedNonEmptyString,
+});
+export type OrchestrationV2EmailAccount = typeof OrchestrationV2EmailAccount.Type;
+
+export const OrchestrationV2EmailDraft = Schema.Struct({
+  /** An `OrchestrationV2EmailAccount` name. */
+  account: TrimmedNonEmptyString,
+  to: Schema.Array(TrimmedNonEmptyString),
+  cc: Schema.Array(TrimmedNonEmptyString),
+  bcc: Schema.Array(TrimmedNonEmptyString),
+  subject: Schema.String,
+  body: Schema.String,
+});
+export type OrchestrationV2EmailDraft = typeof OrchestrationV2EmailDraft.Type;
+
+/**
+ * An agent drafted an email for the user to review. Once sent, `draft` is what
+ * the user actually sent.
+ */
+const OrchestrationV2EmailRequestFields = {
+  type: Schema.Literal("email_request"),
+  accounts: Schema.Array(OrchestrationV2EmailAccount),
+  draft: OrchestrationV2EmailDraft,
+  emailStatus: OrchestrationV2EmailRequestStatus,
+} as const;
+
 export const OrchestrationV2LinkRequestStatus = Schema.Literals([
   "pending",
   "linked",
@@ -1745,6 +1783,10 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     ...OrchestrationV2LinkRequestFields,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    ...OrchestrationV2EmailRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2570,6 +2612,10 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     ...OrchestrationV2LinkRequestFields,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    ...OrchestrationV2EmailRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3459,6 +3505,18 @@ const OrchestrationV2InternalCommand = Schema.Union([
     placeholder: Schema.optional(Schema.String),
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     secretStatus: OrchestrationV2SecretRequestStatus,
+  }),
+  /** Internal so no client can mark an email sent without it being sent. */
+  Schema.Struct({
+    type: Schema.Literal("email_request.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    accounts: Schema.Array(OrchestrationV2EmailAccount),
+    draft: OrchestrationV2EmailDraft,
+    emailStatus: OrchestrationV2EmailRequestStatus,
   }),
   /**
    * Records or updates a link an agent asked the user to make. Internal so no

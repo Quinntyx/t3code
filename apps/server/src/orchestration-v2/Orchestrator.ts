@@ -1,5 +1,6 @@
 import type {
   GuestShareId,
+  OrchestrationV2EmailRequestStatus,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
@@ -524,6 +525,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.created.record":
       return command.parentThreadId;
     case "secret_request.record":
+    case "email_request.record":
     case "link_request.record":
       return command.threadId;
     case "thread.fork":
@@ -531,6 +533,15 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.targetThreadId;
   }
 }
+
+/**
+ * Whether recording `next` replaces an email card's `current` status. A card is answered once,
+ * except that a send outranks a close that raced it: the card must not hide mail that left.
+ */
+export const emailRecordReplaces = (
+  current: OrchestrationV2EmailRequestStatus,
+  next: OrchestrationV2EmailRequestStatus,
+) => (current === "pending" ? next !== "pending" : current === "cancelled" && next === "sent");
 
 // Validate before resolving the request: adapters may otherwise coerce unusable answers.
 const decodeUserInputAnswers = Schema.decodeUnknownEffect(
@@ -8225,6 +8236,90 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const dispatchEmailRequestRecord = Effect.fn("orchestrationV2.dispatch.emailRequestRecord")(
+    function* (
+      command: Extract<OrchestrationV2InternalCommand, { readonly type: "email_request.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const projection = yield* projectionStore
+        .getThreadRecords(
+          command.threadId,
+          ["runs", "nodes", "turnItems", "attempts", "providerTurns"],
+          { turnItemTypes: ["email_request"], messageRoles: [] },
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      if (run === undefined || run.rootNodeId !== command.nodeId) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Node ${command.nodeId} is not the root of run ${command.runId}.`,
+        });
+      }
+      const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
+      if (existing !== undefined && existing.type !== "email_request") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Turn item ${command.turnItemId} is not an email request.`,
+        });
+      }
+      if (existing !== undefined && existing.runId !== command.runId) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Email request ${command.turnItemId} belongs to another run.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const pending = command.emailStatus === "pending";
+      const unchanged =
+        existing !== undefined && !emailRecordReplaces(existing.emailStatus, command.emailStatus);
+      const turnItem: OrchestrationV2TurnItem = unchanged
+        ? existing
+        : {
+            id: command.turnItemId,
+            threadId: command.threadId,
+            runId: command.runId,
+            nodeId: command.nodeId,
+            providerThreadId: run.providerThreadId,
+            providerTurnId: providerTurnForRun(projection, run)?.id ?? null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: existing?.ordinal ?? (yield* nextTurnItemOrdinal(projection)),
+            status: pending
+              ? "waiting"
+              : command.emailStatus === "sent"
+                ? "completed"
+                : "cancelled",
+            title: command.draft.subject || "Email",
+            startedAt: existing?.startedAt ?? now,
+            completedAt: pending ? null : now,
+            updatedAt: now,
+            type: "email_request",
+            accounts: command.accounts,
+            draft: command.draft,
+            emailStatus: command.emailStatus,
+          };
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        runId: command.runId,
+        nodeId: command.nodeId,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: now,
+        payload: turnItem,
+      });
+    },
+  );
+
   /**
    * Records or updates the card for a link an agent asked the user to make.
    * The pairing code goes straight to the link and never through orchestration.
@@ -12721,6 +12816,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "secret_request.record":
         yield* dispatchSecretRequestRecord(command, events);
+        break;
+      case "email_request.record":
+        yield* dispatchEmailRequestRecord(command, events);
         break;
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
