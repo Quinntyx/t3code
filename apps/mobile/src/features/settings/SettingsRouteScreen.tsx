@@ -37,6 +37,7 @@ import {
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { filterSettingsSections } from "./settings-search";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
+import { useDeusPanelStore } from "../deus/panelStore";
 
 export function SettingsRouteScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
@@ -255,6 +256,12 @@ function useSettingsIndexSections(): SettingsListSection[] {
     {
       title: "Agents",
       rows: [
+        {
+          id: "deus",
+          icon: "mic",
+          label: "Deus",
+          onPress: () => useDeusPanelStore.getState().openPicker(),
+        },
         serverPage("SettingsProviderAccounts", "person.crop.circle", "Providers"),
         serverPage("SettingsThreads", "text.bubble", "Threads"),
         page("SettingsScheduledTasks", "clock", "Scheduled tasks"),

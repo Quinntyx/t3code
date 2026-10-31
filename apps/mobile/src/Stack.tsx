@@ -129,6 +129,7 @@ import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
+import { DeusWorkspace } from "./features/deus/DeusPanelHost";
 import { SettingsLabsRouteScreen } from "./features/settings/ThreadSettingsSections";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { openSettings, settingsOpenIn } from "./features/settings/settings-navigation";
@@ -539,8 +540,10 @@ function RootStackLayout(props: {
                 workspaceRouteKeys={workspaceLocation.routeKeys}
                 selectedPullRequestKey={selectedPullRequestKey(props.state)}
               >
-                {props.children}
-                <HardwareKeyboardCommandOverlay />
+                <DeusWorkspace>
+                  {props.children}
+                  <HardwareKeyboardCommandOverlay />
+                </DeusWorkspace>
               </AdaptiveWorkspaceLayout>
             </AndroidWorkspaceTabsProvider>
           </WorkspaceConnectionStatusProvider>

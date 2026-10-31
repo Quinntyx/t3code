@@ -1,9 +1,10 @@
 import { AudioModule, setAudioModeAsync, setIsAudioActiveAsync } from "expo-audio";
 
 type AudioSessionToken = {
-  readonly kind: "playback" | "recording";
-  readonly onCancel?: () => void;
+  readonly kind: "playback" | "recording" | "duplex";
+  readonly onCancel?: () => void | Promise<void>;
   readonly onRelease?: () => void;
+  handoff?: Promise<void>;
   released: boolean;
 };
 
@@ -43,16 +44,25 @@ export function disposeAudioPlayer(player: {
 
 export function acquireAudioSession(
   kind: AudioSessionToken["kind"],
-  onCancel?: () => void,
+  onCancel?: () => void | Promise<void>,
   onRelease?: () => void,
 ) {
   const token: AudioSessionToken = { kind, onCancel, onRelease, released: false };
-  if (kind === "playback" && owner?.kind === "recording" && !owner.released) return token;
+  if (
+    owner &&
+    !owner.released &&
+    ((kind === "playback" && owner.kind !== "playback") ||
+      (kind === "duplex" && owner.kind === "recording"))
+  )
+    return token;
   const previous = owner;
   // Publish before cancelling the old player, including callbacks already queued by Expo.
   AudioModule.setAudioSessionOwner?.(true);
   owner = token;
-  if (previous && !previous.released) previous.onCancel?.();
+  if (previous && !previous.released) {
+    token.handoff = Promise.resolve(previous.onCancel?.());
+    void token.handoff.catch(() => {});
+  }
   return token;
 }
 
@@ -60,14 +70,15 @@ export function isAudioSessionOwner(token: AudioSessionToken): boolean {
   return owner === token && !token.released;
 }
 
-export function activateAudioSession(
+export async function activateAudioSession(
   token: AudioSessionToken,
   nativePlayback = false,
 ): Promise<boolean> {
+  await token.handoff;
   return enqueue(async () => {
     if (!isAudioSessionOwner(token)) return false;
-    // Video configures and activates its own native session, including moviePlayback on iOS.
-    if (nativePlayback) return true;
+    // Video and duplex configure their own native category/mode after ownership is granted.
+    if (nativePlayback || token.kind === "duplex") return true;
     await setAudioModeAsync({
       allowsRecording: token.kind === "recording",
       interruptionMode: "doNotMix",
