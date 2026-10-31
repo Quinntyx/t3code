@@ -3,7 +3,7 @@ import {
   OrchestratorMcpSendEmailInput,
   OrchestratorMcpSendEmailResult,
 } from "@t3tools/contracts";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as EmailRequests from "../../../email/EmailRequests.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -24,6 +24,7 @@ const SendEmailTool = Tool.make("send_email", {
 })
   .annotate(Tool.Title, "Draft an email for the user to send")
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileEmailOff);
 
 export const EmailToolkit = Toolkit.make(SendEmailTool);

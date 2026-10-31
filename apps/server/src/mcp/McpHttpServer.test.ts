@@ -863,128 +863,142 @@ it.effect("admits provider and OAuth client credentials and points only clients 
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("hides tools for links and refuses another environment while the beta is off", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const token = "linksToken";
-      const scope: McpInvocationContext.McpThreadInvocationScope = {
-        environmentId,
-        requestNamespace: token,
-        thread: {
-          threadId: ThreadId.make("thread-links"),
-          providerSessionId: token,
-          providerInstanceId: ProviderInstanceId.make("codex"),
-        },
-        client: undefined,
-        capabilities: new Set(["orchestration"]),
-        issuedAt: 1,
-      };
-      const LinksToolkit = Toolkit.make(
-        Tool.make("links", {
-          description: "Lists links.",
-          success: Schema.Struct({ links: Schema.Number }),
-          failure: OrchestratorMcpFailure,
-          failureMode: "return",
-        }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff),
-        Tool.make("where", {
-          description: "Says where it ran.",
-          parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
-          success: Schema.Struct({ ranIn: Schema.String }),
-          failure: OrchestratorMcpFailure,
-          failureMode: "return",
-        }),
-      );
-      const settingsContext = yield* Layer.build(ServerSettings.layerTest());
-      const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
-      const serverLayer = McpHttpServer.toolkitRegistration(
-        LinksToolkit,
-        McpToolAccess.toLayer(LinksToolkit, {
-          links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
-          where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
-        }),
-      ).pipe(
-        Layer.provideMerge(
-          McpHttpServer.layerMcpTransport.pipe(
-            Layer.provide(Layer.succeedContext(settingsContext)),
-          ),
-        ),
-        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
-        Layer.provide(
-          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-            resolve: (presented) => Effect.succeed(presented === token ? scope : undefined),
+it.effect(
+  "hides tools for links and email while they are off, and refuses another environment",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const token = "linksToken";
+        const scope: McpInvocationContext.McpThreadInvocationScope = {
+          environmentId,
+          requestNamespace: token,
+          thread: {
+            threadId: ThreadId.make("thread-links"),
+            providerSessionId: token,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 1,
+        };
+        const LinksToolkit = Toolkit.make(
+          Tool.make("links", {
+            description: "Lists links.",
+            success: Schema.Struct({ links: Schema.Number }),
+            failure: OrchestratorMcpFailure,
+            failureMode: "return",
+          }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff),
+          Tool.make("mail", {
+            description: "Drafts an email.",
+            success: Schema.Struct({ sent: Schema.Boolean }),
+            failure: OrchestratorMcpFailure,
+            failureMode: "return",
+          }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileEmailOff),
+          Tool.make("where", {
+            description: "Says where it ran.",
+            parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
+            success: Schema.Struct({ ranIn: Schema.String }),
+            failure: OrchestratorMcpFailure,
+            failureMode: "return",
           }),
-        ),
-      );
-      yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
-        Layer.build,
-      );
-      const httpClient = yield* HttpClient.HttpClient;
-      const headers = {
-        accept: "application/json, text/event-stream",
-        authorization: `Bearer ${token}`,
-      };
-      const initialize = yield* httpClient.post("/mcp", {
-        headers,
-        body: HttpBody.text(
-          `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
-          "application/json",
-        ),
-      });
-      const rpc = (method: string, params: object) =>
-        httpClient
-          .post("/mcp", {
-            headers: {
-              ...headers,
-              "mcp-session-id": initialize.headers["mcp-session-id"]!,
-              "mcp-protocol-version": "2025-06-18",
-            },
-            body: HttpBody.text(
-              JSON.stringify({ jsonrpc: "2.0", id: 2, method, params }),
-              "application/json",
-            ),
-          })
-          .pipe(Effect.flatMap((response) => response.json));
-      const listed = () =>
-        rpc("tools/list", {}).pipe(
-          Effect.map((body) =>
-            (body as { result: { tools: ReadonlyArray<{ name: string }> } }).result.tools.map(
-              (tool) => tool.name,
+        );
+        const settingsContext = yield* Layer.build(ServerSettings.layerTest());
+        const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
+        const serverLayer = McpHttpServer.toolkitRegistration(
+          LinksToolkit,
+          McpToolAccess.toLayer(LinksToolkit, {
+            links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
+            mail: McpToolAccess.reads(() => Effect.succeed({ sent: false })),
+            where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
+          }),
+        ).pipe(
+          Layer.provideMerge(
+            McpHttpServer.layerMcpTransport.pipe(
+              Layer.provide(Layer.succeedContext(settingsContext)),
             ),
           ),
-        );
-      const ranIn = (where: EnvironmentId) =>
-        rpc("tools/call", { name: "where", arguments: { environmentId: where } }).pipe(
-          Effect.map(
-            (body) =>
-              (
-                body as {
-                  result: {
-                    isError?: boolean;
-                    structuredContent?: unknown;
-                    content: ReadonlyArray<{ text: string }>;
-                  };
-                }
-              ).result,
+          Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+          Layer.provide(
+            Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              resolve: (presented) => Effect.succeed(presented === token ? scope : undefined),
+            }),
           ),
         );
-      const elsewhere = EnvironmentId.make("environment-elsewhere");
+        yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
+          Layer.build,
+        );
+        const httpClient = yield* HttpClient.HttpClient;
+        const headers = {
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${token}`,
+        };
+        const initialize = yield* httpClient.post("/mcp", {
+          headers,
+          body: HttpBody.text(
+            `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+            "application/json",
+          ),
+        });
+        const rpc = (method: string, params: object) =>
+          httpClient
+            .post("/mcp", {
+              headers: {
+                ...headers,
+                "mcp-session-id": initialize.headers["mcp-session-id"]!,
+                "mcp-protocol-version": "2025-06-18",
+              },
+              body: HttpBody.text(
+                JSON.stringify({ jsonrpc: "2.0", id: 2, method, params }),
+                "application/json",
+              ),
+            })
+            .pipe(Effect.flatMap((response) => response.json));
+        const listed = () =>
+          rpc("tools/list", {}).pipe(
+            Effect.map((body) =>
+              (body as { result: { tools: ReadonlyArray<{ name: string }> } }).result.tools.map(
+                (tool) => tool.name,
+              ),
+            ),
+          );
+        const ranIn = (where: EnvironmentId) =>
+          rpc("tools/call", { name: "where", arguments: { environmentId: where } }).pipe(
+            Effect.map(
+              (body) =>
+                (
+                  body as {
+                    result: {
+                      isError?: boolean;
+                      structuredContent?: unknown;
+                      content: ReadonlyArray<{ text: string }>;
+                    };
+                  }
+                ).result,
+            ),
+          );
+        const elsewhere = EnvironmentId.make("environment-elsewhere");
 
-      expect(yield* listed()).toEqual(["where"]);
-      expect(yield* ranIn(elsewhere)).toMatchObject({
-        isError: true,
-        content: [{ text: expect.stringContaining("Linked environments is off on this machine") }],
-      });
-      expect((yield* ranIn(environmentId)).structuredContent).toEqual({ ranIn: "here" });
+        expect(yield* listed()).toEqual(["where"]);
+        expect(yield* ranIn(elsewhere)).toMatchObject({
+          isError: true,
+          content: [
+            { text: expect.stringContaining("Linked environments is off on this machine") },
+          ],
+        });
+        expect((yield* ranIn(environmentId)).structuredContent).toEqual({ ranIn: "here" });
 
-      yield* settings.updateSettings({ linkedEnvironmentsEnabled: true });
-      expect(yield* listed()).toEqual(["links", "where"]);
-      // On, the call goes on to the forwarding, which this server lacks.
-      expect(yield* ranIn(elsewhere)).toMatchObject({
-        isError: true,
-        content: [{ text: expect.stringContaining("cannot reach linked environments") }],
-      });
-    }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        yield* settings.updateSettings({ linkedEnvironmentsEnabled: true });
+        expect(yield* listed()).toEqual(["links", "where"]);
+        // On, the call goes on to the forwarding, which this server lacks.
+        expect(yield* ranIn(elsewhere)).toMatchObject({
+          isError: true,
+          content: [{ text: expect.stringContaining("cannot reach linked environments") }],
+        });
+
+        yield* settings.updateSettings({ emailEnabled: true });
+        expect(yield* listed()).toEqual(["links", "mail", "where"]);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("lists pull request watch tools only to threads that are not delegated children", () =>

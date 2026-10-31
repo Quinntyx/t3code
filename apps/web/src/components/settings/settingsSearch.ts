@@ -132,10 +132,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
-      "/settings/email",
       "/settings/scheduled-tasks",
     ],
   },
+  { heading: "Capabilities", paths: ["/settings/email"] },
   {
     heading: "Code",
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
@@ -898,6 +898,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/browser",
     scope: "environment-defaults",
     searchTerms: ["device pixel ratio dpr resolution sharp hidpi retina 1x 2x"],
+  },
+  {
+    id: "email-enabled",
+    title: "Agents can draft emails",
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: ["agents send email mail enable disable turn on off drafts aerc"],
   },
   {
     id: "email-accounts-file",
