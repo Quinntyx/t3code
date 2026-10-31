@@ -671,6 +671,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
   {
+    id: "default-branch-remote",
+    title: "Default remote",
+    to: "/settings/worktrees",
+    scope: "project-defaults",
+    searchTerms: ["branch picker remote upstream origin fork other remotes base branch"],
+  },
+  {
     id: "beside-main",
     title: "Beside the main checkout",
     to: "/settings/worktrees",

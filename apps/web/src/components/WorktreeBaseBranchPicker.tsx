@@ -1,11 +1,11 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
 import { useDeferredValue, useState } from "react";
 
 import { usePaginatedBranches } from "../state/queries";
 import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
-import { BranchPicker, BranchPickerRefItem } from "./BranchPicker";
+import { BranchPicker, BranchPickerRefItem, useBranchPickerRemoteView } from "./BranchPicker";
 import { resolveBranchTriggerLabel, sanitizeNewRefName } from "./BranchToolbar.logic";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { Button } from "./ui/button";
@@ -13,6 +13,7 @@ import { ComboboxTrigger } from "./ui/combobox";
 
 export function WorktreeBaseBranchPicker({
   environmentId,
+  projectId,
   cwd,
   value,
   onValueChange,
@@ -22,6 +23,7 @@ export function WorktreeBaseBranchPicker({
   id,
 }: {
   environmentId: EnvironmentId;
+  projectId: ProjectId | null;
   cwd: string | null;
   value: string;
   onValueChange: (branch: string) => void;
@@ -33,10 +35,12 @@ export function WorktreeBaseBranchPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim());
+  const remoteView = useBranchPickerRemoteView(environmentId, projectId);
   const branches = usePaginatedBranches({
     environmentId,
     cwd,
     query: sanitizeNewRefName(deferredQuery),
+    ...remoteView.refTarget,
   });
   const selectedRefQuery = useEnvironmentQuery(
     cwd && value
@@ -90,6 +94,7 @@ export function WorktreeBaseBranchPicker({
       onLoadNext={branches.loadNext}
       statusText={statusText}
       originControl={{ checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }}
+      remotes={remoteView.remotes(branches.data?.remoteNames)}
       popupProps={{ align: "start", side: "bottom", className: "flex w-80 flex-col" }}
       renderItem={(name, index) => {
         const branch = branchByName.get(name);
@@ -98,6 +103,7 @@ export function WorktreeBaseBranchPicker({
             branch={branch}
             projectCwd={cwd}
             index={index}
+            withinRemote={remoteView.view.kind === "remote"}
             onClick={() => {
               onValueChange(branch.name);
               handleOpenChange(false);

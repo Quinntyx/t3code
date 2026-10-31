@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 import { AdvancedSettings } from "./AdvancedSettings";
@@ -13,7 +14,12 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { WorktreeCleanupSection, WorktreesDirectoryRow } from "./StorageSettings";
-import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { Input } from "../ui/input";
+import {
+  useScopedSettings,
+  useScopedSettingsMixed,
+  useUpdateScopedSettings,
+} from "./useScopedSettings";
 
 function StartFromRemoteRow() {
   const settings = useScopedSettings();
@@ -45,6 +51,52 @@ function StartFromRemoteRow() {
             updateSettings({ newWorktreesStartFromOrigin: Boolean(checked) })
           }
           aria-label="Start new worktrees from remote by default"
+        />
+      }
+    />
+  );
+}
+
+function DefaultBranchRemoteRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const { targets } = useSettingsScope();
+  const scopeKey = targets.map((target) => `${target.environmentId}:${target.projectId}`).join(",");
+  const mixed = useScopedSettingsMixed(["defaultBranchRemote"]);
+  const edited = useRef(false);
+  return (
+    <SettingsRow
+      serverScoped
+      settingKeys={["defaultBranchRemote"]}
+      {...searchableSetting("default-branch-remote")}
+      description="Branch pickers list this remote's branches with your local ones. Branches on other remotes sit behind Other remotes. Falls back to origin when the project has no such remote."
+      resetAction={
+        mixed || settings.defaultBranchRemote !== DEFAULT_UNIFIED_SETTINGS.defaultBranchRemote ? (
+          <SettingResetButton
+            label="default remote"
+            onClick={() =>
+              updateSettings({ defaultBranchRemote: DEFAULT_UNIFIED_SETTINGS.defaultBranchRemote })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Input
+          key={`${scopeKey}:${mixed}:${settings.defaultBranchRemote}`}
+          aria-label="Default remote"
+          autoCapitalize="none"
+          spellCheck={false}
+          onChange={() => {
+            edited.current = true;
+          }}
+          placeholder={mixed ? "Mixed" : "origin"}
+          defaultValue={mixed ? "" : settings.defaultBranchRemote}
+          onBlur={(event) => {
+            const value = event.target.value.trim();
+            if (edited.current && (mixed || value !== settings.defaultBranchRemote))
+              updateSettings({ defaultBranchRemote: value });
+            edited.current = false;
+          }}
         />
       }
     />
@@ -101,6 +153,7 @@ export function WorktreesSettingsPanel() {
         </AdvancedSettings>
       </SettingsSection>
       <SettingsSection id="worktree-branches" title="Branches">
+        <DefaultBranchRemoteRow />
         <BranchNamingSettings />
       </SettingsSection>
       <WorktreeCleanupSection />
