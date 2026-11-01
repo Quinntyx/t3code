@@ -24,7 +24,11 @@ import { AppText } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedHistoryControls } from "./ThreadFeed";
-import { INITIAL_THREAD_HISTORY_PULL, reduceThreadHistoryPull } from "./thread-history-pull";
+import {
+  INITIAL_THREAD_HISTORY_PULL,
+  reduceThreadHistoryPull,
+  threadHistoryPullClaims,
+} from "./thread-history-pull";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const RING_CIRCUMFERENCE = 2 * Math.PI * 10;
@@ -58,6 +62,7 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
   if (history === null)
     throw new Error("ThreadHistoryScrollView requires ThreadFeedHistoryProvider");
   const { pull, topInset, offset } = history;
+  const downY = useSharedValue(0);
   const enabled = history.controls?.hasMoreHistory === true && !history.controls.loading;
   const loadEarlier = useEffectEvent(() => {
     if (history.controls?.hasMoreHistory && !history.controls.loading) {
@@ -75,9 +80,11 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
         Gesture.Pan()
           .enabled(enabled)
           .maxPointers(1)
-          .activeOffsetY(10)
+          // Activating would cancel the drawer pans, so only a real pull activates (see threadHistoryPullClaims).
+          .manualActivation(true)
           .failOffsetX([-18, 18])
-          .onBegin(() => {
+          .onBegin((event) => {
+            downY.set(event.absoluteY);
             pull.set(
               reduceThreadHistoryPull(pull.get(), {
                 type: "start",
@@ -85,23 +92,20 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
               }),
             );
           })
-          .onUpdate((event) => {
-            pull.set(
-              reduceThreadHistoryPull(pull.get(), {
-                type: "move",
-                translationY: event.translationY,
-                offset: offset.get() + topInset,
-              }),
-            );
-          })
-          .onEnd((event, success) => {
-            if (!success) return;
+          .onTouchesMove((event, manager) => {
+            const touch = event.allTouches[0];
+            if (!touch) return;
             const moved = reduceThreadHistoryPull(pull.get(), {
               type: "move",
-              translationY: event.translationY,
+              translationY: touch.absoluteY - downY.get(),
               offset: offset.get() + topInset,
             });
-            const released = reduceThreadHistoryPull(moved, { type: "release" });
+            pull.set(moved);
+            if (threadHistoryPullClaims(moved)) manager.activate();
+          })
+          .onEnd((_event, success) => {
+            if (!success) return;
+            const released = reduceThreadHistoryPull(pull.get(), { type: "release" });
             pull.set(released);
             if (released.loadEarlier) runOnJS(loadEarlier)();
           })
@@ -110,7 +114,7 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
           }),
       ),
     // oxlint-disable-next-line react/memo-dependencies -- runOnJS calls the current history controls through the effect event.
-    [enabled, offset, pull, topInset, loadEarlier],
+    [enabled, offset, pull, downY, topInset, loadEarlier],
   );
 
   return (

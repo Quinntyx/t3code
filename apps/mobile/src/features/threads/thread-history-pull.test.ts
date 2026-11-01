@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   INITIAL_THREAD_HISTORY_PULL,
   reduceThreadHistoryPull,
+  THREAD_HISTORY_PULL_CLAIM_DISTANCE,
   THREAD_HISTORY_PULL_DISTANCE,
+  threadHistoryPullClaims,
 } from "./thread-history-pull";
 
 function startAt(offset = 0) {
@@ -56,6 +58,14 @@ describe("pulling earlier thread history", () => {
     const notAtTop = move(THREAD_HISTORY_PULL_DISTANCE * 2, 20);
     expect(notAtTop.progress).toBe(0);
     expect(release(notAtTop).loadEarlier).toBe(false);
+  });
+
+  it("claims the touch from the thread drawers only once it pulls at the boundary", () => {
+    expect(threadHistoryPullClaims(move(THREAD_HISTORY_PULL_CLAIM_DISTANCE * 4, 20))).toBe(false);
+    expect(threadHistoryPullClaims(move(-THREAD_HISTORY_PULL_CLAIM_DISTANCE * 4))).toBe(false);
+    expect(threadHistoryPullClaims(move(THREAD_HISTORY_PULL_CLAIM_DISTANCE))).toBe(false);
+    expect(threadHistoryPullClaims(move(THREAD_HISTORY_PULL_CLAIM_DISTANCE + 1))).toBe(true);
+    expect(threadHistoryPullClaims(move(240, 0, startAt(200)))).toBe(true);
   });
 
   it("supports iOS bounce offsets and Android's clamped top offset", () => {

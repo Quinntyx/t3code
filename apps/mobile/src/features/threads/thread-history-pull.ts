@@ -1,4 +1,6 @@
 export const THREAD_HISTORY_PULL_DISTANCE = 96;
+// The drawer pans fail past this vertical distance, so a pull claims only touches no drawer can take.
+export const THREAD_HISTORY_PULL_CLAIM_DISTANCE = 18;
 
 interface ThreadHistoryPullState {
   readonly startOffset: number | null;
@@ -46,4 +48,10 @@ export function reduceThreadHistoryPull(
     case "cancel":
       return INITIAL_THREAD_HISTORY_PULL;
   }
+}
+
+/** An active pull cancels the thread drawers' pans, so only a real pull at the boundary may claim the touch. */
+export function threadHistoryPullClaims(state: ThreadHistoryPullState): boolean {
+  "worklet";
+  return state.progress * THREAD_HISTORY_PULL_DISTANCE > THREAD_HISTORY_PULL_CLAIM_DISTANCE;
 }
