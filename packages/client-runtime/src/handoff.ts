@@ -137,7 +137,12 @@ export function resolvePendingHandoff(
       run.status !== "rolled_back" &&
       (run.startedAt !== null || (run.status === "starting" && run.contextHandoffId !== null)),
   )?.modelSelection;
-  if (from === undefined || selection == null) return null;
+  if (selection == null) return null;
+  if (from === undefined) {
+    return projection.thread?.historyOrigin === "machine_handoff"
+      ? { from: [], to: selection }
+      : null;
+  }
   const source = providers.find((provider) => provider.instanceId === from.instanceId);
   const target = providers.find((provider) => provider.instanceId === selection.instanceId);
   const needsHandoff =

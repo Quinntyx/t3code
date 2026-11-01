@@ -36,6 +36,8 @@ import { resolveDraftHeroState } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
+import { useAddProjectTargets } from "../hooks/useAddProjectTargets";
+import { openMachineHandoff, useMachineHandoffRequest } from "./machineHandoffRequest";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
@@ -68,6 +70,7 @@ import {
   type ThreadId,
   ProviderInteractionMode,
   resolveIdleCompaction,
+  resolveEnvironmentMachineKind,
   RuntimeMode,
 } from "@t3tools/contracts";
 import {
@@ -1153,8 +1156,14 @@ export default function ChatView(props: ChatViewProps) {
   const logicalProjectEnvironments = useLogicalProjectEnvironments(
     activeProject,
     activeProjectIsScratch && draftId !== null,
+    { machineHandoff: isServerThread },
   );
+  const addProjectTargets = useAddProjectTargets(activeProject, logicalProjectEnvironments);
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
+  const canChangeMachine =
+    isServerThread &&
+    activeProject?.repositoryIdentity != null &&
+    (hasMultipleEnvironments || addProjectTargets.length > 0);
   const canAutoBalanceEnvironments = hasMultipleEnvironments && !activeProjectIsScratch;
   const activeEnvironmentOption =
     logicalProjectEnvironments.find(
@@ -1162,7 +1171,7 @@ export default function ChatView(props: ChatViewProps) {
     ) ?? null;
   const showComposerEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: hasMultipleEnvironments,
+    canPickEnvironment: hasMultipleEnvironments || addProjectTargets.length > 0,
   });
 
   const { handlePreparedPullRequestThreadStable, openPullRequestDialogStable } =
@@ -1706,6 +1715,7 @@ export default function ChatView(props: ChatViewProps) {
   const showComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
+    canChangeMachine,
     hasActiveProject: activeProject !== null && !showProviderSubagentBar,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
@@ -2399,11 +2409,28 @@ export default function ChatView(props: ChatViewProps) {
       entry.enabled &&
       entry.isAvailable,
   );
-  const pendingHandoff = resolvePendingHandoff(
-    serverProjection,
-    pendingHandoffSelectionUsable ? pendingHandoffSelection : null,
-    providerStatuses,
+  const machineHandoff = useMachineHandoffRequest((state) =>
+    state.requests.find((attempt) => attempt.status === "running"),
   );
+  const movingThread =
+    machineHandoff &&
+    activeThread &&
+    machineHandoff.request?.threadRef.environmentId === activeThread.environmentId &&
+    machineHandoff.request.threadRef.threadId === activeThread.id
+      ? activeThread
+      : null;
+  const movingDestination =
+    movingThread && machineHandoff
+      ? environmentById.get(machineHandoff.request.destination.environmentId)
+      : null;
+  const pendingHandoff =
+    movingThread && machineHandoff?.selection
+      ? { from: [movingThread.modelSelection], to: machineHandoff.selection }
+      : resolvePendingHandoff(
+          serverProjection,
+          pendingHandoffSelectionUsable ? pendingHandoffSelection : null,
+          providerStatuses,
+        );
   const compactThreadUnavailable =
     !canOperateThread ||
     !activeThread ||
@@ -2653,14 +2680,22 @@ export default function ChatView(props: ChatViewProps) {
         openThreadFind(activeThreadKey);
       },
       "composer.cycleHost": ({ event }) => {
-        if (!canChangeEnvironment) return false;
+        if (!canChangeEnvironment && !(canChangeMachine && hasMultipleEnvironments)) return false;
         if (event.repeat) return;
         const currentId = readPendingEnvironmentChange()?.environmentId ?? environmentId;
         const index = logicalProjectEnvironments.findIndex(
           (env) => env.environmentId === currentId,
         );
         const next = logicalProjectEnvironments[(index + 1) % logicalProjectEnvironments.length];
-        if (next) onEnvironmentChangeStable(next.environmentId);
+        if (isServerThread && activeThreadRef && next?.projectId) {
+          if (next.environmentId === environmentId) return;
+          openMachineHandoff({
+            threadRef: activeThreadRef,
+            destination: scopeProjectRef(next.environmentId, next.projectId),
+          });
+        } else if (next) {
+          onEnvironmentChangeStable(next.environmentId);
+        }
       },
       "thread.steerQueuedMessage": ({ event }) =>
         routeKind !== "draft" && queuedRunsControlRef.current?.steerNext(event.repeat) === true,
@@ -2816,7 +2851,7 @@ export default function ChatView(props: ChatViewProps) {
     isRevertingCheckpoint,
     threadDetailLoading,
     activeEnvironmentUnavailable,
-    isSendBusy,
+    isSendBusy: isSendBusy || movingThread !== null,
     sendQueuesBehindSetup,
     isDraftHeroState,
     panelAnimationsActive,
@@ -3015,6 +3050,21 @@ export default function ChatView(props: ChatViewProps) {
               environmentId={environmentId}
               endpoints={pendingHandoff}
               providers={providerStatuses}
+              {...(movingDestination
+                ? {
+                    destinationProviders:
+                      providersByEnvironment.get(movingDestination.environmentId) ??
+                      EMPTY_PROVIDERS,
+                    sourceMachine: {
+                      label: activeEnvironment?.label ?? "This machine",
+                      kind: resolveEnvironmentMachineKind(activeEnvironment?.serverConfig ?? null),
+                    },
+                    destinationMachine: {
+                      label: movingDestination.label,
+                      kind: resolveEnvironmentMachineKind(movingDestination.serverConfig),
+                    },
+                  }
+                : {})}
               pending
             />
           </div>
@@ -3483,24 +3533,27 @@ export default function ChatView(props: ChatViewProps) {
                                 (setupQueueSendThreadKey !== null &&
                                   setupQueueSendThreadKey === activeThreadKey) ||
                                 queuedRunEdit.isSaving ||
-                                isResuming
+                                isResuming ||
+                                movingThread !== null
                               }
                               canResume={resumableRunId !== null || hasHeldQueuedRuns}
                               isRevertingCheckpoint={isRevertingCheckpoint}
                               sendDisabledReason={
                                 !canOperateThread
                                   ? "This connection cannot change threads."
-                                  : isEnvironmentChanging
-                                    ? "Preparing machine"
-                                    : isRevertingCheckpoint
-                                      ? "Rewinding conversation"
-                                      : feedbackUploading
-                                        ? "Sending feedback"
-                                        : threadDetailLoading
-                                          ? "Messages loading"
-                                          : worktreeSetupBlocksSend
-                                            ? "Preparing worktree"
-                                            : projectCloneSendBlockReason
+                                  : movingThread !== null
+                                    ? "Moving thread to another machine"
+                                    : isEnvironmentChanging
+                                      ? "Preparing machine"
+                                      : isRevertingCheckpoint
+                                        ? "Rewinding conversation"
+                                        : feedbackUploading
+                                          ? "Sending feedback"
+                                          : threadDetailLoading
+                                            ? "Messages loading"
+                                            : worktreeSetupBlocksSend
+                                              ? "Preparing worktree"
+                                              : projectCloneSendBlockReason
                               }
                               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                               bannerItems={composerBannerItems}

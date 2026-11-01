@@ -325,6 +325,24 @@ describe("pending context handoff", () => {
     expect(resolvePendingHandoff(projection, { instanceId: from, model: "source" }, [])).toBeNull();
     expect(resolvePendingHandoff(projection, { instanceId: from, model: "other" }, [])).toBeNull();
   });
+  it("shows imported machine context before the first local turn", () => {
+    const selection = { instanceId: to, model: "destination" };
+    const imported = {
+      ...projection,
+      thread: { historyOrigin: "machine_handoff" },
+      runs: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    expect(resolvePendingHandoff(imported, selection, [])).toEqual({ from: [], to: selection });
+    expect(resolvePendingHandoff({ ...imported, visibleTurnItems: [] }, selection, [])).toBeNull();
+    expect(resolvePendingHandoff(imported, null, [])).toBeNull();
+    expect(
+      resolvePendingHandoff(
+        { ...imported, thread: { ...imported.thread, historyOrigin: "native" } },
+        selection,
+        [],
+      ),
+    ).toBeNull();
+  });
   it("stays hidden while the thread's timeline is empty", () => {
     const empty = { ...projection, visibleTurnItems: [] };
     expect(resolvePendingHandoff(empty, { instanceId: to, model: "first" }, [])).toBeNull();

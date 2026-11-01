@@ -19,14 +19,19 @@ agent-written summary.
 
 ## Continuing on another machine
 
-Connect both machines, then open the thread's provider/model picker and choose **Hand off to another
-machine**. On mobile, open the existing thread's settings and choose **Machine handoff**. Stop active
-turns, queued work, approvals, and background tasks first.
+Stop active turns, queued work, approvals, and background tasks first, and connect both machines.
 
-Choose the destination machine and its project, then a provider and model available there. If the
-project is missing, clone it from the handoff flow; return to review the transfer after cloning
-finishes. When T3 Code cannot identify a matching repository, explicitly select the corresponding
-project on the destination. A different repository is not a substitute.
+On web and desktop, select another machine from **Run on** in the thread's composer. The transfer
+starts immediately. It keeps the current provider and model when available there, otherwise uses
+an available destination default. You can change that selection in the destination composer before
+sending your next message. Context handoff appears inline in the conversation.
+
+If the project is missing, use **Add to another machine** in the same menu. The existing clone dialog
+handles the destination folder, checkout layout, and optional ignored-file copies. The thread
+transfer continues automatically when cloning and file copies finish.
+
+On mobile, open the thread's settings and choose **Machine handoff**, then choose its destination
+project, provider, and model. A different repository is not a substitute.
 
 The destination receives a new thread and isolated worktree at the source revision, including
 unpushed history, staged and unstaged changes, and non-ignored untracked files. The source can be a
