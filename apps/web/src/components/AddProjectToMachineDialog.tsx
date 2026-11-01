@@ -4,10 +4,12 @@ import {
   getAddProjectInitialQuery,
   getCloneDestinationPath,
   getCloneDirectoryName,
+  getProjectCloneCheckoutPath,
 } from "@t3tools/client-runtime/operations/projects";
 import {
   type EnvironmentId,
   type ProjectIgnoredFile,
+  type ProjectCloneLayout,
   type ScopedProjectRef,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -56,6 +58,7 @@ import { Toggle, ToggleGroup } from "./ui/toggle-group";
 interface AddProjectToMachineRequest {
   readonly projectRef: ScopedProjectRef;
   readonly targetEnvironmentId: EnvironmentId | null;
+  readonly onReady?: (project: ScopedProjectRef) => void;
 }
 
 const useRequest = create<{ request: AddProjectToMachineRequest | null; session: number }>(() => ({
@@ -115,7 +118,9 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
     getCloneDirectoryName(sourceUrl),
   );
   const [pathOverride, setPathOverride] = useState<string | null>(null);
-  const destinationPath = pathOverride ?? defaultPath;
+  const [layout, setLayout] = useState<ProjectCloneLayout>("standard");
+  const repositoryPath = pathOverride ?? defaultPath;
+  const destinationPath = getProjectCloneCheckoutPath(repositoryPath, layout);
 
   const canListFiles = source?.serverConfig?.environment.capabilities.ignoredFileListing === true;
   const ignoredFiles = useEnvironmentQuery(
@@ -196,6 +201,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
         remoteUrl,
         destinationPath: destinationPath.trim(),
         files: files.filter((file) => selectedFiles.has(file.path)).map((file) => file.path),
+        ...(request.onReady ? { onReady: request.onReady } : {}),
       });
       close();
       openClonedProject(scopeProjectRef(target.environmentId, projectId));
@@ -312,14 +318,42 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${id}-path`}>Folder on {target?.label ?? "the other machine"}</Label>
+              <Label htmlFor={`${id}-path`}>
+                Repository folder on {target?.label ?? "the other machine"}
+              </Label>
               <Input
                 id={`${id}-path`}
-                value={destinationPath}
+                value={repositoryPath}
                 onChange={(event) => setPathOverride(event.target.value)}
                 spellCheck={false}
                 autoComplete="off"
               />
+              <Select
+                value={layout}
+                onValueChange={(value) => {
+                  if (value) setLayout(value);
+                }}
+                items={[
+                  { value: "standard", label: "Clone into this folder" },
+                  { value: "worktree-container", label: "Clone into main; use sibling worktrees" },
+                ]}
+              >
+                <SelectTrigger aria-label="Clone layout">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="standard">Clone into this folder</SelectItem>
+                  <SelectItem value="worktree-container">
+                    Clone into main; use sibling worktrees
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+              <p className="font-mono text-muted-foreground text-xs">Checkout: {destinationPath}</p>
+              {layout === "worktree-container" ? (
+                <p className="text-muted-foreground text-xs">
+                  Threads use sibling worktrees when enabled by the destination's worktree settings.
+                </p>
+              ) : null}
             </div>
 
             {canListFiles ? (

@@ -200,9 +200,14 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
   }).pipe(Effect.provide(forkCases[0]!.layer)),
 );
 
-it.effect.each(forkCases)(
-  "bounds $driver context when continuing a fork of a $status run",
-  ({ driver, status, instanceId, modelSelection, layer }) =>
+it.effect.each(
+  forkCases.flatMap((entry) => [
+    { ...entry, machineHandoff: false },
+    { ...entry, machineHandoff: true },
+  ]),
+)(
+  "bounds $driver context when continuing a fork of a $status run (machine handoff: $machineHandoff)",
+  ({ driver, status, instanceId, modelSelection, layer, machineHandoff }) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const eventSink = yield* EventSink.EventSinkV2;
@@ -215,20 +220,28 @@ it.effect.each(forkCases)(
       const providerTurnId = ProviderTurnId.make("interrupted-source-turn");
       const rootNodeId = NodeId.make("interrupted-source-root");
 
-      yield* orchestrator.dispatch({
-        type: "thread.create",
+      const sourceCommand = {
         commandId: CommandId.make("create-source"),
         threadId: sourceThreadId,
         projectId: ProjectId.make("fork-boundary-project"),
         title: "Fork boundary source",
         modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
         branch: null,
         worktreePath: null,
-        createdBy: "user",
-        creationSource: "web",
-      });
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+      };
+      yield* orchestrator.dispatch(
+        machineHandoff
+          ? {
+              ...sourceCommand,
+              type: "thread.machine-import",
+              context: [{ role: "user", text: "TRANSFERRED_CONVERSATION_PREFIX" }],
+            }
+          : { ...sourceCommand, type: "thread.create" },
+      );
       yield* eventSink.write({
         events: [
           {
@@ -389,6 +402,8 @@ it.effect.each(forkCases)(
       const handoff = target.contextHandoffs[0]!;
       const history = handoff.history?.messages.map((message) => message.text).join("\n") ?? "";
       assert.include(`${handoff.summaryText}\n${history}`, "INCLUDED_SOURCE_MARKER");
+      if (machineHandoff)
+        assert.include(`${handoff.summaryText}\n${history}`, "TRANSFERRED_CONVERSATION_PREFIX");
       assert.notInclude(`${handoff.summaryText}\n${history}`, "EXCLUDED_LATER_MARKER");
       assert.isNull(target.providerThreads[0]?.forkedFrom);
     }).pipe(Effect.provide(layer)),

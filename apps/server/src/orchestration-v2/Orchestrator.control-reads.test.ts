@@ -63,6 +63,70 @@ const layerTest = Layer.mergeAll(
 );
 
 it.effect(
+  "imports portable machine history once, stays idle, and supplies it on the next user turn",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("machine-import");
+      const command = {
+        type: "thread.machine-import" as const,
+        commandId: CommandId.make("machine-import-command"),
+        threadId,
+        projectId: ProjectId.make("machine-project"),
+        title: "Continue elsewhere",
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: "/isolated/handoff",
+        createdBy: "user" as const,
+        creationSource: "server" as const,
+        context: [
+          { role: "user" as const, text: "Preserve this request" },
+          { role: "assistant" as const, text: "Previous answer" },
+        ],
+      };
+      const imported = yield* orchestrator.dispatch(command);
+      const retried = yield* orchestrator.dispatch(command);
+      assert.equal(retried.sequence, imported.sequence);
+      const idle = yield* projections.getThreadProjection(threadId);
+      assert.equal(idle.thread.historyOrigin, "machine_handoff");
+      assert.deepEqual(
+        idle.messages.map(({ role, text }) => ({ role, text })),
+        command.context,
+      );
+      assert.deepEqual(idle.runs, []);
+      assert.deepEqual(idle.providerThreads, []);
+      assert.deepEqual(idle.runtimeRequests, []);
+      assert.deepEqual(idle.thread.lineage, {
+        rootThreadId: threadId,
+        parentThreadId: null,
+        relationshipToParent: null,
+      });
+      assert.deepEqual(yield* outbox.listByCommandId(command.commandId), []);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("machine-continue"),
+        threadId,
+        messageId: MessageId.make("machine-next-message"),
+        text: "Continue now",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const started = yield* projections.getThreadProjection(threadId);
+      assert.equal(started.contextHandoffs.length, 1);
+      assert.include(started.contextHandoffs[0]!.summaryText!, "Preserve this request");
+      assert.include(started.contextHandoffs[0]!.summaryText!, "Previous answer");
+      assert.deepEqual(started.contextHandoffs[0]!.fromProviderThreadIds, []);
+      assert.equal(started.providerThreads[0]!.providerInstanceId, instanceId);
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
   "records approval feedback and targets only its runtime request without dispatching a parent turn",
   () =>
     Effect.gen(function* () {

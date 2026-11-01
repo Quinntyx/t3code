@@ -116,11 +116,17 @@ interface SourceControlTextGenerationSettings {
   readonly style: SourceControlWritingStyleSettings;
 }
 
+type ProjectWorktreeInput = VcsCreateWorktreeInput & { readonly projectId?: ProjectId };
+
 export class GitManager extends Context.Service<
   GitManager,
   {
+    readonly resolveWorktreePlacement: (
+      input: ProjectWorktreeInput,
+      options?: GitVcsDriver.CreateWorktreeOptions,
+    ) => Effect.Effect<GitVcsDriver.WorktreePlacement, GitCommandError>;
     readonly createWorktree: (
-      input: VcsCreateWorktreeInput,
+      input: ProjectWorktreeInput,
       options?: GitVcsDriver.CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     readonly status: (
@@ -674,19 +680,22 @@ export const make = Effect.gen(function* () {
   const projectSettingsFor = Effect.fnUntraced(function* (input: {
     readonly cwd: string;
     readonly threadId?: ThreadId | undefined;
+    readonly projectId?: ProjectId | undefined;
   }) {
     const settings = yield* serverSettingsService.getSettings;
     if (!hasProjectSettingsOverrides(settings))
       return { settings, projectId: null as ProjectId | null };
-    const projectId: ProjectId | null = yield* input.threadId !== undefined
-      ? threads.getThreadShell(input.threadId).pipe(
-          Effect.map((thread) => thread?.projectId ?? null),
-          Effect.orElseSucceed(() => null),
-        )
-      : projects.findActiveByWorkspaceRoot(input.cwd).pipe(
-          Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
-          Effect.orElseSucceed(() => null),
-        );
+    const projectId: ProjectId | null = yield* input.projectId !== undefined
+      ? Effect.succeed(input.projectId)
+      : input.threadId !== undefined
+        ? threads.getThreadShell(input.threadId).pipe(
+            Effect.map((thread) => thread?.projectId ?? null),
+            Effect.orElseSucceed(() => null),
+          )
+        : projects.findActiveByWorkspaceRoot(input.cwd).pipe(
+            Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
+            Effect.orElseSucceed(() => null),
+          );
     return { settings: resolveProjectSettings(settings, projectId).settings, projectId };
   });
   const readThreadContext = Effect.fnUntraced(
@@ -743,26 +752,33 @@ export const make = Effect.gen(function* () {
     Effect.map((settings) => settings.worktreesDirectory),
     Effect.orElseSucceed(() => ""),
   );
-  const createWorktree: GitManager["Service"]["createWorktree"] = Effect.fn(
-    "GitManager.createWorktree",
-  )(function* (input, options) {
+  const worktreeOptions = Effect.fn("GitManager.worktreeOptions")(function* (
+    input: ProjectWorktreeInput,
+    options?: GitVcsDriver.CreateWorktreeOptions,
+  ) {
     const projectSettings = yield* projectSettingsFor(input).pipe(
       Effect.map((resolved) => resolved.settings),
       Effect.orElseSucceed(() => undefined),
     );
-    const submodules =
-      options?.submodules !== undefined
-        ? options.submodules
-        : (projectSettings?.worktreeSubmodules ?? null);
-    const containerLayout =
-      options?.containerLayout ?? projectSettings?.newWorktreesBesideMain ?? true;
-    const worktreesDirectory = yield* readWorktreesDirectory;
-    const result = yield* gitCore.createWorktree(input, {
-      worktreesDirectory,
+    return {
+      worktreesDirectory: yield* readWorktreesDirectory,
       ...options,
-      submodules,
-      containerLayout,
-    });
+      submodules:
+        options?.submodules !== undefined
+          ? options.submodules
+          : (projectSettings?.worktreeSubmodules ?? null),
+      containerLayout: options?.containerLayout ?? projectSettings?.newWorktreesBesideMain ?? true,
+    };
+  });
+  const resolveWorktreePlacement: GitManager["Service"]["resolveWorktreePlacement"] = Effect.fn(
+    "GitManager.resolveWorktreePlacement",
+  )(function* (input, options) {
+    return yield* gitCore.resolveWorktreePlacement(input, yield* worktreeOptions(input, options));
+  });
+  const createWorktree: GitManager["Service"]["createWorktree"] = Effect.fn(
+    "GitManager.createWorktree",
+  )(function* (input, options) {
+    const result = yield* gitCore.createWorktree(input, yield* worktreeOptions(input, options));
     if (input.newRefName && input.baseRefName) {
       yield* shareBranchBase(input.cwd, input.newRefName);
     }
@@ -3286,6 +3302,7 @@ export const make = Effect.gen(function* () {
   );
 
   return GitManager.of({
+    resolveWorktreePlacement,
     createWorktree,
     localStatus,
     remoteStatus,

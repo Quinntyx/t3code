@@ -18,6 +18,7 @@ import {
   getCloneDestinationBrowsePath,
   getCloneDestinationPath,
   getCloneDirectoryName,
+  getProjectCloneCheckoutPath,
   getDefaultCloneUrl,
   getNewProjectPathPreview,
   getNewProjectPublishTarget,
@@ -54,8 +55,10 @@ import {
   type EnvironmentId,
   type EnvironmentMachineKind,
   ProjectId,
+  type ProjectCloneLayout,
   resolveEnvironmentMachineKind,
   SourceControlProviderKind,
+  type ScopedProjectRef,
 } from "@t3tools/contracts";
 import {
   StackActions,
@@ -1321,6 +1324,7 @@ export function AddProjectDestinationScreen(props: {
   readonly repositoryTitle?: string | string[];
   readonly repositoryName?: string | string[];
   readonly prompt?: string | string[];
+  readonly onCloneStarted?: (project: ScopedProjectRef) => void;
 }) {
   const openNewTaskDraft = useOpenNewTaskDraft();
   const startProjectClone = useAtomCommand(sourceControlEnvironment.startProjectClone, {
@@ -1345,6 +1349,7 @@ export function AddProjectDestinationScreen(props: {
   const repositoryTitle = stringParam(props.repositoryTitle);
   const prompt = stringParam(props.prompt);
   const repositoryName = stringParam(props.repositoryName)?.trim() ?? "";
+  const [layout, setLayout] = useState<ProjectCloneLayout>("standard");
   const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput } = useBrowsePathInput(
     environment,
     repositoryName,
@@ -1385,13 +1390,18 @@ export function AddProjectDestinationScreen(props: {
         title,
         createdAt: new Date().toISOString(),
         remoteUrl,
-        destinationPath: resolved.path,
+        destinationPath: getProjectCloneCheckoutPath(resolved.path, layout),
       },
     });
     if (AsyncResult.isFailure(startResult)) {
       setError(errorMessage(Cause.squash(startResult.cause)));
     } else {
       void suggestAppAccessForRemote(checkAppAccess, environment.environmentId, remoteUrl);
+      if (props.onCloneStarted) {
+        props.onCloneStarted({ environmentId: environment.environmentId, projectId });
+        setIsSubmitting(false);
+        return;
+      }
       // Wait for the create event; the client store otherwise falls back to the project picker and loses clone controls.
       const project = await waitForProject(
         { environmentId: environment.environmentId, projectId },
@@ -1436,6 +1446,36 @@ export function AddProjectDestinationScreen(props: {
       {environment ? (
         <>
           <ProjectPathInput value={pathInput} onChangeText={setPathInput} onSubmit={submitPath} />
+          <ListSection>
+            <ListRow
+              title="Clone into main; use sibling worktrees"
+              icon={
+                <SymbolView
+                  name="arrow.triangle.branch"
+                  size={Platform.OS === "android" ? 24 : 17}
+                  tintColorClassName="accent-icon"
+                  type="monochrome"
+                />
+              }
+              subtitle="Clone to repo/main. Thread worktrees follow the destination's settings."
+              isFirst
+              right={
+                <ThemedSwitch
+                  accessibilityLabel="Use repo/main clone layout"
+                  value={layout === "worktree-container"}
+                  onValueChange={(enabled) =>
+                    setLayout(enabled ? "worktree-container" : "standard")
+                  }
+                />
+              }
+              onPress={() =>
+                setLayout((current) => (current === "standard" ? "worktree-container" : "standard"))
+              }
+            />
+          </ListSection>
+          <Text className="text-xs text-foreground-muted">
+            Checkout: {getProjectCloneCheckoutPath(pathInput, layout)}
+          </Text>
           <PrimaryActionButton
             label="Clone project"
             disabled={!canCloneProject || isBrowseNavigating || isSubmitting || !remoteUrl}

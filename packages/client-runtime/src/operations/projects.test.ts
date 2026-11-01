@@ -5,6 +5,7 @@ import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   findExistingAddProject,
   getCloneDirectoryName,
+  getProjectCloneCheckoutPath,
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
 } from "./projects.ts";
@@ -61,6 +62,16 @@ describe("add project shared logic", () => {
     expect(getCloneDirectoryName("C:\\src\\repo.git")).toBe("repo");
     expect(getCloneDirectoryName("git@github.com:repo.git")).toBe("repo");
     expect(getCloneDirectoryName("  https://github.com/owner/repo.git  ")).toBe("repo");
+  });
+
+  it("resolves the selected clone layout without changing the repository folder", () => {
+    expect(getProjectCloneCheckoutPath("~/src/repo", "standard")).toBe("~/src/repo");
+    expect(getProjectCloneCheckoutPath("~/src/repo/", "worktree-container")).toBe(
+      "~/src/repo/main",
+    );
+    expect(getProjectCloneCheckoutPath("C:\\src\\repo", "worktree-container")).toBe(
+      "C:\\src\\repo\\main",
+    );
   });
 
   it("keeps a numeric repository name that sits on a path", () => {

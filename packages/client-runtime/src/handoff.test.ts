@@ -1,16 +1,191 @@
 import {
   ContextHandoffId,
+  EnvironmentId,
+  ProjectId,
   ProviderInstanceId,
   RunId,
   type OrchestrationV2ThreadProjection,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  matchingMachineHandoffProjects,
+  machineHandoffBlocker,
+  machineHandoffCloneReady,
+  relayMachineHandoff,
+  sourceProjectSubdirectory,
   resolveHandoffEndpoints,
   resolvePendingHandoff,
   type HandoffTimelineRun,
 } from "./handoff.ts";
+
+describe("machine handoff project matching", () => {
+  const project = (
+    environment: string,
+    root: string,
+    workspaceRoot = root,
+    canonicalKey = "github.com/org/repo",
+  ) => ({
+    id: ProjectId.make(`${environment}:${workspaceRoot}`),
+    environmentId: EnvironmentId.make(environment),
+    workspaceRoot,
+    repositoryIdentity: {
+      canonicalKey,
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: `https://${canonicalKey}`,
+      },
+      rootPath: root,
+    },
+  });
+
+  it("matches repository and project-relative folder, not machine-local absolute paths or titles", () => {
+    const source = project("source", "/home/me/repo", "/home/me/repo/apps/web");
+    const matching = project("target", "C:\\work\\repo", "C:\\work\\repo\\apps\\web");
+    expect(
+      matchingMachineHandoffProjects(source, [
+        source,
+        project("target", "/work/repo"),
+        project("target", "/work/repo", "/work/repo/apps/mobile"),
+        project("target", "/work/another", "/work/another/apps/web", "github.com/org/other"),
+        matching,
+      ]),
+    ).toEqual([matching]);
+  });
+
+  it("does not guess matches for an unidentified repository or ambiguous root", () => {
+    const source = project("source", "/repo");
+    expect(
+      matchingMachineHandoffProjects({ ...source, repositoryIdentity: null }, [
+        project("target", "/repo"),
+      ]),
+    ).toEqual([]);
+    expect(
+      matchingMachineHandoffProjects(project("source", "/repo", "/repo-other"), [
+        project("target", "/repo"),
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe("machine handoff relay", () => {
+  const ready = {
+    sourceAvailable: true,
+    sourceStatus: "completed",
+    sourceConnected: true,
+    targetConnected: true,
+    sourceSupported: true,
+    targetSupported: true,
+    canExport: true,
+    canImport: true,
+    projectSelected: true,
+    modelReady: true,
+  };
+
+  it("refuses active sources, unavailable machines, permissions and missing destinations", () => {
+    expect(machineHandoffBlocker(ready)).toBeNull();
+    for (const sourceStatus of ["preparing", "queued", "starting", "running", "waiting"]) {
+      expect(machineHandoffBlocker({ ...ready, sourceStatus })).toContain("Stop");
+    }
+    for (const key of [
+      "sourceAvailable",
+      "sourceConnected",
+      "targetConnected",
+      "sourceSupported",
+      "targetSupported",
+      "canExport",
+      "canImport",
+      "projectSelected",
+      "modelReady",
+    ] as const) {
+      expect(machineHandoffBlocker({ ...ready, [key]: false })).not.toBeNull();
+    }
+  });
+
+  it("relays the opaque snapshot unchanged and rechecks eligibility before importing", async () => {
+    const snapshot = { opaque: "do not inspect" };
+    const importSnapshot = vi.fn(async (value: typeof snapshot) => value);
+    const eligibility = vi
+      .fn<() => string | null>()
+      .mockReturnValueOnce(null)
+      .mockReturnValue("Permission revoked");
+    await expect(
+      relayMachineHandoff({ eligibility, exportSnapshot: async () => snapshot, importSnapshot }),
+    ).rejects.toThrow("Permission revoked");
+    expect(importSnapshot).not.toHaveBeenCalled();
+    await expect(
+      relayMachineHandoff({
+        eligibility: () => null,
+        exportSnapshot: async () => snapshot,
+        importSnapshot,
+      }),
+    ).resolves.toBe(snapshot);
+    expect(importSnapshot.mock.calls[0]?.[0]).toBe(snapshot);
+  });
+
+  it("retries the original import request without re-exporting or changing its destination", async () => {
+    const snapshot = { ref: "first-export" };
+    const exportSnapshot = vi.fn(async () => snapshot);
+    const importSnapshot = vi
+      .fn<(_: typeof snapshot) => Promise<string>>()
+      .mockRejectedValueOnce(new Error("Database unavailable"))
+      .mockResolvedValue("imported");
+    const attempt: { current: (() => Promise<string>) | null } = { current: null };
+    const input = { eligibility: () => null, exportSnapshot, importSnapshot, attempt };
+    await expect(relayMachineHandoff(input)).rejects.toThrow("Database unavailable");
+    const changedImport = vi.fn(async () => "wrong destination");
+    await expect(relayMachineHandoff({ ...input, importSnapshot: changedImport })).resolves.toBe(
+      "imported",
+    );
+    expect(exportSnapshot).toHaveBeenCalledTimes(1);
+    expect(importSnapshot.mock.calls.map(([value]) => value)).toEqual([snapshot, snapshot]);
+    expect(changedImport).not.toHaveBeenCalled();
+    await expect(
+      relayMachineHandoff({ ...input, eligibility: () => "Permission revoked" }),
+    ).rejects.toThrow("Permission revoked");
+    expect(importSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not export a blocked source or import after a failed export", async () => {
+    const exportSnapshot = vi.fn(async () => {
+      throw new Error("Export rejected");
+    });
+    const importSnapshot = vi.fn(async () => undefined);
+    await expect(
+      relayMachineHandoff({
+        eligibility: () => "Source is active",
+        exportSnapshot,
+        importSnapshot,
+      }),
+    ).rejects.toThrow("Source is active");
+    expect(exportSnapshot).not.toHaveBeenCalled();
+    await expect(
+      relayMachineHandoff({ eligibility: () => null, exportSnapshot, importSnapshot }),
+    ).rejects.toThrow("Export rejected");
+    expect(importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps clone continuation available after successful clone status expires", () => {
+    expect(machineHandoffCloneReady({ phase: "done" }, false)).toBe(true);
+    expect(machineHandoffCloneReady(null, true)).toBe(true);
+    expect(machineHandoffCloneReady("pending", true)).toBe(false);
+    expect(machineHandoffCloneReady(null, false)).toBe(false);
+    for (const phase of ["running", "failed", "cancelled"] as const) {
+      expect(machineHandoffCloneReady({ phase }, true)).toBe(false);
+    }
+  });
+
+  it("preserves repository-relative project paths without accepting sibling prefixes", () => {
+    expect(sourceProjectSubdirectory("/repo", "/repo/apps/mobile")).toBe("apps/mobile");
+    expect(sourceProjectSubdirectory("C:\\repo\\", "C:\\repo\\apps\\mobile")).toBe("apps/mobile");
+    expect(sourceProjectSubdirectory("/repo/", "/repo")).toBe("");
+    expect(sourceProjectSubdirectory("/repo", "/repository/other")).toBeNull();
+    expect(sourceProjectSubdirectory(undefined, "/repo/apps/mobile")).toBeNull();
+    expect(sourceProjectSubdirectory("/repo", "/repo/../elsewhere")).toBeNull();
+    expect(sourceProjectSubdirectory("", "/repo/apps/mobile")).toBeNull();
+  });
+});
 
 const from = ProviderInstanceId.make("codex_personal");
 const to = ProviderInstanceId.make("claudeAgent");
@@ -149,6 +324,24 @@ describe("pending context handoff", () => {
     ).toBe("second");
     expect(resolvePendingHandoff(projection, { instanceId: from, model: "source" }, [])).toBeNull();
     expect(resolvePendingHandoff(projection, { instanceId: from, model: "other" }, [])).toBeNull();
+  });
+  it("shows imported machine context before the first local turn", () => {
+    const selection = { instanceId: to, model: "destination" };
+    const imported = {
+      ...projection,
+      thread: { historyOrigin: "machine_handoff" },
+      runs: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    expect(resolvePendingHandoff(imported, selection, [])).toEqual({ from: [], to: selection });
+    expect(resolvePendingHandoff({ ...imported, visibleTurnItems: [] }, selection, [])).toBeNull();
+    expect(resolvePendingHandoff(imported, null, [])).toBeNull();
+    expect(
+      resolvePendingHandoff(
+        { ...imported, thread: { ...imported.thread, historyOrigin: "native" } },
+        selection,
+        [],
+      ),
+    ).toBeNull();
   });
   it("stays hidden while the thread's timeline is empty", () => {
     const empty = { ...projection, visibleTurnItems: [] };

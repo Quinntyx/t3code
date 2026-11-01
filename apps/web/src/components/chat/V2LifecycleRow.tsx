@@ -30,6 +30,7 @@ import {
   type ServerProvider,
   type ThreadId,
   type EnvironmentId,
+  type EnvironmentMachineKind,
   type NodeId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -59,6 +60,7 @@ import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { subagentResumedSince } from "./V2LifecycleRow.logic";
 import { Button, InlineButton } from "../ui/button";
 import { T3Wordmark } from "../T3Wordmark";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 
 export type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 
@@ -563,6 +565,9 @@ export function HandoffRow(props: {
   readonly environmentId: EnvironmentId;
   readonly endpoints: HandoffEndpoints;
   readonly providers: ReadonlyArray<ServerProvider>;
+  readonly destinationProviders?: ReadonlyArray<ServerProvider>;
+  readonly sourceMachine?: { readonly label: string; readonly kind: EnvironmentMachineKind };
+  readonly destinationMachine?: { readonly label: string; readonly kind: EnvironmentMachineKind };
   readonly pending?: boolean;
   readonly failed?: boolean;
 }) {
@@ -570,6 +575,9 @@ export function HandoffRow(props: {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const derived = deriveProviderInstanceEntries(props.providers);
   const entries = settings ? applyProviderInstanceSettings(derived, settings, null) : derived;
+  const destinationEntries = props.destinationProviders
+    ? deriveProviderInstanceEntries(props.destinationProviders)
+    : entries;
   return (
     <TimelineSystemDivider
       label={props.pending ? "Context handoff pending" : "Context handoff"}
@@ -578,6 +586,13 @@ export function HandoffRow(props: {
       tone={props.failed ? "danger" : "neutral"}
       detail={
         <span className="inline-flex min-w-0 flex-wrap items-center justify-center gap-1.5">
+          {props.sourceMachine ? (
+            <>
+              <EnvironmentMachineIcon kind={props.sourceMachine.kind} className="size-3" />
+              <span>{props.sourceMachine.label}</span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
           {fromEndpoints.map((endpoint, index) => (
             <span
               key={`${endpoint.instanceId}:${endpoint.model ?? ""}`}
@@ -598,7 +613,18 @@ export function HandoffRow(props: {
           {fromEndpoints.length > 0 ? (
             <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0" />
           ) : null}
-          <HandoffEndpoint entries={entries} instanceId={to.instanceId} model={to.model} />
+          {props.destinationMachine ? (
+            <>
+              <EnvironmentMachineIcon kind={props.destinationMachine.kind} className="size-3" />
+              <span>{props.destinationMachine.label}</span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
+          <HandoffEndpoint
+            entries={destinationEntries}
+            instanceId={to.instanceId}
+            model={to.model}
+          />
         </span>
       }
     />
