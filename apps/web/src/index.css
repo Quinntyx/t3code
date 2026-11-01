@@ -136,8 +136,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      floating panels. Dark mode needs a deeper shadow to read against a dark canvas. */
   --app-float-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 32px -8px rgb(0 0 0 / 12%);
   --floating-panel-gap: 0.5rem;
-  /* The open composer's corner on desktop, so every floating card shares it. */
-  --floating-panel-radius: calc(2.25rem + 1px);
+  /* Cards share the menus' and details card's glass corner. The composer stays rounder: its
+     corner follows its send button, and a matching card corner would crowd the sidebar's rows. */
+  --floating-panel-radius: var(--radius-glass);
   /* Titlebar room for a details card risen to the top edge. */
   --floating-details-clearance: calc(
     var(--thread-details-panel-width) + var(--floating-panel-gap) * 2
