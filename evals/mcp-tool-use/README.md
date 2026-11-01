@@ -113,6 +113,8 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 From `evals/`, `node mcp-tool-use/deusText.ts --dry-run` prints bounded requests using the production coordinator policy and tool declarations; `--context` prints their sizes. Both paths are strictly local and make no provider calls. `deusText.test.ts` reuses `gradeSample` to check positive and negative synthetic fixtures. These prove request/grader wiring, not Gemini behavioral compliance; paid evaluation remains a separate gate.
 
+`node mcp-tool-use/deusPonder.ts --dry-run` and `--context` build bounded learning-worker prompts from the production `ponder.md` and prompt builder. `deus-ponder.ndjson` covers the five promotion kinds, explicit no-change, and hostile evidence; `deusPonder.test.ts` checks safe/unsafe synthetic results with the production validator. These zero-call checks do not establish model compliance; real-worker and paid behavioral evaluation remain separate authorization gates.
+
 `node mcp-tool-use/deusLive.ts --dry-run` and `--context` build the corresponding native Live setup with the production policy and shared non-blocking declarations. They use explicit synthetic model/voice names and never connect to Gemini. `deusLive.test.ts` checks this wiring, not selected-model support, scheduling behavior, or physical audio acceptance.
 
 ## Where T3's text lives

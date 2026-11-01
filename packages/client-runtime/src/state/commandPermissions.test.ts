@@ -102,6 +102,9 @@ describe("command permissions", () => {
     { method: WS_METHODS.deusRenew, scope: AuthOrchestrationOperateScope },
     { method: WS_METHODS.deusMediaSubscribe, scope: AuthOrchestrationOperateScope },
     { method: WS_METHODS.deusGetSnapshot, scope: AuthOrchestrationReadScope },
+    { method: WS_METHODS.deusPonder, scope: AuthOrchestrationOperateScope },
+    { method: WS_METHODS.deusGetLearning, scope: AuthOrchestrationReadScope },
+    { method: WS_METHODS.deusConfigureLearning, scope: AuthSettingsWriteScope },
     { method: WS_METHODS.deusUpdateSettings, scope: AuthSettingsWriteScope },
     { method: WS_METHODS.deusSetCredential, scope: AuthProvidersManageScope },
   ] as const)("checks destination grants for $method", ({ method, scope }) =>

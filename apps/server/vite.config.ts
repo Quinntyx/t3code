@@ -69,9 +69,18 @@ const { projects: _rootTestProjects, ...baseTestConfig } = baseConfig.test ?? {}
 // Workspace cache configuration is invalid on a package config.
 const { run: _rootRunConfig, ...basePackageConfig } = baseConfig;
 
+const ponderPrompt = {
+  name: "deus-ponder-prompt",
+  transform(source: string, id: string) {
+    if (id.endsWith("/deus/prompts/ponder.md"))
+      return { code: `export default ${JSON.stringify(source)}`, map: null };
+  },
+};
+
 export default mergeConfig(
   { ...basePackageConfig, test: baseTestConfig },
   defineConfig({
+    plugins: [ponderPrompt],
     run: {
       tasks: {
         build: {
@@ -82,6 +91,7 @@ export default mergeConfig(
       },
     },
     pack: {
+      plugins: [ponderPrompt],
       // SEA embeds one entry; expose the history worker as a hidden subcommand.
       entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
       outDir: packExecutable ? "dist-exe" : "dist",

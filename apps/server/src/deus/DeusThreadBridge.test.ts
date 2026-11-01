@@ -15,6 +15,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Human from "./DeusHumanAuthority.ts";
 import * as Lease from "./DeusMediaLease.ts";
 import * as Transport from "./DeusTransport.ts";
+import * as PonderFixture from "./DeusPonder.testkit.ts";
 import * as Live from "./DeusLiveService.ts";
 import * as Configuration from "./DeusConfiguration.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -346,6 +347,7 @@ it.live(
       });
       const services = yield* Layer.build(
         Transport.layer.pipe(
+          Layer.provideMerge(PonderFixture.layer),
           Layer.provideMerge(Lease.layer.pipe(Layer.provide(Events.layer))),
           Layer.provide(
             Layer.mergeAll(

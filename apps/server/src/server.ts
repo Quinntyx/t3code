@@ -43,6 +43,10 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as DeusContextService from "./deus/DeusContextService.ts";
 import * as DeusMemoryService from "./deus/DeusMemoryService.ts";
+import * as DeusMemoryWriter from "./deus/DeusMemoryWriter.ts";
+import * as DeusPonderService from "./deus/DeusPonderService.ts";
+import * as DeusPonderWorker from "./deus/DeusPonderWorker.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as DeusRepository from "./deus/DeusRepository.ts";
 import * as DeusSessionService from "./deus/DeusSessionService.ts";
 import * as DeusThreadBridge from "./deus/DeusThreadBridge.ts";
@@ -645,6 +649,12 @@ const layerDeusLiveAuthority = Layer.effect(
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   DeusTransport.layer.pipe(
     Layer.provideMerge(Layer.merge(DeusCoordinator.layer, DeusLiveService.layer)),
+    Layer.provideMerge(
+      DeusPonderService.layer.pipe(
+        Layer.provide(DeusPonderWorker.layer),
+        Layer.provide(DeusMemoryWriter.layer.pipe(Layer.provide(GitVcsDriver.layer))),
+      ),
+    ),
     Layer.provide(layerDeusLiveAuthority),
     Layer.provideMerge(GeminiLiveAdapter.layer.pipe(Layer.provide(DeusConfiguration.layer))),
     Layer.provideMerge(DeusTools.layer),
@@ -773,6 +783,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
 
 const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerUsage),
+  Layer.provideMerge(Scheduler.layer),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
@@ -1169,6 +1180,8 @@ const layerMakeServer = Layer.unwrap(
           const deus = yield* DeusSessionService.DeusSessionService;
           const bridge = yield* DeusThreadBridge.DeusThreadBridge;
           const coordinator = yield* DeusCoordinator.DeusCoordinator;
+          const pondering = yield* DeusPonderService.DeusPonderService;
+          yield* pondering.start;
           yield* startup.awaitCommandReady.pipe(
             Effect.andThen(deus.start),
             Effect.andThen(bridge.start),

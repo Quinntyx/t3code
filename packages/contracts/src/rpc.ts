@@ -557,6 +557,8 @@ export const WS_METHODS = {
   deusMemoryRead: "deus.memoryRead",
   deusMemoryCorrect: "deus.memoryCorrect",
   deusPonder: "deus.ponder",
+  deusGetLearning: "deus.getLearning",
+  deusConfigureLearning: "deus.configureLearning",
   deusAttach: "deus.attach",
   deusDetach: "deus.detach",
   deusRenew: "deus.renew",
@@ -2058,6 +2060,16 @@ export const DeusRpcGroup = RpcGroup.make(
   Rpc.make(WS_METHODS.deusMemoryCorrect, {
     payload: Deus.DeusMemoryCorrectionInput,
     success: Deus.DeusMemory,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusGetLearning, {
+    payload: Deus.DeusScope,
+    success: Deus.DeusLearningStatus,
+    error: DeusRpcError,
+  }),
+  Rpc.make(WS_METHODS.deusConfigureLearning, {
+    payload: Deus.DeusLearningInput,
+    success: Deus.DeusLearningStatus,
     error: DeusRpcError,
   }),
   Rpc.make(WS_METHODS.deusPonder, {

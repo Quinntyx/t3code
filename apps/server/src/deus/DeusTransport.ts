@@ -35,6 +35,7 @@ import * as Bridge from "./DeusThreadBridge.ts";
 import * as Tools from "./DeusTools.ts";
 import * as Configuration from "./DeusConfiguration.ts";
 import * as Memory from "./DeusMemoryService.ts";
+import * as Ponder from "./DeusPonderService.ts";
 import * as Live from "./DeusLiveService.ts";
 import { DeusLiveError } from "./GeminiLiveAdapter.ts";
 import { DeusTextError } from "./textProtocol.ts";
@@ -113,6 +114,7 @@ const make = Effect.gen(function* () {
   const bridge = yield* Bridge.DeusThreadBridge;
   const configuration = yield* Configuration.DeusConfiguration;
   const memory = yield* Memory.DeusMemoryService;
+  const ponder = yield* Ponder.DeusPonderService;
   const live = yield* Live.DeusLiveService;
   const secrets = yield* Secrets.SecretRequests;
   const tools = yield* Tools.DeusTools;
@@ -131,7 +133,7 @@ const make = Effect.gen(function* () {
         protocolVersion: DEUS_PROTOCOL_VERSION,
         text: true,
         liveAudio: Boolean(settings.liveModel && settings.voice && !NodeSea.isSea()),
-        learning: false,
+        learning: true,
         reportModes: ["SILENT", "WHEN_IDLE", "INTERRUPT"],
       };
     }),
@@ -233,7 +235,9 @@ const make = Effect.gen(function* () {
               .pipe(Effect.map((entry) => memoryResult(entry, false))),
           ),
         [WS_METHODS.deusMemoryCorrect]: () => Effect.fail(unavailable()),
-        [WS_METHODS.deusPonder]: () => Effect.fail(unavailable()),
+        [WS_METHODS.deusPonder]: (input) => run(ponder.runNow(input)),
+        [WS_METHODS.deusGetLearning]: (input) => run(ponder.status(input)),
+        [WS_METHODS.deusConfigureLearning]: (input) => run(ponder.configure(input)),
         [WS_METHODS.deusAttach]: ({ authority, ...input }) =>
           run(
             Effect.gen(function* () {

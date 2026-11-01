@@ -44,6 +44,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.deusMemoryRead]: "deus",
   [WS_METHODS.deusMemoryCorrect]: "deus",
   [WS_METHODS.deusPonder]: "deus",
+  [WS_METHODS.deusGetLearning]: "deus",
+  [WS_METHODS.deusConfigureLearning]: "deus",
   [WS_METHODS.deusAttach]: "deus",
   [WS_METHODS.deusDetach]: "deus",
   [WS_METHODS.deusRenew]: "deus",

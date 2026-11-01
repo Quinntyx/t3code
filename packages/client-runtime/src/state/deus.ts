@@ -75,6 +75,8 @@ export function createDeusCommands<R, E>(runtime: Atom.AtomRuntime<EnvironmentRe
     memoryRead: command(WS_METHODS.deusMemoryRead),
     memoryCorrect: command(WS_METHODS.deusMemoryCorrect),
     ponder: command(WS_METHODS.deusPonder),
+    getLearning: command(WS_METHODS.deusGetLearning),
+    configureLearning: command(WS_METHODS.deusConfigureLearning),
     attach,
     renew: command(WS_METHODS.deusRenew),
     detach: command(WS_METHODS.deusDetach),

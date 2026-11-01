@@ -82,6 +82,7 @@ import * as Text from "./GeminiTextAdapter.ts";
 import * as Adapter from "./GeminiLiveAdapter.ts";
 import * as Live from "./DeusLiveService.ts";
 import * as Transport from "./DeusTransport.ts";
+import * as PonderFixture from "./DeusPonder.testkit.ts";
 
 const environmentId = EnvironmentId.make("transport-fixture");
 const projectId = ProjectId.make("transport-project");
@@ -181,6 +182,7 @@ const fixture = Effect.gen(function* () {
   );
   const services = yield* Layer.build(
     Transport.layer.pipe(
+      Layer.provideMerge(PonderFixture.layer),
       Layer.provideMerge(Layer.merge(Coordinator.layer, Live.layer)),
       Layer.provide(liveAuthority),
       Layer.provideMerge(Tools.layer),

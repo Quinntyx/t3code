@@ -273,6 +273,19 @@ export const DeusPonderReceipt = Schema.Struct({
   error: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
+  localDate: Schema.optional(TrimmedNonEmptyString),
+  startedAt: Schema.optional(IsoDateTime),
+  attempt: Schema.optional(PositiveInt),
+  threadId: Schema.optional(ThreadId),
+  commit: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  counts: Schema.optional(
+    Schema.Struct({
+      snapshot: NonNegativeInt,
+      omitted: NonNegativeInt,
+      consumed: NonNegativeInt,
+      written: NonNegativeInt,
+    }),
+  ),
 });
 export type DeusPonderReceipt = typeof DeusPonderReceipt.Type;
 
@@ -437,6 +450,21 @@ export const DeusPonderInput = Schema.Struct({
 });
 
 export type DeusPonderInput = typeof DeusPonderInput.Type;
+
+export const DeusLearningInput = Schema.Struct({
+  ...DeusScope.fields,
+  enabled: Schema.Boolean,
+  model: Schema.optional(Schema.NullOr(ModelSelection)),
+});
+export type DeusLearningInput = typeof DeusLearningInput.Type;
+export const DeusLearningStatus = Schema.Struct({
+  ...DeusScope.fields,
+  enabled: Schema.Boolean,
+  model: Schema.NullOr(ModelSelection),
+  pendingCount: NonNegativeInt,
+  runs: Schema.Array(DeusPonderReceipt),
+});
+export type DeusLearningStatus = typeof DeusLearningStatus.Type;
 
 export const DeusAttachment = Schema.Struct({
   ...DeusSessionRef.fields,

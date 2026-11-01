@@ -19,6 +19,7 @@ import * as Config from "../config.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Repository from "./DeusRepository.ts";
 import { CONTEXT_LIMITS, lexicalScore, page, preview } from "./contextBounds.ts";
+import { PromotionEntry } from "./ponderProtocol.ts";
 
 const EntryId = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]{0,79}$/));
 export const MemoryScope = Schema.Literals(["project", "environment", "global"]);
@@ -33,6 +34,9 @@ export const MemoryMetadata = Schema.Struct({
   observationIds: Schema.Array(DeusObservationId).check(Schema.isMaxLength(64)),
   sources: Schema.Array(DeusSourceRef).check(Schema.isMaxLength(64)),
   supersedes: Schema.NullOr(EntryId),
+  kind: Schema.optional(PromotionEntry.fields.kind),
+  paths: Schema.optional(PromotionEntry.fields.paths),
+  evidence: Schema.optional(PromotionEntry.fields.evidence),
 });
 export type MemoryEntry = typeof MemoryMetadata.Type & {
   readonly text: string;
@@ -79,13 +83,13 @@ const invalid = () =>
     message: "Deus memory is malformed, unsafe, uncommitted, or exceeds its read bounds.",
   });
 const hex = (value: string) => Buffer.from(value).toString("hex");
-const entryDirectory = (ref: DeusSessionRef, scope: MemoryScope) =>
+export const entryDirectory = (ref: DeusSessionRef, scope: MemoryScope) =>
   scope === "global"
     ? "global/entries"
     : scope === "environment"
       ? `environments/${hex(ref.environmentId)}/entries`
       : `environments/${hex(ref.environmentId)}/projects/${hex(ref.projectId)}/entries`;
-const safePath = async (target: string, directory: boolean) => {
+export const safePath = async (target: string, directory: boolean) => {
   const absolute = NodePath.resolve(target);
   const parsed = NodePath.parse(absolute);
   let current = parsed.root;
