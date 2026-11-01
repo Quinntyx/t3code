@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       build_android:
-        description: Also build a signed Android APK for first install or a changed native runtime
+        description: Build a signed T3 Code Preview APK
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: t3code-fork-${{ github.ref }}
@@ -88,4 +88,4 @@ jobs:
     uses: ./.forgejo/workflows/mobile.yml
     secrets: inherit
     with:
-      build_android: ${{ inputs.build_android || false }}
+      build_android: ${{ github.event_name != 'workflow_dispatch' || inputs.build_android }}

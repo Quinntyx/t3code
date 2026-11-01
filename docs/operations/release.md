@@ -31,17 +31,21 @@ fingerprint and publishes them to tailnet-only Forgejo package feeds on `main`.
 These feeds require a **new fork-native installation**; an upstream or existing
 EAS binary still points to Expo's original update service. JavaScript-only changes
 can update in-app; native dependency/config changes require a new native binary.
-Dispatch **Fork CI** with `build_android=true` to produce a signed ARM64 APK.
-The signing key uses alias `t3code`; `ANDROID_KEYSTORE` (base64) and
-`ANDROID_KEYSTORE_PASSWORD` are encrypted Actions secrets. The original key and
-password are backed up privately in `~/.local/share/t3code-fork/`; preserve that
-backup to keep Android upgrades installable.
+Fork CI builds a standalone ARM64 **T3 Code Preview** APK by default. Manual
+dispatches can set `build_android=false` to skip it. The APK retains package
+`com.t3tools.t3code.preview` and the original Preview debug signing key, so install
+it over the existing Preview app without uninstalling or losing its settings.
+CI verifies the package, display name, and signing certificate before uploading
+`t3code-preview-android-arm64`. Expo OTA updates are disabled for this APK;
+update it by installing a newer Preview APK, not through the production feed.
 
-For native builds outside this workflow, set `APP_VARIANT=production`,
+For a separate native client using those OTA feeds, set `APP_VARIANT=production`,
 `T3CODE_MOBILE_APP_ID=dev.quinntyx.t3code`, and `T3CODE_MOBILE_UPDATE_URL` to
 `https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-mobile/<android-or-ios>/manifest.json`.
 Use the exported manifest's `runtimeVersion` as
-`T3CODE_MOBILE_RUNTIME_VERSION` when building the matching native client.
+`T3CODE_MOBILE_RUNTIME_VERSION` when building the matching native client. Existing
+production APKs use the separate `t3code` signing key backed up privately in
+`~/.local/share/t3code-fork/`; preserve that backup for production app upgrades.
 The mobile workflow is called by Fork CI after its quality gate, not independently.
 Publication is serialized, and an obsolete main revision cannot advance a feed.
 The Linux runner can export iOS JavaScript, but an installable iOS binary still
