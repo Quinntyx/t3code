@@ -181,6 +181,35 @@ Stashes containing uploaded files must be restored in their original environment
 Those files are retained for 24 hours. After an upload expires, restore the prompt
 and use **Attach again** or remove the missing file before sending.
 
+## Deus live voice
+
+Deus is a project conversation, separate from a worker thread and from composer
+dictation. [Enable it on the destination environment](project-settings.md#deus),
+then open the project's Deus panel without starting a thread. Opening or
+reopening the panel never turns on the microphone.
+
+Choose **Connect voice** to start listening and allow microphone access on your
+device. Deus can answer aloud and delegate work to ordinary threads while the
+conversation continues. The worker's own thread remains available to inspect
+and control its work. Typed messages in the panel use the same project
+conversation when voice is unavailable.
+
+- **Mute microphone** pauses what you send while leaving the connection open;
+  **Resume microphone** starts sending again.
+- **Interrupt** stops the current spoken reply without disconnecting or canceling
+  a worker.
+- **Disconnect voice** releases your local microphone and ends that voice
+  connection. Closing the panel releases local media too, but never stops workers.
+
+**Start new conversation** begins a fresh conversation with long-term memory
+retained. It does not cancel running workers. When another device owns the
+microphone connection, use the explicit takeover action rather than expecting
+opening the panel to take it over.
+
+Browser voice needs [HTTPS or localhost](remote-access.md#deus-voice-over-a-remote-connection)
+and microphone permission. Composer dictation instead records a draft for you to
+review and send; it does not open a live Deus conversation.
+
 ## Voice input on iPhone
 
 On supported iPhones with iOS 26 or later, use the composer's microphone to record,

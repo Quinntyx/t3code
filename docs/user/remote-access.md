@@ -181,6 +181,19 @@ For a plain HTTP LAN endpoint, use the direct pairing URL in a browser that can
 open it, or pair from the desktop app. On mobile, an IP address entered without a
 scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
+## Deus voice over a remote connection
+
+Deus uses the selected project's destination environment for its models,
+credentials, memory and workers. The microphone is on the device you are using,
+not the remote host. Configure Deus on that destination before connecting voice.
+
+Browsers require a secure context: **HTTPS or localhost**, plus microphone
+permission. A plain HTTP LAN or tailnet IP can support ordinary threads but
+cannot enable browser microphone capture. Use an HTTPS route, such as Tailscale
+HTTPS, instead. Remote access alone does not grant microphone permission or make
+an unsupported native client voice-capable. Opening the panel never requests
+the microphone; connecting voice does.
+
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Environments → Add environment**, choose

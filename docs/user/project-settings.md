@@ -46,6 +46,52 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Deus
+
+Deus is off by default on each environment. In **Settings → Projects**, select
+its project and environment, then open Deus and choose **Load Deus settings**.
+On web and desktop it is also under **Settings → Providers**. Enter the text
+model, Live model and voice you intend to use, then choose **Save and enable
+Deus**. **Save and disable Deus** turns it off again. Enabling it applies to
+that environment, not just the selected project or device.
+
+A Gemini Developer API key must already be saved on the destination environment.
+The settings page reports whether one is configured; it does not collect a key.
+Credentials stay in that environment's secret storage, not on the phone or
+browser you connect from. Missing credentials or unsupported voice leave normal
+threads usable. Opening Deus never starts a microphone recording.
+
+Open Deus from the project's sidebar entry, its command-palette actions, or
+**Settings → Projects**; you do not need to create or select a thread. Choose
+the destination when a project has checkouts on several environments. See
+[live voice](composer.md#deus-live-voice) for connection controls.
+
+### Review or remove memory
+
+In the project's Deus panel, open **Tasks, memory and learning**. Load the
+briefing or search long-term memory, then use **Read evidence** to review a
+memory's source. For project memory, choose **Correct or remove**: enter a
+correction and save it, or leave it empty and confirm removal. Removal excludes
+the memory from future retrieval; it does not erase the retained correction
+history. Shared memory can be read here but not changed from this panel.
+
+**Start new conversation** resets the conversation, not the project. Long-term
+memory is retained, and existing workers continue. Closing the panel or resetting
+never cancels a worker; stop that worker explicitly if you want it stopped.
+
+### Learning
+
+Project learning is off by default. In **Tasks, memory and learning**, load
+learning status, then choose **Enable learning** only after a learning model is
+configured on the destination environment. **Disable learning** turns off future
+automatic runs. Deus itself must also be enabled there.
+
+Enabled projects learn at **04:00 in the host environment's local time**, not
+your phone's time zone. The host must be running then: missed runs are not
+caught up after startup or re-enabling Deus. Choose **Run learning now** to run
+manually, and review its outcome in learning history. A failed or blocked run
+leaves its observations available for a later run.
+
 ## Worktree branch names
 
 In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,

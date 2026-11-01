@@ -44,6 +44,24 @@ on macOS and Ctrl on Windows and Linux, including GNOME, KDE Plasma, Niri, and
 Hyprland. If a custom desktop shortcut takes the same keys, choose another binding
 in Settings.
 
+## Deus
+
+On web and desktop, these defaults target the selected project's Deus panel:
+
+| Action                              | Default           |
+| ----------------------------------- | ----------------- |
+| Open Deus without starting a thread | `mod+alt+shift+d` |
+| Connect voice explicitly            | `mod+alt+c`       |
+| Disconnect voice                    | `mod+alt+x`       |
+| Mute or resume the microphone       | `mod+alt+shift+m` |
+
+`mod` means Command on macOS and Ctrl on Windows and Linux. Open and mute use
+Shift to leave macOS's Dock and minimize-all shortcuts alone. These shortcuts do
+not intercept terminal input. Rebind them in **Settings → Keybindings** if your
+browser or desktop takes the same keys. Connecting still requires Deus support
+and microphone permission; opening the panel never starts capture. Use the
+panel's **Interrupt** action to stop a spoken reply without disconnecting.
+
 ## Copy pull request references
 
 With a PR open in the right panel or on the Pull requests page, use `mod+shift+c`

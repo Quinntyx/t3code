@@ -20,6 +20,19 @@ and modes you choose in a draft keep their permissions.
 Approve or reject requests in the conversation to let the agent continue. Permission modes do
 not prevent the agent from asking questions about the task.
 
+## Deus and workers
+
+Deus controls require the permissions granted by your connection to the
+project's destination environment. Being able to read a conversation does not
+grant microphone control, memory correction, learning, or settings changes.
+Unavailable controls do not change the permissions of ordinary threads.
+
+A worker delegated by Deus is an ordinary thread with its own permission mode
+and approval requests. Review those requests in that thread. Muting,
+interrupting, disconnecting, closing Deus, or starting a new conversation never
+cancels workers or approves their pending requests. Stop a worker in its own
+thread when you want to cancel it.
+
 ## Provider differences
 
 Providers enforce permissions differently. Some read-only actions can proceed in **Supervised**.
