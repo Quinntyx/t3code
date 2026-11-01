@@ -374,6 +374,9 @@ function Sidebar({
             variant === "floating" || variant === "inset"
               ? "p-(--floating-panel-gap) group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
               : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+            // The content beside a floating card keeps the gap on that side, as it does beside
+            // the right panel's card, so the two never add up to a double gap.
+            variant === "floating" && (side === "left" ? "pr-0" : "pl-0"),
             className,
           )}
           data-slot="sidebar-container"
@@ -387,7 +390,7 @@ function Sidebar({
                     "relative z-0 overflow-hidden rounded-(--floating-panel-radius) shadow-float [--panel-glass-tint:var(--sidebar)]",
                     // Rows and controls keep corners concentric with the card's.
                     "[--sidebar-content-inset:0.625rem] [--sidebar-row-radius:calc(var(--floating-panel-radius)-var(--sidebar-content-inset))] [--control-radius:var(--sidebar-row-radius)] [&_[data-slot=sidebar-footer]]:pb-(--sidebar-content-inset)",
-                    // The window corner's sidebar toggle moves into the footer, so the brand
+                    // The window corner's sidebar toggle moves to a bottom bubble, so the brand
                     // only clears window controls that overlap the card (macOS traffic lights).
                     "[--workspace-titlebar-content-left:max(calc(var(--workspace-controls-left)-var(--floating-panel-gap)),calc(var(--sidebar-content-inset)+var(--sidebar-row-content-inset)))]",
                   )
