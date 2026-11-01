@@ -211,11 +211,13 @@ class T3WorkspaceNavigationView(
 
   @Composable
   private fun floatingTabs() {
+    val color = Color(containerColor)
     Surface(
       modifier = Modifier.fillMaxSize().padding(8.dp),
       shape = CircleShape,
-      color = Color(containerColor),
-      shadowElevation = 6.dp,
+      color = color,
+      // React Native glass shows through a clear container; a shadow would darken it.
+      shadowElevation = if (color.alpha < 1f) 0.dp else 6.dp,
     ) {
       Row(
         modifier = Modifier.fillMaxSize().selectableGroup(),
