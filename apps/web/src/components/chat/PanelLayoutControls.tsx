@@ -1,9 +1,16 @@
-import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
+import {
+  PanelBottomIcon,
+  PanelRightIcon,
+  PanelsRightBottomIcon,
+  SquareMenuIcon,
+} from "lucide-react";
 import { Maximize2, Minimize2 } from "lucide";
 import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+
+import { FloatingControlBubble } from "../FloatingControlBubble";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
@@ -14,6 +21,8 @@ export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
+  orientation?: "horizontal" | "vertical";
+  tooltipSide?: "bottom" | "left";
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
@@ -34,6 +43,8 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
+  orientation = "horizontal",
+  tooltipSide = "bottom",
   terminalAvailable,
   terminalOpen,
   terminalShortcutLabel,
@@ -70,7 +81,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           threadPanelToggle
         )}
       </TooltipTrigger>
-      <TooltipPopup side="bottom">
+      <TooltipPopup side={tooltipSide}>
         Toggle thread details
         {threadPanelShortcutLabel ? ` (${threadPanelShortcutLabel})` : ""}
       </TooltipPopup>
@@ -79,7 +90,10 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 
   return (
     <div
-      className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
+      className={cn(
+        "flex shrink-0 items-center [-webkit-app-region:no-drag]",
+        orientation === "vertical" ? "flex-col gap-0.5" : "h-full gap-1",
+      )}
       data-panel-layout-controls
     >
       {showThreadPanelControl ? threadPanelControl : null}
@@ -98,7 +112,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               <PanelBottomIcon className="size-4" />
             </Toggle>
           </TooltipTrigger>
-          <TooltipPopup side="bottom">
+          <TooltipPopup side={tooltipSide}>
             {terminalAvailable
               ? `Toggle terminal drawer${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}`
               : "Terminal drawer is unavailable"}
@@ -121,7 +135,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               <PanelRightIcon className="size-4" />
             </Toggle>
           </TooltipTrigger>
-          <TooltipPopup side="bottom">
+          <TooltipPopup side={tooltipSide}>
             {rightPanelAvailable
               ? `Toggle right panel${rightPanelShortcutLabel ? ` (${rightPanelShortcutLabel})` : ""}`
               : rightPanelUnavailableLabel}
@@ -135,9 +149,11 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl({
   maximized,
   onToggle,
+  tooltipSide = "bottom",
 }: {
   maximized: boolean;
   onToggle: () => void;
+  tooltipSide?: "bottom" | "left";
 }) {
   const label = maximized ? "Restore panel size" : "Maximize panel";
   return (
@@ -156,7 +172,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
           </Toggle>
         }
       />
-      <TooltipPopup side="bottom">{label}</TooltipPopup>
+      <TooltipPopup side={tooltipSide}>{label}</TooltipPopup>
     </Tooltip>
   );
 });
@@ -208,5 +224,33 @@ export function WorkspaceTitlebarControls(props: {
       ) : null}
       <div className="pointer-events-auto flex h-full items-center">{props.children}</div>
     </div>
+  );
+}
+
+/**
+ * With floating panels, the layout toggles fold into one bubble in the bottom-right corner, a
+ * twin of the sidebar's, and unfold upward on hover or focus.
+ */
+export function FloatingPanelControls({
+  maximize,
+  ...props
+}: PanelLayoutControlsProps & { maximize: ReactNode }) {
+  return (
+    <FloatingControlBubble
+      className="group/floating-controls absolute right-(--floating-panel-gap) bottom-0 z-30 mb-(--floating-panel-gap) gap-0"
+      data-floating-panel-controls
+      data-floating-dock-bubble
+    >
+      <div className="grid grid-rows-[0fr] group-focus-within/floating-controls:grid-rows-[1fr] group-hover/floating-controls:grid-rows-[1fr] group-has-data-popup-open/floating-controls:grid-rows-[1fr] [[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-150 [[data-panel-animations=true]_&]:ease-out">
+        <div className="flex min-h-0 flex-col items-center gap-0.5 overflow-hidden">
+          {maximize}
+          <PanelLayoutControls {...props} orientation="vertical" tooltipSide="left" />
+          <span aria-hidden className="h-0.5 shrink-0" />
+        </div>
+      </div>
+      <span aria-hidden className="flex size-7 items-center justify-center text-muted-foreground">
+        <PanelsRightBottomIcon className="size-4" />
+      </span>
+    </FloatingControlBubble>
   );
 }

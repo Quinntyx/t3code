@@ -1444,6 +1444,17 @@ export default function ThreadTerminalDrawer({
   const canOperateTerminal = useEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope);
   const terminalArea = workspaceAreaProps("terminal", 5, "Terminal");
   const isPanel = mode === "panel";
+  const floating = useClientSettings((settings) => settings.floatingPanelsEnabled) && !isPanel;
+  const drawerClassName = cn(
+    "relative flex min-w-0 flex-col overflow-hidden",
+    isPanel
+      ? "h-full flex-1 bg-background"
+      : floating
+        ? // Inset so the first line and the toolbar clear the card's rounded corners.
+          "z-45 mx-(--floating-panel-gap) mb-(--floating-panel-gap) shrink-0 rounded-(--floating-panel-radius) px-3 pt-3 pb-2 shadow-float [--terminal-toolbar-inset:0.875rem]"
+        : "z-45 shrink-0 border-t border-border/80 bg-background",
+  );
+  const floatingGlass = floating ? <div aria-hidden className="panel-glass" /> : null;
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1730,12 +1741,10 @@ export default function ThreadTerminalDrawer({
         {...(!isPanel && visible ? terminalArea : {})}
         data-thread-terminal-drawer
         data-terminal-owner={isPanel ? "right-panel" : "drawer"}
-        className={cn(
-          "relative flex min-w-0 flex-col overflow-hidden bg-background",
-          isPanel ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
-        )}
+        className={drawerClassName}
         style={isPanel ? undefined : { height: `var(${DRAG_HEIGHT_PROPERTY}, ${drawerHeight}px)` }}
       >
+        {floatingGlass}
         {!isPanel ? (
           <div
             className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
@@ -1767,12 +1776,10 @@ export default function ThreadTerminalDrawer({
       {...(!isPanel && visible ? terminalArea : {})}
       data-thread-terminal-drawer
       data-terminal-owner={isPanel ? "right-panel" : "drawer"}
-      className={cn(
-        "relative flex min-w-0 flex-col overflow-hidden bg-background",
-        isPanel ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
-      )}
+      className={drawerClassName}
       style={isPanel ? undefined : { height: `var(${DRAG_HEIGHT_PROPERTY}, ${drawerHeight}px)` }}
     >
+      {floatingGlass}
       {!isPanel ? (
         <div
           className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
@@ -1785,7 +1792,7 @@ export default function ThreadTerminalDrawer({
       ) : null}
 
       {!hasTerminalSidebar && (
-        <div className="pointer-events-none absolute right-2 top-2 z-20">
+        <div className="pointer-events-none absolute top-[var(--terminal-toolbar-inset,0.5rem)] right-[var(--terminal-toolbar-inset,0.5rem)] z-20">
           <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
             <TerminalActionButton
               disabled={!canOperateTerminal}

@@ -53,7 +53,7 @@ function Surface({
         "before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:border before:border-(--chat-composer-attached-outline)",
         "[--chat-composer-attached-fill:color-mix(in_srgb,var(--chat-composer-attached-surface)_var(--glass-opacity),transparent)]",
         "before:bg-(--chat-composer-attached-fill) before:bg-linear-to-b before:from-(--chat-composer-attached-tint) before:to-(--chat-composer-attached-tint) before:composer-frost",
-        "before:shadow-composer dark:before:shadow-composer-dark",
+        "before:shadow-float",
         "dark:supports-[(backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px))]:before:bg-composer-seam-above",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:before:bg-(--chat-composer-attached-surface)",
         // Merged into the composer's liquid glass, which draws this surface instead.

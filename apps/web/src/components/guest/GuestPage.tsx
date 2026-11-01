@@ -671,7 +671,7 @@ function GuestComposer({
   };
   return (
     <form
-      className="flex flex-col gap-2 rounded-3xl border border-border bg-card px-4 pt-3 pb-2.5 shadow-composer dark:shadow-composer-dark"
+      className="flex flex-col gap-2 rounded-3xl border border-border bg-card px-4 pt-3 pb-2.5 shadow-float"
       onSubmit={(event) => {
         event.preventDefault();
         void send();

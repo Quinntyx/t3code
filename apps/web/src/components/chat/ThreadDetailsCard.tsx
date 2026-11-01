@@ -12,6 +12,7 @@ import {
 } from "./threadDetailsCardLayout";
 import { observeResize } from "../../lib/observeResize";
 import { requestWorkspaceFocus } from "../../lib/workspaceFocus";
+import { useClientSettings } from "../../hooks/useSettings";
 
 export function ThreadDetailsCard({
   threadRef,
@@ -30,6 +31,9 @@ export function ThreadDetailsCard({
   const placement = canvas?.detailsCardPlacement ?? null;
   const mode = placement ? "inline" : "popover";
   const topInset = canvas?.detailsCardTopInset ?? 0;
+  // Floating panels clear the titlebar's toggles, so the card rises to the window's top edge.
+  const riseToTopEdge =
+    useClientSettings((settings) => settings.floatingPanelsEnabled) && topInset === 0;
   const inlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
@@ -104,7 +108,7 @@ export function ThreadDetailsCard({
   const card = (
     <div
       className={cn(
-        "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-glass",
+        "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-glass shadow-float",
         mode === "popover" &&
           "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
       )}
@@ -142,6 +146,8 @@ export function ThreadDetailsCard({
           className={cn(
             "absolute z-20",
             topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
+            riseToTopEdge &&
+              "translate-x-1 translate-y-[calc(var(--floating-panel-gap)-var(--workspace-topbar-height)-0.75rem)]",
           )}
           style={{
             right: placement.right,

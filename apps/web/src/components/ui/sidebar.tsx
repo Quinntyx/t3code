@@ -365,23 +365,41 @@ function Sidebar({
         <div
           className={cn(
             "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) md:flex",
-            "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            "[[data-panel-animations=true]_&]:transition-[left,right,width,visibility] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            // A floating card's shadow would otherwise peek in from off-screen once it slides out.
+            variant === "floating" && "group-data-[collapsible=offcanvas]:invisible",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
             variant === "floating" || variant === "inset"
-              ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
+              ? "p-(--floating-panel-gap) group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
               : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+            // The content beside a floating card keeps the gap on that side, as it does beside
+            // the right panel's card, so the two never add up to a double gap.
+            variant === "floating" && (side === "left" ? "pr-0" : "pl-0"),
             className,
           )}
           data-slot="sidebar-container"
           {...props}
         >
           <div
-            className="flex h-full w-full flex-col bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
+            className={cn(
+              "flex h-full w-full flex-col",
+              variant === "floating"
+                ? cn(
+                    "relative z-0 overflow-hidden rounded-(--floating-panel-radius) shadow-float [--panel-glass-tint:var(--sidebar)]",
+                    // Rows and controls keep corners concentric with the card's.
+                    "[--sidebar-content-inset:0.625rem] [--sidebar-row-radius:calc(var(--floating-panel-radius)-var(--sidebar-content-inset))] [--control-radius:var(--sidebar-row-radius)] [&_[data-slot=sidebar-footer]]:pb-(--sidebar-content-inset)",
+                    // The window corner's sidebar toggle moves to a bottom bubble, so the brand
+                    // only clears window controls that overlap the card (macOS traffic lights).
+                    "[--workspace-titlebar-content-left:max(calc(var(--workspace-controls-left)-var(--floating-panel-gap)),calc(var(--sidebar-content-inset)+var(--sidebar-row-content-inset)))]",
+                  )
+                : "bg-sidebar surface-grain",
+            )}
             data-sidebar="sidebar"
             data-slot="sidebar-inner"
           >
+            {variant === "floating" ? <div aria-hidden className="panel-glass" /> : null}
             {children}
           </div>
         </div>
@@ -606,7 +624,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
     <main
       className={cn(
-        "relative flex min-w-0 w-full flex-1 flex-col bg-background surface-grain",
+        "relative flex min-w-0 w-full flex-1 flex-col bg-background surface-grain ambient-shimmer:bg-transparent",
         "md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ms-2 md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ms-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm/5",
         className,
       )}

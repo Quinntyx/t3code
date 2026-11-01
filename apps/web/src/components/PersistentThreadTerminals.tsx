@@ -247,6 +247,7 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
           "[[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
         active && visible && "[[data-panel-animations=true]_&]:starting:grid-rows-[0fr]!",
       )}
+      data-floating-terminal-dock=""
     >
       <div className="min-h-0 overflow-clip">
         <ThreadTerminalDrawer

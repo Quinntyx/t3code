@@ -61,7 +61,7 @@ function Host({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="composer-host"
       className={cn(
-        "relative z-10 w-full rounded-(--chat-composer-radius) shadow-composer after:z-1 dark:shadow-none",
+        "relative z-10 w-full rounded-(--chat-composer-radius) shadow-float after:z-1",
         outlineClasses,
         contextSeamClasses,
         // Shaped liquid glass draws the outline around the drawers and strip it merges.
@@ -84,7 +84,7 @@ function Main({ className, ...props }: ComponentProps<"div">) {
         outlineClasses,
         "after:z-20 after:hidden group-has-data-[composer-banner-surface=attached]/composer-surface:after:block",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:bg-(--chat-composer-glass-fill) group-has-data-[composer-banner-surface=attached]/composer-surface:composer-frost",
-        "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-composer dark:group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-none",
+        "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-float",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:group-has-data-[composer-banner-surface=attached]/composer-surface:bg-(--chat-composer-glass-surface)",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:**:data-[chat-composer-mobile-collapsed=true]:min-h-[calc(1rem+1px)]",
         className,

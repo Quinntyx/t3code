@@ -24,6 +24,7 @@ import {
   shortcutLabelForCommand,
 } from "../keybindings";
 import { isEditableFocused } from "../lib/editableFocus";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
@@ -31,12 +32,14 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
+import { useClientSettings, useEnvironmentIdentificationMode } from "../hooks/useSettings";
 import {
   PanelAnimationSuppressionProvider,
   usePanelAnimationSettings,
   usePanelNavigationSuppression,
 } from "../panelAnimations";
+import { AmbientShimmer } from "./AmbientShimmer";
+import { FloatingControlBubble } from "./FloatingControlBubble";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import ThreadSidebar from "./Sidebar";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
@@ -318,7 +321,10 @@ function SidebarControl() {
   const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
+  // Floating panels turn the toggle into a bottom-corner bubble that follows the card's edge.
+  const floatingBubble = floatingPanels && !isMobile;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
     context: { usagePageOpen },
   });
@@ -370,32 +376,43 @@ function SidebarControl() {
       node === null ? undefined : registerAppShellCommands(router, node),
   );
 
+  const trigger = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <SidebarTrigger
+            variant={
+              isSidebarVisible && stageBackdropVariant && !floatingPanels
+                ? "media-navigation"
+                : "ghost"
+            }
+            className={cn(
+              "pointer-events-auto",
+              isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
+            )}
+            aria-label="Toggle main sidebar"
+          />
+        }
+      />
+      <TooltipPopup side={floatingBubble ? "right" : "bottom"}>
+        Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
+      </TooltipPopup>
+    </Tooltip>
+  );
+
   return (
     <div
       ref={appShellCommandsRef}
       className={cn(
-        "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
+        floatingBubble
+          ? "fixed bottom-0 left-(--floating-sidebar-bubble-left) z-50 mb-(--floating-panel-gap) [[data-panel-animations=true]_&]:transition-[left] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out"
+          : "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
         isMobile && mobileSheetMounted && "hidden",
       )}
       data-sidebar-control=""
+      data-floating-dock-bubble={floatingBubble ? "" : undefined}
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarTrigger
-              variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
-              className={cn(
-                "pointer-events-auto",
-                isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
-              )}
-              aria-label="Toggle main sidebar"
-            />
-          }
-        />
-        <TooltipPopup side="bottom">
-          Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
-        </TooltipPopup>
-      </Tooltip>
+      {floatingBubble ? <FloatingControlBubble>{trigger}</FloatingControlBubble> : trigger}
     </div>
   );
 }
@@ -412,6 +429,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
+  const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
+  const sidebarSheetViewport = useMediaQuery("max-md");
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // A clamped drag may not change width, so viewport changes need a separate subscription.
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
@@ -439,6 +458,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     "--sidebar-width": `${clampThreadSidebarWidth(sidebarWidth, sidebarMinimumWidth, sidebarMaximumWidth)}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...windowControlsInsetStyle,
+    // The sidebar toggle leaves the titlebar for its corner bubble, so titles need no room for it.
+    ...(floatingPanels && !sidebarSheetViewport
+      ? {
+          "--workspace-titlebar-content-left":
+            "max(var(--workspace-gutter-start), var(--workspace-controls-left))",
+        }
+      : {}),
   } as CSSProperties;
 
   return (
@@ -449,9 +475,11 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         defaultOpen
         style={sidebarProviderStyle}
       >
+        <AmbientShimmer />
         <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
         <Sidebar
           side="left"
+          variant={floatingPanels ? "floating" : "sidebar"}
           collapsible="offcanvas"
           data-app-sidebar=""
           {...sidebarArea}

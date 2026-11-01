@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useClientSettings, useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
@@ -38,12 +38,14 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
-  const backdropVariant = resolveSidebarStageBackdropVariant(
-    stageLabel,
-    environmentIdentificationMode,
-  );
+  const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
+  // A floating glass card shows the backdrop through it, so artwork falls back to the pill.
+  const backdropVariant = floatingPanels
+    ? null
+    : resolveSidebarStageBackdropVariant(stageLabel, environmentIdentificationMode);
   const pillLabel =
-    environmentIdentificationMode === "pill"
+    environmentIdentificationMode === "pill" ||
+    (floatingPanels && environmentIdentificationMode !== "none")
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
       : null;
 

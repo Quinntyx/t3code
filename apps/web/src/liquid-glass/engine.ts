@@ -19,7 +19,7 @@ import {
 } from "./shape";
 
 const GLASS_SELECTOR =
-  ".surface-glass, .alert-glass, .dialog-glass, .dropdown-glass, [data-liquid-glass], [data-composer-banner-surface]";
+  ".surface-glass, .panel-glass, .alert-glass, .dialog-glass, .dropdown-glass, [data-liquid-glass], [data-composer-banner-surface]";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MIN_SIZE = 16;
 const MAX_AREA = 2_000_000;
