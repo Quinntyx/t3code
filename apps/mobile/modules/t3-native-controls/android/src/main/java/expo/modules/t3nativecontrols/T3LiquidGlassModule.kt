@@ -23,6 +23,9 @@ import expo.modules.kotlin.views.ExpoView
 @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.TIRAMISU)
 private val SUPPORTED = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
+// Bumped when any target attaches or moves, so glass that found none looks again.
+private var targetGeneration = 0
+
 class T3LiquidGlassModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3LiquidGlass")
@@ -61,7 +64,14 @@ class T3LiquidGlassTargetView(context: Context, appContext: AppContext) :
     )
   }
 
-  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) = Unit
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    targetGeneration++
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    if (changed) targetGeneration++
+  }
 
   override fun dispatchDraw(canvas: Canvas) {
     val node = node
@@ -96,8 +106,11 @@ class T3LiquidGlassView(context: Context, appContext: AppContext) : ExpoView(con
   private var refraction = 100f
   private var dispersion = 100f
   private val node: RenderNode? = if (SUPPORTED) RenderNode("T3LiquidGlass") else null
+  // Animated glass relayouts every frame; compile once and only update uniforms.
+  private val shader: RuntimeShader? by lazy { if (SUPPORTED) compileShader() else null }
   private var target: T3LiquidGlassTargetView? = null
   private var searched = false
+  private var searchedGeneration = 0
   private var effectDirty = true
   private val targetLocation = IntArray(2)
   private val location = IntArray(2)
@@ -106,7 +119,10 @@ class T3LiquidGlassView(context: Context, appContext: AppContext) : ExpoView(con
   private var drewFallback = false
 
   private val preDraw = ViewTreeObserver.OnPreDrawListener {
-    if (!searched || target?.isAttachedToWindow == false) resolveTarget()
+    val stale = target?.isAttachedToWindow == false
+    if (!searched || stale || (target == null && searchedGeneration != targetGeneration)) {
+      resolveTarget()
+    }
     val target = target
     if (target != null) {
       target.getLocationInWindow(targetLocation)
@@ -190,25 +206,42 @@ class T3LiquidGlassView(context: Context, appContext: AppContext) : ExpoView(con
 
   private fun resolveTarget() {
     searched = true
+    searchedGeneration = targetGeneration
     target = findTarget()
     invalidate()
   }
 
   // The nearest target painted before this view, within its own screen and never an ancestor:
-  // an ancestor would record this view into the node it samples.
-  private fun findTarget(): T3LiquidGlassTargetView? {
+  // an ancestor would record this view into the node it samples. Chrome declared before its
+  // content and raised by zIndex falls back to a later target it covers.
+  private fun findTarget(): T3LiquidGlassTargetView? =
+    findSiblingTarget(later = false) ?: findSiblingTarget(later = true)
+
+  private fun findSiblingTarget(later: Boolean): T3LiquidGlassTargetView? {
     var child: View = this
-    var found: T3LiquidGlassTargetView? = null
-    while (found == null) {
-      val parent = child.parent as? ViewGroup
-      if (parent == null || parent is T3LiquidGlassTargetView) break
-      found = (parent.indexOfChild(child) - 1 downTo 0).firstNotNullOfOrNull {
-        lastTargetIn(parent.getChildAt(it))
+    while (true) {
+      val parent = child.parent as? ViewGroup ?: return null
+      if (parent is T3LiquidGlassTargetView) return null
+      val index = parent.indexOfChild(child)
+      val found = if (later) {
+        (index + 1 until parent.childCount).firstNotNullOfOrNull {
+          lastTargetIn(parent.getChildAt(it))?.takeIf(::overlaps)
+        }
+      } else {
+        (index - 1 downTo 0).firstNotNullOfOrNull { lastTargetIn(parent.getChildAt(it)) }
       }
-      if (isScreenBoundary(parent)) break
+      if (found != null || isScreenBoundary(parent)) return found
       child = parent
     }
-    return found
+  }
+
+  private fun overlaps(target: View): Boolean {
+    target.getLocationInWindow(targetLocation)
+    getLocationInWindow(location)
+    return location[0] < targetLocation[0] + target.width &&
+      targetLocation[0] < location[0] + width &&
+      location[1] < targetLocation[1] + target.height &&
+      targetLocation[1] < location[1] + height
   }
 
   private fun lastTargetIn(view: View): T3LiquidGlassTargetView? = when {
@@ -227,21 +260,21 @@ class T3LiquidGlassView(context: Context, appContext: AppContext) : ExpoView(con
   private fun createEffect(): RenderEffect? {
     val density = resources.displayMetrics.density
     var effect: RenderEffect? = null
-    val shader = if (refraction > 0f) compileShader() else null
-    if (shader != null) {
-      shader.setFloatUniform("size", width.toFloat(), height.toFloat())
-      shader.setFloatUniform("rim", RIM_WIDTH_DP * density)
-      shader.setFloatUniform("sigma", RIM_SOFTEN_DP * density)
+    val refractionShader = if (refraction > 0f) shader else null
+    if (refractionShader != null) {
+      refractionShader.setFloatUniform("size", width.toFloat(), height.toFloat())
+      refractionShader.setFloatUniform("rim", RIM_WIDTH_DP * density)
+      refractionShader.setFloatUniform("sigma", RIM_SOFTEN_DP * density)
       // Matches the web filter's per-channel scales: -19, -20, and -21 at 100%.
       val strength = refraction / 100f * density
       val spread = dispersion / 100f
-      shader.setFloatUniform(
+      refractionShader.setFloatUniform(
         "scale",
         (-20f + spread) * strength,
         -20f * strength,
         (-20f - spread) * strength,
       )
-      effect = RenderEffect.createRuntimeShaderEffect(shader, "content")
+      effect = RenderEffect.createRuntimeShaderEffect(refractionShader, "content")
     }
     // CSS blur takes a standard deviation; RenderEffect takes a radius it converts back to sigma.
     val sigma = blur * density

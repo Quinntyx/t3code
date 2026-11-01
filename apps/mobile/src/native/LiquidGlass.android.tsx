@@ -13,7 +13,7 @@ const NativeBackdrop = requireNativeView<LiquidGlassBackdropProps>(
   "T3LiquidGlassView",
 );
 
-/** Content that glass drawn after it, in the same screen, refracts. */
+/** Content that glass layered over it, in the same screen, refracts. */
 export function LiquidGlassTarget(props: ViewProps) {
   const { liquidGlass } = useAppearancePreferences();
   return liquidGlass.enabled && LIQUID_GLASS_SUPPORTED ? (

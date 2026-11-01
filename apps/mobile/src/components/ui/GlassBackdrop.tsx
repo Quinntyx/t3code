@@ -5,11 +5,16 @@ import { useAppearancePreferences } from "../../features/settings/appearance/App
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { LIQUID_GLASS_SUPPORTED, LiquidGlassBackdrop } from "../../native/LiquidGlass";
 
+/** Whether glass refracts the screen; surfaces otherwise keep their opaque look. */
+export function useLiquidGlassActive(): boolean {
+  return useAppearancePreferences().liquidGlass.enabled && LIQUID_GLASS_SUPPORTED;
+}
+
 export function GlassBackdrop(props: { readonly fallbackColor?: ColorValue }) {
   const { themeAppearance, themeVariables, liquidGlass } = useAppearancePreferences();
   const supportsBlur = Platform.OS === "ios";
   const color = props.fallbackColor ?? themeVariables["--color-glass-fallback"];
-  const liquid = liquidGlass.enabled && LIQUID_GLASS_SUPPORTED && typeof color === "string";
+  const liquid = useLiquidGlassActive() && typeof color === "string";
   const colorStyle = {
     backgroundColor:
       supportsBlur || typeof color !== "string"

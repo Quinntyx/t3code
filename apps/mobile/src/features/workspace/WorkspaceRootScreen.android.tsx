@@ -5,6 +5,7 @@ import { NAVIGATION_TAB_ORDER } from "./navigation-tab-order";
 import { WorkspaceExtraTab } from "./WorkspaceExtraTab";
 import { useWindowDimensions, View } from "react-native";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -89,33 +90,35 @@ export function WorkspaceRootScreen() {
               : { ...insets, bottom: 0 }
           }
         >
-          {enabled.length === 0 ? (
-            <WorkspaceNoTabs />
-          ) : (
-            <WorkspaceTabPanes
-              tabs={TABS}
-              selected={tab}
-              renderTab={(tab) =>
-                tab === "threads" ? (
-                  <HomeRouteScreen />
-                ) : tab !== "pullRequests" ? (
-                  <WorkspaceExtraTab tab={tab} />
-                ) : (
-                  <PullRequestsScreen
-                    renderFrame={(filters, list) => (
-                      <>
-                        <PullRequestToolbar filters={filters} />
-                        <ScreenContent>{list}</ScreenContent>
-                      </>
-                    )}
-                  />
-                )
-              }
-            />
-          )}
+          <LiquidGlassTarget style={{ flex: 1 }}>
+            {enabled.length === 0 ? (
+              <WorkspaceNoTabs />
+            ) : (
+              <WorkspaceTabPanes
+                tabs={TABS}
+                selected={tab}
+                renderTab={(tab) =>
+                  tab === "threads" ? (
+                    <HomeRouteScreen />
+                  ) : tab !== "pullRequests" ? (
+                    <WorkspaceExtraTab tab={tab} />
+                  ) : (
+                    <PullRequestsScreen
+                      renderFrame={(filters, list) => (
+                        <>
+                          <PullRequestToolbar filters={filters} />
+                          <ScreenContent>{list}</ScreenContent>
+                        </>
+                      )}
+                    />
+                  )
+                }
+              />
+            )}
+          </LiquidGlassTarget>
         </SafeAreaInsetsContext>
         {floatingTabsEnabled ? (
-          <FloatingWorkspaceTabs fillWidth onNewThread={startNewTask} />
+          <FloatingWorkspaceTabs fillWidth glass onNewThread={startNewTask} />
         ) : (
           <AndroidWorkspaceNavigation onNewThread={startNewTask} />
         )}
