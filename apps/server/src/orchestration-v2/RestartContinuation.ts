@@ -69,16 +69,23 @@ function restartContinuationBlocked(
           turn.id === request.providerTurnId)),
   );
   if (waitingRequest) return true;
-  return projection.turnItems.some(
-    (item) =>
-      item.type === "secret_request" &&
+  return projection.turnItems.some((item) => {
+    const status =
+      item.type === "secret_request"
+        ? item.secretStatus
+        : item.type === "email_request"
+          ? item.emailStatus
+          : undefined;
+    return (
+      status !== undefined &&
       item.runId === source.id &&
-      (item.secretStatus === "pending" ||
-        (item.secretStatus === "cancelled" &&
+      (status === "pending" ||
+        (status === "cancelled" &&
           item.completedAt !== null &&
           source.completedAt !== null &&
-          DateTime.Equivalence(item.completedAt, source.completedAt))),
-  );
+          DateTime.Equivalence(item.completedAt, source.completedAt)))
+    );
+  });
 }
 
 /** App-owned delegations continue in their own threads and report back. */
@@ -189,7 +196,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
     const projection = yield* threads.getThreadRecords(
       input.threadId,
       ["messages", "runs", "providerTurns", "attempts", "runtimeRequests", "turnItems"],
-      { messageIds: [messageId], turnItemTypes: ["secret_request"] },
+      { messageIds: [messageId], turnItemTypes: ["secret_request", "email_request"] },
     );
     if (
       !resolveProjectSettings(enabled, projection.thread.projectId).settings

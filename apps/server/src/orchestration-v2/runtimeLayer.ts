@@ -55,6 +55,8 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as EmailRequests from "../email/EmailRequests.ts";
+import * as Mailer from "../email/Mailer.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -279,6 +281,10 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
 const layerSecretRequestsProvided = SecretRequests.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
+const layerEmailRequestsProvided = EmailRequests.layer.pipe(
+  Layer.provideMerge(Mailer.layer),
+  Layer.provide(layerThreadManagementProvided),
+);
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -363,6 +369,7 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLaunchProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
+  layerEmailRequestsProvided,
   GuestShareService.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, layerCommandOutputHubProvided)),
   ),

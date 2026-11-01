@@ -28,6 +28,7 @@ export type SettingsPath =
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
+  | "/settings/email"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
@@ -96,6 +97,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/threads": "Threads",
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
+  "/settings/email": "Email",
   "/settings/scheduled-tasks": "Scheduled tasks",
   "/settings/source-control": "Source control",
   "/settings/worktrees": "Worktrees",
@@ -133,6 +135,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/scheduled-tasks",
     ],
   },
+  { heading: "Capabilities", paths: ["/settings/email"] },
   {
     heading: "Code",
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
@@ -904,6 +907,27 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["device pixel ratio dpr resolution sharp hidpi retina 1x 2x"],
   },
   {
+    id: "email-enabled",
+    title: "Agents can draft emails",
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: ["agents send email mail enable disable turn on off drafts aerc"],
+  },
+  {
+    id: "email-accounts-file",
+    title: "aerc accounts file",
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: ["email mail send smtp aerc accounts.conf config path outgoing"],
+  },
+  {
+    id: "email-accounts",
+    title: "Email accounts",
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: ["email mail send from address gmail outlook smtp sendmail msmtp oauth"],
+  },
+  {
     id: "device-sources",
     title: "Device sources",
     to: "/settings/devices",
@@ -1250,6 +1274,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,
+  "/settings/email": "environment",
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",

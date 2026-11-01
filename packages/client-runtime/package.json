@@ -63,6 +63,10 @@
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"
     },
+    "./email-request": {
+      "types": "./src/emailRequest.ts",
+      "default": "./src/emailRequest.ts"
+    },
     "./link-request": {
       "types": "./src/linkRequest.ts",
       "default": "./src/linkRequest.ts"

@@ -13,6 +13,7 @@ import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collaps
 import { EnvironmentSubagentAvatar, SubagentElapsed, V2LifecycleRow } from "./V2LifecycleRow";
 import { LinkRequestCard } from "./LinkRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
+import { EmailRequestCard } from "./EmailRequestCard";
 import { TimelineRowCtx, type TimelineRow } from "./timelineRowContext";
 import { subagentGroupTiming } from "./TimelineV2EventRow.logic";
 
@@ -25,6 +26,15 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
   if (item.type === "secret_request") {
     return (
       <SecretRequestCard
+        environmentId={ctx.activeThreadEnvironmentId}
+        item={item}
+        visibility={visibility}
+      />
+    );
+  }
+  if (item.type === "email_request") {
+    return (
+      <EmailRequestCard
         environmentId={ctx.activeThreadEnvironmentId}
         item={item}
         visibility={visibility}

@@ -377,6 +377,7 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
+import { EmailAccountsReport, EmailRequestAnswerInput, EmailRequestError } from "./emailRequest.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -543,6 +544,8 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
+  emailAnswerRequest: "email.answerRequest",
+  emailListAccounts: "email.listAccounts",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -1909,6 +1912,17 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsEmailAnswerRequestRpc = Rpc.make(WS_METHODS.emailAnswerRequest, {
+  payload: EmailRequestAnswerInput,
+  error: Schema.Union([EmailRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsEmailListAccountsRpc = Rpc.make(WS_METHODS.emailListAccounts, {
+  payload: Schema.Struct({}),
+  success: EmailAccountsReport,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2010,6 +2024,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  WsEmailAnswerRequestRpc,
+  WsEmailListAccountsRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
