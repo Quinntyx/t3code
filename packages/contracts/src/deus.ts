@@ -179,6 +179,12 @@ export const DeusWorkerLink = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId),
   model: ModelSelection,
   runtimeMode: RuntimeMode,
+  status: Schema.optional(Schema.String),
+  previousRunId: Schema.optional(Schema.NullOr(RunId)),
+  pendingApprovals: Schema.optional(NonNegativeInt),
+  operations: Schema.optional(
+    Schema.Struct({ steer: Schema.Boolean, interrupt: Schema.Boolean, queue: Schema.Boolean }),
+  ),
 });
 export type DeusWorkerLink = typeof DeusWorkerLink.Type;
 
@@ -418,7 +424,7 @@ export const DeusHumanTaskActionInput = Schema.Struct({
 
 export const DeusMemorySearchInput = Schema.Struct({
   ...DeusSessionRef.fields,
-  query: TrimmedNonEmptyString,
+  query: Schema.String.check(Schema.isMaxLength(1024)),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(20)),
   scopes: Schema.optional(
     Schema.Array(Schema.Literals(["project", "environment", "global"])).check(
@@ -438,7 +444,7 @@ export const DeusMemoryCorrectionInput = Schema.Struct({
   inputId: DeusInputId,
   memoryId: DeusMemoryId,
   expectedRevision: PositiveInt,
-  correction: Schema.NullOr(TrimmedNonEmptyString),
+  correction: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(16000))),
 });
 export type DeusMemoryCorrectionInput = typeof DeusMemoryCorrectionInput.Type;
 

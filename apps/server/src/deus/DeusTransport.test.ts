@@ -719,10 +719,10 @@ it.live.each(["direct", "relay", "tunnel"] as const)(
             inputId: DeusInputId.make("correction"),
             memoryId: DeusMemoryId.make("missing"),
             expectedRevision: 1,
-            correction: "not implemented",
+            correction: "Correct a missing memory",
           })
           .pipe(Effect.flip))._tag,
-      ).toBe("DeusUnavailableError");
+      ).toBe("DeusStateError");
       expect(yield* Queue.take(events)).toBe("metadata-before-blocked-media");
       yield* Effect.logInfo("deus-authenticated-wire fixture", {
         requestBytes,

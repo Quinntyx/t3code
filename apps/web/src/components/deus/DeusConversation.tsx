@@ -8,6 +8,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
+import { DeusDetails } from "./DeusDetails";
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0]) {
   const error = squashAtomCommandFailure(result);
@@ -134,6 +135,7 @@ export function useDeusConversation({
             </Button>
           </div>
         ) : null}
+        {view ? <DeusDetails view={view} /> : null}
         <ol
           aria-label="Deus transcript"
           className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm"

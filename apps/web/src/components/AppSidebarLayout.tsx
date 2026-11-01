@@ -11,6 +11,7 @@ import { useLocation, useRouter, type AnyRouter } from "@tanstack/react-router";
 
 import { moveWorkspaceFocus, workspaceAreaProps } from "../lib/workspaceFocus";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { DeusShortcuts } from "./deus/DeusCommands";
 import { isElectron } from "../env";
 import {
   releaseThreadUndoShortcut,
@@ -502,6 +503,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         {children}
         <BackgroundThreadAnnouncer />
         <SidebarControl />
+        <DeusShortcuts />
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );

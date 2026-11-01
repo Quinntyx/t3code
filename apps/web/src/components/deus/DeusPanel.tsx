@@ -168,9 +168,19 @@ export function DeusPanel({
                 </Button>
               </>
             ) : (
-              <Button size="sm" disabled={!voice.ready || busy} onClick={voice.connect}>
-                Connect voice
-              </Button>
+              <>
+                <Button size="sm" disabled={!voice.ready || busy} onClick={voice.connect}>
+                  Connect voice
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!voice.ready || busy}
+                  onClick={voice.takeover}
+                >
+                  Take over voice
+                </Button>
+              </>
             )}
           </div>
           <p className="text-3xs text-muted-foreground">

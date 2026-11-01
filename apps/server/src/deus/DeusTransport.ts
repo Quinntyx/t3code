@@ -35,6 +35,7 @@ import * as Bridge from "./DeusThreadBridge.ts";
 import * as Tools from "./DeusTools.ts";
 import * as Configuration from "./DeusConfiguration.ts";
 import * as Memory from "./DeusMemoryService.ts";
+import * as Writer from "./DeusMemoryWriter.ts";
 import * as Ponder from "./DeusPonderService.ts";
 import * as Live from "./DeusLiveService.ts";
 import { DeusLiveError } from "./GeminiLiveAdapter.ts";
@@ -95,7 +96,7 @@ const memoryResult = (entry: Memory.MemoryEntry, bounded: boolean): DeusMemory =
   observationIds: entry.observationIds,
   ponderId: null,
   supersedes: entry.supersedes === null ? null : DeusMemoryId.make(entry.supersedes),
-  removedAt: null,
+  removedAt: entry.removedAt ?? null,
   updatedAt: entry.updatedAt,
   provenance: { scope: entry.scope, sources: entry.sources, commit: entry.commit },
 });
@@ -115,6 +116,7 @@ const make = Effect.gen(function* () {
   const configuration = yield* Configuration.DeusConfiguration;
   const memory = yield* Memory.DeusMemoryService;
   const ponder = yield* Ponder.DeusPonderService;
+  const writer = yield* Writer.DeusMemoryWriter;
   const live = yield* Live.DeusLiveService;
   const secrets = yield* Secrets.SecretRequests;
   const tools = yield* Tools.DeusTools;
@@ -234,7 +236,8 @@ const make = Effect.gen(function* () {
               .read({ ...input, id: input.memoryId, scope: input.scope ?? "project" })
               .pipe(Effect.map((entry) => memoryResult(entry, false))),
           ),
-        [WS_METHODS.deusMemoryCorrect]: () => Effect.fail(unavailable()),
+        [WS_METHODS.deusMemoryCorrect]: (input) =>
+          run(writer.correct(input, connection.check(input))),
         [WS_METHODS.deusPonder]: (input) => run(ponder.runNow(input)),
         [WS_METHODS.deusGetLearning]: (input) => run(ponder.status(input)),
         [WS_METHODS.deusConfigureLearning]: (input) => run(ponder.configure(input)),

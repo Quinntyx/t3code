@@ -7,7 +7,7 @@ import * as Worker from "./DeusPonderWorker.ts";
 import { ponderError } from "./ponderProtocol.ts";
 
 export const layer = Ponder.layer.pipe(
-  Layer.provide(Writer.layer.pipe(Layer.provide(Git.layer))),
+  Layer.provideMerge(Writer.layer.pipe(Layer.provide(Git.layer))),
   Layer.provide(
     Layer.succeed(Worker.DeusPonderWorker, {
       run: () => Effect.fail(ponderError("Synthetic fixture has no learning provider.")),

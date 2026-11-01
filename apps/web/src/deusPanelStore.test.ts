@@ -32,6 +32,26 @@ describe("project-owned Deus panel", () => {
       useRightPanelStore.setState(previous, true);
     }
   });
+  it("opens without capturing media and only explicitly runs destination voice actions", () => {
+    const store = createDeusPanelStore();
+    const actions: string[] = [];
+    store.getState().registerVoice(first, {
+      ready: true,
+      active: false,
+      muted: false,
+      connect: () => actions.push("connect"),
+      disconnect: () => actions.push("disconnect"),
+      toggleMute: () => actions.push("mute"),
+    });
+    store.getState().requestOpen(first);
+    expect(actions).toEqual([]);
+    store.getState().voice?.controls.connect();
+    expect(actions).toEqual(["connect"]);
+    store.getState().unregisterVoice(second);
+    expect(store.getState().voice).not.toBeNull();
+    store.getState().unregisterVoice(first);
+    expect(store.getState().voice).toBeNull();
+  });
   it("keeps its target and identity on repeat entry, without any thread owner", () => {
     const store = createDeusPanelStore();
     store.getState().requestOpen(first);

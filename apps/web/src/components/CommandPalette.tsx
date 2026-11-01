@@ -43,13 +43,14 @@ import {
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   type DesktopWslState,
-  type EnvironmentId,
+  EnvironmentId,
+  ProjectId,
   type FilesystemBrowseResult,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   BugIcon,
@@ -73,6 +74,8 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
+import { useDeusCommands } from "./deus/DeusCommands";
+import { useDeusPanelStore } from "../deusPanelStore";
 import {
   useDeferredValue,
   useEffect,
@@ -637,6 +640,18 @@ function OpenCommandPaletteDialog(props: {
   const canTriage =
     useAtomValue(serverEnvironment.prepareTriage.permissionAtom(triageEnvironmentId)) &&
     supportsTriage(triageEnvironmentId);
+  const deusRoute = useParams({ strict: false });
+  const pinnedDeus = useDeusPanelStore((state) => state.target);
+  const deusCommands = useDeusCommands(
+    currentProjectEnvironmentId && currentProjectId
+      ? { environmentId: currentProjectEnvironmentId, projectId: currentProjectId }
+      : deusRoute.environmentId && deusRoute.projectId
+        ? {
+            environmentId: EnvironmentId.make(deusRoute.environmentId),
+            projectId: ProjectId.make(deusRoute.projectId),
+          }
+        : pinnedDeus,
+  );
   const currentProjectCwd = currentProjectId
     ? (projectCwdById.get(currentProjectId) ?? null)
     : null;
@@ -1568,6 +1583,17 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  for (const action of deusCommands)
+    actionItems.push({
+      kind: "action",
+      value: `action:${action.command}`,
+      title: action.title,
+      searchTerms: ["deus", "voice", "microphone"],
+      disabled: !action.enabled,
+      shortcutCommand: action.command,
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      run: async () => action.run(),
+    });
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
   // Every setting goes to the palette's own matcher, so settings get the same
   // word starts and typo tolerance as threads.

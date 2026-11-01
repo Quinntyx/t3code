@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { DeusInputId, type DeusScope, type DeusSession } from "@t3tools/contracts";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { useStableCallback } from "../hooks/useStableCallback";
 import { deusEnvironment } from "../state/deus";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useDeusPanelStore } from "../deusPanelStore";
@@ -51,7 +52,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
     };
   }, [target, available, permitted, sessionId, conversation]);
 
-  const connect = () => {
+  const connect = useStableCallback((takeover: boolean) => {
     if (!available || !permitted || !session) return;
     const local = useDeusPanelStore.getState().localAttachment;
     if (!local.has(target)) local.register(target, () => owner.disconnect());
@@ -64,7 +65,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
           sessionId: session.sessionId,
           conversation: session.conversation,
           inputId: DeusInputId.make(randomUUID()),
-          takeover: false,
+          takeover,
           authority: {
             runtimeMode: "approval-required",
             interactionMode: "default",
@@ -80,12 +81,42 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
       if (!connection) throw new Error("Voice attachment did not initialize its media transport.");
       return connection;
     });
-  };
+  });
+
+  // oxlint-disable-next-line t3code/react-effect-budget -- Settings, palette and shortcuts share this mounted media owner; registering actions never captures media.
+  useEffect(() => {
+    const store = useDeusPanelStore.getState();
+    store.registerVoice(target, {
+      ready: available && permitted && !!session,
+      active: state.cleanupRequired || !["disconnected", "error"].includes(state.phase),
+      muted: state.muted,
+      connect: () => connect(false),
+      disconnect: () => {
+        void store.releaseLocal(target).catch(() => {});
+      },
+      toggleMute: () => {
+        if (state.muted) void owner.resume();
+        else void owner.mute();
+      },
+    });
+    return () => store.unregisterVoice(target);
+  }, [
+    target,
+    available,
+    permitted,
+    session,
+    state.phase,
+    state.cleanupRequired,
+    state.muted,
+    connect,
+    owner,
+  ]);
   return {
     state,
     permitted,
     ready: available && permitted && !!session,
-    connect,
+    connect: () => connect(false),
+    takeover: () => connect(true),
     disconnect: () => {
       void useDeusPanelStore
         .getState()

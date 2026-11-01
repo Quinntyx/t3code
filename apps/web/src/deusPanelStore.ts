@@ -2,7 +2,18 @@ import { createDeusLocalAttachment, sameDeusScope } from "@t3tools/client-runtim
 import type { DeusScope } from "@t3tools/contracts";
 import { create } from "zustand";
 
+export interface DeusVoiceControls {
+  ready: boolean;
+  active: boolean;
+  muted: boolean;
+  connect(): void;
+  disconnect(): void;
+  toggleMute(): void;
+}
 interface DeusPanelState {
+  voice: { target: DeusScope; controls: DeusVoiceControls } | null;
+  registerVoice(target: DeusScope, controls: DeusVoiceControls): void;
+  unregisterVoice(target: DeusScope): void;
   target: DeusScope | null;
   pendingTarget: DeusScope | null;
   maximized: boolean;
@@ -45,6 +56,11 @@ export function createDeusPanelStore() {
     };
     return {
       target: null,
+      voice: null,
+      registerVoice: (target, controls) => set({ voice: { target, controls } }),
+      unregisterVoice: (target) => {
+        if (get().voice && sameDeusScope(get().voice!.target, target)) set({ voice: null });
+      },
       pendingTarget: null,
       maximized: false,
       busy: false,

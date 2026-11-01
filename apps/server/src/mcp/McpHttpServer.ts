@@ -1100,7 +1100,7 @@ export const layerOrchestratorToolkit = toolkitRegistration(
   OrchestratorHandlers.layer,
 ).pipe(Layer.provide(OrchestratorMcpService.layer), Layer.provide(ThreadMetadataMcpService.layer));
 
-const layerDeusToolkit = toolkitRegistration(DeusToolkit, DeusHandlers.layer);
+export const layerDeusToolkit = toolkitRegistration(DeusToolkit, DeusHandlers.layer);
 
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 

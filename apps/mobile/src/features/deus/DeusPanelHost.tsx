@@ -19,6 +19,7 @@ import { useEnvironments } from "../../state/environments";
 import { useDeusPanelStore } from "./panelStore";
 import { useDeusConversation } from "./useDeusConversation";
 import { useDeusVoice } from "./useDeusVoice";
+import { DeusDetails } from "./DeusDetails";
 
 function Action({
   label,
@@ -228,10 +229,14 @@ function ProjectPanel({ target }: { target: DeusScope }) {
               />
             </>
           ) : (
-            <Action label="Connect voice" disabled={!voice.ready} onPress={voice.connect} />
+            <>
+              <Action label="Connect voice" disabled={!voice.ready} onPress={voice.connect} />
+              <Action label="Take over voice" disabled={!voice.ready} onPress={voice.takeover} />
+            </>
           )}
         </View>
       </View>
+      {conversation.view ? <DeusDetails view={conversation.view} /> : null}
       <Text accessibilityLiveRegion="polite" className="px-4 py-2 text-xs text-muted">
         {conversation.status}
       </Text>

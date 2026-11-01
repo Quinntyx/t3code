@@ -13,6 +13,7 @@ import {
 import {
   createDeusLocalAttachment,
   projectDeusConversation,
+  deusTaskSections,
   DEUS_TRANSCRIPT_LIMIT,
 } from "./deus.ts";
 
@@ -120,6 +121,46 @@ describe("Deus durable conversation projection", () => {
     );
     expect(reset.transcripts).toEqual(initial.transcripts);
     expect(reset.session.conversation).toBe(2);
+  });
+});
+
+describe("Deus task and learning visibility", () => {
+  it("keeps failed learning outside collapsed terminal task history and preserves workers on reset", () => {
+    const source = snapshot();
+    const task = {
+      id: "failed",
+      status: "failed",
+      updatedAt: "2026-10-30T00:00:00.000Z",
+    } as DeusSnapshot["tasks"][number];
+    const newer = { ...task, id: "newer", updatedAt: "2026-10-31T00:00:00.000Z" } as typeof task;
+    const receipt = { id: "blocked", status: "blocked" } as DeusSnapshot["ponderReceipts"][number];
+    const initial = projectDeusConversation(
+      null,
+      {
+        type: "snapshot",
+        snapshot: { ...source, tasks: [task, newer], ponderReceipts: [receipt] },
+      },
+      ref,
+    );
+    const sections = deusTaskSections(initial);
+    expect(sections.active).toEqual([]);
+    expect(sections.history.map((item) => item.id)).toEqual(["newer", "failed"]);
+    expect(sections.learningProblems).toEqual([receipt]);
+    const reset = projectDeusConversation(
+      initial,
+      {
+        type: "delta",
+        delta: {
+          ...ref,
+          previousCursor: DeusCursor.make(0),
+          cursor: DeusCursor.make(1),
+          change: { type: "conversation-reset", conversation: DeusConversation.make(2) },
+        },
+      },
+      ref,
+    );
+    expect(reset.tasks).toEqual(initial.tasks);
+    expect(reset.ponderReceipts).toEqual(initial.ponderReceipts);
   });
 });
 

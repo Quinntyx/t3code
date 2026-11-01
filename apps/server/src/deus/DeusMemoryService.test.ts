@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { DeusInputId, EnvironmentId, ProjectId } from "@t3tools/contracts";
+import {
+  DeusInputId,
+  DeusMemoryId,
+  DeusStateError,
+  EnvironmentId,
+  ProjectId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -11,10 +17,12 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Memory from "./DeusMemoryService.ts";
 import * as Repository from "./DeusRepository.ts";
+import * as Writer from "./DeusMemoryWriter.ts";
 
 const environmentId = EnvironmentId.make("memory-environment");
 const projectId = ProjectId.make("memory-project");
-const fixture = Memory.layer.pipe(
+const fixture = Writer.layer.pipe(
+  Layer.provideMerge(Memory.layer),
   Layer.provideMerge(Git.layer),
   Layer.provideMerge(Repository.layer),
   Layer.provide(
@@ -237,6 +245,68 @@ it.effect(
         "DeusStateError",
       );
       assert.isAbove((yield* memory.search({ ...ref, query: "" })).items.length, 0);
+    }).pipe(Effect.provide(fixture)),
+);
+
+it.effect(
+  "human removal is durable, replayable, revision-checked and checks authority at execution",
+  () =>
+    Effect.gen(function* () {
+      const { root, fs, execute, write, commit, ref, memory } = yield* setup();
+      yield* fs.makeDirectory(root, { recursive: true });
+      yield* execute(["init"]);
+      yield* write("project", "wrong", markdown("wrong", "Erroneous calibration"));
+      yield* commit();
+      const writer = yield* Writer.DeusMemoryWriter;
+      const input = {
+        ...ref,
+        inputId: DeusInputId.make("human-removal"),
+        memoryId: DeusMemoryId.make("wrong"),
+        expectedRevision: 1,
+        correction: null,
+      };
+      const denied = Effect.fail(
+        new DeusStateError({ reason: "conflict", message: "Revoked human grant" }),
+      );
+      assert.equal((yield* writer.correct(input, denied).pipe(Effect.flip))._tag, "DeusStateError");
+      assert.equal(
+        (yield* writer.correct({ ...input, expectedRevision: 2 }, Effect.void).pipe(Effect.flip))
+          ._tag,
+        "DeusStateError",
+      );
+      const result = yield* writer.correct(input, Effect.void);
+      assert.isNotNull(result.removedAt);
+      assert.deepEqual(yield* writer.correct(input, Effect.void), result);
+      assert.deepEqual((yield* memory.search({ ...ref, query: "calibration" })).items, []);
+      assert.lengthOf((yield* (yield* Repository.DeusRepository).snapshot(ref)).memories, 1);
+    }).pipe(Effect.provide(fixture)),
+);
+
+it.effect(
+  "removal leaves committed correction evidence but excludes the entry from retrieval",
+  () =>
+    Effect.gen(function* () {
+      const { root, fs, execute, write, commit, ref, memory } = yield* setup();
+      yield* fs.makeDirectory(root, { recursive: true });
+      yield* execute(["init"]);
+      yield* write("project", "wrong", markdown("wrong", "Erroneous calibration"));
+      yield* commit();
+      const removal = markdown("removed", "Human removed erroneous calibration").replace(
+        '"supersedes":null',
+        '"supersedes":"wrong","removedAt":"2026-10-31T00:00:00.000Z"',
+      );
+      yield* write("project", "removed", removal);
+      yield* commit();
+      assert.deepEqual((yield* memory.search({ ...ref, query: "calibration" })).items, []);
+      assert.deepEqual((yield* memory.briefing(ref)).items, []);
+      assert.equal(
+        (yield* memory.read({ ...ref, scope: "project", id: "wrong" }).pipe(Effect.flip))._tag,
+        "DeusStateError",
+      );
+      assert.include(
+        (yield* execute(["show", `HEAD:${directory("project")}/removed.md`])).stdout,
+        "Human removed",
+      );
     }).pipe(Effect.provide(fixture)),
 );
 

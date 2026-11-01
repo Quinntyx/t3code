@@ -34,6 +34,7 @@ import * as Intake from "../orchestration-v2/ThreadMessageIntake.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Events from "../orchestration-v2/EventStore.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as Adapters from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { invalidOptionSelections } from "../provider/validateModelOptions.ts";
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as Sessions from "./DeusSessionService.ts";
@@ -89,6 +90,7 @@ export class DeusThreadBridge extends Context.Service<
     readonly launch: (input: DeusTaskLaunchInput) => Effect.Effect<DeusTask, Failure>;
     readonly list: (ref: DeusSessionRef) => Effect.Effect<ReadonlyArray<DeusTask>, Failure>;
     readonly read: (ref: WorkerRef) => Effect.Effect<DeusWorkerSnapshot, Failure>;
+    readonly workerScope: (scope: Mcp.McpInvocationScope) => Effect.Effect<DeusSessionRef, Failure>;
     readonly send: (
       input: WorkerRef & {
         readonly commandId: CommandId;
@@ -125,6 +127,7 @@ const make = Effect.gen(function* () {
   const receipts = yield* Receipts.CommandReceiptStoreV2;
   const events = yield* Events.EventStoreV2;
   const registry = yield* ProviderRegistry.ProviderRegistry;
+  const adapters = yield* Adapters.ProviderAdapterRegistryV2;
   const authority = yield* Authority.DeusAuthority;
   const credentials = yield* McpProviderSessions;
   const reconciliation = yield* Semaphore.make(1);
@@ -316,13 +319,32 @@ const make = Effect.gen(function* () {
         )
           continue;
         const records = yield* threads
-          .getThreadRecords(threadId, ["runs", "subagents"])
+          .getThreadRecords(threadId, ["runs", "subagents", "runtimeRequests"])
           .pipe(Effect.mapError(externalError));
         if (records.thread.projectId !== ref.projectId)
           return yield* scopeError("Descendant escaped its Deus project.");
         const prior = task.workers.find((worker) => worker.threadId === threadId);
         for (const run of records.runs) {
+          const turns = yield* adapters.get(run.providerInstanceId).pipe(
+            Effect.flatMap((adapter) => adapter.getCapabilities()),
+            Effect.map((capabilities) => capabilities.turns),
+            Effect.orElseSucceed(() => null),
+          );
           workers.push({
+            status: run.status,
+            previousRunId:
+              records.runs.find((item) => item.ordinal === run.ordinal - 1)?.id ?? null,
+            pendingApprovals:
+              shell?.activeRunId === run.id
+                ? records.runtimeRequests.filter((request) => request.status === "pending").length
+                : 0,
+            operations: {
+              steer:
+                !!turns &&
+                (turns.supportsActiveSteering || turns.supportsSteeringByInterruptRestart),
+              interrupt: turns?.supportsInterrupt ?? false,
+              queue: turns?.supportsQueuedMessages ?? false,
+            },
             threadId,
             runId: run.id,
             parentTaskId: prior?.parentTaskId ?? null,
@@ -716,7 +738,9 @@ const make = Effect.gen(function* () {
           project: (event) => event,
           filter: (event) =>
             "event" in event &&
-            ["run.updated", "run.created", "subagent.updated"].includes(event.event.type),
+            ["run.updated", "run.created", "subagent.updated", "runtime-request.updated"].includes(
+              event.event.type,
+            ),
         })
         .pipe(
           Stream.runForEach((event) =>
@@ -733,6 +757,23 @@ const make = Effect.gen(function* () {
           Effect.orDie,
           Effect.forkScoped,
         );
+    }),
+    workerScope: Effect.fn("DeusThreadBridge.workerScope")(function* (scope) {
+      if (!scope.thread || scope.client)
+        return yield* scopeError("Only authenticated Deus workers can inspect worker evidence.");
+      const credential = yield* credentials.read(scope.thread.threadId);
+      if (
+        !credential ||
+        credential.environmentId !== scope.environmentId ||
+        credential.providerInstanceId !== scope.thread.providerInstanceId ||
+        credential.providerSessionId !== scope.thread.providerSessionId
+      )
+        return yield* scopeError("Worker credential no longer owns this provider session.");
+      const ref = yield* resolveOwner(scope.thread.threadId);
+      if (!ref || ref.environmentId !== scope.environmentId)
+        return yield* scopeError("Calling thread is not a Deus worker.");
+      yield* owned({ ...ref, threadId: scope.thread.threadId });
+      return ref;
     }),
     list: Effect.fn("DeusThreadBridge.list")(function* (ref) {
       return (yield* sessions.snapshot(ref)).tasks;

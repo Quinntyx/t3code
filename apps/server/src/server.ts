@@ -652,14 +652,20 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provideMerge(
       DeusPonderService.layer.pipe(
         Layer.provide(DeusPonderWorker.layer),
-        Layer.provide(DeusMemoryWriter.layer.pipe(Layer.provide(GitVcsDriver.layer))),
+        Layer.provideMerge(DeusMemoryWriter.layer.pipe(Layer.provide(GitVcsDriver.layer))),
       ),
     ),
     Layer.provide(layerDeusLiveAuthority),
     Layer.provideMerge(GeminiLiveAdapter.layer.pipe(Layer.provide(DeusConfiguration.layer))),
     Layer.provideMerge(DeusTools.layer),
     Layer.provideMerge(
-      Layer.mergeAll(DeusThreadBridge.layer, DeusContextService.layer, GeminiTextAdapter.layer),
+      Layer.mergeAll(
+        DeusThreadBridge.layer.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        ),
+        DeusContextService.layer,
+        GeminiTextAdapter.layer,
+      ),
     ),
     Layer.provideMerge(DeusConfiguration.layer),
     Layer.provideMerge(DeusMemoryService.layer.pipe(Layer.provide(GitVcsDriver.layer))),

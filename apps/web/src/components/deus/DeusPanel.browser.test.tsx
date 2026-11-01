@@ -25,6 +25,7 @@ import {
   type DeusMediaControlInput,
   type DeusMediaOutput,
   DeusCursor,
+  DeusPonderId,
   DeusSessionId,
   DeusTranscriptId,
   DeusStateError,
@@ -58,6 +59,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import { useDeusPanelStore } from "../../deusPanelStore";
+import { useDeusCommands } from "./DeusCommands";
 import { SidebarProvider } from "../ui/sidebar";
 import { ChatRouteLayout } from "../ChatRouteLayout";
 import { ProjectLanding } from "./ProjectLanding";
@@ -148,6 +150,7 @@ vi.mock(import("../../state/environments"), () => ({
   },
 }));
 vi.mock(import("../../state/entities"), () => ({
+  useThreadShells: () => [],
   useProject: (ref: { environmentId: EnvironmentId; projectId: ProjectId } | null) => {
     useFixturePresentation();
     return ref === null
@@ -228,7 +231,15 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup(path = "/projects/one/project", voice = false) {
+function OpenCommandFixture() {
+  const action = useDeusCommands(first)[0]!;
+  return (
+    <button disabled={!action.enabled} onClick={action.run}>
+      Open Deus command
+    </button>
+  );
+}
+async function setup(path = "/projects/one/project", voice = false, learningFailure = false) {
   state.supervisors.clear();
   state.environments.clear();
   state.sessions.clear();
@@ -374,7 +385,21 @@ async function setup(path = "/projects/one/project", voice = false) {
               reports: [],
               observations: [],
               memories: [],
-              ponderReceipts: [],
+              ponderReceipts: learningFailure
+                ? [
+                    {
+                      id: DeusPonderId.make("failed-learning"),
+                      snapshotCursor: DeusCursor.make(0),
+                      observationIds: [],
+                      writtenMemoryIds: [],
+                      acknowledgedObservationIds: [],
+                      status: "blocked",
+                      error: "Fixture learning blocked",
+                      createdAt: timestamp,
+                      completedAt: timestamp,
+                    },
+                  ]
+                : [],
             });
           return snapshots.get(destination)!;
         }),
@@ -464,12 +489,15 @@ async function setup(path = "/projects/one/project", voice = false) {
     component: () => {
       const params = project.useParams();
       return (
-        <ProjectLanding
-          target={{
-            environmentId: EnvironmentId.make(params.environmentId),
-            projectId: ProjectId.make(params.projectId),
-          }}
-        />
+        <>
+          <OpenCommandFixture />
+          <ProjectLanding
+            target={{
+              environmentId: EnvironmentId.make(params.environmentId),
+              projectId: ProjectId.make(params.projectId),
+            }}
+          />
+        </>
       );
     },
   });
@@ -531,6 +559,18 @@ async function setup(path = "/projects/one/project", voice = false) {
 }
 
 describe("project Deus runtime ownership", () => {
+  it("keeps failed learning visible while details and task history are collapsed", async () => {
+    await using h = await setup("/projects/one/project", true, true);
+    await userEvent.click(h.screen.getByRole("button", { name: "Open Deus command", exact: true }));
+    await expect
+      .element(h.screen.getByRole("button", { name: "Connect voice", exact: true }))
+      .toBeEnabled();
+    await expect
+      .element(h.screen.getByRole("alert"))
+      .toHaveTextContent("Learning blocked: Fixture learning blocked");
+    await expect.element(h.screen.getByText("Run learning now", { exact: true })).not.toBeVisible();
+    expect(h.microphone).not.toHaveBeenCalled();
+  });
   it("owns controlled voice above navigation and responsive frames, using guarded authority and distinct controls", async () => {
     await page.viewport(1280, 800);
     await using h = await setup("/projects/one/project", true);

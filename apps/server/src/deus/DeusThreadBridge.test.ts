@@ -807,6 +807,13 @@ it.effect("launches one actual worker and initial message on duplicate accepted 
     );
     assert.equal(first.workers[0]?.runId, second.workers[0]?.runId);
     assert.isNotNull(first.workers[0]?.runId);
+    assert.equal(
+      first.workers[0]?.operations?.steer,
+      CodexProviderCapabilitiesV2.turns.supportsActiveSteering ||
+        CodexProviderCapabilitiesV2.turns.supportsSteeringByInterruptRestart,
+    );
+    assert.equal(first.workers[0]?.pendingApprovals, 0);
+    assert.isString(first.workers[0]?.status);
     assert.lengthOf((yield* sessions.snapshot(input)).tasks, 1);
     assert.equal(
       (yield* sql<{
@@ -1505,6 +1512,37 @@ it.effect("rejects revoked credentials and a new credential claiming an earlier 
     assert.lengthOf((yield* sessions.snapshot(input)).reports, 1);
   }).pipe(Effect.provide(harness())),
 );
+
+it.effect("authenticates immutable MCP worker reads and queries without waking workers", () => {
+  const script = scripted([answer("Only immutable evidence.")]);
+  return Effect.gen(function* () {
+    const { input, bridge, sql } = yield* setup;
+    const task = yield* bridge.launch(input);
+    const threadId = task.workers[0]!.threadId;
+    const scope = yield* authenticate(threadId);
+    const ref = yield* bridge.workerScope(scope);
+    assert.equal(ref.sessionId, input.sessionId);
+    const before =
+      yield* sql`SELECT command_id FROM orchestration_v2_command_receipts ORDER BY command_id`;
+    assert.equal((yield* bridge.read({ ...ref, threadId })).threadId, threadId);
+    const tools = yield* Tools.DeusTools;
+    assert.equal(
+      (yield* tools.queryWorker(scope, threadId, "What is known?")).answer,
+      "Only immutable evidence.",
+    );
+    assert.isUndefined(script.requests[0]?.tools);
+    assert.deepEqual(
+      yield* sql`SELECT command_id FROM orchestration_v2_command_receipts ORDER BY command_id`,
+      before,
+    );
+    yield* (yield* McpSessions.McpProviderSessions).clear(threadId);
+    assert.equal((yield* bridge.workerScope(scope).pipe(Effect.flip))._tag, "DeusStateError");
+    assert.equal(
+      (yield* bridge.workerScope({ ...scope, thread: undefined }).pipe(Effect.flip))._tag,
+      "DeusStateError",
+    );
+  }).pipe(Effect.provide(harness({ text: script.generate })));
+});
 
 it.effect("rejects disabled providers", () =>
   Effect.gen(function* () {

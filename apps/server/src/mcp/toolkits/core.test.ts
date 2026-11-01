@@ -58,6 +58,9 @@ import * as AttachmentHandlers from "./attachment/handlers.ts";
 import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
+import * as DeusBridge from "../../deus/DeusThreadBridge.ts";
+import * as DeusTools from "../../deus/DeusTools.ts";
+import { DeusSessionId, DeusTaskId, DeusConversation, ProjectId } from "@t3tools/contracts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
@@ -105,6 +108,89 @@ const client = McpSchema.McpServerClient.of({
     clientInfo: { name: "mcp-core", version: "1" },
   },
   getClient: Effect.die("unused"),
+});
+
+it.effect("routes Deus read/query to scoped services without exposing human controls", () => {
+  const calls: string[] = [];
+  const ref = {
+    environmentId: scope.environmentId,
+    projectId: ProjectId.make("deus-project"),
+    sessionId: DeusSessionId.make("deus-session"),
+  };
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const names = server.tools.map(({ tool }) => tool.name);
+    expect(names.toSorted()).toEqual([
+      "deus_worker_query",
+      "deus_worker_read",
+      "deus_worker_report",
+    ]);
+    for (const name of ["deus_worker_read", "deus_worker_query"]) {
+      const result = yield* server
+        .callTool({
+          name,
+          arguments: {
+            threadId,
+            ...(name.endsWith("query") ? { question: "What is recorded?" } : {}),
+          },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.isError).not.toBe(true);
+    }
+    expect(calls).toEqual(["scope", "read", "query"]);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerDeusToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(
+          Layer.mock(DeusBridge.DeusThreadBridge)({
+            workerScope: () =>
+              Effect.sync(() => {
+                calls.push("scope");
+                return ref;
+              }),
+            read: () =>
+              Effect.sync(() => {
+                calls.push("read");
+                return {
+                  threadId,
+                  taskId: DeusTaskId.make("task"),
+                  conversation: DeusConversation.make(1),
+                  runId: null,
+                  status: "completed",
+                  messages: [],
+                };
+              }),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(DeusTools.DeusTools)({
+            queryWorker: () =>
+              Effect.sync(() => {
+                calls.push("query");
+                return {
+                  snapshot: {
+                    threadId,
+                    taskId: DeusTaskId.make("task"),
+                    conversation: DeusConversation.make(1),
+                    runId: null,
+                    status: "completed",
+                    messages: [],
+                  },
+                  sourceCompleteness: "bounded-preview" as const,
+                  answer: "Recorded.",
+                };
+              }),
+          }),
+        ),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(NodeCrypto.layer),
+      ),
+    ),
+  );
 });
 
 it.effect("checks capability through the production registration", () =>

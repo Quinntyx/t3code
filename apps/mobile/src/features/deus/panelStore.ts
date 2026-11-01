@@ -2,7 +2,18 @@ import { useSyncExternalStore } from "react";
 import type { DeusScope } from "@t3tools/contracts";
 import { createDeusLocalAttachment, sameDeusScope } from "@t3tools/client-runtime/state/deus";
 
+export interface DeusVoiceControls {
+  ready: boolean;
+  active: boolean;
+  muted: boolean;
+  connect(): void;
+  disconnect(): void;
+  toggleMute(): void;
+}
 interface PanelState {
+  voice: { target: DeusScope; controls: DeusVoiceControls } | null;
+  registerVoice(target: DeusScope, controls: DeusVoiceControls): void;
+  unregisterVoice(target: DeusScope): void;
   visible: boolean;
   choosing: boolean;
   target: DeusScope | null;
@@ -15,6 +26,7 @@ interface PanelState {
   cancelSwitch(): void;
   confirmSwitch(): Promise<void>;
   close(): Promise<void>;
+  visitWorker(): Promise<boolean>;
 }
 export function createDeusPanelStore() {
   const listeners = new Set<() => void>();
@@ -24,6 +36,11 @@ export function createDeusPanelStore() {
     for (const listener of listeners) listener();
   };
   let state: PanelState = {
+    voice: null,
+    registerVoice: (target, controls) => set({ voice: { target, controls } }),
+    unregisterVoice: (target) => {
+      if (get().voice && sameDeusScope(get().voice!.target, target)) set({ voice: null });
+    },
     visible: false,
     choosing: false,
     target: null,
@@ -52,6 +69,21 @@ export function createDeusPanelStore() {
         set({ target: pendingTarget, pendingTarget: null, choosing: false });
       } catch (error) {
         set({ error: error instanceof Error ? error.message : "Local voice cleanup failed." });
+      } finally {
+        set({ busy: false });
+      }
+    },
+    visitWorker: async () => {
+      const { target, localAttachment, busy } = get();
+      if (!target || busy) return false;
+      set({ busy: true, error: null });
+      try {
+        await localAttachment.release(target);
+        set({ visible: false, choosing: false });
+        return true;
+      } catch (error) {
+        set({ error: error instanceof Error ? error.message : "Local voice cleanup failed." });
+        return false;
       } finally {
         set({ busy: false });
       }

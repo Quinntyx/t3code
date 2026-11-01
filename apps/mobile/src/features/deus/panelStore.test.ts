@@ -27,6 +27,17 @@ it("keeps the pinned destination until explicit switch confirmation and complete
   expect(stop).toHaveBeenCalledOnce();
 });
 
+it("visits a real worker and returns to the pinned Deus destination without opening media", async () => {
+  const store = createDeusPanelStore();
+  store.getState().select(a);
+  expect(await store.getState().visitWorker()).toBe(true);
+  expect(store.getState().visible).toBe(false);
+  expect(store.getState().target).toEqual(a);
+  store.getState().select(a);
+  expect(store.getState().visible).toBe(true);
+  expect(store.getState().localAttachment.has(a)).toBe(false);
+});
+
 it("keeps failed local cleanup visible and retryable instead of losing ownership", async () => {
   const store = createDeusPanelStore();
   store.getState().select(a);

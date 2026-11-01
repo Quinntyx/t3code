@@ -1,4 +1,5 @@
 import * as Dialog from "../../components/ui/Dialog";
+import { DeusSettings } from "../deus/DeusSettings";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -55,6 +56,7 @@ export function SettingsProviderAccountsRouteScreen() {
           ) : (
             selectedTargets.map((environment) => (
               <SettingsSection key={environment.environmentId} title={environment.label}>
+                <DeusSettings environmentId={environment.environmentId} />
                 {!permittedEnvironments.has(environment.environmentId) ? (
                   <View className="gap-1 p-4">
                     <Text className="text-base text-foreground">Limited permissions</Text>

@@ -5,8 +5,8 @@ import {
   type DeusSessionRef,
   type DeusSubscriptionEvent,
   type DeusSession,
-  type DeusCursor,
   type DeusTranscript,
+  type DeusSnapshot,
   type DeusAttachInput,
   type DeusHumanCeiling,
 } from "@t3tools/contracts";
@@ -113,10 +113,18 @@ export function createDeusCommands<R, E>(runtime: Atom.AtomRuntime<EnvironmentRe
 export const DEUS_TRANSCRIPT_LIMIT = 200;
 const DEUS_TRANSCRIPT_TEXT_LIMIT = 128_000;
 
-export interface DeusConversationView {
-  readonly session: DeusSession;
-  readonly cursor: DeusCursor;
-  readonly transcripts: readonly DeusTranscript[];
+export type DeusConversationView = DeusSnapshot;
+
+export function deusTaskSections(view: Pick<DeusConversationView, "tasks" | "ponderReceipts">) {
+  const terminal = new Set(["completed", "failed", "cancelled"]);
+  const newest = [...view.tasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return {
+    active: newest.filter((task) => !terminal.has(task.status)),
+    history: newest.filter((task) => terminal.has(task.status)),
+    learningProblems: view.ponderReceipts.filter(
+      (run) => run.status === "failed" || run.status === "blocked",
+    ),
+  };
 }
 
 export function sameDeusScope(a: DeusScope, b: DeusScope) {
@@ -150,8 +158,7 @@ export function projectDeusConversation(
   if (event.type === "snapshot") {
     if (state && state.cursor > event.snapshot.cursor) return state;
     return {
-      session: event.snapshot.session,
-      cursor: event.snapshot.cursor,
+      ...event.snapshot,
       transcripts: boundedTranscripts(event.snapshot.transcripts),
     };
   }
@@ -167,14 +174,50 @@ export function projectDeusConversation(
       message: "Deus history has a gap. Refresh the conversation.",
     });
   }
+  const change = delta.change;
   return {
     ...state,
     cursor: delta.cursor,
-    ...(delta.change.type === "conversation-reset"
-      ? { session: { ...state.session, conversation: delta.change.conversation } }
+    ...(change.type === "conversation-reset"
+      ? { session: { ...state.session, conversation: change.conversation } }
       : {}),
-    ...(delta.change.type === "transcript"
-      ? { transcripts: boundedTranscripts([...state.transcripts, delta.change.transcript]) }
+    ...(change.type === "transcript"
+      ? { transcripts: boundedTranscripts([...state.transcripts, change.transcript]) }
+      : {}),
+    ...(change.type === "task"
+      ? { tasks: [...state.tasks.filter((item) => item.id !== change.task.id), change.task] }
+      : {}),
+    ...(change.type === "report"
+      ? {
+          reports: [
+            ...state.reports.filter((item) => item.cursor !== change.report.cursor),
+            change.report,
+          ],
+        }
+      : {}),
+    ...(change.type === "observation"
+      ? {
+          observations: [
+            ...state.observations.filter((item) => item.id !== change.observation.id),
+            change.observation,
+          ],
+        }
+      : {}),
+    ...(change.type === "memory"
+      ? {
+          memories: [
+            ...state.memories.filter((item) => item.id !== change.memory.id),
+            change.memory,
+          ],
+        }
+      : {}),
+    ...(change.type === "ponder"
+      ? {
+          ponderReceipts: [
+            ...state.ponderReceipts.filter((item) => item.id !== change.receipt.id),
+            change.receipt,
+          ],
+        }
       : {}),
   };
 }

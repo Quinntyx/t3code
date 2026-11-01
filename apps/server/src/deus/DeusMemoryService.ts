@@ -34,6 +34,8 @@ export const MemoryMetadata = Schema.Struct({
   observationIds: Schema.Array(DeusObservationId).check(Schema.isMaxLength(64)),
   sources: Schema.Array(DeusSourceRef).check(Schema.isMaxLength(64)),
   supersedes: Schema.NullOr(EntryId),
+  removedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  correctionInputId: Schema.optional(Schema.String),
   kind: Schema.optional(PromotionEntry.fields.kind),
   paths: Schema.optional(PromotionEntry.fields.paths),
   evidence: Schema.optional(PromotionEntry.fields.evidence),
@@ -218,6 +220,13 @@ const make = Effect.gen(function* () {
         reason: "conflict",
         message: "Deus memory revision has changed.",
       });
+    const entries = yield* list(input, [input.scope], commit);
+    const removed = new Set(entries.map((item) => item.supersedes));
+    if (entry.removedAt || removed.has(entry.id))
+      return yield* new DeusStateError({
+        reason: "not-found",
+        message: "This memory was superseded or removed by a human correction.",
+      });
     return entry;
   });
   const search = Effect.fn("DeusMemoryService.search")(function* (
@@ -228,26 +237,7 @@ const make = Effect.gen(function* () {
     yield* repository.snapshot(input);
     const commit = yield* head();
     if (!commit) return { items: [], omitted: 0 };
-    const entries: MemoryEntry[] = [];
-    let files = 0;
-    for (const scope of new Set(input.scopes ?? (["project"] as const))) {
-      const directory = NodePath.join(root, entryDirectory(input, scope));
-      const ids = yield* io(async () => {
-        if (!(await safePath(directory, true))) return [];
-        const result: string[] = [];
-        const dir = await NodeFSP.opendir(directory);
-        for await (const file of dir) {
-          files++;
-          if (files > CONTEXT_LIMITS.memoryFiles || !file.isFile() || !file.name.endsWith(".md"))
-            throw invalid();
-          const id = file.name.slice(0, -3);
-          if (!isEntryId(id)) throw invalid();
-          result.push(id);
-        }
-        return result.sort();
-      });
-      for (const id of ids) entries.push(yield* load(input, scope, id, commit));
-    }
+    const entries = yield* list(input, input.scopes ?? ["project"], commit);
     const superseded = new Set(
       entries.map((entry) =>
         entry.supersedes === null ? "" : `${entry.scope}:${entry.supersedes}`,
@@ -256,6 +246,7 @@ const make = Effect.gen(function* () {
     const ranked = entries
       .filter(
         (entry) =>
+          !entry.removedAt &&
           !superseded.has(`${entry.scope}:${entry.id}`) &&
           !entry.observationIds.some((id) => excludedObservationIds.has(id)),
       )
@@ -279,6 +270,33 @@ const make = Effect.gen(function* () {
       })),
       input.limit,
     );
+  });
+  const list = Effect.fn("DeusMemoryService.list")(function* (
+    input: DeusSessionRef,
+    scopes: readonly MemoryScope[],
+    commit: string,
+  ) {
+    const entries: MemoryEntry[] = [];
+    let files = 0;
+    for (const scope of new Set(scopes)) {
+      const directory = NodePath.join(root, entryDirectory(input, scope));
+      const ids = yield* io(async () => {
+        if (!(await safePath(directory, true))) return [];
+        const result: string[] = [];
+        const dir = await NodeFSP.opendir(directory);
+        for await (const file of dir) {
+          files++;
+          if (files > CONTEXT_LIMITS.memoryFiles || !file.isFile() || !file.name.endsWith(".md"))
+            throw invalid();
+          const id = file.name.slice(0, -3);
+          if (!isEntryId(id)) throw invalid();
+          result.push(id);
+        }
+        return result.sort();
+      });
+      for (const id of ids) entries.push(yield* load(input, scope, id, commit));
+    }
+    return entries;
   });
   return DeusMemoryService.of({
     read,

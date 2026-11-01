@@ -5,6 +5,8 @@ import {
   DeusInput,
   DeusInputId,
   DeusInputReceipt,
+  DeusMemory,
+  DeusMemoryCorrectionInput,
   DeusLiveOrigin,
   DeusObservationId,
   DeusDelta,
@@ -58,6 +60,10 @@ export type ObservationInput = typeof ObservationInput.Type;
 export const SpokenInput = Schema.Struct({ ...DeusInput.fields, origin: DeusLiveOrigin });
 export type SpokenInput = typeof SpokenInput.Type;
 export const Command = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("correct-memory"),
+    input: Schema.Struct({ ...DeusMemoryCorrectionInput.fields, memory: DeusMemory }),
+  }),
   Schema.Struct({ type: Schema.Literal("spoken-input"), input: SpokenInput }),
   Schema.Struct({
     type: Schema.Literal("report-response"),
@@ -146,6 +152,8 @@ export function decide(
     return new DeusStateError({ reason: "conflict", message: "The conversation has changed." });
   }
   switch (command.type) {
+    case "correct-memory":
+      return { changes: [{ type: "memory", memory: command.input.memory }] };
     case "report-response": {
       if (
         !source ||

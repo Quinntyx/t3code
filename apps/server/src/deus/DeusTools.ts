@@ -13,6 +13,7 @@ import {
   RunId,
   ThreadId,
   type DeusInput,
+  type DeusSessionRef,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import type { FunctionDeclaration } from "@google/genai";
@@ -27,6 +28,7 @@ import * as Memory from "./DeusMemoryService.ts";
 import * as Adapter from "./GeminiTextAdapter.ts";
 import * as Repository from "./DeusRepository.ts";
 import type { HumanConnection } from "./DeusHumanAuthority.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Registry from "../provider/ProviderRegistry.ts";
 import { invalidOptionSelections } from "../provider/validateModelOptions.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -150,6 +152,22 @@ export interface ToolInvocation {
 export class DeusTools extends Context.Service<
   DeusTools,
   {
+    readonly queryWorker: (
+      scope: McpInvocationScope,
+      threadId: ThreadId,
+      question: string,
+    ) => Effect.Effect<
+      {
+        snapshot: Bridge.DeusWorkerSnapshot;
+        sourceCompleteness: "bounded-preview";
+        answer: string;
+      },
+      | Repository.DeusRepositoryError
+      | Bridge.DeusBridgeError
+      | DeusStateError
+      | Authority.DeusAuthorityError
+      | DeusTextError
+    >;
     readonly taskAction: (
       input: DeusTaskActionInput,
       ceiling: DeusHumanCeiling,
@@ -176,7 +194,7 @@ const make = Effect.gen(function* () {
   const repository = yield* Repository.DeusRepository;
   const active = new Set<string>();
   const captureQuery = Effect.fn("DeusTools.captureQuery")(function* (
-    input: DeusInput,
+    input: DeusSessionRef,
     threadId: ThreadId,
     question: string,
   ) {
@@ -253,11 +271,7 @@ const make = Effect.gen(function* () {
               yield* authority.authorize(input);
               let plan = yield* bridge.prepareAction(input);
               if (input.action.type === "query") {
-                const captured = yield* captureQuery(
-                  { ...input, conversation: plan.task.conversation, text: input.action.text },
-                  plan.threadId,
-                  input.action.text,
-                );
+                const captured = yield* captureQuery(input, plan.threadId, input.action.text);
                 if (captured.snapshot.runId !== plan.runId)
                   return yield* new DeusStateError({
                     reason: "conflict",
@@ -437,6 +451,13 @@ const make = Effect.gen(function* () {
     }
   });
   return DeusTools.of({
+    queryWorker: Effect.fn("DeusTools.queryWorker")(function* (scope, threadId, question) {
+      const ref = yield* bridge.workerScope(scope);
+      const { snapshot, query } = yield* captureQuery(ref, threadId, question);
+      const answer = yield* answerQuery(query);
+      yield* bridge.workerScope(scope);
+      return { snapshot, sourceCompleteness: "bounded-preview" as const, answer };
+    }),
     taskAction,
     execute: Effect.fn("DeusTools.execute")((call) =>
       dispatch(call).pipe(

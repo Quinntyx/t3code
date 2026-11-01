@@ -1,4 +1,5 @@
 import { SettingsGroup } from "./SettingsGroup";
+import { DeusProviderSettings } from "../deus/DeusSettings";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   AuthSettingsWriteScope,
@@ -443,6 +444,12 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
         />
       ) : null}
 
+      {selectedEnvironmentCanRenderSettings && selectedEnvironment ? (
+        <DeusProviderSettings
+          key={selectedEnvironment.environmentId}
+          environmentId={selectedEnvironment.environmentId}
+        />
+      ) : null}
       {selectedEnvironment ? (
         <RemoteSessionGatedProviderSettings
           key={selectedEnvironment.environmentId}

@@ -15,6 +15,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Repository from "./DeusRepository.ts";
 import * as Writer from "./DeusMemoryWriter.ts";
+import * as Memory from "./DeusMemoryService.ts";
 import * as Ponder from "./DeusPonderService.ts";
 import * as Worker from "./DeusPonderWorker.ts";
 import { dailyPonderDue, type PonderRun } from "./ponderProtocol.ts";
@@ -89,7 +90,11 @@ const setup = Effect.fn("PonderTest.setup")(function* () {
       }),
   });
   const services = yield* Layer.build(
-    Ponder.layer.pipe(Layer.provideMerge(Writer.layer), Layer.provide(worker)),
+    Ponder.layer.pipe(
+      Layer.provideMerge(Writer.layer),
+      Layer.provide(Memory.layer),
+      Layer.provide(worker),
+    ),
   );
   const service = Context.get(services, Ponder.DeusPonderService);
   yield* service.configure({ environmentId, projectId, enabled: true });

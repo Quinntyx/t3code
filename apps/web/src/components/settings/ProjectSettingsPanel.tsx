@@ -46,6 +46,7 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { DeusSettings } from "../deus/DeusSettings";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
@@ -560,6 +561,12 @@ function ProjectDetail({
             }
           />
         </SettingsSection>
+        {group.memberProjects.map((member) => (
+          <DeusSettings
+            key={`${member.environmentId}:${member.id}`}
+            target={{ environmentId: member.environmentId, projectId: member.id }}
+          />
+        ))}
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
         {hasMultipleCheckouts ? checkoutChoices : null}

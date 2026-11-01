@@ -5,6 +5,7 @@ import { AsyncResult } from "effect/reactivity";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SettingsScreen } from "./components/SettingsScreen";
+import { DeusSettings } from "../deus/DeusSettings";
 import {
   mobileProjectGroupingModePatch,
   resolveMobileProjectGroupingSettings,
@@ -67,6 +68,7 @@ export function SettingsProjectGroupingRouteScreen() {
             />
           ))}
         </SettingsSection>
+        <DeusSettings />
         <WorkingSectionSettings />
         <NewThreadSettingsSection />
       </ScrollView>

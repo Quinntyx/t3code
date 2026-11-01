@@ -88,6 +88,7 @@ export function useDeusConversation(target: DeusScope, available: boolean) {
     } else setError(failure(result));
   };
   return {
+    view,
     session: view?.session ?? null,
     transcripts: view?.transcripts ?? [],
     text,
