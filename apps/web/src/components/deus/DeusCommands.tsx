@@ -70,7 +70,7 @@ export function DeusShortcuts() {
       : pinned;
   const commands = useDeusCommands(target);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  // oxlint-disable-next-line t3code/react-effect-budget -- The shell owns keyboard listeners for the shared Deus entry commands.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Install the shell's keyboard listeners for shared Deus entry commands until unmount.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (

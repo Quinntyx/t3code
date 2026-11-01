@@ -20,6 +20,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Configuration from "./DeusConfiguration.ts";
 import * as Adapter from "./GeminiTextAdapter.ts";
+import * as LiveAdapter from "./GeminiLiveAdapter.ts";
 import { DEUS_TOOL_DECLARATIONS } from "./DeusTools.ts";
 import { TEXT_LIMITS, encodeJson } from "./textProtocol.ts";
 
@@ -111,6 +112,33 @@ it.effect(
         "configuration",
       );
     }).pipe(Effect.provide(dependencies)),
+);
+
+it.effect(
+  "the default-off gate prevents Live client creation even with configured models and a saved key",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let clients = 0;
+        const configuration = yield* Configuration.DeusConfiguration;
+        const layer = LiveAdapter.layerWithClient(() => {
+          clients++;
+          throw new Error("Disabled Deus must not create a provider client");
+        });
+        yield* Effect.gen(function* () {
+          const live = yield* LiveAdapter.GeminiLiveAdapter;
+          assert.equal((yield* live.connect({}).pipe(Effect.flip)).code, "configuration");
+          yield* seedCredential;
+          yield* configuration.update({
+            enabled: false,
+            liveModel: "explicit-local-live-model",
+            voice: "synthetic-voice",
+          });
+          assert.equal((yield* live.connect({}).pipe(Effect.flip)).code, "configuration");
+          assert.equal(clients, 0);
+        }).pipe(Effect.provide(layer));
+      }),
+    ).pipe(Effect.provide(dependencies)),
 );
 
 it.live(

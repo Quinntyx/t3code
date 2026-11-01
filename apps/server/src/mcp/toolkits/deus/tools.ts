@@ -1,6 +1,7 @@
 import { DeusWorkerReportInput, OrchestratorMcpFailure, ThreadId } from "@t3tools/contracts";
 import * as Tools from "../../../deus/DeusTools.ts";
 import { Tool, Toolkit } from "effect/ai";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Schema from "effect/Schema";
 import * as Bridge from "../../../deus/DeusThreadBridge.ts";
 import * as Invocation from "../../McpInvocationContext.ts";
@@ -19,6 +20,7 @@ export const DeusToolkit = Toolkit.make(
     failureMode: "return",
     dependencies: [Invocation.McpInvocationContext, Bridge.DeusThreadBridge],
   })
+    .annotate(McpSchema.EnabledWhen, Invocation.onlyDeusWorkers)
     .annotate(Tool.Title, "Read Deus worker snapshot")
     .annotate(Tool.Readonly, true)
     .annotate(Tool.Destructive, false)
@@ -39,6 +41,7 @@ export const DeusToolkit = Toolkit.make(
     failureMode: "return",
     dependencies: [Invocation.McpInvocationContext, Tools.DeusTools],
   })
+    .annotate(McpSchema.EnabledWhen, Invocation.onlyDeusWorkers)
     .annotate(Tool.Title, "Query Deus worker evidence")
     .annotate(Tool.Readonly, true)
     .annotate(Tool.Destructive, false)
@@ -56,6 +59,7 @@ export const DeusToolkit = Toolkit.make(
       Threads.ThreadManagementService,
     ],
   })
+    .annotate(McpSchema.EnabledWhen, Invocation.onlyDeusWorkers)
     .annotate(Tool.Title, "Report Deus worker result")
     .annotate(Tool.Readonly, false)
     .annotate(Tool.Destructive, false)

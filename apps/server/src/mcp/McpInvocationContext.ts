@@ -108,6 +108,7 @@ export interface McpInvocationScope {
   readonly linkedEnvironments?: boolean;
   /** False while agent email is off here; `/mcp` reads it per request. */
   readonly email?: boolean;
+  readonly deusWorker?: boolean;
 }
 
 /**
@@ -151,6 +152,12 @@ export const hiddenWhileEmailOff = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.email !== false;
+};
+
+export const onlyDeusWorkers = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.deusWorker === true && scope.thread !== undefined;
 };
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"

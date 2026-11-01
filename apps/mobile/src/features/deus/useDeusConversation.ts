@@ -34,7 +34,7 @@ export function useDeusConversation(target: DeusScope, available: boolean) {
       : null,
   );
   const view = permitted && !query.error ? query.data : null;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Opening subscribes to durable project metadata, never native media.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to the selected project's durable service until navigation unmounts it.
   useEffect(() => {
     if (!permitted || !canOpen) return;
     let active = true;

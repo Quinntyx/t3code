@@ -125,6 +125,17 @@ it.effect("routes Deus read/query to scoped services without exposing human cont
       "deus_worker_read",
       "deus_worker_report",
     ]);
+    for (const name of names) {
+      const denied = yield* server
+        .callTool({ name, arguments: { threadId } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.flip,
+        );
+      expect(denied.message).toContain("not found");
+    }
+    expect(calls).toEqual([]);
     for (const name of ["deus_worker_read", "deus_worker_query"]) {
       const result = yield* server
         .callTool({
@@ -135,7 +146,10 @@ it.effect("routes Deus read/query to scoped services without exposing human cont
           },
         })
         .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            deusWorker: true,
+          }),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(result.isError).not.toBe(true);

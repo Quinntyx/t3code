@@ -26,6 +26,7 @@ import {
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DeusBridge from "../deus/DeusThreadBridge.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
@@ -200,12 +201,14 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const deusBridge = yield* Effect.serviceOption(DeusBridge.DeusThreadBridge);
   const enabledFeatures = serverSettings.getSettings.pipe(
     Effect.map((settings) => ({
       linkedEnvironments: settings.linkedEnvironmentsEnabled,
       email: settings.emailEnabled,
+      deus: settings.deus.enabled,
     })),
-    Effect.orElseSucceed(() => ({ linkedEnvironments: false, email: false })),
+    Effect.orElseSucceed(() => ({ linkedEnvironments: false, email: false, deus: false })),
   );
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
@@ -231,13 +234,21 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     }
     const limited = withModeLimit(invocation, request);
     if (limited === undefined) return invalidModeLimit;
-    const { linkedEnvironments, email } = yield* enabledFeatures;
+    const { linkedEnvironments, email, deus } = yield* enabledFeatures;
     if (limited.client?.linked === true && !linkedEnvironments) return linkedEnvironmentsOff;
+    const deusWorker =
+      deus && limited.thread !== undefined && Option.isSome(deusBridge)
+        ? yield* deusBridge.value.workerScope(limited).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          )
+        : false;
     return yield* httpEffect.pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         ...limited,
         linkedEnvironments,
         email,
+        deusWorker,
       }),
       Effect.map(normalizeMcpHttpResponse),
     );

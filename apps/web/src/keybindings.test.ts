@@ -211,6 +211,37 @@ describe("effectiveShortcutsForCommand", () => {
   });
 });
 
+describe("Deus shortcuts", () => {
+  it("leaves macOS Dock and minimize-all shortcuts alone and keeps terminal input untouched", () => {
+    for (const [key, command] of [
+      ["d", "deus.open"],
+      ["m", "deus.mute"],
+    ] as const) {
+      const macShortcut = event({ key, metaKey: true, altKey: true });
+      assert.isNull(
+        resolveShortcutCommand(macShortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        }),
+      );
+      const shifted = { ...macShortcut, shiftKey: true };
+      assert.equal(
+        resolveShortcutCommand(shifted, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        }),
+        command,
+      );
+      assert.isNull(
+        resolveShortcutCommand(shifted, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "MacIntel",
+          context: { terminalFocus: true },
+        }),
+      );
+    }
+  });
+});
+
 describe("settle thread shortcut", () => {
   it("does not intercept the terminal", () => {
     assert.isNull(

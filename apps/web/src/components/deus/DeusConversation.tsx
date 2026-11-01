@@ -46,7 +46,7 @@ export function useDeusConversation({
   );
   const view = permitted && !query.error ? query.data : null;
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Opening subscribes to the selected project's durable service, never media.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to the selected project's durable service while this panel is mounted.
   useEffect(() => {
     if (!permitted || !canOpen) return;
     let active = true;

@@ -27,7 +27,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
   const sessionId = session?.sessionId;
   const conversation = session?.conversation;
   const release = () => useDeusPanelStore.getState().localAttachment.release(target);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Background and true unmount release native media; navigation inside the workspace does not.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release the native media owner on app background and true unmount.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
       if (next === "background")
@@ -44,7 +44,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
         .catch(() => {});
     };
   }, [target]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Destination capability, permission, transport or conversation loss invalidates native media.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Revoke native media when destination capability, permission, transport or conversation changes.
   useEffect(() => {
     if (!available || !permitted || !sessionId || conversation === undefined)
       void useDeusPanelStore
@@ -92,7 +92,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
     },
     [available, permitted, session, target, owner, attach],
   );
-  // oxlint-disable-next-line t3code/react-effect-budget -- Destination settings share the mounted native media owner without starting capture.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Register the mounted native media owner's controls for destination settings.
   useEffect(() => {
     const store = useDeusPanelStore.getState();
     store.registerVoice(target, {

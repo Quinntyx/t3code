@@ -6,9 +6,48 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-
+import { McpSchema } from "effect/ai";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { DeusToolkit } from "./toolkits/deus/tools.ts";
+
+it.effect("hides every Deus worker tool from ordinary threads and external callers", () => {
+  const invocation: McpInvocationContext.McpInvocationScope = {
+    environmentId: EnvironmentId.make("environment-1"),
+    requestNamespace: "provider-session-1",
+    capabilities: new Set(["orchestration"]),
+    issuedAt: 1,
+    thread: undefined,
+    client: undefined,
+  };
+  return Effect.gen(function* () {
+    for (const thread of [
+      undefined,
+      {
+        threadId: ThreadId.make("ordinary-thread"),
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+    ]) {
+      for (const deusWorker of [false, true]) {
+        for (const tool of Object.values(DeusToolkit.tools)) {
+          const enabledWhen = Context.getOrUndefined(tool.annotations, McpSchema.EnabledWhen);
+          const visible = yield* Effect.sync(
+            () => enabledWhen?.({ protocolVersion: "2025-06-18", capabilities: {} }) ?? true,
+          ).pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, {
+              ...invocation,
+              thread,
+              deusWorker,
+            }),
+          );
+          expect(visible).toBe(deusWorker && thread !== undefined);
+        }
+      }
+    }
+  });
+});
 
 it.effect("reports other missing capabilities with the neutral error", () => {
   const invocation: McpInvocationContext.McpInvocationScope = {

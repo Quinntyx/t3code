@@ -390,7 +390,6 @@ const connect = Effect.fn("DeusTransport.test.connect")(function* (
         });
   const entry = { target, profile: Option.none(), enabled: true };
   const driver = Driver.ConnectionDriver.of({
-    checkRoute: () => Effect.succeed("answered"),
     preflight: () => Effect.succeed(true),
     checkHost: () => Effect.succeed("answered"),
     connect: (selected, progress) =>

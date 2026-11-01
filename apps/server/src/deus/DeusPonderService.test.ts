@@ -11,6 +11,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Config from "../config.ts";
 import * as Identity from "../environment/ServerEnvironment.ts";
+import * as Settings from "../serverSettings.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Repository from "./DeusRepository.ts";
@@ -23,7 +24,7 @@ import { DEUS_TOOL_DECLARATIONS } from "./DeusTools.ts";
 
 const environmentId = EnvironmentId.make("ponder-fixture");
 const projectId = ProjectId.make("ponder-project");
-const base = Repository.layer.pipe(
+const base = Layer.merge(Repository.layer, Settings.layerTest()).pipe(
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(Git.layer),
   Layer.provideMerge(
@@ -34,7 +35,9 @@ const base = Repository.layer.pipe(
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "deus-ponder-" })),
   Layer.provideMerge(NodeServices.layer),
 );
-const setup = Effect.fn("PonderTest.setup")(function* () {
+const setup = Effect.fn("PonderTest.setup")(function* (enabled = true) {
+  const settings = yield* Settings.ServerSettingsService;
+  if (enabled) yield* settings.updateSettings({ deus: { enabled: true } });
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${projectId},'Ponder fixture','/synthetic','[]','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')`;
   const repository = yield* Repository.DeusRepository;
@@ -108,6 +111,7 @@ const setup = Effect.fn("PonderTest.setup")(function* () {
   });
   return {
     sql,
+    settings,
     repository,
     service,
     snapshot,
@@ -323,6 +327,48 @@ it.effect("an idle project neither claims the day nor blocks another project's d
     assert.deepEqual((yield* h.service.status(h.snapshot.session)).runs, []);
     yield* h.observe("Synthetic project uses bounded evidence.");
     assert.equal((yield* h.run()).status, "succeeded");
+  }).pipe(Effect.provide(base)),
+);
+
+it.effect(
+  "the default-off environment gate blocks manual and daily learning without catching up",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-01-01T03:59:55"));
+      const h = yield* setup(false);
+      assert.isFalse((yield* h.settings.getSettings).deus.enabled);
+      yield* h.observe("Synthetic project uses bounded evidence.");
+      yield* Deferred.succeed(h.release, undefined);
+      assert.include((yield* h.run().pipe(Effect.flip)).message, "disabled");
+      yield* TestClock.setTime(Date.parse("2026-01-01T04:00:00"));
+      yield* h.service.runDue;
+      assert.equal(h.calls(), 0);
+      assert.deepEqual((yield* h.service.status(h.snapshot.session)).runs, []);
+      yield* h.settings.updateSettings({ deus: { enabled: true } });
+      yield* TestClock.setTime(Date.parse("2026-01-01T04:00:10"));
+      yield* h.service.runDue;
+      assert.equal(h.calls(), 0);
+      assert.equal((yield* h.run()).status, "succeeded");
+    }).pipe(Effect.provide(base)),
+);
+
+it.effect("the disabled environment leaves persisted promotion recovery untouched", () =>
+  Effect.gen(function* () {
+    const h = yield* setup();
+    yield* h.observe("Synthetic project uses bounded evidence.");
+    yield* Deferred.succeed(h.release, undefined);
+    yield* h.sql`CREATE TRIGGER synthetic_ack_crash BEFORE UPDATE ON deus_ponder_runs WHEN json_extract(NEW.run_json, '$.receipt.status') = 'succeeded' BEGIN SELECT RAISE(ABORT, 'synthetic crash after Git commit'); END`;
+    yield* h.run().pipe(Effect.exit);
+    yield* h.sql`DROP TRIGGER synthetic_ack_crash`;
+    yield* h.settings.updateSettings({ deus: { enabled: false } });
+    const before = yield* h.service.status(h.snapshot.session);
+    yield* h.service.recover;
+    assert.deepEqual(yield* h.service.status(h.snapshot.session), before);
+    assert.equal(before.pendingCount, 1);
+    yield* h.settings.updateSettings({ deus: { enabled: true } });
+    yield* h.service.recover;
+    assert.equal((yield* h.service.status(h.snapshot.session)).pendingCount, 0);
+    assert.equal(h.calls(), 1);
   }).pipe(Effect.provide(base)),
 );
 

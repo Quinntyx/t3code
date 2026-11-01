@@ -24,6 +24,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as Settings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Repository from "./DeusRepository.ts";
 import * as Writer from "./DeusMemoryWriter.ts";
@@ -67,6 +68,7 @@ const make = Effect.gen(function* () {
   const writer = yield* Writer.DeusMemoryWriter;
   const worker = yield* Worker.DeusPonderWorker;
   const crypto = yield* Crypto.Crypto;
+  const environment = yield* Settings.ServerSettingsService;
   const lane = yield* Semaphore.make(1);
   const previous = yield* Ref.make(yield* Clock.currentTimeMillis);
   const persistence = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -77,6 +79,9 @@ const make = Effect.gen(function* () {
           : new Repository.DeusPersistenceError({ operation: "ponder", cause }),
       ),
     );
+  const enabled = persistence(environment.getSettings).pipe(
+    Effect.map((settings) => settings.deus.enabled),
+  );
   const save = Effect.fn("DeusPonderService.save")((run: PonderRun) =>
     persistence(
       sql`UPDATE deus_ponder_runs SET run_json = ${encodeRun(run)} WHERE environment_id = ${run.environmentId} AND project_id = ${run.projectId} AND local_date = ${run.localDate}`,
@@ -213,6 +218,7 @@ const make = Effect.gen(function* () {
     daily = false,
   ) {
     const input = yield* persistence(decodePonder(raw));
+    if (!(yield* enabled)) return yield* ponderError("Deus is disabled on this environment.");
     const config = yield* settings(input);
     if (!config.enabled)
       return yield* ponderError(
@@ -322,6 +328,7 @@ const make = Effect.gen(function* () {
     );
   }, lane.withPermits(1));
   const recover = Effect.gen(function* () {
+    if (!(yield* enabled)) return;
     const rows = yield* persistence(
       sql<{
         run_json: string;
@@ -341,7 +348,7 @@ const make = Effect.gen(function* () {
   const runDue = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const before = yield* Ref.getAndSet(previous, now);
-    if (!dailyPonderDue(before, now)) return;
+    if (!(yield* enabled) || !dailyPonderDue(before, now)) return;
     const projects = yield* persistence(
       sql<{
         environment_id: string;

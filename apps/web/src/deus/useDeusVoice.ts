@@ -26,7 +26,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
   const sessionId = session?.sessionId;
   const conversation = session?.conversation;
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- The stable project owner releases browser media on true unmount or an explicit panel close/switch.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release the browser media owner on unmount or explicit panel close/switch.
   useEffect(
     () => () => {
       void useDeusPanelStore
@@ -37,7 +37,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
     [target],
   );
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Capability, permission, connection or conversation loss invalidates the current media generation, never workers.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Revoke browser media when destination capability, permission, connection or conversation changes.
   useEffect(() => {
     if (!available || !permitted || !sessionId || conversation === undefined)
       void useDeusPanelStore
@@ -83,7 +83,7 @@ export function useDeusVoice(target: DeusScope, session: DeusSession | null, ava
     });
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Settings, palette and shortcuts share this mounted media owner; registering actions never captures media.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Register this media owner's controls for settings, palette and shortcuts until unmount.
   useEffect(() => {
     const store = useDeusPanelStore.getState();
     store.registerVoice(target, {

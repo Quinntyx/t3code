@@ -66,10 +66,13 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("upgrades a database at exactly 54", () =>
+  it.effect.each([54, 72])("upgrades a database at exactly %s", (id) =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 54 });
-      assert.deepStrictEqual(yield* runMigrations(), v2Migrations);
+      yield* runMigrations({ toMigrationInclusive: id });
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        v2Migrations.filter(([migrationId]) => migrationId > id),
+      );
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.isAbove(yield* v2TableCount, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

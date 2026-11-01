@@ -5,7 +5,9 @@ import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DeusSessionId,
   EnvironmentId,
+  ProjectId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
   PreviewTabId,
@@ -27,6 +29,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DeusBridge from "../deus/DeusThreadBridge.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -869,6 +872,8 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const token = "linksToken";
+        let registeredWorker = false;
+        let workerScopeCalls = 0;
         const scope: McpInvocationContext.McpThreadInvocationScope = {
           environmentId,
           requestNamespace: token,
@@ -882,6 +887,12 @@ it.effect(
           issuedAt: 1,
         };
         const LinksToolkit = Toolkit.make(
+          Tool.make("worker", {
+            description: "Reads worker evidence.",
+            success: Schema.Struct({ read: Schema.Boolean }),
+            failure: OrchestratorMcpFailure,
+            failureMode: "return",
+          }).annotate(McpSchema.EnabledWhen, McpInvocationContext.onlyDeusWorkers),
           Tool.make("links", {
             description: "Lists links.",
             success: Schema.Struct({ links: Schema.Number }),
@@ -907,6 +918,7 @@ it.effect(
         const serverLayer = McpHttpServer.toolkitRegistration(
           LinksToolkit,
           McpToolAccess.toLayer(LinksToolkit, {
+            worker: McpToolAccess.reads(() => Effect.succeed({ read: true })),
             links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
             mail: McpToolAccess.reads(() => Effect.succeed({ sent: false })),
             where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
@@ -914,7 +926,23 @@ it.effect(
         ).pipe(
           Layer.provideMerge(
             McpHttpServer.layerMcpTransport.pipe(
-              Layer.provide(Layer.succeedContext(settingsContext)),
+              Layer.provide(
+                Layer.merge(
+                  Layer.succeedContext(settingsContext),
+                  Layer.mock(DeusBridge.DeusThreadBridge)({
+                    workerScope: () => {
+                      workerScopeCalls++;
+                      return registeredWorker
+                        ? Effect.succeed({
+                            environmentId,
+                            projectId: ProjectId.make("worker-project"),
+                            sessionId: DeusSessionId.make("worker-session"),
+                          })
+                        : Effect.fail(new DeusBridge.DeusBridgeError({ cause: "not a worker" }));
+                    },
+                  }),
+                ),
+              ),
             ),
           ),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
@@ -997,6 +1025,24 @@ it.effect(
 
         yield* settings.updateSettings({ emailEnabled: true });
         expect(yield* listed()).toEqual(["links", "mail", "where"]);
+        expect(workerScopeCalls).toBe(0);
+        yield* settings.updateSettings({ deus: { enabled: true } });
+        expect(yield* listed()).toEqual(["links", "mail", "where"]);
+        expect(yield* rpc("tools/call", { name: "worker", arguments: {} })).toMatchObject({
+          error: { message: expect.stringContaining("not found") },
+        });
+        registeredWorker = true;
+        expect(yield* listed()).toEqual(["worker", "links", "mail", "where"]);
+        expect(yield* rpc("tools/call", { name: "worker", arguments: {} })).toMatchObject({
+          result: { structuredContent: { read: true } },
+        });
+        yield* settings.updateSettings({ deus: { enabled: false } });
+        const callsBeforeDisabled = workerScopeCalls;
+        expect(yield* listed()).toEqual(["links", "mail", "where"]);
+        expect(yield* rpc("tools/call", { name: "worker", arguments: {} })).toMatchObject({
+          error: { message: expect.stringContaining("not found") },
+        });
+        expect(workerScopeCalls).toBe(callsBeforeDisabled);
       }),
     ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
