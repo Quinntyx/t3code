@@ -94,6 +94,18 @@ describe("global voice input", () => {
     },
   );
 
+  it("starts dictation even when the duplex owner it replaces fails to tear down", async () => {
+    const duplex = acquireAudioSession("duplex", async () => {
+      throw new Error("Native stop failed");
+    });
+    await activateAudioSession(duplex);
+    const recording = acquireAudioSession("recording");
+    await expect(activateAudioSession(recording)).resolves.toBe(true);
+    expect(isAudioSessionOwner(duplex)).toBe(false);
+    await releaseAudioSession(recording);
+    vi.clearAllMocks();
+  });
+
   it.each(["complete", "activation failure"])(
     "protects recording from inline playback and releases its session after %s",
     async (outcome) => {

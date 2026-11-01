@@ -60,8 +60,8 @@ export function acquireAudioSession(
   AudioModule.setAudioSessionOwner?.(true);
   owner = token;
   if (previous && !previous.released) {
-    token.handoff = Promise.resolve(previous.onCancel?.());
-    void token.handoff.catch(() => {});
+    // The new owner proceeds even when the previous owner's own teardown fails.
+    token.handoff = Promise.resolve(previous.onCancel?.()).catch(() => {});
   }
   return token;
 }
