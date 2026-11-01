@@ -260,6 +260,9 @@ const make = Effect.gen(function* () {
           return true;
         })
         .slice(0, PONDER_LIMITS.observations);
+      // An idle snapshot must not claim the day's receipt; later arrivals stay runnable today.
+      if (selected.length === 0)
+        return yield* ponderError("No complete pending observations fit the learning snapshot.");
       const id = DeusPonderId.make(`ponder-${yield* persistence(crypto.randomUUIDv4())}`);
       const threadId = ThreadId.make(`${id}:1`);
       const receipt: DeusPonderReceipt = {
@@ -346,23 +349,30 @@ const make = Effect.gen(function* () {
       }>`SELECT l.environment_id,l.project_id FROM deus_learning_projects l JOIN projection_projects p ON p.project_id=l.project_id WHERE l.enabled=1 AND p.deleted_at IS NULL`,
     );
     for (const project of projects) {
-      const scope = yield* persistence(
-        decodeScope({
-          environmentId: project.environment_id,
-          projectId: project.project_id,
-        }),
-      );
-      const snapshot = yield* repository.open({
-        ...scope,
-        inputId: DeusInputId.make(`daily:${localDay(now).date}`),
-      });
-      yield* runNow(
-        {
-          ...snapshot.session,
+      yield* Effect.gen(function* () {
+        const scope = yield* persistence(
+          decodeScope({
+            environmentId: project.environment_id,
+            projectId: project.project_id,
+          }),
+        );
+        const snapshot = yield* repository.open({
+          ...scope,
           inputId: DeusInputId.make(`daily:${localDay(now).date}`),
-          snapshotCursor: snapshot.cursor,
-        },
-        true,
+        });
+        yield* runNow(
+          {
+            ...snapshot.session,
+            inputId: DeusInputId.make(`daily:${localDay(now).date}`),
+            snapshotCursor: snapshot.cursor,
+          },
+          true,
+        );
+      }).pipe(
+        // One project's failure must not cost the others their only run of the day.
+        Effect.catch((error) =>
+          Effect.logWarning("Deus daily learning failed", { projectId: project.project_id, error }),
+        ),
       );
     }
   });

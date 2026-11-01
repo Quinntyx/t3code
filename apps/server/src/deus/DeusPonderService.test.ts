@@ -283,6 +283,44 @@ it.effect(
     }).pipe(Effect.provide(base)),
 );
 
+it.effect("an idle project neither claims the day nor blocks another project's daily run", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-01-01T03:59:55"));
+    const h = yield* setup();
+    const otherId = ProjectId.make("ponder-project-other");
+    yield* h.sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${otherId},'Other fixture','/synthetic-other','[]','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')`;
+    yield* h.service.configure({ environmentId, projectId: otherId, enabled: true });
+    const other = yield* h.repository.open({
+      environmentId,
+      projectId: otherId,
+      inputId: DeusInputId.make("open-other"),
+    });
+    const source = yield* h.repository.commit({
+      type: "input",
+      input: { ...other.session, inputId: DeusInputId.make("other-input"), text: "Other fact." },
+    });
+    yield* h.repository.commit({
+      type: "observe",
+      input: {
+        ...other.session,
+        inputId: DeusInputId.make("other-observe"),
+        sourceCursor: source.receipt.cursor,
+        kind: "context",
+        text: "Other fact.",
+        supersedes: null,
+      },
+    });
+    yield* Deferred.succeed(h.release, undefined);
+    yield* TestClock.setTime(Date.parse("2026-01-01T04:00:00"));
+    yield* h.service.runDue;
+    assert.equal(h.calls(), 1);
+    assert.equal((yield* h.service.status(other.session)).runs[0]!.status, "succeeded");
+    assert.deepEqual((yield* h.service.status(h.snapshot.session)).runs, []);
+    yield* h.observe("Synthetic project uses bounded evidence.");
+    assert.equal((yield* h.run()).status, "succeeded");
+  }).pipe(Effect.provide(base)),
+);
+
 it.effect("takes scheduling time from TestClock without a catch-up run", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse("2026-01-01T13:00:00Z"));
