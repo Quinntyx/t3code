@@ -83,6 +83,7 @@ vi.mock("react-native-gesture-handler", () => {
       activeOffsetX: () => builder,
       failOffsetX: () => builder,
       failOffsetY: () => builder,
+      onBegin: () => builder,
       onStart: (handler: () => void) => {
         handlers.onStart = handler;
         return builder;

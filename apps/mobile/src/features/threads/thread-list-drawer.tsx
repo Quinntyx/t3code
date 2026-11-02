@@ -24,6 +24,7 @@ import Animated, {
 
 import { useHardwareBack } from "../../lib/backHandler";
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
+import { logGesture } from "./gesture-diagnostics";
 import {
   drawerDragProgress,
   drawerShouldOpen,
@@ -185,13 +186,19 @@ function useDrawerGesture(
   });
   return useMemo(() => {
     const direction = (side === "left" ? 1 : -1) * (open ? -1 : 1);
+    const label = `${open ? "close" : "open"}-${side}`;
     // oxlint-disable-next-line react/capitalized-calls -- Gesture.Pan is a gesture factory, not a React component.
     const gesture = Gesture.Pan()
       .enabled(enabled && width > 0)
       .activeOffsetX(direction * DRAWER_ACTIVATION_DISTANCE)
       .failOffsetY([-DRAWER_VERTICAL_FAIL_DISTANCE, DRAWER_VERTICAL_FAIL_DISTANCE])
+      .onBegin(() => {
+        "worklet";
+        runOnJS(logGesture)(`${label} begin`);
+      })
       .onStart(() => {
         "worklet";
+        runOnJS(logGesture)(`${label} START`);
         if (!open) runOnJS(prepareOpen)();
       })
       .onUpdate((event) => {
@@ -204,8 +211,11 @@ function useDrawerGesture(
           drawerShouldOpen(side, event.translationX, event.velocityX, width, open),
         );
       })
-      .onFinalize((_event, success) => {
+      .onFinalize((event, success) => {
         "worklet";
+        runOnJS(logGesture)(
+          `${label} end ok=${success} st=${event.state} dx=${Math.round(event.translationX)} dy=${Math.round(event.translationY)}`,
+        );
         if (!success) runOnJS(settleOpen)();
       });
     return gesture;

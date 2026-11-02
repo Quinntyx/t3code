@@ -1,8 +1,29 @@
+diff --git a/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt b/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
+index 63001c1799e8d7a48a0a971ed797b3c10a144f05..38b9191a647337cc72dc72e20df0d6ee6c3e7505 100644
+--- a/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
++++ b/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
+@@ -121,6 +121,16 @@ class RNGestureHandlerRootHelper(private val context: ReactContext, wrappedView:
+     // touch event delivery. Legacy handlers are cancelled right away; handlers opting into
+     // native-touch-grab cancellation are deferred to `onNativeDispatchEnd`.
+     if (orchestrator != null && !passingTouch) {
++      // Diagnostic build: report which native view grabbed the touch lock.
++      try {
++        val frames = Throwable().stackTrace.drop(1)
++          .filter { !it.className.startsWith("com.swmansion.gesturehandler") }
++          .take(9)
++          .joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}" }
++        (rootView.context as? com.facebook.react.bridge.ReactContext)
++          ?.emitDeviceEvent("RNGHNativeGrab", "${if (passingNativeTouch) "dispatch" else "async"}: $frames")
++      } catch (_: Throwable) {
++      }
+       // if we are in the process of delivering touch events via GH orchestrator, we don't want to
+       // treat it as a native gesture capturing the lock
+       if (passingNativeTouch) {
 diff --git a/apple/Handlers/RNPanHandler.m b/apple/Handlers/RNPanHandler.m
-index e67d02c..4708f0f 100644
+index e67d02cf8cddebe0206609ae4c4267610c62e329..4708f0f4eca0efc193435c45a99759f54048432f 100644
 --- a/apple/Handlers/RNPanHandler.m
 +++ b/apple/Handlers/RNPanHandler.m
-@@ -31,6 +31,7 @@ @interface RNBetterPanGestureRecognizer : UIPanGestureRecognizer
+@@ -31,6 +31,7 @@
  @property (nonatomic) CGFloat failOffsetYStart;
  @property (nonatomic) CGFloat failOffsetYEnd;
  @property (nonatomic) CGFloat activateAfterLongPress;
@@ -10,7 +31,7 @@ index e67d02c..4708f0f 100644
  
  #if !TARGET_OS_OSX && !TARGET_OS_TV
  @property (atomic, readonly, strong) RNGHStylusData *stylusData;
-@@ -126,9 +127,14 @@ - (void)activateAfterLongPress
+@@ -126,9 +127,14 @@
  
  - (void)interactionsBegan:(NSSet *)touches withEvent:(UIEvent *)event
  {
@@ -28,7 +49,7 @@ index e67d02c..4708f0f 100644
    }
  
    if (touches.count == 0) {
-@@ -476,6 +482,23 @@ - (void)updateConfig:(NSDictionary *)config
+@@ -476,6 +482,23 @@
  
  - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer
  {
@@ -53,7 +74,7 @@ index e67d02c..4708f0f 100644
    BOOL shouldBegin = [super gestureRecognizerShouldBegin:gestureRecognizer];
    _lastState = savedState;
 diff --git a/lib/module/components/ReanimatedSwipeable/ReanimatedSwipeable.js b/lib/module/components/ReanimatedSwipeable/ReanimatedSwipeable.js
-index 5f2f759..c0b8237 100644
+index 5f2f759d88efc1e0a75e0439bd2471e41a039e73..c0b823730a140e765bdb7bb8ce187599bfd5c1a3 100644
 --- a/lib/module/components/ReanimatedSwipeable/ReanimatedSwipeable.js
 +++ b/lib/module/components/ReanimatedSwipeable/ReanimatedSwipeable.js
 @@ -42,6 +42,8 @@ const Swipeable = props => {
@@ -89,7 +110,7 @@ index 5f2f759..c0b8237 100644
      requireToFail,
      block,
 diff --git a/lib/typescript/components/ReanimatedSwipeable/ReanimatedSwipeableProps.d.ts b/lib/typescript/components/ReanimatedSwipeable/ReanimatedSwipeableProps.d.ts
-index e97b6db..de07f26 100644
+index e97b6dbbced1bcbd359cf35293b7f10cbf13b0e7..de07f26423bee66ecd7d0f9bb33233bcb3215751 100644
 --- a/lib/typescript/components/ReanimatedSwipeable/ReanimatedSwipeableProps.d.ts
 +++ b/lib/typescript/components/ReanimatedSwipeable/ReanimatedSwipeableProps.d.ts
 @@ -59,6 +59,12 @@ export type SwipeableProps = {
@@ -120,7 +141,7 @@ index e97b6db..de07f26 100644
  export interface SwipeableMethods {
      close: () => void;
 diff --git a/src/components/ReanimatedSwipeable/ReanimatedSwipeable.tsx b/src/components/ReanimatedSwipeable/ReanimatedSwipeable.tsx
-index b62da83..7d88839 100644
+index b62da83d89c2ad3fbfb1969adc7f2bb3b105083a..7d88839523ec0a2c240353fa1b3adab915b59c89 100644
 --- a/src/components/ReanimatedSwipeable/ReanimatedSwipeable.tsx
 +++ b/src/components/ReanimatedSwipeable/ReanimatedSwipeable.tsx
 @@ -77,6 +77,8 @@ const Swipeable = (props: SwipeableProps) => {
@@ -170,7 +191,7 @@ index b62da83..7d88839 100644
        enabled,
        handleFinalize,
 diff --git a/src/components/ReanimatedSwipeable/ReanimatedSwipeableProps.ts b/src/components/ReanimatedSwipeable/ReanimatedSwipeableProps.ts
-index 1e1246f..f526d4f 100644
+index 1e1246f709feb04c01cf3221472cc1219a8fffac..f526d4fe2d2738becbe8d29c59d1105afa11ae60 100644
 --- a/src/components/ReanimatedSwipeable/ReanimatedSwipeableProps.ts
 +++ b/src/components/ReanimatedSwipeable/ReanimatedSwipeableProps.ts
 @@ -77,6 +77,13 @@ export type SwipeableProps = {

@@ -37,6 +37,7 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { LiquidGlassTarget } from "../../native/LiquidGlass";
+import { logGesture } from "./gesture-diagnostics";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
 import { deriveBottomControlInsets, type NativeLayoutMetrics } from "../../lib/reserved-regions";
 import type {
@@ -1264,6 +1265,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   };
 
   const handleFeedTouchCancel = () => {
+    logGesture("js touchcancel");
     feedTouchStartRef.current = null;
   };
 

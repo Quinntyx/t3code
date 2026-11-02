@@ -24,6 +24,7 @@ import { AppText } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedHistoryControls } from "./ThreadFeed";
+import { logGesture } from "./gesture-diagnostics";
 import { INITIAL_THREAD_HISTORY_PULL, reduceThreadHistoryPull } from "./thread-history-pull";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -69,7 +70,16 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
       // oxlint-disable-next-line react/capitalized-calls -- Gesture.Simultaneous is a gesture factory.
       Gesture.Simultaneous(
         // oxlint-disable-next-line react/capitalized-calls -- Gesture.Native is a gesture factory.
-        Gesture.Native(),
+        Gesture.Native()
+          .onBegin(() => {
+            runOnJS(logGesture)("feed-scroll begin");
+          })
+          .onStart(() => {
+            runOnJS(logGesture)("feed-scroll START");
+          })
+          .onFinalize((event, success) => {
+            runOnJS(logGesture)(`feed-scroll end ok=${success} st=${event.state}`);
+          }),
         // Android clamps scroll offsets at zero, so measure the finger rather than scroll-view bounce.
         // oxlint-disable-next-line react/capitalized-calls -- Gesture.Pan is a gesture factory.
         Gesture.Pan()
@@ -78,12 +88,16 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
           .activeOffsetY(10)
           .failOffsetX([-18, 18])
           .onBegin(() => {
+            runOnJS(logGesture)("history begin");
             pull.set(
               reduceThreadHistoryPull(pull.get(), {
                 type: "start",
                 offset: offset.get() + topInset,
               }),
             );
+          })
+          .onStart((event) => {
+            runOnJS(logGesture)(`history START dy=${Math.round(event.translationY)}`);
           })
           .onUpdate((event) => {
             pull.set(
@@ -105,7 +119,8 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
             pull.set(released);
             if (released.loadEarlier) runOnJS(loadEarlier)();
           })
-          .onFinalize(() => {
+          .onFinalize((event, success) => {
+            runOnJS(logGesture)(`history end ok=${success} st=${event.state}`);
             pull.set(reduceThreadHistoryPull(pull.get(), { type: "cancel" }));
           }),
       ),

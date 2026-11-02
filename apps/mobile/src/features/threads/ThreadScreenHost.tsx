@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Platform, View } from "react-native";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
+import { GestureLogOverlay } from "./gesture-diagnostics";
 import { ThreadListDrawerGestureWrapper } from "./thread-list-drawer";
 
 type ThreadScreenContent =
@@ -50,6 +51,7 @@ function ThreadScreenOutlet() {
           body
         )}
       </ThreadListDrawerGestureWrapper>
+      <GestureLogOverlay />
     </>
   );
 }
