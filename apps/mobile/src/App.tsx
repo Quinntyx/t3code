@@ -5,6 +5,7 @@ import { installThreadPrefetch } from "./state/thread-prefetch";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { DebugShakeCoordinator } from "./features/development/DebugShakeCoordinator";
 import { StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -229,6 +230,7 @@ function AppContent() {
   return (
     <>
       <SplashScreenCoordinator />
+      <DebugShakeCoordinator />
       <SubscriptionUsageCoordinator />
       <GestureHandlerRootView className="flex-1">
         <KeyboardProvider statusBarTranslucent>

@@ -1,3 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import { SheetCloseButton } from "../../components/ui/SheetHeader";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
@@ -93,6 +96,9 @@ export function DevicePreviewScreen({
   const { themeVariables } = useAppearancePreferences();
   const focused = useIsFocused();
   const foreground = useAppForeground();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const debugShakeEnabled =
+    AsyncResult.isSuccess(preferences) && preferences.value.debugShakeEnabled === true;
   const [selectedKey, setSelectedKey] = useState<string | null>(initialDeviceKey ?? null);
   const [inputConnected, setInputConnected] = useState(false);
   const [streamAttempt, setStreamAttempt] = useState(0);
@@ -114,7 +120,7 @@ export function DevicePreviewScreen({
   }, [focused, state.data, previews.length, onClose]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the Accelerometer while focused to toggle controls on a shake
   useEffect(() => {
-    if (!focused || !foreground || embedded) return;
+    if (!focused || !foreground || embedded || debugShakeEnabled) return;
     const shaken = createShakeDetector();
     Accelerometer.setUpdateInterval(50);
     const subscription = Accelerometer.addListener((sample) => {
@@ -123,7 +129,7 @@ export function DevicePreviewScreen({
       setControlsVisible((visible) => !visible);
     });
     return () => subscription.remove();
-  }, [focused, foreground, embedded]);
+  }, [focused, foreground, embedded, debugShakeEnabled]);
   useHardwareBack(!controlsVisible, () => {
     setControlsVisible(true);
     return true;

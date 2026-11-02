@@ -69,6 +69,19 @@ it.effect(
       expect(yield* store.load).toEqual({ baseFontSize: 18, hiddenThreadKeys: ["second:same"] });
       yield* reloaded.savePatch({ hiddenThreadKeys: [] });
       expect(yield* store.load).toEqual({ baseFontSize: 18, hiddenThreadKeys: [] });
+      yield* reloaded.savePatch({
+        debugShakeEnabled: true,
+        debugShakeProject: { environmentId: "machine-2", projectId: "t3code" },
+      });
+      expect(yield* (yield* makeStore).load).toMatchObject({
+        debugShakeEnabled: true,
+        debugShakeProject: { environmentId: "machine-2", projectId: "t3code" },
+      });
+      yield* reloaded.savePatch({ debugShakeEnabled: false });
+      expect(yield* store.load).toMatchObject({
+        debugShakeEnabled: false,
+        debugShakeProject: { environmentId: "machine-2", projectId: "t3code" },
+      });
     }),
 );
 
@@ -85,6 +98,8 @@ it.effect("reads older preferences without hidden keys and sanitizes stored valu
       liquidGlassSaturation: 250,
       liquidGlassRefraction: 12.5,
       liquidGlassDispersion: "100",
+      debugShakeEnabled: "true",
+      debugShakeProject: { environmentId: "machine-1", projectId: "" },
     });
     expect(yield* store.load).toEqual({
       baseFontSize: 18,

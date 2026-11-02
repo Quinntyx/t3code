@@ -1,3 +1,4 @@
+import { DebugShakeSettingsSection } from "./DebugShakeSettingsSection";
 import { Button } from "../../components/ui/Button";
 import { AuthSettingsWriteScope, type ServerSettingsPatch } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
@@ -36,6 +37,7 @@ export function SettingsLabsRouteScreen() {
       >
         <BetaSettingsSection />
         <LegacySettingsSection />
+        <DebugShakeSettingsSection />
       </ScrollView>
     </SettingsScreen>
   );
