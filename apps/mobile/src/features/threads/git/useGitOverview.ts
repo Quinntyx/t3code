@@ -5,6 +5,7 @@ import {
   buildMenuItems,
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
+  resolveQuickAction,
 } from "@t3tools/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -70,6 +71,25 @@ export function useGitOverview(props: {
     gitStatus?.sourceControlProvider?.kind,
   ).changeRequest;
   const { shortLabel, singular } = terminology;
+
+  const resolvedQuickAction = resolveQuickAction(
+    gitStatus ?? null,
+    busy,
+    isDefaultRef,
+    hasPrimaryRemote,
+  );
+  const writeBlocked =
+    !canWriteSourceControl &&
+    (resolvedQuickAction.kind === "run_action" || resolvedQuickAction.kind === "run_pull");
+  const quickAction = !isRepo
+    ? { ...resolvedQuickAction, disabled: true, hint: "This workspace is not a git repository." }
+    : writeBlocked
+      ? {
+          ...resolvedQuickAction,
+          disabled: true,
+          hint: "This connection cannot change source control.",
+        }
+      : resolvedQuickAction;
 
   const rowStatusDetail = (item: GitMenuItem): string | undefined => {
     if (gitStatus == null) return undefined;
@@ -158,6 +178,17 @@ export function useGitOverview(props: {
     await gitActions.onRunSelectedThreadGitAction(input);
   };
 
+  const runQuickAction = async () => {
+    if (quickAction.disabled) return;
+    if (quickAction.kind === "open_pr") {
+      await openExistingPr();
+    } else if (quickAction.kind === "run_pull") {
+      await gitActions.onPullSelectedThreadBranch();
+    } else if (quickAction.kind === "run_action" && quickAction.action) {
+      await runActionWithPrompt({ action: quickAction.action });
+    }
+  };
+
   const onPressMenuItem = async (item: GitMenuItem) => {
     if (item.disabled) return;
     if (item.kind === "open_pr") {
@@ -213,6 +244,8 @@ export function useGitOverview(props: {
     canChangeThreadBranch,
     menuItems,
     onPressMenuItem,
+    quickAction,
+    runQuickAction,
     pull: () => void gitActions.onPullSelectedThreadBranch(),
     openReview,
     openUrl,
