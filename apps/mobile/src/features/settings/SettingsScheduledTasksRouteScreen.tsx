@@ -41,6 +41,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button } from "../../components/ui/Button";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { AndroidHeaderIconButton } from "../../components/ui/AndroidScreenHeader";
 import {
   EnvironmentMachineSymbol,
   ENVIRONMENT_MACHINE_SYMBOLS,
@@ -407,18 +408,14 @@ export function SettingsScheduledTasksRouteScreen() {
       <SettingsScreen
         title="Scheduled tasks"
         trailing={
-          <View className="flex-row items-center">
+          <View className="flex-row items-center gap-2">
             <AndroidSettingsEnvironmentFilter />
-            <Pressable
-              accessibilityRole="button"
+            <AndroidHeaderIconButton
               accessibilityLabel="New task"
-              accessibilityState={{ disabled: visibleEnvironments.length === 0 }}
+              icon="plus"
               disabled={visibleEnvironments.length === 0}
               onPress={newTask}
-              className="size-11 items-center justify-center rounded-full disabled:opacity-50"
-            >
-              <SymbolView name="plus" size={22} tintColorClassName="accent-icon" />
-            </Pressable>
+            />
           </View>
         }
       >

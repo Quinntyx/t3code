@@ -1,9 +1,9 @@
 import type { NativeStackHeaderItem } from "@react-navigation/native-stack";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
-import { Platform, Pressable } from "react-native";
+import { Platform } from "react-native";
 
 import { Menu } from "../../../components/ui/Menu";
-import { SymbolView } from "../../../components/ui/AppSymbol";
+import { AndroidHeaderIconButton } from "../../../components/ui/AndroidScreenHeader";
 import { ENVIRONMENT_MACHINE_SYMBOLS } from "../../../components/EnvironmentMachineSymbol";
 import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { withNativeGlassHeaderItem } from "../../layout/native-glass-header-items";
@@ -180,13 +180,10 @@ export function AndroidSettingsEnvironmentFilter() {
         }
       }}
     >
-      <Pressable
-        accessibilityRole="button"
+      <AndroidHeaderIconButton
         accessibilityLabel="Filter settings environments and projects"
-        className="size-11 items-center justify-center rounded-full"
-      >
-        <SymbolView name={filterIcon} size={22} tintColorClassName="accent-icon" />
-      </Pressable>
+        icon={filterIcon}
+      />
     </Menu>
   );
 }

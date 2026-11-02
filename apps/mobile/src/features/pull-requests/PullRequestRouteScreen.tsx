@@ -28,7 +28,7 @@ import {
 } from "./pullRequestActions";
 import * as Clipboard from "expo-clipboard";
 import { Menu } from "../../components/ui/Menu";
-import { IconButton } from "../../components/ui/IconButton";
+import { HeaderIconButton } from "../../components/ui/HeaderIconButton";
 import { Button } from "../../components/ui/Button";
 import { usePullRequestReviewDraft } from "./usePullRequestReviewDraft";
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
@@ -1163,7 +1163,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
               }}
             >
               <View pointerEvents="none">
-                <IconButton icon="ellipsis" accessibilityLabel="Diff options" />
+                <HeaderIconButton icon="ellipsis" accessibilityLabel="Diff options" />
               </View>
             </Menu>
           }

@@ -1,6 +1,6 @@
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { SheetHeader } from "../../components/ui/SheetHeader";
-import { IconButton } from "../../components/ui/IconButton";
+import { HeaderIconButton } from "../../components/ui/HeaderIconButton";
 import { Button } from "../../components/ui/Button";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 
@@ -76,7 +76,7 @@ function ConfiguredConnectOnboardingRouteScreen() {
                 <AppActivityIndicator />
               </View>
             ) : (
-              <IconButton
+              <HeaderIconButton
                 accessibilityLabel="Refresh environments"
                 icon="arrow.clockwise"
                 onPress={handleRefresh}

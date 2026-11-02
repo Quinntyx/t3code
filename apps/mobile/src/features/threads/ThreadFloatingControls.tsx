@@ -4,8 +4,7 @@ import Animated, { FadeIn, FadeOut, ReduceMotion } from "react-native-reanimated
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { GlassBackdrop, useLiquidGlassActive } from "../../components/ui/GlassBackdrop";
-import { cn } from "../../lib/cn";
+import { FloatingHeaderButtonBackdrop } from "../../components/ui/FloatingHeaderButtonBackdrop";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadDetailsDrawer, useThreadListDrawer } from "./thread-list-drawer";
@@ -24,8 +23,7 @@ export const THREAD_FLOATING_TOP_SCRIM_HEIGHT =
 const CONTROLS_ENTERING = FadeIn.duration(160).reduceMotion(ReduceMotion.System);
 const CONTROLS_EXITING = FadeOut.duration(160).reduceMotion(ReduceMotion.System);
 
-const PILL_CLASS_NAME =
-  "items-center justify-center overflow-hidden rounded-full border border-header-border";
+const PILL_CLASS_NAME = "items-center justify-center overflow-hidden rounded-full";
 const PILL_STYLE = { width: THREAD_FLOATING_CONTROL_SIZE, height: THREAD_FLOATING_CONTROL_SIZE };
 
 /**
@@ -67,9 +65,6 @@ export function ThreadFloatingHeader(props: {
   const insets = useSafeAreaInsets();
   const { openDrawer } = useThreadListDrawer();
   const details = useThreadDetailsDrawer();
-  const glass = useLiquidGlassActive();
-  const pillClassName = cn(PILL_CLASS_NAME, !glass && "bg-header/90");
-  const backdrop = glass ? <GlassBackdrop /> : null;
 
   return (
     <View
@@ -87,11 +82,11 @@ export function ThreadFloatingHeader(props: {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open threads"
-            className={pillClassName}
+            className={PILL_CLASS_NAME}
             style={PILL_STYLE}
             onPress={openDrawer}
           >
-            {backdrop}
+            <FloatingHeaderButtonBackdrop />
             <SymbolView
               name="line.3.horizontal"
               size={24}
@@ -103,11 +98,11 @@ export function ThreadFloatingHeader(props: {
             accessibilityRole="button"
             accessibilityLabel="Open thread details"
             accessibilityState={{ expanded: details.open }}
-            className={pillClassName}
+            className={PILL_CLASS_NAME}
             style={PILL_STYLE}
             onPress={details.openDrawer}
           >
-            {backdrop}
+            <FloatingHeaderButtonBackdrop />
             <SymbolView
               name="sidebar.right"
               size={24}

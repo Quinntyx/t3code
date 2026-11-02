@@ -17,7 +17,7 @@ import { GuideOutline } from "./GuideOutline";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
 import { Menu } from "../../../components/ui/Menu";
-import { IconButton } from "../../../components/ui/IconButton";
+import { HeaderIconButton } from "../../../components/ui/HeaderIconButton";
 import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
 import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { PullRequestCardGroup, PullRequestCardRow } from "../PullRequestControls";
@@ -149,7 +149,7 @@ export function PullRequestGuideStopScreen({ route }: StaticScreenProps<GuideSto
               onPressAction={() => setCodeWordBreak(!appearance.codeWordBreak)}
             >
               <View pointerEvents="none">
-                <IconButton icon="ellipsis" accessibilityLabel="Guide options" />
+                <HeaderIconButton icon="ellipsis" accessibilityLabel="Guide options" />
               </View>
             </Menu>
           }

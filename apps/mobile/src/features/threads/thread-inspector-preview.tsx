@@ -9,7 +9,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { type ReactNode } from "react";
 import { View } from "react-native";
 
-import { IconButton } from "../../components/ui/IconButton";
+import { HeaderIconButton } from "../../components/ui/HeaderIconButton";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { NativeInspectorContent } from "../../native/NativeInspectorContent";
 import { createV5StackNavigator } from "../../native/createV5StackNavigator";
@@ -43,7 +43,7 @@ export function ThreadInspectorHeader(
         accessibilityLabel="Close thread preview"
         trailing={
           props.onMaximize ? (
-            <IconButton
+            <HeaderIconButton
               icon="arrow.up.left.and.arrow.down.right"
               accessibilityLabel="Maximize thread"
               onPress={props.onMaximize}
