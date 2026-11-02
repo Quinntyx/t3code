@@ -1,16 +1,112 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { ServerConfigStreamEvent, UsageLimitSourceId } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ServerConfigStreamEvent,
+  UsageLimitSourceId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "./UsageLimitSources.ts";
 
 const encodeConfigEvent = Schema.encodeSync(ServerConfigStreamEvent);
+
+it.effect("notifies enabled hubs after native resets and preserves success on hub failures", () =>
+  Effect.gen(function* () {
+    for (const failHub of [false, true]) {
+      const resets: string[] = [];
+      const config = (host: string, enabled = true) => ({
+        kind: "cliproxy" as const,
+        url: `https://${host}`,
+        managementKey: "secret",
+        enabled,
+      });
+      yield* Effect.gen(function* () {
+        const sources = yield* UsageLimitSources.make;
+        yield* sources.refresh;
+        const provider = {
+          driver: ProviderDriverKind.make("codex"),
+          auth: { status: "authenticated" as const, workspaceId: "account-a" },
+        };
+        for (const outcome of ["reset", "alreadyRedeemed", "nothingToReset", "noCredit"] as const) {
+          const result = yield* sources.notifyResetCreditConsumed(provider, outcome);
+          expect(result.outcome).toBe(outcome);
+          expect(Boolean(result.warning)).toBe(
+            failHub && (outcome === "reset" || outcome === "alreadyRedeemed"),
+          );
+        }
+        yield* sources.notifyResetCreditConsumed(
+          { ...provider, auth: { status: "unknown" } },
+          "reset",
+        );
+        yield* sources.notifyResetCreditConsumed(
+          { ...provider, driver: ProviderDriverKind.make("claudeAgent") },
+          "reset",
+        );
+        expect(resets).toEqual(["first.test", "second.test", "first.test", "second.test"]);
+      }).pipe(
+        Effect.provide([
+          ServerSettings.layerTest({
+            usageLimitSources: {
+              [UsageLimitSourceId.make("first")]: config("first.test"),
+              [UsageLimitSourceId.make("second")]: config("second.test"),
+              [UsageLimitSourceId.make("disabled")]: config("disabled.test", false),
+              [UsageLimitSourceId.make("unconfigured")]: {
+                ...config("unconfigured.test"),
+                managementKey: "",
+              },
+            },
+          }),
+          Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+            shouldRunScopeWork: () => Effect.succeed(false),
+          }),
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.sync(() => {
+                const url = new URL(request.url);
+                if (url.pathname.endsWith("/auth-files")) {
+                  return HttpClientResponse.fromWeb(
+                    request,
+                    Response.json({
+                      files: [
+                        {
+                          id: "account.json",
+                          auth_index: "a",
+                          provider: "codex",
+                          id_token: { chatgpt_account_id: "account-a" },
+                        },
+                      ],
+                    }),
+                  );
+                }
+                if (url.pathname.endsWith("/reset-quota")) {
+                  resets.push(url.host);
+                  return HttpClientResponse.fromWeb(
+                    request,
+                    Response.json({}, { status: failHub && url.host === "first.test" ? 503 : 200 }),
+                  );
+                }
+                expect(url.pathname).toBe("/v0/management/api-call");
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({ status_code: 503, body: "{}" }),
+                );
+              }),
+            ),
+          ),
+          NodeCrypto.layer,
+        ]),
+        Effect.scoped,
+      );
+    }
+  }),
+);
 
 it.effect("keeps malformed source URLs encodable for config subscribers", () =>
   Effect.gen(function* () {

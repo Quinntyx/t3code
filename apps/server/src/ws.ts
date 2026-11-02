@@ -93,6 +93,7 @@ import {
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderConsumeResetCreditResult,
   ThreadId,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
@@ -2458,18 +2459,28 @@ export const layerWsRpc = (
                 detail: "This provider does not bank reset credits.",
               });
             }
-            const outcome = yield* instance.consumeResetCredit().pipe(
-              Effect.mapError(
-                (error) =>
-                  new ProviderSetupError({
-                    instanceId: input.instanceId,
-                    operation: "consume-reset-credit",
-                    detail: error.detail,
-                    cause: error,
-                  }),
-              ),
+            const provider = yield* instance.snapshot.getSnapshot;
+            const notification = yield* Ref.make<ProviderConsumeResetCreditResult | undefined>(
+              undefined,
             );
-            return { outcome };
+            const outcome = yield* instance
+              .consumeResetCredit((outcome) =>
+                usageLimitSources
+                  .notifyResetCreditConsumed(provider, outcome)
+                  .pipe(Effect.flatMap((result) => Ref.set(notification, result))),
+              )
+              .pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ProviderSetupError({
+                      instanceId: input.instanceId,
+                      operation: "consume-reset-credit",
+                      detail: error.detail,
+                      cause: error,
+                    }),
+                ),
+              );
+            return (yield* Ref.get(notification)) ?? { outcome };
           }),
         [WS_METHODS.providerAuthStart]: (input) => providerAuth.start(input, currentSessionId),
         [WS_METHODS.providerAuthRespond]: (input) =>

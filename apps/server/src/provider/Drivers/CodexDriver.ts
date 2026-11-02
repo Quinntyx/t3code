@@ -285,7 +285,7 @@ export const CodexDriver: ProviderDriver<
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
     const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
-    const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
+    const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = (onConsumed) =>
       resetCreditCoordinator
         .redeem(accountKey, (idempotencyKey) =>
           Effect.gen(function* () {
@@ -313,6 +313,7 @@ export const CodexDriver: ProviderDriver<
                 cause,
               }),
           ),
+          Effect.tap((outcome) => onConsumed?.(outcome) ?? Effect.void),
           // The windows just changed; re-probe so the snapshot says so. A
           // failed probe republishes the pre-redemption limits rather than
           // marking them failed, so "confirmed" means `checkedAt` moved past

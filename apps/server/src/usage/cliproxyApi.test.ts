@@ -56,6 +56,7 @@ function fixture(
     >;
     upstream?: (request: RequestBody) => { status: number; body: unknown };
     cooldownStatus?: number;
+    cooldownStatuses?: Record<string, number>;
   } = {},
 ) {
   const requests: Array<{ path: string; body?: RequestBody }> = [];
@@ -76,7 +77,12 @@ function fixture(
       if (path.endsWith("/reset-quota"))
         return HttpClientResponse.fromWeb(
           request,
-          Response.json({}, { status: options.cooldownStatus ?? 200 }),
+          Response.json(
+            {},
+            {
+              status: options.cooldownStatuses?.[body!.auth_index] ?? options.cooldownStatus ?? 200,
+            },
+          ),
         );
       expect(path).toMatch(/\/v0\/management\/api-call$/);
       expect(body?.header?.Authorization).toBe("Bearer $TOKEN$");
@@ -368,6 +374,35 @@ describe("CLIProxyAPI built-in management API", () => {
           .map((request) => request.body?.auth_index),
       ).toEqual(["b", "b"]);
     }),
+  );
+
+  it.effect(
+    "clears matching Codex accounts after a native redemption without consuming again",
+    () =>
+      Effect.gen(function* () {
+        for (const status of [200, 404]) {
+          const test = fixture({
+            accounts: [
+              ...accounts,
+              { ...accounts[1]!, id: "alias.json", auth_index: "alias" },
+              { ...accounts[1]!, id: "disabled.json", auth_index: "disabled", disabled: true },
+              { ...accounts[1]!, id: "claude.json", auth_index: "claude", provider: "claude" },
+            ],
+            cooldownStatuses: { b: status },
+          });
+          const api = yield* test.api;
+          const result = yield* api.clearAccountCooldowns(config, "account-b").pipe(Effect.result);
+          expect(result._tag).toBe(status === 200 ? "Success" : "Failure");
+          expect(test.requests).toEqual([
+            { path: "/v0/management/auth-files" },
+            { path: "/v0/management/reset-quota", body: { auth_index: "b" } },
+            { path: "/v0/management/reset-quota", body: { auth_index: "alias" } },
+          ]);
+          test.requests.length = 0;
+          yield* api.clearAccountCooldowns(config, "unknown-account");
+          expect(test.requests).toEqual([{ path: "/v0/management/auth-files" }]);
+        }
+      }),
   );
 
   it.effect("reports redemption success even if cooldown clearing fails", () =>
