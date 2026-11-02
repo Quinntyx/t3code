@@ -162,7 +162,7 @@ const isDevServerNotProxiableError = Schema.is(DevServerNotProxiableError);
 
 /** Publish the single-origin web dev port, which proxies the backend. Serve requires HTTP targets. */
 export const resolveTailscaleLocalTarget = (
-  state: PersistedServerRuntimeState,
+  state: Pick<PersistedServerRuntimeState, "host" | "port" | "devUrl">,
 ): { readonly localPort: number; readonly localHost?: string } | DevServerNotProxiableError => {
   if (state.devUrl !== undefined) {
     const devUrl = new URL(state.devUrl);
@@ -356,8 +356,14 @@ const awaitEnvironmentDescriptor = Effect.fn(function* (baseUrl: string) {
   return last;
 });
 
-const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase")(
-  function* (input: { readonly target: DiscoveredPairTarget; readonly servePort: number }) {
+export const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase")(
+  function* (input: {
+    readonly target: {
+      readonly descriptor: Pick<ExecutionEnvironmentDescriptor, "environmentId">;
+      readonly state: Pick<PersistedServerRuntimeState, "host" | "port" | "devUrl">;
+    };
+    readonly servePort: number;
+  }) {
     const notes: Array<string> = [];
     const status = yield* readTailscaleStatus.pipe(
       Effect.mapError((cause) => new TailscaleUnavailableError({ cause })),

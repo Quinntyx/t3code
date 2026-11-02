@@ -13,6 +13,7 @@ import { AndroidHeaderIconButton } from "../../components/ui/AndroidScreenHeader
 import { CloudEnvironmentRows } from "../connection/CloudEnvironmentRows";
 import { LocalEnvironmentList } from "../connection/LocalEnvironmentList";
 import { PullRequestRoutingSettings } from "../connection/PullRequestRoutingSettings";
+import { DiscoverySettingsSection } from "../connection/DiscoverySettingsSection";
 import { splitEnvironmentSections } from "../connection/environmentSections";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -170,6 +171,7 @@ export function SettingsEnvironmentsRouteScreen() {
               }
             : {})}
         />
+        <DiscoverySettingsSection />
         <PullRequestRoutingSettings />
       </ScrollView>
     </SettingsScreen>

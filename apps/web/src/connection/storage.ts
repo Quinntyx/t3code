@@ -85,6 +85,8 @@ function catalogError(operation: string, cause: unknown) {
 
 function persistenceError(
   operation:
+    | "load-discovery-membership"
+    | "save-discovery-membership"
     | "list-targets"
     | "list-disabled-targets"
     | "register-connection"
@@ -625,6 +627,19 @@ export const layer = Layer.effectContext(
       yieldToHost: yieldToBrowserTask,
     });
 
+    const discoverMembershipStore = {
+      load: catalog.read.pipe(
+        Effect.map((document) => document.discoverMembership ?? null),
+        Effect.mapError((cause) => persistenceError("load-discovery-membership", cause)),
+      ),
+      save: (membership: ConnectionCatalogDocumentType["discoverMembership"] | null) =>
+        catalog
+          .update((document) => {
+            const { discoverMembership: _previous, ...rest } = document;
+            return membership == null ? rest : { ...rest, discoverMembership: membership };
+          })
+          .pipe(Effect.mapError((cause) => persistenceError("save-discovery-membership", cause))),
+    } satisfies Context.Service.Shape<typeof Persistence.DiscoverMembershipStore>;
     const targetStore = Persistence.ConnectionTargetStore.of({
       list: catalog.read.pipe(
         Effect.map((document) => document.targets),
@@ -962,6 +977,7 @@ export const layer = Layer.effectContext(
     });
 
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
+      Context.add(Persistence.DiscoverMembershipStore, discoverMembershipStore),
       Context.add(PullRequestRoutingPermissions, pullRequestRoutingPermissions),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),

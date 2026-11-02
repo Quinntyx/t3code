@@ -1,4 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { DiscoverMembership } from "@t3tools/contracts/discover";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -17,12 +18,20 @@ export const StoredConnectionCredential = Schema.Struct({
 });
 export type StoredConnectionCredential = typeof StoredConnectionCredential.Type;
 
+export const StoredDiscoverMembership = Schema.Struct({
+  ...DiscoverMembership.fields,
+  brokerOrigin: Schema.String,
+  seenEnvironmentIds: Schema.Array(EnvironmentId),
+});
+export type StoredDiscoverMembership = typeof StoredDiscoverMembership.Type;
+
 export const ConnectionCatalogDocument = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   targets: Schema.Array(PersistedConnectionTarget),
   profiles: Schema.Array(ConnectionProfile),
   credentials: Schema.Array(StoredConnectionCredential),
   remoteDpopTokens: Schema.Array(TokenStore.RemoteDpopAccessToken),
+  discoverMembership: Schema.optionalKey(StoredDiscoverMembership),
   // Pull request routing grants. The field name predates the rename and stays, so older and
   // newer clients sharing this document keep reading and revoking the same grants.
   githubRoutingPermissions: Schema.optionalKey(Schema.Array(StoredPullRequestRoutingPermission)),

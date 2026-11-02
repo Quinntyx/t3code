@@ -16,6 +16,7 @@ import {
   McpAppToolInfoInput,
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
+import { DiscoverError, DiscoverHostConfiguration, DiscoverHostStatus } from "./discover.ts";
 import {
   PeerLink,
   PeerLinkCreateInput,
@@ -513,6 +514,9 @@ export const WS_METHODS = {
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
+  discoverStatus: "discover.status",
+  discoverConfigure: "discover.configure",
+  discoverRevoke: "discover.revoke",
   peerLinksList: "peerLinks.list",
   peerLinksLink: "peerLinks.link",
   peerLinksUnlink: "peerLinks.unlink",
@@ -793,6 +797,22 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
   success: Schema.NullOr(DatabaseStorageStatus),
   stream: true,
   error: EnvironmentAuthorizationError,
+});
+
+const WsDiscoverStatusRpc = Rpc.make(WS_METHODS.discoverStatus, {
+  payload: Schema.Struct({}),
+  success: DiscoverHostStatus,
+  error: Schema.Union([DiscoverError, EnvironmentAuthorizationError]),
+});
+const WsDiscoverConfigureRpc = Rpc.make(WS_METHODS.discoverConfigure, {
+  payload: DiscoverHostConfiguration,
+  success: DiscoverHostStatus,
+  error: Schema.Union([DiscoverError, EnvironmentAuthorizationError]),
+});
+const WsDiscoverRevokeRpc = Rpc.make(WS_METHODS.discoverRevoke, {
+  payload: Schema.Struct({}),
+  success: DiscoverHostStatus,
+  error: Schema.Union([DiscoverError, EnvironmentAuthorizationError]),
 });
 
 const WsPeerLinksListRpc = Rpc.make(WS_METHODS.peerLinksList, {
@@ -2009,6 +2029,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerUpdateSettingsRpc,
+  WsDiscoverStatusRpc,
+  WsDiscoverConfigureRpc,
+  WsDiscoverRevokeRpc,
   WsPeerLinksListRpc,
   WsPeerLinksLinkRpc,
   WsPeerLinksUnlinkRpc,

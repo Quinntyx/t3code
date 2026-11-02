@@ -15,6 +15,10 @@
       "types": "./src/settings.ts",
       "import": "./src/settings.ts"
     },
+    "./discover": {
+      "types": "./src/discover.ts",
+      "import": "./src/discover.ts"
+    },
     "./relay": {
       "types": "./src/relay.ts",
       "import": "./src/relay.ts"

@@ -6,6 +6,7 @@ import {
 } from "./git.ts";
 import {
   AuthAccessWriteScope,
+  AuthStandardClientScopes,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -68,6 +69,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.emailAnswerRequest]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
+  [WS_METHODS.discoverStatus]: AuthAccessWriteScope,
+  [WS_METHODS.discoverConfigure]: AuthAccessWriteScope,
+  [WS_METHODS.discoverRevoke]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.
@@ -82,6 +86,7 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (method === WS_METHODS.discoverConfigure) return AuthStandardClientScopes;
   if (
     method === ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff ||
     method === ORCHESTRATION_V2_WS_METHODS.importMachineHandoff

@@ -15,6 +15,7 @@ import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as DirectoryDiscovery from "../discover/service.ts";
 
 export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscoveredCompatibility")(
   function* () {
@@ -77,8 +78,13 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   );
   const layerRegistry = EnvironmentRegistry.layer.pipe(Layer.provide(layerDriver));
   const layerOnboarding = ConnectionOnboarding.layer.pipe(Layer.provide(layerRegistry));
+  const layerDiscovery = DirectoryDiscovery.layer.pipe(
+    Layer.provide(layerOnboarding),
+    Layer.provide(layerRegistry),
+  );
   const layerConnectionServices = Layer.mergeAll(
     layerRegistry,
+    layerDiscovery,
     RelayEnvironmentDiscovery.layer,
     layerOnboarding,
     ConnectionResolver.layer,
@@ -89,6 +95,8 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       const platformSource = yield* PlatformConnectionSource.PlatformConnectionSource;
       yield* watchDiscoveredCompatibility().pipe(Effect.forkScoped);
       yield* registry.start;
+      const directoryDiscovery = yield* DirectoryDiscovery.DirectoryDiscovery;
+      yield* directoryDiscovery.start;
       yield* platformSource.registrations.pipe(
         Stream.runForEach(registry.reconcilePlatform),
         Effect.forkScoped,

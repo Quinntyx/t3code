@@ -297,6 +297,20 @@ describe("ConnectionCatalogDocument", () => {
     });
 
     expect(decoded.disabledEnvironmentIds).toEqual([]);
+    expect(decoded.discoverMembership).toBeUndefined();
+    const membership = {
+      directoryId: "directory-1",
+      label: "Devices",
+      memberId: "member-1",
+      token: "protected-member-token",
+      brokerOrigin: "https://directory.example",
+      seenEnvironmentIds: [ENVIRONMENT_ID],
+    };
+    const document = decodeCatalogDocument({ ...decoded, discoverMembership: membership });
+    expect(document.discoverMembership).toEqual(membership);
+    expect(removeConnectionFromCatalog(document, ENVIRONMENT_ID).discoverMembership).toEqual(
+      membership,
+    );
   });
 
   it("switches a saved environment off and back on without touching its records", () => {

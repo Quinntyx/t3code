@@ -1,0 +1,425 @@
+import type { EnvironmentId } from "@t3tools/contracts";
+import {
+  DiscoverDirectory,
+  type DiscoverDirectoryEntry,
+  type DiscoverEndpoint,
+  type DiscoverHostConfiguration,
+  DiscoverMembership,
+  DiscoverPairingRequest,
+  DiscoverPairingResult,
+  type DiscoverTransport,
+} from "@t3tools/contracts/discover";
+import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { HttpClient, HttpClientRequest } from "effect/http";
+
+import {
+  ConnectionBlockedError,
+  ConnectionTransientError,
+  type ConnectionAttemptError,
+} from "../connection/model.ts";
+import { ConnectionOnboarding } from "../connection/onboarding.ts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
+import { ConnectionWakeups } from "../connection/wakeups.ts";
+import { ClientPresentation } from "../platform/capabilities.ts";
+import {
+  DiscoverMembershipStore,
+  type ConnectionPersistenceError,
+} from "../platform/persistence.ts";
+import type { StoredDiscoverMembership } from "../platform/storageDocument.ts";
+import { parseDiscoverEnrollmentUrl } from "./url.ts";
+
+export interface DirectoryDiscoveryState {
+  readonly directory: null | {
+    readonly directoryId: string;
+    readonly label: string;
+    readonly brokerOrigin: string;
+  };
+  readonly refreshing: boolean;
+  readonly error: string | null;
+  readonly hosts: ReadonlyArray<DiscoverDirectoryEntry>;
+}
+
+export const EMPTY_DISCOVERY_STATE: DirectoryDiscoveryState = {
+  directory: null,
+  refreshing: false,
+  error: null,
+  hosts: [],
+};
+
+type DiscoveryError = ConnectionAttemptError | ConnectionPersistenceError;
+const isConnectionError = Schema.is(
+  Schema.Union([ConnectionBlockedError, ConnectionTransientError]),
+);
+
+export class DirectoryDiscovery extends Context.Service<
+  DirectoryDiscovery,
+  {
+    readonly state: SubscriptionRef.SubscriptionRef<DirectoryDiscoveryState>;
+    readonly enroll: (input: {
+      readonly enrollmentUrl: string;
+    }) => Effect.Effect<void, DiscoveryError>;
+    readonly refresh: () => Effect.Effect<void>;
+    readonly disconnect: () => Effect.Effect<void, ConnectionPersistenceError>;
+    readonly getHostConfiguration: (
+      transport: DiscoverTransport,
+    ) => Effect.Effect<DiscoverHostConfiguration, ConnectionBlockedError>;
+    readonly start: Effect.Effect<void>;
+  }
+>()("@t3tools/client-runtime/discover/service/DirectoryDiscovery") {}
+
+function invalid(detail: string) {
+  return new ConnectionBlockedError({ reason: "configuration", detail });
+}
+
+function publicDirectory(
+  membership: StoredDiscoverMembership,
+): NonNullable<DirectoryDiscoveryState["directory"]> {
+  return {
+    directoryId: membership.directoryId,
+    label: membership.label,
+    brokerOrigin: membership.brokerOrigin,
+  };
+}
+
+function endpointOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== "/"
+    )
+      return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function preferredEndpoint(host: DiscoverDirectoryEntry): DiscoverEndpoint | undefined {
+  for (const transport of ["tailscale", "lan"] as const) {
+    const endpoint = host.endpoints.find(
+      (candidate) =>
+        candidate.transport === transport && endpointOrigin(candidate.httpBaseUrl) !== null,
+    );
+    if (endpoint) return endpoint;
+  }
+  return undefined;
+}
+
+/** @public */
+export const make = Effect.gen(function* () {
+  const http = yield* HttpClient.HttpClient;
+  const store = yield* DiscoverMembershipStore;
+  const registry = yield* EnvironmentRegistry;
+  const onboarding = yield* ConnectionOnboarding;
+  const presentation = yield* ClientPresentation;
+  const wakeups = yield* ConnectionWakeups;
+  const scope = yield* Scope.Scope;
+  let membership = yield* store.load;
+  let generation = 0;
+  let started = false;
+  const operations = new Set<Fiber.Fiber<void, DiscoveryError>>();
+  const lock = yield* Semaphore.make(1);
+  const state = yield* SubscriptionRef.make<DirectoryDiscoveryState>({
+    ...EMPTY_DISCOVERY_STATE,
+    directory: membership === null ? null : publicDirectory(membership),
+  });
+
+  const request = Effect.fn("DirectoryDiscovery.request")(
+    function* <S extends Schema.Top>(
+      origin: string,
+      path: string,
+      method: "GET" | "POST" | "DELETE",
+      schema: S & { readonly DecodingServices: never },
+      token?: string,
+      body?: unknown,
+    ) {
+      let req = HttpClientRequest.make(method)(`${origin}/api/discover${path}`);
+      if (token !== undefined) req = HttpClientRequest.bearerToken(req, token);
+      if (body !== undefined) req = HttpClientRequest.bodyJsonUnsafe(req, body);
+      const response = yield* http.execute(req);
+      if (response.status < 200 || response.status >= 300) {
+        return yield* response.status === 429 || response.status >= 500
+          ? new ConnectionTransientError({
+              reason: "remote-unavailable",
+              detail: "The discovery directory is unavailable. Try again shortly.",
+            })
+          : invalid(
+              "The discovery directory rejected this request. Check your directory membership.",
+            );
+      }
+      return yield* response.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)));
+    },
+    Effect.timeout("15 seconds"),
+    Effect.mapError((error) =>
+      isConnectionError(error)
+        ? error
+        : new ConnectionTransientError({
+            reason: "remote-unavailable",
+            detail: "Could not reach the discovery directory or read its response.",
+          }),
+    ),
+  );
+
+  const remember = Effect.fn("DirectoryDiscovery.remember")(function* (
+    environmentId: EnvironmentId,
+    expected: number,
+  ) {
+    if (
+      generation !== expected ||
+      membership === null ||
+      membership.seenEnvironmentIds.includes(environmentId)
+    )
+      return;
+    const next = {
+      ...membership,
+      seenEnvironmentIds: [...membership.seenEnvironmentIds, environmentId],
+    };
+    yield* store.save(next);
+    if (generation === expected) membership = next;
+  });
+
+  const importHost = Effect.fn("DirectoryDiscovery.importHost")(function* (
+    host: DiscoverDirectoryEntry,
+    expected: number,
+  ) {
+    if (generation !== expected || membership === null) return;
+    const environmentId = host.descriptor.environmentId;
+    if (membership.seenEnvironmentIds.includes(environmentId)) return;
+    if ((yield* Clock.currentTimeMillis) - host.lastSeenAt > 30_000) return;
+    if ((yield* SubscriptionRef.get(registry.entries)).has(environmentId)) {
+      yield* remember(environmentId, expected);
+      return;
+    }
+    const endpoint = preferredEndpoint(host);
+    if (endpoint === undefined) return;
+    const current = membership;
+    const pairing = yield* request(
+      current.brokerOrigin,
+      "/requests",
+      "POST",
+      DiscoverPairingRequest,
+      current.token,
+      { environmentId, transport: endpoint.transport },
+    );
+    if (pairing.environmentId !== environmentId || pairing.transport !== endpoint.transport)
+      return yield* invalid(
+        "The directory returned a pairing request for a different environment.",
+      );
+    let result = yield* request(
+      current.brokerOrigin,
+      `/requests/${encodeURIComponent(pairing.requestId)}/result`,
+      "GET",
+      DiscoverPairingResult,
+      current.token,
+    );
+    while (result.status === "pending") {
+      if ((yield* Clock.currentTimeMillis) >= pairing.expiresAt)
+        return yield* invalid("The discovery pairing request expired. Try refreshing again.");
+      yield* Effect.sleep("1 second");
+      result = yield* request(
+        current.brokerOrigin,
+        `/requests/${encodeURIComponent(pairing.requestId)}/result`,
+        "GET",
+        DiscoverPairingResult,
+        current.token,
+      );
+    }
+    if (result.status === "failed")
+      return yield* invalid("The discovered environment could not provide a pairing link.");
+    if (result.expiresAt <= (yield* Clock.currentTimeMillis))
+      return yield* invalid("The discovery pairing link expired. Try refreshing again.");
+    yield* Effect.try({
+      try: () => {
+        const url = new URL(result.pairingUrl);
+        if (url.pathname === "/discover" || url.username || url.password) throw new Error();
+        const target = resolveRemotePairingTarget({ pairingUrl: result.pairingUrl });
+        if (endpointOrigin(target.httpBaseUrl) !== endpointOrigin(endpoint.httpBaseUrl))
+          throw new Error();
+      },
+      catch: () =>
+        invalid("The discovery pairing link does not match the advertised environment endpoint."),
+    });
+    if (
+      generation !== expected ||
+      (membership !== current && membership?.memberId !== current.memberId)
+    )
+      return;
+    if (!(yield* SubscriptionRef.get(registry.entries)).has(environmentId)) {
+      yield* onboarding.registerPairing({
+        pairingUrl: result.pairingUrl,
+        expectedEnvironmentId: environmentId,
+      });
+    }
+    yield* remember(environmentId, expected);
+  });
+
+  const refreshUnlocked = Effect.fn("DirectoryDiscovery.refresh")(function* (expected: number) {
+    if (membership === null || expected !== generation) return;
+    const current = membership;
+    yield* SubscriptionRef.update(state, (value) => ({ ...value, refreshing: true, error: null }));
+    yield* Effect.gen(function* () {
+      const directory = yield* request(
+        current.brokerOrigin,
+        "/hosts",
+        "GET",
+        DiscoverDirectory,
+        current.token,
+      );
+      if (generation !== expected) return;
+      yield* SubscriptionRef.update(state, (value) => ({ ...value, hosts: directory.hosts }));
+      for (const host of directory.hosts) {
+        if (generation !== expected) return;
+        yield* importHost(host, expected).pipe(
+          Effect.catch(() =>
+            SubscriptionRef.update(state, (value) =>
+              generation === expected
+                ? {
+                    ...value,
+                    error: "Could not connect a discovered environment. Refresh to try again.",
+                  }
+                : value,
+            ),
+          ),
+        );
+      }
+    }).pipe(
+      Effect.catch(() =>
+        SubscriptionRef.update(state, (value) =>
+          generation === expected
+            ? {
+                ...value,
+                error: "The discovery directory is unavailable. Saved connections are unchanged.",
+              }
+            : value,
+        ),
+      ),
+      Effect.ensuring(
+        SubscriptionRef.update(state, (value) =>
+          generation === expected ? { ...value, refreshing: false } : value,
+        ),
+      ),
+    );
+  });
+
+  const tracked = Effect.fn("DirectoryDiscovery.tracked")(function* (
+    operation: Effect.Effect<void, DiscoveryError>,
+  ) {
+    const fiber = yield* Effect.forkChild(operation);
+    operations.add(fiber);
+    yield* Fiber.join(fiber).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          operations.delete(fiber);
+        }),
+      ),
+    );
+  });
+
+  const refresh = () =>
+    Effect.suspend(() => {
+      const expected = generation;
+      return tracked(lock.withPermits(1)(refreshUnlocked(expected))).pipe(Effect.ignore);
+    });
+
+  const enroll = Effect.fn("DirectoryDiscovery.enroll")(function* (input: {
+    readonly enrollmentUrl: string;
+  }) {
+    const parsed = parseDiscoverEnrollmentUrl(input.enrollmentUrl);
+    if (parsed === null)
+      return yield* invalid("Enter a valid discovery enrollment URL ending in /discover#token=….");
+    const expected = generation;
+    yield* tracked(
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          if (membership !== null)
+            return yield* invalid(
+              "Disconnect the current discovery directory before enrolling in another.",
+            );
+          const result = yield* request(
+            parsed.brokerOrigin,
+            "/enroll",
+            "POST",
+            DiscoverMembership,
+            undefined,
+            { code: parsed.code, label: presentation.metadata.label ?? "T3 Code" },
+          );
+          if (generation !== expected) return;
+          const next = { ...result, brokerOrigin: parsed.brokerOrigin, seenEnvironmentIds: [] };
+          yield* store.save(next);
+          if (generation !== expected) return;
+          membership = next;
+          yield* SubscriptionRef.set(state, {
+            ...EMPTY_DISCOVERY_STATE,
+            directory: publicDirectory(next),
+          });
+          yield* refreshUnlocked(expected);
+        }),
+      ),
+    );
+  });
+
+  const disconnect = Effect.fn("DirectoryDiscovery.disconnect")(function* () {
+    generation++;
+    const previous = membership;
+    yield* Effect.forEach([...operations], Fiber.interrupt, { discard: true });
+    yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* store.save(null);
+        membership = null;
+        yield* SubscriptionRef.set(state, EMPTY_DISCOVERY_STATE);
+      }),
+    );
+    if (previous !== null) {
+      yield* request(
+        previous.brokerOrigin,
+        "/membership",
+        "DELETE",
+        Schema.Struct({}),
+        previous.token,
+      ).pipe(Effect.ignore);
+    }
+  });
+
+  const getHostConfiguration = Effect.fn("DirectoryDiscovery.getHostConfiguration")(function* (
+    transport: DiscoverTransport,
+  ) {
+    if (membership === null) return yield* invalid("Enroll in a discovery directory first.");
+    return {
+      brokerOrigin: membership.brokerOrigin,
+      memberToken: membership.token,
+      transport,
+    } satisfies DiscoverHostConfiguration;
+  });
+
+  const start = Effect.gen(function* () {
+    if (started) return;
+    started = true;
+    yield* Stream.merge(
+      Stream.tick("1 minute"),
+      wakeups.changes.pipe(Stream.filter((reason) => reason !== "credentials-changed")),
+    ).pipe(
+      Stream.runForEach(() => refresh()),
+      Effect.forkIn(scope),
+    );
+    yield* refresh().pipe(Effect.forkIn(scope));
+  });
+
+  return DirectoryDiscovery.of({ state, enroll, refresh, disconnect, getHostConfiguration, start });
+});
+
+export const layer = Layer.effect(DirectoryDiscovery, make);

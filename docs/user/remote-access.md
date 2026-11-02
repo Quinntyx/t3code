@@ -44,6 +44,37 @@ opens and approve. The new limit applies the next time you add a machine. If you
 cancel or downgrade T3 Chat, machines you already linked stay linked, but you
 cannot add more until you are under the limit again.
 
+## Self-hosted discovery on a private network
+
+T3 Discover is a small, self-hosted directory for machines already reachable on
+one LAN or tailnet. It uses local SQLite storage, with no hosted account or relay.
+Connections still go directly to each machine through normal pairing.
+
+Run the `t3discover` broker on an always-on machine, bound to its private address:
+
+```bash
+t3discover serve --host <private-ip>
+t3discover pair --origin http://<private-ip>:3775
+```
+
+Paste the printed one-time enrollment URL into **Add environment** on each desktop,
+web, or mobile client. Generate a fresh URL for each device. Enrollment joins the
+directory; it does not share any machine. In **Settings → Environments → Discovery**,
+choose a reachable transport and explicitly share each environment you want other
+members to discover. LAN sharing requires network access on that host. New shared
+machines appear automatically on enrolled clients.
+
+The broker is trusted to authorize its members to pair with shared machines. Bind
+it only to your private network and restrict access with your tailnet rules. An
+HTTPS web client also needs an HTTPS broker and host endpoints; use your existing
+private HTTPS proxy for the broker and pass its address to `pair --origin`.
+
+**Stop sharing** removes an environment from discovery. **Disconnect discovery**
+leaves existing direct connections intact. Use `t3discover members` and
+`t3discover revoke <member-id>` on the broker machine to remove a membership;
+revoke existing device sessions separately under **Sharing & access**. Keep the
+broker's `--home` directory consistent across commands and back up its SQLite file.
+
 ## Pair over a LAN or private network
 
 Use direct pairing when the other device can reach the host's network address.
