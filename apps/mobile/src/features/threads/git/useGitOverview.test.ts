@@ -96,18 +96,30 @@ describe("drawer Git quick action", () => {
     },
   );
 
-  it("keeps default-branch confirmation for the stacked action", async () => {
-    state.status = { ...state.status!, isDefaultRef: true, refName: "main" };
-    await overview().runQuickAction();
-    expect(state.runAction).not.toHaveBeenCalled();
-    expect(state.navigate).toHaveBeenCalledExactlyOnceWith("GitConfirm", {
-      environmentId: "environment",
-      threadId: "thread",
-      confirmAction: "commit_push",
-      branchName: "main",
-      includesCommit: "true",
-    });
-  });
+  it.each([
+    { hasWorkingTreeChanges: true, aheadCount: 0, includesCommit: "true" },
+    { hasWorkingTreeChanges: false, aheadCount: 1, includesCommit: "false" },
+  ])(
+    "keeps accurate default-branch confirmation with includesCommit=$includesCommit",
+    async ({ hasWorkingTreeChanges, aheadCount, includesCommit }) => {
+      state.status = {
+        ...state.status!,
+        isDefaultRef: true,
+        refName: "main",
+        hasWorkingTreeChanges,
+        aheadCount,
+      };
+      await overview().runQuickAction();
+      expect(state.runAction).not.toHaveBeenCalled();
+      expect(state.navigate).toHaveBeenCalledExactlyOnceWith("GitConfirm", {
+        environmentId: "environment",
+        threadId: "thread",
+        confirmAction: "commit_push",
+        branchName: "main",
+        includesCommit,
+      });
+    },
+  );
 
   it.each(["read-only", "busy", "missing status", "not a repo", "clean"] as const)(
     "does not run a disabled action: %s",

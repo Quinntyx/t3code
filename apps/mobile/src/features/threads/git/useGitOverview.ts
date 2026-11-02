@@ -167,7 +167,10 @@ export function useGitOverview(props: {
         threadId: String(threadId),
         confirmAction: confirmableAction,
         branchName,
-        includesCommit: String(input.action === "commit_push" || input.action === "commit_push_pr"),
+        includesCommit: String(
+          (input.action === "commit_push" || input.action === "commit_push_pr") &&
+            !!gitStatus?.hasWorkingTreeChanges,
+        ),
       });
       return;
     }
