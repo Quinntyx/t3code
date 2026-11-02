@@ -56,6 +56,7 @@ import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSi
 import { useEnabledNavigationTabs } from "../workspace/navigation-tabs";
 import { FLOATING_TABS, floatingTabsMetrics } from "../workspace/floating-workspace-tabs";
 import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import {
   AndroidWorkspaceNavigation,
   FloatingWorkspaceTabs,
@@ -1053,32 +1054,62 @@ function AdaptiveWorkspaceLayoutContent(
             renderColumns(props.children)
           )}
           <ThreadListDrawerHost width={threadListDrawerPanelWidth}>
-            {(drawer) => (
-              <ThreadNavigationSidebar
-                {...sidebarProps}
-                width={threadListDrawerPanelWidth}
-                visible={drawer.open}
-                // Close first, so the home list is what the drawer uncovers.
-                onOpenHome={() => {
-                  drawer.closeDrawer();
-                  handleOpenHome();
-                }}
-                onStartNewTask={() => {
-                  drawer.closeDrawer();
-                  handleStartNewTask();
-                }}
-                // Close first, so the thread opens with the chat already behind it.
-                onSelectThread={(thread) => {
-                  drawer.closeDrawer();
-                  handleSelectThread(thread);
-                }}
-                // Close first, so the pull request opens with the page already behind it.
-                onOpenThreadPullRequests={(thread, pr) => {
-                  drawer.closeDrawer();
-                  handleOpenThreadPullRequests(thread, pr);
-                }}
-              />
-            )}
+            {(drawer) => {
+              const startNewTask = () => {
+                drawer.closeDrawer();
+                handleStartNewTask();
+              };
+              // The drawer repeats the home screen's navigation and compose button.
+              return (
+                <View className="flex-1">
+                  <SafeAreaInsetsContext
+                    value={floatingTabsEnabled ? safeAreaInsets : { ...safeAreaInsets, bottom: 0 }}
+                  >
+                    <LiquidGlassTarget style={{ flex: 1 }}>
+                      <AndroidHomeFabLayout
+                        paneWidth={threadListDrawerPanelWidth}
+                        onStartNewTask={startNewTask}
+                      >
+                        <ThreadNavigationSidebar
+                          {...sidebarProps}
+                          width={threadListDrawerPanelWidth}
+                          visible={drawer.open}
+                          // Close first, so the home list is what the drawer uncovers.
+                          onOpenHome={() => {
+                            drawer.closeDrawer();
+                            handleOpenHome();
+                          }}
+                          // Close first, so the thread opens with the chat already behind it.
+                          onSelectThread={(thread) => {
+                            drawer.closeDrawer();
+                            handleSelectThread(thread);
+                          }}
+                          // Close first, so the pull request opens with the page already behind it.
+                          onOpenThreadPullRequests={(thread, pr) => {
+                            drawer.closeDrawer();
+                            handleOpenThreadPullRequests(thread, pr);
+                          }}
+                        />
+                      </AndroidHomeFabLayout>
+                    </LiquidGlassTarget>
+                  </SafeAreaInsetsContext>
+                  {floatingTabsEnabled ? (
+                    <FloatingWorkspaceTabs
+                      glass
+                      paneWidth={threadListDrawerPanelWidth}
+                      onNewThread={startNewTask}
+                      onSelect={drawer.closeDrawer}
+                    />
+                  ) : (
+                    <AndroidWorkspaceNavigation
+                      paneWidth={threadListDrawerPanelWidth}
+                      onNewThread={startNewTask}
+                      onSelect={drawer.closeDrawer}
+                    />
+                  )}
+                </View>
+              );
+            }}
           </ThreadListDrawerHost>
         </WindowHingeContext>
       </AdaptiveWorkspaceContext.Provider>
