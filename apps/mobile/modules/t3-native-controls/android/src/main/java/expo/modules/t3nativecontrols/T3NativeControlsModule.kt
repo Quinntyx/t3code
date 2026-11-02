@@ -1,7 +1,11 @@
 package expo.modules.t3nativecontrols
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.text.format.DateFormat
+import android.view.PixelCopy
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowInsetsControllerCompat
 import expo.modules.kotlin.Promise
@@ -28,6 +32,43 @@ class T3NativeControlsModule : Module() {
       activity.runOnUiThread {
         WindowInsetsControllerCompat(activity.window, activity.window.decorView)
           .isAppearanceLightNavigationBars = appearance == "light"
+      }
+    }
+
+    AsyncFunction("captureScreenshot") { promise: Promise ->
+      val activity = appContext.currentActivity ?: error("The app is not active.")
+      activity.runOnUiThread {
+        val view = activity.window.decorView
+        if (view.width <= 0 || view.height <= 0) {
+          promise.reject("SCREENSHOT_UNAVAILABLE", "The window is not ready.", null)
+          return@runOnUiThread
+        }
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        try {
+          PixelCopy.request(
+            activity.window,
+            bitmap,
+            { result ->
+              try {
+                check(result == PixelCopy.SUCCESS) { "Could not capture the window ($result)." }
+                val directory = File(activity.cacheDir, "t3-composer-paste").apply { mkdirs() }
+                val file = File.createTempFile("debug-shake-", ".png", directory)
+                file.outputStream().use {
+                  check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+                }
+                promise.resolve(file.toURI().toString())
+              } catch (error: Exception) {
+                promise.reject("SCREENSHOT_FAILED", "Could not save the screenshot.", error)
+              } finally {
+                bitmap.recycle()
+              }
+            },
+            Handler(Looper.getMainLooper())
+          )
+        } catch (error: Exception) {
+          bitmap.recycle()
+          promise.reject("SCREENSHOT_FAILED", "Could not capture the window.", error)
+        }
       }
     }
 

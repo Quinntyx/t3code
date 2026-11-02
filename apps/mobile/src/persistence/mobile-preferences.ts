@@ -129,6 +129,8 @@ export interface Preferences {
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
+  readonly debugShakeEnabled?: boolean;
+  readonly debugShakeProject?: typeof ThreadProject.Type;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -219,6 +221,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
+    debugShakeEnabled?: boolean;
+    debugShakeProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -387,6 +391,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isThreadProject(parsed.lastThreadProject)) {
     preferences.lastThreadProject = parsed.lastThreadProject;
+  }
+  if (typeof parsed.debugShakeEnabled === "boolean") {
+    preferences.debugShakeEnabled = parsed.debugShakeEnabled;
+  }
+  if (isThreadProject(parsed.debugShakeProject)) {
+    preferences.debugShakeProject = parsed.debugShakeProject;
   }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(

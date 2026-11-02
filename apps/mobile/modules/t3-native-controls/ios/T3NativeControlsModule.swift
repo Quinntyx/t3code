@@ -51,6 +51,25 @@ public final class T3NativeControlsModule: Module {
       ViewName("ScrollEdgeBleed")
     }
 
+    AsyncFunction("captureScreenshot") { () -> String in
+      guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .first(where: { $0.activationState == .foregroundActive }),
+        let window = scene.windows.first(where: { $0.isKeyWindow })
+      else { throw URLError(.resourceUnavailable) }
+      let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+      let image = renderer.image { _ in
+        window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+      }
+      guard let data = image.pngData() else { throw URLError(.cannotDecodeContentData) }
+      let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("t3-composer-paste", isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let url = directory.appendingPathComponent("\(UUID().uuidString).png")
+      try data.write(to: url, options: .atomic)
+      return url.absoluteString
+    }.runOnQueue(.main)
+
     AsyncFunction("presentVideo") { (url: URL, title: String, sourceIdentifier: String, identifier: String, promise: Promise) in
       try self.presentVideo(
         url: url,

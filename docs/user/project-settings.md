@@ -46,6 +46,18 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Debug shake on mobile
+
+At the bottom of **Settings → Labs**, under **Developer**, choose the machine and
+project for bug reports, then enable **Debug shake**. Shake your phone to open a
+new draft there with a screenshot and the last 200 lines of mobile console logs.
+Add a description and review the screenshot and logs for sensitive information
+before sending. No agent starts automatically.
+
+Logs are collected only while enabled and are cleared when you disable it or
+restart the app. Long log lines are truncated. This does not collect server or
+native system logs.
+
 ## Worktree branch names
 
 In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,
