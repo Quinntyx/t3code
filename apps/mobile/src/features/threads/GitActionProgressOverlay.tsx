@@ -8,7 +8,10 @@ import { Toast } from "../../components/ui/Toast";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 import { MOBILE_MOTION } from "../../lib/designTokens";
 import { APP_BAR_HEIGHT } from "../../lib/layoutMetrics";
-import type { GitActionProgress } from "../../state/use-vcs-action-state";
+import {
+  keepGitActionResultVisible,
+  type GitActionProgress,
+} from "../../state/use-vcs-action-state";
 
 export function GitActionProgressOverlay(props: {
   readonly progress: GitActionProgress;
@@ -49,6 +52,10 @@ export function GitActionProgressOverlay(props: {
     >
       <Toast
         singleLine
+        onExpand={keepGitActionResultVisible}
+        {...(progress.phase === "error"
+          ? { dismissMode: "swipe", onDismiss }
+          : { dismissMode: "button", onDismiss: undefined })}
         message={progress.label ?? "Source control"}
         description={progress.description ?? undefined}
         tone={
