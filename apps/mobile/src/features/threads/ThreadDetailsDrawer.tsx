@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { FloatingHeaderButtonBackdrop } from "../../components/ui/FloatingHeaderButtonBackdrop";
 import { ListRow } from "../../components/ui/ListRow";
 import { ListSection } from "../../components/ui/ListSection";
 import { cn } from "../../lib/cn";
@@ -93,6 +94,7 @@ function ThreadDetailsContent(props: DetailsProps) {
           onPress={closeDrawer}
           className="h-11 w-11 items-center justify-center rounded-full active:bg-subtle"
         >
+          {Platform.OS === "android" ? <FloatingHeaderButtonBackdrop /> : null}
           <SymbolView name="xmark" size={20} tintColorClassName="accent-header-foreground" />
         </Pressable>
       </View>

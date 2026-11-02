@@ -77,7 +77,7 @@ export function FilesHeader(props: {
       </View>
       {searching ? (
         <View className="absolute inset-0 bg-header px-2" style={{ paddingTop, paddingBottom }}>
-          <View className="flex-1 flex-row items-center gap-1">
+          <View className="flex-1 flex-row items-center gap-2">
             <AndroidHeaderIconButton
               accessibilityLabel="Close file search"
               icon="arrow.left"

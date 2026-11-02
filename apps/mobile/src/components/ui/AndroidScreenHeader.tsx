@@ -7,6 +7,9 @@ import { View } from "react-native";
 import type { AppSymbolName } from "./AppSymbol";
 import { NativeAppBar } from "./NativeAppBar.android";
 import { IconButton } from "./IconButton";
+import type { IconButtonProps } from "./IconButton.types";
+import { useAndroidControlSizing } from "./useAndroidControlSizing";
+import { FloatingHeaderButtonBackdrop } from "./FloatingHeaderButtonBackdrop";
 import { AndroidAnchoredMenu } from "./AndroidAnchoredMenu";
 import { splitAndroidHeaderActions } from "./headerMenu.android";
 import { useScaledTextRole } from "../../features/settings/appearance/useScaledTextRole";
@@ -26,17 +29,21 @@ export interface AndroidHeaderAction {
   readonly overflowOnly?: boolean;
 }
 
-export function AndroidHeaderIconButton(props: {
-  readonly accessibilityLabel: string;
-  readonly icon: AppSymbolName;
-  readonly onPress?: () => void;
-  readonly disabled?: boolean;
-  readonly selected?: boolean;
-  readonly floating?: boolean;
-}) {
-  const { floating, ...buttonProps } = props;
-  const button = <IconButton {...buttonProps} tintColorClassName="accent-header-foreground" />;
-  return floating ? <View className="rounded-full bg-sheet">{button}</View> : button;
+export function AndroidHeaderIconButton(props: IconButtonProps & { readonly floating?: boolean }) {
+  const {
+    floating = true,
+    tintColorClassName = "accent-header-foreground",
+    ...buttonProps
+  } = props;
+  const button = <IconButton {...buttonProps} tintColorClassName={tintColorClassName} />;
+  return floating ? (
+    <View className="overflow-hidden rounded-full">
+      <FloatingHeaderButtonBackdrop />
+      {button}
+    </View>
+  ) : (
+    button
+  );
 }
 
 export function AndroidScreenHeader(props: {
@@ -51,13 +58,15 @@ export function AndroidScreenHeader(props: {
   readonly hideBottomBorder?: boolean;
   /** One row with the subtitle after the title, for screens short on height. */
   readonly compact?: boolean;
-  /** Borderless bar over a grouped page background, with sheet-filled round buttons. */
+  /** Defaults to borderless chrome with the thread screen's circular controls. */
   readonly floating?: boolean;
 }) {
   const { colors } = useControlTheme();
   const titleRole = useScaledTextRole("title");
-  const titleTypography = props.floating ? { ...titleRole, fontWeight: "600" as const } : titleRole;
+  const floating = props.floating ?? true;
+  const titleTypography = floating ? { ...titleRole, fontWeight: "600" as const } : titleRole;
   const subtitleTypography = useScaledTextRole("label");
+  const { buttonSize } = useAndroidControlSizing();
   const inFormSheet = use(RoutedFormSheetContext);
   const { paddingTop, paddingBottom } = useToolbarLayout(props.embedded || inFormSheet);
   const [headerWidth, setHeaderWidth] = useState(0);
@@ -69,7 +78,7 @@ export function AndroidScreenHeader(props: {
   return (
     <View
       onLayout={(event) => setHeaderWidth(event.nativeEvent.layout.width)}
-      className={props.floating ? undefined : "border-b border-header-border bg-header"}
+      className={floating ? undefined : "border-b border-header-border bg-header"}
       style={{
         paddingTop,
         paddingBottom,
@@ -84,15 +93,15 @@ export function AndroidScreenHeader(props: {
       ) : null}
       <NativeAppBar
         singleLine={props.compact}
-        containerColor={props.floating ? "transparent" : undefined}
+        containerColor={floating ? "transparent" : undefined}
         navigationIcon={
           props.onBack || props.leading ? (
-            <View collapsable={false} className="flex-row items-center">
+            <View collapsable={false} className="flex-row items-center gap-2">
               {props.onBack ? (
                 <AndroidHeaderIconButton
                   accessibilityLabel="Navigate up"
                   icon="arrow.left"
-                  floating={props.floating}
+                  floating={floating}
                   onPress={props.onBack}
                 />
               ) : null}
@@ -160,17 +169,16 @@ export function AndroidScreenHeader(props: {
         }
         actions={
           visibleActions.length > 0 || overflowActions.length > 0 || props.trailing ? (
-            <View
-              collapsable={false}
-              className={props.floating ? "flex-row items-center gap-2" : "flex-row items-center"}
-            >
+            <View collapsable={false} className="flex-row items-center gap-2">
               {visibleActions.map((action) =>
                 action.loading ? (
                   <View
                     key={action.accessibilityLabel}
                     accessibilityLabel={action.accessibilityLabel}
-                    className="size-12 items-center justify-center"
+                    className="items-center justify-center"
+                    style={{ width: buttonSize, height: buttonSize }}
                   >
+                    {floating ? <FloatingHeaderButtonBackdrop /> : null}
                     <AppActivityIndicator colorClassName="accent-header-foreground" />
                   </View>
                 ) : (
@@ -180,7 +188,7 @@ export function AndroidScreenHeader(props: {
                     disabled={action.disabled}
                     selected={action.selected}
                     icon={action.icon}
-                    floating={props.floating}
+                    floating={floating}
                     onPress={action.onPress}
                   />
                 ),
@@ -205,7 +213,7 @@ export function AndroidScreenHeader(props: {
                     <AndroidHeaderIconButton
                       accessibilityLabel="More actions"
                       icon="ellipsis"
-                      floating={props.floating}
+                      floating={floating}
                       onPress={open}
                     />
                   )}

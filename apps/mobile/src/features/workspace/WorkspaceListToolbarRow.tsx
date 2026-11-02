@@ -26,7 +26,7 @@ export function WorkspaceListToolbarRow(props: {
 }) {
   const { height } = useToolbarLayout();
   return (
-    <View className="flex-row items-center gap-1" style={{ minHeight: height }}>
+    <View className="flex-row items-center gap-2" style={{ minHeight: height }}>
       {props.searching ? (
         <>
           <AndroidHeaderIconButton

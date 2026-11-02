@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Keyboard, Pressable, TextInput, type TextInputInstance, View } from "react-native";
+import { Keyboard, TextInput, type TextInputInstance, View } from "react-native";
 import { useHardwareBack } from "../../lib/backHandler";
 import { useToolbarLayout } from "./useToolbarLayout";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
@@ -17,7 +17,7 @@ import { useAndroidControlSizing } from "./useAndroidControlSizing";
 export function AppBar(props: AppBarProps) {
   const { search } = props;
   const { paddingTop, paddingBottom } = useToolbarLayout();
-  const { scale, buttonSize, iconSize, smallIconSize } = useAndroidControlSizing();
+  const { scale, buttonSize } = useAndroidControlSizing();
   const { themeVariables } = useAppearancePreferences();
   const inputRef = useRef<TextInputInstance>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -43,23 +43,7 @@ export function AppBar(props: AppBarProps) {
         if (action && !action.disabled) action.onPress();
       }}
     >
-      {search?.mode === "inline" ? (
-        <Pressable
-          accessibilityLabel={menu.title}
-          accessibilityRole="button"
-          className="items-center justify-center rounded-full bg-subtle"
-          style={{ width: buttonSize, height: buttonSize }}
-        >
-          <SymbolView
-            name={menu.icon}
-            size={smallIconSize}
-            tintColorClassName="accent-header-foreground"
-            type="monochrome"
-          />
-        </Pressable>
-      ) : (
-        <ScreenHeaderButton accessibilityLabel={menu.title} icon={menu.icon} />
-      )}
+      <ScreenHeaderButton accessibilityLabel={menu.title} icon={menu.icon} />
     </Menu>
   ));
   const options = (
@@ -80,30 +64,19 @@ export function AppBar(props: AppBarProps) {
       <>
         {options}
         <View
-          className="border-b border-header-border bg-header px-3"
+          className="bg-header px-3"
           style={{
             paddingTop,
             paddingBottom: 8.75 * scale,
-            borderBottomWidth: 0,
           }}
         >
           <View className="flex-row items-center gap-2" style={{ minHeight: buttonSize }}>
             {props.onBack ? (
-              <Pressable
+              <ScreenHeaderButton
                 accessibilityLabel="Navigate up"
-                accessibilityRole="button"
-                hitSlop={8}
+                icon="arrow.left"
                 onPress={props.onBack}
-                className="items-center justify-center"
-                style={{ width: buttonSize, height: buttonSize }}
-              >
-                <SymbolView
-                  name="chevron.left"
-                  size={iconSize}
-                  tintColorClassName="accent-header-foreground"
-                  type="monochrome"
-                />
-              </Pressable>
+              />
             ) : null}
             <View
               className="flex-1 flex-row items-center bg-input"
@@ -196,10 +169,10 @@ export function AppBar(props: AppBarProps) {
           {searching ? (
             <View
               className="absolute inset-0 bg-header"
-              // Match Material TopAppBar's navigation inset so the back button stays put.
+              // Keep the search back button aligned with the header's navigation inset.
               style={{ paddingTop, paddingBottom, paddingHorizontal: 4 }}
             >
-              <View className="flex-1 flex-row items-center gap-1">
+              <View className="flex-1 flex-row items-center gap-2">
                 <ScreenHeaderButton
                   accessibilityLabel={search.closeAccessibilityLabel ?? "Close search"}
                   icon="arrow.left"

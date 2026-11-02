@@ -5,7 +5,7 @@ import { Linking, Pressable, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 import { Button } from "../../../components/ui/Button";
-import { IconButton } from "../../../components/ui/IconButton";
+import { HeaderIconButton } from "../../../components/ui/HeaderIconButton";
 import { AppActivityIndicator } from "../../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { LoadingStrip } from "../../../components/ui/LoadingStrip";
@@ -32,7 +32,7 @@ export function SettingsLegalDocumentExternalHeaderButton({
   const safeExternalUrl = isLegalDocumentUrl(externalUrl) ? externalUrl : LEGAL_URL;
 
   return (
-    <IconButton
+    <HeaderIconButton
       accessibilityLabel="Open legal documents in external browser"
       icon="safari"
       onPress={() => void Linking.openURL(safeExternalUrl).catch(() => undefined)}

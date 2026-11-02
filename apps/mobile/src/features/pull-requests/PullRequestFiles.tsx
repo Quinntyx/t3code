@@ -11,7 +11,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { IconButton } from "../../components/ui/IconButton";
+import { HeaderIconButton } from "../../components/ui/HeaderIconButton";
 import { Menu } from "../../components/ui/Menu";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { ScreenContent } from "../../components/ui/ScreenContent";
@@ -171,7 +171,7 @@ function FileFilterMenu({ filter }: { readonly filter: ChangedFiles["filter"] })
       onPressAction={filter.toggle}
     >
       <View pointerEvents="none">
-        <IconButton
+        <HeaderIconButton
           icon="line.3.horizontal.decrease"
           accessibilityLabel="Filter review files"
           selected={filter.hideTestFiles}
