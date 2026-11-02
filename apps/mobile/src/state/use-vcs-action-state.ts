@@ -46,9 +46,13 @@ export function showGitActionResult(result: GitActionResultNotification): void {
   }, RESULT_DISMISS_MS);
 }
 
-export function dismissGitActionResult(): void {
+export function keepGitActionResultVisible(): void {
   if (dismissTimer) clearTimeout(dismissTimer);
   dismissTimer = null;
+}
+
+export function dismissGitActionResult(): void {
+  keepGitActionResultVisible();
   broadcast(null);
 }
 
