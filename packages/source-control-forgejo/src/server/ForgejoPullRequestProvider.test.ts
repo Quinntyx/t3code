@@ -1,4 +1,8 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
+import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -27,17 +31,20 @@ it.effect("reads file revisions from the pull request diff and refuses a truncat
     ].join("\n");
     const provider = yield* ForgejoPullRequestProvider.make.pipe(
       Effect.provide(
-        Layer.mock(ForgejoCli.ForgejoCli)({
-          api: (input) => {
-            assert.strictEqual(input.host, "forge.example:3000");
-            assert.strictEqual(input.repository, "reviewer/project");
-            assert.strictEqual(input.path, "repos/reviewer/project/pulls/1.diff");
-            return Effect.succeed({
-              ...TestSourceControlHost.processOutput(diff),
-              stdoutTruncated: truncated,
-            });
-          },
-        }),
+        Layer.merge(
+          TestSourceControlHost.layer(),
+          Layer.mock(ForgejoCli.ForgejoCli)({
+            api: (input) => {
+              assert.strictEqual(input.host, "forge.example:3000");
+              assert.strictEqual(input.repository, "reviewer/project");
+              assert.strictEqual(input.path, "repos/reviewer/project/pulls/1.diff");
+              return Effect.succeed({
+                ...TestSourceControlHost.processOutput(diff),
+                stdoutTruncated: truncated,
+              });
+            },
+          }),
+        ),
       ),
     );
     const reference = {
@@ -65,4 +72,99 @@ it.effect("reads file revisions from the pull request diff and refuses a truncat
     const refused = yield* Effect.flip(provider.getFileRevisions!({ ...reference, paths }));
     assert.strictEqual(refused._tag, "PullRequestProviderError");
   }),
+);
+
+it.live(
+  "proves Forgejo conflicts with real Git without touching the checkout and clears stale conflicts",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { process } = yield* SourceControlHost.SourceControlHost;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-forgejo-conflicts-" });
+      const git = (...args: string[]) =>
+        process
+          .run({
+            operation: "test.setup",
+            command: "git",
+            cwd,
+            args,
+            env: {
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_CONFIG_GLOBAL: "/dev/null",
+              GIT_AUTHOR_NAME: "Test",
+              GIT_AUTHOR_EMAIL: "test@example.com",
+              GIT_COMMITTER_NAME: "Test",
+              GIT_COMMITTER_EMAIL: "test@example.com",
+            },
+          })
+          .pipe(Effect.map((output) => output.stdout.trim()));
+      yield* git("init", "-b", "main");
+      yield* fs.writeFileString(`${cwd}/file.txt`, "original\n");
+      yield* git("add", "file.txt");
+      yield* git("commit", "-m", "original");
+      yield* git("switch", "-c", "feature");
+      yield* fs.writeFileString(`${cwd}/file.txt`, "feature\n");
+      yield* git("commit", "-am", "feature");
+      const head = yield* git("rev-parse", "HEAD");
+      yield* git("switch", "main");
+      yield* fs.writeFileString(`${cwd}/file.txt`, "main\n");
+      yield* git("commit", "-am", "main");
+      const base = yield* git("rev-parse", "HEAD");
+      yield* fs.writeFileString(`${cwd}/file.txt`, "dirty worktree\n");
+      const refs = yield* git("show-ref");
+      const index = yield* git("ls-files", "--stage");
+      const pull = {
+        number: 1,
+        title: "Conflict",
+        body: "",
+        html_url: "https://forgejo.test/acme/web/pulls/1",
+        user: null,
+        state: "open",
+        merged: false,
+        mergeable: false,
+        draft: false,
+        base: { ref: "main", sha: base, repo: null },
+        head: { ref: "feature", sha: head, repo: null },
+        created_at: "2026-11-02T00:00:00Z",
+        updated_at: "2026-11-02T00:00:00Z",
+        closed_at: null,
+        merged_at: null,
+        labels: [],
+      };
+      const encode = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+      const provider = yield* ForgejoPullRequestProvider.make.pipe(
+        Effect.provide(
+          Layer.mock(ForgejoCli.ForgejoCli)({
+            api: (input) => {
+              assert.isUndefined(input.method);
+              return encode(input.path.endsWith("pulls/1") ? pull : { full_name: "acme/web" }).pipe(
+                Effect.orDie,
+                Effect.map(TestSourceControlHost.processOutput),
+              );
+            },
+          }),
+        ),
+      );
+      const input = { cwd, repository: "acme/web", host: "forgejo.test", number: 1 };
+      const read = provider.getChangeRequestSummary!;
+      assert.strictEqual((yield* read(input)).mergeability, "conflicting");
+      const refused = yield* Effect.flip(provider.runAction({ ...input, action: "merge" }));
+      assert.include(refused.detail, "merge conflicts");
+      pull.head.sha = base;
+      assert.strictEqual((yield* read(input)).mergeability, "unknown");
+      pull.mergeable = true;
+      assert.strictEqual((yield* read(input)).mergeability, "mergeable");
+      pull.mergeable = false;
+      pull.head.sha = "c".repeat(40);
+      assert.strictEqual((yield* read(input)).mergeability, "unknown");
+      const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-forgejo-no-checkout-" });
+      assert.strictEqual((yield* read({ ...input, cwd: outside })).mergeability, "unknown");
+      assert.strictEqual(yield* git("rev-parse", "HEAD"), base);
+      assert.strictEqual(yield* git("show-ref"), refs);
+      assert.strictEqual(yield* git("ls-files", "--stage"), index);
+      assert.strictEqual(yield* fs.readFileString(`${cwd}/file.txt`), "dirty worktree\n");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(TestSourceControlHost.layerWithRealGit(), NodeServices.layer)),
+    ),
 );

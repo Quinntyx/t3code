@@ -5,9 +5,11 @@ import * as Result from "effect/Result";
 import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import * as ForgejoCli from "./ForgejoCli.ts";
+import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { parseDiffFileRevisions } from "@t3tools/source-control-core/server/diffFileRevisions";
 import {
   PullRequestProviderError,
+  type ProviderChangeRequest,
   type ProviderChangeRequestDetail,
   type ProviderRepositoryRef,
   type PullRequestProviderApi,
@@ -82,6 +84,7 @@ const reviewCommentId = (review: typeof ForgejoReview.Type) =>
 
 export const make = Effect.gen(function* () {
   const cli = yield* ForgejoCli.ForgejoCli;
+  const { process } = yield* SourceControlHost.SourceControlHost;
   const failure = (operation: string, detail: string, cause?: unknown) =>
     new PullRequestProviderError({
       provider: SourceControlProviderKind.make("forgejo"),
@@ -180,6 +183,51 @@ export const make = Effect.gen(function* () {
       },
       ForgejoPullRequest,
     );
+  const changeRequest = Effect.fn("ForgejoPullRequestProvider.changeRequest")(function* (
+    input: ProviderRepositoryRef,
+    pr: typeof ForgejoPullRequest.Type,
+  ) {
+    const result = forgejoChangeRequest(pr);
+    if (
+      result.state !== "open" ||
+      result.isDraft ||
+      pr.mergeable !== false ||
+      ![pr.base.sha, pr.head.sha].every((sha) => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(sha))
+    )
+      return result;
+    // Forgejo 16 conflates conflicts, pending checks and errors. Probe only exact local commits;
+    // missing objects stay unknown, without fetching or changing refs, index or working tree.
+    const conflicting = yield* process
+      .run({
+        operation: "ForgejoPullRequestProvider.checkConflicts",
+        command: "git",
+        cwd: input.cwd,
+        args: [
+          "merge-tree",
+          "--write-tree",
+          "--name-only",
+          "--no-messages",
+          "-z",
+          pr.base.sha,
+          pr.head.sha,
+        ],
+        env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" },
+        allowNonZeroExit: true,
+        timeoutMs: 1_500,
+        maxOutputBytes: 128,
+        outputMode: "truncate",
+        concurrency: { key: `forgejo-mergeability:${input.cwd}`, limit: 2 },
+      })
+      .pipe(
+        // Invalid revisions can also exit 1, but only a completed merge emits a result tree.
+        Effect.map(
+          (output) =>
+            output.exitCode === 1 && /^[0-9a-f]{40}(?:[0-9a-f]{24})?\0/i.test(output.stdout),
+        ),
+        Effect.orElseSucceed(() => false),
+      );
+    return conflicting ? { ...result, mergeability: "conflicting" as const } : result;
+  });
   const getRepo = (input: ProviderRepositoryRef) =>
     read({ ...input, path: repoPath(input) }, ForgejoRepository);
   const getViewer = (input: {
@@ -272,7 +320,7 @@ export const make = Effect.gen(function* () {
     listChangeRequests: Effect.fn("ForgejoPullRequestProvider.listChangeRequests")(
       function* (input) {
         const offset = input.cursor?.delivered ?? 0;
-        const items: ReturnType<typeof forgejoChangeRequest>[] = [];
+        const items: ProviderChangeRequest[] = [];
         const state = input.state === "merged" ? "closed" : input.state;
         const params = new URLSearchParams({ state, sort: "recentupdate" });
         const filters = input.filters;
@@ -314,18 +362,23 @@ export const make = Effect.gen(function* () {
           const rows = result.rows;
           const start = index === firstIndex ? offset % pageSize : 0;
           const countBefore = consumed;
-          for (const row of rows.slice(start)) {
-            if (consumed >= input.limit) break;
-            consumed++;
-            if (row) items.push(forgejoChangeRequest(row));
-          }
+          const selected = rows.slice(start, start + input.limit - consumed);
+          consumed += selected.length;
+          items.push(
+            ...(yield* Effect.forEach(
+              selected.filter((row) => row !== null),
+              (row) => changeRequest(input, row),
+              { concurrency: 2 },
+            )),
+          );
           more = result.more || rows.length - start > consumed - countBefore;
         }
         return { items, truncated: more, continues: true, cursorAdvance: consumed };
       },
     ),
     getChangeRequestPreview: (input) => getPull(input).pipe(Effect.map(forgejoChangeRequest)),
-    getChangeRequestSummary: (input) => getPull(input).pipe(Effect.map(forgejoChangeRequest)),
+    getChangeRequestSummary: (input) =>
+      getPull(input).pipe(Effect.flatMap((pr) => changeRequest(input, pr))),
     getChangeRequestChecks: Effect.fn("ForgejoPullRequestProvider.getChangeRequestChecks")(
       function* (input) {
         const pr = yield* getPull(input);
@@ -339,7 +392,7 @@ export const make = Effect.gen(function* () {
       );
       const checks = yield* readChecks(input, pr);
       return {
-        ...forgejoChangeRequest(pr),
+        ...(yield* changeRequest(input, pr)),
         headSha: pr.head.sha,
         body: pr.body ?? "",
         changedFiles: pr.changed_files ?? 0,
@@ -511,6 +564,12 @@ export const make = Effect.gen(function* () {
         case "merge":
           return Effect.gen(function* () {
             const deleteBranch = (yield* getRepo(input)).default_delete_branch_after_merge ?? false;
+            const pr = yield* changeRequest(input, yield* getPull(input));
+            if (pr.mergeability === "conflicting")
+              return yield* failure(
+                "merge",
+                "Resolve this pull request's merge conflicts before merging.",
+              );
             yield* write({
               ...input,
               path: `${pullPath(input)}/merge`,
