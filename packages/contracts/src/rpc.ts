@@ -5,6 +5,7 @@ import {
   OrchestrationV2SearchThreadsInput,
   OrchestrationV2SearchThreadsResult,
 } from "./orchestrationV2.ts";
+import { PycellsNotebookInput, PycellsNotebookSnapshot, PycellsNotebookError } from "./pycells.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   McpAppCallToolInput,
@@ -542,6 +543,7 @@ export const WS_METHODS = {
   serverReportClientActivity: "server.reportClientActivity",
   serverGetUsageSummary: "server.getUsageSummary",
   serverGetThreadUsage: "server.getThreadUsage",
+  threadsGetNotebook: "threads.getNotebook",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
@@ -960,6 +962,12 @@ const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   payload: UsageSummaryInput,
   success: UsageSummary,
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
+const WsThreadsGetNotebookRpc = Rpc.make(WS_METHODS.threadsGetNotebook, {
+  payload: PycellsNotebookInput,
+  success: PycellsNotebookSnapshot,
+  error: Schema.Union([EnvironmentAuthorizationError, PycellsNotebookError]),
 });
 
 const WsServerGetThreadUsageRpc = Rpc.make(WS_METHODS.serverGetThreadUsage, {
@@ -2035,6 +2043,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerPrepareTriageRpc,
   WsServerGetUsageSummaryRpc,
   WsServerGetThreadUsageRpc,
+  WsThreadsGetNotebookRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
   WsScheduledTasksSubscribeRpc,

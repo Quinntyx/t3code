@@ -1,3 +1,4 @@
+import { PycellsLauncher } from "@t3tools/shared/pycells";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -416,6 +417,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
+  const pycellsLauncher = yield* PycellsLauncher;
   const fileSystem = yield* FileSystem.FileSystem;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
@@ -464,9 +466,24 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      const notebookEnvironment = yield* pycellsLauncher
+        .prepare(host.paths.stateDir, input.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: PI_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          ),
+        );
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment: options.environment,
+        environment: {
+          ...options.environment,
+          ...notebookEnvironment,
+        },
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
@@ -3016,9 +3033,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   });
             // CLI --fork uses Pi's own session format and sets the destination cwd. RPC
             // switch_session/clone alone would retain the source cwd.
+            const forkNotebookEnvironment = yield* pycellsLauncher
+              .prepare(host.paths.stateDir, forkInput.targetThreadId)
+              .pipe(Effect.mapError((cause) => protocolError(cause.message)));
             const forkLaunch = buildPiRpcLaunch({
               launchArgs: resolvedLaunchArgs.args,
-              environment: options.environment,
+              environment: {
+                ...options.environment,
+                ...forkNotebookEnvironment,
+              },
               mcpSession: undefined,
               extensionPath: undefined,
               disableExtensions: true,
