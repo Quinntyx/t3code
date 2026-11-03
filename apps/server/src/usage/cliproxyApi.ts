@@ -371,6 +371,25 @@ export const makeCliproxyApi = Effect.gen(function* () {
     );
   });
 
+  const clearAccountCooldowns = Effect.fn("CliproxyApi.clearAccountCooldowns")(function* (
+    config: UsageLimitSourceConfig,
+    workspaceId: string,
+  ) {
+    const accounts = yield* authFiles(config);
+    const results = yield* Effect.forEach(
+      accounts.filter(
+        (account) =>
+          !account.disabled &&
+          account.provider === "codex" &&
+          account.id_token?.chatgpt_account_id?.trim() === workspaceId,
+      ),
+      (account) =>
+        management(config, "reset-quota", { auth_index: account.auth_index }).pipe(Effect.result),
+    );
+    const failed = results.find((result) => result._tag === "Failure");
+    if (failed) return yield* failed.failure;
+  });
+
   const consume = Effect.fn("CliproxyApi.consume")(function* (
     config: UsageLimitSourceConfig,
     accountId: string,
@@ -423,5 +442,5 @@ export const makeCliproxyApi = Effect.gen(function* () {
       ),
     );
   });
-  return { readAccounts, consume };
+  return { readAccounts, consume, clearAccountCooldowns };
 });

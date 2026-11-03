@@ -2,7 +2,9 @@ import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   UsageLimitSourceError,
   type UsageLimitSourceConsumeResetCreditInput,
+  type ProviderConsumeResetCreditOutcome,
   type ProviderConsumeResetCreditResult,
+  type ServerProvider,
   type ServerSettings,
   type UsageLimitSourceConfig,
   type UsageLimitSourceId,
@@ -33,6 +35,10 @@ export class UsageLimitSources extends Context.Service<
     readonly consumeResetCredit: (
       input: UsageLimitSourceConsumeResetCreditInput,
     ) => Effect.Effect<ProviderConsumeResetCreditResult, UsageLimitSourceError>;
+    readonly notifyResetCreditConsumed: (
+      provider: Pick<ServerProvider, "driver" | "auth">,
+      outcome: ProviderConsumeResetCreditOutcome,
+    ) => Effect.Effect<ProviderConsumeResetCreditResult>;
   }
 >()("t3/usage/UsageLimitSources") {}
 
@@ -120,6 +126,43 @@ export const make = Effect.gen(function* () {
     return result;
   }, refreshLock.withPermits(1));
 
+  const notifyResetCreditConsumed = Effect.fn("UsageLimitSources.notifyResetCreditConsumed")(
+    function* (
+      provider: Pick<ServerProvider, "driver" | "auth">,
+      outcome: ProviderConsumeResetCreditOutcome,
+    ): Effect.fn.Return<ProviderConsumeResetCreditResult> {
+      const workspaceId = provider.auth.workspaceId?.trim();
+      if (
+        provider.driver !== "codex" ||
+        !workspaceId ||
+        (outcome !== "reset" && outcome !== "alreadyRedeemed")
+      ) {
+        return { outcome };
+      }
+      const failed = yield* Effect.gen(function* () {
+        const settings = yield* settingsService.getSettings;
+        const results = yield* Effect.forEach(
+          Object.values(settings.usageLimitSources).filter(
+            (config) => config.enabled && config.managementKey.length > 0,
+          ),
+          (config) => api.clearAccountCooldowns(config, workspaceId).pipe(Effect.result),
+          { concurrency: 4 },
+        );
+        return results.some((result) => result._tag === "Failure");
+      }).pipe(Effect.orElseSucceed(() => true));
+      yield* refresh;
+      return {
+        outcome,
+        ...(failed
+          ? {
+              warning:
+                "Credit redeemed, but some hub cooldowns could not be cleared. Routing may resume after their cooldowns expire.",
+            }
+          : {}),
+      };
+    },
+  );
+
   yield* settingsService.streamChanges.pipe(
     Stream.map((settings) => settings.usageLimitSources),
     Stream.changes,
@@ -152,6 +195,7 @@ export const make = Effect.gen(function* () {
   return {
     current: Ref.get(stateRef),
     consumeResetCredit,
+    notifyResetCreditConsumed,
     refresh,
     get streamChanges() {
       return Stream.unwrap(

@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
@@ -436,6 +437,56 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       );
       expect(probeCount).toBeGreaterThan(sameAccountFailureProbeCount);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live.skipIf(windowsHost)(
+    "observes a confirmed Codex reset even when the usage re-probe fails",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const fixtures = yield* makeTildeProviderFixtures();
+        yield* fs.writeFileString(
+          fixtures.codexScriptPath,
+          JSON.stringify({
+            rootThreadId: "probe-thread",
+            notifications: [],
+            account: { type: "chatgpt", email: "reset@example.test", planType: "plus" },
+            resetCreditOutcome: "reset",
+            failRateLimitsRead: true,
+          }),
+        );
+        const instanceId = ProviderInstanceId.make("codex_reset");
+        const { registry } = yield* makeProviderInstanceRegistry({
+          drivers: [CodexDriver],
+          configMap: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              enabled: true,
+              environment: [
+                {
+                  name: "T3_CODEX_COLLAB_SCRIPT",
+                  value: fixtures.codexScriptPath,
+                  sensitive: false,
+                },
+              ],
+              config: makeCodexConfig({ enabled: true, binaryPath: fixtures.codexBinaryPath }),
+            },
+          },
+        });
+        const instance = yield* registry.getInstance(instanceId);
+        const observed = yield* Ref.make<string | undefined>(undefined);
+        const result = yield* instance!.consumeResetCredit!((outcome) =>
+          Ref.set(observed, outcome),
+        ).pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            detail:
+              "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
+          },
+        });
+        expect(yield* Ref.get(observed)).toBe("reset");
+      }).pipe(Effect.provide(layerTest)),
   );
 
   const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
