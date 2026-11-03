@@ -446,8 +446,12 @@ const openRuntime = Effect.fnUntraced(function* (
     runtimePolicy,
   });
   const emitted = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+  const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
   yield* runtime.events.pipe(
-    Stream.runForEach((event) => Queue.offer(emitted, event)),
+    Stream.runForEach((event) => {
+      events.push(event);
+      return Queue.offer(emitted, event);
+    }),
     Effect.forkScoped,
   );
   const takeEvent = (predicate: (event: ProviderAdapter.ProviderAdapterV2Event) => boolean) =>
@@ -457,7 +461,7 @@ const openRuntime = Effect.fnUntraced(function* (
         if (predicate(event)) return event;
       }
     });
-  return { runtime, takeEvent };
+  return { runtime, takeEvent, events };
 });
 
 const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THREAD_ID) {
@@ -4313,6 +4317,190 @@ describe("PiAdapterV2", () => {
       yield* fake.takeRequest("get_state");
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+});
+
+describe("Pi per-turn consumption", () => {
+  it.effect.each(["completed", "interrupted", "failed", "missing-final", "recovered"] as const)(
+    "accounts for tool-loop messages without double counting (%s)",
+    (ending) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent, events } = yield* openRuntime(fake, "codex/gpt-6.1-sol");
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("codex/gpt-6.1-sol"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread, "codex/gpt-6.1-sol");
+        yield* fake.emit({ type: "agent_start" });
+        const firstUsage = { input: 100, output: 30, cacheRead: 200, cacheWrite: 50 };
+        yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        yield* fake.emit({
+          type: "message_end",
+          message: { role: "assistant", stopReason: "toolUse", usage: firstUsage },
+        });
+        yield* fake.emit({
+          type: "tool_execution_start",
+          toolCallId: "tool-usage",
+          toolName: "subagent",
+          args: {},
+        });
+        yield* fake.emit({
+          type: "tool_execution_end",
+          toolCallId: "tool-usage",
+          toolName: "subagent",
+          result: { usage: { input: 1_000_000, output: 1_000_000 } },
+        });
+        yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        const streamingUsage = { input: 80, output: 4, cacheRead: 220, cacheWrite: 10 };
+        for (let index = 0; index < 2; index++) {
+          yield* fake.emit({ type: "message_update", usage: streamingUsage });
+        }
+        yield* fake.emit({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Answer" },
+        });
+        yield* takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "assistant_message",
+        );
+        const live = events.findLast(
+          (event) =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.turnTokenUsage?.outputTokens === 34,
+        );
+        assert.isDefined(live);
+        if (live?.type !== "provider_turn.updated") return;
+        assert.isUndefined(live.providerTurn.tokenUsage);
+        assert.deepEqual(live.providerTurn.turnTokenUsage, {
+          usageScope: "main_agent",
+          usageStatus: "partial",
+          inputTokens: 660,
+          cachedInputTokens: 420,
+          cacheCreationTokens: 60,
+          outputTokens: 34,
+          hasSubagents: true,
+        });
+        const finalUsage = { input: 90, output: 20, cacheRead: 230, cacheWrite: 20 };
+        const hasFinalUsage = ending !== "interrupted" && ending !== "missing-final";
+        if (ending === "recovered") {
+          yield* fake.emit({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "Upstream disconnected before final usage",
+              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          });
+          yield* fake.emit({ type: "agent_end", willRetry: true });
+          yield* fake.emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1 });
+          yield* fake.emit({ type: "auto_retry_end", success: true, attempt: 1 });
+          yield* fake.emit({ type: "agent_start" });
+          yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        }
+        if (hasFinalUsage) {
+          yield* fake.emit({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: ending === "failed" ? "error" : "stop",
+              errorMessage: ending === "failed" ? "Model failed" : undefined,
+              usage: finalUsage,
+            },
+          });
+        }
+        if (ending === "interrupted") {
+          yield* runtime.interruptTurn({
+            providerThread,
+            providerTurnId: live.providerTurn.id,
+          });
+          yield* fake.emit({ type: "agent_settled", aborted: true });
+        } else {
+          yield* fake.emit({
+            type: "agent_end",
+            messages: [{ usage: firstUsage }, { usage: finalUsage }],
+          });
+          yield* fake.emit({ type: "agent_settled" });
+        }
+        const final = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.completedAt !== null,
+        );
+        assert.isTrue(final.type === "provider_turn.updated");
+        if (final.type !== "provider_turn.updated") return;
+        assert.deepEqual(final.providerTurn.turnTokenUsage, {
+          usageScope: "main_agent",
+          usageStatus: ending === "completed" ? "complete" : "partial",
+          inputTokens: hasFinalUsage ? 690 : 660,
+          cachedInputTokens: hasFinalUsage ? 430 : 420,
+          cacheCreationTokens: hasFinalUsage ? 70 : 60,
+          outputTokens: hasFinalUsage ? 50 : 34,
+          hasSubagents: true,
+        });
+        yield* takeEvent((event) => event.type === "turn.terminal");
+
+        yield* startTurn(runtime, providerThread, "codex/gpt-6.1-sol", [], "Next", undefined, 2);
+        yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        yield* fake.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0 },
+          },
+        });
+        yield* fake.emit({ type: "agent_settled" });
+        const next = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.completedAt !== null,
+        );
+        assert.isTrue(next.type === "provider_turn.updated");
+        if (next.type !== "provider_turn.updated") return;
+        assert.deepEqual(next.providerTurn.turnTokenUsage, {
+          usageScope: "main_agent",
+          usageStatus: "complete",
+          inputTokens: 2,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 1,
+          hasSubagents: false,
+        });
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("does not invent consumption from context snapshots or invalid usage", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      fake.queueState({ model: { contextWindow: 100_000 } });
+      fake.queueState({ model: { contextWindow: 100_000 } });
+      fake.queueStats({ tokens: { input: 90_000, output: 5_000 } });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_update",
+        usage: { input: -1, output: 5, cacheRead: 0, cacheWrite: 0 },
+      });
+      yield* fake.emit({ type: "message_end", message: { role: "assistant" } });
+      yield* fake.emit({ type: "agent_settled" });
+      const final = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.completedAt !== null,
+      );
+      assert.isTrue(final.type === "provider_turn.updated");
+      if (final.type !== "provider_turn.updated") return;
+      assert.deepEqual(final.providerTurn.turnTokenUsage, {
+        usageScope: "main_agent",
+        usageStatus: "unavailable",
+        hasSubagents: false,
+      });
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });
