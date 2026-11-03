@@ -241,7 +241,7 @@ export function FloatingPanelControls({
       data-floating-panel-controls
       data-floating-dock-bubble
     >
-      <div className="grid grid-rows-[0fr] group-focus-within/floating-controls:grid-rows-[1fr] group-hover/floating-controls:grid-rows-[1fr] group-has-data-popup-open/floating-controls:grid-rows-[1fr] [[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-150 [[data-panel-animations=true]_&]:ease-out">
+      <div className="grid grid-rows-[0fr] group-has-focus-visible/floating-controls:grid-rows-[1fr] group-hover/floating-controls:grid-rows-[1fr] group-has-data-popup-open/floating-controls:grid-rows-[1fr] [[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-150 [[data-panel-animations=true]_&]:ease-out">
         <div className="flex min-h-0 flex-col items-center gap-0.5 overflow-hidden">
           {maximize}
           <PanelLayoutControls {...props} orientation="vertical" tooltipSide="left" />
