@@ -165,7 +165,7 @@ export function selectedPullRequestAuthor(
   hosted: ReadonlyArray<PullRequestActor>,
   value: string | undefined,
 ): PullRequestAuthorFacet | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === "me") return undefined;
   const key = normalize(value);
   return (
     facets.find((facet) => normalize(facet.actor.login) === key) ?? {
