@@ -1,9 +1,8 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import { type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
 import {
   DiscoverDirectory,
   type DiscoverDirectoryEntry,
   type DiscoverEndpoint,
-  type DiscoverHostConfiguration,
   DiscoverMembership,
   DiscoverPairingRequest,
   DiscoverPairingResult,
@@ -37,6 +36,7 @@ import {
 } from "../platform/persistence.ts";
 import type { StoredDiscoverMembership } from "../platform/storageDocument.ts";
 import { parseDiscoverEnrollmentUrl } from "./url.ts";
+import { requestGuarded, type EnvironmentRpcInput } from "../rpc/client.ts";
 
 export interface DirectoryDiscoveryState {
   readonly directory: null | {
@@ -67,12 +67,10 @@ export class DirectoryDiscovery extends Context.Service<
     readonly state: SubscriptionRef.SubscriptionRef<DirectoryDiscoveryState>;
     readonly enroll: (input: {
       readonly enrollmentUrl: string;
+      readonly transport?: DiscoverTransport;
     }) => Effect.Effect<void, DiscoveryError>;
     readonly refresh: () => Effect.Effect<void>;
     readonly disconnect: () => Effect.Effect<void, ConnectionPersistenceError>;
-    readonly getHostConfiguration: (
-      transport: DiscoverTransport,
-    ) => Effect.Effect<DiscoverHostConfiguration, ConnectionBlockedError>;
     readonly start: Effect.Effect<void>;
   }
 >()("@t3tools/client-runtime/discover/service/DirectoryDiscovery") {}
@@ -336,8 +334,32 @@ export const make = Effect.gen(function* () {
       return tracked(lock.withPermits(1)(refreshUnlocked(expected))).pipe(Effect.ignore);
     });
 
+  const localEnvironmentId = Effect.gen(function* () {
+    if (presentation.metadata.surface !== "desktop") return undefined;
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    return [...entries.values()].find((entry) => entry.target._tag === "PrimaryConnectionTarget")
+      ?.target.environmentId;
+  });
+
+  const hostRequest = Effect.fn("DirectoryDiscovery.hostRequest")(function* <
+    T extends typeof WS_METHODS.discoverConfigure | typeof WS_METHODS.discoverRevoke,
+  >(environmentId: EnvironmentId, tag: T, input: EnvironmentRpcInput<T>) {
+    return yield* registry
+      .run(environmentId, requestGuarded(tag, input))
+      .pipe(
+        Effect.mapError((error) =>
+          invalid(
+            error instanceof Error
+              ? error.message
+              : "Could not update local discovery registration.",
+          ),
+        ),
+      );
+  });
+
   const enroll = Effect.fn("DirectoryDiscovery.enroll")(function* (input: {
     readonly enrollmentUrl: string;
+    readonly transport?: DiscoverTransport;
   }) {
     const parsed = parseDiscoverEnrollmentUrl(input.enrollmentUrl);
     if (parsed === null)
@@ -350,6 +372,9 @@ export const make = Effect.gen(function* () {
             return yield* invalid(
               "Disconnect the current discovery directory before enrolling in another.",
             );
+          const localId = yield* localEnvironmentId;
+          if (presentation.metadata.surface === "desktop" && localId === undefined)
+            return yield* invalid("Connect your local environment before joining discovery.");
           const result = yield* request(
             parsed.brokerOrigin,
             "/enroll",
@@ -360,7 +385,32 @@ export const make = Effect.gen(function* () {
           );
           if (generation !== expected) return;
           const next = { ...result, brokerOrigin: parsed.brokerOrigin, seenEnvironmentIds: [] };
-          yield* store.save(next);
+          let configured = false;
+          yield* Effect.gen(function* () {
+            if (localId !== undefined) {
+              yield* hostRequest(localId, WS_METHODS.discoverConfigure, {
+                brokerOrigin: parsed.brokerOrigin,
+                memberToken: result.token,
+                transport: input.transport ?? "tailscale",
+              });
+              configured = true;
+            }
+            yield* store.save(next);
+          }).pipe(
+            Effect.onError(() =>
+              Effect.gen(function* () {
+                if (configured && localId !== undefined)
+                  yield* hostRequest(localId, WS_METHODS.discoverRevoke, {}).pipe(Effect.ignore);
+                yield* request(
+                  parsed.brokerOrigin,
+                  "/membership",
+                  "DELETE",
+                  Schema.Struct({}),
+                  result.token,
+                ).pipe(Effect.ignore);
+              }),
+            ),
+          );
           if (generation !== expected) return;
           membership = next;
           yield* SubscriptionRef.set(state, {
@@ -379,6 +429,9 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach([...operations], Fiber.interrupt, { discard: true });
     yield* lock.withPermits(1)(
       Effect.gen(function* () {
+        const localId = yield* localEnvironmentId;
+        if (previous !== null && localId !== undefined)
+          yield* hostRequest(localId, WS_METHODS.discoverRevoke, {}).pipe(Effect.ignore);
         yield* store.save(null);
         membership = null;
         yield* SubscriptionRef.set(state, EMPTY_DISCOVERY_STATE);
@@ -395,17 +448,6 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  const getHostConfiguration = Effect.fn("DirectoryDiscovery.getHostConfiguration")(function* (
-    transport: DiscoverTransport,
-  ) {
-    if (membership === null) return yield* invalid("Enroll in a discovery directory first.");
-    return {
-      brokerOrigin: membership.brokerOrigin,
-      memberToken: membership.token,
-      transport,
-    } satisfies DiscoverHostConfiguration;
-  });
-
   const start = Effect.gen(function* () {
     if (started) return;
     started = true;
@@ -419,7 +461,7 @@ export const make = Effect.gen(function* () {
     yield* refresh().pipe(Effect.forkIn(scope));
   });
 
-  return DirectoryDiscovery.of({ state, enroll, refresh, disconnect, getHostConfiguration, start });
+  return DirectoryDiscovery.of({ state, enroll, refresh, disconnect, start });
 });
 
 export const layer = Layer.effect(DirectoryDiscovery, make);

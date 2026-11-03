@@ -16,10 +16,12 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Option from "effect/Option";
 import { parseDiscoverEnrollmentUrl } from "@t3tools/client-runtime/discover";
+import type { DiscoverTransport } from "@t3tools/contracts/discover";
 
 import { cn } from "../../lib/utils";
 import { formatDesktopSshTarget } from "./EnvironmentRow";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { CommandShortcut } from "../ui/command";
 import {
   Autocomplete,
@@ -116,6 +118,7 @@ export function AddEnvironmentDialog({
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const isDiscoveryEnrollment = parseDiscoverEnrollmentUrl(savedBackendHost) !== null;
+  const [discoveryTransport, setDiscoveryTransport] = useState<DiscoverTransport>("tailscale");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
   const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
@@ -208,7 +211,10 @@ export function AddEnvironmentDialog({
         setIsAddingSavedBackend(false);
         return;
       }
-      const result = await enrollDiscovery({ enrollmentUrl: savedBackendHost.trim() });
+      const result = await enrollDiscovery({
+        enrollmentUrl: savedBackendHost.trim(),
+        transport: discoveryTransport,
+      });
       setIsAddingSavedBackend(false);
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
@@ -223,7 +229,9 @@ export function AddEnvironmentDialog({
       toastManager.add({
         type: "success",
         title: "Discovery connected",
-        description: "Choose an environment in Environments settings to share it explicitly.",
+        description: desktopBridge
+          ? "Your local environment is discoverable. Other environments appear in your existing list."
+          : "Discovered environments appear in your existing environment list.",
       });
       return;
     }
@@ -436,17 +444,44 @@ export function AddEnvironmentDialog({
           />
         </label>
       </div>
+      {renderDiscoveryTransport()}
       <div>
         <span className="mt-1 block text-2xs text-muted-foreground">
           {isDiscoveryEnrollment
             ? routeTarget
               ? "Discovery enrollment cannot add a route. Use a direct environment pairing URL."
-              : "Join this discovery directory. Enrolling does not share an environment; choose one to share in Environments settings."
+              : desktopBridge
+                ? "Join this discovery directory and make this desktop’s local environment discoverable to its members."
+                : "Join this discovery directory. Discovered environments appear in your existing list."
             : "Paste a full pairing or discovery enrollment URL here."}
         </span>
       </div>
     </div>
   );
+  const renderDiscoveryTransport = () =>
+    isDiscoveryEnrollment && desktopBridge && !routeTarget ? (
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-medium text-foreground">
+          Local environment address
+        </span>
+        <Select
+          value={discoveryTransport}
+          disabled={isAddingSavedBackend}
+          onValueChange={(value) => {
+            if (value === "tailscale" || value === "lan") setDiscoveryTransport(value);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="tailscale">Tailscale</SelectItem>
+            <SelectItem value="lan">LAN</SelectItem>
+          </SelectPopup>
+        </Select>
+      </label>
+    ) : null;
+
   const relayRouteOffer =
     routeTarget !== null &&
     !routeTarget.relayManaged &&

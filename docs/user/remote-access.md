@@ -58,19 +58,19 @@ t3discover pair --origin http://<private-ip>:3775
 ```
 
 Paste the printed one-time enrollment URL into **Add environment** on each desktop,
-web, or mobile client. Generate a fresh URL for each device. Enrollment joins the
-directory; it does not share any machine. In **Settings → Environments → Discovery**,
-choose a reachable transport and explicitly share each environment you want other
-members to discover. LAN sharing requires network access on that host. New shared
-machines appear automatically on enrolled clients.
+web, or mobile client. Generate a fresh URL for each device. Joining on desktop
+also makes its local environment discoverable; choose Tailscale or LAN for its
+address when joining. LAN requires network access on that host. Web and mobile
+clients discover environments without advertising the servers they connect to.
+Discovered machines appear automatically in the existing environment list.
 
 The broker is trusted to authorize its members to pair with shared machines. Bind
 it only to your private network and restrict access with your tailnet rules. An
 HTTPS web client also needs an HTTPS broker and host endpoints; use your existing
 private HTTPS proxy for the broker and pass its address to `pair --origin`.
 
-**Stop sharing** removes an environment from discovery. **Disconnect discovery**
-leaves existing direct connections intact. Use `t3discover members` and
+**Disconnect discovery** leaves the directory and removes that desktop's listing,
+while keeping existing direct connections intact. Use `t3discover members` and
 `t3discover revoke <member-id>` on the broker machine to remove a membership;
 revoke existing device sessions separately under **Sharing & access**. Keep the
 broker's `--home` directory consistent across commands and back up its SQLite file.

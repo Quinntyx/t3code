@@ -1,4 +1,10 @@
-import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  EnvironmentAuthorizationError,
+  authScopeRequiredResponse,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  WS_METHODS,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,13 +16,23 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { ConnectionOnboarding } from "../connection/onboarding.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
-import { BearerConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  BearerConnectionTarget,
+  PrimaryConnectionTarget,
+  ConnectionBlockedError,
+  type PreparedConnection,
+} from "../connection/model.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { ConnectionWakeups } from "../connection/wakeups.ts";
 import { ClientPresentation } from "../platform/capabilities.ts";
-import { DiscoverMembershipStore } from "../platform/persistence.ts";
+import { ConnectionPersistenceError, DiscoverMembershipStore } from "../platform/persistence.ts";
 import type { StoredDiscoverMembership } from "../platform/storageDocument.ts";
 import { layerRemoteHttpClient } from "../rpc/http.ts";
+import { RpcPermissionGuard } from "../rpc/client.ts";
 import { make } from "./service.ts";
 import { parseDiscoverEnrollmentUrl } from "./url.ts";
 
@@ -38,13 +54,23 @@ const host = {
 };
 const enrollmentUrl = "https://directory.example/discover#token=enrollment-code";
 
-const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* () {
+const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
+  surface: "desktop" | "mobile" | "web" = "web",
+  initiallyRegistered = false,
+) {
   let persisted: StoredDiscoverMembership | null = null;
   let pairingUrl = "http://100.64.0.20:3773/#token=fresh-code";
   let offline = false;
   let calls = 0;
   const requestedTransports: string[] = [];
   const imports: string[] = [];
+  const hostCalls: Array<{ environmentId: EnvironmentId; method: string; input: unknown }> = [];
+  let failHost = false;
+  let registered = initiallyRegistered;
+  let leftDirectory = false;
+  let denyHost = false;
+  let failSave = false;
+  const authorized: string[] = [];
   const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
     new Map(),
   );
@@ -81,22 +107,100 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* () {
     }
     if (url.endsWith("/result"))
       return Response.json({ status: "ready", pairingUrl, expiresAt: Number.MAX_SAFE_INTEGER });
-    if (url.endsWith("/membership")) return Response.json({ ok: true });
+    if (url.endsWith("/membership")) {
+      leftDirectory = true;
+      return Response.json({ ok: true });
+    }
     throw new Error("Unexpected discovery request");
+  };
+  const client = {
+    [WS_METHODS.discoverConfigure]: (input: unknown) =>
+      Effect.gen(function* () {
+        if (failHost)
+          return yield* new ConnectionBlockedError({
+            reason: "permission",
+            detail: "Local host unavailable",
+          });
+        const supervisor = yield* EnvironmentSupervisor;
+        hostCalls.push({
+          environmentId: supervisor.target.environmentId,
+          method: "configure",
+          input,
+        });
+        registered = true;
+        return { brokerOrigin: "https://directory.example", transport: "tailscale", error: null };
+      }),
+    [WS_METHODS.discoverRevoke]: () =>
+      Effect.gen(function* () {
+        const supervisor = yield* EnvironmentSupervisor;
+        hostCalls.push({
+          environmentId: supervisor.target.environmentId,
+          method: "revoke",
+          input: {},
+        });
+        registered = false;
+        return { brokerOrigin: null, transport: null, error: null };
+      }),
+  } as unknown as WsRpcProtocolClient;
+  const session: RpcSession = {
+    client,
+    initialConfig: Effect.never,
+    subscribeServerConfig: () => Stream.never,
+    ready: Effect.void,
+    probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
+    closed: Effect.never,
+  };
+  const permissionGuard = {
+    authorize: (_id: EnvironmentId, method: string) =>
+      Effect.gen(function* () {
+        authorized.push(method);
+        if (denyHost)
+          return yield* new EnvironmentAuthorizationError({
+            ...authScopeRequiredResponse("orchestration:read"),
+            message: "Not allowed",
+          });
+      }),
   };
   const dependencies = Layer.mergeAll(
     layerRemoteHttpClient(fetchFn),
-    Layer.succeed(ClientPresentation, { metadata: { label: "Test client" } }),
+    Layer.succeed(ClientPresentation, { metadata: { label: "Test client", surface } }),
     Layer.succeed(ConnectionWakeups, { changes: Stream.never }),
     Layer.succeed(DiscoverMembershipStore, {
       load: Effect.sync(() => persisted),
       save: (value) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          if (failSave && value !== null)
+            return yield* new ConnectionPersistenceError({
+              operation: "save-discovery-membership",
+              message: "Storage unavailable",
+            });
           persisted = value;
         }),
     }),
     Layer.mock(EnvironmentRegistry)({
       entries,
+      run: (environmentId, effect) =>
+        Effect.gen(function* () {
+          const target = (yield* SubscriptionRef.get(entries)).get(environmentId)!.target;
+          const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession>>(
+            Option.some(session),
+          );
+          const state = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+          const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
+            Option.none(),
+          );
+          return yield* effect.pipe(
+            Effect.provide(
+              Layer.mock(EnvironmentSupervisor)({
+                target,
+                session: activeSession,
+                state,
+                prepared,
+              }),
+            ),
+          );
+        }),
       networkStatus: yield* SubscriptionRef.make<"online" | "offline" | "unknown">("online"),
     }),
     Layer.mock(ConnectionOnboarding)({
@@ -128,6 +232,20 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* () {
     entries,
     imports,
     requestedTransports,
+    hostCalls,
+    authorized,
+    permissionGuard,
+    failSave: () => {
+      failSave = true;
+    },
+    registered: () => registered,
+    leftDirectory: () => leftDirectory,
+    failHost: () => {
+      failHost = true;
+    },
+    denyHost: () => {
+      denyHost = true;
+    },
     importReached,
     importRelease,
     gateImport: () => {
@@ -145,6 +263,151 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* () {
 });
 
 describe("directory discovery", () => {
+  it.effect(
+    "enrolling a desktop registers only its local server, and disconnect unregisters it",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness("desktop");
+        const localId = EnvironmentId.make("local-server");
+        yield* SubscriptionRef.set(
+          h.entries,
+          new Map([
+            [
+              id,
+              {
+                target: new BearerConnectionTarget({
+                  environmentId: id,
+                  label: "Remote",
+                  connectionId: "remote",
+                }),
+                profile: Option.none(),
+                enabled: true,
+              },
+            ],
+            [
+              localId,
+              {
+                target: new PrimaryConnectionTarget({
+                  environmentId: localId,
+                  label: "Local",
+                  httpBaseUrl: "http://localhost:3773",
+                  wsBaseUrl: "ws://localhost:3773",
+                }),
+                profile: Option.none(),
+                enabled: true,
+              },
+            ],
+          ]),
+        );
+        const discovery = yield* h.create;
+        yield* discovery
+          .enroll({ enrollmentUrl, transport: "lan" })
+          .pipe(Effect.provideService(RpcPermissionGuard, h.permissionGuard));
+        expect(h.hostCalls).toEqual([
+          {
+            environmentId: localId,
+            method: "configure",
+            input: {
+              brokerOrigin: "https://directory.example",
+              memberToken: "secret-member",
+              transport: "lan",
+            },
+          },
+        ]);
+        expect(h.registered()).toBe(true);
+        expect(h.persisted()).not.toBeNull();
+        yield* discovery
+          .disconnect()
+          .pipe(Effect.provideService(RpcPermissionGuard, h.permissionGuard));
+        expect(h.hostCalls.map((call) => call.environmentId)).toEqual([localId, localId]);
+        expect(h.hostCalls[1]?.method).toBe("revoke");
+        expect(h.authorized).toEqual([WS_METHODS.discoverConfigure, WS_METHODS.discoverRevoke]);
+        expect(h.registered()).toBe(false);
+        expect(h.leftDirectory()).toBe(true);
+        expect(h.persisted()).toBeNull();
+        expect((yield* SubscriptionRef.get(h.entries)).has(id)).toBe(true);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "desktop enrollment fails safely without a local server and rolls back failed registration",
+    () =>
+      Effect.gen(function* () {
+        for (const failure of [
+          "missing-local",
+          "host",
+          "permission",
+          "storage",
+          "pre-existing",
+        ] as const) {
+          const h = yield* makeHarness("desktop", failure === "pre-existing");
+          if (failure !== "missing-local") {
+            const localId = EnvironmentId.make("local-server");
+            yield* SubscriptionRef.set(
+              h.entries,
+              new Map([
+                [
+                  localId,
+                  {
+                    target: new PrimaryConnectionTarget({
+                      environmentId: localId,
+                      label: "Local",
+                      httpBaseUrl: "http://localhost:3773",
+                      wsBaseUrl: "ws://localhost:3773",
+                    }),
+                    profile: Option.none(),
+                    enabled: true,
+                  },
+                ],
+              ]),
+            );
+          }
+          if (failure === "host" || failure === "pre-existing") h.failHost();
+          if (failure === "permission") h.denyHost();
+          if (failure === "storage") h.failSave();
+          const discovery = yield* h.create;
+          const result = yield* discovery
+            .enroll({ enrollmentUrl })
+            .pipe(Effect.provideService(RpcPermissionGuard, h.permissionGuard), Effect.result);
+          expect(result._tag).toBe("Failure");
+          expect(h.persisted()).toBeNull();
+          expect(h.registered()).toBe(failure === "pre-existing");
+          if (failure === "pre-existing") expect(h.hostCalls).toEqual([]);
+          expect(h.leftDirectory()).toBe(failure !== "missing-local");
+          if (failure === "missing-local") expect(h.calls()).toBe(0);
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("mobile and browser enrollment never registers a connected server", () =>
+    Effect.gen(function* () {
+      for (const surface of ["mobile", "web"] as const) {
+        const h = yield* makeHarness(surface);
+        yield* SubscriptionRef.set(
+          h.entries,
+          new Map([
+            [
+              id,
+              {
+                target: new PrimaryConnectionTarget({
+                  environmentId: id,
+                  label: "Remote primary",
+                  httpBaseUrl: "https://remote.example",
+                  wsBaseUrl: "wss://remote.example",
+                }),
+                profile: Option.none(),
+                enabled: true,
+              },
+            ],
+          ]),
+        );
+        const discovery = yield* h.create;
+        yield* discovery.enroll({ enrollmentUrl });
+        yield* discovery.disconnect();
+        expect(h.hostCalls).toEqual([]);
+      }
+    }).pipe(Effect.scoped),
+  );
   it("distinguishes enrollment from pairing links and rejects ambiguous origins and fragments", () => {
     expect(parseDiscoverEnrollmentUrl(enrollmentUrl)).toEqual({
       brokerOrigin: "https://directory.example",
@@ -185,11 +448,7 @@ describe("directory discovery", () => {
           brokerOrigin: "https://directory.example",
         });
         expect(JSON.stringify(state)).not.toContain("secret-member");
-        expect(yield* discovery.getHostConfiguration("lan")).toEqual({
-          brokerOrigin: "https://directory.example",
-          memberToken: "secret-member",
-          transport: "lan",
-        });
+        expect(h.hostCalls).toEqual([]);
         yield* SubscriptionRef.set(h.entries, new Map());
         const restarted = yield* h.create;
         yield* restarted.refresh();

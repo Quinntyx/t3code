@@ -292,7 +292,7 @@ function PairingForm({
                 (isDiscoveryEnrollment
                   ? routeFor
                     ? "Discovery enrollment cannot add a route. Use a direct environment pairing URL."
-                    : "Join this discovery directory. Enrolling does not share an environment; choose one to share in Environments settings."
+                    : "Join this discovery directory. Discovered environments appear in your existing list."
                   : "Paste a pairing or discovery enrollment URL, or enter a machine on your local network or tailnet.")}
             </Text>
           </View>
