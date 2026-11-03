@@ -20,6 +20,7 @@ import {
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  type TurnTokenUsage,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
   type OrchestrationV2ProviderTurnTokenUsage,
@@ -345,6 +346,77 @@ function compactionTitle(status: PiCompactionStatus): string {
   }
 }
 
+interface PiMessageUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly reasoningTokens?: number;
+}
+
+function piMessageUsage(usage: unknown): PiMessageUsage | null {
+  const input = recordNumber(usage, "input");
+  const output = recordNumber(usage, "output");
+  const cacheRead = recordNumber(usage, "cacheRead");
+  const cacheWrite = recordNumber(usage, "cacheWrite");
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined ||
+    ![input, output, cacheRead, cacheWrite].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    )
+  )
+    return null;
+  const reasoning = recordNumber(usage, "reasoning");
+  return {
+    // Pi reports disjoint input/cache counters; T3 input includes both cache categories.
+    inputTokens: input + cacheRead + cacheWrite,
+    outputTokens: output,
+    cachedInputTokens: cacheRead,
+    cacheCreationTokens: cacheWrite,
+    ...(reasoning !== undefined && Number.isSafeInteger(reasoning) && reasoning >= 0
+      ? { reasoningTokens: Math.min(output, reasoning) }
+      : {}),
+  };
+}
+
+function addPiMessageUsage(left: PiMessageUsage, right: PiMessageUsage): PiMessageUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    cacheCreationTokens: left.cacheCreationTokens + right.cacheCreationTokens,
+    ...(left.reasoningTokens === undefined && right.reasoningTokens === undefined
+      ? {}
+      : { reasoningTokens: (left.reasoningTokens ?? 0) + (right.reasoningTokens ?? 0) }),
+  };
+}
+
+function piTurnTokenUsage(turn: ActivePiTurn, completed = false): TurnTokenUsage {
+  const usage =
+    turn.pendingUsage === null
+      ? turn.completedUsage
+      : turn.completedUsage === null
+        ? turn.pendingUsage
+        : addPiMessageUsage(turn.completedUsage, turn.pendingUsage);
+  if (usage === null) {
+    return {
+      usageScope: "main_agent",
+      hasSubagents: turn.hasSubagents,
+      usageStatus: "unavailable",
+    };
+  }
+  return {
+    usageScope: "main_agent",
+    hasSubagents: turn.hasSubagents,
+    usageStatus:
+      completed && turn.usageComplete && turn.pendingUsage === null ? "complete" : "partial",
+    ...usage,
+  };
+}
+
 interface ActivePiTurn {
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly providerTurn: OrchestrationV2ProviderTurn;
@@ -363,6 +435,10 @@ interface ActivePiTurn {
   readonly promptMayBeCommandOnly: boolean;
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
+  completedUsage: PiMessageUsage | null;
+  pendingUsage: PiMessageUsage | null;
+  usageComplete: boolean;
+  hasSubagents: boolean;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
@@ -712,17 +788,25 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const reportLiveUsage =
         /* Provider events include streaming deltas; avoid a span for each update. */
         Effect.fnUntraced(function* (turn: ActivePiTurn, usage: unknown) {
+          const messageUsage = piMessageUsage(usage);
+          const consumptionChanged =
+            messageUsage !== null &&
+            (turn.pendingUsage === null ||
+              messageUsage.inputTokens !== turn.pendingUsage.inputTokens ||
+              messageUsage.outputTokens !== turn.pendingUsage.outputTokens ||
+              messageUsage.cachedInputTokens !== turn.pendingUsage.cachedInputTokens ||
+              messageUsage.cacheCreationTokens !== turn.pendingUsage.cacheCreationTokens ||
+              messageUsage.reasoningTokens !== turn.pendingUsage.reasoningTokens);
+          if (messageUsage !== null) turn.pendingUsage = messageUsage;
           const usedTokens = nonNegativeInteger(usage, "totalTokens");
-          if (
-            usedTokens === undefined ||
-            usedTokens === 0 ||
-            usedTokens === turn.lastLiveUsedTokens ||
-            contextWindow === null ||
-            contextWindow === 0
-          ) {
-            return;
-          }
-          turn.lastLiveUsedTokens = usedTokens;
+          const contextChanged =
+            usedTokens !== undefined &&
+            usedTokens > 0 &&
+            usedTokens !== turn.lastLiveUsedTokens &&
+            contextWindow !== null &&
+            contextWindow > 0;
+          if (!consumptionChanged && !contextChanged) return;
+          if (contextChanged) turn.lastLiveUsedTokens = usedTokens;
           const inputTokens = nonNegativeInteger(usage, "input");
           const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
           const outputTokens = nonNegativeInteger(usage, "output");
@@ -733,14 +817,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             threadId: turn.turnInput.threadId,
             providerTurn: {
               ...turn.providerTurn,
-              tokenUsage: {
-                usedTokens,
-                maxTokens: contextWindow,
-                ...(inputTokens === undefined ? {} : { inputTokens }),
-                ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-                ...(outputTokens === undefined ? {} : { outputTokens }),
-                updatedAt: DateTime.formatIso(updatedAt),
-              },
+              turnTokenUsage: piTurnTokenUsage(turn),
+              ...(contextChanged
+                ? {
+                    tokenUsage: {
+                      usedTokens,
+                      maxTokens: contextWindow,
+                      ...(inputTokens === undefined ? {} : { inputTokens }),
+                      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+                      ...(outputTokens === undefined ? {} : { outputTokens }),
+                      updatedAt: DateTime.formatIso(updatedAt),
+                    },
+                  }
+                : {}),
             },
           });
         });
@@ -1538,6 +1627,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
+            turnTokenUsage: piTurnTokenUsage(turn, !interrupted && failure === null),
           },
         });
         yield* updateProviderThread(
@@ -1735,6 +1825,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn !== null && recordString(event["message"], "role") === "assistant") {
               turn.sawAgentActivity = true;
               turn.messageOrdinal += 1;
+              if (turn.pendingUsage !== null) {
+                turn.completedUsage =
+                  turn.completedUsage === null
+                    ? turn.pendingUsage
+                    : addPiMessageUsage(turn.completedUsage, turn.pendingUsage);
+                turn.pendingUsage = null;
+                turn.usageComplete = false;
+              }
             }
             return;
           }
@@ -1774,6 +1872,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
+            const finalUsage = piMessageUsage(recordField(message, "usage"));
+            const usage = finalUsage ?? turn.pendingUsage;
+            if (usage !== null)
+              turn.completedUsage =
+                turn.completedUsage === null
+                  ? usage
+                  : addPiMessageUsage(turn.completedUsage, usage);
+            turn.pendingUsage = null;
+            const stopReason = recordString(message, "stopReason");
+            if (finalUsage === null || stopReason === "error" || stopReason === "aborted") {
+              turn.usageComplete = false;
+            }
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               const errorMessage =
@@ -1788,6 +1898,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           case "tool_execution_start":
             if (turn !== null) {
               turn.sawAgentActivity = true;
+              if (recordString(event, "toolName") === "subagent") turn.hasSubagents = true;
               yield* emitToolItem(turn, event, "start");
             }
             return;
@@ -2526,6 +2637,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
+              completedUsage: null,
+              pendingUsage: null,
+              usageComplete: true,
+              hasSubagents: false,
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               sawCompaction: false,
