@@ -184,6 +184,8 @@ import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
+import * as ThreadNotebookService from "./notebook/ThreadNotebookService.ts";
+import * as PycellsLauncher from "./notebook/PycellsLauncher.ts";
 import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
@@ -606,6 +608,7 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   ThreadUsageService.layer,
+  ThreadNotebookService.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
@@ -1128,6 +1131,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(PycellsLauncher.layer),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

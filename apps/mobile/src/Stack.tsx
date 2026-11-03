@@ -66,6 +66,7 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { ThreadNotebookSheet } from "./features/threads/ThreadNotebookSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import {
@@ -899,6 +900,15 @@ const RootStackConfig = createWorkspaceStackNavigator({
         ...HORIZONTAL_FORM_SHEET_OPTIONS,
         headerShown: false,
         sheetAllowedDetents: formSheetDetents(0.5, 0.9),
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadNotebook: createNativeStackScreen({
+      screen: ThreadNotebookSheet,
+      options: {
+        ...HORIZONTAL_FORM_SHEET_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: formSheetDetents(0.65, 0.95),
         sheetGrabberVisible: true,
       },
     }),

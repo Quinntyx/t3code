@@ -1308,6 +1308,13 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscribeResourceTelemetry,
       idleTtlMs: 0,
     }),
+    threadNotebook: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-notebook",
+      tag: WS_METHODS.threadsGetNotebook,
+      idleTtlMs: 0,
+      staleTimeMs: 0,
+      refreshIntervalMs: 1_000,
+    }),
     threadUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:thread-usage",
       tag: WS_METHODS.serverGetThreadUsage,

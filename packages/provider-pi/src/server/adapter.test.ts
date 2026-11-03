@@ -426,7 +426,13 @@ const makeAdapter = Effect.fnUntraced(function* (
   return yield* makePiAdapterV2({
     instanceId: PI_INSTANCE_ID,
     settings: { enabled: true, binaryPath: "pi", launchArgs, customModels: [] },
-    environment: {},
+    environment: {
+      T3_THREAD_ID: "ambient-thread",
+      T3_PYCELLS_SOCKET: "/tmp/ambient.sock",
+      T3_PYCELLS_OWNER_PID: "0",
+      T3_PYCELLS_LAUNCH_SOCKET: "/tmp/ambient-launch.sock",
+      TMUX: "ambient-tmux",
+    },
   }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 });
 
@@ -1572,6 +1578,11 @@ describe("PiAdapterV2", () => {
       assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
       assert.equal(spawn.env.T3_PI_RUNTIME_MODE, "full-access");
+      assert.equal(spawn.env.T3_THREAD_ID, THREAD_ID);
+      assert.equal(spawn.env.T3_PYCELLS_OWNER_PID, String(process.pid));
+      assert.equal(spawn.env.T3_PYCELLS_LAUNCH_SOCKET, "");
+      assert.match(spawn.env.T3_PYCELLS_SOCKET!, /^\/tmp\/pi-pycells-\d+\/t3-[a-f0-9]{24}\.sock$/);
+      assert.equal(spawn.env.TMUX, "ambient-tmux");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -1865,6 +1876,13 @@ describe("PiAdapterV2", () => {
       assert.notEqual(forked.id, source.id);
       assert.equal(source.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
       const args = forkFake.lastSpawn().args;
+      assert.equal(forkFake.lastSpawn().env.T3_THREAD_ID, target);
+      assert.equal(forkFake.lastSpawn().env.T3_PYCELLS_OWNER_PID, String(process.pid));
+      assert.equal(forkFake.lastSpawn().env.T3_PYCELLS_LAUNCH_SOCKET, "");
+      assert.notEqual(
+        forkFake.lastSpawn().env.T3_PYCELLS_SOCKET,
+        fake.lastSpawn().env.T3_PYCELLS_SOCKET,
+      );
       assert.equal(args[args.indexOf("--fork") + 1], FAKE_SESSION_FILE);
       assert.include(args, "--no-extensions");
       assert.include(args, "--no-tools");

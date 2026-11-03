@@ -33,6 +33,7 @@ import {
   FileDiff,
   Files,
   Globe2,
+  NotebookPen,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -123,6 +124,7 @@ export interface RightPanelTabsProps {
   onAddBrowser: () => void;
   /** Keep separate from the DOM click handler so a MouseEvent cannot become a profile id. */
   onAddBrowserInProfile: (profileId: string) => void;
+  onAddNotebook?: (() => void) | undefined;
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -294,6 +296,7 @@ function SurfaceMenuItem(props: {
 }
 
 function RightPanelEmptyState(props: {
+  onAddNotebook?: (() => void) | undefined;
   onAddBrowser: () => void;
   onAddBrowserInProfile: (profileId: string) => void;
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
@@ -314,6 +317,14 @@ function RightPanelEmptyState(props: {
   const [highlight, setHighlight] = useState(-1);
 
   const actions = [
+    {
+      label: "Notebook",
+      icon: NotebookPen,
+      shortcut: "N",
+      available: props.onAddNotebook !== undefined,
+      disabledReason: "Notebooks are only available from a saved thread.",
+      onClick: () => props.onAddNotebook?.(),
+    },
     {
       label: "Browser",
       icon: Globe2,
@@ -552,6 +563,8 @@ function surfaceTitle(
       );
     case "pull-request":
       return `#${surface.number}`;
+    case "notebook":
+      return "Notebook";
     case "pull-requests":
       return "Pull requests";
     case "device":
@@ -642,6 +655,8 @@ function SurfaceIcon({
           seed={pullRequestStatusSeed}
         />
       );
+    case "notebook":
+      return <NotebookPen className="size-3 shrink-0" />;
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "device":
@@ -1009,6 +1024,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   };
 
   const addSurfaceActions = [
+    {
+      label: "Notebook",
+      icon: NotebookPen,
+      shortcut: "N",
+      available: props.onAddNotebook !== undefined,
+      disabledReason: "Notebooks are only available from a saved thread.",
+      onClick: () => props.onAddNotebook?.(),
+    },
     {
       label: "Browser",
       icon: Globe2,
@@ -1436,6 +1459,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddNotebook={props.onAddNotebook}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddDevice={props.onAddDevice}
