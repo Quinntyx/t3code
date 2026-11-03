@@ -7,6 +7,7 @@ import {
   removeCatalogValue,
   replaceCatalogValue,
   Persistence,
+  type StoredDiscoverMembership,
 } from "@t3tools/client-runtime/platform";
 import { TokenStore } from "@t3tools/client-runtime/authorization";
 import {
@@ -25,6 +26,8 @@ import * as CatalogStore from "./catalog-store";
 
 function targetPersistenceError(
   operation:
+    | "load-discovery-membership"
+    | "save-discovery-membership"
     | "list-targets"
     | "list-disabled-targets"
     | "register-connection"
@@ -48,6 +51,21 @@ export const layer = Layer.effectContext(
         catalog.update((document) => ({ ...document, githubRoutingPermissions })),
     });
 
+    const discoverMembershipStore = {
+      load: catalog.read.pipe(
+        Effect.map((document) => document.discoverMembership ?? null),
+        Effect.mapError((error) => targetPersistenceError("load-discovery-membership", error)),
+      ),
+      save: (membership: StoredDiscoverMembership | null) =>
+        catalog
+          .update((document) => {
+            const { discoverMembership: _previous, ...rest } = document;
+            return membership === null ? rest : { ...rest, discoverMembership: membership };
+          })
+          .pipe(
+            Effect.mapError((error) => targetPersistenceError("save-discovery-membership", error)),
+          ),
+    } satisfies Context.Service.Shape<typeof Persistence.DiscoverMembershipStore>;
     const targetStore = Persistence.ConnectionTargetStore.of({
       list: catalog.read.pipe(
         Effect.map((document) => document.targets),
@@ -150,6 +168,7 @@ export const layer = Layer.effectContext(
         })),
     });
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
+      Context.add(Persistence.DiscoverMembershipStore, discoverMembershipStore),
       Context.add(PullRequestRoutingPermissions, githubRoutingPermissions),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),

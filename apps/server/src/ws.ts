@@ -4,6 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as DiscoveryHost from "./discover/DiscoveryHost.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1344,6 +1345,7 @@ export const layerWsRpc = (
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const peerLinks = yield* PeerLinks.PeerLinks;
+      const discoveryHost = yield* DiscoveryHost.DiscoveryHost;
       const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -2521,6 +2523,9 @@ export const layerWsRpc = (
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
+        [WS_METHODS.discoverStatus]: () => discoveryHost.status(),
+        [WS_METHODS.discoverConfigure]: (input) => discoveryHost.configure(input),
+        [WS_METHODS.discoverRevoke]: () => discoveryHost.revoke(),
         [WS_METHODS.peerLinksList]: (_input) =>
           peerLinks.list.pipe(Effect.map((links) => ({ links }))),
         [WS_METHODS.peerLinksLink]: (input) => peerLinks.link(input),
@@ -3289,6 +3294,7 @@ export const layer = Layer.unwrap(
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
+    const discoveryHost = yield* DiscoveryHost.DiscoveryHost;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3370,6 +3376,7 @@ export const layer = Layer.unwrap(
                 ),
               ),
               Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+              Layer.provide(Layer.succeed(DiscoveryHost.DiscoveryHost, discoveryHost)),
               Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

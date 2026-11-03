@@ -1,5 +1,7 @@
 import {
   AuthEnvironmentMaintainScope,
+  AuthStandardClientScopes,
+  clientRpcRequiredScopes,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
   AuthProvidersManageScope,
@@ -68,6 +70,10 @@ describe("RPC authorization scopes", () => {
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalOperateScope);
     }
+  });
+
+  it("requires every delegated scope before configuring discovery sharing", () => {
+    expect(clientRpcRequiredScopes("discover.configure", {})).toEqual(AuthStandardClientScopes);
   });
 
   it("rejects unknown RPC method names", () => {

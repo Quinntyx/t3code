@@ -1,0 +1,28 @@
+{
+  "name": "t3discover",
+  "version": "0.1.0",
+  "bin": {
+    "t3discover": "dist/bin.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "scripts": {
+    "start": "node src/bin.ts",
+    "build": "vp pack",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run --config ../../vite.config.ts"
+  },
+  "dependencies": {
+    "@t3tools/contracts": "workspace:*",
+    "@t3tools/shared": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
