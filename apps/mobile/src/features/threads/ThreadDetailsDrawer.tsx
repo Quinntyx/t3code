@@ -1,5 +1,6 @@
+import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { AuthFilesystemReadScope, EnvironmentId } from "@t3tools/contracts";
+import { AuthFilesystemReadScope, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Clipboard from "expo-clipboard";
 import { useState, type ReactNode } from "react";
 import {
@@ -60,6 +61,7 @@ export function ThreadDetailsDrawer(props: {
 
 // Read-only facts sit at the top; the actions people reach for most sit in a dock under the thumb.
 function ThreadDetailsContent(props: DetailsProps) {
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { closeDrawer } = useThreadDetailsDrawer();
   const controls = props.gitControls;
@@ -125,6 +127,23 @@ function ThreadDetailsContent(props: DetailsProps) {
             ))}
           </ListSection>
         ) : null}
+
+        <ListSection title="Notebook">
+          <ListRow
+            icon="doc.text"
+            label="Notebook"
+            description="Read-only cells and outputs"
+            disabled={!hasThread}
+            onPress={() =>
+              navigate(() =>
+                navigation.navigate("ThreadNotebook", {
+                  environmentId: EnvironmentId.make(String(controls.environmentId)),
+                  threadId: ThreadId.make(String(controls.threadId)),
+                }),
+              )
+            }
+          />
+        </ListSection>
 
         <ManageSection {...props} git={git} hasThread={hasThread} navigate={navigate} />
 

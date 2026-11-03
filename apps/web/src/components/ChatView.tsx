@@ -3918,6 +3918,11 @@ export default function ChatView(props: ChatViewProps) {
           onAddTerminal={addTerminalSurfaceStable}
           onAddDiff={addDiffSurfaceStable}
           onAddFiles={addFilesSurfaceStable}
+          onAddNotebook={
+            isServerThread
+              ? () => useRightPanelStore.getState().open(activeThreadRef, "notebook")
+              : undefined
+          }
           onAddPullRequest={addPullRequestSurfaceStable}
           onAddPullRequests={addPullRequestsSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}

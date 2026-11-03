@@ -1,3 +1,5 @@
+import { useNavigation } from "@react-navigation/native";
+import { useThreadListDrawer } from "./thread-list-drawer";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -20,7 +22,7 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
 import { useMemo, useRef, useState } from "react";
 import type { LayoutChangeEvent, TextInputInstance } from "react-native";
-import { Platform, StyleSheet, TextInput, View } from "react-native";
+import { Platform, Pressable, StyleSheet, TextInput, View } from "react-native";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useEnabledNavigationTabs } from "../workspace/navigation-tabs";
@@ -144,6 +146,8 @@ function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
 function ThreadNavigationSidebarPane(
   props: ThreadNavigationSidebarProps & { readonly nativeChrome: boolean },
 ) {
+  const navigation = useNavigation();
+  const { closeDrawer } = useThreadListDrawer();
   const floatingTabsEnabled = useAndroidFloatingTabs();
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const drawerColor = materialTheme["--color-drawer"];
@@ -154,6 +158,9 @@ function ThreadNavigationSidebarPane(
   const floatingTabs = floatingTabsMetrics(enabledTabs.length + 1, scale, fabSize, props.width);
   const projects = useProjects();
   const threads = useNavigationThreadShells();
+  const selectedThread = threads.find(
+    (thread) => scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey,
+  );
   const { showHidden, setShowHidden } = useHiddenThreads();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -863,6 +870,28 @@ function ThreadNavigationSidebarPane(
           </SwipeableScrollGateProvider>
         )}
       </View>
+
+      {selectedThread ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open thread notebook"
+          className="min-h-11 flex-row items-center gap-3 border-t border-border px-5 py-3"
+          onPress={() => {
+            closeDrawer();
+            navigation.navigate("ThreadNotebook", {
+              environmentId: selectedThread.environmentId,
+              threadId: selectedThread.id,
+            });
+          }}
+        >
+          <SymbolView
+            name="doc.text"
+            size={18}
+            tintColorClassName="accent-drawer-foreground-muted"
+          />
+          <Text className="text-sm text-drawer-foreground">Notebook</Text>
+        </Pressable>
+      ) : null}
 
       {Platform.OS === "android" ? (
         <ThreadListToolbar
