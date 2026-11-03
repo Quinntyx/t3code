@@ -247,6 +247,7 @@ export function derivePendingBackgroundWork(input: {
   /** Excludes rolled-back runs; optional only when the caller already filtered them, as SQL shell reads do. */
   readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
   readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
+  readonly awaitedScheduledTaskIds?: ReadonlyArray<string> | undefined;
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const hasActiveRun =
     input.hasActiveRun ??
@@ -257,8 +258,16 @@ export function derivePendingBackgroundWork(input: {
   if (hasActiveRun) {
     return [];
   }
+  const scheduledTasks: Array<PendingBackgroundWorkTask> = (
+    input.awaitedScheduledTaskIds ?? []
+  ).map((taskId) => ({
+    taskId,
+    description: "Scheduled follow-up",
+    kind: "monitor",
+    awaited: true,
+  }));
   if (input.latestRun == null) {
-    return pullRequestWatchTasks(input.pullRequests);
+    return [...pullRequestWatchTasks(input.pullRequests), ...scheduledTasks];
   }
   if (!isLatestRunSettledForBackgroundWait(input.latestRun)) {
     return [];
@@ -297,7 +306,8 @@ export function derivePendingBackgroundWork(input: {
     byTaskId.set(taskId, pendingTaskFromTurnItem(taskId, item));
   }
 
-  for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
+  for (const task of [...pullRequestWatchTasks(input.pullRequests), ...scheduledTasks])
+    byTaskId.set(task.taskId, task);
 
   return Array.from(byTaskId.values());
 }

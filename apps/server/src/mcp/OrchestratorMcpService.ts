@@ -170,6 +170,13 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpCreateThreadsInput,
   ) => Effect.Effect<OrchestratorMcpCreateThreadsResult, OrchestratorMcpFailure>;
+  readonly awaitBackgroundTasks: (
+    scope: McpInvocationScope,
+    input: { readonly taskIds: ReadonlyArray<string>; readonly waiting?: boolean | undefined },
+  ) => Effect.Effect<
+    { readonly matched: ReadonlyArray<string>; readonly unmatched: ReadonlyArray<string> },
+    OrchestratorMcpFailure
+  >;
   readonly scheduleTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpScheduleTaskInput,
@@ -1840,6 +1847,33 @@ const make = Effect.gen(function* () {
   });
 
   return OrchestratorMcpService.of({
+    awaitBackgroundTasks: Effect.fn("OrchestratorMcpService.awaitBackgroundTasks")(
+      function* (scope, input) {
+        const caller = yield* requireThreadScope(scope, "t3_background_wait");
+        const threadId = caller.thread.threadId;
+        const awaited = input.waiting ?? true;
+        const scheduled = yield* scheduledTasks
+          .awaitTasks({ threadId, taskIds: input.taskIds, awaited })
+          .pipe(Effect.mapError((cause) => failure("orchestration_error", cause.message)));
+        if (scheduled.unmatched.length === 0) return scheduled;
+        const native = yield* threadManagement
+          .awaitBackgroundTasks({ threadId, taskIds: scheduled.unmatched, awaited })
+          .pipe(
+            Effect.catch((cause) =>
+              scheduled.matched.length > 0 &&
+              (cause.reason === "unsupported" || cause.reason === "unavailable")
+                ? Effect.succeed({ matched: [], unmatched: scheduled.unmatched })
+                : Effect.fail(
+                    failure(
+                      cause.reason === "unsupported" ? "invalid_request" : "orchestration_error",
+                      cause.message,
+                    ),
+                  ),
+            ),
+          );
+        return { matched: [...scheduled.matched, ...native.matched], unmatched: native.unmatched };
+      },
+    ),
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
