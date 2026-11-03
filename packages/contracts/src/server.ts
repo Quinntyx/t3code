@@ -263,6 +263,7 @@ export const ServerProvider = Schema.Struct({
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
   updateState: Schema.optionalKey(ServerProviderUpdateState),
+  canUpdateExtensions: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
@@ -860,6 +861,7 @@ export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,
   targetVersion: Schema.optionalKey(TrimmedNonEmptyString),
   instanceId: Schema.optionalKey(ProviderInstanceId),
+  extensionsOnly: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 

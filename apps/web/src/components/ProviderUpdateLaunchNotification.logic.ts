@@ -117,10 +117,30 @@ export function isProviderUpdateActive(provider: Pick<ServerProvider, "updateSta
   return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
 }
 
-export function collectProviderUpdateCandidates(
+function collectProviderUpdateCandidates(
   providers: ReadonlyArray<ServerProvider>,
 ): ProviderUpdateCandidate[] {
   return dedupeProvidersByDriver(providers.filter(isProviderUpdateCandidate));
+}
+
+export function collectProviderMaintenanceCandidates(providers: ReadonlyArray<ServerProvider>) {
+  const updates = collectProviderUpdateCandidates(providers).filter((candidate) =>
+    canOneClickUpdateProviderCandidate(candidate, providers),
+  );
+  const updatingInstances = new Set(updates.map((candidate) => candidate.instanceId));
+  return [
+    ...updates.map((candidate) => ({ ...candidate, extensionsOnly: false })),
+    ...providers
+      .filter(
+        (candidate) =>
+          candidate.enabled &&
+          candidate.installed &&
+          candidate.canUpdateExtensions === true &&
+          !isProviderUpdateActive(candidate) &&
+          !updatingInstances.has(candidate.instanceId),
+      )
+      .map((candidate) => ({ ...candidate, extensionsOnly: true })),
+  ];
 }
 
 export function isProviderSettingsUpdateCandidate(

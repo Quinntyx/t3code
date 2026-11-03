@@ -10,6 +10,7 @@ import { AsyncResult } from "effect/reactivity";
 
 import {
   canOneClickUpdateProviderCandidate,
+  collectProviderMaintenanceCandidates,
   getProviderUpdateRunToastView,
   getProviderUpdateSidebarPillView,
   hasOneClickUpdateProviderCandidate,
@@ -71,6 +72,41 @@ function updateCandidate(input: Parameters<typeof provider>[0]): ProviderUpdateC
 }
 
 describe("provider update launch notification logic", () => {
+  it("includes current extensions for every instance without repeating shared CLI updates", () => {
+    const pi = {
+      ...provider({ driver: driver("pi"), advisoryStatus: "current" }),
+      canUpdateExtensions: true,
+    };
+    const claude = { ...provider({ driver: driver("claudeAgent") }), canUpdateExtensions: true };
+    const candidates = collectProviderMaintenanceCandidates([
+      pi,
+      { ...pi, instanceId: instanceId("pi-work") },
+      { ...pi, instanceId: instanceId("disabled"), enabled: false },
+      { ...pi, instanceId: instanceId("missing"), installed: false },
+      {
+        ...pi,
+        instanceId: instanceId("running"),
+        updateState: {
+          status: "running",
+          startedAt: checkedAt,
+          finishedAt: null,
+          message: "Updating",
+          output: null,
+        },
+      },
+      claude,
+      { ...claude, instanceId: instanceId("claude-work") },
+      provider({ driver: driver("codex"), advisoryStatus: "current" }),
+    ]);
+    expect(
+      candidates.map(({ instanceId, extensionsOnly }) => [instanceId, extensionsOnly]),
+    ).toEqual([
+      [instanceId("claudeAgent"), false],
+      [instanceId("pi"), true],
+      [instanceId("pi-work"), true],
+      [instanceId("claude-work"), true],
+    ]);
+  });
   it("disables one-click updates when provider instances disagree on the update command", () => {
     const candidate = updateCandidate({
       driver: driver("claudeAgent"),

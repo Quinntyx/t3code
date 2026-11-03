@@ -123,8 +123,16 @@ details** to include the error in a bug report.
 
 **Settings → Providers** shows provider updates for the selected environment.
 **Update all** updates every outdated provider on every connected environment
-at once. Hover it to see which providers it will update. Providers that only
-offer a manual update command are not included.
+at once. Hover it to see which providers it will update. CLI updates that
+require a manual command are not included.
+
+Bulk updates also run `pi update --extensions` for Pi and refresh Claude Code's
+marketplaces before updating its installed user-scope plugins. Each enabled
+provider instance uses its own configuration, even if its CLI is already current.
+These updates cover environment-level packages, not project-local extensions or
+plugins. Use **Settings → Providers → Update all** to update extensions when no
+CLI or T3 Code update is available. Extension failures appear in the provider's
+update status; they are not reported as a successful CLI-only update.
 
 After a successful provider CLI update, T3 Code refreshes model discovery for
 every enabled instance of that provider using its own configuration. Connected

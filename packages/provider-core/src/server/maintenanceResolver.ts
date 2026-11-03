@@ -82,6 +82,7 @@ export interface ProviderMaintenanceCapabilitiesResolver {
 export interface PackageManagedProviderMaintenanceDefinition {
   readonly provider: ProviderDriverKind;
   readonly npmPackageName: string;
+  readonly extensionUpdateArgs?: ReadonlyArray<string>;
   readonly nativeUpdate: {
     readonly args: ReadonlyArray<string>;
     readonly isCommandPath?: (commandPath: string) => boolean;
@@ -693,7 +694,28 @@ export function makePackageManagedProviderMaintenanceResolver(
   definition: PackageManagedProviderMaintenanceDefinition,
 ): ProviderMaintenanceCapabilitiesResolver {
   return {
-    resolve: (context) => resolvePackageManagedProviderMaintenance(definition, context),
+    resolve: Effect.fn("resolvePackageManagedProviderMaintenanceWithExtensions")(
+      function* (context) {
+        const capabilities = yield* resolvePackageManagedProviderMaintenance(definition, context);
+        if (!context || !definition.extensionUpdateArgs) return capabilities;
+        const args = definition.extensionUpdateArgs;
+        return {
+          ...capabilities,
+          updateExtensions: {
+            command: [
+              quoteUpdateExecutable(context.resolvedCommandPath, context.platform),
+              ...args,
+            ].join(" "),
+            executable: context.resolvedCommandPath,
+            args,
+            lockKey: capabilities.update?.lockKey ?? `provider-extensions:${definition.provider}`,
+            env: context.env,
+            // Environment maintenance must not pick up the server checkout's project packages.
+            cwd: yield* HostProcess.HomeDirectory,
+          },
+        };
+      },
+    ),
   };
 }
 
@@ -911,6 +933,7 @@ export const enrichProviderSnapshotWithVersionAdvisory = Effect.fn(
   if (!shouldResolveLatestVersion) {
     return {
       ...snapshot,
+      canUpdateExtensions: capabilities.updateExtensions !== undefined,
       versionAdvisory: createProviderVersionAdvisory({
         driver: snapshot.driver,
         currentVersion,
@@ -923,6 +946,7 @@ export const enrichProviderSnapshotWithVersionAdvisory = Effect.fn(
   const latestVersion = yield* resolveLatestProviderVersion(capabilities);
   return {
     ...snapshot,
+    canUpdateExtensions: capabilities.updateExtensions !== undefined,
     versionAdvisory: createProviderVersionAdvisory({
       driver: snapshot.driver,
       currentVersion,

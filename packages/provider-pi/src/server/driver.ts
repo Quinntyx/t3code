@@ -48,6 +48,7 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@earendil-works/pi-coding-agent",
   nativeUpdate: { args: ["update", "--self"] },
+  extensionUpdateArgs: ["update", "--extensions"],
 });
 
 export type PiDriverEnv =

@@ -84,6 +84,7 @@ function isClaudeNativeCommandPath(commandPath: string): boolean {
 const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@anthropic-ai/claude-code",
+  extensionUpdateArgs: ["plugin", "marketplace", "update"],
   nativeUpdate: {
     args: ["update"],
     isCommandPath: isClaudeNativeCommandPath,
@@ -144,18 +145,26 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       enabled,
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
     } satisfies ClaudeSettings;
+    const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
     const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
       resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
-        env: processEnv,
+        env: { ...processEnv, CLAUDE_CONFIG_DIR: configDir },
       }).pipe(
+        Effect.map((capabilities) => ({
+          ...capabilities,
+          ...(capabilities.updateExtensions
+            ? {
+                updateExtensions: { ...capabilities.updateExtensions, cwd: stateDir },
+              }
+            : {}),
+        })),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       ),
     );
     const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig, processEnv);
-    const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
     const accountConfigPath = yield* ClaudeResetCredits.claudeAccountConfigPath(
       effectiveConfig.homePath.trim() || processEnv.CLAUDE_CONFIG_DIR?.trim()
         ? configDir
