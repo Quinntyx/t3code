@@ -83,9 +83,10 @@ const make = Effect.gen(function* () {
               if (key === "T3_THREAD_ID" || key.startsWith("T3_PYCELLS_")) delete environment[key];
             }
             Object.assign(environment, integrationEnvironment(recipe.threadId));
+            if (process.versions.electron) environment.ELECTRON_RUN_AS_NODE = "1";
             // This spawn runs in the server, never through the provider's scoped spawner.
             const child = NodeChildProcess.spawn(
-              "node",
+              process.execPath,
               [entry, "--socket", recipe.socketPath, "--root", root],
               {
                 cwd: root,

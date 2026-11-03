@@ -101,6 +101,7 @@ it.live(
           environment: {
             ...process.env,
             READY_SOCKET: readyPath,
+            PATH: root,
             PYCELLS_TEST_EXTRA: "preserved",
             T3_THREAD_ID: "wrong",
             T3_PYCELLS_SOCKET: "/tmp/wrong.sock",
@@ -123,6 +124,7 @@ it.live(
             request(env.T3_PYCELLS_LAUNCH_SOCKET!, recipe),
           ]),
         );
+        expect(responses.every((response) => response.result?.pid !== undefined)).toBe(true);
         const child = yield* Effect.promise(() => ready);
         expect(responses.map((response) => response.result?.pid)).toEqual([child.pid, child.pid]);
         expect(child).toMatchObject({

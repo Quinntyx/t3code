@@ -7,7 +7,8 @@ export const PycellsNotebookOutput = Schema.Union([
     kind: Schema.Literal("image"),
     mimeType: Schema.Literals(["image/png", "image/jpeg", "image/gif", "image/webp"]),
     data: Schema.String.check(
-      Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+      Schema.isPattern(/^[A-Za-z0-9+/]*={0,2}$/),
+      Schema.makeFilter((data) => data.length % 4 === 0 || "Invalid base64 length."),
     ),
   }),
   Schema.Struct({ kind: Schema.Literal("error"), text: Schema.String }),

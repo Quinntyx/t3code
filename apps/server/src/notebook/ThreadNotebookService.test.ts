@@ -130,7 +130,7 @@ describe("thread notebooks", () => {
       const image = {
         kind: "image",
         mimeType: "image/png",
-        data: Buffer.alloc(3 * 1024 * 1024).toString("base64"),
+        data: Buffer.alloc(6 * 1024 * 1024).toString("base64"),
       };
       const large = {
         ...snapshot,
