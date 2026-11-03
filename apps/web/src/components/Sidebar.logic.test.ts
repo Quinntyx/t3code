@@ -603,23 +603,29 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Completed", pulse: false });
   });
 
-  it("shows failed, not completed, when the unseen run failed", () => {
-    expect(
-      resolveThreadStatusPill({
-        thread: {
-          ...baseThread,
-          interactionMode: "default",
-          latestRun: { ...makeLatestRun(), status: "failed" },
-          lastVisitedAt: "2026-03-09T10:04:00.000Z",
-          runtime: {
-            ...baseThread.runtime,
-            status: "failed",
-            activeRunId: null,
-            lastError: "Provider turn failed.",
+  it("shows failed, not completed or waiting, when the unseen run failed", () => {
+    for (const pendingBackgroundTasks of [
+      [],
+      [{ taskId: "scheduled-task:training", kind: "monitor" as const, awaited: true as const }],
+    ]) {
+      expect(
+        resolveThreadStatusPill({
+          thread: {
+            ...baseThread,
+            interactionMode: "default",
+            latestRun: { ...makeLatestRun(), status: "failed" },
+            lastVisitedAt: "2026-03-09T10:04:00.000Z",
+            pendingBackgroundTasks,
+            runtime: {
+              ...baseThread.runtime,
+              status: "failed",
+              activeRunId: null,
+              lastError: "Provider turn failed.",
+            },
           },
-        },
-      }),
-    ).toMatchObject({ label: "Failed", pulse: false });
+        }),
+      ).toMatchObject({ label: "Failed", pulse: false });
+    }
   });
 
   it("shows failed, not plan ready, when a plan run proposed a plan and then failed", () => {

@@ -3,6 +3,7 @@ import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
@@ -308,7 +309,14 @@ const layerScheduledTasksTest = ScheduledTaskService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      Layer.unwrap(
+        Effect.map(ProjectionStore.ProjectionStoreV2, (store) =>
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: (threadId, fields, filter) =>
+              store.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+          }),
+        ),
+      ).pipe(Layer.provide(ProjectionStore.layer)),
       Layer.mock(SecretRequests.SecretRequests)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -332,6 +340,7 @@ const layerProjectDeletionTest = Layer.mergeAll(
   RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
   RuntimeLayer.layerEventSink,
+  EffectOutbox.layer,
   ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provide(
@@ -636,6 +645,175 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerPlatformTest),
 );
+
+it.layer(layerProjectDeletionTest)("automation waiting", (it) => {
+  it.effect("keeps a bound automation awaited across check-ins and releases its lifecycle", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("automation-wait");
+      const otherThreadId = ThreadId.make("automation-wait-other");
+      const projectId = ProjectId.make("automation-wait-project");
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const projects = yield* ProjectService.ProjectService;
+      yield* projects.create({
+        commandId: CommandId.make("automation-wait-project-create"),
+        projectId,
+        title: "Automation waiting",
+        workspaceRoot: "/work/automation-waiting",
+      });
+      for (const id of [threadId, otherThreadId]) {
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: id,
+          projectId,
+          title: "Training follow-up",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+        });
+      }
+      const dependencies = Layer.mergeAll(
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.succeed(ThreadManagementService.ThreadManagementService, threads),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        Scheduler.layer,
+        NodeCrypto.layer,
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const input = {
+          id: ScheduledTaskId.make("scheduled-task:training"),
+          title: "Training",
+          prompt: "Check training progress",
+          enabled: true,
+          schedule: { type: "interval" as const, everyMs: 1_800_000 },
+          projectId,
+          threadId,
+          workspaceStrategy: { type: "root" as const },
+          modelSelection,
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          createdBy: "agent" as const,
+          creationSource: "mcp" as const,
+        };
+        yield* service.upsert(input);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          [],
+        );
+        const awaitTask = (awaited = true) =>
+          service.awaitTasks({ threadId, taskIds: [input.id], awaited });
+        assert.deepEqual(
+          yield* service.awaitTasks({
+            threadId: otherThreadId,
+            taskIds: [input.id],
+            awaited: true,
+          }),
+          {
+            matched: [],
+            unmatched: [input.id],
+          },
+        );
+        assert.deepEqual(yield* awaitTask(), { matched: [input.id], unmatched: [] });
+        const expected = [
+          {
+            taskId: input.id,
+            description: "Scheduled follow-up",
+            kind: "monitor" as const,
+            awaited: true as const,
+          },
+        ];
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          expected,
+        );
+        for (const ordinal of [1, 2]) {
+          yield* TestClock.adjust(1);
+          const fired = yield* service.runNow({ id: input.id });
+          assert.equal(fired.task.lastRunStatus, "succeeded", fired.task.lastRunError ?? undefined);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          const run = projection.runs.at(-1)!;
+          assert.equal(projection.messages.at(-1)?.scheduledTaskId, input.id);
+          assert.deepEqual(
+            (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+            [],
+          );
+          yield* outbox.cancelUnsettled({
+            threadId,
+            effectTypes: ["provider-turn.start"],
+            reason: "provider execution is outside this scheduler test",
+          });
+          const now = yield* DateTime.now;
+          yield* eventSink.write({
+            commandId: CommandId.make(`complete:automation-wait:${ordinal}`),
+            events: [
+              {
+                id: EventId.make(`complete:automation-wait:${ordinal}`),
+                type: "run.updated",
+                threadId,
+                occurredAt: now,
+                payload: { ...run, status: "completed", completedAt: now },
+              },
+            ],
+          });
+          assert.deepEqual(
+            (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+            expected,
+          );
+        }
+        yield* awaitTask(false);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          [],
+        );
+        yield* awaitTask();
+        yield* service.setEnabled({ id: input.id, enabled: false });
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          [],
+        );
+        assert.deepEqual((yield* awaitTask()).matched, []);
+        yield* service.setEnabled({ id: input.id, enabled: true });
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          [],
+        );
+        yield* awaitTask();
+        yield* service.upsert({ ...input, threadId: otherThreadId });
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          [],
+        );
+        yield* service.upsert(input);
+        yield* awaitTask();
+        yield* service.delete({ id: input.id });
+        assert.deepEqual(
+          (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+          [],
+        );
+        assert.deepEqual((yield* awaitTask()).unmatched, [input.id]);
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(ScheduledTaskService.layer).pipe(
+            Layer.provide(dependencies),
+            Layer.provide(SqlitePersistence.layerMemory),
+          ),
+        ),
+      );
+    }),
+  );
+});
 
 it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
   const seedFailingRollbackThread = (name: string) =>

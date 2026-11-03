@@ -75,6 +75,7 @@ export function idleCompactionWindow(
       providerThreads,
       turnItems,
       activeProviderThreadId: thread.activeProviderThreadId,
+      awaitedScheduledTaskIds: thread.awaitedScheduledTaskIds,
     }).length > 0
   )
     return null;

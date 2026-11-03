@@ -1179,6 +1179,15 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  if (hasUnseenFailure(thread)) {
+    return {
+      label: "Failed",
+      colorClass: "text-red-600 dark:text-red-300/90",
+      dotClass: "bg-red-500 dark:bg-red-300/90",
+      pulse: false,
+    };
+  }
+
   if (
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
@@ -1196,15 +1205,6 @@ export function resolveThreadStatusPill(input: {
           dotClass: "bg-sidebar-muted-foreground",
           pulse: false,
         };
-  }
-
-  if (hasUnseenFailure(thread)) {
-    return {
-      label: "Failed",
-      colorClass: "text-red-600 dark:text-red-300/90",
-      dotClass: "bg-red-500 dark:bg-red-300/90",
-      pulse: false,
-    };
   }
 
   const hasPlanReadyPrompt =

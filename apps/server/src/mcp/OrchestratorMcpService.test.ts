@@ -72,6 +72,81 @@ const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
 );
 
 describe("OrchestratorMcpService", () => {
+  it.effect("routes automation waits independently of native background-task support", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("automation-caller");
+      const automationId = "scheduled-task:training";
+      let nativeSupported = false;
+      const dependencies = Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          awaitBackgroundTasks: (input) =>
+            nativeSupported
+              ? Effect.succeed({ matched: input.taskIds, unmatched: [] })
+              : Effect.fail(
+                  new ThreadManagementService.ThreadManagementBackgroundWaitError({
+                    threadId,
+                    reason: "unsupported",
+                  }),
+                ),
+        }),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+          awaitTasks: (input) =>
+            Effect.succeed({
+              matched: input.taskIds.filter((id) => id === automationId),
+              unmatched: input.taskIds.filter((id) => id !== automationId),
+            }),
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        ServerSettings.layerTest(),
+        NodeServices.layer,
+      );
+      const scope: McpInvocationScope = {
+        environmentId: EnvironmentId.make("automation-environment"),
+        requestNamespace: "automation-session",
+        thread: {
+          threadId,
+          providerSessionId: "automation-session",
+          providerInstanceId: ProviderInstanceId.make("pi"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        assert.deepEqual(yield* service.awaitBackgroundTasks(scope, { taskIds: [automationId] }), {
+          matched: [automationId],
+          unmatched: [],
+        });
+        assert.deepEqual(
+          yield* service.awaitBackgroundTasks(scope, {
+            taskIds: [automationId, "native-task"],
+            waiting: false,
+          }),
+          {
+            matched: [automationId],
+            unmatched: ["native-task"],
+          },
+        );
+        const unsupported = yield* service
+          .awaitBackgroundTasks(scope, { taskIds: ["native-task"] })
+          .pipe(Effect.flip);
+        assert.equal(unsupported.code, "invalid_request");
+        nativeSupported = true;
+        assert.deepEqual(
+          yield* service.awaitBackgroundTasks(scope, { taskIds: [automationId, "native-task"] }),
+          {
+            matched: [automationId, "native-task"],
+            unmatched: [],
+          },
+        );
+      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(dependencies))));
+    }),
+  );
   it.effect("retries terminal acknowledgement with a fresh command id", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-ack-parent");

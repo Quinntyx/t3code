@@ -34,6 +34,43 @@ describe("waitingOnAgents", () => {
 });
 
 describe("derivePendingBackgroundWork", () => {
+  it("keeps scheduled follow-ups awaited between runs without masking active work", () => {
+    const input = {
+      providerThreads: [],
+      turnItems: [],
+      awaitedScheduledTaskIds: ["scheduled-task:training"],
+    };
+    const expected = [
+      {
+        taskId: "scheduled-task:training",
+        description: "Scheduled follow-up",
+        kind: "monitor",
+        awaited: true,
+      },
+    ];
+    expect(derivePendingBackgroundWork({ ...input, latestRun: null })).toEqual(expected);
+    expect(
+      derivePendingBackgroundWork({
+        ...input,
+        latestRun: { id: "check-1" as never, ordinal: 1, status: "completed" },
+      }),
+    ).toEqual(expected);
+    expect(
+      derivePendingBackgroundWork({
+        ...input,
+        latestRun: { id: "check-2" as never, ordinal: 2, status: "completed" },
+      }),
+    ).toEqual(expected);
+    expect(derivePendingBackgroundWork({ ...input, latestRun: null, hasActiveRun: true })).toEqual(
+      [],
+    );
+    expect(
+      derivePendingBackgroundWork({
+        ...input,
+        latestRun: { id: "check-2" as never, ordinal: 2, status: "running" },
+      }),
+    ).toEqual([]);
+  });
   it("takes each subagent item's instance from its joined owner", () => {
     const owner = ProviderInstanceId.make("claude-owner");
     const tasks = derivePendingBackgroundWork({

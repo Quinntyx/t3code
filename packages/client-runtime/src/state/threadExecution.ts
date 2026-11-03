@@ -241,6 +241,7 @@ export function deriveThreadStructureRuntime(
       activeProviderThreadId: projection.thread.activeProviderThreadId,
       runs: projection.runs,
       pullRequests: projection.thread.pullRequests,
+      awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
     }),
   );
   // A pull request watch can hold a thread that never ran.
