@@ -308,6 +308,12 @@ function PullRequestAuthorChoices({
             Anyone
           </span>
         </MenuRadioItem>
+        <MenuRadioItem value="me">
+          <span className="flex min-w-0 items-center gap-2">
+            <UserRoundIcon aria-hidden className="size-3.5" />
+            Me
+          </span>
+        </MenuRadioItem>
         {visible.map((option) => (
           <MenuRadioItem key={option.actor.login.toLowerCase()} value={option.actor.login}>
             <span className="flex min-w-0 items-center gap-2">
@@ -348,7 +354,7 @@ function PullRequestAuthorFilter({
         <UserRoundIcon aria-hidden className="size-3.5" />
         <span className="flex-1">Author</span>
         <span className="min-w-0 max-w-32 truncate text-xs text-muted-foreground">
-          {value ?? "Anyone"}
+          {value === "me" ? "Me" : (value ?? "Anyone")}
         </span>
       </MenuSubTrigger>
       <MenuSubPopup>

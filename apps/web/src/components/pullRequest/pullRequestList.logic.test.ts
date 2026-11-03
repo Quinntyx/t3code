@@ -791,6 +791,7 @@ describe("filter picker choices", () => {
     expect(selectedPullRequestAuthor(loaded, [], "juliana")?.actor.login).toBe("juliana");
     expect(selectedPullRequestAuthor(loaded, hosted, "JULIUS")?.count).toBe(4);
     expect(selectedPullRequestAuthor(loaded, hosted, undefined)).toBeUndefined();
+    expect(selectedPullRequestAuthor(loaded, hosted, "me")).toBeUndefined();
   });
 
   it("puts the host's authors after the first loaded matches rather than after all of them", () => {
