@@ -83,6 +83,8 @@ export interface EventSinkV2Shape {
      * The batch must not also change that run's lifecycle.
      */
     readonly updateDelegatedCompletionOnly?: boolean;
+    /** Fills missing usage-limit reset times without overwriting concurrent provider updates. */
+    readonly fillUsageLimitResetAtOnly?: boolean;
     readonly unlessNativeThreadOwned?: Pick<
       OrchestrationV2ProviderThread,
       "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
@@ -407,6 +409,42 @@ const layerBase: Layer.Layer<
       );
     });
 
+    // Merge inside the write transaction; a provider may supply its own reset after the sweep reads.
+    const fillUsageLimitResetAtOnly = Effect.fnUntraced(function* (
+      events: ReadonlyArray<OrchestrationV2DomainEvent>,
+    ) {
+      const updates: Array<OrchestrationV2DomainEvent> = [];
+      for (const event of events) {
+        if (
+          event.type !== "turn-item.updated" ||
+          event.payload.type !== "error" ||
+          event.payload.failure.class !== "usage_limit" ||
+          event.payload.failure.resetAt == null
+        )
+          continue;
+        const current = yield* projectionStore.getTurnItem({
+          threadId: event.threadId,
+          itemId: event.payload.id,
+        });
+        if (
+          current?.type !== "error" ||
+          current.status !== "failed" ||
+          current.runId !== event.payload.runId ||
+          current.failure.class !== "usage_limit" ||
+          current.failure.resetAt != null
+        )
+          continue;
+        updates.push({
+          ...event,
+          payload: {
+            ...current,
+            failure: { ...current.failure, resetAt: event.payload.failure.resetAt },
+          },
+        });
+      }
+      return updates;
+    });
+
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
     ) {
@@ -434,9 +472,11 @@ const layerBase: Layer.Layer<
           }
           // Checkpoint capture can finish after a cohort writer reads its parent run.
           // Merge in this transaction so the event log and projection keep that completion.
-          const events = input.updateDelegatedCompletionOnly
-            ? yield* updateDelegatedCompletionOnly(input.events, () => true)
-            : input.events;
+          const events = input.fillUsageLimitResetAtOnly
+            ? yield* fillUsageLimitResetAtOnly(input.events)
+            : input.updateDelegatedCompletionOnly
+              ? yield* updateDelegatedCompletionOnly(input.events, () => true)
+              : input.events;
           const normalized = yield* normalizeEvents(
             input.guardPendingUserInputCancellations === true
               ? yield* guardUserInputCancellations(events)

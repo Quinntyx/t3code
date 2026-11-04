@@ -1,5 +1,8 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
-import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import {
+  layer as layerUsageLimitRecovery,
+  limitRecoveryCommand,
+} from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -32,6 +35,8 @@ import {
   RunId,
   ScheduledTaskId,
   ThreadId,
+  UsageLimitSourceId,
+  type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -54,6 +59,8 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -6636,12 +6643,113 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
                     message: "Plan limit reached.",
                     code: "usageLimitExceeded",
                     retryable: null,
-                    resetAt,
+                    resetAt: null,
                   },
                 },
               },
             ],
           });
+          let sources: ReadonlyArray<UsageLimitSourceSnapshot> = [];
+          let sweep: Effect.Effect<void> = Effect.void;
+          yield* Layer.build(
+            layerUsageLimitRecovery.pipe(
+              Layer.provide(IdAllocator.layer),
+              Layer.provide(layerTestProviderInstanceRegistry),
+              Layer.provide(
+                ServerSettings.layerTest({
+                  autoResumeLimitedThreads: false,
+                  snoozeLimitedThreads: false,
+                }),
+              ),
+              Layer.provide(
+                Layer.mock(UsageLimitSources.UsageLimitSources)({
+                  current: Effect.sync(() => sources),
+                }),
+              ),
+              Layer.provide(
+                Layer.succeed(Scheduler.Scheduler, {
+                  register: <E, R>(_name: string, work: Effect.Effect<void, E, R>) =>
+                    Effect.gen(function* () {
+                      const context = yield* Effect.context<R>();
+                      sweep = Effect.provideContext(work, context).pipe(Effect.orDie);
+                    }),
+                }),
+              ),
+            ),
+          );
+          yield* sweep;
+          assert.isNull((yield* orchestrator.getThreadShell(threadId))?.usageLimitResetAt);
+          sources = [
+            {
+              id: UsageLimitSourceId.make("hub"),
+              kind: "cliproxy",
+              label: "CLIProxyAPI",
+              checkedAt: createdAt,
+              accounts: [
+                {
+                  id: "claude-account",
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  usageLimits: {
+                    checkedAt: createdAt,
+                    windows: [
+                      {
+                        id: "five_hour",
+                        kind: "session",
+                        label: "Session",
+                        usedPercent: 100,
+                        resetsAt: DateTime.formatIso(DateTime.add(now, { minutes: 2 })),
+                      },
+                    ],
+                  },
+                },
+                {
+                  id: "codex-account",
+                  driver,
+                  usageLimits: {
+                    checkedAt: createdAt,
+                    windows: [
+                      {
+                        id: "primary",
+                        kind: "session",
+                        label: "Session",
+                        usedPercent: 100,
+                        resetsAt: resetAt,
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ];
+          yield* sweep;
+          const reconciled = yield* orchestrator.getThreadProjection(threadId);
+          const failure = reconciled.turnItems.find((item) => item.type === "error");
+          assert.equal(failure?.type === "error" ? failure.failure.resetAt : null, resetAt);
+          assert.isNull(reconciled.thread.limitRecovery ?? null);
+          const repairedSequence = yield* events.latestSequence({ threadId });
+          yield* sweep;
+          assert.equal(yield* events.latestSequence({ threadId }), repairedSequence);
+          assert.isDefined(failure);
+          yield* events.writeWithEffects({
+            fillUsageLimitResetAtOnly: true,
+            events: [
+              {
+                id: EventId.make(`manual-resume:stale-reset:${reason}`),
+                type: "turn-item.updated",
+                threadId,
+                occurredAt: now,
+                payload: {
+                  ...failure,
+                  failure: {
+                    ...failure.failure,
+                    resetAt: DateTime.formatIso(DateTime.add(now, { minutes: 5 })),
+                  },
+                },
+              },
+            ],
+            effects: [],
+          });
+          assert.equal(yield* events.latestSequence({ threadId }), repairedSequence);
           const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
             (thread) => thread.id === threadId,
           )!;

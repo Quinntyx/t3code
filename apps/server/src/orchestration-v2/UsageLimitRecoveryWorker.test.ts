@@ -1,12 +1,16 @@
 import { type OrchestrationV2DomainEvent, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -21,8 +25,13 @@ const verifySweep = (event: OrchestrationV2DomainEvent) =>
         Layer.mergeAll(
           Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
             getLimitRecoveryCandidates: () => Queue.offer(sweeps, undefined).pipe(Effect.as([])),
           }),
+          Layer.mock(IdAllocator.IdAllocatorV2)({}),
+          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+          Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+          Layer.mock(EventSink.EventSinkV2)({}),
           Layer.mock(ThreadManagement.ThreadManagementService)({}),
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(events),

@@ -236,6 +236,7 @@ it.effect("enriches quota failures and refreshes the failing instance", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const refreshed = yield* Deferred.make<void>();
+      const sourcesRefreshed = yield* Deferred.make<void>();
       const adapter = yield* ProviderAdapter.ProviderAdapterV2.pipe(
         Effect.provide(
           Layer.mock(ProviderAdapter.ProviderAdapterV2)({
@@ -272,6 +273,7 @@ it.effect("enriches quota failures and refreshes the failing instance", () =>
       };
       let currentSnapshot = snapshot;
       const sources = Layer.mock(UsageLimitSources.UsageLimitSources)({
+        refresh: Deferred.succeed(sourcesRefreshed, undefined).pipe(Effect.asVoid),
         current: Effect.succeed([
           {
             id: UsageLimitSourceId.make("hub"),
@@ -355,6 +357,7 @@ it.effect("enriches quota failures and refreshes the failing instance", () =>
         for (const [failureClass, reportedResetAt, usageLimits, model, expectedResetAt] of [
           ["validation_error", undefined, snapshot.usageLimits, "claude-opus-4-6", undefined],
           ["usage_limit", undefined, snapshot.usageLimits, "claude-opus-4-6", resetAt],
+          ["usage_limit", null, snapshot.usageLimits, "claude-opus-4-6", resetAt],
           [
             "usage_limit",
             "2026-09-04T12:00:00.000Z",
@@ -384,11 +387,14 @@ it.effect("enriches quota failures and refreshes the failing instance", () =>
               runOrdinal: 1,
               failureItemOrdinal: 1,
               status: "failed",
-              failure: makeProviderFailure({
-                class: failureClass,
-                message: "Provider rejected turn.",
-                resetAt: reportedResetAt ?? null,
-              }),
+              failure: {
+                ...makeProviderFailure({
+                  class: failureClass,
+                  message: "Provider rejected turn.",
+                  resetAt: reportedResetAt ?? null,
+                }),
+                ...(reportedResetAt === null ? { resetAt: null } : {}),
+              },
               threadDisposition: "reusable",
             },
           });
@@ -406,11 +412,14 @@ it.effect("enriches quota failures and refreshes the failing instance", () =>
                 driver: instance.driverKind,
                 turnItem: {
                   ...item,
-                  failure: makeProviderFailure({
-                    class: failureClass,
-                    message: "Provider rejected turn.",
-                    resetAt: reportedResetAt ?? null,
-                  }),
+                  failure: {
+                    ...makeProviderFailure({
+                      class: failureClass,
+                      message: "Provider rejected turn.",
+                      resetAt: reportedResetAt ?? null,
+                    }),
+                    ...(reportedResetAt === null ? { resetAt: null } : {}),
+                  },
                 },
               },
             });
@@ -429,6 +438,7 @@ it.effect("enriches quota failures and refreshes the failing instance", () =>
         }
         assert.isTrue(lookups.every((id) => id === instance.instanceId));
         yield* Deferred.await(refreshed);
+        yield* Deferred.await(sourcesRefreshed);
       }).pipe(
         Effect.provide(makeLayerTest(layerTestEventSink, instances).pipe(Layer.provide(sources))),
       );
