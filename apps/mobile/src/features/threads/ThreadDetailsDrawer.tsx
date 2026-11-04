@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { Button } from "../../components/ui/Button";
 import { FloatingHeaderButtonBackdrop } from "../../components/ui/FloatingHeaderButtonBackdrop";
 import { ListRow } from "../../components/ui/ListRow";
 import { ListSection } from "../../components/ui/ListSection";
@@ -362,69 +363,41 @@ function ActionDock(
     AuthFilesystemReadScope,
   );
   const latestTerminal = controls.terminalSessions.at(-1);
-  const showGit = hasThread && git.isRepo && git.menuItems.length > 0;
-
-  const [commit, push, pr] = git.menuItems;
-  const branchPrUrl = git.gitStatus?.pr?.state === "open" ? git.gitStatus.pr.url : null;
-  const linkedPr = git.linkedPrLines.find(
-    (line) => line.link.snapshot === null || line.link.snapshot.state === "open",
-  )?.link;
-  const prUrl = branchPrUrl ?? linkedPr?.url ?? null;
-  const prNumber = branchPrUrl ? git.gitStatus?.pr?.number : linkedPr?.number;
-  const pull = git.behindCount > 0;
-  const gitTiles = showGit
-    ? [
-        commit && {
-          key: "commit",
-          icon: "checkmark.circle" as const,
-          label: commit.item.label,
-          detail: commit.statusDetail,
-          disabled: commit.item.disabled,
-          onPress: () => void git.onPressMenuItem(commit.item),
-        },
-        pull
-          ? {
-              key: "pull",
-              icon: "arrow.down.circle" as const,
-              label: "Pull",
-              detail: `${git.behindCount} behind`,
-              disabled: !git.canWriteSourceControl || git.busy,
-              onPress: git.pull,
-            }
-          : push && {
-              key: "push",
-              icon: "arrow.up.circle" as const,
-              label: push.item.label,
-              detail: push.statusDetail,
-              disabled: push.item.disabled,
-              onPress: () => void git.onPressMenuItem(push.item),
-            },
-        prUrl
-          ? {
-              key: "pr",
-              icon: PullRequestGlyph.pullRequest,
-              label: `Open ${git.terminology.shortLabel}`,
-              detail: prNumber != null ? `#${prNumber}` : undefined,
-              disabled: false,
-              onPress: () => void git.openUrl(prUrl),
-            }
-          : pr && {
-              key: "pr",
-              icon: "arrow.up.right.circle" as const,
-              label: pr.item.label,
-              detail: pr.statusDetail,
-              disabled: pr.item.disabled,
-              onPress: () => void git.onPressMenuItem(pr.item),
-            },
-      ].filter((tile) => !!tile)
-    : [];
-  const primaryKey = gitTiles.find((tile) => !tile.disabled)?.key;
+  const showGit = hasThread && git.isRepo;
+  const { quickAction } = git;
+  const quickActionIcon: AppSymbolName =
+    quickAction.kind === "run_pull"
+      ? "arrow.down.circle"
+      : quickAction.action === "commit"
+        ? "checkmark.circle"
+        : quickAction.action === "push" || quickAction.action === "commit_push"
+          ? "arrow.up.circle"
+          : "arrow.up.right.circle";
 
   return (
     <View
       className="gap-2 border-t border-header-border px-3 pt-3"
       style={{ paddingBottom: Math.max(insets.bottom, 12) }}
     >
+      {showGit ? (
+        <View className="gap-1">
+          <Button
+            label={quickAction.label}
+            icon={quickActionIcon}
+            tone="primary"
+            fullWidth
+            disabled={quickAction.disabled}
+            loading={git.busy}
+            accessibilityHint={quickAction.hint}
+            onPress={() => void git.runQuickAction()}
+          />
+          {quickAction.disabled && quickAction.hint ? (
+            <Text textRole="caption" className="text-center text-foreground-muted">
+              {quickAction.hint}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
       <View className="flex-row gap-2">
         {props.onReturnToThread ? (
           <DockTile
@@ -461,13 +434,6 @@ function ActionDock(
           />
         ) : null}
       </View>
-      {gitTiles.length > 0 ? (
-        <View className="flex-row gap-2">
-          {gitTiles.map(({ key, ...tile }) => (
-            <DockTile key={key} {...tile} primary={key === primaryKey} />
-          ))}
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -477,10 +443,8 @@ function DockTile(props: {
   readonly label: string;
   readonly detail?: string | undefined;
   readonly disabled?: boolean;
-  readonly primary?: boolean;
   readonly onPress: () => void;
 }) {
-  const primary = props.primary && !props.disabled;
   return (
     <Pressable
       accessibilityRole="button"
@@ -489,29 +453,16 @@ function DockTile(props: {
       disabled={props.disabled}
       onPress={props.onPress}
       className={cn(
-        "min-h-16 min-w-0 flex-1 items-center justify-center gap-1 rounded-2xl px-2 py-2 active:opacity-70",
-        primary ? "bg-primary" : "bg-grouped-card",
+        "min-h-16 min-w-0 flex-1 items-center justify-center gap-1 rounded-2xl bg-grouped-card px-2 py-2 active:opacity-70",
         props.disabled && "opacity-40",
       )}
     >
-      <SymbolView
-        name={props.icon}
-        size={20}
-        tintColorClassName={primary ? "accent-primary-foreground" : "accent-icon"}
-      />
-      <Text
-        textRole="label"
-        numberOfLines={1}
-        className={cn("font-t3-medium", primary ? "text-primary-foreground" : "text-foreground")}
-      >
+      <SymbolView name={props.icon} size={20} tintColorClassName="accent-icon" />
+      <Text textRole="label" numberOfLines={1} className="font-t3-medium text-foreground">
         {props.label}
       </Text>
       {props.detail ? (
-        <Text
-          textRole="caption"
-          numberOfLines={1}
-          className={primary ? "text-primary-foreground" : "text-foreground-muted"}
-        >
+        <Text textRole="caption" numberOfLines={1} className="text-foreground-muted">
           {props.detail}
         </Text>
       ) : null}
