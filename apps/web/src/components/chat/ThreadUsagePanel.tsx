@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 import { resolveSubagentMetadata } from "@t3tools/client-runtime/state/subagent-display";
@@ -6,15 +7,20 @@ import type {
   EnvironmentId,
   ProviderDriverKind,
   ServerProvider,
+  ServerProviderUsageWindow,
+  ThreadConsumptionCap,
+  ThreadConsumptionCapHit,
   ThreadId,
   ThreadUsageGroup,
   ThreadUsageModel,
 } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
 import { ChevronDownIcon, GaugeIcon, UsersIcon } from "lucide-react";
-import { useState } from "react";
+import { type MouseEvent, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
+import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import {
   deriveProviderInstanceEntries,
@@ -24,11 +30,19 @@ import {
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { revisionedQuery } from "../../state/revisionedQuery";
+import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
+import { threadEnvironment } from "../../state/threads";
+import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { formatDayAwareTimestamp, formatShortTimestamp } from "../../timestampFormat";
 import { ThreadUsageChart, type ThreadUsageChartSeries } from "../usage/ThreadUsageChart";
 import { PROVIDER_PRESENTATION } from "../usage/usageProviders";
+import { toastManager } from "../ui/toast";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import {
+  ThreadConsumptionCapDialog,
+  type ThreadConsumptionCapRow,
+} from "./ThreadConsumptionCapDialog";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import {
@@ -43,6 +57,39 @@ const GROUP_LABEL: Record<ThreadUsageGroup, string> = {
   main: "Main agent",
   delegates: "Delegates",
 };
+
+const WINDOW_KIND_LABEL = {
+  session: "5h",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  other: "Window",
+} as const;
+
+function isFiveHourOrWeekly(window: ServerProviderUsageWindow): boolean {
+  return (
+    window.kind === "session" ||
+    window.kind === "weekly" ||
+    window.windowDurationMins === 300 ||
+    window.windowDurationMins === 10_080
+  );
+}
+
+function consumptionCapSummary(
+  cap: ThreadConsumptionCap | null,
+  hit: ThreadConsumptionCapHit | null,
+): string {
+  if (hit !== null) return hit.reason;
+  if (cap === null) return "Right-click to set a cap";
+  if (cap.mode === "api") {
+    return cap.totalLimitUsd !== undefined
+      ? `${formatUsd(cap.totalLimitUsd)} total`
+      : `${cap.rules.length} model${cap.rules.length === 1 ? "" : "s"}`;
+  }
+  const [first] = cap.rules;
+  if (first === undefined) return "No quota";
+  const label = first.windowLabel ?? WINDOW_KIND_LABEL[first.windowKind ?? "other"];
+  return `${label} ${first.atPercent ?? "?"}%${cap.rules.length > 1 ? ` +${cap.rules.length - 1}` : ""}`;
+}
 
 function providerColor(driver: ProviderDriverKind): string {
   return (
@@ -211,6 +258,11 @@ export function ThreadUsagePanel(props: {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ?? EMPTY_PROVIDERS;
   const [open, setOpen] = useState<ReadonlySet<ThreadUsageGroup>>(() => new Set());
+  const [capOpen, setCapOpen] = useState(false);
+  const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
+  const updateMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   // Delegates report back through the parent's runs, so its run state is enough to refetch on.
   const revision =
     shell === null
@@ -230,7 +282,8 @@ export function ThreadUsagePanel(props: {
       revision,
     ),
   );
-  if (data === null || data.startedAt === null || data.models.length === 0) return null;
+  if (data === null) return null;
+  const hasUsage = data.startedAt !== null && data.models.length > 0;
 
   const entries = deriveProviderInstanceEntries(providers);
   const present = (
@@ -251,6 +304,95 @@ export function ThreadUsagePanel(props: {
         entry.accentColor !== undefined &&
         shouldShowInstanceBadge(entry, entries),
     };
+  };
+  const cap = shell?.consumptionCap ?? null;
+  const capHit = shell?.consumptionCapHit ?? null;
+  const usageWindows = (providerInstanceId: string): ReadonlyArray<ServerProviderUsageWindow> =>
+    (
+      providers.find((provider) => provider.instanceId === providerInstanceId)?.usageLimits
+        ?.windows ?? []
+    ).filter(isFiveHourOrWeekly);
+  const capRows: ThreadConsumptionCapRow[] = (() => {
+    const rows = new Map<
+      string,
+      {
+        readonly model: Pick<ThreadUsageModel, "providerInstanceId" | "driver" | "model">;
+        costUsd: number | null;
+      }
+    >();
+    for (const model of data.models) {
+      const key = `${model.providerInstanceId}\u0000${model.model}`;
+      const existing = rows.get(key);
+      if (existing === undefined) {
+        rows.set(key, { model, costUsd: model.costUsd });
+      } else if (existing.costUsd !== null || model.costUsd !== null) {
+        existing.costUsd = (existing.costUsd ?? 0) + (model.costUsd ?? 0);
+      }
+    }
+    for (const rule of cap?.rules ?? []) {
+      const key = `${rule.providerInstanceId}\u0000${rule.model}`;
+      if (!rows.has(key)) rows.set(key, { model: rule, costUsd: null });
+    }
+    if (rows.size === 0 && shell !== null) {
+      const provider = providers.find(
+        (candidate) => candidate.instanceId === shell.modelSelection.instanceId,
+      );
+      if (provider !== undefined) {
+        rows.set(`${provider.instanceId}\u0000${shell.modelSelection.model}`, {
+          model: {
+            providerInstanceId: provider.instanceId,
+            driver: provider.driver,
+            model: shell.modelSelection.model,
+          },
+          costUsd: null,
+        });
+      }
+    }
+    return [...rows.entries()].map(([key, { model, costUsd }]) => {
+      const presentation = present(model);
+      return {
+        key,
+        providerInstanceId: model.providerInstanceId,
+        driver: model.driver,
+        model: model.model,
+        label: presentation.label,
+        icon: <ModelIcon model={model} presentation={presentation} />,
+        costUsd,
+        windows: usageWindows(model.providerInstanceId),
+      };
+    });
+  })();
+  const handleContextMenu = (event: MouseEvent<HTMLElement>) => {
+    if (!canOperate) return;
+    const api = readLocalApi();
+    if (!api) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const items = [
+      {
+        id: "edit" as const,
+        label: cap === null ? "Set consumption cap…" : "Edit consumption cap…",
+      },
+      ...(cap === null
+        ? []
+        : [{ id: "remove" as const, label: "Remove consumption cap", destructive: true }]),
+    ];
+    void api.contextMenu.show(items, { x: event.clientX, y: event.clientY }).then((action) => {
+      if (action === "edit") setCapOpen(true);
+      if (action !== "remove") return;
+      void updateMetadata({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, consumptionCap: null },
+      }).then((result) => {
+        if (result._tag === "Success") return;
+        const cause = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Could not remove consumption cap",
+          description: cause instanceof Error ? cause.message : "An error occurred.",
+        });
+      });
+    });
   };
   const byTokens = (left: ThreadUsageModel, right: ThreadUsageModel) =>
     right.totalTokens - left.totalTokens;
@@ -278,35 +420,70 @@ export function ThreadUsagePanel(props: {
       headingId="thread-details-usage-heading"
       title="Usage"
       showHeading={false}
+      onContextMenu={handleContextMenu}
     >
       <div className="flex flex-col">
         <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
           <GaugeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
           <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Usage</span>
-          <UsageFigures models={data.models} />
+          {hasUsage ? (
+            <UsageFigures models={data.models} />
+          ) : (
+            <span className="text-xs text-muted-foreground">No usage yet</span>
+          )}
         </div>
-        <div className="px-2.5 pt-1 pb-2">
-          <ThreadUsageChart
-            series={series}
-            startedAt={data.startedAt}
-            bucketMs={data.bucketMs}
-            compactedAt={data.compactedAt}
-            endLabel={shell?.runtime?.activeRunId ? "Now" : null}
-            formatTime={(iso) => formatShortTimestamp(iso, timestampFormat)}
-            formatTooltipTime={(iso) => formatDayAwareTimestamp(iso, timestampFormat)}
+        {hasUsage && data.startedAt !== null ? (
+          <div className="px-2.5 pt-1 pb-2">
+            <ThreadUsageChart
+              series={series}
+              startedAt={data.startedAt}
+              bucketMs={data.bucketMs}
+              compactedAt={data.compactedAt}
+              endLabel={shell?.runtime?.activeRunId ? "Now" : null}
+              formatTime={(iso) => formatShortTimestamp(iso, timestampFormat)}
+              formatTooltipTime={(iso) => formatDayAwareTimestamp(iso, timestampFormat)}
+            />
+          </div>
+        ) : null}
+        <div
+          className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex min-w-0 items-center")}
+          onContextMenu={handleContextMenu}
+        >
+          <GaugeIcon
+            aria-hidden
+            className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, capHit !== null && "text-warning")}
           />
+          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Cap</span>
+          <span
+            className={cn(
+              "min-w-0 max-w-[62%] truncate text-xs tabular-nums",
+              capHit !== null ? "text-warning" : "text-muted-foreground",
+            )}
+          >
+            {consumptionCapSummary(cap, capHit)}
+          </span>
         </div>
-        {(["main", "delegates"] as const).map((group) => (
-          <UsageGroupRow
-            key={group}
-            group={group}
-            models={groupModels(group)}
-            present={present}
-            open={open.has(group)}
-            onToggle={() => toggle(group)}
-          />
-        ))}
+        {hasUsage
+          ? (["main", "delegates"] as const).map((group) => (
+              <UsageGroupRow
+                key={group}
+                group={group}
+                models={groupModels(group)}
+                present={present}
+                open={open.has(group)}
+                onToggle={() => toggle(group)}
+              />
+            ))
+          : null}
       </div>
+      <ThreadConsumptionCapDialog
+        open={capOpen}
+        onOpenChange={setCapOpen}
+        environmentId={props.environmentId}
+        threadId={props.threadId}
+        cap={cap}
+        rows={capRows}
+      />
     </ThreadDetailsSection>
   );
 }

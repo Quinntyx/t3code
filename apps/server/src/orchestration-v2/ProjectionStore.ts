@@ -184,6 +184,11 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "snoozedUntil"
 >;
 
+export interface ProjectionConsumptionCapCandidate {
+  readonly thread: OrchestrationV2AppThread;
+  readonly activeRunId: RunId | null;
+}
+
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
   "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pullRequests"
@@ -475,6 +480,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
+  readonly getConsumptionCapCandidates: () => Effect.Effect<
+    ReadonlyArray<ProjectionConsumptionCapCandidate>,
+    ProjectionStoreV2Error
+  >;
   readonly getLimitRecoveryCandidates: (options: {
     readonly now: DateTime.Utc;
     readonly autoResume: boolean;
@@ -1772,6 +1781,12 @@ function shellFromState(input: {
     ...(input.state.thread.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: input.state.thread.delegatedFrom }),
+    ...(input.state.thread.consumptionCap === undefined
+      ? {}
+      : { consumptionCap: input.state.thread.consumptionCap }),
+    ...(input.state.thread.consumptionCapHit === undefined
+      ? {}
+      : { consumptionCapHit: input.state.thread.consumptionCapHit }),
     latestRunId: input.state.latestRunId,
     latestRunRequestedAt: input.state.latestRunRequestedAt,
     latestRunStartedAt: input.state.latestRunStartedAt,
@@ -3738,6 +3753,44 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               : new ProjectionStoreReadError({ threadId, cause }),
           ),
         ),
+    );
+
+    const getConsumptionCapCandidates = Effect.fn("ProjectionStore.getConsumptionCapCandidates")(
+      function* () {
+        const rows = yield* sql<{
+          readonly payload_json: string;
+          readonly active_run_id: string | null;
+        }>`
+        SELECT t.payload_json,
+          (
+            SELECT r.run_id FROM orchestration_v2_projection_runs r
+            WHERE r.thread_id = t.thread_id
+              AND r.status IN ('preparing', 'starting', 'running')
+            ORDER BY r.ordinal DESC
+            LIMIT 1
+          ) AS active_run_id
+        FROM orchestration_v2_projection_threads t
+        WHERE t.deleted_at IS NULL
+          AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+          AND (
+            json_extract(t.payload_json, '$.consumptionCap') IS NOT NULL
+            OR json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL
+          )
+        ORDER BY t.thread_id
+      `;
+        return yield* Effect.forEach(
+          rows,
+          (row) =>
+            decodeThreadPayload(row.payload_json).pipe(
+              Effect.map((thread) => ({
+                thread,
+                activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
+              })),
+            ),
+          { concurrency: 1 },
+        );
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
 
     const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
@@ -6815,6 +6868,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRuntimeRequest: readOnReader(getRuntimeRequest),
       getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
+      getConsumptionCapCandidates: readOnReader(getConsumptionCapCandidates),
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
       getRecoveryThreadIds: readOnReader(getRecoveryThreadIds),
       getUnreadableThreadIds: readOnReader(getUnreadableThreadIds),

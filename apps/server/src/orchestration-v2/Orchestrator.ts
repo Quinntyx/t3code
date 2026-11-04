@@ -3390,6 +3390,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ),
                 }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
+            ...(command.consumptionCap === undefined
+              ? {}
+              : { consumptionCap: command.consumptionCap, consumptionCapHit: null }),
+            ...(command.consumptionCapHit === undefined
+              ? {}
+              : { consumptionCapHit: command.consumptionCapHit }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&
             Date.parse(limitRecovery.resetAt) > DateTime.toEpochMillis(now)

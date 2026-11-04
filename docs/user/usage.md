@@ -63,6 +63,15 @@ the subagent threads it started and any those started. A group that ran more tha
 context was compacted. Only Claude Code and Codex report per-turn usage, and subagents a provider
 runs inside its own turn count toward the main agent.
 
+## Cap a thread's consumption
+
+Right-click **Usage** in the thread details card to set a cap for that thread. Choose
+**API spend** to cap its estimated API-list cost, either as a total or per model; delegates count
+toward the same thread. Choose **Usage quota** to stop the thread when a provider's 5-hour or
+weekly window reaches the percentage you set. When the cap is reached, T3 stops the thread and
+marks it **Limited**. Raise or remove the cap to continue. A model without a known price cannot
+enforce a dollar cap, and quota mode needs a provider that reports usage limits.
+
 ## Set custom model prices
 
 On web or desktop, open the environment dropdown on **Usage**, then choose **Model prices** to add,
