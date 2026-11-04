@@ -210,6 +210,8 @@ it.effect(
         ProjectionStore.ProjectionStoreV2.of({
           apply: () => Effect.void,
           getConsumptionCapCandidates: () => Effect.die("unused getConsumptionCapCandidates"),
+          getUsageLimitFailuresWithoutReset: () =>
+            Effect.die("unused getUsageLimitFailuresWithoutReset"),
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           hasActivePullRequestThread: () => Effect.die("unused hasActivePullRequestThread"),
           getLimitRecoveryWakeAt: () => Effect.die("unused getLimitRecoveryWakeAt"),

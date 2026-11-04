@@ -10,6 +10,7 @@ import {
   type ServerProviderUsageWindow,
   ThreadId,
 } from "@t3tools/contracts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,8 +20,11 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -102,9 +106,14 @@ const verifySweep = (event: OrchestrationV2DomainEvent) =>
         Layer.mergeAll(
           Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
             getLimitRecoveryCandidates: () => Queue.offer(sweeps, undefined).pipe(Effect.as([])),
             getLimitRecoveryWakeAt: () => Effect.succeed(null),
           }),
+          Layer.mock(IdAllocator.IdAllocatorV2)({}),
+          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+          Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+          Layer.mock(EventSink.EventSinkV2)({}),
           Layer.mock(ThreadManagement.ThreadManagementService)({}),
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(events),

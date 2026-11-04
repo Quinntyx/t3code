@@ -8,6 +8,8 @@ import {
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
+import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,6 +22,9 @@ import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -249,6 +254,10 @@ const makeSweep = Effect.gen(function* () {
   // A thread that failed after that report keeps its own clock, so one report cannot retry it
   // twice, and a window that is spent again clears the instance.
   const resetObservedAt = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(new Map());
+  const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const usageSources = yield* UsageLimitSources.UsageLimitSources;
+  const eventSink = yield* EventSink.EventSinkV2;
+  const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const sweep = Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
     const now = yield* DateTime.now;
     const nowMs = DateTime.toEpochMillis(now);
@@ -256,6 +265,46 @@ const makeSweep = Effect.gen(function* () {
     const readVersion = yield* due.version;
     const preferences = yield* settings.getSettings;
     const resets = yield* Ref.get(resetObservedAt);
+    const failures = yield* projections.getUsageLimitFailuresWithoutReset();
+    if (failures.length > 0) {
+      const sources = yield* usageSources.current;
+      for (const { run, item } of failures) {
+        yield* Effect.gen(function* () {
+          const instance = yield* instances.getInstance(run.providerInstanceId);
+          if (instance === undefined) return;
+          const snapshot = yield* instance.snapshot.getSnapshot;
+          const model = run.modelSelection.model;
+          const resetAt =
+            usageLimitResetAt(snapshot, nowMs, model) ??
+            usageLimitSourceResetAt(sources, instance.driverKind, nowMs, model);
+          if (resetAt === null) return;
+          yield* eventSink.writeWithEffects({
+            fillUsageLimitResetAtOnly: true,
+            events: [
+              {
+                id: yield* idAllocator.allocate.event({ threadId: item.threadId }),
+                type: "turn-item.updated",
+                threadId: item.threadId,
+                runId: run.id,
+                nodeId: item.nodeId ?? undefined,
+                driver: instance.driverKind,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: now,
+                payload: { ...item, failure: { ...item.failure, resetAt } },
+              },
+            ],
+            effects: [],
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("orchestration-v2.limit-recovery.reset-reconciliation-failed", {
+              threadId: item.threadId,
+              cause,
+            }),
+          ),
+        );
+      }
+    }
     const candidates = yield* projections.getLimitRecoveryCandidates({
       now,
       autoResume: preferences.autoResumeLimitedThreads,
