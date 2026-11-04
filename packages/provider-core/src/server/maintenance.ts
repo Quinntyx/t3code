@@ -5,6 +5,7 @@ export interface ProviderMaintenanceCapabilities {
   readonly provider: ProviderDriverKind;
   readonly packageName: string | null;
   readonly update: ProviderMaintenanceCommandAction | null;
+  readonly updateExtensions?: ProviderMaintenanceCommandAction;
   /** undefined defers to npm; null means the installer could not determine the latest version. */
   readonly latestVersion?: string | null;
   /**
@@ -24,4 +25,5 @@ export interface ProviderMaintenanceCommandAction {
   readonly lockKey: string;
   /** Native updaters must use the instance's custom home (e.g. `CODEX_HOME`). */
   readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
 }

@@ -128,7 +128,7 @@ function layerMockSpawner(
   handler: (
     command: string,
     args: ReadonlyArray<string>,
-    options: { readonly env?: NodeJS.ProcessEnv | undefined },
+    options: { readonly env?: NodeJS.ProcessEnv | undefined; readonly cwd?: string | undefined },
   ) => {
     readonly stdout?: string;
     readonly stderr?: string;
@@ -142,7 +142,10 @@ function layerMockSpawner(
       const childProcess = command as unknown as {
         readonly command: string;
         readonly args: ReadonlyArray<string>;
-        readonly options: { readonly env?: NodeJS.ProcessEnv | undefined };
+        readonly options: {
+          readonly env?: NodeJS.ProcessEnv | undefined;
+          readonly cwd?: string | undefined;
+        };
       };
       return Effect.succeed(
         mockHandle(handler(childProcess.command, childProcess.args, childProcess.options)),
@@ -277,6 +280,120 @@ describe("providerMaintenanceRunner", () => {
       ),
     );
   });
+
+  it.effect("updates instance extensions and reports failures instead of CLI-only success", () =>
+    Effect.gen(function* () {
+      for (const scenario of [
+        "pi",
+        "claude",
+        "invalid-list",
+        "plugin-failure",
+        "extension-failure",
+        "extensions-only",
+      ] as const) {
+        const provider = ProviderDriverKind.make(
+          scenario === "pi" || scenario === "extension-failure" || scenario === "extensions-only"
+            ? "pi"
+            : "claudeAgent",
+        );
+        const instanceId = ProviderInstanceId.make(`${provider}-work`);
+        const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+        const env = {
+          PI_CODING_AGENT_DIR: "/work/pi-profile",
+          CLAUDE_CONFIG_DIR: "/work/claude-profile",
+        };
+        const capabilities = {
+          ...lifecycleFor(NATIVE_CLI_DRIVER),
+          provider,
+          ...(scenario === "extensions-only" ? { update: null } : {}),
+          updateExtensions: {
+            command: "extension update",
+            executable: "/work/custom-agent",
+            args:
+              provider === "pi" ? ["update", "--extensions"] : ["plugin", "marketplace", "update"],
+            lockKey: "native-agent",
+            env,
+            cwd: "/work",
+          },
+        };
+        const { registry } = yield* makeRegistry({ ...baseProvider, instanceId, driver: provider });
+        const updater = yield* makeTestRunner({
+          ...registry,
+          getProviderMaintenanceCapabilitiesForInstance: () => Effect.succeed(capabilities),
+        }).pipe(
+          Effect.provide(
+            layerMockSpawner((command, args, options) => {
+              calls.push({ command, args });
+              if (command === "native-agent") return { stdout: "CLI updated" };
+              assert.deepStrictEqual(options.env, env);
+              assert.strictEqual(options.cwd, "/work");
+              if (args[1] === "list")
+                return {
+                  stdout:
+                    scenario === "invalid-list"
+                      ? "not JSON"
+                      : JSON.stringify([
+                          { id: "formatter@marketplace", scope: "user" },
+                          { id: "disabled@marketplace", scope: "user", enabled: false },
+                          {
+                            id: "project-only@marketplace",
+                            scope: "project",
+                            projectPath: "/other/project",
+                          },
+                          { id: "local-only@marketplace", scope: "local" },
+                        ]),
+                };
+              return scenario === "extension-failure" ||
+                (scenario === "plugin-failure" && args[1] === "update")
+                ? { code: 1, stderr: "Extension fetch failed" }
+                : { stdout: "Extensions updated" };
+            }),
+          ),
+        );
+        const result = yield* updater.updateProvider({
+          provider,
+          instanceId,
+          extensionsOnly: scenario === "extensions-only",
+        });
+        assert.deepStrictEqual(calls.slice(0, scenario === "extensions-only" ? 1 : 2), [
+          ...(scenario === "extensions-only"
+            ? []
+            : [{ command: "native-agent", args: ["update"] }]),
+          { command: "/work/custom-agent", args: capabilities.updateExtensions.args },
+        ]);
+        const state = result.providers[0]?.updateState;
+        if (
+          scenario === "invalid-list" ||
+          scenario === "extension-failure" ||
+          scenario === "plugin-failure"
+        ) {
+          assert.strictEqual(state?.status, "failed");
+          assert.include(state?.message ?? "", "Extension");
+          assert.notInclude(state?.message ?? "", "Provider updated");
+        } else {
+          assert.strictEqual(state?.status, "succeeded");
+          if (scenario !== "extensions-only") assert.include(state?.output ?? "", "CLI updated");
+          assert.include(state?.output ?? "", "Extensions updated");
+        }
+        if (scenario === "claude")
+          assert.deepStrictEqual(calls.slice(2), [
+            { command: "/work/custom-agent", args: ["plugin", "list", "--json"] },
+            {
+              command: "/work/custom-agent",
+              args: ["plugin", "update", "formatter@marketplace", "--scope", "user"],
+            },
+            {
+              command: "/work/custom-agent",
+              args: ["plugin", "update", "disabled@marketplace", "--scope", "user"],
+            },
+          ]);
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(layerNonWindowsPlatform, layerLatestVersionHttpClient("0.0.0")),
+      ),
+    ),
+  );
 
   it.effect(
     "keeps a successful update when the binary is present but its version is unreadable",

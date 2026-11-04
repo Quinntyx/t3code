@@ -87,13 +87,17 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
       environmentId: machine.environmentId,
       label: machine.label,
       providers: machine.candidates.map(
-        (candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver,
+        (candidate) =>
+          `${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}${candidate.extensionsOnly ? " extensions" : ""}`,
       ),
     })),
   });
 
   return {
-    hasUpdates: servers.length > 0 || providers.machines.length > 0,
+    hasUpdates:
+      servers.length > 0 ||
+      providers.hasUpdates ||
+      (localUpdateVersion !== null && providers.machines.length > 0),
     ...view,
     restarts,
     run: async ({
