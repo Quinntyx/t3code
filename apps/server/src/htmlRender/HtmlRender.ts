@@ -485,6 +485,7 @@ const make = Effect.gen(function* () {
         width,
         urlFragment: htmlRenderThemeFragment(theme),
         appearance,
+        backgroundColor: theme.variables["--background"],
       }).pipe(Effect.provideContext(services)),
     );
     return {

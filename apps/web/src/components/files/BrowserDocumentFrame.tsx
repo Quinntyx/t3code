@@ -286,7 +286,7 @@ export function HtmlRenderDocument(props: {
         {loaded ? null : (
           <Skeleton role="status" aria-label="Loading page" className="absolute inset-0" />
         )}
-        {/* A loading frame paints an opaque canvas over the skeleton. `invisible` would stall lazy loading. */}
+        {/* Visibility would stall lazy loading, so the frame fades in over the skeleton. */}
         <iframe
           ref={frameRef}
           src={src}
