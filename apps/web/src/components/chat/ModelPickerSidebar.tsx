@@ -43,7 +43,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   selectableUnavailableInstanceIds?: ReadonlySet<ProviderInstanceId>;
   getDisabledInstanceTooltip?: (entry: ProviderInstanceEntry) => string;
   limitsByInstance?: ReadonlyMap<ProviderInstanceId, ProviderLimitsSummary>;
-  now: number;
 }) {
   const handleSelect = (instanceId: ProviderInstanceId | "favorites") => {
     props.onSelectInstance(instanceId);
@@ -258,8 +257,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                     <ProviderLimitBars
                       summary={limits}
                       driver={entry.driverKind}
-                      providerName={entry.displayName}
-                      now={props.now}
                       onSelect={select}
                     />
                   </div>
