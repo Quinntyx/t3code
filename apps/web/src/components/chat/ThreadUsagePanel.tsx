@@ -33,7 +33,7 @@ import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
-import { formatDayAwareTimestamp, formatShortTimestamp } from "../../timestampFormat";
+import { formatDayAwareTimestamp, formatUsageChartTimestamp } from "../../timestampFormat";
 import { ThreadUsageChart, type ThreadUsageChartSeries } from "../usage/ThreadUsageChart";
 import { PROVIDER_PRESENTATION } from "../usage/usageProviders";
 import { toastManager } from "../ui/toast";
@@ -420,7 +420,7 @@ export function ThreadUsagePanel(props: {
               bucketMs={data.bucketMs}
               compactedAt={data.compactedAt}
               endLabel={shell?.runtime?.activeRunId ? "Now" : null}
-              formatTime={(iso) => formatShortTimestamp(iso, timestampFormat)}
+              formatTime={(iso, spanMs) => formatUsageChartTimestamp(iso, timestampFormat, spanMs)}
               formatTooltipTime={(iso) => formatDayAwareTimestamp(iso, timestampFormat)}
             />
           </div>
