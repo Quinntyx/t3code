@@ -54,7 +54,7 @@ export function ThreadUsageChart({
   readonly bucketMs: number;
   readonly compactedAt: readonly string[];
   readonly endLabel: string | null;
-  readonly formatTime: (iso: string) => string;
+  readonly formatTime: (iso: string, spanMs: number) => string;
   readonly formatTooltipTime: (iso: string) => string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -96,6 +96,7 @@ export function ThreadUsageChart({
   };
 
   const middle = Math.floor((count - 1) / 2);
+  const spanMs = (count - 1) * bucketMs;
 
   return (
     <div className="flex flex-col gap-1">
@@ -216,9 +217,9 @@ export function ThreadUsageChart({
         </div>
       </div>
       <div className="flex justify-between ps-9.5 text-3xs text-muted-foreground uppercase">
-        <span>{formatTime(bucketIso(0))}</span>
-        <span>{formatTime(bucketIso(middle))}</span>
-        <span>{endLabel ?? formatTime(bucketIso(count - 1))}</span>
+        <span>{formatTime(bucketIso(0), spanMs)}</span>
+        <span>{formatTime(bucketIso(middle), spanMs)}</span>
+        <span>{endLabel ?? formatTime(bucketIso(count - 1), spanMs)}</span>
       </div>
     </div>
   );
