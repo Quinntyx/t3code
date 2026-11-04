@@ -5017,16 +5017,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    // Manual continuations render like restart continuations: a system row, not a user bubble.
+    // Continuation prompts are provider input, not messages authored by the user.
     const notification: OrchestrationV2Notification | undefined =
-      command.manualContinuationOfRunId === undefined
-        ? command.notification
-        : (command.notification ?? {
+      command.notification ??
+      (command.manualContinuationOfRunId !== undefined ||
+      command.usageLimitContinuationOfRunId !== undefined ||
+      command.restartContinuationOfRunId !== undefined
+        ? {
             source: { kind: "system" },
             outcome: "updated",
             summary: "T3 Code resumed",
             detail: command.text,
-          });
+          }
+        : undefined);
     if (command.usageLimitContinuationOfRunId !== undefined) {
       const run = usageLimitBlockedRun(projection.runs, projection.turnItems, null);
       const failure = latestRootProviderFailure(run, projection.turnItems);

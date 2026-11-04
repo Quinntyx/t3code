@@ -3903,18 +3903,18 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect(
-    "admits restart continuations once and rejects a stale continuation behind newer work",
-    () =>
+  it.effect.each(["default", "custom"] as const)(
+    "admits restart continuations once with %s notification and rejects a stale continuation behind newer work",
+    (notificationMode) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const eventSink = yield* EventSink.EventSinkV2;
-        const threadId = ThreadId.make("runtime-layer-restart-continuation");
+        const threadId = ThreadId.make(`runtime-layer-restart-continuation:${notificationMode}`);
         yield* orchestrator.dispatch({
           type: "thread.create",
           createdBy: "user",
           creationSource: "web",
-          commandId: CommandId.make("restart-create"),
+          commandId: CommandId.make(`restart-create:${notificationMode}`),
           threadId,
           projectId: ProjectId.make("restart-project"),
           title: "Restart",
@@ -3928,9 +3928,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           type: "message.dispatch",
           createdBy: "user",
           creationSource: "web",
-          commandId: CommandId.make("restart-user-message"),
+          commandId: CommandId.make(`restart-user-message:${notificationMode}`),
           threadId,
-          messageId: MessageId.make("restart-user-message"),
+          messageId: MessageId.make(`restart-user-message:${notificationMode}`),
           text: "Original work",
           attachments: [],
           modelSelection,
@@ -3939,13 +3939,13 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const original = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
         const now = yield* DateTime.now;
         yield* eventSink.commitCommand({
-          commandId: CommandId.make("restart-cancel"),
+          commandId: CommandId.make(`restart-cancel:${notificationMode}`),
           threadId,
           commandType: "provider-runtime.reconcile",
           acceptedAt: now,
           events: [
             {
-              id: EventId.make("restart-cancel-event"),
+              id: EventId.make(`restart-cancel-event:${notificationMode}`),
               type: "run.updated",
               threadId,
               runId: original.id,
@@ -3953,14 +3953,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               payload: { ...original, status: "cancelled", completedAt: now },
             },
             {
-              id: EventId.make("restart-cut-wake-event"),
+              id: EventId.make(`restart-cut-wake-event:${notificationMode}`),
               type: "run.created",
               threadId,
-              runId: RunId.make("restart-cut-wake"),
+              runId: RunId.make(`restart-cut-wake:${notificationMode}`),
               occurredAt: now,
               payload: {
                 ...original,
-                id: RunId.make("restart-cut-wake"),
+                id: RunId.make(`restart-cut-wake:${notificationMode}`),
                 ordinal: 2,
                 status: "cancelled",
                 startedAt: null,
@@ -3974,16 +3974,20 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           type: "message.dispatch" as const,
           createdBy: "agent" as const,
           creationSource: "server" as const,
-          commandId: CommandId.make("restart-automatic-message"),
+          commandId: CommandId.make(`restart-automatic-message:${notificationMode}`),
           threadId,
-          messageId: MessageId.make("restart-automatic-message"),
+          messageId: MessageId.make(`restart-automatic-message:${notificationMode}`),
           text: "Continue where you left off.",
-          notification: {
-            source: { kind: "system" as const },
-            outcome: "updated" as const,
-            summary: "T3 Code restarted and resumed this turn",
-            detail: "Continue where you left off.",
-          },
+          ...(notificationMode === "custom"
+            ? {
+                notification: {
+                  source: { kind: "system" as const },
+                  outcome: "updated" as const,
+                  summary: "T3 Code restarted and resumed this turn",
+                  detail: "Continue where you left off.",
+                },
+              }
+            : {}),
           attachments: [],
           modelSelection,
           dispatchMode: { type: "start_immediately" as const },
@@ -4002,16 +4006,23 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           continuationItems.flatMap((item) =>
             item.type === "notification" ? [[item.summary, item.detail]] : [],
           ),
-          ["T3 Code restarted and resumed this turn", "Continue where you left off."],
+          [
+            notificationMode === "custom"
+              ? "T3 Code restarted and resumed this turn"
+              : "T3 Code resumed",
+            "Continue where you left off.",
+          ],
         );
         yield* orchestrator.dispatch({
           ...command,
-          commandId: CommandId.make("restart-stale-race"),
-          messageId: MessageId.make("restart-stale-race"),
+          commandId: CommandId.make(`restart-stale-race:${notificationMode}`),
+          messageId: MessageId.make(`restart-stale-race:${notificationMode}`),
         });
         const raced = yield* orchestrator.getThreadProjection(threadId);
         assert.lengthOf(raced.runs, 3);
-        assert.isFalse(raced.messages.some((message) => message.id === "restart-stale-race"));
+        assert.isFalse(
+          raced.messages.some((message) => message.id === `restart-stale-race:${notificationMode}`),
+        );
       }),
   );
 
@@ -7182,6 +7193,19 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
             ? 1
             : 0),
       );
+      for (const message of after.messages.filter((message) =>
+        message.id.startsWith("limit-resume:"),
+      )) {
+        assert.deepEqual(message.notification, {
+          source: { kind: "system" },
+          outcome: "updated",
+          summary: "T3 Code resumed",
+          detail: message.text,
+        });
+        const continuationItems = after.turnItems.filter((item) => item.runId === message.runId);
+        assert.isFalse(continuationItems.some((item) => item.type === "user_message"));
+        assert.isTrue(continuationItems.some((item) => item.type === "notification"));
+      }
       if (scenario === "stop") {
         assert.deepInclude(after.thread.limitRecovery, { runId: run.id, autoResume: false });
         const projections = yield* ProjectionStore.ProjectionStoreV2;
