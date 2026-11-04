@@ -2814,6 +2814,15 @@ describe("PiAdapterV2", () => {
         ["a1b"],
       );
       assert.equal(snapshot.providerThread.id, providerThread.id);
+      // A cold bind consumes the session's one implicit registration, so the next unbound thread needs a new one.
+      const rebound = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        existingProviderThread: { ...providerThread, nativeThreadRef: null },
+      });
+      assert.isTrue(fake.allRequests().some((request) => request.type === "new_session"));
+      assert.notEqual(rebound.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

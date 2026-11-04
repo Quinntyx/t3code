@@ -2508,6 +2508,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         if (resumeId === null || resumeId === undefined || closed || stopRequested) {
           return yield* protocolError("Pi session has no registered thread");
         }
+        registrationAttempted = true;
         const switched = yield* lifecycleRequest({
           type: "switch_session",
           sessionPath: resumeId,
