@@ -455,7 +455,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const keybindings = providedKeybindings ?? serverKeybindings;
   const [searchHeight, setSearchHeight] = useState(0);
   const toggleFavorite = useToggleEnvironmentModelFavorite(props.environmentId);
-  // Read once per opening, like the limits panel: hover cards must not tick while open.
+  // Read once per opening, like the limits panel, so the bars do not tick while open.
   const [limitsNow] = useState(Date.now);
   const serverConfigs = useServerConfigs();
   const usageLimitSources =
@@ -868,7 +868,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             instanceEntries={sidebarInstanceEntries}
             showFavorites
             limitsByInstance={limitsByInstance}
-            now={limitsNow}
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
               ? {
