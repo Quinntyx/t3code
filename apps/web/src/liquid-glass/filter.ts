@@ -276,14 +276,49 @@ export function buildOutlineGlare(
 /** Masks for a traced outline: its fill, and a 1px ring just inside it for the border. */
 export function buildOutlineMasks(outline: { width: number; height: number; path: string }) {
   const { height, path, width } = outline;
-  const svg = (body: string) =>
-    `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`)}")`;
   return {
-    fill: svg(`<path d="${path}" fill="#fff"/>`),
-    ring: svg(
+    fill: svgImage(width, height, `<path d="${path}" fill="#fff"/>`),
+    ring: svgImage(
+      width,
+      height,
       `<clipPath id="inside"><path d="${path}"/></clipPath><path d="${path}" fill="none" stroke="#fff" stroke-width="2" clip-path="url(#inside)"/>`,
     ),
   };
+}
+
+function svgImage(width: number, height: number, body: string): string {
+  return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`)}")`;
+}
+
+/** How far a shaped surface's shadow reaches past its outline, in CSS pixels. */
+export const GLASS_SHADOW_MARGIN = 48;
+// Mirrors --app-float-shadow's wide layer, so shaped and plain glass sit at the same height.
+const GLASS_SHADOW_BLUR = 12;
+const GLASS_SHADOW_OFFSET_Y = 8;
+// The shadow's -8px spread: the silhouette shrinks before it blurs.
+const GLASS_SHADOW_SPREAD = 8;
+
+/**
+ * The shape's silhouette, blurred into the shadow it casts. A mask, so the shadow takes the
+ * theme's colour instead of one baked into the image. The body itself is cut out, so its own
+ * translucent fill never sits on top of its shadow.
+ */
+export function buildGlassShadowMask(outline: {
+  width: number;
+  height: number;
+  path: string;
+}): string {
+  const { height, path, width } = outline;
+  const margin = GLASS_SHADOW_MARGIN;
+  return svgImage(
+    width + margin * 2,
+    height + margin * 2,
+    `<defs>` +
+      `<filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feMorphology operator="erode" radius="${GLASS_SHADOW_SPREAD}"/><feGaussianBlur stdDeviation="${GLASS_SHADOW_BLUR}"/></filter>` +
+      `<mask id="outside"><rect width="100%" height="100%" fill="#fff"/><path d="${path}" fill="#000" transform="translate(${margin} ${margin})"/></mask>` +
+      `</defs>` +
+      `<g mask="url(#outside)"><path d="${path}" fill="#fff" filter="url(#blur)" transform="translate(${margin} ${margin + GLASS_SHADOW_OFFSET_Y})"/></g>`,
+  );
 }
 
 export function liquidGlassBackdropFilter(

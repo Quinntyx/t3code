@@ -135,6 +135,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   /* One drop shadow for every floating surface: composer, details card, floating browser, and
      floating panels. Dark mode needs a deeper shadow to read against a dark canvas. */
   --app-float-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 32px -8px rgb(0 0 0 / 12%);
+  /* A shaped composer casts one shadow from its whole body, so its colour lives here. */
+  --composer-glass-shadow-color: rgb(0 0 0 / 12%);
   --floating-panel-gap: 0.5rem;
   /* Cards share the menus' and details card's glass corner. The composer stays rounder: its
      corner follows its send button, and a matching card corner would crowd the sidebar's rows. */
@@ -180,6 +182,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --glass-blur: 16px;
     --glass-saturation: 1.08;
     --app-float-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 10px 36px -10px rgb(0 0 0 / 50%);
+    --composer-glass-shadow-color: rgb(0 0 0 / 50%);
   }
 }
 
@@ -621,6 +624,27 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   pointer-events: none;
   background: var(--glass-liquid-edge, transparent);
   mask: var(--glass-liquid-outline) 0 0 / 100% 100% no-repeat;
+}
+
+/* A shaped body casts one shadow from its whole silhouette (card, drawers, context strip),
+   instead of each part casting a clipped copy of its own box. */
+[data-slot="composer-glass-shadow"] {
+  display: none;
+}
+
+[data-liquid-glass-shaped] [data-slot="composer-glass-shadow"] {
+  display: block;
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  inset: calc(var(--glass-liquid-top) - var(--glass-liquid-shadow-margin, 0px))
+    calc(var(--glass-liquid-right) - var(--glass-liquid-shadow-margin, 0px))
+    calc(var(--glass-liquid-bottom) - var(--glass-liquid-shadow-margin, 0px))
+    calc(var(--glass-liquid-left) - var(--glass-liquid-shadow-margin, 0px));
+  background: var(--composer-glass-shadow-color);
+  /* Transparent until the engine hands over the blurred silhouette. */
+  mask: var(--glass-liquid-shadow, linear-gradient(transparent, transparent)) 0 0 / 100% 100%
+    no-repeat;
 }
 
 @utility topbar-scroll-fade {
