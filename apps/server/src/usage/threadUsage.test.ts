@@ -14,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import {
   buildThreadUsage,
   delegateThreadIds,
+  threadRunDurationMs,
   threadUsageTurns,
   type ThreadUsageRecords,
 } from "./threadUsage.ts";
@@ -61,6 +62,9 @@ function records(
       id: RunId.make(`${threadId}:run:${index}`),
       threadId: ThreadId.make(turn.runThreadId ?? threadId),
       modelSelection: { instanceId, model },
+      status: "completed",
+      startedAt: at(turn.from),
+      completedAt: at(turn.to),
     })),
     attempts: turns.map((_, index) => ({
       id: RunAttemptId.make(`${threadId}:attempt:${index}`),
@@ -120,6 +124,29 @@ describe("thread usage", () => {
         reasoningTokens: 0,
       },
     ]);
+  });
+
+  it("sums own run durations without quota gaps, inherited runs, or a usage requirement", () => {
+    const main = records("main", claude, "claude-opus-5-5", [
+      { from: 0, to: 15, usage: usage(1_000, 100) },
+      { from: 195, to: 322, usage: { ...usage(0, 0), usageStatus: "unavailable" } },
+      { from: 0, to: 300, usage: usage(1_000, 100), runThreadId: "source" },
+    ]);
+    expect(threadRunDurationMs(main, T0 + 600 * MINUTE)).toBe(142 * MINUTE);
+    expect(
+      threadRunDurationMs(
+        {
+          ...main,
+          runs: [
+            main.runs[0]!,
+            { ...main.runs[1]!, status: "running", completedAt: null },
+            { ...main.runs[2]!, threadId: main.thread.id, startedAt: null, completedAt: null },
+            { ...main.runs[2]!, threadId: main.thread.id, status: "failed", completedAt: null },
+          ],
+        },
+        T0 + 200 * MINUTE,
+      ),
+    ).toBe(20 * MINUTE);
   });
 
   it("splits a turn's tokens across the buckets it ran in and prices each group", () => {

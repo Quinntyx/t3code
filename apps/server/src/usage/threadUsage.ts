@@ -49,7 +49,12 @@ export interface ThreadUsagePricing {
 
 export interface ThreadUsageRecords {
   readonly thread: Pick<OrchestrationV2AppThread, "id">;
-  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "threadId" | "modelSelection">>;
+  readonly runs: ReadonlyArray<
+    Pick<
+      OrchestrationV2Run,
+      "id" | "threadId" | "modelSelection" | "status" | "startedAt" | "completedAt"
+    >
+  >;
   readonly attempts: ReadonlyArray<
     Pick<OrchestrationV2RunAttempt, "id" | "runId" | "providerInstanceId">
   >;
@@ -60,6 +65,25 @@ export interface ThreadUsageRecords {
       "providerThreadId" | "runAttemptId" | "startedAt" | "completedAt" | "turnTokenUsage"
     >
   >;
+}
+
+export function threadRunDurationMs(
+  records: Pick<ThreadUsageRecords, "thread" | "runs">,
+  nowMs: number,
+): number {
+  return records.runs.reduce((total, run) => {
+    if (run.threadId !== records.thread.id || run.startedAt === null) return total;
+    const endMs =
+      run.completedAt !== null
+        ? DateTime.toEpochMillis(run.completedAt)
+        : run.status === "starting" || run.status === "running" || run.status === "waiting"
+          ? nowMs
+          : null;
+    // workStartedAt can carry an earlier run's start across a continuation.
+    return endMs === null
+      ? total
+      : total + Math.max(0, endMs - DateTime.toEpochMillis(run.startedAt));
+  }, 0);
 }
 
 function usageSpeed(selection: ModelSelection): UsageSpeed {

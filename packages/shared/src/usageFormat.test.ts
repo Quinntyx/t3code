@@ -1,7 +1,15 @@
 // @effect-diagnostics globalDate:off -- A fixed instant keeps calendar-window assertions deterministic.
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { formatHourShort, makeWindow } from "./usageFormat.ts";
+import { formatHourShort, formatThreadUsageCost, makeWindow } from "./usageFormat.ts";
+
+it("shows thread cost as a floor when only some models are priced", () => {
+  expect(formatThreadUsageCost([{ costUsd: 1.25 }, { costUsd: 2.5 }])).toBe("$3.75");
+  expect(formatThreadUsageCost([{ costUsd: 1.25 }, { costUsd: null }])).toBe("$1.25+");
+  expect(formatThreadUsageCost([{ costUsd: 0 }])).toBe("$0.00");
+  expect(formatThreadUsageCost([{ costUsd: null }])).toBeNull();
+  expect(formatThreadUsageCost([])).toBeNull();
+});
 
 describe("hourly usage formatting", () => {
   it("keeps requested zones separate when formatting repeated calls", () => {

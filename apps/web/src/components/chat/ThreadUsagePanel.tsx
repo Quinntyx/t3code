@@ -16,11 +16,12 @@ import type {
   ThreadUsageModel,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
+import { formatThreadUsageCost, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
 import { ChevronDownIcon, GaugeIcon, UsersIcon } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
+import { useThreadUsage } from "../../hooks/useThreadUsage";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import {
@@ -28,9 +29,6 @@ import {
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { useQuietThreadShell } from "../../state/entities";
-import { useEnvironmentQuery } from "../../state/query";
-import { revisionedQuery } from "../../state/revisionedQuery";
 import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
@@ -106,16 +104,8 @@ function providerColor(driver: ProviderDriverKind): string {
   );
 }
 
-/** Unpriced models leave the sum short, so it reads as a floor. */
-function costLabel(models: ReadonlyArray<Pick<ThreadUsageModel, "costUsd">>): string | null {
-  const priced = models.filter((model) => model.costUsd !== null);
-  if (priced.length === 0) return null;
-  const total = formatUsd(priced.reduce((sum, model) => sum + (model.costUsd ?? 0), 0));
-  return priced.length < models.length ? `${total}+` : total;
-}
-
 function UsageFigures({ models }: { readonly models: ReadonlyArray<ThreadUsageModel> }) {
-  const cost = costLabel(models);
+  const cost = formatThreadUsageCost(models);
   return (
     <span className="flex shrink-0 items-center gap-0.5 text-xs font-normal tabular-nums">
       <span className="text-foreground/85">
@@ -261,7 +251,7 @@ export function ThreadUsagePanel(props: {
   readonly threadId: ThreadId;
 }) {
   const threadRef = scopeThreadRef(props.environmentId, props.threadId);
-  const shell = useQuietThreadShell(threadRef);
+  const { data, shell } = useThreadUsage(threadRef);
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ?? EMPTY_PROVIDERS;
@@ -271,25 +261,6 @@ export function ThreadUsagePanel(props: {
   const updateMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  // Delegates report back through the parent's runs, so its run state is enough to refetch on.
-  const revision =
-    shell === null
-      ? undefined
-      : [
-          shell.latestRun?.runId,
-          shell.latestRun?.status,
-          shell.latestRun?.completedAt,
-          shell.runtime?.status,
-        ].join(":");
-  const { data } = useEnvironmentQuery(
-    revisionedQuery(
-      serverEnvironment.threadUsage({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId },
-      }),
-      revision,
-    ),
-  );
   if (data === null) return null;
   const hasUsage = data.startedAt !== null && data.models.length > 0;
 
