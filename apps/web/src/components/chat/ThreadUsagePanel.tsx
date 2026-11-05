@@ -286,10 +286,7 @@ export function ThreadUsagePanel(props: {
       label: resolveModelShortName({ name: label }, model.driver) ?? label,
       color: entry?.accentColor ?? providerColor(model.driver),
       entry,
-      showBadge:
-        entry !== undefined &&
-        entry.accentColor !== undefined &&
-        shouldShowInstanceBadge(entry, entries),
+      showBadge: entry !== undefined && shouldShowInstanceBadge(entry, entries),
     };
   };
   const cap = shell?.consumptionCap ?? null;
