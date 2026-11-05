@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buddyRunOutcome, deriveBuddyLoop, type BuddyRunSnapshot } from "./buddy.logic";
+import {
+  BUDDY_REST_AFTER_MS,
+  buddyRunOutcome,
+  deriveBuddyLoop,
+  deriveBuddyRest,
+  restLoop,
+  restTransition,
+  type BuddyRunSnapshot,
+} from "./buddy.logic";
 
 type Shell = NonNullable<Parameters<typeof deriveBuddyLoop>[0]>;
 type Items = Parameters<typeof deriveBuddyLoop>[1];
@@ -33,8 +41,57 @@ describe("deriveBuddyLoop", () => {
     ],
     ["an approval", shell({ hasPendingApprovals: true }), [item("command_execution")], "waiting"],
     ["a question while stopped", shell({ hasPendingUserInput: true }, "idle"), [], "waiting"],
+    ["one subagent", shell(), [item("command_execution"), item("subagent")], "juggling"],
+    [
+      "two subagents",
+      shell(),
+      [item("command_execution"), item("subagent"), item("subagent")],
+      "juggling2",
+    ],
+    ["a compaction", shell(), [item("compaction")], "sweeping"],
+    ["a checkpoint", shell(), [item("command_execution"), item("checkpoint")], "carrying"],
   ] as const)("shows %s as %s", (_name, input, items, expected) => {
     expect(deriveBuddyLoop(input, items)).toBe(expected);
+  });
+
+  it.each([
+    [1, "working"],
+    [2, "working2"],
+    [3, "working3"],
+  ] as const)("uses the %i-session clip while tools run", (count, expected) => {
+    expect(deriveBuddyLoop(shell(), [item("command_execution")], count)).toBe(expected);
+  });
+});
+
+describe("deriveBuddyRest", () => {
+  it.each([
+    [0, "awake"],
+    [BUDDY_REST_AFTER_MS.restless - 1, "awake"],
+    [BUDDY_REST_AFTER_MS.restless, "restless"],
+    [BUDDY_REST_AFTER_MS.dozing, "dozing"],
+    [BUDDY_REST_AFTER_MS.sleeping, "sleeping"],
+    [BUDDY_REST_AFTER_MS.sleeping * 10, "sleeping"],
+  ] as const)("is %s after %ims", (idleForMs, expected) => {
+    expect(deriveBuddyRest(idleForMs)).toBe(expected);
+  });
+
+  it.each([
+    ["awake", "idle"],
+    ["restless", "roam"],
+    ["dozing", "dozing"],
+    ["sleeping", "sleeping"],
+  ] as const)("loops %s on %s", (rest, expected) => {
+    expect(restLoop(rest)).toBe(expected);
+  });
+
+  it.each([
+    ["awake", "restless", "yawning"],
+    ["restless", "dozing", null],
+    ["dozing", "sleeping", "collapsing"],
+    ["sleeping", "awake", "waking"],
+    ["dozing", "dozing", null],
+  ] as const)("transitions %s to %s with %s", (from, to, expected) => {
+    expect(restTransition(from, to)).toBe(expected);
   });
 });
 

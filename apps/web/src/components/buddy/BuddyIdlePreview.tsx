@@ -3,14 +3,22 @@ import { use } from "react";
 import { loadBuddyClip, type BuddyCharacter } from "./buddyCharacters";
 
 /** The character's idle loop; suspends until the clip has loaded. */
-export function BuddyIdlePreview({
+export function BuddyIdlePreview(props: { character: BuddyCharacter; height: number }) {
+  const idleUrl = props.character.clips.idle;
+  if (idleUrl === undefined) return null;
+  return <IdlePreviewClip url={idleUrl} character={props.character} height={props.height} />;
+}
+
+function IdlePreviewClip({
+  url,
   character,
   height,
 }: {
+  url: string;
   character: BuddyCharacter;
   height: number;
 }) {
-  const src = use(loadBuddyClip(character.clips.idle));
+  const src = use(loadBuddyClip(url));
   if (src === null) return null;
   return (
     <div
@@ -20,7 +28,7 @@ export function BuddyIdlePreview({
     >
       <video
         className="absolute max-w-none"
-        style={character.clipStyle}
+        style={{ width: "100%", height: "100%", left: 0, top: 0 }}
         src={src}
         autoPlay
         loop
