@@ -1,28 +1,44 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import * as Schema from "effect/Schema";
-import { Suspense, use, useEffect, useRef, useState, type PointerEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 
 import { useThreadRouteRef } from "~/hooks/useThreadRouteTarget";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
-import { useQuietThreadProjection, useQuietThreadShell } from "~/state/entities";
+import {
+  useQuietThreadProjection,
+  useQuietThreadShell,
+  useQuietThreadShells,
+} from "~/state/entities";
 
 import {
-  BUDDY_ANIMATIONS,
+  BUDDY_REST_AFTER_MS,
   buddyRunOutcome,
   clampBuddyFraction,
   deriveBuddyLoop,
+  deriveBuddyRest,
   isBuddyOneShot,
+  restLoop,
+  restTransition,
   type BuddyAnimation,
   type BuddyLoop,
   type BuddyOneShot,
   type BuddyPosition,
+  type BuddyRest,
   type BuddyRunSnapshot,
 } from "./buddy.logic";
-import { BUDDY_CHARACTERS, loadBuddyClip, type BuddyCharacter } from "./buddyCharacters";
+import {
+  BUDDY_CHARACTERS,
+  clipLoadOrder,
+  isBuddyCharacterId,
+  loadBuddyClip,
+  resolveBuddyClip,
+  type BuddyCharacter,
+} from "./buddyCharacters";
+import { useBuddyCatalog } from "./buddySources";
 
 const BUDDY_WIDTH_PX = 120;
 // Clips are hard swaps, so quick activity changes would otherwise flicker between them.
@@ -35,10 +51,17 @@ const DEFAULT_BUDDY_POSITION: BuddyPosition = { x: 0.98, y: 0.8 };
 
 export function BuddyHost() {
   const buddy = useClientSettings((settings) => settings.buddy);
+  const sources = useClientSettings((settings) => settings.buddySources);
+  const catalog = useBuddyCatalog(sources.map((source) => source.repositoryUrl));
   if (buddy === "none") return null;
+  // A downloaded buddy resolves once its source has been read.
+  const character = isBuddyCharacterId(buddy)
+    ? BUDDY_CHARACTERS[buddy]
+    : catalog.characters.get(buddy);
+  if (character === undefined) return null;
   return createPortal(
     <Suspense fallback={null}>
-      <BuddyOverlay key={buddy} character={BUDDY_CHARACTERS[buddy]} />
+      <BuddyOverlay key={buddy} character={character} />
     </Suspense>,
     document.body,
   );
@@ -63,8 +86,33 @@ function dragTarget(drag: DragState, event: PointerEvent): BuddyPosition {
   };
 }
 
+/**
+ * Clips arrive one at a time so the pet can appear on the idle loop without
+ * waiting on the other nineteen.
+ */
+function useBuddyClips(character: BuddyCharacter) {
+  const [urls, setUrls] = useState<Partial<Record<BuddyAnimation, string>>>({});
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fetches each clip blob from the network and keeps it mounted for the session
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const name of clipLoadOrder(character)) {
+        const url = character.clips[name];
+        if (url === undefined) continue;
+        const objectUrl = await loadBuddyClip(url);
+        if (cancelled) return;
+        if (objectUrl !== null) setUrls((previous) => ({ ...previous, [name]: objectUrl }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [character]);
+  return urls;
+}
+
 function BuddyOverlay({ character }: { character: BuddyCharacter }) {
-  const clipUrls = BUDDY_ANIMATIONS.map((name) => use(loadBuddyClip(character.clips[name])));
+  const loadedClips = useBuddyClips(character);
   const height = Math.round(BUDDY_WIDTH_PX / character.aspectRatio);
   const animation = useBuddyAnimation();
   const [storedPosition, setStoredPosition] = useLocalStorage(
@@ -80,17 +128,19 @@ function BuddyOverlay({ character }: { character: BuddyCharacter }) {
     y: clampBuddyFraction(storedPosition.y),
   };
 
+  // A slot without its own art borrows the nearest clip this character ships.
+  const loadedOnly: BuddyCharacter = { ...character, clips: loadedClips };
+  const requested = resolveBuddyClip(loadedOnly, animation.name);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drives the media elements: only the clip on screen plays, from its first frame
   useEffect(() => {
     for (const [name, video] of videosRef.current) {
-      if (name !== animation.name) {
-        video.pause();
-        continue;
-      }
-      video.currentTime = 0;
-      void video.play().catch(() => undefined);
+      if (name !== requested) video.pause();
     }
-  }, [animation.name]);
+    const active = videosRef.current.get(requested);
+    if (active === undefined) return;
+    active.currentTime = 0;
+    void active.play().catch(() => undefined);
+  }, [requested]);
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -143,7 +193,7 @@ function BuddyOverlay({ character }: { character: BuddyCharacter }) {
     animation.react("angry");
   };
 
-  if (clipUrls.includes(null)) return null;
+  if (loadedClips.idle === undefined) return null;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[2147483647]">
@@ -166,7 +216,7 @@ function BuddyOverlay({ character }: { character: BuddyCharacter }) {
         // A native drag of the video would cancel the pointer drag.
         onDragStart={(event) => event.preventDefault()}
       >
-        {BUDDY_ANIMATIONS.map((name, index) => (
+        {(Object.entries(loadedClips) as Array<[BuddyAnimation, string]>).map(([name, src]) => (
           <video
             key={name}
             ref={(video) => {
@@ -176,16 +226,23 @@ function BuddyOverlay({ character }: { character: BuddyCharacter }) {
                 videosRef.current.delete(name);
               };
             }}
-            className={cn("absolute max-w-none", name === animation.name ? "visible" : "invisible")}
+            className={cn("absolute max-w-none", name === requested ? "visible" : "invisible")}
             style={character.clipStyle}
-            src={clipUrls[index] ?? undefined}
+            src={src}
             draggable={false}
             muted
             playsInline
             preload="auto"
             disablePictureInPicture
             loop={!isBuddyOneShot(name)}
-            onEnded={name === animation.name ? animation.finish : undefined}
+            onEnded={name === requested ? animation.finish : undefined}
+            // A clip can mount before its data arrives, and a rejected play() would
+            // otherwise leave the pet frozen on frame one until the state changed.
+            onCanPlay={
+              name === requested
+                ? (event) => void event.currentTarget.play().catch(() => undefined)
+                : undefined
+            }
           />
         ))}
       </div>
@@ -199,13 +256,58 @@ interface BuddyAnimationState {
   readonly finish: () => void;
 }
 
+/** Sleep thresholds, so a signature reads once instead of repeating the triple. */
+const REST_THRESHOLDS_MS = [
+  BUDDY_REST_AFTER_MS.restless,
+  BUDDY_REST_AFTER_MS.dozing,
+  BUDDY_REST_AFTER_MS.sleeping,
+];
+
 /** The clip that reflects the routed thread's agent right now. */
 function useBuddyAnimation(): BuddyAnimationState {
   const threadRef = useThreadRouteRef();
   const shell = useQuietThreadShell(threadRef);
   const active = threadRuntimeIsActive(shell?.runtime);
   const structure = useQuietThreadProjection(active ? threadRef : null);
-  const loop = deriveBuddyLoop(shell, structure?.projection.turnItems ?? []);
+  const allShells = useQuietThreadShells();
+  const activeThreadCount = allShells.filter((entry) =>
+    threadRuntimeIsActive(entry.runtime),
+  ).length;
+  const busyLoop = deriveBuddyLoop(
+    shell,
+    structure?.projection.turnItems ?? [],
+    Math.max(1, activeThreadCount),
+  );
+
+  const [oneShot, setOneShot] = useState<BuddyOneShot | null>(null);
+
+  // The doze-off sequence only starts once the routed thread has been quiet.
+  const [rest, setRest] = useState<BuddyRest>("awake");
+  const restRef = useRef<BuddyRest>("awake");
+  const idleSinceRef = useRef<number | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the doze-off timers, and the stage they advance, in step with the routed thread going quiet
+  useEffect(() => {
+    if (busyLoop !== "idle" || idleSinceRef.current === null) idleSinceRef.current = Date.now();
+    const idleSince = idleSinceRef.current;
+    // Every stage change lands in a timer, never synchronously inside the effect.
+    const advance = () => {
+      const next = deriveBuddyRest(Date.now() - idleSince);
+      const previous = restRef.current;
+      if (previous === next) return;
+      restRef.current = next;
+      setRest(next);
+      const transition = restTransition(previous, next);
+      if (transition !== null) setOneShot(transition);
+    };
+    const timers = [0, ...REST_THRESHOLDS_MS].map((threshold) =>
+      window.setTimeout(advance, Math.max(0, idleSince + threshold - Date.now())),
+    );
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [busyLoop]);
+
+  const loop: BuddyLoop = busyLoop === "idle" ? restLoop(rest) : busyLoop;
 
   const run: BuddyRunSnapshot | null =
     threadRef !== null && shell?.latestRun
@@ -216,7 +318,6 @@ function useBuddyAnimation(): BuddyAnimationState {
         }
       : null;
   const [seenRun, setSeenRun] = useState(run);
-  const [oneShot, setOneShot] = useState<BuddyOneShot | null>(null);
   if (
     seenRun?.threadKey !== run?.threadKey ||
     seenRun?.runId !== run?.runId ||
@@ -229,7 +330,7 @@ function useBuddyAnimation(): BuddyAnimationState {
 
   const [shownLoop, setShownLoop] = useState<{ loop: BuddyLoop; since: number }>(() => ({
     loop,
-    since: Date.now(),
+    since: 0,
   }));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds each loop on screen for MIN_LOOP_MS before swapping to the next activity
   useEffect(() => {

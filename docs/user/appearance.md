@@ -72,10 +72,29 @@ without replaying its transitions.
 ## Buddy
 
 Pick a buddy under **Settings → Appearance → Buddy** to add an animated companion that floats
-above the app. It reacts to the agent in the thread you have open: thinking, running tools,
-waiting on an approval or answer, and finishing or failing a turn. Drag it anywhere on screen;
-click it to tease it. The choice and position are saved on each device. Buddies are not available
-in the mobile app, and Safari may show them on a solid background.
+above the app. Clawd and Whale-chan ship with T3 Code; Whale-chan has fewer clips and reuses its
+nearest one in the states it lacks.
+
+It reacts to the agent in the thread you have open: thinking, running tools, juggling when
+subagents are working, waiting on an approval or answer, sweeping while the context compacts,
+carrying when a checkpoint lands, and finishing or failing a turn. Two or three threads running
+at once get busier clips. Leave the app alone and it drifts from a bored wander into a doze and
+then sleep, and wakes when you come back.
+
+Drag it anywhere on screen; it dangles while you drag, and you can click it to tease it. The
+choice and position are saved on each device. Buddies are not available in the mobile app, and
+Safari may show them on a solid background.
+
+### Buddy sources
+
+More buddies can come from git repositories instead of the app. A source is one folder per
+buddy, each holding a `buddy.json` manifest and its `.webm` clips. Add a repository under
+**Settings → Appearance → Buddy → Buddy sources**; T3 Code clones it with the same connections
+and credentials it uses for projects, then lists every buddy it finds.
+
+Sources are re-pulled when you open T3 Code, and **Reload** pulls immediately. A buddy from a
+source can be renamed, updated or removed there without reinstalling the app. Removing a source
+drops its buddies from the picker; the clone stays on disk until the server removes it.
 
 ## Custom themes
 

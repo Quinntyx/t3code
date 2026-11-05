@@ -350,9 +350,18 @@ export type ChatWidth = typeof ChatWidth.Type;
 export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
-/** The animated companion drawn above the app, or none. */
-export const Buddy = Schema.Literals(["none", "whale-chan", "clawd"]);
+/**
+ * The animated companion drawn above the app. `none` disables it, a bare id names
+ * a bundled character, and `<source>/<id>` names one from a downloaded source.
+ */
+export const Buddy = Schema.String;
 export type Buddy = typeof Buddy.Type;
+
+/** A git repository laid out as one folder per buddy, each holding `buddy.json`. */
+export const BuddySource = Schema.Struct({
+  repositoryUrl: TrimmedNonEmptyString,
+});
+export type BuddySource = typeof BuddySource.Type;
 
 export const ModelFavorite = Schema.Struct({
   provider: ProviderInstanceId,
@@ -559,6 +568,8 @@ export const ClientSettingsSchema = Schema.Struct({
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   buddy: Buddy.pipe(Schema.withDecodingDefault(Effect.succeed("none"))),
+  // Repositories cloned on demand by the server; every one is pulled on load.
+  buddySources: Schema.Array(BuddySource).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1824,5 +1835,6 @@ export const ClientSettingsPatch = Schema.Struct({
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
   buddy: Schema.optionalKey(Buddy),
+  buddySources: Schema.optionalKey(Schema.Array(BuddySource)),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
