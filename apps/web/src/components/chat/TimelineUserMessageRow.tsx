@@ -82,6 +82,7 @@ import {
 } from "./TimelineRowParts";
 import { UserMessageContextReferenceChip } from "./UserMessageContextChips";
 import { resolvePreviewAnnotationImage } from "./TimelineUserMessageRow.logic";
+import { unsentMessageBubbleClassName } from "./unsentMessageStyle";
 
 const BUBBLE_CHIP_CLASS_NAME =
   "[&_[data-slot=context-chip]]:[--context-chip-ink:var(--context-chip-message,var(--context-chip-accent))]";
@@ -165,10 +166,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     <div className="group flex flex-col items-end gap-1" data-user-message-attribution="automation">
       {row.message.inputIntent === "steer" ||
       row.message.inputIntent === "promoted_queued_to_steer" ? (
-        <UserMessageIntentMarker
-          intent={row.message.inputIntent}
-          queued={row.projectedItem?.item.status === "pending"}
-        />
+        <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       <div
         className={cn(
@@ -345,6 +343,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     (attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment),
   );
   const userMessage = resolveUserMessagePresentation(row.message);
+  // Until the provider consumes it, an unsent message wears the queue's dashed look.
+  const unsent = row.projectedItem?.item.status === "pending";
   // Messages from other agents fold to one line so the user's own messages stay easy to find.
   const folded = userMessage.attribution === "agent";
   const [expanded, setExpanded] = useState(false);
@@ -489,18 +489,22 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <GuestMessageName name={userMessage.guestName} />
         </div>
       ) : null}
-      {row.message.inputIntent === "steer" ||
-      row.message.inputIntent === "promoted_queued_to_steer" ? (
-        <UserMessageIntentMarker
-          intent={row.message.inputIntent}
-          queued={row.projectedItem?.item.status === "pending"}
-        />
+      {!unsent &&
+      (row.message.inputIntent === "steer" ||
+        row.message.inputIntent === "promoted_queued_to_steer") ? (
+        <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       <div
         className={cn(
           "relative min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
-          userMessage.attribution === "guest" ? guestBubbleClassName(false) : "bg-message",
+          unsent
+            ? unsentMessageBubbleClassName(
+                userMessage.attribution === "guest" ? "guest" : "default",
+              )
+            : userMessage.attribution === "guest"
+              ? guestBubbleClassName(false)
+              : "bg-message",
           !folded && "p-3",
           folded && expanded && "w-full",
         )}
@@ -731,10 +735,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
 function UserMessageIntentMarker({
   intent,
-  queued,
 }: {
   readonly intent: "steer" | "promoted_queued_to_steer";
-  readonly queued: boolean;
 }) {
   return (
     <Tooltip>
@@ -747,14 +749,12 @@ function UserMessageIntentMarker({
         }
       >
         <Redo2Icon aria-hidden="true" className="size-3" />
-        {queued ? "Steer queued" : "Steer"}
+        Steer
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {queued
-          ? "Waiting for the provider to consume this message"
-          : intent === "promoted_queued_to_steer"
-            ? "Originally queued, then promoted to steer the active turn"
-            : "Steered the active turn"}
+        {intent === "promoted_queued_to_steer"
+          ? "Originally queued, then promoted to steer the active turn"
+          : "Steered the active turn"}
       </TooltipPopup>
     </Tooltip>
   );

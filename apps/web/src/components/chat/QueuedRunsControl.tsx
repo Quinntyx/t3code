@@ -35,6 +35,7 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { GuestMessageName } from "./guestMessageStyle";
 import { TimelineRowTimestamp } from "./TimelineRowParts";
 import { FoldedMessageHeader, useScheduledTaskTitle } from "./TimelineUserMessageRow";
+import { unsentMessageBubbleClassName } from "./unsentMessageStyle";
 
 export interface EditQueuedRunRequest {
   readonly runId: RunId;
@@ -438,12 +439,13 @@ function QueuedMessage(props: {
       {/* Dashed and unfilled: a turn that has not been sent yet. */}
       <div
         className={cn(
-          "flex min-w-0 max-w-[80%] flex-col rounded-2xl border border-dashed text-sm",
+          "flex min-w-0 max-w-[80%] flex-col rounded-2xl text-sm",
           props.isEditing
-            ? "border-primary/60 text-foreground"
-            : attribution === "guest"
-              ? "border-guest/50 text-muted-foreground"
-              : "border-muted-foreground/40 text-muted-foreground",
+            ? "border border-dashed border-primary/60 text-foreground"
+            : cn(
+                unsentMessageBubbleClassName(attribution === "guest" ? "guest" : "default"),
+                "text-muted-foreground",
+              ),
           fold === null && "px-3 py-2",
           fold !== null && expanded && "w-full",
         )}
