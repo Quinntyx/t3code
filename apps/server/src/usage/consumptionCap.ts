@@ -1,7 +1,7 @@
 import type {
   ProviderInstanceId,
   ThreadConsumptionCap,
-  ThreadConsumptionCapRule,
+  ThreadConsumptionCapCondition,
   ThreadConsumptionCapWindowKind,
   ThreadUsageModel,
 } from "@t3tools/contracts";
@@ -23,19 +23,19 @@ export interface ConsumptionCapWindow {
 
 export interface ConsumptionCapSnapshot {
   readonly models: ReadonlyArray<ConsumptionCapModelUsage>;
+  /** Instances the worker read for this cap's quota conditions. */
   readonly windowsByInstance: ReadonlyMap<string, ReadonlyArray<ConsumptionCapWindow>>;
 }
 
 export interface ConsumptionCapBreach {
   readonly reason: string;
-  readonly rule: ThreadConsumptionCapRule | null;
 }
 
 export interface ConsumptionCapEvaluation {
   readonly breach: ConsumptionCapBreach | null;
   /**
    * False when the snapshot cannot answer whether the cap is met, such as a
-   * missing quota window or an unpriced model contributing to a dollar cap.
+   * missing quota window or an unpriced model inside a dollar condition.
    * Callers must not clear an existing hit on an unknown result.
    */
   readonly known: boolean;
@@ -51,101 +51,87 @@ function windowIsCurrent(window: ConsumptionCapWindow, nowMs: number): boolean {
   return Number.isFinite(resetsAt) && resetsAt > nowMs;
 }
 
-function quotaWindow(rule: ThreadConsumptionCapRule, windows: ReadonlyArray<ConsumptionCapWindow>) {
-  const byId =
-    rule.windowId === undefined ? undefined : windows.find((w) => w.id === rule.windowId);
-  if (byId !== undefined) return byId;
-  return rule.windowKind === undefined
-    ? undefined
-    : windows.find((w) => w.kind === rule.windowKind);
+function conditionModels(condition: ThreadConsumptionCapCondition) {
+  const scope = condition.models;
+  if (scope === undefined) return undefined;
+  return new Set(scope.map((entry) => modelKey(entry.providerInstanceId, entry.model)));
+}
+
+function conditionScopeLabel(condition: ThreadConsumptionCapCondition): string {
+  const scope = condition.models;
+  if (scope === undefined) return "Thread";
+  return scope.length === 1 ? scope[0]!.model : `${scope.length} models`;
 }
 
 /**
- * The thread's own and delegated turns count against one cap. Models without a
- * rate contribute no dollars, so a total is only ever a priced floor.
+ * A thread stops on the first condition it meets, whether that condition counts
+ * dollars or a provider usage window.
  */
 export function evaluateConsumptionCap(
   cap: ThreadConsumptionCap,
   snapshot: ConsumptionCapSnapshot,
   nowMs: number,
 ): ConsumptionCapEvaluation {
-  if (cap.mode === "quota") {
-    let known = true;
-    for (const rule of cap.rules) {
-      if (rule.atPercent === undefined) continue;
-      const window = quotaWindow(
-        rule,
-        snapshot.windowsByInstance.get(rule.providerInstanceId) ?? [],
-      );
-      if (window === undefined) {
-        known = false;
-        continue;
+  let known = true;
+
+  for (const condition of cap.conditions) {
+    const scope = conditionModels(condition);
+
+    if (condition.kind === "spend") {
+      let total = 0;
+      let pricedModels = 0;
+      let unpriced = false;
+      for (const model of snapshot.models) {
+        if (scope !== undefined && !scope.has(modelKey(model.providerInstanceId, model.model))) {
+          continue;
+        }
+        if (model.costUsd === null) {
+          unpriced = true;
+          continue;
+        }
+        pricedModels += 1;
+        total += model.costUsd;
       }
-      // A passed reset means the window is current at zero, not that the data is stale.
+      if (pricedModels > 0 && total >= condition.limitUsd) {
+        return {
+          known: true,
+          breach: {
+            reason: `${conditionScopeLabel(condition)} API spend ${formatUsd(total)} reached ${formatUsd(condition.limitUsd)} cap.`,
+          },
+        };
+      }
+      // Unpriced spend is a floor, so a short total cannot clear the limit.
+      if (unpriced) known = false;
+      continue;
+    }
+
+    const instanceIds =
+      scope === undefined
+        ? [...snapshot.windowsByInstance.keys()]
+        : [...new Set((condition.models ?? []).map((entry) => entry.providerInstanceId as string))];
+    let answered = false;
+    for (const instanceId of instanceIds) {
+      const window = (snapshot.windowsByInstance.get(instanceId) ?? []).find(
+        (candidate) => candidate.kind === condition.windowKind,
+      );
+      if (window === undefined) continue;
+      answered = true;
       if (!windowIsCurrent(window, nowMs)) continue;
-      if (window.usedPercent < rule.atPercent) continue;
+      if (window.usedPercent < condition.atPercent) continue;
       return {
         known: true,
         breach: {
-          rule,
-          reason: `${window.label} usage ${Math.round(window.usedPercent)}% reached ${rule.atPercent}% cap.`,
+          reason: `${window.label} usage ${Math.round(window.usedPercent)}% reached ${condition.atPercent}% cap.`,
         },
       };
     }
-    return { breach: null, known };
+    if (!answered) known = false;
   }
 
-  const costs = new Map<string, number>();
-  const unpriced = new Set<string>();
-  let total = 0;
-  let pricedModels = 0;
-  for (const model of snapshot.models) {
-    const key = modelKey(model.providerInstanceId, model.model);
-    if (model.costUsd === null) {
-      unpriced.add(key);
-      continue;
-    }
-    pricedModels += 1;
-    total += model.costUsd;
-    costs.set(key, (costs.get(key) ?? 0) + model.costUsd);
-  }
-
-  if (cap.totalLimitUsd !== undefined && pricedModels > 0 && total >= cap.totalLimitUsd) {
-    return {
-      known: true,
-      breach: {
-        rule: null,
-        reason: `Thread API spend ${formatUsd(total)} reached ${formatUsd(cap.totalLimitUsd)} cap.`,
-      },
-    };
-  }
-
-  for (const rule of cap.rules) {
-    if (rule.limitUsd === undefined) continue;
-    const key = modelKey(rule.providerInstanceId, rule.model);
-    const cost = costs.get(key);
-    if (cost === undefined || cost < rule.limitUsd) continue;
-    return {
-      known: true,
-      breach: {
-        rule,
-        reason: `${rule.model} API spend ${formatUsd(cost)} reached ${formatUsd(rule.limitUsd)} cap.`,
-      },
-    };
-  }
-
-  let known = true;
-  if (cap.totalLimitUsd !== undefined) {
-    known = snapshot.models.length === 0 || (pricedModels > 0 && unpriced.size === 0);
-  }
-  for (const rule of cap.rules) {
-    if (rule.limitUsd === undefined) continue;
-    if (unpriced.has(modelKey(rule.providerInstanceId, rule.model))) known = false;
-  }
   return { breach: null, known };
 }
 
-/** Keeps a duplicate check from writing the same hit every scheduler tick. */
+/** Keeps the sweep from rewriting the same hit every scheduler tick. */
 export function consumptionCapHitMatches(
   hit: { readonly reason: string } | null | undefined,
   breach: ConsumptionCapBreach | null,

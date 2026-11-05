@@ -59,7 +59,6 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   ThreadConsumptionCap,
-  consumptionCapIsMorePermissive,
   latestProviderTurnForAttempt,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
@@ -3368,7 +3367,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ) {
             return thread;
           }
-          const previousConsumptionCap = thread.consumptionCap ?? null;
           const previousRecovery =
             thread.limitRecovery?.runId === command.limitRecovery?.runId &&
             thread.limitRecovery?.resetAt === command.limitRecovery?.resetAt
@@ -3404,11 +3402,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ),
                 }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
+            // Removing the cap clears its hit at once. Any other edit waits for the
+            // sweep to re-evaluate, so saving cannot lift a hit it still meets.
             ...(command.consumptionCap === undefined
               ? {}
-              : previousConsumptionCap === null ||
-                  consumptionCapIsMorePermissive(command.consumptionCap, previousConsumptionCap)
-                ? { consumptionCap: command.consumptionCap, consumptionCapHit: null }
+              : command.consumptionCap === null
+                ? { consumptionCap: null, consumptionCapHit: null }
                 : { consumptionCap: command.consumptionCap }),
             ...(command.consumptionCapHit === undefined
               ? {}

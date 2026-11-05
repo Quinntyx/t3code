@@ -3069,7 +3069,7 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Replaces the whole cap; null clears it and its hit. */
     consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
-    /** Worker-written hit marker; a new cap clears it. */
+    /** Worker-written hit marker; removing the cap clears it. */
     consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
     /** Rejects a worker hit or clear evaluated against an older cap. */
     expectedConsumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),

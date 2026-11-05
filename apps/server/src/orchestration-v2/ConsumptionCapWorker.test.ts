@@ -102,7 +102,7 @@ describe("consumption cap sweep", () => {
     const commands = await runSweep({
       candidates: [
         candidate({
-          cap: { mode: "api", totalLimitUsd: 0.5, rules: [] },
+          cap: { conditions: [{ kind: "spend", limitUsd: 0.5 }] },
           activeRunId: runId,
         }),
       ],
@@ -137,7 +137,7 @@ describe("consumption cap sweep", () => {
     const commands = await runSweep({
       candidates: [
         candidate({
-          cap: { mode: "api", totalLimitUsd: 0.5, rules: [] },
+          cap: { conditions: [{ kind: "spend", limitUsd: 0.5 }] },
           hasActiveDelegates: true,
         }),
       ],
@@ -160,7 +160,7 @@ describe("consumption cap sweep", () => {
     const commands = await runSweep({
       candidates: [
         candidate({
-          cap: { mode: "api", totalLimitUsd: 0.5, rules: [] },
+          cap: { conditions: [{ kind: "spend", limitUsd: 0.5 }] },
           hasActiveBackgroundWork: true,
         }),
       ],
@@ -184,12 +184,9 @@ describe("consumption cap sweep", () => {
       candidates: [
         candidate({
           cap: {
-            mode: "quota",
-            rules: [
+            conditions: [
               {
-                providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-                driver: ProviderDriverKind.make("claudeAgent"),
-                model: "opus",
+                kind: "quota",
                 windowKind: "session",
                 atPercent: 80,
               },
@@ -211,7 +208,7 @@ describe("consumption cap sweep", () => {
     const commands = await runSweep({
       candidates: [
         candidate({
-          cap: { mode: "api", totalLimitUsd: 5, rules: [] },
+          cap: { conditions: [{ kind: "spend", limitUsd: 5 }] },
           hit: {
             at: "2026-11-04T12:00:00.000Z",
             reason: "Thread API spend $0.75 reached $0.50 cap.",

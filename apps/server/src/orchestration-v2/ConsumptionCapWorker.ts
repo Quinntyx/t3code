@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
+  type ConsumptionCapModelUsage,
   capModel,
   consumptionCapHitMatches,
   evaluateConsumptionCap,
@@ -27,6 +28,25 @@ const clearHit = (threadId: ThreadId, hitAt: string, expectedCap: ThreadConsumpt
   consumptionCapHit: null,
   expectedConsumptionCap: expectedCap,
 });
+
+/** Quota conditions watch the account behind their scope, or the thread's own account. */
+function quotaInstances(
+  cap: ThreadConsumptionCap,
+  usageModels: ReadonlyArray<ConsumptionCapModelUsage>,
+  threadProviderInstanceId: ProviderInstanceId,
+): ReadonlySet<ProviderInstanceId> {
+  const instances = new Set<ProviderInstanceId>();
+  for (const condition of cap.conditions) {
+    if (condition.kind !== "quota") continue;
+    if (condition.models !== undefined) {
+      for (const model of condition.models) instances.add(model.providerInstanceId);
+      continue;
+    }
+    for (const model of usageModels) instances.add(model.providerInstanceId);
+    instances.add(threadProviderInstanceId);
+  }
+  return instances;
+}
 
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -80,15 +100,13 @@ const makeSweep = Effect.gen(function* () {
         }
 
         const threadUsage = yield* usage.read(thread.id);
+        const usageModels = threadUsage.models.map(capModel);
         const windowsByInstance = yield* readWindows(
-          new Set(cap.rules.map((rule) => rule.providerInstanceId)),
+          quotaInstances(cap, usageModels, thread.providerInstanceId),
         );
         const evaluation = evaluateConsumptionCap(
           cap,
-          {
-            models: threadUsage.models.map(capModel),
-            windowsByInstance,
-          },
+          { models: usageModels, windowsByInstance },
           nowMs,
         );
 

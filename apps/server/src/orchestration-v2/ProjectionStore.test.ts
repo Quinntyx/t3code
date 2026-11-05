@@ -6625,7 +6625,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         occurredAt: now,
         payload: {
           ...threadPayload,
-          consumptionCap: { mode: "api", totalLimitUsd: 10, rules: [] },
+          consumptionCap: { conditions: [{ kind: "spend", limitUsd: 10 }] },
         },
       });
 

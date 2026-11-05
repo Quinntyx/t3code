@@ -9,6 +9,7 @@ import type {
   ServerProvider,
   ServerProviderUsageWindow,
   ThreadConsumptionCap,
+  ThreadConsumptionCapCondition,
   ThreadConsumptionCapHit,
   ThreadId,
   ThreadUsageGroup,
@@ -74,21 +75,28 @@ function isFiveHourOrWeekly(window: ServerProviderUsageWindow): boolean {
   );
 }
 
+function consumptionCapConditionLabel(condition: ThreadConsumptionCapCondition): string {
+  const models = condition.models?.length;
+  if (condition.kind === "spend") {
+    const amount = formatUsd(condition.limitUsd);
+    return models === undefined
+      ? `${amount} total`
+      : `${amount} · ${models} model${models === 1 ? "" : "s"}`;
+  }
+  const window = `${WINDOW_KIND_LABEL[condition.windowKind]} ${condition.atPercent}%`;
+  return models === undefined ? window : `${window} · ${models} model${models === 1 ? "" : "s"}`;
+}
+
 function consumptionCapSummary(
   cap: ThreadConsumptionCap | null,
   hit: ThreadConsumptionCapHit | null,
 ): string {
   if (hit !== null) return hit.reason;
   if (cap === null) return "Right-click to set a cap";
-  if (cap.mode === "api") {
-    return cap.totalLimitUsd !== undefined
-      ? `${formatUsd(cap.totalLimitUsd)} total`
-      : `${cap.rules.length} model${cap.rules.length === 1 ? "" : "s"}`;
-  }
-  const [first] = cap.rules;
-  if (first === undefined) return "No quota";
-  const label = first.windowLabel ?? WINDOW_KIND_LABEL[first.windowKind ?? "other"];
-  return `${label} ${first.atPercent ?? "?"}%${cap.rules.length > 1 ? ` +${cap.rules.length - 1}` : ""}`;
+  const [first] = cap.conditions;
+  if (first === undefined) return "No limits";
+  const more = cap.conditions.length > 1 ? ` +${cap.conditions.length - 1}` : "";
+  return `${consumptionCapConditionLabel(first)}${more}`;
 }
 
 function providerColor(driver: ProviderDriverKind): string {
@@ -329,9 +337,11 @@ export function ThreadUsagePanel(props: {
         existing.costUsd = (existing.costUsd ?? 0) + (model.costUsd ?? 0);
       }
     }
-    for (const rule of cap?.rules ?? []) {
-      const key = `${rule.providerInstanceId}\u0000${rule.model}`;
-      if (!rows.has(key)) rows.set(key, { model: rule, costUsd: null });
+    for (const condition of cap?.conditions ?? []) {
+      for (const model of condition.models ?? []) {
+        const key = `${model.providerInstanceId}\u0000${model.model}`;
+        if (!rows.has(key)) rows.set(key, { model, costUsd: null });
+      }
     }
     if (rows.size === 0 && shell !== null) {
       const provider = providers.find(
@@ -356,7 +366,6 @@ export function ThreadUsagePanel(props: {
         driver: model.driver,
         model: model.model,
         label: presentation.label,
-        icon: <ModelIcon model={model} presentation={presentation} />,
         costUsd,
         windows: usageWindows(model.providerInstanceId),
       };

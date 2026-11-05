@@ -4,12 +4,13 @@ import type {
   ProviderInstanceId,
   ServerProviderUsageWindow,
   ThreadConsumptionCap,
-  ThreadConsumptionCapMode,
+  ThreadConsumptionCapCondition,
+  ThreadConsumptionCapWindowKind,
   ThreadId,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { formatUsd } from "@t3tools/shared/usageFormat";
-import { type ReactNode, useState } from "react";
+import { PlusIcon, XIcon } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -26,7 +27,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
@@ -36,16 +36,27 @@ export interface ThreadConsumptionCapRow {
   readonly driver: ProviderDriverKind;
   readonly model: string;
   readonly label: string;
-  readonly icon: ReactNode;
   readonly costUsd: number | null;
   readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
 }
 
-interface RuleDraft {
+interface ConditionDraft {
+  /** Local identity for the editor; conditions themselves carry no id. */
+  readonly key: string;
+  readonly kind: ThreadConsumptionCapCondition["kind"];
+  /** `all` watches every model; otherwise the row keys this condition covers. */
+  readonly scope: "all" | ReadonlyArray<string>;
   readonly limitUsd: string;
-  readonly windowId: string;
   readonly atPercent: string;
+  readonly windowKind: ThreadConsumptionCapWindowKind;
 }
+
+const WINDOW_KINDS: ReadonlyArray<ThreadConsumptionCapWindowKind> = [
+  "session",
+  "weekly",
+  "monthly",
+  "other",
+];
 
 const WINDOW_KIND_LABEL = {
   session: "5h",
@@ -53,6 +64,8 @@ const WINDOW_KIND_LABEL = {
   monthly: "Monthly",
   other: "Window",
 } as const;
+
+const KIND_LABEL = { spend: "API spend", quota: "Usage quota" } as const;
 
 function windowLabel(window: ServerProviderUsageWindow): string {
   return window.label || WINDOW_KIND_LABEL[window.kind];
@@ -70,99 +83,106 @@ function parsePercent(value: string): number | null {
   return parsed !== null && parsed <= 100 ? parsed : null;
 }
 
-function initialDrafts(
-  cap: ThreadConsumptionCap | null,
+const rowKey = (model: { providerInstanceId: ProviderInstanceId; model: string }) =>
+  `${model.providerInstanceId}\u0000${model.model}`;
+
+function scopedRows(
   rows: ReadonlyArray<ThreadConsumptionCapRow>,
-): Record<string, RuleDraft> {
-  return Object.fromEntries(
-    rows.map((row) => {
-      const rule = cap?.rules.find(
-        (candidate) =>
-          candidate.providerInstanceId === row.providerInstanceId && candidate.model === row.model,
-      );
-      const windowId =
-        rule?.windowId ??
-        (rule?.windowKind === undefined
-          ? (row.windows[0]?.id ?? "")
-          : (row.windows.find((window) => window.kind === rule.windowKind)?.id ?? ""));
-      return [
-        row.key,
-        {
-          limitUsd: rule?.limitUsd?.toString() ?? "",
-          windowId,
-          atPercent: rule?.atPercent?.toString() ?? "",
-        } satisfies RuleDraft,
-      ];
-    }),
-  );
+  scope: ConditionDraft["scope"],
+): ReadonlyArray<ThreadConsumptionCapRow> {
+  return scope === "all" ? rows : rows.filter((row) => scope.includes(row.key));
+}
+
+/** The worst window of each kind the condition's models report. */
+function windowChoices(
+  rows: ReadonlyArray<ThreadConsumptionCapRow>,
+  scope: ConditionDraft["scope"],
+) {
+  const scoped = scopedRows(rows, scope);
+  return WINDOW_KINDS.map((kind) => {
+    const windows = scoped.flatMap((row) => row.windows.filter((window) => window.kind === kind));
+    if (windows.length === 0) {
+      return {
+        kind,
+        label: WINDOW_KIND_LABEL[kind],
+        window: null as ServerProviderUsageWindow | null,
+      };
+    }
+    const worst = windows.reduce((left, right) =>
+      right.usedPercent > left.usedPercent ? right : left,
+    );
+    return { kind, label: windowLabel(worst), window: worst };
+  });
+}
+
+function newDraft(kind: ThreadConsumptionCapCondition["kind"], key: string): ConditionDraft {
+  return {
+    key,
+    kind,
+    scope: "all",
+    limitUsd: "",
+    atPercent: "",
+    windowKind: "session",
+  };
+}
+
+function initialDrafts(cap: ThreadConsumptionCap | null): ReadonlyArray<ConditionDraft> {
+  if (cap === null || cap.conditions.length === 0) return [newDraft("spend", "draft-0")];
+  return cap.conditions.map((condition, index) => ({
+    key: `draft-${index}`,
+    kind: condition.kind,
+    scope: condition.models === undefined ? "all" : condition.models.map((model) => rowKey(model)),
+    limitUsd: condition.kind === "spend" ? condition.limitUsd.toString() : "",
+    atPercent: condition.kind === "quota" ? condition.atPercent.toString() : "",
+    windowKind: condition.kind === "quota" ? condition.windowKind : "session",
+  }));
 }
 
 function buildCap(
-  mode: ThreadConsumptionCapMode,
-  total: string,
+  drafts: ReadonlyArray<ConditionDraft>,
   rows: ReadonlyArray<ThreadConsumptionCapRow>,
-  drafts: Readonly<Record<string, RuleDraft>>,
-  cap: ThreadConsumptionCap | null,
 ): { readonly cap: ThreadConsumptionCap | null; readonly error: string | null } {
-  if (mode === "api") {
-    const parsedTotal = total.trim().length === 0 ? undefined : parsePositive(total);
-    if (total.trim().length > 0 && parsedTotal === null)
-      return { cap: null, error: "Enter a positive total dollar cap." };
-    const totalLimitUsd = parsedTotal ?? undefined;
-    const rules = [];
-    for (const row of rows) {
-      const draft = drafts[row.key];
-      const raw = draft?.limitUsd.trim() ?? "";
-      if (raw.length === 0) continue;
-      const limitUsd = parsePositive(raw);
-      if (limitUsd === null)
-        return { cap: null, error: `Enter a positive dollar cap for ${row.label}.` };
-      rules.push({
-        providerInstanceId: row.providerInstanceId,
-        driver: row.driver,
-        model: row.model,
-        limitUsd,
-      });
+  const conditions: Array<ThreadConsumptionCapCondition> = [];
+  for (const draft of drafts) {
+    const models =
+      draft.scope === "all"
+        ? undefined
+        : scopedRows(rows, draft.scope).map((row) => ({
+            providerInstanceId: row.providerInstanceId,
+            driver: row.driver,
+            model: row.model,
+          }));
+    if (models !== undefined && models.length === 0) {
+      return { cap: null, error: "Pick at least one model, or All, for every limit." };
     }
-    if (totalLimitUsd === undefined && rules.length === 0) return { cap: null, error: null };
-    return {
-      cap: {
-        mode,
-        ...(totalLimitUsd === undefined ? {} : { totalLimitUsd }),
-        rules,
-      },
-      error: null,
-    };
-  }
-
-  const rules = [];
-  for (const row of rows) {
-    const draft = drafts[row.key];
-    const windowId = draft?.windowId ?? "";
-    const raw = draft?.atPercent.trim() ?? "";
-    if (windowId.length === 0 || raw.length === 0) continue;
-    const atPercent = parsePercent(raw);
-    if (atPercent === null)
-      return { cap: null, error: `Enter a percentage from 1 to 100 for ${row.label}.` };
-    const window = row.windows.find((candidate) => candidate.id === windowId);
-    const stored = cap?.rules.find(
-      (candidate) =>
-        candidate.providerInstanceId === row.providerInstanceId && candidate.model === row.model,
+    if (draft.kind === "spend") {
+      const limitUsd = parsePositive(draft.limitUsd);
+      if (limitUsd === null) {
+        return { cap: null, error: "Enter a positive dollar amount for every API spend limit." };
+      }
+      conditions.push({
+        kind: "spend",
+        limitUsd,
+        ...(models === undefined ? {} : { models }),
+      });
+      continue;
+    }
+    const atPercent = parsePercent(draft.atPercent);
+    if (atPercent === null) {
+      return { cap: null, error: "Enter a percentage from 1 to 100 for every usage quota limit." };
+    }
+    const choice = windowChoices(rows, draft.scope).find(
+      (candidate) => candidate.kind === draft.windowKind,
     );
-    const windowKind = window?.kind ?? stored?.windowKind;
-    const label = window === undefined ? stored?.windowLabel : windowLabel(window);
-    rules.push({
-      providerInstanceId: row.providerInstanceId,
-      driver: row.driver,
-      model: row.model,
-      windowId,
-      ...(windowKind === undefined ? {} : { windowKind }),
-      ...(label === undefined ? {} : { windowLabel: label }),
+    conditions.push({
+      kind: "quota",
       atPercent,
+      windowKind: draft.windowKind,
+      ...(choice === undefined ? {} : { windowLabel: choice.label }),
+      ...(models === undefined ? {} : { models }),
     });
   }
-  if (rules.length === 0) return { cap: null, error: null };
-  return { cap: { mode, rules }, error: null };
+  return { cap: conditions.length === 0 ? null : { conditions }, error: null };
 }
 
 export function ThreadConsumptionCapDialog({
@@ -209,17 +229,32 @@ function ThreadConsumptionCapDialogContent({
     reportFailure: false,
   });
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
-  const [mode, setMode] = useState<ThreadConsumptionCapMode>(cap?.mode ?? "api");
-  const [total, setTotal] = useState(cap?.totalLimitUsd?.toString() ?? "");
-  const [drafts, setDrafts] = useState(() => initialDrafts(cap, rows));
+  const nextKeyRef = useRef(cap?.conditions.length ?? 0);
+  const [drafts, setDrafts] = useState(() => initialDrafts(cap));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const updateDraft = (key: string, patch: Partial<RuleDraft>) => {
-    setDrafts((current) => ({
-      ...current,
-      [key]: { ...(current[key] ?? { limitUsd: "", windowId: "", atPercent: "" }), ...patch },
-    }));
+  const updateDraft = (key: string, patch: Partial<ConditionDraft>) => {
+    setDrafts((current) =>
+      current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)),
+    );
+    setError(null);
+  };
+
+  const updateScope = (key: string, values: ReadonlyArray<string>) => {
+    setDrafts((current) =>
+      current.map((draft) => {
+        if (draft.key !== key) return draft;
+        const previous = draft.scope === "all" ? ["all"] : draft.scope;
+        const added = values.find((value) => !previous.includes(value));
+        if (added === "all") return { ...draft, scope: "all" };
+        if (added !== undefined) {
+          return { ...draft, scope: values.filter((value) => value !== "all") };
+        }
+        const remaining = values.filter((value) => value !== "all");
+        return { ...draft, scope: remaining.length === 0 ? "all" : remaining };
+      }),
+    );
     setError(null);
   };
 
@@ -246,7 +281,7 @@ function ThreadConsumptionCapDialogContent({
           className="flex min-h-0 flex-col"
           onSubmit={(event) => {
             event.preventDefault();
-            const built = buildCap(mode, total, rows, drafts, cap);
+            const built = buildCap(drafts, rows);
             if (built.error !== null) {
               setError(built.error);
               return;
@@ -257,181 +292,173 @@ function ThreadConsumptionCapDialogContent({
           <DialogHeader>
             <DialogTitle>Consumption cap</DialogTitle>
             <DialogDescription>
-              Stop this thread when its API spend or a provider usage window reaches a limit.
-              Delegated work counts toward the same thread.
+              Stop this thread when any one of these limits is reached. Delegated work counts toward
+              the same thread.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <div className="flex flex-col gap-4">
-              <ToggleGroup
-                aria-label="Consumption cap mode"
-                className="w-full *:flex-1"
-                value={[mode]}
-                onValueChange={(next) => {
-                  const value = next[0];
-                  if (value === "api" || value === "quota") setMode(value);
+              <div className="flex flex-col gap-2">
+                {drafts.map((draft, index) => {
+                  const choices = windowChoices(rows, draft.scope);
+                  const selected = choices.find((choice) => choice.kind === draft.windowKind);
+                  const scoped = scopedRows(rows, draft.scope);
+                  const unpriced =
+                    draft.kind === "spend" &&
+                    scoped.some((row) => row.costUsd === null) &&
+                    scoped.some((row) => row.costUsd !== null);
+                  return (
+                    <div
+                      key={draft.key}
+                      className="flex min-w-0 flex-col gap-2 rounded-md border border-border/70 p-2.5"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Select
+                          value={draft.kind}
+                          items={KIND_LABEL}
+                          onValueChange={(value) => {
+                            if (value === "spend" || value === "quota") {
+                              updateDraft(draft.key, { kind: value });
+                            }
+                          }}
+                        >
+                          <SelectTrigger
+                            aria-label={`Limit ${index + 1} kind`}
+                            className="h-8 min-w-0 flex-1"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectPopup>
+                            <SelectItem value="spend">{KIND_LABEL.spend}</SelectItem>
+                            <SelectItem value="quota">{KIND_LABEL.quota}</SelectItem>
+                          </SelectPopup>
+                        </Select>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Remove limit ${index + 1}`}
+                          onClick={() => {
+                            setDrafts((current) =>
+                              current.filter((candidate) => candidate.key !== draft.key),
+                            );
+                            setError(null);
+                          }}
+                        >
+                          <XIcon aria-hidden />
+                        </Button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-muted-foreground">Models</span>
+                        <ToggleGroup
+                          aria-label="Models this limit watches"
+                          multiple
+                          variant="segmented"
+                          value={draft.scope === "all" ? ["all"] : draft.scope}
+                          onValueChange={(values) => updateScope(draft.key, values)}
+                        >
+                          <Toggle value="all">All</Toggle>
+                          {rows.map((row) => (
+                            <Toggle key={row.key} value={row.key}>
+                              {row.label}
+                            </Toggle>
+                          ))}
+                        </ToggleGroup>
+                      </div>
+
+                      {draft.kind === "spend" ? (
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 text-xs text-muted-foreground">Stop at</span>
+                          <Input
+                            aria-label={`Limit ${index + 1} dollar cap`}
+                            inputMode="decimal"
+                            className="h-8"
+                            placeholder="10.00"
+                            value={draft.limitUsd}
+                            onChange={(event) =>
+                              updateDraft(draft.key, { limitUsd: event.target.value })
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Input
+                            aria-label={`Limit ${index + 1} usage percentage`}
+                            inputMode="decimal"
+                            className="h-8 w-16"
+                            placeholder="80"
+                            value={draft.atPercent}
+                            onChange={(event) =>
+                              updateDraft(draft.key, { atPercent: event.target.value })
+                            }
+                          />
+                          <span className="shrink-0 text-xs text-muted-foreground">% of</span>
+                          <Select
+                            value={draft.windowKind}
+                            items={Object.fromEntries(
+                              choices.map((choice) => [choice.kind, choice.label]),
+                            )}
+                            onValueChange={(value) => {
+                              if (value !== null && WINDOW_KINDS.some((kind) => kind === value)) {
+                                updateDraft(draft.key, {
+                                  windowKind: value as ThreadConsumptionCapWindowKind,
+                                });
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="h-8 min-w-0 flex-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectPopup>
+                              {choices.map((choice) => (
+                                <SelectItem key={choice.kind} value={choice.kind}>
+                                  {choice.window === null
+                                    ? `${choice.label} · usage data unavailable`
+                                    : `${choice.label} · ${Math.round(choice.window.usedPercent)}% used`}
+                                </SelectItem>
+                              ))}
+                            </SelectPopup>
+                          </Select>
+                        </div>
+                      )}
+
+                      {draft.kind === "quota" ? (
+                        <p className="text-xs text-muted-foreground">
+                          {selected?.window === null || selected === undefined
+                            ? "This account does not report that window yet."
+                            : `${Math.round(selected.window.usedPercent)}% used${
+                                selected.window.resetsAt
+                                  ? ` · resets ${formatUpcomingTimestamp(selected.window.resetsAt, timestampFormat)}`
+                                  : ""
+                              }`}
+                        </p>
+                      ) : unpriced ? (
+                        <p className="text-xs text-muted-foreground">
+                          Models without a known API price do not count, so the total is a floor.
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-fit"
+                onClick={() => {
+                  setDrafts((current) => [
+                    ...current,
+                    newDraft("spend", `draft-${(nextKeyRef.current += 1)}`),
+                  ]);
                   setError(null);
                 }}
               >
-                <Toggle value="api">API spend</Toggle>
-                <Toggle value="quota">Usage quota</Toggle>
-              </ToggleGroup>
+                <PlusIcon aria-hidden />
+                Add limit
+              </Button>
 
-              {mode === "api" ? (
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="thread-consumption-total">Total cap</Label>
-                  <Input
-                    id="thread-consumption-total"
-                    inputMode="decimal"
-                    placeholder="No total cap"
-                    value={total}
-                    onChange={(event) => {
-                      setTotal(event.target.value);
-                      setError(null);
-                    }}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Priced API-list spend across every model in this thread. Models without a price
-                    do not count.
-                  </p>
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Watch a provider usage window and stop the thread when it reaches the percentage.
-                  The 5h session and weekly limits come from the Usage panel.
-                </p>
-              )}
-
-              <div className="flex flex-col gap-2">
-                {rows.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    This thread has no model usage yet.
-                  </p>
-                ) : (
-                  rows.map((row) => {
-                    const draft = drafts[row.key] ?? {
-                      limitUsd: "",
-                      windowId: "",
-                      atPercent: "",
-                    };
-                    const rule = cap?.rules.find(
-                      (candidate) =>
-                        candidate.providerInstanceId === row.providerInstanceId &&
-                        candidate.model === row.model,
-                    );
-                    const selectedWindow = row.windows.find(
-                      (candidate) => candidate.id === draft.windowId,
-                    );
-                    const windowOptions = [
-                      ...row.windows.map((window) => ({
-                        id: window.id,
-                        label: windowLabel(window),
-                        window,
-                      })),
-                      ...(draft.windowId.length > 0 && selectedWindow === undefined
-                        ? [
-                            {
-                              id: draft.windowId,
-                              label: rule?.windowLabel ?? "Saved window",
-                              window: undefined,
-                            },
-                          ]
-                        : []),
-                    ];
-                    const noWindows = windowOptions.length === 0;
-                    const noPrice = row.costUsd === null;
-                    return (
-                      <div
-                        key={row.key}
-                        className="flex min-w-0 flex-col gap-2 rounded-md border border-border/70 p-2.5"
-                      >
-                        <div className="flex min-w-0 items-center gap-2">
-                          {row.icon}
-                          <span className="min-w-0 flex-1 truncate text-sm">{row.label}</span>
-                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                            {row.costUsd === null ? "No price data" : formatUsd(row.costUsd)}
-                          </span>
-                        </div>
-                        {mode === "api" ? (
-                          <div className="flex items-center gap-2">
-                            <span className="shrink-0 text-xs text-muted-foreground">Cap</span>
-                            <Input
-                              aria-label={`${row.label} dollar cap`}
-                              inputMode="decimal"
-                              className="h-8"
-                              placeholder="No cap"
-                              value={draft.limitUsd}
-                              onChange={(event) =>
-                                updateDraft(row.key, { limitUsd: event.target.value })
-                              }
-                            />
-                          </div>
-                        ) : (
-                          <div className="flex min-w-0 items-center gap-2">
-                            <Select
-                              value={draft.windowId}
-                              items={Object.fromEntries(
-                                windowOptions.map((option) => [option.id, option.label]),
-                              )}
-                              onValueChange={(value) => {
-                                if (typeof value === "string")
-                                  updateDraft(row.key, { windowId: value });
-                              }}
-                            >
-                              <SelectTrigger className="h-8 min-w-0 flex-1">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectPopup>
-                                {windowOptions.map((option) => (
-                                  <SelectItem key={option.id} value={option.id}>
-                                    {option.window === undefined
-                                      ? `${option.label} · usage data unavailable`
-                                      : `${option.label} · ${Math.round(option.window.usedPercent)}% used`}
-                                  </SelectItem>
-                                ))}
-                              </SelectPopup>
-                            </Select>
-                            <div className="flex shrink-0 items-center gap-1">
-                              <Input
-                                inputMode="decimal"
-                                className="h-8 w-16"
-                                placeholder="80"
-                                aria-label={`${row.label} cap percentage`}
-                                disabled={noWindows}
-                                value={draft.atPercent}
-                                onChange={(event) =>
-                                  updateDraft(row.key, { atPercent: event.target.value })
-                                }
-                              />
-                              <span className="text-xs text-muted-foreground">%</span>
-                            </div>
-                          </div>
-                        )}
-                        {mode === "quota" ? (
-                          <p className="text-xs text-muted-foreground">
-                            {noWindows
-                              ? "No 5h or weekly usage is reported for this account."
-                              : draft.windowId.length === 0
-                                ? "Pick a usage window."
-                                : selectedWindow === undefined
-                                  ? "Usage data for this window is unavailable."
-                                  : `${Math.round(selectedWindow.usedPercent)}% used${
-                                      selectedWindow.resetsAt
-                                        ? ` · resets ${formatUpcomingTimestamp(selectedWindow.resetsAt, timestampFormat)}`
-                                        : ""
-                                    }`}
-                          </p>
-                        ) : noPrice ? (
-                          <p className="text-xs text-muted-foreground">
-                            No API price is known for this model, so a dollar cap cannot be
-                            enforced.
-                          </p>
-                        ) : null}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
               {error !== null ? (
                 <p role="alert" className="text-sm text-destructive">
                   {error}

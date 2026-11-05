@@ -65,12 +65,16 @@ runs inside its own turn count toward the main agent.
 
 ## Cap a thread's consumption
 
-Right-click **Usage** in the thread details card to set a cap for that thread. Choose
-**API spend** to cap its estimated API-list cost, either as a total or per model; delegates count
-toward the same thread. Choose **Usage quota** to stop the thread when a provider's 5-hour or
-weekly window reaches the percentage you set. When the cap is reached, T3 stops the thread and
-marks it **Limited**. Raise or remove the cap to continue. A model without a known price cannot
-enforce a dollar cap, and quota mode needs a provider that reports usage limits.
+Right-click **Usage** in the thread details card to add consumption limits for that thread. Add as
+many as you need; the thread stops when any one of them is reached, and delegates count toward the
+same thread.
+
+Each limit is either **API spend** or **Usage quota**, and applies to **All** models or to a chosen
+set of them. A spend limit compares the models it covers with your estimated API-list cost, and a
+quota limit compares a provider's window, such as the 5-hour session or the week, with a
+percentage. When a limit is reached, T3 stops the thread and marks it **Limited**; removing the cap
+or raising a limit clears it after the next check. A model without a known price cannot enforce a
+dollar limit, and a quota limit needs a provider that reports usage limits.
 
 ## Set custom model prices
 
