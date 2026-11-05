@@ -256,6 +256,10 @@ the continuation finishes. If the queue was held by a restart, resume it then.
 When the provider or usage tracker reports a reset time, choose **Resume at reset**
 to schedule a continuation. You can cancel it from the thread. Enable **Resume after
 usage limits** in **Settings → Threads** to schedule limit stops by default.
+Enable **Resume threads with pull requests first** there to give threads with a
+linked pull request the first chance at each new allowance; the other limited
+threads resume after those finish. This keeps quota with work that is closest to
+review.
 The environment must be running when the reset arrives; it resumes overdue
 continuations after a restart. Stopping the thread, sending a new message,
 archiving, or settling it prevents a pending continuation from starting.

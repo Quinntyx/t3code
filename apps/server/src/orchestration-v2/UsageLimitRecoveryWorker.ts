@@ -18,8 +18,13 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
+type LimitRecoveryThread = Omit<
+  ProjectionStore.ProjectionLimitRecoveryCandidate,
+  "hasLinkedPullRequest"
+>;
+
 export function limitRecoveryCommand(
-  thread: ProjectionStore.ProjectionLimitRecoveryCandidate,
+  thread: LimitRecoveryThread,
   autoResume: boolean,
   nowMs: number,
   snooze = false,
@@ -91,6 +96,20 @@ export const isLimitRecoverySignal = (event: OrchestrationV2DomainEvent) =>
   (event.type === "run.updated" && event.payload.status === "failed") ||
   (event.type === "runtime-request.updated" && event.payload.status !== "pending");
 
+export function selectLimitRecoveryCandidates<T extends { readonly hasLinkedPullRequest: boolean }>(
+  candidates: ReadonlyArray<T>,
+  options: {
+    readonly prioritizePullRequests: boolean;
+    readonly activePullRequestThread: boolean;
+  },
+): ReadonlyArray<T> {
+  if (!options.prioritizePullRequests) return candidates;
+  const prioritized = candidates.filter((thread) => thread.hasLinkedPullRequest);
+  if (prioritized.length > 0) return prioritized;
+  // The pull-request threads already resumed are still working, so the rest wait.
+  return options.activePullRequestThread ? [] : candidates;
+}
+
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -104,8 +123,19 @@ const makeSweep = Effect.gen(function* () {
       autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
     });
+    const prioritizePullRequests =
+      preferences.autoResumeLimitedThreads && preferences.autoResumePullRequestThreadsFirst;
+    const activePullRequestThread =
+      prioritizePullRequests &&
+      candidates.length > 0 &&
+      candidates.every((thread) => !thread.hasLinkedPullRequest)
+        ? yield* projections.hasActivePullRequestThread()
+        : false;
     const nowMs = DateTime.toEpochMillis(now);
-    for (const thread of candidates) {
+    for (const thread of selectLimitRecoveryCandidates(candidates, {
+      prioritizePullRequests,
+      activePullRequestThread,
+    })) {
       const command = limitRecoveryCommand(
         thread,
         preferences.autoResumeLimitedThreads,

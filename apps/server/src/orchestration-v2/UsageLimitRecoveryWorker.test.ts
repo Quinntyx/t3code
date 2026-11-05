@@ -90,3 +90,50 @@ it.effect("recognizes only events that can change limit recovery", () =>
     assert.isFalse(signal({ type: "runtime-request.updated", payload: { status: "pending" } }));
   }),
 );
+
+const limited = (id: string, hasLinkedPullRequest: boolean) => ({ id, hasLinkedPullRequest });
+const limitedThreads = [
+  limited("without-pull-request", false),
+  limited("with-pull-request", true),
+  limited("also-with-pull-request", true),
+];
+const selected = (
+  candidates: ReadonlyArray<ReturnType<typeof limited>>,
+  prioritizePullRequests: boolean,
+  activePullRequestThread: boolean,
+) =>
+  UsageLimitRecoveryWorker.selectLimitRecoveryCandidates(candidates, {
+    prioritizePullRequests,
+    activePullRequestThread,
+  }).map((candidate) => candidate.id);
+
+it("resumes every limited thread when pull requests do not come first", () => {
+  assert.deepEqual(
+    selected(limitedThreads, false, false),
+    limitedThreads.map((row) => row.id),
+  );
+  assert.deepEqual(
+    selected(limitedThreads, false, true),
+    limitedThreads.map((row) => row.id),
+  );
+  assert.deepEqual(selected([limitedThreads[0]!], false, true), ["without-pull-request"]);
+});
+
+it("resumes only pull-request threads while any of them are limited", () => {
+  assert.deepEqual(selected(limitedThreads, true, false), [
+    "with-pull-request",
+    "also-with-pull-request",
+  ]);
+});
+
+it("holds other limited threads while a pull-request thread is still working", () => {
+  assert.deepEqual(selected(limitedThreads, true, true), [
+    "with-pull-request",
+    "also-with-pull-request",
+  ]);
+  assert.deepEqual(selected([limitedThreads[0]!], true, true), []);
+});
+
+it("resumes other limited threads once pull-request work finishes", () => {
+  assert.deepEqual(selected([limitedThreads[0]!], true, false), ["without-pull-request"]);
+});
