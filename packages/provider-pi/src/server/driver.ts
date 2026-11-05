@@ -13,6 +13,7 @@ import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderL
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { piUsageReader } from "./usage.ts";
 import { readPiOpenCodeGoUsageLimits } from "./goUsageLimits.ts";
+import { readPiCodexUsageLimits } from "./codexUsageLimits.ts";
 import { makePiTextGeneration } from "./textGeneration.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./adapter.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
@@ -153,10 +154,33 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
           settings: effectiveConfig,
           environment: processEnv,
         }),
+        codexUsage: readPiCodexUsageLimits({
+          enabled,
+          settings: effectiveConfig,
+          environment: processEnv,
+        }),
       },
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.map(({ provider, usageLimits }) => ({ ...provider, usageLimits })),
+      Effect.map(({ provider, usageLimits, codexUsage }) => ({
+        ...provider,
+        usageLimits,
+        ...(codexUsage.limits.unavailable || codexUsage.limits.windows.length === 0
+          ? {}
+          : {
+              usageSources: [
+                {
+                  id: "chatgpt",
+                  label: "ChatGPT",
+                  driver: ProviderDriverKind.make("codex"),
+                  // Hub and native Codex logins key on chatgpt_account_id; wham's account_id is a
+                  // different claim, so leaving it out lets the shared registry bind this login.
+                  ...(codexUsage.email ? { email: codexUsage.email } : {}),
+                  limits: codexUsage.limits,
+                },
+              ],
+            }),
+      })),
       Effect.map(stampIdentity),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(HttpClient.HttpClient, httpClient),

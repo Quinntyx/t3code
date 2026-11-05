@@ -123,6 +123,9 @@ the bar show each account's quota, countdown, and credits. Tap a row to open its
 The same account signed in on more than one environment, or reported by a hub as well, counts once.
 Filter with the environment dropdown to see what a single machine has.
 
+On the model picker, a hub's accounts appear on a provider card only when that provider, or a Pi
+route on it, uses the hub's endpoint. A provider pointed at a different proxy keeps its own numbers.
+
 When a Claude or Codex account has no overall weekly quota left, its pooled session contribution
 shows 0% left. The next refill depends on both reset times: an exhausted session must also reset,
 and a partly spent session may only regain its unused portion when the week resets. Missing or
@@ -144,7 +147,8 @@ belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode 
 in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
 your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
 refresh provider status. Pi reports the same OpenCode Go allowance on Pi's card when the Pi
-account is signed in to Go, so a subscription driven through Pi does not need OpenCode running.
+account is signed in to Go, and the ChatGPT allowance when the Pi account is signed in with
+ChatGPT, so a subscription driven through Pi does not need OpenCode or Codex running.
 Cursor reports
 its monthly allowance, including separate Auto and API usage, using the CLI login or
 `CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor

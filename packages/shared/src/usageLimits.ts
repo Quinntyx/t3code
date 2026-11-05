@@ -13,7 +13,9 @@ import {
   type ServerProvider,
   type ServerProviderResetCredits,
   type ServerProviderUsageLimits,
+  type ServerProviderUsageSource,
   type ServerProviderUsageWindow,
+  type UsageLimitSourceSnapshot,
   type UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 
@@ -22,6 +24,62 @@ import * as DateTime from "effect/DateTime";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+
+const USAGE_DRIVER_LABELS: Readonly<Record<string, string>> = {
+  antigravity: "Antigravity",
+  claudeAgent: "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+  grok: "Grok",
+  opencode: "OpenCode",
+  pi: "Pi",
+};
+
+function usageDriverLabel(driver: string): string {
+  return USAGE_DRIVER_LABELS[driver] ?? driver;
+}
+
+// One hub is often entered as localhost in settings and 127.0.0.1 in a model base URL.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+function usageOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const host = LOOPBACK_HOSTS.has(url.hostname) ? "localhost" : url.hostname;
+    return `${url.protocol}//${host}${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return null;
+  }
+}
+
+function usageRoutesByOrigin(provider: ServerProvider): ReadonlyMap<string, ReadonlySet<string>> {
+  const routes = new Map<string, Set<string>>();
+  for (const route of provider.usageRoutes ?? []) {
+    const origin = usageOrigin(route.origin);
+    if (!origin) continue;
+    const drivers = routes.get(origin) ?? new Set<string>();
+    drivers.add(String(route.driver));
+    routes.set(origin, drivers);
+  }
+  return routes;
+}
+
+/**
+ * Drivers an instance can reach at a hub's origin. `null` keeps the same-driver fallback for a
+ * provider whose routes are unknown, and an empty set hides a hub it cannot reach.
+ */
+function hubRouteDrivers(
+  provider: ServerProvider,
+  routesByOrigin: ReadonlyMap<string, ReadonlySet<string>>,
+  source: Pick<UsageLimitSourceSnapshot, "url">,
+): ReadonlySet<string> | null {
+  const origin = source.url ? usageOrigin(source.url) : null;
+  const drivers = origin ? routesByOrigin.get(origin) : undefined;
+  if (drivers) return drivers;
+  // A source without an origin cannot be matched, so it keeps the driver fallback.
+  return origin && routesByOrigin.size > 0 ? new Set() : null;
+}
 
 type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
 
@@ -218,7 +276,7 @@ function providersWithLimits(providers: readonly ServerProvider[]): readonly Ser
       provider.enabled &&
       provider.installed &&
       isProviderAvailable(provider) &&
-      provider.usageLimits !== undefined,
+      (provider.usageLimits !== undefined || (provider.usageSources?.length ?? 0) > 0),
   );
 }
 
@@ -283,6 +341,13 @@ const nativeReport = (provider: ServerProvider): AccountReport => ({
   email: provider.auth.email,
   workspaceId: provider.auth.workspaceId,
   usageLimits: provider.usageLimits,
+});
+
+const usageSourceReport = (source: ServerProviderUsageSource): AccountReport => ({
+  driver: source.driver,
+  email: source.email,
+  workspaceId: source.workspaceId,
+  usageLimits: source.limits,
 });
 
 // Include every enabled login, even unreadable workspaces.
@@ -366,7 +431,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       plan: previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
-      sourceLabel: environments.length > 0 ? null : (previous.sourceLabel ?? next.sourceLabel),
+      // The first entry is the login itself; a hub only names an account it alone reports.
+      sourceLabel: previous.sourceLabel ?? (environments.length > 0 ? null : next.sourceLabel),
       redeem:
         hubRedeems.get(key)?.redeem ??
         (creditSource ? creditSource.redeem : (winner.redeem ?? previous.redeem ?? next.redeem)),
@@ -383,25 +449,49 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       ...(presentation.serverConfig?.providers ?? [])
         .filter((provider) => provider.enabled)
         .map(nativeReport),
+      ...(presentation.serverConfig?.providers ?? []).flatMap((provider) =>
+        (provider.usageSources ?? []).map(usageSourceReport),
+      ),
       ...(presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) => source.accounts),
     ]),
   );
   for (const [environmentId, presentation] of presentations) {
     const label = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
-      if (!provider.usageLimits || limitsNotice(provider.usageLimits) !== null) continue;
-      merge(resolveKey(nativeReport(provider)) ?? `${environmentId}:${provider.instanceId}`, {
-        key: `${environmentId}:${provider.instanceId}`,
-        driver: provider.driver,
-        displayName: provider.displayName?.trim() || null,
-        email: provider.auth.email,
-        plan: provider.auth.label,
-        accentColor: provider.accentColor,
-        environments: [{ environmentId, label }],
-        sourceLabel: null,
-        redeem: { environmentId, input: { instanceId: provider.instanceId } },
-        limits: provider.usageLimits,
-      });
+      if (provider.usageLimits && limitsNotice(provider.usageLimits) === null) {
+        merge(resolveKey(nativeReport(provider)) ?? `${environmentId}:${provider.instanceId}`, {
+          key: `${environmentId}:${provider.instanceId}`,
+          driver: provider.driver,
+          displayName: provider.displayName?.trim() || null,
+          email: provider.auth.email,
+          plan: provider.auth.label,
+          accentColor: provider.accentColor,
+          environments: [{ environmentId, label }],
+          sourceLabel: null,
+          redeem: { environmentId, input: { instanceId: provider.instanceId } },
+          limits: provider.usageLimits,
+        });
+      }
+      // A local source outlives the provider's primary limits, e.g. ChatGPT without an OpenCode Go key.
+      for (const source of provider.usageSources ?? []) {
+        if (limitsNotice(source.limits) !== null) continue;
+        merge(
+          resolveKey(usageSourceReport(source)) ??
+            `${environmentId}:${provider.instanceId}:${source.id}`,
+          {
+            key: `${environmentId}:${provider.instanceId}:${source.id}`,
+            driver: source.driver,
+            displayName: provider.displayName?.trim() || null,
+            email: source.email,
+            plan: provider.auth.label,
+            accentColor: provider.accentColor,
+            environments: [{ environmentId, label }],
+            sourceLabel: source.label,
+            redeem: { environmentId, input: { instanceId: provider.instanceId } },
+            limits: source.limits,
+          },
+        );
+      }
     }
   }
   const labelEnvironment = presentations.size > 1;
@@ -811,6 +901,7 @@ export function collectProviderUsageLimits(
   if (!selected || !hasProviderUsageLimits(selected.driver, providers, sources)) return null;
   const resolveKey = accountKeyResolver([
     ...providers.filter((provider) => provider.enabled).map(nativeReport),
+    ...providers.flatMap((provider) => (provider.usageSources ?? []).map(usageSourceReport)),
     ...sources.flatMap((source) => source.accounts),
   ]);
   type NativeSnapshot = { provider: ServerProvider; limits: ServerProviderUsageLimits };
@@ -843,10 +934,18 @@ export function collectProviderUsageLimits(
     });
   }
   const native = [...nativeByAccount.values()];
+  // Every readable login, whatever its driver, keeps its hub duplicate off other cards.
   const nativeAccountKeys = new Set(
-    native.flatMap(({ usage: { provider, limits } }) => {
-      const key = resolveKey(nativeReport(provider));
-      return key && limits.windows.length && !limits.unavailable ? [key] : [];
+    providers.flatMap((candidate) => {
+      if (!candidate.enabled) return [];
+      return [
+        nativeReport(candidate),
+        ...(candidate.usageSources ?? []).map(usageSourceReport),
+      ].flatMap((report) => {
+        const key = resolveKey(report);
+        const limits = report.usageLimits;
+        return key && limits && limits.windows.length > 0 && !limits.unavailable ? [key] : [];
+      });
     }),
   );
   const accounts: Array<UsageLimitsReport["accounts"][number]> = [];
@@ -898,8 +997,25 @@ export function collectProviderUsageLimits(
       limits: shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
     });
   }
+  for (const source of selected.usageSources ?? []) {
+    if (limitsNotice(source.limits) !== null || source.limits.windows.length === 0) continue;
+    accounts.push({
+      id: `${selected.instanceId}:${source.id}`,
+      driver: source.driver,
+      label: `${source.label} · ${selected.displayName?.trim() || String(selected.driver)}`,
+      sourceLabel: source.label,
+      instanceId: selected.instanceId,
+      resetCreditInput: { instanceId: selected.instanceId },
+      ...(source.email ? { email: source.email } : {}),
+      limits: source.limits,
+    });
+  }
+  const routeOrigins = usageRoutesByOrigin(selected);
   for (const source of sources) {
-    const matching = source.accounts.filter((account) => account.driver === selected.driver);
+    const routeDrivers = hubRouteDrivers(selected, routeOrigins, source);
+    const matching = source.accounts.filter((account) =>
+      routeDrivers ? routeDrivers.has(String(account.driver)) : account.driver === selected.driver,
+    );
     for (const account of matching) {
       const key = resolveKey(account);
       if (key && nativeAccountKeys.has(key)) continue;
@@ -988,8 +1104,9 @@ function summarizePool(pool: LimitPool, now: number): readonly ProviderLimitWind
 }
 
 /**
- * One model picker card: the instance's own account, then each usage source's accounts of the
- * same driver pooled per source. Hub accounts that duplicate a native login stay on that login's card.
+ * One model picker card: the instance's own account, its local usage sources, then accounts from
+ * hubs reachable at its routes, pooled per source and driver. Hub accounts that duplicate a native
+ * login stay on that login's card.
  */
 export function summarizeProviderLimits(
   provider: ServerProvider,
@@ -999,6 +1116,14 @@ export function summarizeProviderLimits(
 ): ProviderLimitsSummary | null {
   const resolveKey = accountKeyResolver([
     ...providers.filter((candidate) => candidate.enabled).map(nativeReport),
+    ...providers.flatMap((candidate) =>
+      (candidate.usageSources ?? []).map((source) => ({
+        driver: source.driver,
+        email: source.email,
+        workspaceId: source.workspaceId,
+        usageLimits: source.limits,
+      })),
+    ),
     ...sources.flatMap((source) => source.accounts),
   ]);
   const usable = (limits: ServerProviderUsageLimits | undefined) =>
@@ -1024,41 +1149,83 @@ export function summarizeProviderLimits(
       )[0]
     : undefined;
   const nativeKeys = new Set(
-    providersWithLimits(providers).flatMap((candidate) => {
-      const key =
-        candidate.driver === provider.driver && usable(candidate.usageLimits)
-          ? resolveKey(nativeReport(candidate))
-          : null;
-      return key ? [key] : [];
+    providers.flatMap((candidate) => {
+      if (!candidate.enabled) return [];
+      const reports = [
+        nativeReport(candidate),
+        ...(candidate.usageSources ?? []).map(usageSourceReport),
+      ];
+      return reports.flatMap((report) => {
+        const key = usable(report.usageLimits) ? resolveKey(report) : null;
+        return key ? [key] : [];
+      });
     }),
   );
-  const pooled = sources.flatMap((source) => {
-    const accounts = source.accounts.flatMap((account): LimitAccount[] => {
-      const key = resolveKey(account);
-      if (account.driver !== provider.driver || !usable(account.usageLimits)) return [];
-      if (key !== null && nativeKeys.has(key)) return [];
-      return [
+  const routesByOrigin = usageRoutesByOrigin(provider);
+  const localSources = (provider.usageSources ?? []).flatMap((source) => {
+    if (!usable(source.limits) || source.limits.windows.length === 0) return [];
+    const pool = collectLimitPools(
+      [
         {
-          key: `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`,
-          driver: account.driver,
-          displayName: null,
-          email: account.email,
-          plan: account.plan,
-          accentColor: undefined,
+          key: `${provider.instanceId}:${source.id}`,
+          driver: source.driver,
+          displayName: provider.displayName?.trim() || null,
+          email: source.email,
+          plan: provider.auth.label,
+          accentColor: provider.accentColor,
           environments: [],
           sourceLabel: source.label,
           redeem: null,
-          limits: account.usageLimits,
+          limits: source.limits,
+        },
+      ],
+      now,
+    )[0];
+    return pool
+      ? [{ id: `provider:${source.id}`, label: source.label, windows: summarizePool(pool, now) }]
+      : [];
+  });
+  const pooled = sources.flatMap((source) => {
+    const routeDrivers = hubRouteDrivers(provider, routesByOrigin, source);
+    const drivers = routeDrivers ?? new Set([String(provider.driver)]);
+    const groups = new Map<string, LimitAccount[]>();
+    for (const account of source.accounts) {
+      if (!drivers.has(String(account.driver)) || !usable(account.usageLimits)) continue;
+      const key = resolveKey(account);
+      if (key !== null && nativeKeys.has(key)) continue;
+      const group = groups.get(String(account.driver)) ?? [];
+      group.push({
+        key: `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`,
+        driver: account.driver,
+        displayName: null,
+        email: account.email,
+        plan: account.plan,
+        accentColor: undefined,
+        environments: [],
+        sourceLabel: source.label,
+        redeem: null,
+        limits: account.usageLimits,
+      });
+      groups.set(String(account.driver), group);
+    }
+    return [...groups].flatMap(([driver, accounts]) => {
+      const pool = collectLimitPools(accounts, now)[0];
+      if (!pool || pool.windows.length === 0) return [];
+      const suffix = groups.size > 1 ? ` · ${usageDriverLabel(driver)}` : "";
+      return [
+        {
+          // A stable key: reachable drivers appear and vanish, the source stays the same row.
+          id: `${source.id}:${driver}`,
+          label: `${source.label}${suffix}`,
+          windows: summarizePool(pool, now),
         },
       ];
     });
-    const pool = collectLimitPools(accounts, now)[0];
-    return pool ? [{ id: source.id, label: source.label, windows: summarizePool(pool, now) }] : [];
   });
-  if (!own && pooled.length === 0) return null;
+  if (!own && localSources.length === 0 && pooled.length === 0) return null;
   return {
     windows: own ? summarizePool(own, now) : [],
-    sources: pooled,
+    sources: [...localSources, ...pooled],
     exhausted: exhaustedUsageWindow(provider, now) !== undefined,
   };
 }

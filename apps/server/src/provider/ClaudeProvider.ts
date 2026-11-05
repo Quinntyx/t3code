@@ -4,6 +4,7 @@ import {
   type ServerProvider,
   type ServerProviderSlashCommand,
   type ServerProviderResetCredits,
+  ProviderDriverKind,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -36,7 +37,11 @@ import {
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
 import { resolveClaudeSdkExecutablePath } from "./Drivers/ClaudeExecutable.ts";
-import { hasClaudeManagedMcpConfig, makeClaudeEnvironment } from "./Drivers/ClaudeHome.ts";
+import {
+  hasClaudeManagedMcpConfig,
+  makeClaudeEnvironment,
+  readClaudeSettingsBaseUrl,
+} from "./Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "./Drivers/ClaudeSkills.ts";
 import type { ProviderWorkspaceSnapshot } from "@t3tools/provider-core/server/driver";
 import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
@@ -468,6 +473,23 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  // First-party account fields cannot verify custom endpoint credentials.
+  const configuredBaseUrl = resolvedEnvironment.ANTHROPIC_BASE_URL?.trim();
+  // The CLI reads its home settings itself, so a base URL there is this instance's endpoint too.
+  const baseUrl =
+    configuredBaseUrl && configuredBaseUrl.length > 0
+      ? configuredBaseUrl
+      : yield* readClaudeSettingsBaseUrl(claudeSettings, resolvedEnvironment);
+  const endpoint = URL.parse(baseUrl ?? "");
+  const customApiEndpoint =
+    endpoint !== null &&
+    (endpoint.protocol === "http:" || endpoint.protocol === "https:") &&
+    endpoint.hostname !== "" &&
+    endpoint.hostname !== "api.anthropic.com";
+  // Routes are a configuration fact, so a failed capabilities probe must not hide them.
+  const usageRoutes = customApiEndpoint
+    ? [{ driver: ProviderDriverKind.make("claudeAgent"), origin: endpoint.origin }]
+    : [];
   const allModels = providerModelsFromSettings(
     modelCatalog.models.map((entry) => entry.model),
     claudeSettings.customModels,
@@ -585,6 +607,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       checkedAt,
       models,
       updateRequiredModels,
+      usageRoutes,
       slashCommands: dedupedSlashCommands,
       skills,
       probe: {
@@ -601,13 +624,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  // First-party account fields cannot verify custom endpoint credentials.
-  const endpoint = URL.parse(resolvedEnvironment.ANTHROPIC_BASE_URL?.trim() ?? "");
-  const customApiEndpoint =
-    endpoint !== null &&
-    (endpoint.protocol === "http:" || endpoint.protocol === "https:") &&
-    endpoint.hostname !== "" &&
-    endpoint.hostname !== "api.anthropic.com";
   if (!customApiEndpoint && claudeAuthStatus(capabilities) === "unauthenticated") {
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
@@ -658,6 +674,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     checkedAt,
     models,
     updateRequiredModels,
+    usageRoutes,
     slashCommands: dedupedSlashCommands,
     skills,
     probe: {

@@ -2,6 +2,8 @@ import {
   type CustomModelSetting,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerProviderUsageRoute,
+  ProviderDriverKind,
 } from "@t3tools/contracts";
 import type { PiSettings } from "../settings.ts";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -72,6 +74,7 @@ const PI_DEFAULT_MODEL: ServerProviderModel = {
 
 interface PiDiscovery extends PiDiscoveredCommands {
   readonly models: ReadonlyArray<ServerProviderModel>;
+  readonly usageRoutes: ReadonlyArray<ServerProviderUsageRoute>;
   readonly authenticated: boolean;
 }
 
@@ -86,10 +89,33 @@ function piModelsFromSettings(
   );
 }
 
+function usageOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function piUsageDriver(provider: string, api: string | undefined): ProviderDriverKind | null {
+  if (provider === "openai-codex") return ProviderDriverKind.make("codex");
+  if (provider === "cliproxyapi" || provider.startsWith("cliproxyapi-")) {
+    return ProviderDriverKind.make(api === "anthropic-messages" ? "claudeAgent" : "codex");
+  }
+  return null;
+}
+
 function parseDiscoveredModels(
   data: unknown,
   state: unknown,
-): Result.Result<ReadonlyArray<ServerProviderModel>, PiRpcError> {
+): Result.Result<
+  {
+    readonly models: ReadonlyArray<ServerProviderModel>;
+    readonly usageRoutes: ReadonlyArray<ServerProviderUsageRoute>;
+  },
+  PiRpcError
+> {
   const models = recordField(data, "models");
   if (!Array.isArray(models)) {
     return Result.fail(
@@ -101,6 +127,8 @@ function parseDiscoveredModels(
   const activeModelId = recordString(activeModel, "id");
   const seen = new Set<string>();
   const parsed: Array<ServerProviderModel> = [];
+  const usageRoutes: Array<ServerProviderUsageRoute> = [];
+  const routeKeys = new Set<string>();
   for (const model of models) {
     const provider = recordString(model, "provider");
     const id = recordString(model, "id");
@@ -108,6 +136,16 @@ function parseDiscoveredModels(
       return Result.fail(
         new PiRpcError({ operation: "get_available_models", detail: "Invalid model identity" }),
       );
+    }
+    const usageDriver = piUsageDriver(provider, recordString(model, "api"));
+    const baseUrl = recordString(model, "baseUrl");
+    if (usageDriver && baseUrl) {
+      const origin = usageOrigin(baseUrl);
+      const key = origin ? `${usageDriver}:${origin}` : null;
+      if (origin && key && !routeKeys.has(key)) {
+        routeKeys.add(key);
+        usageRoutes.push({ driver: usageDriver, origin });
+      }
     }
     const slug = `${provider}/${id}`;
     if (seen.has(slug)) continue;
@@ -125,7 +163,7 @@ function parseDiscoveredModels(
       ),
     });
   }
-  return Result.succeed(parsed);
+  return Result.succeed({ models: parsed, usageRoutes });
 }
 
 const makePiDiscoveryConnection = Effect.fnUntraced(function* (
@@ -167,13 +205,14 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
   const commandsData = yield* connection
     .request({ type: "get_commands" })
     .pipe(Effect.orElseSucceed(() => undefined));
-  const discoveredModels = yield* Effect.fromResult(parseDiscoveredModels(modelsData, stateData));
+  const discovered = yield* Effect.fromResult(parseDiscoveredModels(modelsData, stateData));
   const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
   return {
-    models: discoveredModels,
+    models: discovered.models,
+    usageRoutes: discovered.usageRoutes,
     slashCommands: withPiBuiltinSlashCommands(slashCommands),
     skills,
-    authenticated: discoveredModels.length > 0,
+    authenticated: discovered.models.length > 0,
   } satisfies PiDiscovery;
 }, Effect.scoped);
 
@@ -437,6 +476,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     enabled: piSettings.enabled,
     checkedAt,
     models,
+    usageRoutes: discovery.usageRoutes,
     slashCommands: discovery.slashCommands,
     skills: discovery.skills,
     probe: {

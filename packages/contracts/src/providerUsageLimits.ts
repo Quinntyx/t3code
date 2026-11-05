@@ -55,6 +55,23 @@ export const ProviderUsageLimitsUpdate = Schema.Struct({
 });
 export type ProviderUsageLimitsUpdate = typeof ProviderUsageLimitsUpdate.Type;
 
+export const ServerProviderUsageRoute = Schema.Struct({
+  driver: ProviderDriverKind,
+  origin: TrimmedNonEmptyString,
+});
+export type ServerProviderUsageRoute = typeof ServerProviderUsageRoute.Type;
+
+/** A quota the provider reads from one of its own logins, beside its primary limits. */
+export const ServerProviderUsageSource = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  driver: ProviderDriverKind,
+  email: Schema.optional(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(TrimmedNonEmptyString),
+  limits: ServerProviderUsageLimits,
+});
+export type ServerProviderUsageSource = typeof ServerProviderUsageSource.Type;
+
 export const UsageLimitSourceAccount = Schema.Struct({
   id: TrimmedNonEmptyString,
   driver: ProviderDriverKind,
@@ -69,6 +86,8 @@ export const UsageLimitSourceSnapshot = Schema.Struct({
   id: UsageLimitSourceId,
   kind: Schema.Literal("cliproxy"),
   label: TrimmedNonEmptyString,
+  /** Endpoint the hub manages; provider routes at the same origin share its accounts. */
+  url: Schema.optionalKey(TrimmedNonEmptyString),
   checkedAt: IsoDateTime,
   accounts: ForwardCompatibleArray(UsageLimitSourceAccount),
   error: Schema.optional(TrimmedNonEmptyString),
