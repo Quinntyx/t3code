@@ -297,9 +297,12 @@ export const layer: Layer.Layer<
           const now = DateTime.toEpochMillis(occurredAt);
           const resetAt =
             usageLimitResetAt(snapshot, now, model) ??
-            (usageSources
-              ? usageLimitSourceResetAt(yield* usageSources.current, input.event.driver, now, model)
-              : null);
+            usageLimitSourceResetAt(
+              usageSources ? yield* usageSources.current : [],
+              snapshot,
+              now,
+              model,
+            );
           if (resetAt !== null) payload = { ...payload, failure: { ...payload.failure, resetAt } };
         }
         return yield* decodeDomainEvent(

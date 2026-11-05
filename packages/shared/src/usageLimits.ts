@@ -6,7 +6,6 @@ import {
   resolveProjectProviderInstanceEnabled,
   type UsageLimitsReport,
   type ProviderInstanceId,
-  type ProviderDriverKind,
   type ProviderConsumeResetCreditInput,
   type ServerProviderSlashCommand,
   isProviderAvailable,
@@ -169,25 +168,34 @@ export function usageLimitResetAt(
 
 export function usageLimitSourceResetAt(
   sources: UsageLimitSourceSnapshots,
-  driver: ProviderDriverKind,
+  provider: ServerProvider | undefined,
   now: number,
   model?: string,
 ): string | null {
+  if (provider === undefined) return null;
   const modelId = model?.split(/[/:]/).at(-1);
   const quotaDriver = modelId?.startsWith("claude-")
     ? "claudeAgent"
     : modelId !== undefined && /^(?:gpt-|codex(?:-|$)|o\d(?:-|$))/.test(modelId)
       ? "codex"
-      : driver;
-  let earliest: string | null = null;
+      : provider.driver;
+  const accounts = (provider.usageSources ?? []).map((source) => ({
+    driver: source.driver,
+    usageLimits: source.limits,
+  }));
+  const routesByOrigin = usageRoutesByOrigin(provider);
   for (const source of sources) {
     if (source.error) continue;
-    for (const account of source.accounts) {
-      if (account.driver !== quotaDriver) continue;
-      const resetAt = usageLimitResetAt(account, now, model);
-      if (resetAt !== null && (earliest === null || Date.parse(resetAt) < Date.parse(earliest))) {
-        earliest = resetAt;
-      }
+    const drivers = hubRouteDrivers(provider, routesByOrigin, source);
+    if (drivers !== null && !drivers.has(quotaDriver)) continue;
+    accounts.push(...source.accounts);
+  }
+  let earliest: string | null = null;
+  for (const account of accounts) {
+    if (account.driver !== quotaDriver) continue;
+    const resetAt = usageLimitResetAt(account, now, model);
+    if (resetAt !== null && (earliest === null || Date.parse(resetAt) < Date.parse(earliest))) {
+      earliest = resetAt;
     }
   }
   return earliest;

@@ -276,7 +276,7 @@ const makeSweep = Effect.gen(function* () {
           const model = run.modelSelection.model;
           const resetAt =
             usageLimitResetAt(snapshot, nowMs, model) ??
-            usageLimitSourceResetAt(sources, instance.driverKind, nowMs, model);
+            usageLimitSourceResetAt(sources, snapshot, nowMs, model);
           if (resetAt === null) return;
           yield* eventSink.writeWithEffects({
             fillUsageLimitResetAtOnly: true,
