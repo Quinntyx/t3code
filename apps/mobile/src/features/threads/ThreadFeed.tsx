@@ -281,7 +281,7 @@ import {
   resolveWorkspaceRelativeFilePath,
 } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
-import { UNSENT_MESSAGE_BUBBLE_CLASS_NAME } from "./unsentMessageStyle";
+import { UNSENT_MESSAGE_ANNOUNCEMENT, unsentMessageBubbleClassName } from "./unsentMessageStyle";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
 import { useFileChipShare } from "./useFileChipShare";
@@ -1783,7 +1783,13 @@ function renderFeedEntry(
             <GuestMessageName name={presentation.guestName} />
           ) : null}
           <View
-            className={cn("min-w-0 rounded-[20px]", unsent && UNSENT_MESSAGE_BUBBLE_CLASS_NAME)}
+            className={cn(
+              "min-w-0 rounded-[20px]",
+              unsent &&
+                unsentMessageBubbleClassName(
+                  presentation.attribution === "guest" ? "guest" : "default",
+                ),
+            )}
             style={{
               ...(unsent ? null : { backgroundColor: userBubbleColor }),
               maxWidth: props.duoColumns ? "85%" : props.userBubbleMaxWidth,
@@ -1797,6 +1803,12 @@ function renderFeedEntry(
             }}
           >
             {presentation.attribution === "guest" && !unsent ? <GuestBubbleTint /> : null}
+            {unsent ? (
+              // React Native has no visually-hidden text, so a transparent 1px node carries the state.
+              <Text className="absolute h-px w-px overflow-hidden opacity-0">
+                {UNSENT_MESSAGE_ANNOUNCEMENT}
+              </Text>
+            ) : null}
             {foldRowId !== null ? (
               <AgentMessageFoldHeader
                 environmentId={props.environmentId}
