@@ -418,6 +418,31 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+export const OrchestrationV2GoalStatus = Schema.Literals([
+  "active",
+  "paused",
+  "blocked",
+  "usage_limited",
+  "budget_limited",
+  "complete",
+]);
+export type OrchestrationV2GoalStatus = typeof OrchestrationV2GoalStatus.Type;
+
+/**
+ * The thread's goal. A provider with native goals owns the state and fills in its telemetry;
+ * elsewhere T3 Code keeps the objective and status and drives the turns itself.
+ */
+export const OrchestrationV2Goal = Schema.Struct({
+  objective: TrimmedNonEmptyString,
+  status: OrchestrationV2GoalStatus,
+  tokensUsed: Schema.optional(NonNegativeInt),
+  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  timeUsedSeconds: Schema.optional(NonNegativeInt),
+  checks: Schema.optional(NonNegativeInt),
+  lastCheck: Schema.optional(Schema.String),
+});
+export type OrchestrationV2Goal = typeof OrchestrationV2Goal.Type;
+
 /**
  * `score` is an open count that halves every two weeks, as of `openedAt`.
  * `picks` stores lowercase palette queries, newest first.
@@ -454,6 +479,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   awaitedScheduledTaskIds: Schema.optional(Schema.Array(ScheduledTaskId)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
+  /** A goal T3 Code drives itself. Providers with native goals keep theirs on the provider thread. */
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
@@ -571,6 +600,15 @@ export function parseGoalCommand(message: {
     default:
       return { type: "set", objective: argument };
   }
+}
+
+/** The instruction a provider receives for a goal T3 Code drives itself. */
+export function goalTurnPrompt(objective: string): string {
+  return [
+    `Goal for this thread: ${objective}`,
+    "",
+    'Keep working until the goal is met. Call the `t3_goal` tool with action "complete" when it is, or action "blocked" with what is missing if you cannot finish.',
+  ].join("\n");
 }
 
 /** Why T3 Code sent this `/compact` on its own, or undefined for one someone asked for. */
@@ -1032,27 +1070,6 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
 export type OrchestrationV2ProviderThreadNativeMetadata =
   typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
 
-export const OrchestrationV2ProviderGoalStatus = Schema.Literals([
-  "active",
-  "paused",
-  "blocked",
-  "usage_limited",
-  "budget_limited",
-  "complete",
-]);
-export type OrchestrationV2ProviderGoalStatus = typeof OrchestrationV2ProviderGoalStatus.Type;
-
-export const OrchestrationV2ProviderGoal = Schema.Struct({
-  objective: TrimmedNonEmptyString,
-  status: OrchestrationV2ProviderGoalStatus,
-  tokensUsed: Schema.optional(NonNegativeInt),
-  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
-  timeUsedSeconds: Schema.optional(NonNegativeInt),
-  checks: Schema.optional(NonNegativeInt),
-  lastCheck: Schema.optional(Schema.String),
-});
-export type OrchestrationV2ProviderGoal = typeof OrchestrationV2ProviderGoal.Type;
-
 export const OrchestrationV2ProviderThread = Schema.Struct({
   id: ProviderThreadId,
   driver: ProviderDriverKind,
@@ -1082,7 +1099,7 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
   nativeMetadata: Schema.optional(Schema.NullOr(OrchestrationV2ProviderThreadNativeMetadata)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)).pipe(
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   createdAt: Schema.DateTimeUtc,
@@ -2125,7 +2142,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   providerInstanceHistory: Schema.optional(Schema.Array(ProviderInstanceId)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)),
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)),
   itemCount: NonNegativeInt,
   visibleItemCount: NonNegativeInt,
   createdAt: Schema.DateTimeUtc,
@@ -3075,6 +3092,18 @@ export const OrchestrationV2Command = Schema.Union([
     expectedConsumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    /** Null clears the goal. Without `objective`, the goal keeps the objective it has. */
+    goal: Schema.NullOr(
+      Schema.Struct({
+        objective: Schema.optional(TrimmedNonEmptyString),
+        status: Schema.Literals(["active", "paused", "complete", "blocked"]),
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),

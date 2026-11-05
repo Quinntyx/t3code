@@ -125,6 +125,12 @@ start no Codex turn settle on a provider turn without a native ref, which native
 not count. Claude's SDK mode emits no goal events; its adapter reads goal state from the
 synthetic command output and Stop hook feedback in the transcript.
 
+Providers without native goals get T3 Code's own loop: the goal lives on the app thread, and
+[GoalLoopService](../../apps/server/src/orchestration-v2/GoalLoopService.ts) starts the next turn
+after each completed one until the agent calls the `t3_goal` tool. Those providers receive the
+objective as an instruction rather than the `/goal` text. Keep the loop in orchestration; an
+adapter that grew its own would duplicate the pause, clear, and stop rules.
+
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
 therefore rejects revert before touching files. Native permission and question option IDs must

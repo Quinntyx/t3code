@@ -327,6 +327,21 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       }),
     ),
   ),
+  t3_goal: writesThread((input) =>
+    Effect.gen(function* () {
+      const { projection } = yield* readThread(input.threadId);
+      if (projection.thread.goal == null)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "This thread has no goal.",
+        });
+      return yield* dispatch(input.threadId, (common) => ({
+        ...common,
+        type: "thread.goal.update",
+        goal: { status: input.action === "complete" ? "complete" : "blocked" },
+      }));
+    }),
+  ),
   t3_thread_organize: writesThread((input) =>
     Effect.gen(function* () {
       const { threads, projection, caller } = yield* readThread(input.threadId);

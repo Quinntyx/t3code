@@ -143,6 +143,18 @@ const PendingRequestTool = Tool.make("t3_pending_request", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const GoalTool = Tool.make("t3_goal", {
+  ...commandTool,
+  description:
+    "Mark this thread's goal complete or blocked. Use it only when the thread has a goal from /goal: `complete` when the goal is met, `blocked` when you cannot finish.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    threadId: Schema.optional(ThreadId),
+    action: Schema.Literals(["complete", "blocked"]),
+  }),
+  success: OrchestrationV2DispatchCommandResult,
+});
+
 const threadConfiguration = Schema.Struct({
   threadId: ThreadId,
   modelSelection: ModelSelection,
@@ -238,6 +250,7 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
 
 export const ThreadToolkit = Toolkit.make(
   ScheduledTaskRunTool,
+  GoalTool,
   ThreadSearchTool,
   ThreadConfigureTool,
   ThreadTransferTool,

@@ -2793,39 +2793,40 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("shows the native goal of the active provider thread on the shell", () =>
+  it.effect("shows the thread's goal on the shell, from the provider or from T3 Code", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
       const threadId = ThreadId.make("thread:provider-goal");
+      const thread = {
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id: threadId,
+        projectId: ProjectId.make("project:provider-goal"),
+        title: "Provider goal",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
       yield* projectionStore.apply({
         id: EventId.make("event:provider-goal:thread"),
         type: "thread.created",
         threadId,
         occurredAt: now,
-        payload: {
-          createdBy: "user",
-          creationSource: "web",
-          id: threadId,
-          projectId: ProjectId.make("project:provider-goal"),
-          title: "Provider goal",
-          providerInstanceId,
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          activeProviderThreadId: null,
-          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-          forkedFrom: null,
-          createdAt: now,
-          updatedAt: now,
-          archivedAt: null,
-          settledOverride: null,
-          settledAt: null,
-          lastVisitedAt: null,
-          deletedAt: null,
-        },
+        payload: thread,
       });
       const applyProviderThread = (
         suffix: string,
@@ -2865,7 +2866,35 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
 
       yield* applyProviderThread("first", goal, 0);
       assert.deepEqual(yield* shellGoal, goal);
-      yield* applyProviderThread("second", null, 1);
+
+      // A goal T3 Code drives wins over the provider's, and clearing it falls back.
+      const ownGoal = { objective: "T3 Code's goal", status: "active" as const };
+      yield* projectionStore.apply({
+        id: EventId.make("event:provider-goal:own"),
+        type: "thread.metadata-updated",
+        threadId,
+        occurredAt: DateTime.add(now, { seconds: 1 }),
+        payload: {
+          ...thread,
+          activeProviderThreadId: ProviderThreadId.make("provider-thread:provider-goal:first"),
+          goal: ownGoal,
+        },
+      });
+      assert.deepEqual(yield* shellGoal, ownGoal);
+      yield* projectionStore.apply({
+        id: EventId.make("event:provider-goal:cleared"),
+        type: "thread.metadata-updated",
+        threadId,
+        occurredAt: DateTime.add(now, { seconds: 2 }),
+        payload: {
+          ...thread,
+          activeProviderThreadId: ProviderThreadId.make("provider-thread:provider-goal:first"),
+          goal: null,
+        },
+      });
+      assert.deepEqual(yield* shellGoal, goal);
+
+      yield* applyProviderThread("second", null, 3);
       assert.isNull(yield* shellGoal);
     }),
   );

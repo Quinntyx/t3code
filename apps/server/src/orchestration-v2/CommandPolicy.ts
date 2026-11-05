@@ -4,7 +4,7 @@ import {
   type OrchestrationV2Command,
   OrchestrationV2ProviderCapabilities,
   type OrchestrationV2GoalCommand,
-  type OrchestrationV2ProviderGoalStatus,
+  type OrchestrationV2GoalStatus,
   type OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
   ProviderInstanceId,
@@ -75,7 +75,7 @@ export function isNativeMaintenanceCommand(message: {
  */
 export function goalCommandStopsActiveRun(
   command: OrchestrationV2GoalCommand,
-  goalStatus: OrchestrationV2ProviderGoalStatus | null,
+  goalStatus: OrchestrationV2GoalStatus | null,
 ): boolean {
   switch (command.type) {
     case "set":

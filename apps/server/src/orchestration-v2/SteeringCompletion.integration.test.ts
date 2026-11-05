@@ -11,6 +11,7 @@ import {
   ProviderTurnId,
   ThreadId,
   TurnItemId,
+  goalTurnPrompt,
   type ModelSelection,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
@@ -447,7 +448,9 @@ const composerSelection = {
 const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (
   name: string,
   canRestart = false,
+  driverKind: ProviderDriverKind = driver,
 ) {
+  const driver = driverKind;
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
   const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
@@ -588,7 +591,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     yield* Fiber.join(running);
     return threadId;
   });
-  return { cwd, events, started, steered, layer, startFirstTurn };
+  return { cwd, events, started, steered, layer, startFirstTurn, driverKind };
 });
 
 it.effect("sends a selected held message once and preserves the remaining queue order", () =>
@@ -1461,6 +1464,77 @@ it.effect("stops the running turn when a goal clear ends the goal driving it", (
           queue: [],
           started: ["first", "/goal clear"],
           stopRequested: true,
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+const t3GoalHarness = Effect.fn("t3GoalHarness")(function* (name: string) {
+  const harness = yield* nextTurnSelectionHarness(name, false, ProviderDriverKind.make("grok"));
+  const send = (id: string, text: string, delivery: "queue" | "auto") =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(id),
+        threadId: ThreadId.make(`thread:${name}`),
+        messageId: MessageId.make(`message:${id}`),
+        text,
+        attachments: [],
+        modelSelection: runSelection,
+        ...(delivery === "queue"
+          ? { dispatchMode: { type: "queue_after_active" } }
+          : { dispatchMode: { type: "start_immediately" }, deliveryIntent: "auto" }),
+        createdBy: "user",
+        creationSource: "web",
+      });
+    });
+  const read = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const projection = yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(threadId);
+      return {
+        goal: projection.thread.goal ?? null,
+        started: harness.started.map((turn) => turn.message.text),
+      };
+    });
+  return { ...harness, send, read };
+});
+
+it.effect("keeps a goal T3 Code owns and sends its objective to the provider", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { layer, startFirstTurn, send, read } = yield* t3GoalHarness("t3-goal-set");
+      yield* Effect.gen(function* () {
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* startFirstTurn;
+        yield* send("goal", "/goal all tests pass", "auto");
+        yield* worker.drain();
+
+        assert.deepEqual(yield* read(threadId), {
+          goal: { objective: "all tests pass", status: "active" },
+          started: ["first", goalTurnPrompt("all tests pass")],
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("clears a goal T3 Code owns without sending the command to the provider", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { layer, startFirstTurn, send, read } = yield* t3GoalHarness("t3-goal-clear");
+      yield* Effect.gen(function* () {
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* startFirstTurn;
+        yield* send("goal", "/goal all tests pass", "auto");
+        yield* worker.drain();
+        yield* send("clear", "/goal clear", "auto");
+        yield* worker.drain();
+
+        assert.deepEqual(yield* read(threadId), {
+          goal: null,
+          started: ["first", goalTurnPrompt("all tests pass")],
         });
       }).pipe(Effect.provide(layer));
     }),
