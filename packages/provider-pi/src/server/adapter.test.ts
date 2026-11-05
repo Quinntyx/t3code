@@ -2760,6 +2760,72 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("rolls back a thread this reopened session does not host yet", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = {
+        id: ProviderThreadId.make("provider-thread:pi-reopened"),
+        driver: PI_PROVIDER,
+        providerInstanceId: PI_INSTANCE_ID,
+        providerSessionId: SESSION_ID,
+        appThreadId: THREAD_ID,
+        ownerNodeId: null,
+        nativeThreadRef: { driver: PI_PROVIDER, nativeId: FAKE_SESSION_FILE, strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: null,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        pendingBackgroundTasks: [],
+        createdAt: at(10),
+        updatedAt: at(10),
+      } satisfies OrchestrationV2ProviderThread;
+      fake.queueEntries({ entries: TURN_ONE_ENTRIES, leafId: "a1b" });
+      const snapshot = yield* runtime.rollbackThread({
+        providerThread,
+        target: {
+          type: "thread_start",
+          checkpointId: CheckpointId.make("checkpoint-start"),
+          appRunOrdinal: 0,
+        },
+        providerThreadTurns: [
+          {
+            id: ProviderTurnId.make("turn-1"),
+            providerThreadId: providerThread.id,
+            nodeId: NodeId.make("node-1"),
+            runAttemptId: null,
+            nativeTurnRef: { driver: PI_PROVIDER, nativeId: "a1b", strength: "strong" },
+            ordinal: 1,
+            status: "completed",
+            startedAt: at(20),
+            completedAt: at(30),
+          },
+        ],
+      });
+      const resumed = fake.allRequests().find((request) => request.type === "switch_session");
+      assert.equal(resumed?.["sessionPath"], FAKE_SESSION_FILE);
+      assert.deepEqual(
+        fake
+          .allRequests()
+          .filter((request) => request.type === "fork")
+          .map((request) => request.entryId),
+        ["a1b"],
+      );
+      assert.equal(snapshot.providerThread.id, providerThread.id);
+      // A cold bind consumes the session's one implicit registration, so the next unbound thread needs a new one.
+      const rebound = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        existingProviderThread: { ...providerThread, nativeThreadRef: null },
+      });
+      assert.isTrue(fake.allRequests().some((request) => request.type === "new_session"));
+      assert.notEqual(rebound.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("rolls back past turns that left nothing in the session tree", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
