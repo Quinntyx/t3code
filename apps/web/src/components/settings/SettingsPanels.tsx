@@ -474,6 +474,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? ["Resume after usage limits"]
       : []),
+    ...(settings.autoResumePullRequestThreadsFirst !==
+    DEFAULT_UNIFIED_SETTINGS.autoResumePullRequestThreadsFirst
+      ? ["Resume threads with pull requests first"]
+      : []),
     ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
       ? ["Snooze until limits reset"]
       : []),
@@ -650,6 +654,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+      autoResumePullRequestThreadsFirst: DEFAULT_UNIFIED_SETTINGS.autoResumePullRequestThreadsFirst,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
@@ -1608,6 +1613,22 @@ export function ThreadsSettingsPanel() {
                 updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
               }
               aria-label="Resume after usage limits"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("auto-resume-pull-request-threads-first")}
+          description="Resume limited threads with a linked pull request before the rest. Other limited threads wait until those finish."
+          settingKeys={["autoResumePullRequestThreadsFirst"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["autoResumePullRequestThreadsFirst"]}
+              checked={settings.autoResumePullRequestThreadsFirst}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumePullRequestThreadsFirst: Boolean(checked) })
+              }
+              aria-label="Resume threads with pull requests first"
             />
           }
         />

@@ -15,7 +15,10 @@ import {
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
+import {
+  threadPullRequestsOf,
+  visibleThreadPullRequests,
+} from "../sourceControl/threadPullRequests.ts";
 import type {
   OrchestrationV2AppThread,
   OrchestrationV2Checkpoint,
@@ -182,7 +185,10 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "updatedAt"
   | "limitRecovery"
   | "snoozedUntil"
->;
+> & {
+  /** A linked pull request, or one discovered on the thread's branch. */
+  readonly hasLinkedPullRequest: boolean;
+};
 
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
@@ -480,6 +486,8 @@ export interface ProjectionStoreV2Shape {
     readonly autoResume: boolean;
     readonly snooze: boolean;
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
+  /** A pull-request thread is still working, so lower-priority resumes wait behind it. */
+  readonly hasActivePullRequestThread: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
@@ -3849,9 +3857,45 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             pendingRuntimeRequest: null,
             limitRecovery: thread.limitRecovery ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
+            hasLinkedPullRequest:
+              thread.branchPullRequest != null ||
+              visibleThreadPullRequests(threadPullRequestsOf(thread)).length > 0,
           });
         }
         return candidates;
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
+    const hasActivePullRequestThread = Effect.fn("ProjectionStore.hasActivePullRequestThread")(
+      function* () {
+        const rows = yield* sql<{ readonly active: number }>`
+          SELECT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_threads t
+            WHERE t.deleted_at IS NULL
+              AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+              AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+              AND json_extract(t.payload_json, '$.settledAt') IS NULL
+              AND (
+                json_extract(t.payload_json, '$.branchPullRequest') IS NOT NULL
+                OR (
+                  CASE WHEN json_type(t.payload_json, '$.pullRequests') IS NULL
+                    THEN json_extract(t.payload_json, '$.linkedPullRequest') IS NOT NULL
+                    ELSE EXISTS (
+                      SELECT 1 FROM json_each(t.payload_json, '$.pullRequests') link
+                      WHERE json_extract(link.value, '$.source') IS NOT 'stack-dismissed'
+                    )
+                  END
+                )
+              )
+              AND EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs r
+                WHERE r.thread_id = t.thread_id
+                  AND r.status IN ('preparing', 'starting', 'running', 'waiting')
+              )
+          ) AS active
+        `;
+        return (rows[0]?.active ?? 0) === 1;
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
@@ -6816,6 +6860,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
+      hasActivePullRequestThread: readOnReader(hasActivePullRequestThread),
       getRecoveryThreadIds: readOnReader(getRecoveryThreadIds),
       getUnreadableThreadIds: readOnReader(getUnreadableThreadIds),
       getThreadSnapshot: readOnReader(getThreadSnapshot),

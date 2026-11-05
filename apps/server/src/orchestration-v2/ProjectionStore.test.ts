@@ -4160,6 +4160,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             pendingRuntimeRequest: null,
             limitRecovery: sqlShell.limitRecovery,
             snoozedUntil: sqlShell.snoozedUntil,
+            hasLinkedPullRequest:
+              (sqlShell.pullRequests ?? []).length > 0 || sqlShell.branchPullRequest != null,
           });
         } else assert.isUndefined(candidate);
         assert.isUndefined(candidates.find((row) => row.id === otherThreadId));
@@ -4172,6 +4174,29 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         payload: limitItem,
       });
       yield* applyRun("failed");
+      yield* assertSummary("Plan limit reached.", "usage_limit");
+      const thread = yield* store.getThread(threadId);
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:pull-request"),
+        type: "thread.pull-request-synced",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          pullRequests: [
+            {
+              host: "github.com",
+              repository: "owner/repository",
+              number: 42,
+              url: "https://github.com/owner/repository/pull/42",
+              source: "manual",
+              linkedAt: DateTime.formatIso(now),
+              snapshot: null,
+              stack: null,
+            },
+          ],
+        },
+      });
       yield* assertSummary("Plan limit reached.", "usage_limit");
       const queuedRunId = RunId.make("run:limit-shell:queued");
       yield* store.apply({
@@ -4745,6 +4770,76 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           assert.include(errorLookup, "(thread_id=? AND run_id=? AND node_id=?)");
         }
       }
+    }),
+  );
+
+  it.effect("only counts active pull-request threads as priority work", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const suffix = "active-pull-request";
+      const threadId = yield* addRolledBackRecoveryCandidate(suffix);
+      const now = yield* DateTime.now;
+      const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      yield* store.apply({
+        id: EventId.make(`event:${suffix}:run-running`),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...run, status: "running", completedAt: null },
+      });
+      assert.isFalse(yield* store.hasActivePullRequestThread());
+      const thread = yield* store.getThread(threadId);
+      const link = {
+        host: "github.com",
+        repository: "owner/repository",
+        number: 42,
+        url: "https://github.com/owner/repository/pull/42",
+        source: "agent" as const,
+        linkedAt: DateTime.formatIso(now),
+        snapshot: null,
+        stack: null,
+      };
+      yield* store.apply({
+        id: EventId.make(`event:${suffix}:pull-request`),
+        type: "thread.pull-request-synced",
+        threadId,
+        occurredAt: now,
+        payload: { ...thread, pullRequests: [link] },
+      });
+      assert.isTrue(yield* store.hasActivePullRequestThread());
+      yield* store.apply({
+        id: EventId.make(`event:${suffix}:pull-request-dismissed`),
+        type: "thread.pull-request-link-updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...link, source: "stack-dismissed" },
+      });
+      assert.isFalse(yield* store.hasActivePullRequestThread());
+      yield* store.apply({
+        id: EventId.make(`event:${suffix}:branch-pull-request`),
+        type: "thread.pull-request-synced",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          pullRequests: [],
+          branchPullRequest: {
+            projectId: thread.projectId,
+            repository: "owner/repository",
+            number: 42,
+            url: "https://github.com/owner/repository/pull/42",
+          },
+        },
+      });
+      assert.isTrue(yield* store.hasActivePullRequestThread());
+      yield* store.apply({
+        id: EventId.make(`event:${suffix}:run-completed`),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...run, status: "completed", completedAt: now },
+      });
+      assert.isFalse(yield* store.hasActivePullRequestThread());
     }),
   );
 

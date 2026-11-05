@@ -20,7 +20,11 @@ const firstProject = "first-project" as ProjectId;
 const secondProject = "second-project" as ProjectId;
 
 describe("mobile usage-limit settings across environments", () => {
-  it.each(["autoResumeLimitedThreads", "snoozeLimitedThreads"] as const)(
+  it.each([
+    "autoResumeLimitedThreads",
+    "autoResumePullRequestThreadsFirst",
+    "snoozeLimitedThreads",
+  ] as const)(
     "shows %s as mixed and can enable it everywhere without changing other settings",
     (key) => {
       const targets = resolveMobileSettingsTargets(

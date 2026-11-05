@@ -81,6 +81,7 @@ export function AutoSettleSettingsRows(props: {
   const writeToAll = (
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
+      autoResumePullRequestThreadsFirst?: boolean;
       snoozeLimitedThreads?: boolean;
     },
   ) => props.write(patch);
@@ -112,6 +113,13 @@ export function AutoSettleSettingsRows(props: {
             value={uniformMobileSetting(displayTargets, "autoResumeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ autoResumeLimitedThreads: value })}
+          />
+          <SettingsSwitchRow
+            icon="clock"
+            label="Resume threads with PRs first"
+            value={uniformMobileSetting(displayTargets, "autoResumePullRequestThreadsFirst")}
+            disabled={disabled}
+            onValueChange={(value) => writeToAll({ autoResumePullRequestThreadsFirst: value })}
           />
           <SettingsSwitchRow
             icon="clock"

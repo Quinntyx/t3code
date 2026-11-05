@@ -489,6 +489,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["usage quota rate limit reset recover continue"],
   },
   {
+    id: "auto-resume-pull-request-threads-first",
+    title: "Resume threads with pull requests first",
+    to: "/settings/threads",
+    searchTerms: [
+      "usage quota rate limit reset recover continue priority linked pull request review ready",
+    ],
+  },
+  {
     id: "working-shelf",
     title: "Working section",
     to: "/settings/general",
