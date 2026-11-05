@@ -437,7 +437,7 @@ const layerBase: Layer.Layer<
       );
     });
 
-    // Merge inside the write transaction; a provider may supply its own reset after the sweep reads.
+    // Recheck eligibility and merge in the transaction; sweeps can race provider or thread updates.
     const fillUsageLimitResetAtOnly = Effect.fnUntraced(function* (
       events: ReadonlyArray<OrchestrationV2DomainEvent>,
     ) {
@@ -450,20 +450,13 @@ const layerBase: Layer.Layer<
           event.payload.failure.resetAt == null
         )
           continue;
-        const current = yield* projectionStore.getTurnItem({
-          threadId: event.threadId,
-          itemId: event.payload.id,
-        });
-        if (
-          current?.type !== "error" ||
-          current.status !== "failed" ||
-          current.runId !== event.payload.runId ||
-          current.failure.class !== "usage_limit" ||
-          current.failure.resetAt != null
-        )
-          continue;
+        const failures = yield* projectionStore.getUsageLimitFailuresWithoutReset(event.threadId);
+        const current = failures.find(({ item }) => item.id === event.payload.id)?.item;
+        if (current === undefined || current.runId !== event.payload.runId) continue;
+        const thread = yield* projectionStore.getThread(event.threadId);
         updates.push({
           ...event,
+          occurredAt: DateTime.max(event.occurredAt, thread.updatedAt),
           payload: {
             ...current,
             failure: { ...current.failure, resetAt: event.payload.failure.resetAt },

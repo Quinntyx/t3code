@@ -8462,6 +8462,174 @@ it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (
 });
 
 it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
+  it.effect.each(["resumed", "deleted", "new-error", "metadata"] as const)(
+    "rechecks a usage-limit backfill after a concurrent %s update",
+    (scenario) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const events = yield* EventSink.EventSinkV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const threadId = ThreadId.make(`reset-race:${scenario}`);
+        const projectId = ProjectId.make(`reset-race:project:${scenario}`);
+        const now = yield* DateTime.now;
+        const later = DateTime.add(now, { seconds: 1 });
+        const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+        yield* seedProject({
+          projectId,
+          title: "Reset race project",
+          workspaceRoot: process.cwd(),
+          defaultModelSelection: modelSelection,
+          createdAt: DateTime.formatIso(now),
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`reset-race:create:${scenario}`),
+          threadId,
+          projectId,
+          title: "Limited thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`reset-race:message:${scenario}`),
+          messageId: MessageId.make(`reset-race:message:${scenario}`),
+          threadId,
+          text: "Start work.",
+          attachments: [],
+          dispatchMode: { type: "defer_start" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const original = yield* orchestrator.getThreadProjection(threadId);
+        const run = original.runs[0]!;
+        const error = {
+          id: EventId.make(`reset-race:error:${scenario}`),
+          type: "turn-item.updated" as const,
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`reset-race:error:${scenario}`),
+            type: "error" as const,
+            threadId,
+            runId: run.id,
+            nodeId: run.rootNodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 2,
+            status: "failed" as const,
+            title: "Usage limit reached",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            failure: {
+              class: "usage_limit" as const,
+              message: "Plan limit reached.",
+              code: "usageLimitExceeded",
+              retryable: null,
+              resetAt: null,
+            },
+          },
+        };
+        yield* events.write({
+          events: [
+            {
+              id: EventId.make(`reset-race:failed:${scenario}`),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...run, status: "failed", completedAt: now },
+            },
+            error,
+          ],
+        });
+        assert.lengthOf(yield* projections.getUsageLimitFailuresWithoutReset(), 1);
+        const updateId = EventId.make(`reset-race:concurrent:${scenario}`);
+        yield* events.write({
+          events: [
+            scenario === "resumed"
+              ? {
+                  id: updateId,
+                  type: "run.created",
+                  threadId,
+                  occurredAt: later,
+                  payload: {
+                    ...run,
+                    id: RunId.make(`reset-race:resumed:${scenario}`),
+                    rootNodeId: NodeId.make(`reset-race:resumed:${scenario}`),
+                    ordinal: run.ordinal + 1,
+                    status: "running",
+                    startedAt: later,
+                    completedAt: null,
+                  },
+                }
+              : scenario === "new-error"
+                ? {
+                    ...error,
+                    id: updateId,
+                    occurredAt: later,
+                    payload: {
+                      ...error.payload,
+                      id: TurnItemId.make(`reset-race:new-error:${scenario}`),
+                      ordinal: error.payload.ordinal + 1,
+                      updatedAt: later,
+                      failure: {
+                        ...error.payload.failure,
+                        class: "provider_error",
+                        message: "Another failure.",
+                      },
+                    },
+                  }
+                : {
+                    id: updateId,
+                    type: scenario === "deleted" ? "thread.deleted" : "thread.metadata-updated",
+                    threadId,
+                    occurredAt: later,
+                    payload: {
+                      ...original.thread,
+                      title: "Changed after the sweep read",
+                      deletedAt: scenario === "deleted" ? later : null,
+                      updatedAt: later,
+                    },
+                  },
+          ],
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const sequence = yield* events.latestSequence({ threadId });
+        const committed = yield* events.writeWithEffects({
+          fillUsageLimitResetAtOnly: true,
+          events: [
+            {
+              ...error,
+              id: EventId.make(`reset-race:backfill:${scenario}`),
+              payload: { ...error.payload, failure: { ...error.payload.failure, resetAt } },
+            },
+          ],
+          effects: [],
+        });
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(after.thread.updatedAt, later);
+        if (scenario === "metadata") {
+          assert.lengthOf(committed, 1);
+          assert.equal(
+            after.turnItems.find((item) => item.type === "error")?.failure.resetAt,
+            resetAt,
+          );
+        } else {
+          assert.lengthOf(committed, 0);
+          assert.equal(yield* events.latestSequence({ threadId }), sequence);
+          assert.deepEqual(after, before);
+        }
+      }),
+  );
+
   it.effect.each(["interrupted", "provider_error", "usage_limit"] as const)(
     "manually resumes a run (%s) ahead of its queued message only once",
     (reason) =>
