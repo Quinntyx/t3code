@@ -28,7 +28,7 @@ const verifySweep = (event: OrchestrationV2DomainEvent) =>
             getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
             getLimitRecoveryCandidates: () => Queue.offer(sweeps, undefined).pipe(Effect.as([])),
           }),
-          Layer.mock(IdAllocator.IdAllocatorV2)({}),
+          IdAllocator.layer,
           Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
           Layer.mock(UsageLimitSources.UsageLimitSources)({}),
           Layer.mock(EventSink.EventSinkV2)({}),

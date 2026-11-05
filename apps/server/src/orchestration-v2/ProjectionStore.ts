@@ -475,7 +475,7 @@ export interface ProjectionStoreV2Shape {
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
-  readonly getUsageLimitFailuresWithoutReset: () => Effect.Effect<
+  readonly getUsageLimitFailuresWithoutReset: (threadId?: ThreadId) => Effect.Effect<
     ReadonlyArray<{
       readonly run: OrchestrationV2Run;
       readonly item: Extract<OrchestrationV2TurnItem, { readonly type: "error" }>;
@@ -3750,7 +3750,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getUsageLimitFailuresWithoutReset = Effect.fn(
       "ProjectionStore.getUsageLimitFailuresWithoutReset",
     )(
-      function* () {
+      function* (threadId?: ThreadId) {
         const rows = yield* sql<{
           readonly run_payload_json: string;
           readonly item_payload_json: string;
@@ -3762,6 +3762,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND item.node_id IS json_extract(r.payload_json, '$.rootNodeId')
           INNER JOIN orchestration_v2_projection_threads t ON t.thread_id = item.thread_id
           WHERE t.deleted_at IS NULL
+            ${threadId === undefined ? sql`` : sql`AND t.thread_id = ${threadId}`}
             AND item.type = 'error' AND item.status = 'failed'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NULL
