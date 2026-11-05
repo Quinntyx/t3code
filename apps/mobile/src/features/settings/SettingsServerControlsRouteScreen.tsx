@@ -42,7 +42,7 @@ import {
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
-import { AutoSettleSettingsRows } from "./ThreadSettingsSections";
+import { AutoSettleSettingsRows } from "./AutoSettleSettingsRows";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 
 type SettingsPage = "threads" | "source-control" | "worktrees" | "maintenance";
