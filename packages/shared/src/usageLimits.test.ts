@@ -448,6 +448,68 @@ describe("pools", () => {
     expect(collectLimitAccounts(input)).toHaveLength(1);
   });
 
+  it("merges one Go subscription read by Pi and by OpenCode", () => {
+    const goWindows = [
+      { id: "go_rolling", kind: "session", label: "Go · Session", usedPercent: 12 },
+      { id: "go_weekly", kind: "weekly", label: "Go · Weekly", usedPercent: 40 },
+    ] as const;
+    const opencode = provider({
+      driver: ProviderDriverKind.make("opencode"),
+      instanceId: ProviderInstanceId.make("opencode"),
+      usageLimits: { checkedAt, credentialFingerprint: "shared-go-key", windows: goWindows },
+    });
+    const pi = provider({
+      driver: ProviderDriverKind.make("pi"),
+      instanceId: ProviderInstanceId.make("pi"),
+      displayName: "Pi",
+      usageLimits: {
+        checkedAt,
+        credentialFingerprint: "shared-go-key",
+        ownerDriver: ProviderDriverKind.make("opencode"),
+        windows: goWindows,
+      },
+    });
+    const input = new Map([
+      [EnvironmentId.make("env-a"), { ...laptop, serverConfig: { providers: [opencode, pi] } }],
+    ]);
+
+    const accounts = collectLimitAccounts(input);
+    expect(accounts).toHaveLength(1);
+    expect(collectLimitPools(accounts, now)).toMatchObject([
+      { driver: "opencode", accounts: [{ key: "env-a:opencode" }] },
+    ]);
+
+    // Provider order decides which card carries the merged account, never whether it merges.
+    input.set(EnvironmentId.make("env-a"), {
+      ...laptop,
+      serverConfig: { providers: [pi, opencode] },
+    });
+    expect(collectLimitAccounts(input)).toHaveLength(1);
+
+    input.set(EnvironmentId.make("env-a"), {
+      ...laptop,
+      serverConfig: {
+        providers: [
+          opencode,
+          { ...pi, usageLimits: { ...pi.usageLimits!, credentialFingerprint: "other-go-key" } },
+        ],
+      },
+    });
+    expect(collectLimitAccounts(input)).toHaveLength(2);
+
+    // Without a credential, two logins cannot be proven to be one subscription.
+    input.set(EnvironmentId.make("env-a"), {
+      ...laptop,
+      serverConfig: {
+        providers: [
+          opencode,
+          { ...pi, usageLimits: { ...pi.usageLimits!, credentialFingerprint: undefined } },
+        ],
+      },
+    });
+    expect(collectLimitAccounts(input)).toHaveLength(2);
+  });
+
   it("takes windows from a fresher hub read but credits and redeem from the native instance", () => {
     const native = provider({
       driver: claude,

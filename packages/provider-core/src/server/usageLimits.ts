@@ -83,6 +83,13 @@ export function applyUsageLimitsUpdate(input: {
     previous === undefined ? { reason: "probeFailed" as const } : previous.unavailable;
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
+    // Account-level facts outlive a window tick; dropping the fingerprint would split one account
+    // into a duplicate row on every provider that reported it.
+    ...(previous?.credentialFingerprint !== undefined
+      ? { credentialFingerprint: previous.credentialFingerprint }
+      : {}),
+    ...(previous?.ownerDriver !== undefined ? { ownerDriver: previous.ownerDriver } : {}),
+    ...(previous?.externalUsage !== undefined ? { externalUsage: previous.externalUsage } : {}),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
     ...(unavailable !== undefined ? { unavailable } : {}),
   };

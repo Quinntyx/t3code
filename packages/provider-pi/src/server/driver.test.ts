@@ -403,6 +403,7 @@ it.layer(layerTest)("PiDriver OpenCode Go limits", (it) => {
         ],
       );
       assert.isUndefined(snapshot.usageLimits?.unavailable);
+      assert.equal(snapshot.usageLimits?.ownerDriver, "opencode");
       assert.isTrue(
         launches.some((launch) =>
           launch.args.join(" ").includes("auth print-api-key --provider opencode-go"),
