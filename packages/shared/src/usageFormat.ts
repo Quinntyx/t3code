@@ -1,5 +1,10 @@
 // @effect-diagnostics globalDate:off -- Usage windows are calendar days in the viewer's zone, derived from wall-clock "now" via Intl.
-import { UsageDay, type UsageResolution, type UsageSummaryInput } from "@t3tools/contracts";
+import {
+  UsageDay,
+  type ThreadUsageModel,
+  type UsageResolution,
+  type UsageSummaryInput,
+} from "@t3tools/contracts";
 
 import type { UsageContractMismatch } from "./usageMerge.ts";
 
@@ -14,6 +19,16 @@ const INTEGER = new Intl.NumberFormat("en-US");
 
 export function formatUsd(value: number): string {
   return CURRENCY.format(value);
+}
+
+/** Unpriced models leave the sum short, so it reads as a floor. */
+export function formatThreadUsageCost(
+  models: ReadonlyArray<Pick<ThreadUsageModel, "costUsd">>,
+): string | null {
+  const priced = models.filter((model) => model.costUsd !== null);
+  if (priced.length === 0) return null;
+  const total = formatUsd(priced.reduce((sum, model) => sum + (model.costUsd ?? 0), 0));
+  return priced.length < models.length ? `${total}+` : total;
 }
 
 export function formatCount(value: number): string {

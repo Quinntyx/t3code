@@ -6,7 +6,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import { buildThreadUsage, delegateThreadIds, threadUsageTurns } from "./threadUsage.ts";
+import {
+  buildThreadUsage,
+  delegateThreadIds,
+  threadRunDurationMs,
+  threadUsageTurns,
+} from "./threadUsage.ts";
 import * as UsageService from "./UsageService.ts";
 
 const USAGE_FIELDS = ["runs", "attempts", "providerThreads", "providerTurns"] as const;
@@ -44,7 +49,7 @@ const make = Effect.gen(function* () {
       );
       const nowMs = yield* Clock.currentTimeMillis;
       const counted = new Set([threadId, ...delegates]);
-      return buildThreadUsage({
+      const result = buildThreadUsage({
         turns: [
           ...threadUsageTurns("main", main, nowMs),
           ...children.flatMap((records) => threadUsageTurns("delegates", records, nowMs)),
@@ -57,6 +62,7 @@ const make = Effect.gen(function* () {
         nowMs,
         active: family.some((thread) => counted.has(thread.id) && thread.activeRunId !== null),
       });
+      return { ...result, durationMs: threadRunDurationMs(main, nowMs) };
     },
     (effect, threadId) =>
       effect.pipe(Effect.mapError((cause) => new ThreadUsageError({ threadId, cause }))),
