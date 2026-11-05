@@ -8,6 +8,8 @@ import { describe, it, assert, expect } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -86,7 +88,10 @@ const disabledDefaultSlots = (
     ]),
   );
 
-const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({});
+// A fixed home keeps status tests independent of the machine's ~/.claude/settings.json.
+const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({
+  homePath: "/nonexistent-claude-home",
+});
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
 
 process.env.T3CODE_CURSOR_ENABLED = "1";
@@ -2321,6 +2326,12 @@ it.layer(
         assert.strictEqual(status.auth.status, "authenticated");
         assert.strictEqual(status.auth.type, "customEndpoint");
         assert.strictEqual(status.auth.label, "Custom API endpoint");
+        assert.deepEqual(status.usageRoutes, [
+          {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            origin: new URL(environment.ANTHROPIC_BASE_URL ?? "").origin,
+          },
+        ]);
       }).pipe(
         Effect.provide(
           layerMockSpawner((args) => {
@@ -2381,6 +2392,43 @@ it.layer(
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.auth.status, "authenticated");
       }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("reads the instance's settings.json base URL for usage routing", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "claude-home-" });
+        yield* fileSystem.writeFileString(
+          path.join(home, "settings.json"),
+          JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://hub.example:8317" } }),
+        );
+        const status = yield* checkClaudeProviderStatus(
+          { ...defaultClaudeSettings, homePath: home },
+          claudeCapabilities({
+            tokenSource: "none",
+            apiKeySource: "none",
+            apiProvider: "firstParty",
+          }),
+          { ANTHROPIC_BASE_URL: "" },
+        );
+        assert.strictEqual(status.auth.type, "customEndpoint");
+        assert.deepEqual(status.usageRoutes, [
+          {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            origin: "http://hub.example:8317",
+          },
+        ]);
+      }).pipe(
+        Effect.scoped,
         Effect.provide(
           layerMockSpawner((args) => {
             const joined = args.join(" ");

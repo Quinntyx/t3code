@@ -1462,6 +1462,7 @@ describe("model picker limits", () => {
       id: UsageLimitSourceId.make("hub"),
       kind: "cliproxy" as const,
       label: "Accounts",
+      url: "https://hub.example",
       checkedAt,
       accounts: [
         {
@@ -1509,7 +1510,7 @@ describe("model picker limits", () => {
       ],
       sources: [
         {
-          id: "hub",
+          id: "hub:codex",
           label: "Accounts",
           windows: [
             {
@@ -1536,6 +1537,175 @@ describe("model picker limits", () => {
     expect(summarizeProviderLimits(spent, [spent], [], now)?.exhausted).toBe(true);
     const unlimited = provider({ instanceId: ProviderInstanceId.make("plain") });
     expect(summarizeProviderLimits(unlimited, [unlimited], [], now)).toBeNull();
+  });
+
+  it("only pools a hub on an instance routed to its origin", () => {
+    const routed = provider({
+      usageRoutes: [{ driver: personal.driver, origin: "https://hub.example" }],
+    });
+    expect(summarizeProviderLimits(routed, [routed], hub, now)?.sources[0]?.id).toBe("hub:codex");
+    const elsewhere = provider({
+      instanceId: ProviderInstanceId.make("ambassator"),
+      usageRoutes: [{ driver: personal.driver, origin: "https://other.example" }],
+    });
+    expect(summarizeProviderLimits(elsewhere, [elsewhere], hub, now)).toBeNull();
+  });
+
+  it("treats a hub entered as localhost and a 127.0.0.1 route as the same endpoint", () => {
+    const local = provider({
+      usageRoutes: [{ driver: personal.driver, origin: "http://127.0.0.1:8317" }],
+    });
+    const localHub = [{ ...hub[0]!, url: "http://localhost:8317" }];
+    expect(summarizeProviderLimits(local, [local], localHub, now)?.sources[0]?.id).toBe(
+      "hub:codex",
+    );
+  });
+
+  it("keeps a hub without a reported endpoint on same-driver matching", () => {
+    const routed = provider({
+      usageRoutes: [{ driver: personal.driver, origin: "https://other.example" }],
+    });
+    const { url: _url, ...legacyHub } = hub[0]!;
+    expect(summarizeProviderLimits(routed, [routed], [legacyHub], now)?.sources[0]?.id).toBe(
+      "hub:codex",
+    );
+  });
+
+  it("pools each hub driver reachable from a Pi route", () => {
+    const claude = ProviderDriverKind.make("claudeAgent");
+    const pi = provider({
+      instanceId: ProviderInstanceId.make("pi"),
+      driver: ProviderDriverKind.make("pi"),
+      usageRoutes: [
+        { driver: personal.driver, origin: "https://hub.example" },
+        { driver: claude, origin: "https://hub.example" },
+      ],
+    });
+    const mixedHub = [
+      {
+        ...hub[0]!,
+        accounts: [
+          ...hub[0]!.accounts,
+          {
+            id: "claude-spare",
+            driver: claude,
+            usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 10 }] },
+          },
+        ],
+      },
+    ];
+    expect(
+      summarizeProviderLimits(pi, [pi], mixedHub, now)?.sources.map((source) => [
+        source.id,
+        source.label,
+      ]),
+    ).toEqual([
+      ["hub:codex", "Accounts · Codex"],
+      ["hub:claudeAgent", "Accounts · Claude"],
+    ]);
+  });
+
+  it("shows a provider's own extra usage source and dedupes it from a hub", () => {
+    const pi = provider({
+      instanceId: ProviderInstanceId.make("pi"),
+      driver: ProviderDriverKind.make("pi"),
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: ProviderDriverKind.make("codex"),
+          email: "pi@example.com",
+          limits: { checkedAt, windows: [{ ...window, usedPercent: 20 }] },
+        },
+      ],
+    });
+    expect(summarizeProviderLimits(pi, [pi], [], now)?.sources).toMatchObject([
+      { id: "provider:chatgpt", label: "ChatGPT", windows: [{ remainingPercent: 80 }] },
+    ]);
+    const duplicateHub = [
+      {
+        ...hub[0]!,
+        accounts: [
+          {
+            id: "same-login",
+            driver: ProviderDriverKind.make("codex"),
+            email: "PI@example.com",
+            usageLimits: { checkedAt, windows: [window] },
+          },
+        ],
+      },
+    ];
+    expect(
+      summarizeProviderLimits(pi, [pi], duplicateHub, now)?.sources.map((source) => source.id),
+    ).toEqual(["provider:chatgpt"]);
+  });
+});
+
+describe("provider-local usage sources", () => {
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+  const pi = provider({
+    instanceId: ProviderInstanceId.make("pi"),
+    driver: ProviderDriverKind.make("pi"),
+    auth: { status: "authenticated", email: "pi@example.com" },
+    usageLimits: { checkedAt, windows: [], unavailable: { reason: "unsupported" } },
+    usageSources: [
+      {
+        id: "chatgpt",
+        label: "ChatGPT",
+        driver: ProviderDriverKind.make("codex"),
+        email: "pi@example.com",
+        limits: { checkedAt, windows: [{ ...window, usedPercent: 20 }] },
+      },
+    ],
+  });
+
+  it("lists a local source even when the instance reports no primary limits", () => {
+    const accounts = collectLimitAccounts(
+      new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            entry: { target: { label: "Laptop" } },
+            serverConfig: { providers: [pi] },
+          },
+        ],
+      ]),
+    );
+    expect(accounts.map((account) => [account.driver, account.sourceLabel])).toEqual([
+      ["codex", "ChatGPT"],
+    ]);
+  });
+
+  it("keeps a hub duplicate of the provider's own login out of the report", () => {
+    const hub = {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Accounts",
+      url: "https://hub.example",
+      checkedAt,
+      accounts: [
+        {
+          id: "same-login.json",
+          driver: ProviderDriverKind.make("codex"),
+          email: "PI@example.com",
+          usageLimits: { checkedAt, windows: [window] },
+        },
+      ],
+    };
+    const accounts = collectLimitAccounts(
+      new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            entry: { target: { label: "Laptop" } },
+            serverConfig: { providers: [pi], usageLimitSources: [hub] },
+          },
+        ],
+      ]),
+    );
+    expect(accounts.map((account) => [account.driver, account.sourceLabel])).toEqual([
+      ["codex", "ChatGPT"],
+    ]);
   });
 });
 

@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,6 +32,23 @@ const usagePayload = {
   },
 };
 
+const codexUsagePayload = {
+  email: "pilot@example.com",
+  plan_type: "plus",
+  rate_limit: {
+    primary_window: {
+      used_percent: 20,
+      reset_at: 1_793_854_677,
+      limit_window_seconds: 18_000,
+    },
+    secondary_window: {
+      used_percent: 40,
+      reset_at: 1_794_387_427,
+      limit_window_seconds: 604_800,
+    },
+  },
+};
+
 const layerTest = Layer.mergeAll(
   TestProviderHost.layer({
     cwd: "/machine",
@@ -42,7 +63,9 @@ const layerTest = Layer.mergeAll(
     HttpClient.make((request) =>
       request.url === "https://opencode.ai/zen/go/v1/usage"
         ? Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(usagePayload)))
-        : Effect.die("Unexpected HTTP"),
+        : request.url === "https://chatgpt.com/backend-api/wham/usage"
+          ? Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(codexUsagePayload)))
+          : Effect.die("Unexpected HTTP"),
     ),
   ),
 ).pipe(Layer.provideMerge(NodeServices.layer));
@@ -62,6 +85,7 @@ const makePiSpawner = Effect.fnUntraced(function* (
     readonly state?: unknown;
     readonly models?: ReadonlyArray<unknown>;
     readonly goApiKey?: string;
+    readonly codexToken?: string;
   } = {},
 ) {
   const pendingCommand = yield* Deferred.make<void>();
@@ -73,14 +97,21 @@ const makePiSpawner = Effect.fnUntraced(function* (
       launches.push(command);
       const version = command.args.includes("--version");
       const printApiKey = command.args.includes("print-api-key");
-      const immediate = version || printApiKey;
+      const printBearerToken = command.args.includes("print-bearer-token");
+      const immediate = version || printApiKey || printBearerToken;
       const stdout = yield* Queue.unbounded<Uint8Array>();
       const cwd = command.options.cwd;
       return ChildProcessSpawner.makeHandle({
         // Outside the valid PID range, so transport cleanup cannot signal a real process.
         pid: ChildProcessSpawner.ProcessId(999_999_999),
         exitCode: immediate
-          ? Effect.succeed(ChildProcessSpawner.ExitCode(printApiKey && !discovery.goApiKey ? 1 : 0))
+          ? Effect.succeed(
+              ChildProcessSpawner.ExitCode(
+                (printApiKey && !discovery.goApiKey) || (printBearerToken && !discovery.codexToken)
+                  ? 1
+                  : 0,
+              ),
+            )
           : Effect.never,
         isRunning: Effect.succeed(!immediate),
         kill: () => Effect.void,
@@ -129,7 +160,11 @@ const makePiSpawner = Effect.fnUntraced(function* (
           ? Stream.succeed(encoder.encode("pi 1.0.2\n"))
           : printApiKey
             ? Stream.succeed(encoder.encode(discovery.goApiKey ? `${discovery.goApiKey}\n` : ""))
-            : Stream.fromQueue(stdout),
+            : printBearerToken
+              ? Stream.succeed(
+                  encoder.encode(discovery.codexToken ? `${discovery.codexToken}\n` : ""),
+                )
+              : Stream.fromQueue(stdout),
         stderr: Stream.empty,
         all: Stream.empty,
         getInputFd: () => Sink.drain,
@@ -271,6 +306,82 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           ["personal"],
         );
       }).pipe(Effect.scoped),
+  );
+});
+
+it.layer(layerTest)("PiDriver ChatGPT limits and usage routes", (it) => {
+  it.effect("reports ChatGPT windows and routes hub models to their origin", () =>
+    Effect.gen(function* () {
+      const { spawner, launches } = yield* makePiSpawner({
+        codexToken: "codex-token",
+        models: [
+          {
+            provider: "cliproxyapi",
+            id: "gpt-6.1-sol",
+            baseUrl: "http://araveia.example:8317/backend-api",
+            api: "openai-codex-responses",
+          },
+          {
+            provider: "cliproxyapi",
+            id: "claude-sonnet-5",
+            baseUrl: "http://araveia.example:8317/backend-api",
+            api: "anthropic-messages",
+          },
+          {
+            provider: "opencode-go",
+            id: "deepseek-v4.1-flash",
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            api: "openai-completions",
+          },
+        ],
+      });
+      const instance = yield* create().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      yield* instance.snapshot.refresh;
+      const snapshot = yield* instance.snapshot.getSnapshot;
+      assert.deepEqual(snapshot.usageRoutes, [
+        { driver: ProviderDriverKind.make("codex"), origin: "http://araveia.example:8317" },
+        {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          origin: "http://araveia.example:8317",
+        },
+      ]);
+      const source = snapshot.usageSources?.[0];
+      assert.equal(source?.id, "chatgpt");
+      assert.equal(source?.label, "ChatGPT");
+      assert.equal(source?.driver, "codex");
+      assert.equal(source?.email, "pilot@example.com");
+      assert.deepEqual(
+        source?.limits.windows.map((window) => [
+          window.id,
+          window.kind,
+          window.usedPercent,
+          window.windowDurationMins,
+        ]),
+        [
+          ["primary", "session", 20, 300],
+          ["secondary", "weekly", 40, 10_080],
+        ],
+      );
+      assert.isTrue(
+        launches.some((launch) =>
+          launch.args.join(" ").includes("auth print-bearer-token --provider openai-codex"),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("omits ChatGPT usage when Pi has no Codex login", () =>
+    Effect.gen(function* () {
+      const { spawner } = yield* makePiSpawner();
+      const instance = yield* create().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      yield* instance.snapshot.refresh;
+      const snapshot = yield* instance.snapshot.getSnapshot;
+      assert.isUndefined(snapshot.usageSources);
+    }).pipe(Effect.scoped),
   );
 });
 

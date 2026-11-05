@@ -1,6 +1,7 @@
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -40,6 +41,33 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
     CLAUDE_CONFIG_DIR: resolvedHomePath,
   };
+});
+
+const ClaudeHomeSettings = Schema.Struct({
+  env: Schema.optional(
+    Schema.Struct({
+      ANTHROPIC_BASE_URL: Schema.optional(Schema.String),
+    }),
+  ),
+});
+const decodeClaudeHomeSettings = Schema.decodeEffect(Schema.fromJsonString(ClaudeHomeSettings));
+
+/** The Claude CLI reads its home settings itself; status and usage attribution need the same endpoint. */
+export const readClaudeSettingsBaseUrl = Effect.fn("readClaudeSettingsBaseUrl")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  environment?: NodeJS.ProcessEnv,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* resolveClaudeHomePath(config, environment);
+  const raw = yield* fileSystem
+    .readFileString(path.join(home, "settings.json"))
+    .pipe(Effect.option);
+  if (Option.isNone(raw)) return undefined;
+  const decoded = yield* decodeClaudeHomeSettings(raw.value).pipe(Effect.option);
+  if (Option.isNone(decoded)) return undefined;
+  const value = decoded.value.env?.ANTHROPIC_BASE_URL?.trim();
+  return value ? value : undefined;
 });
 
 /** managed-mcp.json excludes other MCP config and forbids --strict-mcp-config; omit the flag when present. */
