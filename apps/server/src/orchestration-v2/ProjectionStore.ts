@@ -187,6 +187,8 @@ export type ProjectionLimitRecoveryCandidate = Pick<
 export interface ProjectionConsumptionCapCandidate {
   readonly thread: OrchestrationV2AppThread;
   readonly activeRunId: RunId | null;
+  readonly hasActiveDelegates: boolean;
+  readonly hasActiveBackgroundWork: boolean;
 }
 
 export type ProjectionThreadPullRequests = Pick<
@@ -3760,6 +3762,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly active_run_id: string | null;
+          readonly has_active_delegates: number;
+          readonly has_active_background_work: number;
         }>`
         SELECT t.payload_json,
           (
@@ -3768,7 +3772,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND r.status IN ('preparing', 'starting', 'running')
             ORDER BY r.ordinal DESC
             LIMIT 1
-          ) AS active_run_id
+          ) AS active_run_id,
+          EXISTS (
+            SELECT 1
+            FROM orchestration_v2_projection_threads child
+            INNER JOIN orchestration_v2_projection_runs child_run
+              ON child_run.thread_id = child.thread_id
+            WHERE json_extract(child.payload_json, '$.lineage.parentThreadId') = t.thread_id
+              AND child_run.status IN ('preparing', 'starting', 'running')
+          ) AS has_active_delegates,
+          EXISTS (
+            SELECT 1
+            FROM orchestration_v2_projection_turn_items item
+            WHERE item.thread_id = t.thread_id
+              AND item.type IN ('command_execution', 'dynamic_tool', 'subagent')
+              AND item.status IN ('pending', 'running', 'waiting')
+          ) AS has_active_background_work
         FROM orchestration_v2_projection_threads t
         WHERE t.deleted_at IS NULL
           AND json_extract(t.payload_json, '$.archivedAt') IS NULL
@@ -3785,6 +3804,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               Effect.map((thread) => ({
                 thread,
                 activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
+                hasActiveDelegates: row.has_active_delegates === 1,
+                hasActiveBackgroundWork: row.has_active_background_work === 1,
               })),
             ),
           { concurrency: 1 },

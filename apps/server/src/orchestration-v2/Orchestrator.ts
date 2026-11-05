@@ -58,6 +58,8 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  ThreadConsumptionCap,
+  consumptionCapIsMorePermissive,
   latestProviderTurnForAttempt,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
@@ -456,6 +458,7 @@ function wakeWorkStartedAt(
 }
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
+const threadConsumptionCapEquals = Schema.toEquivalence(Schema.NullOr(ThreadConsumptionCap));
 
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
@@ -3355,6 +3358,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.mark-unread":
           return { ...thread, lastVisitedAt: markUnreadVisitedAt };
         case "thread.metadata.update": {
+          if (
+            command.expectedConsumptionCap !== undefined &&
+            command.consumptionCapHit !== undefined &&
+            !threadConsumptionCapEquals(
+              command.expectedConsumptionCap,
+              thread.consumptionCap ?? null,
+            )
+          ) {
+            return thread;
+          }
+          const previousConsumptionCap = thread.consumptionCap ?? null;
           const previousRecovery =
             thread.limitRecovery?.runId === command.limitRecovery?.runId &&
             thread.limitRecovery?.resetAt === command.limitRecovery?.resetAt
@@ -3392,7 +3406,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.consumptionCap === undefined
               ? {}
-              : { consumptionCap: command.consumptionCap, consumptionCapHit: null }),
+              : previousConsumptionCap === null ||
+                  consumptionCapIsMorePermissive(command.consumptionCap, previousConsumptionCap)
+                ? { consumptionCap: command.consumptionCap, consumptionCapHit: null }
+                : { consumptionCap: command.consumptionCap }),
             ...(command.consumptionCapHit === undefined
               ? {}
               : { consumptionCapHit: command.consumptionCapHit }),
@@ -11349,6 +11366,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     if (projection.thread.deletedAt !== null) return undefined;
+    if (command.consumptionCapGuard !== undefined) {
+      const guard = command.consumptionCapGuard;
+      if (
+        !threadConsumptionCapEquals(guard.cap, projection.thread.consumptionCap ?? null) ||
+        projection.thread.consumptionCapHit?.at !== guard.hitAt
+      ) {
+        return undefined;
+      }
+    }
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
       command.stopDelegatedTasks === false ||

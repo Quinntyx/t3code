@@ -226,7 +226,12 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
-  if (thread.latestRunId === null && thread.activeProviderThreadId === null && !parkAtIdle) {
+  if (
+    thread.latestRunId === null &&
+    thread.activeProviderThreadId === null &&
+    !parkAtIdle &&
+    thread.consumptionCapHit == null
+  ) {
     return null;
   }
   const capHit = thread.consumptionCapHit ?? null;

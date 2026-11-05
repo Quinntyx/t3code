@@ -2911,6 +2911,13 @@ export const OrchestrationV2Command = Schema.Union([
      * do under their caller's dispatch limit. Otherwise Stop also stops every task under the thread.
      */
     stopDelegatedTasks: Schema.optional(Schema.Boolean),
+    /** A consumption-cap stop only lands while this cap and hit are still current. */
+    consumptionCapGuard: Schema.optional(
+      Schema.Struct({
+        cap: Schema.NullOr(ThreadConsumptionCap),
+        hitAt: IsoDateTime,
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.create"),
@@ -3064,6 +3071,8 @@ export const OrchestrationV2Command = Schema.Union([
     consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
     /** Worker-written hit marker; a new cap clears it. */
     consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
+    /** Rejects a worker hit or clear evaluated against an older cap. */
+    expectedConsumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   }),

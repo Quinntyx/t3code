@@ -46,10 +46,82 @@ export const ThreadConsumptionCap = Schema.Struct({
 });
 export type ThreadConsumptionCap = typeof ThreadConsumptionCap.Type;
 
-/** Written by the consumption-cap sweep; changing the cap clears it. */
+/** Written by the consumption-cap sweep; removing or loosening the cap clears it. */
 export const ThreadConsumptionCapHit = Schema.Struct({
   at: IsoDateTime,
   reason: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
   runId: Schema.optional(RunId),
 });
 export type ThreadConsumptionCapHit = typeof ThreadConsumptionCapHit.Type;
+
+function ruleKey(rule: ThreadConsumptionCapRule): string {
+  return `${rule.providerInstanceId}\u0000${rule.model}`;
+}
+
+function rulesByKey(rules: ReadonlyArray<ThreadConsumptionCapRule>) {
+  return new Map(rules.map((rule) => [ruleKey(rule), rule]));
+}
+
+/**
+ * True only when every previous limit still exists and was raised, or a rule
+ * was removed. The cap hit stays when the comparison is ambiguous.
+ */
+export function consumptionCapIsMorePermissive(
+  next: ThreadConsumptionCap | null,
+  previous: ThreadConsumptionCap | null,
+): boolean {
+  if (next === null) return true;
+  if (previous === null || next.mode !== previous.mode) return false;
+
+  let increased = false;
+  const nextRules = rulesByKey(next.rules);
+  const previousRules = rulesByKey(previous.rules);
+
+  if (next.mode === "api") {
+    if (previous.totalLimitUsd !== undefined) {
+      if (next.totalLimitUsd === undefined) increased = true;
+      else if (next.totalLimitUsd < previous.totalLimitUsd) return false;
+      else if (next.totalLimitUsd > previous.totalLimitUsd) increased = true;
+    } else if (next.totalLimitUsd !== undefined) {
+      return false;
+    }
+
+    for (const [key, previousRule] of previousRules) {
+      if (previousRule.limitUsd === undefined) continue;
+      const nextRule = nextRules.get(key);
+      if (nextRule === undefined || nextRule.limitUsd === undefined) {
+        increased = true;
+        continue;
+      }
+      if (nextRule.limitUsd < previousRule.limitUsd) return false;
+      if (nextRule.limitUsd > previousRule.limitUsd) increased = true;
+    }
+    for (const [key, nextRule] of nextRules) {
+      if (nextRule.limitUsd === undefined) continue;
+      if (previousRules.get(key)?.limitUsd === undefined) return false;
+    }
+    return increased;
+  }
+
+  for (const [key, previousRule] of previousRules) {
+    if (previousRule.atPercent === undefined) continue;
+    const nextRule = nextRules.get(key);
+    if (nextRule === undefined || nextRule.atPercent === undefined) {
+      increased = true;
+      continue;
+    }
+    if (
+      nextRule.windowId !== previousRule.windowId ||
+      nextRule.windowKind !== previousRule.windowKind
+    ) {
+      return false;
+    }
+    if (nextRule.atPercent < previousRule.atPercent) return false;
+    if (nextRule.atPercent > previousRule.atPercent) increased = true;
+  }
+  for (const [key, nextRule] of nextRules) {
+    if (nextRule.atPercent === undefined) continue;
+    if (previousRules.get(key)?.atPercent === undefined) return false;
+  }
+  return increased;
+}

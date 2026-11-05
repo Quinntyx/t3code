@@ -249,7 +249,8 @@ export function deriveThreadStructureRuntime(
   if (
     latestRun === null &&
     projection.thread.activeProviderThreadId === null &&
-    !backgroundWorkHoldsRun
+    !backgroundWorkHoldsRun &&
+    capHit === null
   ) {
     return null;
   }

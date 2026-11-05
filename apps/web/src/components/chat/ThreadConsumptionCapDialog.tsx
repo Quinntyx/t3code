@@ -80,11 +80,16 @@ function initialDrafts(
         (candidate) =>
           candidate.providerInstanceId === row.providerInstanceId && candidate.model === row.model,
       );
+      const windowId =
+        rule?.windowId ??
+        (rule?.windowKind === undefined
+          ? (row.windows[0]?.id ?? "")
+          : (row.windows.find((window) => window.kind === rule.windowKind)?.id ?? ""));
       return [
         row.key,
         {
           limitUsd: rule?.limitUsd?.toString() ?? "",
-          windowId: rule?.windowId ?? row.windows[0]?.id ?? "",
+          windowId,
           atPercent: rule?.atPercent?.toString() ?? "",
         } satisfies RuleDraft,
       ];
@@ -355,7 +360,6 @@ function ThreadConsumptionCapDialogContent({
                               inputMode="decimal"
                               className="h-8"
                               placeholder="No cap"
-                              disabled={noPrice}
                               value={draft.limitUsd}
                               onChange={(event) =>
                                 updateDraft(row.key, { limitUsd: event.target.value })

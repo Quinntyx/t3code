@@ -72,6 +72,26 @@ describe("V2 client presentation", () => {
     });
   });
 
+  it("presents a first-turn cap hit before any run exists", () => {
+    const shell = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: null,
+      activeRunId: null,
+      activeProviderThreadId: null,
+      status: "idle",
+      consumptionCapHit: {
+        at: DateTime.formatIso(v2ThreadShell.updatedAt),
+        reason: "5h usage 90% reached 80% cap.",
+      },
+    });
+    expect(shell.runtime).toMatchObject({
+      status: "failed",
+      lastError: "5h usage 90% reached 80% cap.",
+      lastErrorClass: "usage_limit",
+      lastErrorCode: "consumption_cap",
+    });
+  });
+
   it("keeps blocking and legacy questions out of Working", () => {
     for (const capability of [{ blocking: true }, {}]) {
       const shell = presentThreadShell(environmentId, {

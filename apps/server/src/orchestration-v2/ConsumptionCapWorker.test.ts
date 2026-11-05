@@ -25,6 +25,8 @@ const candidate = (input: {
   readonly cap: OrchestrationV2AppThread["consumptionCap"];
   readonly hit?: OrchestrationV2AppThread["consumptionCapHit"];
   readonly activeRunId?: RunId;
+  readonly hasActiveDelegates?: boolean;
+  readonly hasActiveBackgroundWork?: boolean;
 }): ProjectionStore.ProjectionConsumptionCapCandidate => ({
   thread: {
     id: threadId,
@@ -32,6 +34,8 @@ const candidate = (input: {
     consumptionCapHit: input.hit ?? null,
   } as OrchestrationV2AppThread,
   activeRunId: input.activeRunId ?? null,
+  hasActiveDelegates: input.hasActiveDelegates ?? false,
+  hasActiveBackgroundWork: input.hasActiveBackgroundWork ?? false,
 });
 
 const runSweep = (input: {
@@ -127,6 +131,80 @@ describe("consumption cap sweep", () => {
       threadId,
       reason: "Thread API spend $0.75 reached $0.50 cap.",
     });
+  });
+
+  it("stops the thread when a delegate is the only active work", async () => {
+    const commands = await runSweep({
+      candidates: [
+        candidate({
+          cap: { mode: "api", totalLimitUsd: 0.5, rules: [] },
+          hasActiveDelegates: true,
+        }),
+      ],
+      models: [
+        {
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "opus",
+          costUsd: 0.75,
+        },
+      ],
+    });
+
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.metadata.update",
+      "thread.stop",
+    ]);
+  });
+
+  it("stops the thread when background work is the only active work", async () => {
+    const commands = await runSweep({
+      candidates: [
+        candidate({
+          cap: { mode: "api", totalLimitUsd: 0.5, rules: [] },
+          hasActiveBackgroundWork: true,
+        }),
+      ],
+      models: [
+        {
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "opus",
+          costUsd: 0.75,
+        },
+      ],
+    });
+
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.metadata.update",
+      "thread.stop",
+    ]);
+  });
+
+  it("does not clear a quota hit while the window is unknown", async () => {
+    const commands = await runSweep({
+      candidates: [
+        candidate({
+          cap: {
+            mode: "quota",
+            rules: [
+              {
+                providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+                driver: ProviderDriverKind.make("claudeAgent"),
+                model: "opus",
+                windowKind: "session",
+                atPercent: 80,
+              },
+            ],
+          },
+          hit: {
+            at: "2026-11-04T12:00:00.000Z",
+            reason: "5h usage 90% reached 80% cap.",
+          },
+        }),
+      ],
+      models: [],
+    });
+
+    expect(commands).toEqual([]);
   });
 
   it("clears a hit that no longer breaches the cap", async () => {

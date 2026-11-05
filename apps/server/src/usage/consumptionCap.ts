@@ -31,6 +31,16 @@ export interface ConsumptionCapBreach {
   readonly rule: ThreadConsumptionCapRule | null;
 }
 
+export interface ConsumptionCapEvaluation {
+  readonly breach: ConsumptionCapBreach | null;
+  /**
+   * False when the snapshot cannot answer whether the cap is met, such as a
+   * missing quota window or an unpriced model contributing to a dollar cap.
+   * Callers must not clear an existing hit on an unknown result.
+   */
+  readonly known: boolean;
+}
+
 const modelKey = (providerInstanceId: string, model: string) =>
   `${providerInstanceId}\u0000${model}`;
 
@@ -58,52 +68,81 @@ export function evaluateConsumptionCap(
   cap: ThreadConsumptionCap,
   snapshot: ConsumptionCapSnapshot,
   nowMs: number,
-): ConsumptionCapBreach | null {
+): ConsumptionCapEvaluation {
   if (cap.mode === "quota") {
+    let known = true;
     for (const rule of cap.rules) {
       if (rule.atPercent === undefined) continue;
       const window = quotaWindow(
         rule,
         snapshot.windowsByInstance.get(rule.providerInstanceId) ?? [],
       );
-      if (window === undefined || !windowIsCurrent(window, nowMs)) continue;
+      if (window === undefined) {
+        known = false;
+        continue;
+      }
+      // A passed reset means the window is current at zero, not that the data is stale.
+      if (!windowIsCurrent(window, nowMs)) continue;
       if (window.usedPercent < rule.atPercent) continue;
       return {
-        rule,
-        reason: `${window.label} usage ${Math.round(window.usedPercent)}% reached ${rule.atPercent}% cap.`,
+        known: true,
+        breach: {
+          rule,
+          reason: `${window.label} usage ${Math.round(window.usedPercent)}% reached ${rule.atPercent}% cap.`,
+        },
       };
     }
-    return null;
+    return { breach: null, known };
   }
 
   const costs = new Map<string, number>();
+  const unpriced = new Set<string>();
   let total = 0;
   let pricedModels = 0;
   for (const model of snapshot.models) {
-    if (model.costUsd === null) continue;
+    const key = modelKey(model.providerInstanceId, model.model);
+    if (model.costUsd === null) {
+      unpriced.add(key);
+      continue;
+    }
     pricedModels += 1;
     total += model.costUsd;
-    const key = modelKey(model.providerInstanceId, model.model);
     costs.set(key, (costs.get(key) ?? 0) + model.costUsd);
   }
 
   if (cap.totalLimitUsd !== undefined && pricedModels > 0 && total >= cap.totalLimitUsd) {
     return {
-      rule: null,
-      reason: `Thread API spend ${formatUsd(total)} reached ${formatUsd(cap.totalLimitUsd)} cap.`,
+      known: true,
+      breach: {
+        rule: null,
+        reason: `Thread API spend ${formatUsd(total)} reached ${formatUsd(cap.totalLimitUsd)} cap.`,
+      },
     };
   }
 
   for (const rule of cap.rules) {
     if (rule.limitUsd === undefined) continue;
-    const cost = costs.get(modelKey(rule.providerInstanceId, rule.model));
+    const key = modelKey(rule.providerInstanceId, rule.model);
+    const cost = costs.get(key);
     if (cost === undefined || cost < rule.limitUsd) continue;
     return {
-      rule,
-      reason: `${rule.model} API spend ${formatUsd(cost)} reached ${formatUsd(rule.limitUsd)} cap.`,
+      known: true,
+      breach: {
+        rule,
+        reason: `${rule.model} API spend ${formatUsd(cost)} reached ${formatUsd(rule.limitUsd)} cap.`,
+      },
     };
   }
-  return null;
+
+  let known = true;
+  if (cap.totalLimitUsd !== undefined) {
+    known = snapshot.models.length === 0 || (pricedModels > 0 && unpriced.size === 0);
+  }
+  for (const rule of cap.rules) {
+    if (rule.limitUsd === undefined) continue;
+    if (unpriced.has(modelKey(rule.providerInstanceId, rule.model))) known = false;
+  }
+  return { breach: null, known };
 }
 
 /** Keeps a duplicate check from writing the same hit every scheduler tick. */

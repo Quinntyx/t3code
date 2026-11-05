@@ -145,6 +145,27 @@ describe("thread execution presentation", () => {
     });
   });
 
+  it("presents a cap hit before the first run", () => {
+    const projection = {
+      ...v2Projection,
+      runs: [],
+      thread: {
+        ...v2Projection.thread,
+        activeProviderThreadId: null,
+        consumptionCapHit: {
+          at: DateTime.formatIso(now),
+          reason: "5h usage 90% reached 80% cap.",
+        },
+      },
+    };
+    expect(deriveThreadRuntime(projection)).toMatchObject({
+      status: "failed",
+      lastError: "5h usage 90% reached 80% cap.",
+      lastErrorClass: "usage_limit",
+      lastErrorCode: "consumption_cap",
+    });
+  });
+
   // regression: #15029 working timers no longer reset on every background wake
   it("counts a wake run's activity from the start of the work it continues", () => {
     const workStartedAt = DateTime.makeUnsafe("2026-07-28T09:20:00.000Z");

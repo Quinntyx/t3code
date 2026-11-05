@@ -1,6 +1,7 @@
 import {
   CommandId,
   type ProviderInstanceId,
+  type ThreadConsumptionCap,
   type ThreadConsumptionCapHit,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -19,11 +20,12 @@ import * as ThreadUsageService from "../usage/ThreadUsageService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
-const clearHit = (threadId: ThreadId, hitAt: string) => ({
+const clearHit = (threadId: ThreadId, hitAt: string, expectedCap: ThreadConsumptionCap | null) => ({
   type: "thread.metadata.update" as const,
   commandId: CommandId.make(`consumption-cap-clear:${threadId}:${hitAt}`),
   threadId,
   consumptionCapHit: null,
+  expectedConsumptionCap: expectedCap,
 });
 
 const makeSweep = Effect.gen(function* () {
@@ -67,12 +69,12 @@ const makeSweep = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(now);
     const candidates = yield* projections.getConsumptionCapCandidates();
 
-    for (const { thread, activeRunId } of candidates) {
+    for (const { thread, activeRunId, hasActiveDelegates, hasActiveBackgroundWork } of candidates) {
       yield* Effect.gen(function* () {
         const cap = thread.consumptionCap ?? null;
         if (cap === null) {
           if (thread.consumptionCapHit != null) {
-            yield* threads.dispatch(clearHit(thread.id, thread.consumptionCapHit.at));
+            yield* threads.dispatch(clearHit(thread.id, thread.consumptionCapHit.at, null));
           }
           return;
         }
@@ -81,7 +83,7 @@ const makeSweep = Effect.gen(function* () {
         const windowsByInstance = yield* readWindows(
           new Set(cap.rules.map((rule) => rule.providerInstanceId)),
         );
-        const breach = evaluateConsumptionCap(
+        const evaluation = evaluateConsumptionCap(
           cap,
           {
             models: threadUsage.models.map(capModel),
@@ -90,35 +92,37 @@ const makeSweep = Effect.gen(function* () {
           nowMs,
         );
 
-        if (breach === null) {
-          if (thread.consumptionCapHit != null) {
-            yield* threads.dispatch(clearHit(thread.id, thread.consumptionCapHit.at));
+        if (evaluation.breach === null) {
+          if (evaluation.known && thread.consumptionCapHit != null) {
+            yield* threads.dispatch(clearHit(thread.id, thread.consumptionCapHit.at, cap));
           }
           return;
         }
 
-        if (!consumptionCapHitMatches(thread.consumptionCapHit, breach)) {
+        const hitMatches = consumptionCapHitMatches(thread.consumptionCapHit, evaluation.breach);
+        const hitAt = hitMatches ? thread.consumptionCapHit!.at : DateTime.formatIso(now);
+        if (!hitMatches) {
           const hit: ThreadConsumptionCapHit = {
-            at: DateTime.formatIso(now),
-            reason: breach.reason,
+            at: hitAt,
+            reason: evaluation.breach.reason,
             ...(activeRunId === null ? {} : { runId: activeRunId }),
           };
           yield* threads.dispatch({
             type: "thread.metadata.update",
-            commandId: CommandId.make(
-              `consumption-cap-hit:${thread.id}:${DateTime.formatIso(now)}`,
-            ),
+            commandId: CommandId.make(`consumption-cap-hit:${thread.id}:${hitAt}`),
             threadId: thread.id,
             consumptionCapHit: hit,
+            expectedConsumptionCap: cap,
           });
         }
 
-        if (activeRunId !== null) {
+        if (activeRunId !== null || hasActiveDelegates || hasActiveBackgroundWork) {
           yield* threads.dispatch({
             type: "thread.stop",
-            commandId: CommandId.make(`consumption-cap-stop:${thread.id}:${activeRunId}`),
+            commandId: CommandId.make(`consumption-cap-stop:${thread.id}:${hitAt}`),
             threadId: thread.id,
-            reason: breach.reason,
+            reason: evaluation.breach.reason,
+            consumptionCapGuard: { cap, hitAt },
           });
         }
       }).pipe(
