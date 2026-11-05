@@ -25,6 +25,7 @@ function ScrollArea({
   scrollFade = false,
   scrollFadePadding = true,
   scrollbarGutter = false,
+  scrollbarInset = false,
   hideScrollbars = false,
   chainVerticalScroll = false,
   radius = "inherit",
@@ -34,6 +35,8 @@ function ScrollArea({
   scrollFade?: boolean;
   scrollFadePadding?: boolean;
   scrollbarGutter?: boolean;
+  /** Keeps the bar clear of a rounded container's edge, so it reads as a scrollbar and not a border. */
+  scrollbarInset?: boolean;
   hideScrollbars?: boolean;
   chainVerticalScroll?: boolean;
   radius?: "inherit" | "none";
@@ -67,8 +70,8 @@ function ScrollArea({
       </ScrollAreaPrimitive.Viewport>
       {!hideScrollbars && (
         <>
-          <ScrollBar orientation="vertical" />
-          <ScrollBar orientation="horizontal" />
+          <ScrollBar inset={scrollbarInset} orientation="vertical" />
+          <ScrollBar inset={scrollbarInset} orientation="horizontal" />
           <ScrollAreaPrimitive.Corner data-slot="scroll-area-corner" />
         </>
       )}
@@ -78,13 +81,17 @@ function ScrollArea({
 
 function ScrollBar({
   className,
+  inset = false,
   orientation = "vertical",
   ...props
-}: ScrollAreaPrimitive.Scrollbar.Props) {
+}: ScrollAreaPrimitive.Scrollbar.Props & { inset?: boolean }) {
   return (
     <ScrollAreaPrimitive.Scrollbar
       className={cn(
-        "flex opacity-0 transition-opacity delay-300 data-[orientation=horizontal]:mx-1 data-[orientation=horizontal]:mb-px data-[orientation=horizontal]:h-1.5 data-[orientation=vertical]:my-1 data-[orientation=vertical]:mr-px data-[orientation=vertical]:w-1.5 data-[orientation=horizontal]:flex-col data-hovering:opacity-100 data-scrolling:opacity-100 data-hovering:delay-0 data-scrolling:delay-0 data-hovering:duration-100 data-scrolling:duration-100",
+        "flex opacity-0 transition-opacity delay-300 data-[orientation=horizontal]:h-1.5 data-[orientation=vertical]:w-1.5 data-[orientation=horizontal]:flex-col data-hovering:opacity-100 data-scrolling:opacity-100 data-hovering:delay-0 data-scrolling:delay-0 data-hovering:duration-100 data-scrolling:duration-100",
+        inset
+          ? "data-[orientation=horizontal]:mx-3 data-[orientation=horizontal]:mb-2 data-[orientation=vertical]:my-3 data-[orientation=vertical]:mr-2"
+          : "data-[orientation=horizontal]:mx-1 data-[orientation=horizontal]:mb-px data-[orientation=vertical]:my-1 data-[orientation=vertical]:mr-px",
         className,
       )}
       data-slot="scroll-area-scrollbar"
