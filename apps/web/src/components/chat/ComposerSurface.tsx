@@ -7,6 +7,7 @@ import { composerGlassShape } from "./composerGlass";
 function Shell({
   contextRow = false,
   className,
+  children,
   ...props
 }: Omit<ComponentProps<"div">, "ref"> & { contextRow?: boolean }) {
   return (
@@ -38,23 +39,30 @@ function Shell({
         contextRow && [
           "[--chat-composer-context-extension:2.25rem] sm:[--chat-composer-context-extension:2rem]",
           "[--chat-composer-drawer-padding:calc(var(--chat-composer-drawer-inset)+0.5rem)]",
-          "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:before:rounded-none",
-          "before:[clip-path:shape(from_0_var(--chat-composer-radius),arc_to_var(--chat-composer-radius)_0_of_var(--chat-composer-radius)_cw,line_to_calc(100%-var(--chat-composer-radius))_0,arc_to_100%_var(--chat-composer-radius)_of_var(--chat-composer-radius)_cw,line_to_100%_calc(100%-var(--chat-composer-context-extension)-var(--chat-composer-radius)),arc_to_calc(100%-var(--chat-composer-radius))_calc(100%-var(--chat-composer-context-extension))_of_var(--chat-composer-radius)_cw,line_to_calc(100%-var(--chat-composer-drawer-inset))_calc(100%-var(--chat-composer-context-extension)),line_to_calc(100%-var(--chat-composer-drawer-inset))_calc(100%-16px),arc_to_calc(100%-var(--chat-composer-drawer-inset)-16px)_100%_of_16px_cw,line_to_calc(var(--chat-composer-drawer-inset)+16px)_100%,arc_to_var(--chat-composer-drawer-inset)_calc(100%-16px)_of_16px_cw,line_to_var(--chat-composer-drawer-inset)_calc(100%-var(--chat-composer-context-extension)),line_to_var(--chat-composer-radius)_calc(100%-var(--chat-composer-context-extension)),arc_to_0_calc(100%-var(--chat-composer-context-extension)-var(--chat-composer-radius))_of_var(--chat-composer-radius)_cw,line_to_0_var(--chat-composer-radius),close)]",
-          "not-supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:before:bottom-(--chat-composer-context-extension)",
+          // The context strip draws its own surface below the card, so the glass stops at the card.
+          "before:bottom-(--chat-composer-context-extension)",
         ],
         className,
       )}
       {...props}
-    />
+    >
+      <div data-slot="composer-glass-shadow" aria-hidden="true" />
+      {children}
+    </div>
   );
 }
 
 const outlineClasses =
   "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:border after:border-(--chat-composer-outline) dark:after:inset-shadow-2xs dark:after:inset-shadow-(color:--chat-composer-highlight)";
 
-// The drawer is one surface with the card, so the card's bottom edge stops short of it.
+// The strip carries the body's lower edge, so the card's own bottom outline stops where it starts.
 const contextSeamClasses =
-  "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:group-data-[context-row=true]/composer-surface:after:[clip-path:polygon(0_0,100%_0,100%_100%,calc(100%-22px)_100%,calc(100%-22px)_calc(100%-2px),22px_calc(100%-2px),22px_100%,0_100%)]";
+  "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:group-data-[context-row=true]/composer-surface:after:[clip-path:polygon(0_0,100%_0,100%_100%,calc(100%-var(--chat-composer-drawer-inset))_100%,calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_100%,0_100%)]";
+
+// Everything but the strip's footprint, so the card's shadow stops at the seam instead of crossing
+// it, and the strip draws the body's shadow from there down.
+const contextShadowClasses =
+  "group-data-[context-row=true]/composer-surface:[clip-path:polygon(-100px_-100px,calc(100%_+_100px)_-100px,calc(100%_+_100px)_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%_+_100px),-100px_calc(100%_+_100px))]";
 
 function Host({ className, ...props }: ComponentProps<"div">) {
   return (
@@ -64,7 +72,9 @@ function Host({ className, ...props }: ComponentProps<"div">) {
         "relative z-10 w-full rounded-(--chat-composer-radius) shadow-float after:z-1",
         outlineClasses,
         contextSeamClasses,
-        // Shaped liquid glass draws the outline around the drawers and strip it merges.
+        contextShadowClasses,
+        // Shaped liquid glass draws the outline and one body shadow around the drawers and strip.
+        "group-data-liquid-glass-shaped/composer-surface:shadow-none",
         "group-data-liquid-glass-shaped/composer-surface:after:hidden",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-none group-has-data-[composer-banner-surface=attached]/composer-surface:after:hidden",
         className,
@@ -94,15 +104,23 @@ function Main({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-/** A plain row inside the drawer under the card (environment, worktree, branch), inset to it. */
+/**
+ * The row under the card (environment, worktree, branch), drawn as the card's attached surface:
+ * the same fill, outline and corners as a banner above it, meeting the card's bottom edge.
+ */
 function ContextStrip({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="composer-context-strip"
       className={cn(
-        "group/composer-context relative flex h-(--chat-composer-context-extension) w-full items-center gap-2 overflow-x-clip px-2 text-muted-foreground",
-        // Without the drawer shape the row is a plain strip under the card, so it lines up with it.
-        "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:px-(--chat-composer-drawer-padding)",
+        "group/composer-context relative isolate z-20 flex h-(--chat-composer-context-extension) w-full items-center gap-2 overflow-x-clip px-(--chat-composer-drawer-padding,2.25rem) text-muted-foreground",
+        "before:pointer-events-none before:absolute before:inset-x-(--chat-composer-drawer-inset,1.75rem) before:inset-y-0 before:-z-1 before:rounded-b-glass before:border before:border-t-0 before:border-(--chat-composer-outline) before:bg-(--chat-composer-glass-fill) before:composer-frost",
+        // The strip's share of the body's shadow sits on its own layer, so shaped liquid glass can
+        // draw the fill while the shadow still closes the body's lower edge. Kept off the card.
+        "after:pointer-events-none after:absolute after:inset-x-(--chat-composer-drawer-inset,1.75rem) after:inset-y-0 after:-z-1 after:rounded-b-glass after:shadow-float after:[clip-path:inset(0_-100px_-100px_-100px)]",
+        "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:before:bg-(--chat-composer-glass-surface)",
+        // Shaped liquid glass draws the strip as part of the card's body instead.
+        "group-data-liquid-glass-shaped/composer-surface:before:hidden group-data-liquid-glass-shaped/composer-surface:after:hidden",
         className,
       )}
       {...props}

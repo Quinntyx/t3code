@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildLiquidGlassFilter, buildLiquidGlassGlare, liquidGlassBackdropFilter } from "./filter";
+import {
+  buildGlassShadowMask,
+  buildLiquidGlassFilter,
+  buildLiquidGlassGlare,
+  GLASS_SHADOW_MARGIN,
+  liquidGlassBackdropFilter,
+} from "./filter";
 
 const mapOf = (markup: string) => {
   const encoded = /data:image\/svg\+xml,([^"]+)"/.exec(markup)?.[1];
@@ -79,6 +85,29 @@ describe("buildLiquidGlassFilter", () => {
     expect(
       buildLiquidGlassFilter("glass-3", { width: 700, height: 96, radius: 8 }).markup,
     ).toContain('x="0" y="0" width="1" height="1"');
+  });
+});
+
+describe("buildGlassShadowMask", () => {
+  it("blurs the silhouette inside room for the shadow, with the body cut out of it", () => {
+    const outline = { width: 720, height: 140, path: "M0 0L720 0L720 140Z" };
+    const svg = decodeURIComponent(
+      buildGlassShadowMask(outline).slice('url("data:image/svg+xml,'.length, -2),
+    );
+    const margin = GLASS_SHADOW_MARGIN;
+    expect(svg).toContain(
+      `width="${720 + margin * 2}" height="${140 + margin * 2}" viewBox="0 0 ${720 + margin * 2} ${140 + margin * 2}"`,
+    );
+    // The cut-out sits on the body; the blurred source sits 8px lower, like the float shadow.
+    expect(svg).toContain(
+      `<path d="${outline.path}" fill="#000" transform="translate(${margin} ${margin})"/>`,
+    );
+    expect(svg).toContain(
+      `<path d="${outline.path}" fill="#fff" filter="url(#blur)" transform="translate(${margin} ${margin + 8})"/>`,
+    );
+    expect(svg).toContain(
+      '<feMorphology operator="erode" radius="8"/><feGaussianBlur stdDeviation="12"/>',
+    );
   });
 });
 

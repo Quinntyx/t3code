@@ -1,11 +1,13 @@
 import { observeResize } from "~/lib/observeResize";
 
 import {
+  buildGlassShadowMask,
   buildLiquidGlassFilter,
   buildLiquidGlassGlare,
   buildOutlineGlare,
   buildOutlineMasks,
   DEFAULT_LIQUID_GLASS_OPTIONS,
+  GLASS_SHADOW_MARGIN,
   liquidGlassBackdropFilter,
   liquidGlassCenterBlurExtra,
   type LiquidGlassOptions,
@@ -28,6 +30,8 @@ const RESIZE_SETTLE_MS = 120;
 interface Outline {
   fill: string;
   ring: string;
+  /** The body's silhouette blurred into a shadow mask. */
+  shadow: string;
   /** CSS inset of the outline's box from the element's border box. */
   inset: readonly [top: number, right: number, bottom: number, left: number];
   merged: readonly Element[];
@@ -108,11 +112,14 @@ function paintOutline(element: Element, next: Outline | null, previous: Outline 
     element.removeAttribute("data-liquid-glass-shaped");
     style.removeProperty("--glass-liquid-mask");
     style.removeProperty("--glass-liquid-outline");
+    style.removeProperty("--glass-liquid-shadow");
     for (const property of INSET_PROPERTIES) style.removeProperty(property);
     return;
   }
   style.setProperty("--glass-liquid-mask", next.fill);
   style.setProperty("--glass-liquid-outline", next.ring);
+  style.setProperty("--glass-liquid-shadow", next.shadow);
+  style.setProperty("--glass-liquid-shadow-margin", `${GLASS_SHADOW_MARGIN}px`);
   INSET_PROPERTIES.forEach((property, index) =>
     style.setProperty(property, `${next.inset[index] ?? 0}px`),
   );
@@ -210,6 +217,7 @@ export function startLiquidGlass(
               .markup,
             outline: {
               ...masks,
+              shadow: buildGlassShadowMask({ ...shape, path: outline.path }),
               inset,
               merged: parts.flatMap((part) => (part.element ? [part.element] : [])),
             },

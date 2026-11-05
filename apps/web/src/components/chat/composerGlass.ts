@@ -3,8 +3,6 @@ import { invalidateLiquidGlass, type LiquidGlassShapePart } from "~/liquid-glass
 
 // Drawers blend into the composer through a concave fillet, like liquid-glass-studio's merge.
 const DRAWER_FILLET = 12;
-// Matches the context strip's corners in ComposerSurface's clip path.
-const CONTEXT_STRIP_RADIUS = 16;
 
 const drawers = new WeakMap<Element, Set<Element>>();
 
@@ -54,13 +52,17 @@ export function composerGlassShape(shell: HTMLElement): LiquidGlassShapePart[] |
   ];
   if (shell.dataset.contextRow) {
     const inset = composerDrawerInset(shell);
+    const strip = shell.querySelector('[data-slot="composer-context-strip"]');
     parts.push({
       x: inset,
       y: cardMiddle,
       width: box.width - inset * 2,
       height: box.height - cardMiddle,
-      radius: CONTEXT_STRIP_RADIUS,
-      fillet: 0,
+      // Same radius and fillet as the drawers above, so both joints read as one body.
+      radius: strip
+        ? Number.parseFloat(window.getComputedStyle(strip, "::before").borderBottomLeftRadius) || 0
+        : 0,
+      fillet: DRAWER_FILLET,
     });
   }
   for (const drawer of drawers.get(shell) ?? []) {
