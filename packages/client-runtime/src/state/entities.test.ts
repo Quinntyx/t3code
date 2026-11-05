@@ -53,6 +53,45 @@ describe("V2 client presentation", () => {
     expect(effectiveSnoozed(active, { now: "2026-06-20T00:05:00.000Z" })).toBe(false);
   });
 
+  it("presents a consumption cap hit as limited in the shell summary", () => {
+    const shell = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: RunId.make("run-consumption-cap"),
+      status: "completed",
+      consumptionCapHit: {
+        at: DateTime.formatIso(v2ThreadShell.updatedAt),
+        reason: "Thread API spend $0.75 reached $0.50 cap.",
+      },
+    });
+    expect(shell.runtime).toMatchObject({
+      status: "failed",
+      lastError: "Thread API spend $0.75 reached $0.50 cap.",
+      lastErrorClass: "usage_limit",
+      lastErrorCode: "consumption_cap",
+      usageLimitResetAt: null,
+    });
+  });
+
+  it("presents a first-turn cap hit before any run exists", () => {
+    const shell = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: null,
+      activeRunId: null,
+      activeProviderThreadId: null,
+      status: "idle",
+      consumptionCapHit: {
+        at: DateTime.formatIso(v2ThreadShell.updatedAt),
+        reason: "5h usage 90% reached 80% cap.",
+      },
+    });
+    expect(shell.runtime).toMatchObject({
+      status: "failed",
+      lastError: "5h usage 90% reached 80% cap.",
+      lastErrorClass: "usage_limit",
+      lastErrorCode: "consumption_cap",
+    });
+  });
+
   it("keeps blocking and legacy questions out of Working", () => {
     for (const capability of [{ blocking: true }, {}]) {
       const shell = presentThreadShell(environmentId, {

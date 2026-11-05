@@ -964,6 +964,7 @@ export default function ChatView(props: ChatViewProps) {
   const timelineThreadError =
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
+    activeThreadShell?.consumptionCapHit == null &&
     activeThreadShell?.latestRun &&
     visibleThreadError === serverRuntime.lastError
       ? null
@@ -2524,6 +2525,7 @@ export default function ChatView(props: ChatViewProps) {
   const limitRecoveryBanner =
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
+    activeThreadShell?.consumptionCapHit == null &&
     activeThreadShell?.latestRun
       ? usageLimitRecoveryBannerItem({
           runId: activeThreadShell.latestRun.runId,

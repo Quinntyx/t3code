@@ -21,6 +21,7 @@ export function UsageLimitRecoveryCard({
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const consumptionCapHit = thread.consumptionCapHit ?? null;
   const resetAt = thread.runtime?.usageLimitResetAt ?? null;
   const canSchedule =
     resetAt !== null &&
@@ -30,12 +31,21 @@ export function UsageLimitRecoveryCard({
   const recovery = thread.limitRecovery;
   const scheduled =
     recovery?.runId === runId && recovery?.resetAt === resetAt && recovery?.autoResume;
-  if (
-    thread.runtime?.status !== "failed" ||
-    thread.runtime.lastErrorClass !== "usage_limit" ||
-    !runId
-  )
+  if (thread.runtime?.status !== "failed" || thread.runtime.lastErrorClass !== "usage_limit") {
     return null;
+  }
+  if (consumptionCapHit !== null) {
+    return (
+      <View className="mx-3 mb-2 gap-2 rounded-xl border border-warning-foreground/25 bg-screen p-3">
+        <Text className="text-sm text-warning-foreground">Consumption cap reached.</Text>
+        <Text className="text-sm text-foreground/75">{consumptionCapHit.reason}</Text>
+        <Text className="text-sm text-foreground/75">
+          Raise or remove the thread's consumption cap to continue.
+        </Text>
+      </View>
+    );
+  }
+  if (!runId) return null;
   const snoozed =
     recovery?.snooze === true &&
     recovery.runId === runId &&

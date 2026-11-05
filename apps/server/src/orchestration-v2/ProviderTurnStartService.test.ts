@@ -17,6 +17,7 @@ import {
   ThreadId,
   ProjectId,
   type OrchestrationV2ThreadProjection,
+  type ThreadConsumptionCapHit,
   OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -278,6 +279,7 @@ function makeLocalCommandHarness(input: {
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
   readonly failReadsAfterRunning?: boolean;
+  readonly consumptionCapHit?: ThreadConsumptionCapHit;
   readonly previousTurn?: {
     readonly runStatus: "failed" | "completed";
     readonly turnStatus: "running" | "completed" | "interrupted";
@@ -354,6 +356,9 @@ function makeLocalCommandHarness(input: {
       projectId: ProjectId.make("project-native-account-command"),
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
+      ...(input.consumptionCapHit === undefined
+        ? {}
+        : { consumptionCapHit: input.consumptionCapHit }),
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -786,6 +791,34 @@ function makeLocalCommandHarness(input: {
     }).pipe(Effect.provide(layer)),
   };
 }
+
+effectIt.effect(
+  "fails a new turn before starting the provider when the consumption cap is hit",
+  () =>
+    Effect.gen(function* () {
+      const hit: ThreadConsumptionCapHit = {
+        at: "2026-09-04T11:59:00.000Z",
+        reason: "Thread API spend $5.00 reached $5.00 cap.",
+      };
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        consumptionCapHit: hit,
+      });
+      yield* harness.start;
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      const failure = harness.events.flatMap((event) =>
+        event.type === "turn-item.updated" && event.payload.type === "error"
+          ? [event.payload.failure]
+          : [],
+      )[0];
+      expect(failure).toMatchObject({
+        class: "usage_limit",
+        code: "consumption_cap",
+        message: hit.reason,
+      });
+      expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+    }),
+);
 
 effectIt.effect(
   "recovers the thread branch tip, falls back to the current project branch, and rejects detached HEAD",

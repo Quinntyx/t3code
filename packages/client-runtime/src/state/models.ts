@@ -178,6 +178,8 @@ export interface EnvironmentThreadShell {
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
+  readonly consumptionCap?: import("@t3tools/contracts").ThreadConsumptionCap | null;
+  readonly consumptionCapHit?: import("@t3tools/contracts").ThreadConsumptionCapHit | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   readonly pinOrderKey: string | null;
@@ -224,10 +226,17 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
-  if (thread.latestRunId === null && thread.activeProviderThreadId === null && !parkAtIdle) {
+  if (
+    thread.latestRunId === null &&
+    thread.activeProviderThreadId === null &&
+    !parkAtIdle &&
+    thread.consumptionCapHit == null
+  ) {
     return null;
   }
-  const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
+  const capHit = thread.consumptionCapHit ?? null;
+  const status =
+    capHit !== null ? "failed" : parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
   return {
     status,
     activeRunId: thread.activeRunId,
@@ -237,10 +246,10 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
         : nullableIso(thread.activityRunStartedAt),
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
-    lastError: thread.lastError ?? null,
-    lastErrorClass: thread.lastErrorClass ?? null,
-    lastErrorCode: thread.lastErrorCode ?? null,
-    usageLimitResetAt: thread.usageLimitResetAt ?? null,
+    lastError: capHit?.reason ?? thread.lastError ?? null,
+    lastErrorClass: capHit === null ? (thread.lastErrorClass ?? null) : "usage_limit",
+    lastErrorCode: capHit === null ? (thread.lastErrorCode ?? null) : "consumption_cap",
+    usageLimitResetAt: capHit === null ? (thread.usageLimitResetAt ?? null) : null,
     updatedAt: iso(thread.updatedAt),
   };
 }
@@ -335,6 +344,8 @@ export function presentThreadShell(
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     limitRecovery: thread.limitRecovery ?? null,
+    consumptionCap: thread.consumptionCap ?? null,
+    consumptionCapHit: thread.consumptionCapHit ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,

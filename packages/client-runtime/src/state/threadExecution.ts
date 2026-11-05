@@ -228,6 +228,7 @@ export function deriveThreadStructureRuntime(
     (session) => session.providerInstanceId === projection.thread.providerInstanceId,
   );
   const usageLimitedRun = presentedUsageLimitRun(projection);
+  const capHit = projection.thread.consumptionCapHit ?? null;
   const latestRunProjection = presentedLatestRun(projection);
   const activityRun = deriveThreadActivityRun(projection);
   const liveActivityRun = latestMatchingRun(projection, (run) =>
@@ -248,18 +249,20 @@ export function deriveThreadStructureRuntime(
   if (
     latestRun === null &&
     projection.thread.activeProviderThreadId === null &&
-    !backgroundWorkHoldsRun
+    !backgroundWorkHoldsRun &&
+    capHit === null
   ) {
     return null;
   }
   const activeRunId =
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
   return {
-    status: usageLimitedRun
-      ? "failed"
-      : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
-        ? "idle"
-        : (activityRun?.status ?? "idle"),
+    status:
+      capHit !== null || usageLimitedRun
+        ? "failed"
+        : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
+          ? "idle"
+          : (activityRun?.status ?? "idle"),
     activeRunId,
     activityStartedAt:
       liveActivityRun === null
@@ -267,10 +270,17 @@ export function deriveThreadStructureRuntime(
         : DateTime.formatIso(orchestrationV2RunWorkStartedAt(liveActivityRun)),
     providerInstanceId: projection.thread.providerInstanceId,
     providerName: providerSession?.driver ?? null,
-    ...threadErrorSummary(
-      latestRootProviderFailure(latestRunProjection, projection.turnItems),
-      providerSession?.lastError ?? null,
-    ),
+    ...(capHit === null
+      ? threadErrorSummary(
+          latestRootProviderFailure(latestRunProjection, projection.turnItems),
+          providerSession?.lastError ?? null,
+        )
+      : {
+          lastError: capHit.reason,
+          lastErrorClass: "usage_limit" as const,
+          lastErrorCode: "consumption_cap",
+          usageLimitResetAt: null,
+        }),
   };
 }
 

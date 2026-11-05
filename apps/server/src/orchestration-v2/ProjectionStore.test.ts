@@ -6683,4 +6683,158 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       );
     }),
   );
+
+  it.effect("finds capped threads with background work and active delegates", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:consumption-cap-candidates");
+      const childThreadId = ThreadId.make("thread:consumption-cap-candidates:child");
+      const threadPayload = {
+        createdBy: "user",
+        creationSource: "web",
+        id: threadId,
+        projectId: ProjectId.make("project:consumption-cap-candidates"),
+        title: "Consumption cap candidates",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      } as const;
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...threadPayload,
+          consumptionCap: { conditions: [{ kind: "spend", limitUsd: 10 }] },
+        },
+      });
+
+      const runId = RunId.make("run:consumption-cap-candidates");
+      const rootNodeId = NodeId.make("node:consumption-cap-candidates:root");
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:run"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:consumption-cap-candidates"),
+          rootNodeId,
+          activeAttemptId: null,
+          status: "completed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:item"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("item:consumption-cap-candidates"),
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "waiting",
+          title: "background command",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "command_execution",
+          input: "sleep 60",
+        },
+      });
+
+      const childRunId = RunId.make("run:consumption-cap-candidates:child");
+      const childRootNodeId = NodeId.make("node:consumption-cap-candidates:child-root");
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:child-thread"),
+        type: "thread.created",
+        threadId: childThreadId,
+        occurredAt: now,
+        payload: {
+          ...threadPayload,
+          id: childThreadId,
+          title: "Consumption cap candidate child",
+          lineage: {
+            parentThreadId: threadId,
+            relationshipToParent: "subagent",
+            rootThreadId: threadId,
+          },
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:child-run"),
+        type: "run.created",
+        threadId: childThreadId,
+        runId: childRunId,
+        nodeId: childRootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: childRunId,
+          threadId: childThreadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:consumption-cap-candidates:child"),
+          rootNodeId: childRootNodeId,
+          activeAttemptId: null,
+          status: "running",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+
+      assert.deepEqual(yield* store.getConsumptionCapCandidates(), [
+        {
+          thread: (yield* store.getThreadProjection(threadId)).thread,
+          activeRunId: null,
+          hasActiveDelegates: true,
+          hasActiveBackgroundWork: true,
+        },
+      ]);
+    }),
+  );
 });
