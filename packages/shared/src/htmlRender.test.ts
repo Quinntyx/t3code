@@ -83,6 +83,14 @@ describe("injectHtmlRenderBootstrap", () => {
     expect(injected).toContain('name="viewport"');
   });
 
+  it("keeps the page transparent so the thread shows through", () => {
+    const injected = injectHtmlRenderBootstrap("<p>x</p>");
+    expect(injected).toContain("html{background:transparent;");
+    // A dark color-scheme on the root would paint an opaque canvas over the thread.
+    expect(injected).toContain("body{color-scheme:dark}");
+    expect(injected).not.toContain(":root{color-scheme:");
+  });
+
   it("wraps fragments without a head and keeps existing meta tags", () => {
     const fragment =
       '<meta charset="utf-8"><meta name="viewport" content="width=device-width"><p>hi</p>';

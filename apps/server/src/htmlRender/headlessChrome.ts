@@ -59,6 +59,16 @@ const textEncoder = new TextEncoder();
 const pageBody = (html: string) =>
   Buffer.from(Buffer.from(html, "utf8").toString("base64"), "latin1");
 
+// A transparent page screenshot composites over Chrome's white, so previews paint the theme canvas behind it.
+function parseHexColor(value: string | undefined) {
+  const match = value === undefined ? null : /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+  if (match === null) return undefined;
+  const digits =
+    match[1]!.length === 3 ? [...match[1]!].map((digit) => digit + digit).join("") : match[1]!;
+  const color = Number.parseInt(digits, 16);
+  return { r: (color >> 16) & 0xff, g: (color >> 8) & 0xff, b: color & 0xff };
+}
+
 const CdpMessage = Schema.fromJsonString(
   Schema.Struct({
     id: Schema.optional(Schema.Number),
@@ -399,7 +409,11 @@ const launchBrowser = Effect.fnUntraced(function* (input: {
     );
   });
 
-  const openPage = Effect.fnUntraced(function* (width: number, appearance: ThemeAppearance) {
+  const openPage = Effect.fnUntraced(function* (
+    width: number,
+    appearance: ThemeAppearance,
+    backgroundColor?: string,
+  ) {
     const { targetId } = yield* send(
       "Target.createTarget",
       { url: "about:blank" },
@@ -428,6 +442,15 @@ const launchBrowser = Effect.fnUntraced(function* (input: {
       Ignored,
       sessionId,
     );
+    const background = parseHexColor(backgroundColor);
+    if (background !== undefined) {
+      yield* send(
+        "Emulation.setDefaultBackgroundColorOverride",
+        { color: { ...background, a: 1 } },
+        Ignored,
+        sessionId,
+      );
+    }
     // Previews have no use for WebRTC, whose ICE servers can make the browser
     // resolve names outside the proxy. Runs before page scripts in every frame.
     yield* send(
@@ -542,6 +565,7 @@ export const captureHtmlScreenshot = Effect.fn("headlessChrome.captureHtmlScreen
     readonly width: number;
     readonly urlFragment: string;
     readonly appearance: ThemeAppearance;
+    readonly backgroundColor?: string | undefined;
   }) {
     const path = yield* Path.Path;
     const directory = yield* scratchDirectory;
@@ -550,7 +574,7 @@ export const captureHtmlScreenshot = Effect.fn("headlessChrome.captureHtmlScreen
       noSandbox: input.noSandbox,
       profileDirectory: path.join(directory, "profile"),
     });
-    const page = yield* browser.openPage(input.width, input.appearance);
+    const page = yield* browser.openPage(input.width, input.appearance, input.backgroundColor);
     const contentHeight = yield* page.load(pageBody(input.html), input.urlFragment);
     const capturedHeight = Math.max(1, Math.min(contentHeight, MAX_CAPTURE_HEIGHT));
     const png = yield* page.screenshot(capturedHeight);
