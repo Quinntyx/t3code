@@ -227,7 +227,7 @@ function BuddyOverlay({ character }: { character: BuddyCharacter }) {
               };
             }}
             className={cn("absolute max-w-none", name === requested ? "visible" : "invisible")}
-            style={character.clipStyle}
+            style={{ width: "100%", height: "100%", left: 0, top: 0 }}
             src={src}
             draggable={false}
             muted

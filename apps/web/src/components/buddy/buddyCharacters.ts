@@ -1,29 +1,31 @@
-import type { Buddy } from "@t3tools/contracts/settings";
-import type { CSSProperties } from "react";
-
 import { BUDDY_ANIMATIONS, type BuddyAnimation } from "./buddy.logic";
 
-/** Buddies drawn into the app itself; downloaded ones are resolved at runtime. */
-export type BuddyCharacterId = "whale-chan" | "clawd";
-
-export const BUDDY_CHARACTER_IDS: ReadonlyArray<BuddyCharacterId> = ["whale-chan", "clawd"];
-
-export const isBuddyCharacterId = (value: Buddy): value is BuddyCharacterId =>
-  BUDDY_CHARACTER_IDS.includes(value as BuddyCharacterId);
+/** The on-disk shape of a buddy folder, bundled or downloaded. */
+export interface BuddyManifest {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly author: string;
+  readonly license: string;
+  /** Clip width divided by height. */
+  readonly aspectRatio: number;
+  /** Buddy state slot to clip file name. */
+  readonly clips: Readonly<Record<string, string>>;
+}
 
 export interface BuddyCharacter {
   readonly label: string;
   readonly description: string;
+  readonly author: string;
+  readonly license: string;
   /** Only the slots this character has art for; `resolveBuddyClip` fills the rest. */
   readonly clips: Partial<Record<BuddyAnimation, string>>;
-  /** Positions a clip so that only the character's rectangle shows. */
-  readonly clipStyle: CSSProperties;
   readonly aspectRatio: number;
 }
 
 /**
  * Every clip a character lacks falls back down this chain, which always ends at
- * `idle`. It keeps a small set (Whale-chan ships seven) working across all states.
+ * `idle`. It keeps a sparse set working across all states.
  */
 const BUDDY_FALLBACKS: Readonly<Record<BuddyAnimation, ReadonlyArray<BuddyAnimation>>> = {
   idle: [],
@@ -59,53 +61,57 @@ export function resolveBuddyClip(
   return "idle";
 }
 
-const CLIP_URLS = import.meta.glob<string>("~/assets/buddy/*/*.webm", {
+/** Builds a character from a manifest, given how to address one of its clips. */
+export function buddyCharacterFrom(
+  manifest: BuddyManifest,
+  clipUrl: (file: string) => string,
+): BuddyCharacter {
+  const clips: Partial<Record<BuddyAnimation, string>> = {};
+  for (const slot of BUDDY_ANIMATIONS) {
+    const file = manifest.clips[slot];
+    if (file !== undefined) clips[slot] = clipUrl(file);
+  }
+  return {
+    label: manifest.name,
+    description: manifest.description || manifest.author,
+    author: manifest.author,
+    license: manifest.license,
+    clips,
+    aspectRatio: manifest.aspectRatio,
+  };
+}
+
+const BUNDLED_MANIFESTS = import.meta.glob<BuddyManifest>("~/assets/buddy/*/buddy.json", {
+  eager: true,
+  import: "default",
+});
+
+const BUNDLED_CLIP_URLS = import.meta.glob<string>("~/assets/buddy/*/*.webm", {
   eager: true,
   query: "?url",
   import: "default",
 });
 
-function clipsFor(character: BuddyCharacterId): Partial<Record<BuddyAnimation, string>> {
-  const clips: Partial<Record<BuddyAnimation, string>> = {};
-  for (const [file, url] of Object.entries(CLIP_URLS)) {
-    const match = /buddy\/([^/]+)\/([^/]+)\.webm$/.exec(file);
-    if (match === null || match[1] !== character) continue;
-    const slot = match[2] as BuddyAnimation;
-    if (BUDDY_ANIMATIONS.includes(slot)) clips[slot] = url;
+function bundledCharacters(): Readonly<Record<string, BuddyCharacter>> {
+  const characters: Record<string, BuddyCharacter> = {};
+  for (const [manifestPath, manifest] of Object.entries(BUNDLED_MANIFESTS)) {
+    const directory = manifestPath.slice(0, manifestPath.lastIndexOf("/"));
+    characters[manifest.id] = buddyCharacterFrom(manifest, (file) => {
+      const url = BUNDLED_CLIP_URLS[`${directory}/${file}`];
+      if (url === undefined) throw new Error(`Bundled clip ${directory}/${file} is missing.`);
+      return url;
+    });
   }
-  return clips;
+  return characters;
 }
 
-function cropStyle(
-  frame: { readonly width: number; readonly height: number },
-  crop: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
-): CSSProperties {
-  return {
-    width: `${(frame.width / crop.width) * 100}%`,
-    height: `${(frame.height / crop.height) * 100}%`,
-    left: `${(-crop.x / crop.width) * 100}%`,
-    top: `${(-crop.y / crop.height) * 100}%`,
-  };
-}
+/** Buddies drawn into the app itself; downloaded ones are resolved at runtime. */
+export const BUDDY_CHARACTERS = bundledCharacters();
 
-const FULL_FRAME: CSSProperties = { width: "100%", height: "100%", left: 0, top: 0 };
+export const BUDDY_CHARACTER_IDS: ReadonlyArray<string> = Object.keys(BUDDY_CHARACTERS);
 
-export const BUDDY_CHARACTERS: Readonly<Record<BuddyCharacterId, BuddyCharacter>> = {
-  "whale-chan": {
-    label: "Whale-chan",
-    description: "DeepSeek",
-    clips: clipsFor("whale-chan"),
-    clipStyle: cropStyle({ width: 640, height: 360 }, { x: 155, y: 6, width: 313, height: 331 }),
-    aspectRatio: 313 / 331,
-  },
-  clawd: {
-    label: "Clawd",
-    description: "Claude",
-    clips: clipsFor("clawd"),
-    clipStyle: FULL_FRAME,
-    aspectRatio: 1,
-  },
-};
+export const isBuddyCharacterId = (value: string): boolean =>
+  Object.hasOwn(BUDDY_CHARACTERS, value);
 
 /** Idle first, then the loop states, then one-shots, so the pet appears fast. */
 export function clipLoadOrder(character: BuddyCharacter): ReadonlyArray<BuddyAnimation> {

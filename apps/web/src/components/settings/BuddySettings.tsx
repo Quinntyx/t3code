@@ -57,15 +57,19 @@ export function BuddySection() {
             onSelect={() => select("none")}
             preview={<BanIcon className="size-10 text-muted-foreground" strokeWidth={1.5} />}
           />
-          {BUDDY_CHARACTER_IDS.map((id) => (
-            <BuddyChoice
-              key={id}
-              reference={id}
-              character={BUDDY_CHARACTERS[id]}
-              isActive={buddy === id}
-              onSelect={select}
-            />
-          ))}
+          {BUDDY_CHARACTER_IDS.map((id) => {
+            const character = BUDDY_CHARACTERS[id];
+            if (character === undefined) return null;
+            return (
+              <BuddyChoice
+                key={id}
+                reference={id}
+                character={character}
+                isActive={buddy === id}
+                onSelect={select}
+              />
+            );
+          })}
           {[...catalog.characters].map(([reference, character]) => (
             <BuddyChoice
               key={reference}

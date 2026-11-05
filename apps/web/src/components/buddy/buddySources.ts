@@ -1,21 +1,10 @@
 import { useEffect, useSyncExternalStore } from "react";
 
-import { BUDDY_ANIMATIONS, type BuddyAnimation } from "./buddy.logic";
-import type { BuddyCharacter } from "./buddyCharacters";
-
-export interface RemoteBuddyManifest {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string;
-  readonly author: string;
-  readonly license: string;
-  readonly aspectRatio: number;
-  readonly clips: Readonly<Record<string, string>>;
-}
+import { buddyCharacterFrom, type BuddyCharacter, type BuddyManifest } from "./buddyCharacters";
 
 export interface BuddySourceEntry {
   readonly repositoryUrl: string;
-  readonly buddies: ReadonlyArray<RemoteBuddyManifest>;
+  readonly buddies: ReadonlyArray<BuddyManifest>;
   readonly error: string | null;
 }
 
@@ -30,23 +19,8 @@ const clipUrl = (repositoryUrl: string, buddyId: string, file: string): string =
   return `/api/buddies/clip?${query.toString()}`;
 };
 
-function remoteBuddyCharacter(
-  repositoryUrl: string,
-  manifest: RemoteBuddyManifest,
-): BuddyCharacter {
-  const clips: Partial<Record<BuddyAnimation, string>> = {};
-  for (const slot of BUDDY_ANIMATIONS) {
-    const file = manifest.clips[slot];
-    if (file !== undefined) clips[slot] = clipUrl(repositoryUrl, manifest.id, file);
-  }
-  return {
-    label: manifest.name,
-    description: manifest.description || manifest.author,
-    clips,
-    clipStyle: { width: "100%", height: "100%", left: 0, top: 0 },
-    aspectRatio: manifest.aspectRatio,
-  };
-}
+const remoteBuddyCharacter = (repositoryUrl: string, manifest: BuddyManifest): BuddyCharacter =>
+  buddyCharacterFrom(manifest, (file) => clipUrl(repositoryUrl, manifest.id, file));
 
 // One catalog for the whole app: the overlay and the settings picker share it,
 // so a reload in either place shows up in both.

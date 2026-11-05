@@ -72,8 +72,8 @@ without replaying its transitions.
 ## Buddy
 
 Pick a buddy under **Settings → Appearance → Buddy** to add an animated companion that floats
-above the app. Clawd and Whale-chan ship with T3 Code; Whale-chan has fewer clips and reuses its
-nearest one in the states it lacks.
+above the app. Clawd and Whale-chan ship with T3 Code, in the same format as a downloaded buddy
+— a `buddy.json` manifest beside its clips.
 
 It reacts to the agent in the thread you have open: thinking, running tools, juggling when
 subagents are working, waiting on an approval or answer, sweeping while the context compacts,
