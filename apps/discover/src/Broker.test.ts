@@ -15,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Broker from "./Broker.ts";
+import type { DiscoverableService } from "./services/index.ts";
 
 const registration = (id: string): DiscoverHostRegistration => ({
   descriptor: {
@@ -196,4 +197,119 @@ it.effect("retains directory, enrollment and pending work across a durable resta
     for (const secret of [state.owner.token, state.grant.hostToken, state.code])
       assert.notInclude(disk, secret);
   }),
+);
+
+const fakeService = (input: {
+  readonly serviceId: string;
+  readonly capabilities: ReadonlyArray<"key-exchange">;
+  readonly minted: Array<string>;
+  readonly revoked: Array<string>;
+}): DiscoverableService => ({
+  serviceId: input.serviceId,
+  kind: "cliproxyapi",
+  label: input.serviceId,
+  protocol: "openai",
+  endpoints: [{ transport: "lan", httpBaseUrl: "http://192.168.1.9:8317" }],
+  capabilities: input.capabilities,
+  health: Effect.succeed("online"),
+  issueCredential: (member) =>
+    Effect.sync(() => {
+      const apiKey = `key-${member.label}-${input.minted.length}`;
+      input.minted.push(apiKey);
+      return {
+        protocol: "openai" as const,
+        baseUrl: "http://192.168.1.9:8317/v1",
+        apiKey,
+      };
+    }),
+  revokeCredential: (_member, credential) =>
+    Effect.sync(() => {
+      input.revoked.push(credential.apiKey);
+    }),
+});
+
+const hubMinted: Array<string> = [];
+const hubRevoked: Array<string> = [];
+
+it.effect("lists services with per-member link state and mints one credential per member", () =>
+  Effect.gen(function* () {
+    const broker = yield* Broker.Broker;
+    const owner = yield* broker.enroll({ code: yield* broker.pair(), label: "owner" });
+    const guest = yield* broker.enroll({ code: yield* broker.pair(), label: "guest" });
+    const initial = yield* broker.directory(owner.token);
+    assert.deepEqual(initial.services, [
+      {
+        serviceId: "hub",
+        kind: "cliproxyapi",
+        label: "hub",
+        protocol: "openai",
+        endpoints: [{ transport: "lan", httpBaseUrl: "http://192.168.1.9:8317" }],
+        capabilities: ["key-exchange"],
+        health: "online",
+        lastSeenAt: 0,
+        linkedAt: null,
+      },
+    ]);
+    const first = yield* broker.link(owner.token, { serviceId: "hub" });
+    assert.strictEqual(first.credential?.apiKey, "key-owner-0");
+    assert.deepEqual(hubMinted, ["key-owner-0"]);
+    const again = yield* broker.link(owner.token, { serviceId: "hub" });
+    assert.deepEqual(again, first);
+    assert.deepEqual(hubMinted, ["key-owner-0"]);
+    assert.strictEqual(
+      (yield* broker.serviceLink(owner.token, "hub")).credential?.apiKey,
+      "key-owner-0",
+    );
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(broker.serviceLink(guest.token, "hub"))));
+    assert.strictEqual((yield* broker.directory(guest.token)).services[0]!.linkedAt, null);
+    const guestLink = yield* broker.link(guest.token, { serviceId: "hub" });
+    assert.strictEqual(guestLink.credential?.apiKey, "key-guest-1");
+    assert.strictEqual((yield* broker.directory(owner.token)).services[0]!.health, "online");
+    yield* broker.unlink(owner.token, "hub");
+    assert.deepEqual(hubRevoked, ["key-owner-0"]);
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(broker.serviceLink(owner.token, "hub"))));
+    assert.strictEqual((yield* broker.directory(guest.token)).services[0]!.linkedAt !== null, true);
+    yield* broker.leave(guest.token);
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(broker.serviceLink(guest.token, "hub"))));
+    // Leaving must not strand a hub key the member can still use.
+    assert.deepEqual(hubRevoked, ["key-owner-0", "key-guest-1"]);
+  }).pipe(
+    Effect.provide(
+      Broker.layer(":memory:", [
+        fakeService({
+          serviceId: "hub",
+          capabilities: ["key-exchange"],
+          minted: hubMinted,
+          revoked: hubRevoked,
+        }),
+      ]),
+    ),
+  ),
+);
+
+it.effect("links a service without key exchange and rejects unknown services", () =>
+  Effect.gen(function* () {
+    const broker = yield* Broker.Broker;
+    const owner = yield* member(broker);
+    const link = yield* broker.link(owner.token, { serviceId: "plain" });
+    assert.strictEqual(link.credential, null);
+    assert.strictEqual(link.serviceId, "plain");
+    assert.isTrue(
+      Exit.isFailure(yield* Effect.exit(broker.link(owner.token, { serviceId: "missing" }))),
+    );
+    assert.isTrue(
+      Exit.isFailure(
+        yield* Effect.exit(
+          broker.link(owner.token, { serviceId: "plain", transport: "tailscale" }),
+        ),
+      ),
+    );
+    yield* broker.unlink(owner.token, "missing");
+  }).pipe(
+    Effect.provide(
+      Broker.layer(":memory:", [
+        fakeService({ serviceId: "plain", capabilities: [], minted: [], revoked: [] }),
+      ]),
+    ),
+  ),
 );

@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -43,8 +44,59 @@ export const DiscoverDirectoryEntry = Schema.Struct({
 });
 export type DiscoverDirectoryEntry = typeof DiscoverDirectoryEntry.Type;
 
+export const DiscoverServiceKind = Schema.Literals(["cliproxyapi", "generic"]);
+export type DiscoverServiceKind = typeof DiscoverServiceKind.Type;
+
+/** Wire protocol a discovered service speaks to its clients. */
+export const DiscoverServiceProtocol = Schema.Literals(["openai", "anthropic"]);
+export type DiscoverServiceProtocol = typeof DiscoverServiceProtocol.Type;
+
+export const DiscoverServiceCapability = Schema.Literals(["key-exchange"]);
+export type DiscoverServiceCapability = typeof DiscoverServiceCapability.Type;
+
+export const DiscoverServiceEndpoint = Schema.Struct({
+  transport: DiscoverTransport,
+  httpBaseUrl: Schema.String,
+});
+export type DiscoverServiceEndpoint = typeof DiscoverServiceEndpoint.Type;
+
+export const DiscoverServiceHealth = Schema.Literals(["online", "offline", "unknown"]);
+export type DiscoverServiceHealth = typeof DiscoverServiceHealth.Type;
+
+/** A non-environment service the broker advertises, such as a model hub. */
+export const DiscoverServiceEntry = Schema.Struct({
+  serviceId: Schema.String,
+  kind: DiscoverServiceKind,
+  label: Schema.String,
+  protocol: DiscoverServiceProtocol,
+  endpoints: Schema.Array(DiscoverServiceEndpoint),
+  capabilities: Schema.Array(DiscoverServiceCapability),
+  health: DiscoverServiceHealth,
+  lastSeenAt: Schema.Number,
+  /** Null until this member links the service; linking is always an explicit user action. */
+  linkedAt: Schema.NullOr(Schema.Number),
+});
+export type DiscoverServiceEntry = typeof DiscoverServiceEntry.Type;
+
+/** What a linked service hands one member: one credential and the base URL it belongs to. */
+export const DiscoverServiceCredential = Schema.Struct({
+  protocol: DiscoverServiceProtocol,
+  baseUrl: Schema.String,
+  apiKey: Schema.String,
+});
+export type DiscoverServiceCredential = typeof DiscoverServiceCredential.Type;
+
+export const DiscoverServiceLink = Schema.Struct({
+  serviceId: Schema.String,
+  linkedAt: Schema.Number,
+  credential: Schema.NullOr(DiscoverServiceCredential),
+});
+export type DiscoverServiceLink = typeof DiscoverServiceLink.Type;
+
 export const DiscoverDirectory = Schema.Struct({
   hosts: Schema.Array(DiscoverDirectoryEntry),
+  // Older brokers predate services; absent means none.
+  services: Schema.Array(DiscoverServiceEntry).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 
 export const DiscoverPairingRequestInput = Schema.Struct({

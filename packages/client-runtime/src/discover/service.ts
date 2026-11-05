@@ -6,6 +6,8 @@ import {
   DiscoverMembership,
   DiscoverPairingRequest,
   DiscoverPairingResult,
+  DiscoverServiceLink,
+  type DiscoverServiceEntry,
   type DiscoverTransport,
 } from "@t3tools/contracts/discover";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
@@ -47,6 +49,7 @@ export interface DirectoryDiscoveryState {
   readonly refreshing: boolean;
   readonly error: string | null;
   readonly hosts: ReadonlyArray<DiscoverDirectoryEntry>;
+  readonly services: ReadonlyArray<DiscoverServiceEntry>;
 }
 
 export const EMPTY_DISCOVERY_STATE: DirectoryDiscoveryState = {
@@ -54,6 +57,7 @@ export const EMPTY_DISCOVERY_STATE: DirectoryDiscoveryState = {
   refreshing: false,
   error: null,
   hosts: [],
+  services: [],
 };
 
 type DiscoveryError = ConnectionAttemptError | ConnectionPersistenceError;
@@ -72,6 +76,11 @@ export class DirectoryDiscovery extends Context.Service<
     readonly refresh: () => Effect.Effect<void>;
     readonly disconnect: () => Effect.Effect<void, ConnectionPersistenceError>;
     readonly start: Effect.Effect<void>;
+    readonly linkService: (input: {
+      readonly serviceId: string;
+      readonly transport?: DiscoverTransport;
+    }) => Effect.Effect<DiscoverServiceLink, DiscoveryError>;
+    readonly unlinkService: (serviceId: string) => Effect.Effect<void, DiscoveryError>;
   }
 >()("@t3tools/client-runtime/discover/service/DirectoryDiscovery") {}
 
@@ -279,7 +288,11 @@ export const make = Effect.gen(function* () {
         current.token,
       );
       if (generation !== expected) return;
-      yield* SubscriptionRef.update(state, (value) => ({ ...value, hosts: directory.hosts }));
+      yield* SubscriptionRef.update(state, (value) => ({
+        ...value,
+        hosts: directory.hosts,
+        services: directory.services,
+      }));
       for (const host of directory.hosts) {
         if (generation !== expected) return;
         yield* importHost(host, expected).pipe(
@@ -448,6 +461,53 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  const linkService = Effect.fn("DirectoryDiscovery.linkService")(function* (input: {
+    readonly serviceId: string;
+    readonly transport?: DiscoverTransport;
+  }) {
+    const current = membership;
+    if (current === null)
+      return yield* invalid("Join a discovery directory before linking services.");
+    const link = yield* request(
+      current.brokerOrigin,
+      `/services/${encodeURIComponent(input.serviceId)}/link`,
+      "POST",
+      DiscoverServiceLink,
+      current.token,
+      input.transport === undefined ? {} : { transport: input.transport },
+    );
+    if (link.serviceId !== input.serviceId)
+      return yield* invalid("The directory returned a link for a different service.");
+    yield* SubscriptionRef.update(state, (value) => ({
+      ...value,
+      services: value.services.map((service) =>
+        service.serviceId === input.serviceId ? { ...service, linkedAt: link.linkedAt } : service,
+      ),
+    }));
+    return link;
+  });
+
+  const unlinkService = Effect.fn("DirectoryDiscovery.unlinkService")(function* (
+    serviceId: string,
+  ) {
+    const current = membership;
+    if (current === null)
+      return yield* invalid("Join a discovery directory before unlinking services.");
+    yield* request(
+      current.brokerOrigin,
+      `/services/${encodeURIComponent(serviceId)}/link`,
+      "DELETE",
+      Schema.Struct({ ok: Schema.Boolean }),
+      current.token,
+    );
+    yield* SubscriptionRef.update(state, (value) => ({
+      ...value,
+      services: value.services.map((service) =>
+        service.serviceId === serviceId ? { ...service, linkedAt: null } : service,
+      ),
+    }));
+  });
+
   const start = Effect.gen(function* () {
     if (started) return;
     started = true;
@@ -461,7 +521,15 @@ export const make = Effect.gen(function* () {
     yield* refresh().pipe(Effect.forkIn(scope));
   });
 
-  return DirectoryDiscovery.of({ state, enroll, refresh, disconnect, start });
+  return DirectoryDiscovery.of({
+    state,
+    enroll,
+    refresh,
+    disconnect,
+    start,
+    linkService,
+    unlinkService,
+  });
 });
 
 export const layer = Layer.effect(DirectoryDiscovery, make);

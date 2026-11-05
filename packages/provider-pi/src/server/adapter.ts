@@ -70,6 +70,7 @@ import {
 } from "./rpc.ts";
 import {
   buildPiRpcLaunch,
+  materializePiT3DiscoverExtension,
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
@@ -538,6 +539,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const extensionPath = yield* provideCacheFs(
         materializePiT3McpExtension(host.paths.providerStatusCacheDir),
       );
+      const discoverExtensionPath = yield* provideCacheFs(
+        materializePiT3DiscoverExtension(host.paths.providerStatusCacheDir),
+      );
       const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
@@ -562,6 +566,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         },
         mcpSession,
         extensionPath,
+        discoverExtensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
       });
       const scopedLaunch = yield* agentScope.wrap({

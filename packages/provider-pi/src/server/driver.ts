@@ -16,6 +16,7 @@ import { readPiOpenCodeGoUsageLimits } from "./goUsageLimits.ts";
 import { readPiCodexUsageLimits } from "./codexUsageLimits.ts";
 import { makePiTextGeneration } from "./textGeneration.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./adapter.ts";
+import { materializePiT3DiscoverExtension } from "./mcpInjection.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import {
   buildInitialPiProviderSnapshot,
@@ -146,9 +147,15 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     );
     const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
 
+    const discoverExtensionPath = yield* materializePiT3DiscoverExtension(
+      host.paths.providerStatusCacheDir,
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.orElseSucceed(() => undefined),
+    );
     const checkProvider = Effect.all(
       {
-        provider: checkPiProviderStatus(effectiveConfig, processEnv, cwd),
+        provider: checkPiProviderStatus(effectiveConfig, processEnv, cwd, discoverExtensionPath),
         usageLimits: readPiOpenCodeGoUsageLimits({
           enabled,
           settings: effectiveConfig,

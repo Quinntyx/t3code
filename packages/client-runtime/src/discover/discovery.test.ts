@@ -53,6 +53,22 @@ const host = {
   lastSeenAt: 1,
 };
 const enrollmentUrl = "https://directory.example/discover#token=enrollment-code";
+const service = {
+  serviceId: "hub",
+  kind: "cliproxyapi",
+  label: "Model hub",
+  protocol: "openai",
+  endpoints: [{ transport: "lan", httpBaseUrl: "http://192.168.1.30:8317" }],
+  capabilities: ["key-exchange"],
+  health: "online",
+  lastSeenAt: 2,
+  linkedAt: null,
+};
+const serviceCredential = {
+  protocol: "openai",
+  baseUrl: "http://192.168.1.30:8317/v1",
+  apiKey: "t3d-minted",
+};
 
 const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
   surface: "desktop" | "mobile" | "web" = "web",
@@ -70,6 +86,8 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
   let leftDirectory = false;
   let denyHost = false;
   let failSave = false;
+  let serviceLinked = false;
+  let serviceUnlinked = false;
   const authorized: string[] = [];
   const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
     new Map(),
@@ -94,7 +112,20 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
       });
     }
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer secret-member");
-    if (url.endsWith("/hosts")) return Response.json({ hosts: [host] });
+    if (url.endsWith("/hosts"))
+      return Response.json({
+        hosts: [host],
+        services: [{ ...service, linkedAt: serviceLinked ? 5 : null }],
+      });
+    if (url.endsWith("/services/hub/link")) {
+      if (init?.method === "DELETE") {
+        serviceUnlinked = true;
+        serviceLinked = false;
+        return Response.json({ ok: true });
+      }
+      serviceLinked = true;
+      return Response.json({ serviceId: "hub", linkedAt: 5, credential: serviceCredential });
+    }
     if (url.endsWith("/requests")) {
       const body = JSON.parse(String(init?.body));
       requestedTransports.push(body.transport);
@@ -259,6 +290,7 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
     },
     persisted: () => persisted,
     calls: () => calls,
+    serviceUnlinked: () => serviceUnlinked,
   };
 });
 
@@ -525,5 +557,36 @@ describe("directory discovery", () => {
         expect(h.persisted()).toBeNull();
         expect((yield* SubscriptionRef.get(discovery.state)).directory).toBeNull();
       }).pipe(Effect.scoped),
+  );
+});
+
+describe("discovered services", () => {
+  it.effect("links only on request and clears the link when unlinked", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      const before = yield* SubscriptionRef.get(discovery.state);
+      expect(before.services).toEqual([service]);
+      expect(before.services[0]!.linkedAt).toBeNull();
+
+      const link = yield* discovery.linkService({ serviceId: "hub" });
+      expect(link.credential).toEqual(serviceCredential);
+      expect((yield* SubscriptionRef.get(discovery.state)).services[0]!.linkedAt).toBe(5);
+
+      yield* discovery.unlinkService("hub");
+      expect(h.serviceUnlinked()).toBe(true);
+      expect((yield* SubscriptionRef.get(discovery.state)).services[0]!.linkedAt).toBeNull();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects a link for a different service than the one requested", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      const result = yield* discovery.linkService({ serviceId: "other" }).pipe(Effect.exit);
+      expect(result._tag).toBe("Failure");
+    }).pipe(Effect.scoped),
   );
 });

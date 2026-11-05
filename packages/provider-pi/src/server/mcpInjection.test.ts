@@ -134,3 +134,56 @@ describe("pi T3 MCP injection", () => {
     assert.isTrue(resolvePiLaunchArgs("--model deepseek/v4").ok);
   });
 });
+
+describe("pi discovered service injection", () => {
+  it("adds the discover extension beside the permission bridge", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: { PATH: "/usr/bin" },
+      mcpSession: undefined,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      discoverExtensionPath: "/tmp/cache/pi-t3-discover-extension.ts",
+    });
+    assert.deepEqual(launch.args, [
+      "--mode",
+      "rpc",
+      "--extension",
+      "/tmp/cache/pi-t3-mcp-extension.ts",
+      "--extension",
+      "/tmp/cache/pi-t3-discover-extension.ts",
+    ]);
+  });
+
+  it("omits the discover extension when extensions are disabled", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: {},
+      mcpSession: undefined,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      discoverExtensionPath: "/tmp/cache/pi-t3-discover-extension.ts",
+      disableExtensions: true,
+    });
+    assert.notInclude(launch.args, "--extension");
+    assert.include(launch.args, "--no-extensions");
+  });
+});
+
+describe("pi discovered service status probe", () => {
+  it("loads the discover extension without the permission bridge", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: {},
+      mcpSession: undefined,
+      extensionPath: undefined,
+      discoverExtensionPath: "/tmp/cache/pi-t3-discover-extension.ts",
+      ephemeral: true,
+    });
+    assert.deepEqual(launch.args, [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--extension",
+      "/tmp/cache/pi-t3-discover-extension.ts",
+    ]);
+  });
+});
