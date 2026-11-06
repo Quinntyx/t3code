@@ -94,13 +94,23 @@ export const loadServicesConfig = Effect.fn("DiscoverServices.loadConfig")(funct
   home: string,
 ) {
   const path = servicesConfigPath(home);
-  const raw = yield* Effect.sync(() => {
+  const read = yield* Effect.sync(() => {
     try {
-      return NodeFS.readFileSync(path, "utf8");
-    } catch {
-      return null;
+      return { ok: true as const, raw: NodeFS.readFileSync(path, "utf8") as string | null };
+    } catch (cause) {
+      // Only a missing file means "no services"; an unreadable one must not look like that.
+      return (cause as NodeJS.ErrnoException).code === "ENOENT"
+        ? { ok: true as const, raw: null }
+        : { ok: false as const };
     }
   });
+  if (!read.ok) {
+    return yield* new ServicesConfigError({
+      path,
+      message: "Could not read the services configuration.",
+    });
+  }
+  const raw = read.raw;
   if (raw === null) return { services: [] } satisfies ServicesConfig;
   const decoded = yield* decodeConfig(raw).pipe(
     Effect.mapError(

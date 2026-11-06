@@ -143,7 +143,7 @@ export const make = Effect.gen(function* () {
   let membership = yield* store.load;
   let generation = 0;
   let started = false;
-  const operations = new Set<Fiber.Fiber<void, DiscoveryError>>();
+  const operations = new Set<Fiber.Fiber<unknown, DiscoveryError>>();
   const lock = yield* Semaphore.make(1);
   const state = yield* SubscriptionRef.make<DirectoryDiscoveryState>({
     ...EMPTY_DISCOVERY_STATE,
@@ -331,12 +331,12 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const tracked = Effect.fn("DirectoryDiscovery.tracked")(function* (
-    operation: Effect.Effect<void, DiscoveryError>,
+  const tracked = Effect.fn("DirectoryDiscovery.tracked")(function* <A>(
+    operation: Effect.Effect<A, DiscoveryError>,
   ) {
     const fiber = yield* Effect.forkChild(operation);
     operations.add(fiber);
-    yield* Fiber.join(fiber).pipe(
+    return yield* Fiber.join(fiber).pipe(
       Effect.ensuring(
         Effect.sync(() => {
           operations.delete(fiber);
@@ -468,82 +468,101 @@ export const make = Effect.gen(function* () {
   const serviceLink = Effect.fn("DirectoryDiscovery.serviceLink")(function* (serviceId: string) {
     const current = membership;
     if (current === null) return null;
-    const response = yield* http
-      .execute(
+    // The timeout has to cover the body read too, or a stalled body leaves the dialog pending and
+    // the per-service single-flight command blocks every later click.
+    return yield* Effect.gen(function* () {
+      const response = yield* http.execute(
         HttpClientRequest.bearerToken(
           HttpClientRequest.get(
             `${current.brokerOrigin}/api/discover/services/${encodeURIComponent(serviceId)}/link`,
           ),
           current.token,
         ),
-      )
-      .pipe(
-        Effect.timeout("15 seconds"),
-        Effect.mapError(
-          () =>
-            new ConnectionTransientError({
+      );
+      if (response.status === 404) return null;
+      if (response.status < 200 || response.status >= 300)
+        return yield* invalid("The discovery directory rejected this request.");
+      return yield* response.json.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(DiscoverServiceLink)),
+        Effect.mapError(() =>
+          invalid("The discovery directory returned an unreadable service credential."),
+        ),
+      );
+    }).pipe(
+      Effect.timeout("15 seconds"),
+      Effect.mapError((error) =>
+        isConnectionError(error)
+          ? error
+          : new ConnectionTransientError({
               reason: "remote-unavailable",
               detail: "Could not read the discovery service credential.",
             }),
-        ),
-      );
-    if (response.status === 404) return null;
-    if (response.status < 200 || response.status >= 300)
-      return yield* invalid("The discovery directory rejected this request.");
-    return yield* response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(DiscoverServiceLink)),
-      Effect.mapError(() =>
-        invalid("The discovery directory returned an unreadable service credential."),
       ),
     );
   });
 
-  const linkService = Effect.fn("DirectoryDiscovery.linkService")(function* (input: {
+  const linkService = (input: {
     readonly serviceId: string;
     readonly transport?: DiscoverTransport;
-  }) {
-    const current = membership;
-    if (current === null)
-      return yield* invalid("Join a discovery directory before linking services.");
-    const link = yield* request(
-      current.brokerOrigin,
-      `/services/${encodeURIComponent(input.serviceId)}/link`,
-      "POST",
-      DiscoverServiceLink,
-      current.token,
-      input.transport === undefined ? {} : { transport: input.transport },
-    );
-    if (link.serviceId !== input.serviceId)
-      return yield* invalid("The directory returned a link for a different service.");
-    yield* SubscriptionRef.update(state, (value) => ({
-      ...value,
-      services: value.services.map((service) =>
-        service.serviceId === input.serviceId ? { ...service, linkedAt: link.linkedAt } : service,
-      ),
-    }));
-    return link;
-  });
+  }) =>
+    Effect.suspend(() => {
+      const current = membership;
+      if (current === null) return invalid("Join a discovery directory before linking services.");
+      const expected = generation;
+      // Tracked so disconnect cancels it, and generation-checked so a late answer from the
+      // previous directory cannot mark the new one linked or hand back its member's credential.
+      return tracked(
+        Effect.gen(function* () {
+          const link = yield* request(
+            current.brokerOrigin,
+            `/services/${encodeURIComponent(input.serviceId)}/link`,
+            "POST",
+            DiscoverServiceLink,
+            current.token,
+            input.transport === undefined ? {} : { transport: input.transport },
+          );
+          if (link.serviceId !== input.serviceId)
+            return yield* invalid("The directory returned a link for a different service.");
+          if (generation !== expected)
+            return yield* invalid("The discovery directory changed. Try again.");
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            services: value.services.map((service) =>
+              service.serviceId === input.serviceId
+                ? { ...service, linkedAt: link.linkedAt }
+                : service,
+            ),
+          }));
+          return link;
+        }),
+      );
+    });
 
-  const unlinkService = Effect.fn("DirectoryDiscovery.unlinkService")(function* (
-    serviceId: string,
-  ) {
-    const current = membership;
-    if (current === null)
-      return yield* invalid("Join a discovery directory before unlinking services.");
-    yield* request(
-      current.brokerOrigin,
-      `/services/${encodeURIComponent(serviceId)}/link`,
-      "DELETE",
-      Schema.Struct({ ok: Schema.Boolean }),
-      current.token,
-    );
-    yield* SubscriptionRef.update(state, (value) => ({
-      ...value,
-      services: value.services.map((service) =>
-        service.serviceId === serviceId ? { ...service, linkedAt: null } : service,
-      ),
-    }));
-  });
+  const unlinkService = (serviceId: string) =>
+    Effect.suspend(() => {
+      const current = membership;
+      if (current === null) return invalid("Join a discovery directory before unlinking services.");
+      const expected = generation;
+      return tracked(
+        Effect.gen(function* () {
+          yield* request(
+            current.brokerOrigin,
+            `/services/${encodeURIComponent(serviceId)}/link`,
+            "DELETE",
+            Schema.Struct({ ok: Schema.Boolean }),
+            current.token,
+          );
+          if (generation !== expected)
+            return yield* invalid("The discovery directory changed. Try again.");
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            services: value.services.map((service) =>
+              service.serviceId === serviceId ? { ...service, linkedAt: null } : service,
+            ),
+          }));
+        }),
+      );
+    });
 
   const start = Effect.gen(function* () {
     if (started) return;

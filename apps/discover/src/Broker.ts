@@ -327,6 +327,8 @@ const make = Effect.fn("Discover.make")(function* (
         !service.endpoints.some((endpoint) => endpoint.transport === input.transport)
       )
         return yield* reject(400, "Transport unavailable.");
+      // An existing link keeps the credential it was issued, including its endpoint; changing the
+      // transport is an unlink followed by a link, not a silent rewrite of a working key.
       const existing = yield* serviceLinkRow(service.serviceId, member.id);
       if (existing[0]) return yield* decodeLink(existing[0]);
       const endpoint =

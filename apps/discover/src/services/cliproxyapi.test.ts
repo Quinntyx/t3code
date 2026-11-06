@@ -57,10 +57,23 @@ const withServer = (
   );
 };
 
+/** Mirrors upstream: PATCH appends `new` when `old` is absent, DELETE always succeeds. */
 const keyList = (request: Recorded, keys: Array<string>) => {
   if (request.method === "GET") return Response.json({ "api-keys": [...keys] });
-  const next = JSON.parse(request.body) as Array<string>;
-  keys.splice(0, keys.length, ...next);
+  if (request.method === "PATCH") {
+    const body = JSON.parse(request.body) as { old?: string; new?: string };
+    if (body.old === undefined || body.new === undefined)
+      return Response.json({ error: "missing fields" }, { status: 400 });
+    const index = keys.indexOf(body.old);
+    if (index >= 0) keys[index] = body.new;
+    else keys.push(body.new);
+    return Response.json({ status: "ok" });
+  }
+  const value = new URL(`http://hub.example${request.pathname}${request.query}`).searchParams.get(
+    "value",
+  );
+  const index = keys.indexOf(value ?? "");
+  if (index >= 0) keys.splice(index, 1);
   return Response.json({ status: "ok" });
 };
 
@@ -75,12 +88,10 @@ it.effect("mints a client key by appending to the existing list", () =>
       assert.strictEqual(credential.baseUrl, "http://hub.example:8317/v1");
       assert.match(credential.apiKey, /^t3d-/);
       assert.deepEqual(keys, ["existing-key", credential.apiKey]);
+      // One request, no list read: a concurrent revocation cannot be undone by this write.
       assert.deepEqual(
-        calls.map((call) => [call.method, call.pathname]),
-        [
-          ["GET", "/v0/management/api-keys"],
-          ["PUT", "/v0/management/api-keys"],
-        ],
+        calls.map((call) => [call.method, call.pathname, JSON.parse(call.body)]),
+        [["PATCH", "/v0/management/api-keys", { old: credential.apiKey, new: credential.apiKey }]],
       );
       for (const call of calls) assert.strictEqual(call.authorization, "Bearer management-secret");
     }),
@@ -88,33 +99,38 @@ it.effect("mints a client key by appending to the existing list", () =>
 );
 
 it.effect("revokes one key with a single request so a concurrent mint cannot resurrect it", () =>
+  withServer(keyList, ({ service, calls, keys }) =>
+    Effect.gen(function* () {
+      yield* service.revokeCredential(
+        { id: "member-1", label: "desktop" },
+        { protocol: "openai", baseUrl: "http://hub.example:8317/v1", apiKey: "existing-key" },
+      );
+      assert.deepEqual(keys, []);
+      yield* service.revokeCredential(
+        { id: "member-1", label: "desktop" },
+        { protocol: "openai", baseUrl: "http://hub.example:8317/v1", apiKey: "never-there" },
+      );
+      assert.deepEqual(keys, []);
+      assert.deepEqual(
+        calls.map((call) => call.method),
+        ["DELETE", "DELETE"],
+      );
+    }),
+  ),
+);
+
+it.effect("treats a missing management route as a failed revocation", () =>
   withServer(
-    (request, keys) => {
-      if (request.method !== "DELETE") return keyList(request, keys);
-      const value = new URL(
-        `http://hub.example${request.pathname}${request.query}`,
-      ).searchParams.get("value");
-      const index = keys.indexOf(value ?? "");
-      if (index < 0) return Response.json({ error: "not found" }, { status: 404 });
-      keys.splice(index, 1);
-      return Response.json({ status: "ok" });
-    },
-    ({ service, calls, keys }) =>
+    () => Response.json({ error: "not found" }, { status: 404 }),
+    ({ service }) =>
       Effect.gen(function* () {
-        yield* service.revokeCredential(
-          { id: "member-1", label: "desktop" },
-          { protocol: "openai", baseUrl: "http://hub.example:8317/v1", apiKey: "existing-key" },
+        const result = yield* Effect.exit(
+          service.revokeCredential(
+            { id: "member-1", label: "desktop" },
+            { protocol: "openai", baseUrl: "http://hub.example:8317/v1", apiKey: "live-key" },
+          ),
         );
-        assert.deepEqual(keys, []);
-        yield* service.revokeCredential(
-          { id: "member-1", label: "desktop" },
-          { protocol: "openai", baseUrl: "http://hub.example:8317/v1", apiKey: "never-there" },
-        );
-        assert.deepEqual(keys, []);
-        assert.deepEqual(
-          calls.map((call) => call.method),
-          ["DELETE", "DELETE"],
-        );
+        assert.strictEqual(result._tag, "Failure");
       }),
   ),
 );

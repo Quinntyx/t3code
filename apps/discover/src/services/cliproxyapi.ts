@@ -20,8 +20,6 @@ import { ServiceError, type DiscoverableService, type ServiceMember } from "./ty
  */
 const DEFAULT_MANAGEMENT_BASE_PATH = "/v0/management";
 
-const ApiKeys = Schema.Struct({ "api-keys": Schema.Array(Schema.String) });
-const decodeApiKeys = Schema.decodeUnknownEffect(Schema.fromJsonString(ApiKeys));
 const isServiceError = Schema.is(ServiceError);
 
 const joinPath = (base: string, path: string) =>
@@ -61,39 +59,19 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
   const managementUrl = (path: string) =>
     joinPath(managementOrigin, joinPath(managementBasePath, path));
 
-  const readKeys = Effect.gen(function* () {
-    const response = yield* http.execute(
-      authorize(HttpClientRequest.get(managementUrl("api-keys"))),
-    );
-    if (response.status !== 200) {
-      return yield* serviceFailure(
-        config.serviceId,
-        `CLIProxyAPI rejected the management key (${response.status}).`,
-      );
-    }
-    const body = yield* response.text;
-    const decoded = yield* decodeApiKeys(body);
-    return decoded["api-keys"];
-  }).pipe(
-    Effect.timeout("10 seconds"),
-    Effect.mapError((cause) =>
-      isServiceError(cause)
-        ? cause
-        : serviceFailure(config.serviceId, "Could not read CLIProxyAPI client keys."),
-    ),
-  );
-
-  const writeKeys = Effect.fn("DiscoverServices.cliProxy.write")(
-    function* (keys: ReadonlyArray<string>) {
+  // PATCH appends `new` when `old` is absent, so one request adds a key without rewriting the
+  // list a concurrent revocation just edited. DELETE succeeds even when the key is already gone.
+  const appendKey = Effect.fn("DiscoverServices.cliProxy.append")(
+    function* (apiKey: string) {
       const response = yield* http.execute(
-        authorize(HttpClientRequest.put(managementUrl("api-keys"))).pipe(
-          HttpClientRequest.bodyJsonUnsafe(keys),
+        authorize(HttpClientRequest.patch(managementUrl("api-keys"))).pipe(
+          HttpClientRequest.bodyJsonUnsafe({ old: apiKey, new: apiKey }),
         ),
       );
       if (response.status !== 200) {
         return yield* serviceFailure(
           config.serviceId,
-          `CLIProxyAPI rejected the key update (${response.status}).`,
+          `CLIProxyAPI rejected the key (${response.status}).`,
         );
       }
     },
@@ -101,7 +79,7 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
     Effect.mapError((cause) =>
       isServiceError(cause)
         ? cause
-        : serviceFailure(config.serviceId, "Could not update CLIProxyAPI client keys."),
+        : serviceFailure(config.serviceId, "Could not add the CLIProxyAPI client key."),
     ),
   );
 
@@ -127,11 +105,8 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
       );
     }
     yield* Effect.annotateCurrentSpan({ "discover.member": member.id });
-    // The management API has no atomic append, so a mint is read-modify-write. Revocation is not,
-    // which keeps the destructive direction from racing a concurrent mint.
-    const existing = yield* readKeys;
     const apiKey = `t3d-${NodeCrypto.randomBytes(24).toString("base64url")}`;
-    yield* writeKeys([...existing, apiKey]);
+    yield* appendKey(apiKey);
     return {
       protocol: config.protocol,
       baseUrl: cliProxyBaseUrl(endpoint ?? config.endpoints[0]!, config.basePath),
@@ -149,8 +124,9 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
           ),
         ),
       );
-      // A key the hub no longer has is already revoked.
-      if (response.status === 200 || response.status === 404) return;
+      // The delete handler answers 200 even for an absent key, so a 404 means the management route
+      // itself is unavailable and the key is still live.
+      if (response.status === 200) return;
       return yield* serviceFailure(
         config.serviceId,
         `CLIProxyAPI rejected the key revocation (${response.status}).`,
