@@ -97,6 +97,7 @@ export function ChatCanvas({
         {...props}
         ref={elementRef}
         data-chat-canvas
+        data-chat-lane-obstacle-end={layout.chat.insetEnd > 0 ? "" : undefined}
         data-preview-overlaps-chat={layout.overlapsChat || undefined}
         className="relative flex min-h-0 min-w-0 flex-1 flex-col"
         style={
