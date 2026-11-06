@@ -7,10 +7,12 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { threadListItemFromShell } from "../../threadListItem.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   dispatchFailure,
@@ -120,18 +122,32 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   t3_thread_search: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readCaller();
-      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const { caller, scope, threads } = yield* readCaller();
       const threadSearch = yield* ThreadSearch.ThreadSearch;
+      const nowMs = yield* Clock.currentTimeMillis;
       const { matches } = yield* threadSearch
         .searchThreads({ ...input, projectId: input.projectId ?? caller?.projectId })
         .pipe(Effect.mapError(unavailable));
-      return {
-        matches: matches.map((match) => ({
-          ...match,
-          link: McpInvocationContext.threadLinkFor(scope, match.threadId),
-        })),
-      };
+      const items = yield* Effect.forEach(
+        matches,
+        (match) =>
+          Effect.gen(function* () {
+            const shell = yield* threads
+              .getThreadShell(match.threadId)
+              .pipe(Effect.mapError(unavailable));
+            if (shell === null || shell.deletedAt !== null) return null;
+            return {
+              ...threadListItemFromShell(scope, shell, nowMs),
+              source: match.source,
+              ...(match.snippet === undefined ? {} : { snippet: match.snippet }),
+              ...(match.messageCreatedAt === undefined
+                ? {}
+                : { messageCreatedAt: match.messageCreatedAt }),
+            };
+          }),
+        { concurrency: 10 },
+      );
+      return { matches: items.filter((item) => item !== null) };
     }),
   ),
   t3_thread_transfer: McpToolAccess.either(
