@@ -281,7 +281,9 @@ on the Pull requests page, **Link to thread** lets you search for an active thre
 also lists the threads that link to it, including archived threads, so you can return to their context.
 
 Thread badges show a stack's layer count or the current review number with a count of additional
-links. Clicking a badge with more than one review opens the **Linked pull requests** panel. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
+links. Clicking a badge with more than one review opens the **Linked pull requests** panel. Right-click
+a badge to open it in the PR viewer, merge it, or stack a new thread on its branch, which opens the
+composer with that branch as the new worktree's base. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
 Linking and unlinking are available in the web and desktop clients.
 
 The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its

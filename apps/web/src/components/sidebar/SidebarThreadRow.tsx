@@ -64,6 +64,8 @@ import {
 
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
+import { resolveThreadPullRequestContextMenuTarget } from "../pullRequest/threadPullRequestContextMenu";
+import { useThreadPullRequestContextMenu } from "../pullRequest/useThreadPullRequestContextMenu";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -715,6 +717,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const currentLinkedPr = supportsMultiplePullRequests
     ? resolveThreadCurrentPullRequestLink(thread.pullRequests)
     : null;
+  const showPullRequestMenu = useThreadPullRequestContextMenu({
+    threadRef,
+    projectId: thread.projectId,
+    target: resolveThreadPullRequestContextMenuTarget({
+      projectId: thread.projectId,
+      links: thread.pullRequests,
+      pr,
+      branchPullRequest: thread.branchPullRequest,
+    }),
+    onOpenedInPanel: () => {
+      if (!props.isRouteThread) onThreadActivate(threadRef);
+    },
+  });
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = useSidebarThreadStatus(thread);
@@ -1087,6 +1102,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         status={prStatus}
         onOpenList={handlePrListClick}
         onOpenPullRequest={handlePrClick}
+        onContextMenu={(event) => void showPullRequestMenu({ x: event.clientX, y: event.clientY })}
       />
     ) : null;
   const terminalStatusIcon = (

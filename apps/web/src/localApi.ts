@@ -44,6 +44,10 @@ export function createLocalApi(): LocalApi {
       },
     },
     contextMenu: {
+      // Read per use: the bridge is exposed by the preload script, not this module.
+      get supportsInPlaceConfirm() {
+        return nativeContextMenuBridge() === undefined;
+      },
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },

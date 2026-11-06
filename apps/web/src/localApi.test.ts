@@ -86,6 +86,7 @@ describe("LocalApi", () => {
     const { createLocalApi } = await import("./localApi");
     const api = createLocalApi();
 
+    expect(api.contextMenu.supportsInPlaceConfirm).toBe(!native);
     await expect(api.contextMenu.show([{ id: "rename", label: "Rename" }])).resolves.toBe(
       native ? "native" : "fallback",
     );
