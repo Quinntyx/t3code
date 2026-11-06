@@ -281,6 +281,7 @@ import {
   resolveWorkspaceRelativeFilePath,
 } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
+import { UNSENT_MESSAGE_ANNOUNCEMENT, unsentMessageBubbleClassName } from "./unsentMessageStyle";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
 import { useFileChipShare } from "./useFileChipShare";
@@ -1752,10 +1753,9 @@ function renderFeedEntry(
       const foldRowId = presentation.attribution === "agent" ? `agent:${message.id}` : null;
       const foldExpanded = foldRowId !== null && (props.expandedWorkRows[foldRowId] ?? false);
       const bubbleBodyVisible = foldRowId === null || foldExpanded;
-      const intentBadge = resolveUserMessageIntentBadge(
-        message.inputIntent,
-        message.projectedItem?.item.status === "pending",
-      );
+      // Until the provider consumes it, an unsent message wears the queue's dashed look.
+      const unsent = message.projectedItem?.item.status === "pending";
+      const intentBadge = unsent ? null : resolveUserMessageIntentBadge(message.inputIntent);
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );
@@ -1783,9 +1783,15 @@ function renderFeedEntry(
             <GuestMessageName name={presentation.guestName} />
           ) : null}
           <View
-            className="min-w-0 rounded-[20px]"
+            className={cn(
+              "min-w-0 rounded-[20px]",
+              unsent &&
+                unsentMessageBubbleClassName(
+                  presentation.attribution === "guest" ? "guest" : "default",
+                ),
+            )}
             style={{
-              backgroundColor: userBubbleColor,
+              ...(unsent ? null : { backgroundColor: userBubbleColor }),
               maxWidth: props.duoColumns ? "85%" : props.userBubbleMaxWidth,
               ...(!bubbleBodyVisible
                 ? null
@@ -1796,7 +1802,13 @@ function renderFeedEntry(
                     : null),
             }}
           >
-            {presentation.attribution === "guest" ? <GuestBubbleTint /> : null}
+            {presentation.attribution === "guest" && !unsent ? <GuestBubbleTint /> : null}
+            {unsent ? (
+              // React Native has no visually-hidden text, so a transparent 1px node carries the state.
+              <Text className="absolute h-px w-px overflow-hidden opacity-0">
+                {UNSENT_MESSAGE_ANNOUNCEMENT}
+              </Text>
+            ) : null}
             {foldRowId !== null ? (
               <AgentMessageFoldHeader
                 environmentId={props.environmentId}

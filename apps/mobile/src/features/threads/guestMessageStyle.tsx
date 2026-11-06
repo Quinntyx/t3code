@@ -26,5 +26,7 @@ export function GuestBubbleTint() {
 }
 
 /** A pending guest bubble has a dashed edge and no fill. */
-export const GUEST_PENDING_BUBBLE_CLASS_NAME =
-  "min-w-0 rounded-[20px] border border-dashed border-adaptive-fuchsia-500-a50-300-a40 bg-transparent px-3.5 py-2.5";
+export const GUEST_PENDING_EDGE_CLASS_NAME =
+  "border border-dashed border-adaptive-fuchsia-500-a50-300-a40 bg-transparent";
+
+export const GUEST_PENDING_BUBBLE_CLASS_NAME = `min-w-0 rounded-[20px] ${GUEST_PENDING_EDGE_CLASS_NAME} px-3.5 py-2.5`;
