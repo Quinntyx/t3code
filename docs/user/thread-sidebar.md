@@ -261,8 +261,10 @@ linked pull request the first chance at each new allowance; the other limited
 threads resume after those finish. This keeps quota with work that is closest to
 review.
 The environment must be running when the reset arrives; it resumes overdue
-continuations after a restart. Stopping the thread, sending a new message,
-archiving, or settling it prevents a pending continuation from starting.
+continuations after a restart. When the provider reports the allowance back
+before the scheduled time, as with a redeemed reset credit, the waiting threads
+continue then instead of at the old time. Stopping the thread, sending a new
+message, archiving, or settling it prevents a pending continuation from starting.
 
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without
