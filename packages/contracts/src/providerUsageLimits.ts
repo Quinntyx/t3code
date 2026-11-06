@@ -33,6 +33,8 @@ export const ServerProviderUsageLimits = Schema.Struct({
   checkedAt: IsoDateTime,
   windows: ForwardCompatibleArray(ServerProviderUsageWindow),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
+  /** The provider whose login these limits read, when it is not the reporting provider. */
+  ownerDriver: Schema.optional(ProviderDriverKind),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(
     Schema.Struct({

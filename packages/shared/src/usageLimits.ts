@@ -322,10 +322,13 @@ function accountKey(
   email: string | undefined,
   limits?: ServerProviderUsageLimits,
 ): string | null {
+  // A provider reading another provider's login reports that provider's subscription, so the same
+  // account merges on both cards instead of appearing once per reader.
+  const owner = limits?.ownerDriver ?? driver;
   const normalizedEmail = email?.trim().toLowerCase();
-  if (normalizedEmail) return `${driver}:${normalizedEmail}`;
+  if (normalizedEmail) return `${owner}:${normalizedEmail}`;
   return limits?.credentialFingerprint
-    ? `${driver}:credential:${limits.credentialFingerprint}`
+    ? `${owner}:credential:${limits.credentialFingerprint}`
     : null;
 }
 

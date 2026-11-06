@@ -1,4 +1,4 @@
-import type { ServerProviderUsageLimits } from "@t3tools/contracts";
+import { ProviderDriverKind, type ServerProviderUsageLimits } from "@t3tools/contracts";
 import { readOpenCodeGoUsage } from "@t3tools/provider-core/server/opencodeGoUsage";
 import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 import * as DateTime from "effect/DateTime";
@@ -43,7 +43,8 @@ export const readPiOpenCodeGoUsageLimits = Effect.fn("readPiOpenCodeGoUsageLimit
     );
     switch (usage._tag) {
       case "limits":
-        return usage.limits;
+        // Pi reads OpenCode's Go login, so Pi and an OpenCode instance share one subscription.
+        return { ...usage.limits, ownerDriver: ProviderDriverKind.make("opencode") };
       case "noSubscription":
         return unsupported;
       case "failed":

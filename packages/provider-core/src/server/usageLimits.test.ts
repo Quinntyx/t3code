@@ -1,3 +1,4 @@
+import { ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { applyUsageLimitsUpdate, resolveUsageLimitsAfterProbe } from "./usageLimits.ts";
@@ -64,6 +65,28 @@ describe("applyUsageLimitsUpdate", () => {
     expect(
       applyUsageLimitsUpdate({ previous: undefined, checkedAt, update: { windows: [weekly] } }),
     ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });
+  });
+
+  it("keeps the account identity a window update does not carry", () => {
+    const account = {
+      ...published,
+      credentialFingerprint: "shared-go-key",
+      ownerDriver: ProviderDriverKind.make("opencode"),
+      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
+    };
+    const next = applyUsageLimitsUpdate({
+      previous: account,
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      update: { windows: [{ ...session, usedPercent: 55 }] },
+    });
+
+    expect(next).toEqual({
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      windows: [{ ...session, usedPercent: 55 }, weekly],
+      credentialFingerprint: "shared-go-key",
+      ownerDriver: "opencode",
+      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
+    });
   });
 
   it("preserves reset credits when a streamed window update changes usage", () => {
