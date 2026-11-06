@@ -59,5 +59,11 @@ export function createDiscoveryAtoms<R, E>(
     execute: (serviceId: string) =>
       DirectoryDiscovery.pipe(Effect.flatMap((discovery) => discovery.unlinkService(serviceId))),
   });
-  return { stateValueAtom, enroll, refresh, disconnect, linkService, unlinkService };
+  const serviceLink = createRuntimeCommand(runtime, {
+    label: "directory-discovery:service-link",
+    concurrency: { mode: "singleFlight", key: (serviceId) => serviceId },
+    execute: (serviceId: string) =>
+      DirectoryDiscovery.pipe(Effect.flatMap((discovery) => discovery.serviceLink(serviceId))),
+  });
+  return { stateValueAtom, enroll, refresh, disconnect, linkService, unlinkService, serviceLink };
 }

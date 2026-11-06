@@ -118,6 +118,7 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
 
   const issueCredential = Effect.fn("DiscoverServices.cliProxy.issue")(function* (
     member: ServiceMember,
+    endpoint: DiscoverServiceEndpoint | undefined,
   ) {
     if (config.managementKey.length === 0) {
       return yield* serviceFailure(
@@ -126,25 +127,42 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
       );
     }
     yield* Effect.annotateCurrentSpan({ "discover.member": member.id });
+    // The management API has no atomic append, so a mint is read-modify-write. Revocation is not,
+    // which keeps the destructive direction from racing a concurrent mint.
     const existing = yield* readKeys;
     const apiKey = `t3d-${NodeCrypto.randomBytes(24).toString("base64url")}`;
     yield* writeKeys([...existing, apiKey]);
     return {
       protocol: config.protocol,
-      baseUrl: cliProxyBaseUrl(config.endpoints[0]!, config.basePath),
+      baseUrl: cliProxyBaseUrl(endpoint ?? config.endpoints[0]!, config.basePath),
       apiKey,
     } satisfies DiscoverServiceCredential;
   });
 
-  const revokeCredential = Effect.fn("DiscoverServices.cliProxy.revoke")(function* (
-    _member: ServiceMember,
-    credential: DiscoverServiceCredential,
-  ) {
-    if (config.managementKey.length === 0) return;
-    const existing = yield* readKeys;
-    if (!existing.includes(credential.apiKey)) return;
-    yield* writeKeys(existing.filter((key) => key !== credential.apiKey));
-  });
+  const revokeCredential = Effect.fn("DiscoverServices.cliProxy.revoke")(
+    function* (_member: ServiceMember, credential: DiscoverServiceCredential) {
+      if (config.managementKey.length === 0) return;
+      const response = yield* http.execute(
+        authorize(
+          HttpClientRequest.delete(
+            `${managementUrl("api-keys")}?value=${encodeURIComponent(credential.apiKey)}`,
+          ),
+        ),
+      );
+      // A key the hub no longer has is already revoked.
+      if (response.status === 200 || response.status === 404) return;
+      return yield* serviceFailure(
+        config.serviceId,
+        `CLIProxyAPI rejected the key revocation (${response.status}).`,
+      );
+    },
+    Effect.timeout("10 seconds"),
+    Effect.mapError((cause) =>
+      isServiceError(cause)
+        ? cause
+        : serviceFailure(config.serviceId, "Could not revoke the CLIProxyAPI client key."),
+    ),
+  );
 
   return {
     serviceId: config.serviceId,

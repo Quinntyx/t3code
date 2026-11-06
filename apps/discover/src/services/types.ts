@@ -32,8 +32,10 @@ export interface DiscoverableService {
   readonly endpoints: ReadonlyArray<DiscoverServiceEndpoint>;
   readonly capabilities: ReadonlyArray<DiscoverServiceCapability>;
   readonly health: Effect.Effect<DiscoverServiceHealth>;
+  /** `endpoint` is the one the member asked for, so a remote client gets an address it can reach. */
   readonly issueCredential: (
     member: ServiceMember,
+    endpoint: DiscoverServiceEndpoint | undefined,
   ) => Effect.Effect<DiscoverServiceCredential, ServiceError>;
   readonly revokeCredential: (
     member: ServiceMember,

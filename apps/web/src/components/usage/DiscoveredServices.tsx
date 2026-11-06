@@ -13,7 +13,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { BoxesIcon, KeyRoundIcon, LinkIcon, UnlinkIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   useEnvironmentSettings,
@@ -179,9 +179,11 @@ function LinkServiceDialog({
   const link = useAtomCommand(directoryDiscovery.linkService, { reportFailure: false });
   const unlink = useAtomCommand(directoryDiscovery.unlinkService, { reportFailure: false });
   const [credential, setCredential] = useState<DiscoverServiceCredential | null>(initialCredential);
+  const [linkedWithoutCredential, setLinkedWithoutCredential] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const linked = service.linkedAt !== null || credential !== null;
+  const linked = service.linkedAt !== null || credential !== null || linkedWithoutCredential;
+  const issuesCredential = service.capabilities.includes("key-exchange");
 
   const load = async () => {
     const result = await link({ serviceId: service.serviceId });
@@ -212,9 +214,8 @@ function LinkServiceDialog({
     setError(null);
     const result = await load();
     setPending(false);
-    if (result !== null && result.credential === null) {
-      setError("This service does not issue credentials through discovery.");
-    }
+    // A service without key exchange links successfully with no credential to show.
+    if (result !== null && result.credential === null) setLinkedWithoutCredential(true);
   };
 
   const runUnlink = async () => {
@@ -225,6 +226,7 @@ function LinkServiceDialog({
     setPending(false);
     if (result._tag === "Success") {
       setCredential(null);
+      setLinkedWithoutCredential(false);
       toastManager.add({ type: "success", title: `${service.label} unlinked` });
     } else if (!isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
@@ -249,15 +251,25 @@ function LinkServiceDialog({
               <div className="flex flex-col gap-2">
                 <p className="text-sm text-muted-foreground">
                   {linked
-                    ? "The credential issued for this machine could not be loaded."
-                    : service.capabilities.includes("key-exchange")
+                    ? issuesCredential
+                      ? "The credential issued for this machine could not be loaded."
+                      : "This service is linked. It does not issue a credential through discovery."
+                    : issuesCredential
                       ? "Linking asks the discovery server to mint a credential for this machine. Nothing is shared until you link."
                       : "Linking records this service on this machine. It does not issue a credential."}
                 </p>
-                <Button disabled={pending} onClick={() => void runLink()}>
-                  <LinkIcon aria-hidden />
-                  {pending ? "Linking…" : linked ? "Retry" : "Link service"}
-                </Button>
+                {linked && !issuesCredential ? null : (
+                  <Button disabled={pending} onClick={() => void runLink()}>
+                    <LinkIcon aria-hidden />
+                    {pending ? "Linking…" : linked ? "Retry" : "Link service"}
+                  </Button>
+                )}
+                {linked ? (
+                  <Button variant="outline" disabled={pending} onClick={() => void runUnlink()}>
+                    <UnlinkIcon aria-hidden />
+                    Unlink and revoke
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <div className="flex flex-col gap-3">
@@ -310,24 +322,27 @@ function LinkServiceDialog({
 
 export function DiscoveredServicesSection() {
   const state = useAtomValue(directoryDiscovery.stateValueAtom);
-  const link = useAtomCommand(directoryDiscovery.linkService, { reportFailure: false });
+  const readLink = useAtomCommand(directoryDiscovery.serviceLink, { reportFailure: false });
+  const openSequence = useRef(0);
   const [open, setOpen] = useState<{
     readonly serviceId: string;
     readonly credential: DiscoverServiceCredential | null;
   } | null>(null);
   if (state.services.length === 0) return null;
   const selected = state.services.find((service) => service.serviceId === open?.serviceId) ?? null;
-  // A linked service re-reads its stored credential before the dialog mounts, so the dialog never
-  // has to sync a late prop into state. An unlinked one waits for the explicit prompt.
+  // Opening reads the stored credential; it must never mint one, because a stale listing would
+  // otherwise turn a click into a link. A late response for a newer click is dropped.
   const openService = async (service: DiscoverServiceEntry) => {
+    const sequence = ++openSequence.current;
     if (service.linkedAt === null) {
       setOpen({ serviceId: service.serviceId, credential: null });
       return;
     }
-    const result = await link({ serviceId: service.serviceId });
+    const result = await readLink(service.serviceId);
+    if (sequence !== openSequence.current) return;
     setOpen({
       serviceId: service.serviceId,
-      credential: result._tag === "Success" ? result.value.credential : null,
+      credential: result._tag === "Success" ? (result.value?.credential ?? null) : null,
     });
   };
   return (
@@ -351,6 +366,7 @@ export function DiscoveredServicesSection() {
       </DiscoveryList>
       {selected === null ? null : (
         <LinkServiceDialog
+          key={selected.serviceId}
           service={selected}
           initialCredential={open?.credential ?? null}
           onClose={() => setOpen(null)}

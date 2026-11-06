@@ -88,6 +88,8 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
   let failSave = false;
   let serviceLinked = false;
   let serviceUnlinked = false;
+  let serviceReads = 0;
+  let serviceMints = 0;
   const authorized: string[] = [];
   const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
     new Map(),
@@ -123,7 +125,14 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
         serviceLinked = false;
         return Response.json({ ok: true });
       }
+      if (init?.method !== "POST") {
+        serviceReads += 1;
+        return serviceLinked
+          ? Response.json({ serviceId: "hub", linkedAt: 5, credential: serviceCredential })
+          : Response.json({ error: "Service is not linked." }, { status: 404 });
+      }
       serviceLinked = true;
+      serviceMints += 1;
       return Response.json({ serviceId: "hub", linkedAt: 5, credential: serviceCredential });
     }
     if (url.endsWith("/requests")) {
@@ -291,6 +300,8 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
     persisted: () => persisted,
     calls: () => calls,
     serviceUnlinked: () => serviceUnlinked,
+    serviceReads: () => serviceReads,
+    serviceMints: () => serviceMints,
   };
 });
 
@@ -587,6 +598,26 @@ describe("discovered services", () => {
       yield* discovery.enroll({ enrollmentUrl });
       const result = yield* discovery.linkService({ serviceId: "other" }).pipe(Effect.exit);
       expect(result._tag).toBe("Failure");
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("reading a service link", () => {
+  it.effect("returns the stored credential without minting a new one", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      expect(yield* discovery.serviceLink("hub")).toBeNull();
+      expect(h.serviceMints()).toBe(0);
+
+      yield* discovery.linkService({ serviceId: "hub" });
+      expect(h.serviceMints()).toBe(1);
+
+      const stored = yield* discovery.serviceLink("hub");
+      expect(stored?.credential).toEqual(serviceCredential);
+      expect(h.serviceMints()).toBe(1);
+      expect(h.serviceReads()).toBe(2);
     }).pipe(Effect.scoped),
   );
 });

@@ -81,6 +81,10 @@ export class DirectoryDiscovery extends Context.Service<
       readonly transport?: DiscoverTransport;
     }) => Effect.Effect<DiscoverServiceLink, DiscoveryError>;
     readonly unlinkService: (serviceId: string) => Effect.Effect<void, DiscoveryError>;
+    /** Reads an existing credential without minting one; null when the service is not linked. */
+    readonly serviceLink: (
+      serviceId: string,
+    ) => Effect.Effect<DiscoverServiceLink | null, DiscoveryError>;
   }
 >()("@t3tools/client-runtime/discover/service/DirectoryDiscovery") {}
 
@@ -461,6 +465,39 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  const serviceLink = Effect.fn("DirectoryDiscovery.serviceLink")(function* (serviceId: string) {
+    const current = membership;
+    if (current === null) return null;
+    const response = yield* http
+      .execute(
+        HttpClientRequest.bearerToken(
+          HttpClientRequest.get(
+            `${current.brokerOrigin}/api/discover/services/${encodeURIComponent(serviceId)}/link`,
+          ),
+          current.token,
+        ),
+      )
+      .pipe(
+        Effect.timeout("15 seconds"),
+        Effect.mapError(
+          () =>
+            new ConnectionTransientError({
+              reason: "remote-unavailable",
+              detail: "Could not read the discovery service credential.",
+            }),
+        ),
+      );
+    if (response.status === 404) return null;
+    if (response.status < 200 || response.status >= 300)
+      return yield* invalid("The discovery directory rejected this request.");
+    return yield* response.json.pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(DiscoverServiceLink)),
+      Effect.mapError(() =>
+        invalid("The discovery directory returned an unreadable service credential."),
+      ),
+    );
+  });
+
   const linkService = Effect.fn("DirectoryDiscovery.linkService")(function* (input: {
     readonly serviceId: string;
     readonly transport?: DiscoverTransport;
@@ -529,6 +566,7 @@ export const make = Effect.gen(function* () {
     start,
     linkService,
     unlinkService,
+    serviceLink,
   });
 });
 

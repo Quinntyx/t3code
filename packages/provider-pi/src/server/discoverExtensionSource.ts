@@ -45,8 +45,12 @@ function providerId(slug: string): string {
   return "t3-discover-" + slug.toLowerCase().replace(/_/g, "-");
 }
 
-async function listModels(baseUrl: string, apiKey: string, signal: AbortSignal) {
-  const response = await fetch(baseUrl.replace(/\\/+$/, "") + "/models", {
+// An Anthropic base URL is the bare origin so message requests can append /v1/messages, but the
+// model list still lives under /v1. An OpenAI base URL already ends in /v1.
+async function listModels(baseUrl: string, api: string, apiKey: string, signal: AbortSignal) {
+  const root = baseUrl.replace(/\\/+$/, "");
+  const url = api === "anthropic-messages" ? root + "/v1/models" : root + "/models";
+  const response = await fetch(url, {
     headers: { authorization: "Bearer " + apiKey },
     signal,
   });
@@ -77,7 +81,7 @@ export default async function registerDiscoveredServices(pi: ExtensionAPI) {
     const api = hub.API === "anthropic-messages" ? "anthropic-messages" : "openai-completions";
     const apiKey = process.env[apiKeyEnv];
     const initial = apiKey
-      ? await listModels(baseUrl, apiKey, AbortSignal.timeout(4000)).catch(() => [])
+      ? await listModels(baseUrl, api, apiKey, AbortSignal.timeout(4000)).catch(() => [])
       : [];
     pi.registerProvider(providerId(slug), {
       name: hub.LABEL ?? providerId(slug),
@@ -88,7 +92,7 @@ export default async function registerDiscoveredServices(pi: ExtensionAPI) {
       async refreshModels({ signal }) {
         const current = process.env[apiKeyEnv];
         if (!current) return [];
-        const models = await listModels(baseUrl, current, signal);
+        const models = await listModels(baseUrl, api, current, signal);
         return models.map(toPiModel);
       },
     });

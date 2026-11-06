@@ -329,10 +329,13 @@ const make = Effect.fn("Discover.make")(function* (
         return yield* reject(400, "Transport unavailable.");
       const existing = yield* serviceLinkRow(service.serviceId, member.id);
       if (existing[0]) return yield* decodeLink(existing[0]);
+      const endpoint =
+        service.endpoints.find((candidate) => candidate.transport === input.transport) ??
+        service.endpoints[0];
       const now = yield* Clock.currentTimeMillis;
       const credential = service.capabilities.includes("key-exchange")
         ? yield* service
-            .issueCredential({ id: member.id, label: member.label })
+            .issueCredential({ id: member.id, label: member.label }, endpoint)
             .pipe(Effect.mapError((cause) => reject(502, cause.message)))
         : null;
       const encoded =
@@ -341,8 +344,19 @@ const make = Effect.fn("Discover.make")(function* (
           : yield* Schema.encodeEffect(jsonCredential)(credential).pipe(
               Effect.mapError((cause) => new DatabaseError({ cause })),
             );
+      // A mint that cannot be recorded would leave a live key nobody can revoke.
       yield* sql`INSERT INTO service_links VALUES (${service.serviceId}, ${member.id}, ${encoded}, ${now})
-      ON CONFLICT(service_id, member_id) DO UPDATE SET credential = excluded.credential, linked_at = excluded.linked_at`;
+      ON CONFLICT(service_id, member_id) DO UPDATE SET credential = excluded.credential, linked_at = excluded.linked_at`.pipe(
+        Effect.catchTags({
+          SqlError: (cause) =>
+            (credential === null
+              ? Effect.void
+              : service
+                  .revokeCredential({ id: member.id, label: member.label }, credential)
+                  .pipe(Effect.ignore)
+            ).pipe(Effect.andThen(Effect.fail(new DatabaseError({ cause })))),
+        }),
+      );
       return { serviceId: service.serviceId, linkedAt: now, credential };
     },
     databaseErrors,
@@ -359,9 +373,10 @@ const make = Effect.fn("Discover.make")(function* (
         const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
           Effect.mapError((cause) => new DatabaseError({ cause })),
         );
+        // Keep the row until the hub confirms revocation, or the key outlives its record.
         yield* service
           .revokeCredential({ id: member.id, label: member.label }, credential)
-          .pipe(Effect.ignore);
+          .pipe(Effect.mapError((cause) => reject(502, cause.message)));
       }
       yield* sql`DELETE FROM service_links WHERE service_id = ${serviceId} AND member_id = ${member.id}`;
     },
@@ -503,7 +518,10 @@ const make = Effect.fn("Discover.make")(function* (
       const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
         Effect.mapError((cause) => new DatabaseError({ cause })),
       );
-      yield* service.revokeCredential(member, credential).pipe(Effect.ignore);
+      // A member that cannot be cleaned up stays so the operator can retry the revocation.
+      yield* service
+        .revokeCredential(member, credential)
+        .pipe(Effect.mapError((cause) => reject(502, cause.message)));
     }
   });
   const leave = Effect.fn("Discover.leave")(

@@ -201,8 +201,11 @@ if (values.help) {
     server.once("error", () => {
       process.stderr.write("Unable to listen on the configured broker address.\n");
       process.exitCode = 1;
-      void runtime.dispose();
-      void servicesRuntime.dispose();
+      // Supervisors own their own scopes, so disposing the runtimes would leave them running.
+      void servicesRuntime
+        .runPromise(stopAll(built.managed))
+        .then(() => runtime.dispose())
+        .then(() => servicesRuntime.dispose());
     });
     await servicesRuntime.runPromise(startAll(autostartServices(configured, built)));
     server.listen(port, host, () =>
