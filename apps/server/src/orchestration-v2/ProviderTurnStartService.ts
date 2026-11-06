@@ -10,6 +10,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2TurnItem,
+  goalTurnPrompt,
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
@@ -783,13 +784,18 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const userText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      });
+      const parsedGoal = parseGoalCommand(message);
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
-      const goalCommand = goalDriver && parseGoalCommand(message) !== null;
+      const goalCommand = goalDriver && parsedGoal !== null;
+      // Elsewhere T3 Code owns the goal, so the provider gets the objective as an instruction.
+      const userText =
+        !goalDriver && parsedGoal?.type === "set"
+          ? goalTurnPrompt(parsedGoal.objective)
+          : projectComposerContextForProvider({
+              text: message.text,
+              records: message.context?.records ?? [],
+            });
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,

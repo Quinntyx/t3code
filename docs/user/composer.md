@@ -254,21 +254,28 @@ Claude instances can also compact idle threads for you. See
 
 ## Goals
 
-With Codex and Claude, send `/goal` followed by what "done" means, for example
+Send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
 line at the end of the thread (above the composer on mobile) shows the goal and
 its progress.
+
+Codex and Claude have their own goals, with pause/resume and token budgets. With
+every other provider T3 Code keeps the goal itself. Each turn ends with a review
+by a delegate on the same model, and only a review that leaves the goal open
+starts the next turn. The agent working on the goal reports what blocks it with
+the `t3_goal` tool; the review is what closes the goal.
 
 - `/goal` alone shows the current goal. `/goal clear` removes it.
 - Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
   pauses it, and so does Codex ending its work without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
+- Elsewhere, stopping a goal turn ends that turn. The goal stays set and the next
+  completed turn continues it, unless you pause or clear it.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current
   turn and starts the goal, unless you queue it. `/goal clear` and `/goal pause`
-  stop the turn only when it is working on the goal. Other goal commands wait for
-  the turn to end.
+  stop the turn only when it is working on the goal.
 
 ## Context in your message
 

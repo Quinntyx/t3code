@@ -1,7 +1,7 @@
 import type {
   EnvironmentId,
   OrchestrationV2PendingBackgroundTask,
-  OrchestrationV2ProviderGoal,
+  OrchestrationV2Goal,
   ThreadId,
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
@@ -69,7 +69,7 @@ export function childInputNowItem(input: {
 /** The thread's goal, for the end of the timeline. */
 export function goalNowItem(input: {
   readonly threadId: ThreadId;
-  readonly goal: OrchestrationV2ProviderGoal;
+  readonly goal: OrchestrationV2Goal;
   readonly isWorking: boolean;
   readonly onSendCommand: (text: string, failureMessage: string) => Promise<void>;
 }): ThreadNowItem {

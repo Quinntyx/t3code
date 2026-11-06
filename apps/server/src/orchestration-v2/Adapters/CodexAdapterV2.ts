@@ -33,7 +33,7 @@ import {
   defaultInstanceIdForDriver,
   isOrchestrationV2WorkActive,
   type OrchestrationV2GoalCommand,
-  OrchestrationV2ProviderGoal,
+  OrchestrationV2Goal,
   parseGoalCommand,
   ProviderDriverKind,
   type ProviderSetupError,
@@ -889,9 +889,9 @@ const CODEX_GOAL_STATUSES = {
   usageLimited: "usage_limited",
   budgetLimited: "budget_limited",
   complete: "complete",
-} as const satisfies Record<CodexThreadGoal["status"], OrchestrationV2ProviderGoal["status"]>;
+} as const satisfies Record<CodexThreadGoal["status"], OrchestrationV2Goal["status"]>;
 
-function providerGoalFromCodex(goal: CodexThreadGoal): OrchestrationV2ProviderGoal | null {
+function providerGoalFromCodex(goal: CodexThreadGoal): OrchestrationV2Goal | null {
   const objective = goal.objective.trim();
   if (objective.length === 0) return null;
   return {
@@ -903,9 +903,9 @@ function providerGoalFromCodex(goal: CodexThreadGoal): OrchestrationV2ProviderGo
   };
 }
 
-const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2ProviderGoal));
+const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2Goal));
 
-function describeCodexGoal(goal: OrchestrationV2ProviderGoal): string {
+function describeCodexGoal(goal: OrchestrationV2Goal): string {
   return `Goal ${goal.status.replace("_", " ")}: ${goal.objective}`;
 }
 
@@ -1844,7 +1844,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const completedFinalAnswerTextsByTurn = yield* Ref.make(new Map<string, Set<string>>());
         // Serialize native completion and interrupt timeout so only one publishes terminal events.
         const turnTerminalizationPermit = yield* Semaphore.make(1);
-        const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
+        const goalsByNativeThread = new Map<string, OrchestrationV2Goal | null>();
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const goalHolds = new Map<string, CodexGoalHold>();
         const continuedRuns = new Map<ProviderTurnId, Array<ActiveCodexTurnContext>>();

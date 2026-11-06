@@ -77,7 +77,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
-  OrchestrationV2ProviderGoal,
+  OrchestrationV2Goal,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
   type OrchestrationV2PendingBackgroundTask,
@@ -1764,9 +1764,9 @@ const CLAUDE_GOAL_SET_PREFIX = "Goal set: ";
 const CLAUDE_GOAL_ACTIVE = /^Goal active: ([\s\S]+?) \((?:not yet evaluated|(\d+) turns?)\)/u;
 
 function nextClaudeGoal(
-  current: OrchestrationV2ProviderGoal | null,
+  current: OrchestrationV2Goal | null,
   message: SDKMessage,
-): OrchestrationV2ProviderGoal | null | undefined {
+): OrchestrationV2Goal | null | undefined {
   if (message.type === "assistant") {
     if (message.parent_tool_use_id !== null || message.message.model !== "<synthetic>") {
       return undefined;
@@ -1822,7 +1822,7 @@ function isClaudeGoalAcknowledgement(message: SDKMessage): boolean {
   return text.startsWith(CLAUDE_GOAL_SET_PREFIX) || text.startsWith("Goal cleared: ");
 }
 
-const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2ProviderGoal));
+const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2Goal));
 
 function normalizeClaudeResultText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -4639,7 +4639,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const lastProviderThreadByNativeThread = yield* Ref.make(
           new Map<string, OrchestrationV2ProviderThread>(),
         );
-        const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
+        const goalsByNativeThread = new Map<string, OrchestrationV2Goal | null>();
         const goalCheckedTurns = new Set<string>();
         // Background subagents can finish after root settlement; retain their registry for wake evidence and hydration.
         const sessionSubagentsByTaskId = yield* Ref.make(new Map<string, ActiveClaudeSubagent>());

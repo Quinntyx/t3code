@@ -125,6 +125,16 @@ start no Codex turn settle on a provider turn without a native ref, which native
 not count. Claude's SDK mode emits no goal events; its adapter reads goal state from the
 synthetic command output and Stop hook feedback in the transcript.
 
+Providers without native goals get T3 Code's own loop: the goal lives on the app thread, and
+[GoalLoopService](../../apps/server/src/orchestration-v2/GoalLoopService.ts) continues it. Each
+completed turn starts a `goal_review` delegate on the same model rather than the next turn; the
+review closes the goal through `t3_goal`, and only a goal it leaves open starts the next turn. The
+agent working on a goal therefore never decides that its own goal is met. That review is the one
+`delegated_task.request` allowed to name a settled parent run, and its completion delivery stays
+disposed so the goal loop, not a completion wake, decides what follows. Those providers receive
+the objective as an instruction rather than the `/goal` text. Keep the loop in orchestration; an
+adapter that grew its own would duplicate the pause, clear, and stop rules.
+
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
 therefore rejects revert before touching files. Native permission and question option IDs must

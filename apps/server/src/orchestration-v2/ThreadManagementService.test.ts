@@ -3,6 +3,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ProviderThread,
@@ -72,6 +73,32 @@ it("stamps authoritative provenance on commands that create threads or messages"
   });
   expect(stamped).not.toHaveProperty("linkOrigin");
   expect(stamped).not.toHaveProperty("delegatedFrom");
+});
+
+it("keeps a caller from starting a goal review on a settled run", () => {
+  const command: OrchestrationV2Command = {
+    type: "delegated_task.request",
+    createdBy: "agent",
+    creationSource: "mcp",
+    commandId: CommandId.make("command:thread-management:goal-review"),
+    parentThreadId: ThreadId.make("thread:thread-management:goal-review"),
+    parentRunId: RunId.make("run:thread-management:goal-review"),
+    parentNodeId: NodeId.make("node:thread-management:goal-review"),
+    task: "Review the goal",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    purpose: "goal_review",
+  };
+
+  const stamped = ThreadManagementService.withCreationProvenance(command, {
+    createdBy: "agent",
+    creationSource: "mcp",
+  });
+  expect(stamped).not.toHaveProperty("purpose");
 });
 
 const layerReceiptsTest = CommandReceiptStore.layer.pipe(
