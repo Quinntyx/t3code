@@ -9,6 +9,7 @@ import {
   EnvironmentId,
   NodeId,
   OrchestratorMcpThreadReadResult,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
@@ -73,15 +74,32 @@ import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
+const threadId = ThreadId.make("mcp-core-thread");
+
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
-  Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+  Layer.provide(
+    Layer.mock(ThreadSearch.ThreadSearch)({
+      searchThreads: ({ query }) =>
+        Effect.succeed({
+          matches:
+            query === "handoff"
+              ? [
+                  {
+                    threadId,
+                    projectId: ProjectId.make("project:mcp-test"),
+                    title: "handoff",
+                    source: "title" as const,
+                  },
+                ]
+              : [],
+        }),
+    }),
+  ),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
   Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
   Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
 );
-
-const threadId = ThreadId.make("mcp-core-thread");
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("mcp-core-environment"),
   requestNamespace: "mcp-core-session",
@@ -123,6 +141,39 @@ it.effect("checks capability through the production registration", () =>
     expect(declaredFailure(result)).toMatchObject({ code: "capability_denied" });
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toBeUndefined();
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+      ),
+    ),
+  ),
+);
+
+it.effect("t3_thread_search returns the same thread fields as t3_thread_list", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({ name: "t3_thread_search", arguments: { query: "handoff" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.isError).toBe(false);
+    expect(result.structuredContent).toMatchObject({
+      matches: [
+        {
+          threadId,
+          title: threadId,
+          providerInstanceId: "codex",
+          model: "gpt-5",
+          status: "running",
+          source: "title",
+        },
+      ],
+    });
   }).pipe(
     Effect.provide(
       layerThreadToolkit.pipe(

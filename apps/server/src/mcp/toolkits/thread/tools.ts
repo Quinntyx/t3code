@@ -3,7 +3,7 @@ import {
   ScheduledTaskId,
   ScheduledTask,
   OrchestrationSearchThreadsInput,
-  OrchestrationThreadSearchMatch,
+  OrchestratorMcpThreadSearchResult,
   OrchestrationV2ThreadForkSourcePoint,
   OrchestrationV2ContextTransfer,
   TrimmedNonEmptyString,
@@ -203,25 +203,13 @@ const ThreadTransferTool = Tool.make("t3_thread_transfer", {
 const ThreadSearchTool = Tool.make("t3_thread_search", {
   ...commandTool,
   description:
-    "Search active threads by title, branch, PR, project, then message text. Skips subagent threads. `projectId`: one project, else yours, else all outside a thread. Not exhaustive.",
+    "Search active threads by title, branch, PR, project, then message text. Each match carries the same thread fields as `t3_thread_list`, plus `source`, `snippet`, and `messageCreatedAt`. Skips subagent threads. `projectId`: one project, else yours, else all outside a thread. Not exhaustive.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     ...OrchestrationSearchThreadsInput.fields,
     projectId: Schema.optional(ProjectId),
   }),
-  success: Schema.Struct({
-    matches: Schema.Array(
-      Schema.Struct({
-        threadId: OrchestrationThreadSearchMatch.fields.threadId,
-        projectId: OrchestrationThreadSearchMatch.fields.projectId,
-        title: Schema.String,
-        link: Schema.optional(Schema.String),
-        source: Schema.Literals(["title", "user", "assistant"]),
-        snippet: Schema.optional(OrchestrationThreadSearchMatch.fields.snippet),
-        messageCreatedAt: Schema.optional(OrchestrationThreadSearchMatch.fields.messageCreatedAt),
-      }),
-    ),
-  }),
+  success: OrchestratorMcpThreadSearchResult,
   dependencies: [...commandTool.dependencies, ThreadSearch.ThreadSearch],
 })
   .annotate(Tool.Readonly, true)

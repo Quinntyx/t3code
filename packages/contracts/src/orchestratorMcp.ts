@@ -389,6 +389,20 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
 
+/** A list item plus the search fields that say why the thread matched. */
+export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
+  ...OrchestratorMcpThreadListItem.fields,
+  source: Schema.Literals(["title", "user", "assistant"]),
+  snippet: Schema.optional(Schema.String.check(Schema.isMaxLength(240))),
+  messageCreatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+});
+export type OrchestratorMcpThreadSearchMatch = typeof OrchestratorMcpThreadSearchMatch.Type;
+
+export const OrchestratorMcpThreadSearchResult = Schema.Struct({
+  matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
+});
+export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
+
 // Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
 // decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
 // 0 asks for nothing, and answering it with one item would be a different request.
