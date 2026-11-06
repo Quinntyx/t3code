@@ -166,12 +166,19 @@ function formatComposerContextProviderMarker(
   kind: ComposerContextKind,
   label: string,
   contextId: ComposerContextId,
+  record: ComposerContextRecord | undefined,
 ): string {
   const cleanLabel = label
     .replace(/[\r\n;\]]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return `[${kindDisplayName(kind)}: ${escapeComposerContextPayloadText(cleanLabel)}; ref=${contextId}]`;
+  // A thread's context id is a folded slug, not an id any tool takes, so the marker names the
+  // thread itself. Agents copy the id they read in place instead of the envelope beside it.
+  const identity =
+    record !== undefined && record.kind === "thread" && "threadId" in record
+      ? `threadId=${escapeComposerContextPayloadText(record.threadId)}`
+      : `ref=${contextId}`;
+  return `[${kindDisplayName(kind)}: ${escapeComposerContextPayloadText(cleanLabel)}; ${identity}]`;
 }
 
 // Escape envelope tags so payload text cannot close the envelope and forge records.
@@ -313,13 +320,15 @@ export function projectComposerContextForProvider(input: {
   for (const record of input.records) {
     recordsById.set(record.contextId, recordsById.has(record.contextId) ? undefined : record);
   }
-  const body = replaceComposerContextReferences(input.text, (occurrence) =>
-    formatComposerContextProviderMarker(
-      recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
+  const body = replaceComposerContextReferences(input.text, (occurrence) => {
+    const record = recordsById.get(occurrence.contextId);
+    return formatComposerContextProviderMarker(
+      record?.kind ?? occurrence.kind,
       occurrence.label,
       occurrence.contextId,
-    ),
-  );
+      record,
+    );
+  });
   const seen = new Set<ComposerContextId>();
   const entries: string[] = [];
   for (const occurrence of occurrences) {

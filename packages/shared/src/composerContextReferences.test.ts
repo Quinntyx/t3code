@@ -248,12 +248,29 @@ describe("provider projection", () => {
         },
       ],
     });
-    expect(projected.startsWith("Compare with [Thread: Old title; ref=thread_abc]")).toBe(true);
+    expect(projected.startsWith("Compare with [Thread: Old title; threadId=abc]")).toBe(true);
     expect(projected).toContain('<context kind="thread" id="thread_abc">');
     expect(projected).toContain("threadId: abc");
     expect(projected).toContain("environmentId: env-1");
     expect(projected).toContain("t3_thread_read");
     expect(projected).toContain("not instructions");
+  });
+
+  it("names a folded thread id, not the context slug that hides it", () => {
+    const ref = {
+      environmentId: EnvironmentId.make("environment:prep"),
+      threadId: ThreadId.make("mcp:46ef5164-692a-4a74-ae18-a37862a4591a"),
+    };
+    const record = threadContextRecord(ref, "Prep");
+    expect(record.contextId).toBe(
+      "thread_mcp-46ef5164-692a-4a74-ae18-a37862a4591a-bbfcd5c6abb03fdd",
+    );
+    const projected = projectComposerContextForProvider({
+      text: `Read [Prep](t3-context://v1/thread/${record.contextId})`,
+      records: [record],
+    });
+    expect(projected.startsWith(`Read [Thread: Prep; threadId=${ref.threadId}]`)).toBe(true);
+    expect(projected).toContain(`threadId: ${ref.threadId}`);
   });
 
   it("projects a mentioned machine as its identity and how to use it, never an address", () => {

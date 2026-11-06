@@ -9,6 +9,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import * as Config from "effect/Config";
 
 export const DEFAULT_HANDOFF_TOKEN_CAP = 16_000;
@@ -130,6 +131,13 @@ export function historicalMessage(
   let text: string;
   switch (item.type) {
     case "user_message":
+      // Replay what the live turn showed. A canonical context link carries a composer context id,
+      // which an agent reads as a thread id and cannot resolve.
+      text = projectComposerContextForProvider({
+        text: item.text,
+        records: item.context?.records ?? [],
+      });
+      break;
     case "assistant_message":
       text = item.text;
       break;
