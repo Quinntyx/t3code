@@ -261,8 +261,10 @@ line at the end of the thread (above the composer on mobile) shows the goal and
 its progress.
 
 Codex and Claude have their own goals, with pause/resume and token budgets. With
-every other provider T3 Code keeps the goal itself and starts the next turn
-after each completed one; the agent reports completion with the `t3_goal` tool.
+every other provider T3 Code keeps the goal itself. Each turn ends with a review
+by a delegate on the same model, and only a review that leaves the goal open
+starts the next turn. The agent working on the goal reports what blocks it with
+the `t3_goal` tool; the review is what closes the goal.
 
 - `/goal` alone shows the current goal. `/goal clear` removes it.
 - Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal

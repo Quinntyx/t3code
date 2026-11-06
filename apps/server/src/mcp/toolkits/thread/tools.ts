@@ -146,7 +146,7 @@ const PendingRequestTool = Tool.make("t3_pending_request", {
 const GoalTool = Tool.make("t3_goal", {
   ...commandTool,
   description:
-    "Mark this thread's goal complete or blocked. Use it only when the thread has a goal from /goal: `complete` when the goal is met, `blocked` when you cannot finish.",
+    "Report a thread's goal outcome. The review that runs after each goal turn marks it `complete` when the goal is met; the agent working on the goal marks it `blocked` when it cannot finish. The agent working on a goal cannot mark it complete.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),

@@ -607,7 +607,20 @@ export function goalTurnPrompt(objective: string): string {
   return [
     `Goal for this thread: ${objective}`,
     "",
-    'Keep working until the goal is met. Call the `t3_goal` tool with action "complete" when it is, or action "blocked" with what is missing if you cannot finish.',
+    'Keep working until the goal is met. A reviewer checks the thread each time you stop and decides whether to continue, so do not stop early. Call the `t3_goal` tool with action "blocked" and what is missing if you cannot finish.',
+  ].join("\n");
+}
+
+/** The task a goal-review delegate receives once a goal turn settles. */
+export function goalReviewPrompt(input: {
+  readonly objective: string;
+  readonly threadId: ThreadId;
+}): string {
+  return [
+    `Review whether the goal of thread ${input.threadId} is met: ${input.objective}`,
+    "",
+    `Read that thread's recent work with t3_thread_read and inspect the repository yourself. Judge the work, not the agent's claim about it.`,
+    `If the goal is met, call t3_goal with threadId ${input.threadId} and action "complete". If it cannot be met, call it with action "blocked". If more work is needed, leave the goal alone and reply with what remains.`,
   ].join("\n");
 }
 
@@ -917,6 +930,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   model: Schema.NullOr(Schema.String),
   modelSelection: Schema.optional(ModelSelection),
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
+  /** Set on the server's own goal-review delegate; it never delivers a completion wake. */
+  purpose: Schema.optional(Schema.Literal("goal_review")),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   status: Schema.Literals([
     "idle",
@@ -3377,6 +3392,11 @@ export const OrchestrationV2Command = Schema.Union([
     workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
     // Defaults to settled_only; fire-and-forget wakes require always.
     completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
+    /**
+     * A goal review the server starts once a goal turn settles. Its parent run may already be
+     * finished, and its own completion never wakes the parent: the goal loop reads the verdict.
+     */
+    purpose: Schema.optional(Schema.Literal("goal_review")),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({

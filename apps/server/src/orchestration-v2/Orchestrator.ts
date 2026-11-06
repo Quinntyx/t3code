@@ -7319,7 +7319,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const parentRun = parentProjection.runs.find(
         (candidate) => candidate.id === command.parentRunId,
       );
-      if (parentRun === undefined || !isBlockingRun(parentRun)) {
+      // A goal review is the server's own follow-up to a goal turn that already settled.
+      const settledGoalReview =
+        command.purpose === "goal_review" && parentRun?.status === "completed";
+      if (parentRun === undefined || (!isBlockingRun(parentRun) && !settledGoalReview)) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -7394,6 +7397,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
         ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
+        // The reviewer judges the parent's goal; it does not carry one of its own.
+        ...(command.purpose === "goal_review" ? { goal: null } : {}),
       };
       const task: OrchestrationV2Subagent = {
         id: taskNodeId,
@@ -7411,6 +7416,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         title: command.title ?? null,
         model: command.modelSelection.model,
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
+        ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+        ...(command.purpose === "goal_review"
+          ? { completionDelivery: { state: "disposed" as const, observedByRunId: null } }
+          : {}),
         status: "running",
         result: null,
         startedAt: now,

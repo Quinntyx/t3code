@@ -2,13 +2,16 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
+  NodeId,
   RunId,
   ThreadId,
+  goalReviewPrompt,
   goalTurnPrompt,
   type OrchestrationV2AppThread,
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -21,9 +24,15 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const threadId = ThreadId.make("thread-goal-loop");
+const reviewThreadId = ThreadId.make("thread-goal-review");
 const objective = "all tests in packages/api pass";
 
 const activeGoal = { objective, status: "active" } as const;
+
+const modelSelection = {
+  instanceId: "provider-instance",
+  model: "model",
+} as unknown as OrchestrationV2AppThread["modelSelection"];
 
 const appThread = (overrides: Partial<OrchestrationV2AppThread> = {}) =>
   ({
@@ -33,16 +42,42 @@ const appThread = (overrides: Partial<OrchestrationV2AppThread> = {}) =>
     deletedAt: null,
     settledOverride: null,
     snoozedUntil: null,
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
     ...overrides,
   }) as unknown as OrchestrationV2AppThread;
 
-const run = (id: string, status: OrchestrationV2Run["status"]) =>
-  ({ id: RunId.make(id), status }) as unknown as OrchestrationV2Run;
+const reviewThread = () =>
+  appThread({
+    id: reviewThreadId,
+    goal: null,
+    lineage: {
+      parentThreadId: threadId,
+      relationshipToParent: "subagent",
+      rootThreadId: threadId,
+    },
+  });
 
-const completedRun = (id: string): OrchestrationV2DomainEvent =>
+const reviewTask = () =>
+  ({
+    id: "task-goal-review",
+    purpose: "goal_review",
+    childThreadId: reviewThreadId,
+  }) as unknown as OrchestrationV2Subagent;
+
+const run = (id: string, status: OrchestrationV2Run["status"]) =>
+  ({
+    id: RunId.make(id),
+    status,
+    rootNodeId: "node-root",
+  }) as unknown as OrchestrationV2Run;
+
+const completedRun = (id: string, thread = threadId): OrchestrationV2DomainEvent =>
   ({
     type: "run.updated",
-    threadId,
+    threadId: thread,
     payload: run(id, "completed"),
   }) as unknown as OrchestrationV2DomainEvent;
 
@@ -59,6 +94,7 @@ const dispatchedFor = (input: {
   readonly thread?: OrchestrationV2AppThread;
   readonly runs?: ReadonlyArray<OrchestrationV2Run>;
   readonly runtimeRequests?: ReadonlyArray<{ readonly status: string }>;
+  readonly subagents?: ReadonlyArray<OrchestrationV2Subagent>;
 }) =>
   Effect.gen(function* () {
     const dispatched: Array<OrchestrationV2Command> = [];
@@ -72,13 +108,24 @@ const dispatchedFor = (input: {
           }),
       } as unknown as Orchestrator.OrchestratorV2Shape),
       Layer.succeed(ProjectionStore.ProjectionStoreV2, {
-        getThreadRecords: () =>
-          Effect.succeed({
-            thread: input.thread ?? appThread(),
-            runs: input.runs ?? [run("run-1", "completed")],
-            messages: [],
-            runtimeRequests: input.runtimeRequests ?? [],
-          }),
+        getThreadRecords: (id: ThreadId) =>
+          Effect.succeed(
+            id === reviewThreadId
+              ? {
+                  thread: reviewThread(),
+                  runs: [run("review-run-1", "completed")],
+                  messages: [],
+                  runtimeRequests: [],
+                  subagents: [],
+                }
+              : {
+                  thread: input.thread ?? appThread(),
+                  runs: input.runs ?? [run("run-1", "completed")],
+                  messages: [],
+                  runtimeRequests: input.runtimeRequests ?? [],
+                  subagents: input.subagents ?? [],
+                },
+          ),
       } as unknown as ProjectionStore.ProjectionStoreV2Shape),
     );
     yield* Effect.gen(function* () {
@@ -88,9 +135,36 @@ const dispatchedFor = (input: {
     return dispatched;
   });
 
-it.effect("continues an active goal after a completed turn", () =>
+it.effect("reviews an active goal after a completed turn", () =>
   Effect.gen(function* () {
     const dispatched = yield* dispatchedFor({ events: [completedRun("run-1")] });
+
+    assert.deepEqual(dispatched, [
+      {
+        type: "delegated_task.request",
+        commandId: CommandId.make(`server:goal-review:${threadId}:run-1`),
+        parentThreadId: threadId,
+        parentRunId: RunId.make("run-1"),
+        parentNodeId: NodeId.make("node-root"),
+        task: goalReviewPrompt({ objective, threadId }),
+        title: "Review the goal",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        purpose: "goal_review",
+        createdBy: "agent",
+        creationSource: "server",
+      },
+    ]);
+  }),
+);
+
+it.effect("continues the parent when the review leaves the goal open", () =>
+  Effect.gen(function* () {
+    const dispatched = yield* dispatchedFor({
+      events: [completedRun("review-run-1", reviewThreadId)],
+      subagents: [reviewTask()],
+    });
 
     assert.deepEqual(dispatched, [
       {
@@ -108,7 +182,39 @@ it.effect("continues an active goal after a completed turn", () =>
   }),
 );
 
-it.effect("continues a goal that is resumed on an idle thread", () =>
+it.effect("stops when the review closes the goal", () =>
+  Effect.gen(function* () {
+    const dispatched = yield* dispatchedFor({
+      events: [completedRun("review-run-1", reviewThreadId)],
+      thread: appThread({ goal: { objective, status: "complete" } }),
+      subagents: [reviewTask()],
+    });
+
+    assert.deepEqual(dispatched, []);
+  }),
+);
+
+it.effect("continues the parent when the review failed", () =>
+  Effect.gen(function* () {
+    const dispatched = yield* dispatchedFor({
+      events: [
+        {
+          type: "run.updated",
+          threadId: reviewThreadId,
+          payload: run("review-run-1", "failed"),
+        } as unknown as OrchestrationV2DomainEvent,
+      ],
+      subagents: [reviewTask()],
+    });
+
+    assert.deepEqual(
+      dispatched.map((command) => command.type),
+      ["message.dispatch"],
+    );
+  }),
+);
+
+it.effect("starts a goal that is resumed on an idle thread", () =>
   Effect.gen(function* () {
     const dispatched = yield* dispatchedFor({ events: [goalUpdated("active")] });
 

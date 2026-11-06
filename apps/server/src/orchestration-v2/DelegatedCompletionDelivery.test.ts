@@ -3128,4 +3128,95 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
         assert.notEqual(finished?.completionDelivery?.state, "disposed");
       }),
   );
+
+  it.effect("a goal review may attach to a settled run, and an ordinary delegate may not", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("goal-review-settled");
+      const runId = RunId.make("goal-review-settled-run");
+      const rootNodeId = NodeId.make("goal-review-settled-root");
+      yield* seedParentWithTerminalTask({
+        threadId,
+        projectId: ProjectId.make("goal-review-settled-project"),
+        runId,
+        rootNodeId,
+        taskId: NodeId.make("goal-review-settled-task"),
+        deliveryState: "disposed",
+        now,
+      });
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:goal-review-root-node"),
+            type: "node.updated",
+            threadId,
+            runId,
+            nodeId: rootNodeId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              id: rootNodeId,
+              threadId,
+              runId,
+              parentNodeId: null,
+              rootNodeId,
+              kind: "root_turn",
+              status: "completed",
+              countsForRun: true,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: now,
+              completedAt: now,
+            },
+          },
+        ],
+      });
+      const running = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      yield* sink.write({
+        events: [
+          {
+            ...runEvent({ threadId, runId, ordinal: 1, status: "completed", now }),
+            payload: { ...running, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.status,
+        "completed",
+      );
+
+      const request = {
+        type: "delegated_task.request" as const,
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+        parentThreadId: threadId,
+        parentRunId: runId,
+        parentNodeId: rootNodeId,
+        task: "Review the goal",
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+      };
+      const refused = yield* orchestrator
+        .dispatch({ ...request, commandId: CommandId.make("goal-review-ordinary") })
+        .pipe(Effect.flip);
+      assert.equal(refused._tag, "OrchestratorDispatchError");
+
+      yield* orchestrator.dispatch({
+        ...request,
+        commandId: CommandId.make("goal-review-purpose"),
+        purpose: "goal_review",
+      });
+      const review = (yield* orchestrator.getThreadProjection(threadId)).subagents.find(
+        (task) => task.purpose === "goal_review",
+      );
+      assert.equal(review?.runId, runId);
+      assert.equal(review?.completionDelivery?.state, "disposed");
+    }),
+  );
 });
