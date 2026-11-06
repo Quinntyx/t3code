@@ -171,12 +171,14 @@ const makePiDiscoveryConnection = Effect.fnUntraced(function* (
   environment: NodeJS.ProcessEnv,
   launchArgs: ReadonlyArray<string>,
   cwd?: string,
+  discoverExtensionPath?: string,
 ) {
   const launch = buildPiRpcLaunch({
     launchArgs,
     environment,
     mcpSession: undefined,
     extensionPath: undefined,
+    ...(discoverExtensionPath === undefined ? {} : { discoverExtensionPath }),
     ephemeral: true,
   });
   const connection = yield* makePiRpcConnection({
@@ -198,8 +200,15 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
   environment: NodeJS.ProcessEnv,
   launchArgs: ReadonlyArray<string>,
   cwd?: string,
+  discoverExtensionPath?: string,
 ) {
-  const connection = yield* makePiDiscoveryConnection(piSettings, environment, launchArgs, cwd);
+  const connection = yield* makePiDiscoveryConnection(
+    piSettings,
+    environment,
+    launchArgs,
+    cwd,
+    discoverExtensionPath,
+  );
   const stateData = yield* connection.request({ type: "get_state" });
   const modelsData = yield* connection.request({ type: "get_available_models" });
   const commandsData = yield* connection
@@ -299,6 +308,8 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
+  /** Registers discovered services so their models reach the picker, not just a live session. */
+  discoverExtensionPath?: string,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = piModelsFromSettings(piSettings.customModels);
@@ -432,6 +443,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     environment,
     resolvedLaunchArgs.args,
     cwd,
+    discoverExtensionPath,
   ).pipe(Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS), Effect.exit);
   if (Exit.isFailure(discoveryExit)) {
     yield* Effect.logWarning("Pi RPC discovery failed.", {

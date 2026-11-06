@@ -82,3 +82,39 @@ it.effect(
       }
     }).pipe(Effect.provide(Broker.layer(":memory:"))),
 );
+
+it.effect("links services only through the member's own bearer token", () =>
+  Effect.gen(function* () {
+    const broker = yield* Broker.Broker;
+    const origin = "http://localhost:3775";
+    const code = yield* broker.pair();
+    const enrolled = yield* handle(
+      new Request(`${origin}/api/discover/enroll`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code, label: "browser" }),
+      }),
+    );
+    const membership = yield* Effect.promise(() => enrolled.json() as Promise<{ token: string }>);
+    const authenticated = { authorization: `Bearer ${membership.token}` };
+    const directory = yield* handle(
+      new Request(`${origin}/api/discover/hosts`, { headers: authenticated }),
+    );
+    const body = yield* Effect.promise(
+      () => directory.json() as Promise<{ services: ReadonlyArray<{ serviceId: string }> }>,
+    );
+    assert.deepEqual(body.services, []);
+    const missing = yield* handle(
+      new Request(`${origin}/api/discover/services/hub/link`, {
+        method: "POST",
+        headers: { ...authenticated, "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    assert.strictEqual(missing.status, 404);
+    const anonymous = yield* handle(
+      new Request(`${origin}/api/discover/services/hub/link`, { method: "GET" }),
+    );
+    assert.strictEqual(anonymous.status, 401);
+  }).pipe(Effect.provide(Broker.layer(":memory:"))),
+);

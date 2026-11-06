@@ -8,19 +8,49 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Schema from "effect/Schema";
 
 import * as Broker from "./Broker.ts";
+import { loadServicesConfig, servicesConfigPath } from "./config.ts";
 import { handle } from "./http.ts";
+import { autostartServices, buildServices, startAll, stopAll } from "./services/index.ts";
 
 const encodeMembers = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String }))),
 );
 
+const encodeServices = (
+  services: ReadonlyArray<{
+    serviceId: string;
+    kind: string;
+    label: string;
+    health: string;
+    capabilities: ReadonlyArray<string>;
+  }>,
+  configPath: string,
+) =>
+  JSON.stringify(
+    {
+      config: configPath,
+      services: services.map((service) => ({
+        serviceId: service.serviceId,
+        kind: service.kind,
+        label: service.label,
+        health: service.health,
+        capabilities: service.capabilities,
+      })),
+    },
+    null,
+    2,
+  );
+
 const usage =
-  "t3discover <serve|pair|members|revoke member-id> [--host 127.0.0.1] [--port 3775] [--home ~/.t3discover] [--origin https://discover.example]";
+  "t3discover <serve|pair|members|services|revoke member-id> [--host 127.0.0.1] [--port 3775] [--home ~/.t3discover] [--origin https://discover.example]";
 const { values, positionals } = NodeUtil.parseArgs({
   allowPositionals: true,
   options: {
@@ -36,7 +66,7 @@ const command = positionals[0];
 if (values.help) {
   process.stdout.write(`${usage}\n`);
 } else if (
-  !["serve", "pair", "members", "revoke"].includes(command ?? "") ||
+  !["serve", "pair", "members", "services", "revoke"].includes(command ?? "") ||
   positionals.length !== (command === "revoke" ? 2 : 1)
 ) {
   process.stderr.write(`${usage}\n`);
@@ -62,7 +92,26 @@ if (values.help) {
   const home = NodePath.resolve(values.home);
   NodeFS.mkdirSync(home, { recursive: true, mode: 0o700 });
   NodeFS.chmodSync(home, 0o700);
-  const runtime = ManagedRuntime.make(Broker.layer(NodePath.join(home, "discover.sqlite")));
+  // Services are built before the broker so its directory can advertise them; both runtimes stay
+  // alive for the process lifetime so supervised children keep their fibers.
+  const servicesRuntime = ManagedRuntime.make(
+    Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer),
+  );
+  const configured = await servicesRuntime.runPromise(
+    loadServicesConfig(home).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          // A malformed file must not start a broker that silently advertises nothing.
+          process.stderr.write(`t3discover: ${error.path}: ${error.message}\n`);
+          process.exit(1);
+        }),
+      ),
+    ),
+  );
+  const built = await servicesRuntime.runPromise(buildServices(configured));
+  const runtime = ManagedRuntime.make(
+    Broker.layer(NodePath.join(home, "discover.sqlite"), built.discoverable),
+  );
   if (command !== "serve") {
     try {
       await runtime.runPromise(
@@ -76,6 +125,11 @@ if (values.help) {
           } else if (command === "members") {
             const members = yield* broker.members();
             yield* Effect.sync(() => process.stdout.write(`${encodeMembers(members)}\n`));
+          } else if (command === "services") {
+            const services = yield* broker.services();
+            yield* Effect.sync(() =>
+              process.stdout.write(`${encodeServices(services, servicesConfigPath(home))}\n`),
+            );
           } else {
             yield* broker.revoke(positionals[1]!);
           }
@@ -86,6 +140,7 @@ if (values.help) {
       process.exitCode = 1;
     } finally {
       await runtime.dispose();
+      await servicesRuntime.dispose();
     }
   } else {
     const server = NodeHttp.createServer(
@@ -133,17 +188,26 @@ if (values.help) {
         }
       },
     );
-    const stop = () =>
+    const stop = () => {
       server.close(() => {
-        void runtime.dispose();
+        void servicesRuntime
+          .runPromise(stopAll(built.managed))
+          .then(() => runtime.dispose())
+          .then(() => servicesRuntime.dispose());
       });
+    };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     server.once("error", () => {
       process.stderr.write("Unable to listen on the configured broker address.\n");
       process.exitCode = 1;
-      void runtime.dispose();
+      // Supervisors own their own scopes, so disposing the runtimes would leave them running.
+      void servicesRuntime
+        .runPromise(stopAll(built.managed))
+        .then(() => runtime.dispose())
+        .then(() => servicesRuntime.dispose());
     });
+    await servicesRuntime.runPromise(startAll(autostartServices(configured, built)));
     server.listen(port, host, () =>
       process.stderr.write(`t3discover listening on ${origin.origin}\n`),
     );

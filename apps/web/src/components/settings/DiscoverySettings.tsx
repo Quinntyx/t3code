@@ -68,6 +68,13 @@ export function DiscoverySettings() {
           ) : undefined
         }
       />
+      {state.services.map((service) => (
+        <SettingsRow
+          key={service.serviceId}
+          title={service.label}
+          description={`${service.kind} · ${service.health} · ${service.linkedAt === null ? "not linked" : "linked"}. Link it and configure providers from the Usage tab.`}
+        />
+      ))}
       {(error ?? state.error) ? (
         <SettingsRow title="Discovery error" description={error ?? state.error} />
       ) : null}

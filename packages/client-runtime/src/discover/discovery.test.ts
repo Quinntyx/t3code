@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import { ConnectionOnboarding } from "../connection/onboarding.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
@@ -53,6 +54,22 @@ const host = {
   lastSeenAt: 1,
 };
 const enrollmentUrl = "https://directory.example/discover#token=enrollment-code";
+const service = {
+  serviceId: "hub",
+  kind: "cliproxyapi",
+  label: "Model hub",
+  protocol: "openai",
+  endpoints: [{ transport: "lan", httpBaseUrl: "http://192.168.1.30:8317" }],
+  capabilities: ["key-exchange"],
+  health: "online",
+  lastSeenAt: 2,
+  linkedAt: null,
+};
+const serviceCredential = {
+  protocol: "openai",
+  baseUrl: "http://192.168.1.30:8317/v1",
+  apiKey: "t3d-minted",
+};
 
 const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
   surface: "desktop" | "mobile" | "web" = "web",
@@ -70,6 +87,20 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
   let leftDirectory = false;
   let denyHost = false;
   let failSave = false;
+  let serviceLinked = false;
+  let serviceUnlinked = false;
+  let serviceReads = 0;
+  let serviceMints = 0;
+  let stallCredentialBody = false;
+  let gateLink = false;
+  let signalLinkReached: () => void = () => {};
+  let releaseLink: () => void = () => {};
+  const linkReached = new Promise<void>((resolve) => {
+    signalLinkReached = resolve;
+  });
+  const linkGate = new Promise<void>((resolve) => {
+    releaseLink = resolve;
+  });
   const authorized: string[] = [];
   const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
     new Map(),
@@ -94,7 +125,38 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
       });
     }
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer secret-member");
-    if (url.endsWith("/hosts")) return Response.json({ hosts: [host] });
+    if (url.endsWith("/hosts"))
+      return Response.json({
+        hosts: [host],
+        services: [{ ...service, linkedAt: serviceLinked ? 5 : null }],
+      });
+    if (url.endsWith("/services/hub/link")) {
+      if (init?.method === "DELETE") {
+        serviceUnlinked = true;
+        serviceLinked = false;
+        return Response.json({ ok: true });
+      }
+      if (init?.method !== "POST") {
+        serviceReads += 1;
+        if (stallCredentialBody)
+          return new Response(
+            new ReadableStream({
+              start() {},
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        return serviceLinked
+          ? Response.json({ serviceId: "hub", linkedAt: 5, credential: serviceCredential })
+          : Response.json({ error: "Service is not linked." }, { status: 404 });
+      }
+      serviceLinked = true;
+      serviceMints += 1;
+      if (gateLink) {
+        signalLinkReached();
+        await linkGate;
+      }
+      return Response.json({ serviceId: "hub", linkedAt: 5, credential: serviceCredential });
+    }
     if (url.endsWith("/requests")) {
       const body = JSON.parse(String(init?.body));
       requestedTransports.push(body.transport);
@@ -259,6 +321,17 @@ const makeHarness = Effect.fn("DiscoverTest.makeHarness")(function* (
     },
     persisted: () => persisted,
     calls: () => calls,
+    serviceUnlinked: () => serviceUnlinked,
+    serviceReads: () => serviceReads,
+    serviceMints: () => serviceMints,
+    stallCredentialBody: () => {
+      stallCredentialBody = true;
+    },
+    linkReached: Effect.promise(() => linkReached),
+    releaseLink,
+    gateLink: () => {
+      gateLink = true;
+    },
   };
 });
 
@@ -525,5 +598,90 @@ describe("directory discovery", () => {
         expect(h.persisted()).toBeNull();
         expect((yield* SubscriptionRef.get(discovery.state)).directory).toBeNull();
       }).pipe(Effect.scoped),
+  );
+});
+
+describe("discovered services", () => {
+  it.effect("links only on request and clears the link when unlinked", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      const before = yield* SubscriptionRef.get(discovery.state);
+      expect(before.services).toEqual([service]);
+      expect(before.services[0]!.linkedAt).toBeNull();
+
+      const link = yield* discovery.linkService({ serviceId: "hub" });
+      expect(link.credential).toEqual(serviceCredential);
+      expect((yield* SubscriptionRef.get(discovery.state)).services[0]!.linkedAt).toBe(5);
+
+      yield* discovery.unlinkService("hub");
+      expect(h.serviceUnlinked()).toBe(true);
+      expect((yield* SubscriptionRef.get(discovery.state)).services[0]!.linkedAt).toBeNull();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects a link for a different service than the one requested", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      const result = yield* discovery.linkService({ serviceId: "other" }).pipe(Effect.exit);
+      expect(result._tag).toBe("Failure");
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("reading a service link", () => {
+  it.effect("returns the stored credential without minting a new one", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      expect(yield* discovery.serviceLink("hub")).toBeNull();
+      expect(h.serviceMints()).toBe(0);
+
+      yield* discovery.linkService({ serviceId: "hub" });
+      expect(h.serviceMints()).toBe(1);
+
+      const stored = yield* discovery.serviceLink("hub");
+      expect(stored?.credential).toEqual(serviceCredential);
+      expect(h.serviceMints()).toBe(1);
+      expect(h.serviceReads()).toBe(2);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("service operations across membership changes", () => {
+  it.effect("disconnect cancels an in-flight link instead of publishing its credential", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      h.gateLink();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      const linking = yield* discovery.linkService({ serviceId: "hub" }).pipe(Effect.forkChild);
+      yield* h.linkReached;
+      yield* discovery.disconnect();
+      h.releaseLink();
+      const result = yield* Fiber.await(linking);
+      expect(result._tag).toBe("Failure");
+      expect((yield* SubscriptionRef.get(discovery.state)).services).toEqual([]);
+      expect(h.persisted()).toBeNull();
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("credential reads", () => {
+  it.effect("times out a stalled body instead of leaving the dialog pending", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      h.stallCredentialBody();
+      const discovery = yield* h.create;
+      yield* discovery.enroll({ enrollmentUrl });
+      const reading = yield* discovery.serviceLink("hub").pipe(Effect.forkChild);
+      yield* TestClock.adjust("16 seconds");
+      const result = yield* Fiber.await(reading);
+      expect(result._tag).toBe("Failure");
+    }).pipe(Effect.scoped),
   );
 });

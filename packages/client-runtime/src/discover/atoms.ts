@@ -47,5 +47,23 @@ export function createDiscoveryAtoms<R, E>(
         withEnvironmentRpcPermissions(runtime, registry),
       ),
   });
-  return { stateValueAtom, enroll, refresh, disconnect };
+  const linkService = createRuntimeCommand(runtime, {
+    label: "directory-discovery:link-service",
+    concurrency: { mode: "singleFlight", key: (input) => input.serviceId },
+    execute: (input: { readonly serviceId: string; readonly transport?: DiscoverTransport }) =>
+      DirectoryDiscovery.pipe(Effect.flatMap((discovery) => discovery.linkService(input))),
+  });
+  const unlinkService = createRuntimeCommand(runtime, {
+    label: "directory-discovery:unlink-service",
+    concurrency: { mode: "singleFlight", key: (serviceId) => serviceId },
+    execute: (serviceId: string) =>
+      DirectoryDiscovery.pipe(Effect.flatMap((discovery) => discovery.unlinkService(serviceId))),
+  });
+  const serviceLink = createRuntimeCommand(runtime, {
+    label: "directory-discovery:service-link",
+    concurrency: { mode: "singleFlight", key: (serviceId) => serviceId },
+    execute: (serviceId: string) =>
+      DirectoryDiscovery.pipe(Effect.flatMap((discovery) => discovery.serviceLink(serviceId))),
+  });
+  return { stateValueAtom, enroll, refresh, disconnect, linkService, unlinkService, serviceLink };
 }

@@ -172,9 +172,11 @@ environment that will connect to the hub and enter its URL and management key.
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
 account and choose **Use reset** to redeem one. No hub plugin is required.
 
-This connection supplies usage information; configure
-the provider separately to send agent requests through the hub. Remove the hub from the same
-settings section when you no longer need it.
+This connection supplies usage information. To send agent requests through the hub as well, use
+discovery instead: a hub the `t3discover` broker advertises appears at the top of **Usage**, and
+linking it mints one key for this machine and can set the endpoint and key on Claude Code, Codex,
+and Pi providers. See [Self-hosted discovery](remote-access.md#discover-and-run-other-services).
+Remove the hub from the same settings section when you no longer need it.
 
 ## Subscription usage widget
 

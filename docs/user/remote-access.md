@@ -75,6 +75,57 @@ while keeping existing direct connections intact. Use `t3discover members` and
 revoke existing device sessions separately under **Sharing & access**. Keep the
 broker's `--home` directory consistent across commands and back up its SQLite file.
 
+### Discover and run other services
+
+The broker also advertises services that are not T3 environments, such as a
+CLIProxyAPI hub. A service has two independent settings: whether the broker
+starts it, and whether it is discoverable. A hub you run yourself can be
+discoverable without being managed, and a managed service can stay private.
+
+Describe services in `<home>/services.json` (mode `0600`):
+
+```json
+{
+  "services": [
+    {
+      "serviceId": "cliproxy",
+      "kind": "cliproxyapi",
+      "label": "Model hub",
+      "discoverable": {
+        "endpoints": [{ "transport": "lan", "httpBaseUrl": "http://192.168.1.9:8317" }],
+        "managementKeyEnv": "CLIPROXY_MANAGEMENT_KEY"
+      },
+      "managed": {
+        "command": "cliproxy",
+        "args": ["--config", "/etc/cliproxy/config.yaml"],
+        "autostart": true
+      }
+    }
+  ]
+}
+```
+
+`t3discover services` lists each configured service with its health. `serve`
+starts every service whose `managed.autostart` is true and stops them when it
+exits. `discoverable.protocol` defaults to `openai` with a `/v1` base path; set it
+to `anthropic` to hand clients the bare origin.
+
+Linking is never automatic. Each member links a service from the **Usage** tab,
+which is the moment the broker mints that machine's credential. For CLIProxyAPI
+the broker adds one client key through the management API and revokes it on
+unlink, so each machine gets its own key. The prompt then sets the credential and
+endpoint on whichever providers you pick:
+
+| Harness     | Variables                                                                       |
+| ----------- | ------------------------------------------------------------------------------- |
+| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`                                    |
+| Codex       | `OPENAI_BASE_URL`, `OPENAI_API_KEY`                                             |
+| Pi          | `T3_DISCOVER_<ID>_BASE_URL`, `T3_DISCOVER_<ID>_API_KEY`, `T3_DISCOVER_<ID>_API` |
+
+Pi has no base-URL environment variable, so T3 injects an extension that
+registers the service as a provider and reads those variables. Other harnesses
+ignore the link until you point them at the endpoint yourself.
+
 ## Pair over a LAN or private network
 
 Use direct pairing when the other device can reach the host's network address.

@@ -7,9 +7,13 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
+
+import type { DiscoverableService } from "./services/index.ts";
 
 export class BrokerError extends Schema.TaggedError<BrokerError>()("BrokerError", {
   status: Schema.Int,
@@ -28,6 +32,7 @@ type Failure = BrokerError | DatabaseError;
 type Enrollment = typeof Discover.DiscoverEnrollmentInput.Type;
 type RequestInput = typeof Discover.DiscoverPairingRequestInput.Type;
 type Completion = Exclude<Discover.DiscoverPairingResult, { status: "pending" }>;
+type LinkInput = { readonly serviceId: string; readonly transport?: Discover.DiscoverTransport };
 
 export class Broker extends Context.Service<
   Broker,
@@ -63,6 +68,16 @@ export class Broker extends Context.Service<
     ) => Effect.Effect<void, Failure>;
     readonly leave: (token: string) => Effect.Effect<void, Failure>;
     readonly unregister: (token: string) => Effect.Effect<void, Failure>;
+    readonly services: () => Effect.Effect<ReadonlyArray<Discover.DiscoverServiceEntry>, Failure>;
+    readonly link: (
+      token: string,
+      input: LinkInput,
+    ) => Effect.Effect<Discover.DiscoverServiceLink, Failure>;
+    readonly serviceLink: (
+      token: string,
+      serviceId: string,
+    ) => Effect.Effect<Discover.DiscoverServiceLink, Failure>;
+    readonly unlink: (token: string, serviceId: string) => Effect.Effect<void, Failure>;
   }
 >()("t3discover/Broker") {}
 
@@ -73,6 +88,7 @@ const unavailable = { status: "failed", error: "Request unavailable." } as const
 const requestLifetime = 120_000;
 const jsonRegistration = Schema.fromJsonString(Discover.DiscoverHostRegistration);
 const jsonResult = Schema.fromJsonString(Discover.DiscoverPairingResult);
+const jsonCredential = Schema.fromJsonString(Discover.DiscoverServiceCredential);
 
 const validUrl = (value: string, endpoint = false) => {
   try {
@@ -116,6 +132,12 @@ interface RequestRow {
   expires_at: number;
   result: string | null;
 }
+interface ServiceLinkRow {
+  service_id: string;
+  member_id: string;
+  credential: string | null;
+  linked_at: number;
+}
 const toRequest = (row: RequestRow): Discover.DiscoverPairingRequest => ({
   requestId: row.id,
   environmentId: row.environment_id as Discover.DiscoverPairingRequest["environmentId"],
@@ -123,8 +145,14 @@ const toRequest = (row: RequestRow): Discover.DiscoverPairingRequest => ({
   expiresAt: row.expires_at,
 });
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("Discover.make")(function* (
+  serviceList: ReadonlyArray<DiscoverableService>,
+) {
   const sql = yield* SqlClient.SqlClient;
+  const byId = new Map(serviceList.map((service) => [service.serviceId, service]));
+  const lastOnline = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+  // Minting and revoking reach an external hub, so serialize them instead of holding a write lock.
+  const linkLock = yield* Semaphore.make(1);
   yield* sql`PRAGMA busy_timeout = 5000`;
   yield* sql`PRAGMA foreign_keys = ON`;
   yield* sql`PRAGMA journal_mode = WAL`;
@@ -146,6 +174,10 @@ const make = Effect.gen(function* () {
       yield* sql`CREATE INDEX IF NOT EXISTS requests_expiry ON requests(expires_at)`;
       yield* sql`CREATE INDEX IF NOT EXISTS requests_host ON requests(environment_id, expires_at)`;
       yield* sql`CREATE INDEX IF NOT EXISTS requests_member ON requests(requester_id, expires_at)`;
+      yield* sql`CREATE TABLE IF NOT EXISTS service_links (
+      service_id TEXT NOT NULL, member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      credential TEXT, linked_at INTEGER NOT NULL, PRIMARY KEY (service_id, member_id))`;
+      yield* sql`CREATE INDEX IF NOT EXISTS service_links_member ON service_links(member_id)`;
     }),
   );
 
@@ -156,9 +188,10 @@ const make = Effect.gen(function* () {
   const authenticateMember = Effect.fn("Discover.authenticateMember")(function* (token: string) {
     const rows = yield* sql<{
       id: string;
-    }>`SELECT id FROM members WHERE token_hash = ${hash(token)}`;
+      label: string;
+    }>`SELECT id, label FROM members WHERE token_hash = ${hash(token)}`;
     if (!rows[0]) return yield* reject(401, "Member authorization required.");
-    return rows[0].id;
+    return rows[0];
   });
   const authenticateHost = Effect.fn("Discover.authenticateHost")(function* (token: string) {
     const rows = yield* sql<HostRow>`SELECT * FROM hosts WHERE token_hash = ${hash(token)}`;
@@ -197,24 +230,166 @@ const make = Effect.gen(function* () {
     const directory = yield* sql<{ id: string }>`SELECT id FROM directory`;
     return { directoryId: directory[0]!.id, label: "T3 Discover", memberId, token };
   }, transaction);
-  const directory = Effect.fn("Discover.directory")(function* (token: string) {
-    yield* authenticateMember(token);
-    yield* cleanup(yield* Clock.currentTimeMillis);
-    const rows =
-      yield* sql<HostRow>`SELECT * FROM hosts WHERE token_hash IS NOT NULL ORDER BY environment_id LIMIT 1024`;
-    const hosts = yield* Effect.forEach(rows, (row) =>
-      Schema.decodeEffect(jsonRegistration)(row.registration).pipe(
-        Effect.map((registration) => ({ ...registration, lastSeenAt: row.last_seen_at })),
-        Effect.mapError((cause) => new DatabaseError({ cause })),
+  const serviceLinkRow = (serviceId: string, memberId: string) =>
+    sql<ServiceLinkRow>`SELECT * FROM service_links WHERE service_id = ${serviceId} AND member_id = ${memberId}`;
+  const decodeLink = Effect.fn("Discover.decodeLink")(function* (row: ServiceLinkRow) {
+    if (row.credential === null) {
+      return {
+        serviceId: row.service_id,
+        linkedAt: row.linked_at,
+        credential: null,
+      } satisfies Discover.DiscoverServiceLink;
+    }
+    const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
+      Effect.mapError((cause) => new DatabaseError({ cause })),
+    );
+    return {
+      serviceId: row.service_id,
+      linkedAt: row.linked_at,
+      credential,
+    } satisfies Discover.DiscoverServiceLink;
+  });
+  const databaseErrors = <A, R>(
+    effect: Effect.Effect<A, Failure | SqlError, R>,
+  ): Effect.Effect<A, Failure, R> =>
+    effect.pipe(
+      Effect.catchTags({ SqlError: (cause) => Effect.fail(new DatabaseError({ cause })) }),
+    );
+  const serviceEntries = Effect.fn("Discover.serviceEntries")(function* (memberId: string | null) {
+    const now = yield* Clock.currentTimeMillis;
+    const links =
+      memberId === null
+        ? []
+        : yield* sql<ServiceLinkRow>`SELECT * FROM service_links WHERE member_id = ${memberId}`;
+    const linkedAt = new Map(links.map((row) => [row.service_id, row.linked_at]));
+    const seen = yield* Ref.get(lastOnline);
+    const entries = yield* Effect.forEach(serviceList, (service) =>
+      service.health.pipe(
+        Effect.timeout("5 seconds"),
+        Effect.orElseSucceed((): Discover.DiscoverServiceHealth => "unknown"),
+        Effect.map((health) => ({ service, health })),
       ),
     );
-    return { hosts };
+    const next = new Map(seen);
+    for (const { service, health } of entries) {
+      if (health === "online") next.set(service.serviceId, now);
+    }
+    yield* Ref.set(lastOnline, next);
+    return entries.map(({ service, health }) => ({
+      serviceId: service.serviceId,
+      kind: service.kind,
+      label: service.label,
+      protocol: service.protocol,
+      endpoints: service.endpoints,
+      capabilities: service.capabilities,
+      health,
+      lastSeenAt: next.get(service.serviceId) ?? 0,
+      linkedAt: linkedAt.get(service.serviceId) ?? null,
+    })) satisfies ReadonlyArray<Discover.DiscoverServiceEntry>;
+  }, databaseErrors);
+  const directory = Effect.fn("Discover.directory")(function* (token: string) {
+    const member = yield* authenticateMember(token);
+    // Hosts commit before the health probes so a slow hub never holds the write lock.
+    const hosts = yield* transaction(
+      Effect.gen(function* () {
+        yield* cleanup(yield* Clock.currentTimeMillis);
+        const rows =
+          yield* sql<HostRow>`SELECT * FROM hosts WHERE token_hash IS NOT NULL ORDER BY environment_id LIMIT 1024`;
+        return yield* Effect.forEach(rows, (row) =>
+          Schema.decodeEffect(jsonRegistration)(row.registration).pipe(
+            Effect.map((registration) => ({ ...registration, lastSeenAt: row.last_seen_at })),
+            Effect.mapError((cause) => new DatabaseError({ cause })),
+          ),
+        );
+      }),
+    );
+    return { hosts, services: yield* serviceEntries(member.id) };
+  }, databaseErrors);
+  const services = Effect.fn("Discover.services")(function* () {
+    return yield* serviceEntries(null);
+  }, databaseErrors);
+  const serviceLink = Effect.fn("Discover.serviceLink")(function* (
+    token: string,
+    serviceId: string,
+  ) {
+    const member = yield* authenticateMember(token);
+    const rows = yield* serviceLinkRow(serviceId, member.id);
+    if (!rows[0]) return yield* reject(404, "Service is not linked.");
+    return yield* decodeLink(rows[0]);
   }, transaction);
+  const link = Effect.fn("Discover.link")(
+    function* (token: string, input: LinkInput) {
+      const member = yield* authenticateMember(token);
+      const service = byId.get(input.serviceId);
+      if (service === undefined) return yield* reject(404, "Service unavailable.");
+      if (
+        input.transport !== undefined &&
+        !service.endpoints.some((endpoint) => endpoint.transport === input.transport)
+      )
+        return yield* reject(400, "Transport unavailable.");
+      // An existing link keeps the credential it was issued, including its endpoint; changing the
+      // transport is an unlink followed by a link, not a silent rewrite of a working key.
+      const existing = yield* serviceLinkRow(service.serviceId, member.id);
+      if (existing[0]) return yield* decodeLink(existing[0]);
+      const endpoint =
+        service.endpoints.find((candidate) => candidate.transport === input.transport) ??
+        service.endpoints[0];
+      const now = yield* Clock.currentTimeMillis;
+      const credential = service.capabilities.includes("key-exchange")
+        ? yield* service
+            .issueCredential({ id: member.id, label: member.label }, endpoint)
+            .pipe(Effect.mapError((cause) => reject(502, cause.message)))
+        : null;
+      const encoded =
+        credential === null
+          ? null
+          : yield* Schema.encodeEffect(jsonCredential)(credential).pipe(
+              Effect.mapError((cause) => new DatabaseError({ cause })),
+            );
+      // A mint that cannot be recorded would leave a live key nobody can revoke.
+      yield* sql`INSERT INTO service_links VALUES (${service.serviceId}, ${member.id}, ${encoded}, ${now})
+      ON CONFLICT(service_id, member_id) DO UPDATE SET credential = excluded.credential, linked_at = excluded.linked_at`.pipe(
+        Effect.catchTags({
+          SqlError: (cause) =>
+            (credential === null
+              ? Effect.void
+              : service
+                  .revokeCredential({ id: member.id, label: member.label }, credential)
+                  .pipe(Effect.ignore)
+            ).pipe(Effect.andThen(Effect.fail(new DatabaseError({ cause })))),
+        }),
+      );
+      return { serviceId: service.serviceId, linkedAt: now, credential };
+    },
+    databaseErrors,
+    linkLock.withPermits(1),
+  );
+  const unlink = Effect.fn("Discover.unlink")(
+    function* (token: string, serviceId: string) {
+      const member = yield* authenticateMember(token);
+      const service = byId.get(serviceId);
+      const rows = yield* serviceLinkRow(serviceId, member.id);
+      const row = rows[0];
+      if (row === undefined) return;
+      if (row.credential !== null && service !== undefined) {
+        const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
+          Effect.mapError((cause) => new DatabaseError({ cause })),
+        );
+        // Keep the row until the hub confirms revocation, or the key outlives its record.
+        yield* service
+          .revokeCredential({ id: member.id, label: member.label }, credential)
+          .pipe(Effect.mapError((cause) => reject(502, cause.message)));
+      }
+      yield* sql`DELETE FROM service_links WHERE service_id = ${serviceId} AND member_id = ${member.id}`;
+    },
+    databaseErrors,
+    linkLock.withPermits(1),
+  );
   const enrollHost = Effect.fn("Discover.enrollHost")(function* (
     token: string,
     input: Discover.DiscoverHostRegistration,
   ) {
-    const owner = yield* authenticateMember(token);
+    const owner = (yield* authenticateMember(token)).id;
     yield* validateRegistration(input);
     const id = input.descriptor.environmentId;
     const existing = yield* sql<HostRow>`SELECT * FROM hosts WHERE environment_id = ${id}`;
@@ -259,7 +434,7 @@ const make = Effect.gen(function* () {
     return { requests: rows.map(toRequest) };
   }, transaction);
   const request = Effect.fn("Discover.request")(function* (token: string, input: RequestInput) {
-    const requester = yield* authenticateMember(token);
+    const requester = (yield* authenticateMember(token)).id;
     const now = yield* Clock.currentTimeMillis;
     yield* cleanup(now);
     const hosts =
@@ -286,7 +461,7 @@ const make = Effect.gen(function* () {
     };
   }, transaction);
   const result = Effect.fn("Discover.result")(function* (token: string, id: string) {
-    const requester = yield* authenticateMember(token);
+    const requester = (yield* authenticateMember(token)).id;
     const now = yield* Clock.currentTimeMillis;
     yield* cleanup(now);
     const rows =
@@ -332,10 +507,34 @@ const make = Effect.gen(function* () {
     );
     yield* sql`UPDATE requests SET result = ${encoded} WHERE id = ${id}`;
   }, transaction);
-  const leave = Effect.fn("Discover.leave")(function* (token: string) {
-    const member = yield* authenticateMember(token);
-    yield* sql`DELETE FROM members WHERE id = ${member}`;
-  }, transaction);
+  // Deleting the member cascades the link rows, so revoke the hub keys first or they outlive it.
+  const revokeMemberServices = Effect.fn("Discover.revokeMemberServices")(function* (member: {
+    readonly id: string;
+    readonly label: string;
+  }) {
+    const rows =
+      yield* sql<ServiceLinkRow>`SELECT * FROM service_links WHERE member_id = ${member.id}`;
+    for (const row of rows) {
+      const service = byId.get(row.service_id);
+      if (service === undefined || row.credential === null) continue;
+      const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
+        Effect.mapError((cause) => new DatabaseError({ cause })),
+      );
+      // A member that cannot be cleaned up stays so the operator can retry the revocation.
+      yield* service
+        .revokeCredential(member, credential)
+        .pipe(Effect.mapError((cause) => reject(502, cause.message)));
+    }
+  });
+  const leave = Effect.fn("Discover.leave")(
+    function* (token: string) {
+      const member = yield* authenticateMember(token);
+      yield* revokeMemberServices(member);
+      yield* sql`DELETE FROM members WHERE id = ${member.id}`;
+    },
+    databaseErrors,
+    linkLock.withPermits(1),
+  );
   const unregister = Effect.fn("Discover.unregister")(function* (token: string) {
     const host = yield* authenticateHost(token);
     yield* sql`DELETE FROM requests WHERE environment_id = ${host.environment_id}`;
@@ -347,9 +546,19 @@ const make = Effect.gen(function* () {
       label: string;
     }>`SELECT id, label FROM members ORDER BY label, id`;
   }, transaction);
-  const revoke = Effect.fn("Discover.revoke")(function* (memberId: string) {
-    yield* sql`DELETE FROM members WHERE id = ${memberId}`;
-  }, transaction);
+  const revoke = Effect.fn("Discover.revoke")(
+    function* (memberId: string) {
+      const rows = yield* sql<{
+        id: string;
+        label: string;
+      }>`SELECT id, label FROM members WHERE id = ${memberId}`;
+      const member = rows[0];
+      if (member !== undefined) yield* revokeMemberServices(member);
+      yield* sql`DELETE FROM members WHERE id = ${memberId}`;
+    },
+    databaseErrors,
+    linkLock.withPermits(1),
+  );
   return Broker.of({
     pair,
     members,
@@ -364,8 +573,14 @@ const make = Effect.gen(function* () {
     complete,
     leave,
     unregister,
+    services,
+    link,
+    serviceLink,
+    unlink,
   });
 });
 
-export const layer = (filename: string) =>
-  Layer.effect(Broker, make).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename })));
+export const layer = (filename: string, serviceList: ReadonlyArray<DiscoverableService> = []) =>
+  Layer.effect(Broker, make(serviceList)).pipe(
+    Layer.provideMerge(NodeSqliteClient.layer({ filename })),
+  );

@@ -10,6 +10,7 @@ const completion = Schema.Union([
   Discover.DiscoverPairingResult.members[1],
   Discover.DiscoverPairingResult.members[2],
 ]);
+const LinkInput = Schema.Struct({ transport: Schema.optionalKey(Discover.DiscoverTransport) });
 const response = (body: unknown, status = 200) =>
   Response.json(body, {
     status,
@@ -102,6 +103,24 @@ export const handle = Effect.fn("DiscoverHttp.handle")(
       return response(
         yield* broker.request(token, yield* payload(request, Discover.DiscoverPairingRequestInput)),
       );
+    const servicePath = /^\/api\/discover\/services\/([a-z0-9][a-z0-9-]{0,63})\/link$/.exec(
+      pathname,
+    );
+    if (servicePath && request.method === "GET")
+      return response(yield* broker.serviceLink(token, servicePath[1]!));
+    if (servicePath && request.method === "POST") {
+      const input = yield* payload(request, LinkInput);
+      return response(
+        yield* broker.link(token, {
+          serviceId: servicePath[1]!,
+          ...(input.transport === undefined ? {} : { transport: input.transport }),
+        }),
+      );
+    }
+    if (servicePath && request.method === "DELETE") {
+      yield* broker.unlink(token, servicePath[1]!);
+      return response({ ok: true });
+    }
     const resultPath = /^\/api\/discover\/requests\/([A-Za-z0-9-]{1,64})\/result$/.exec(pathname);
     if (resultPath && request.method === "GET")
       return response(yield* broker.result(token, resultPath[1]!));
