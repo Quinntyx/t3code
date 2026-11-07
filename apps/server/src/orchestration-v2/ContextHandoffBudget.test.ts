@@ -2,6 +2,8 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import { assert, describe, it } from "@effect/vitest";
 import {
   ContextHandoffId,
+  EnvironmentId,
+  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -13,6 +15,7 @@ import {
   type OrchestrationV2HistoricalMessage,
   type OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
+import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -67,6 +70,22 @@ const message = (
   status: "interrupted",
   kind: role === "user" ? "user_message" : "assistant_message",
 });
+const turnItemBase = {
+  id: TurnItemId.make("item:base"),
+  threadId,
+  runId: RunId.make("run:source"),
+  nodeId: null,
+  providerThreadId: providerThread.id,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal: 1,
+  status: "failed" as const,
+  title: null,
+  startedAt: now,
+  completedAt: now,
+  updatedAt: now,
+};
 const messages = [
   message("item:one", "user", "Preserve every line.\n\n  And this indentation.\n"),
   message("item:two", "assistant", "Partial work: 日本語 🧪 مرحبا\n" + "x".repeat(600)),
@@ -109,25 +128,31 @@ describe("handoff budget", () => {
     assert.equal(decodeHandoff(projected).id, handoff.id);
     assert.deepEqual(handoff.history?.messages, messages);
   });
-  it("carries command outcomes as attributed activity and excludes reasoning", () => {
-    const base = {
-      id: TurnItemId.make("item:command"),
-      threadId,
-      runId: RunId.make("run:source"),
-      nodeId: null,
-      providerThreadId: providerThread.id,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: 1,
-      status: "failed" as const,
-      title: null,
-      startedAt: now,
-      completedAt: now,
-      updatedAt: now,
+  it("replays a user message the way its live turn read, thread ids included", () => {
+    const ref = {
+      environmentId: EnvironmentId.make("environment:prep"),
+      threadId: ThreadId.make("mcp:46ef5164-692a-4a74-ae18-a37862a4591a"),
     };
+    const record = threadContextRecord(ref, "Prep");
+    const replayed = historicalMessage({
+      ...turnItemBase,
+      type: "user_message",
+      messageId: MessageId.make("message:thread-ref"),
+      inputIntent: "turn_start",
+      text: `Compare with [Prep](t3-context://v1/thread/${record.contextId})`,
+      attachments: [],
+      context: { version: 1, records: [record] },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    assert.notInclude(replayed!.text, "t3-context://");
+    assert.include(replayed!.text, `[Thread: Prep; threadId=${ref.threadId}]`);
+    assert.include(replayed!.text, `threadId: ${ref.threadId}`);
+  });
+
+  it("carries command outcomes as attributed activity and excludes reasoning", () => {
     const command = historicalMessage({
-      ...base,
+      ...turnItemBase,
       type: "command_execution",
       input: "vp test",
       output: "Failure near the end: " + "界".repeat(300),
@@ -139,7 +164,7 @@ describe("handoff budget", () => {
     assert.include(command!.text, "界".repeat(300));
     assert.isNull(
       historicalMessage({
-        ...base,
+        ...turnItemBase,
         type: "reasoning",
         text: "private reasoning",
         streaming: false,
