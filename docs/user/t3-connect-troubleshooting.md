@@ -79,6 +79,18 @@ Fix:
 2. On the host, run `t3 connect status`.
 3. If the check fails only on the host, check the host's DNS, VPN, or proxy.
 
+## "You are offline"
+
+T3 Code checks whether this device can reach the internet by requesting a tiny,
+uncached file from `gstatic.com` and `cloudflare.com`. When neither answers, it
+treats the device as offline: it stops retrying environments that need the
+internet and shows **You are offline** until the network answers. A network that
+blocks both hosts reads as offline.
+
+If the banner shows while other apps work, look for a firewall, DNS filter, or
+captive portal that blocks those hosts. **Retry** on the banner attempts every
+enabled environment once.
+
 ## This device can't reach T3 Connect
 
 The problem is on this device's network, not on the host. This device could

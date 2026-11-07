@@ -123,6 +123,8 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
   const connectivity = Connectivity.Connectivity.of({
     status: SubscriptionRef.get(networkStatus),
     changes: SubscriptionRef.changes(networkStatus),
+    checkNow: Effect.void,
+    report: () => Effect.void,
   });
   const layer = RelayEnvironmentDiscovery.layer.pipe(
     Layer.provide(
@@ -296,7 +298,7 @@ describe("RelayEnvironmentDiscovery", () => {
               identity: Effect.succeedSome({ accountId: "account-1" }),
               clerkToken: Effect.succeed("clerk-token"),
             }),
-            Layer.succeed(Connectivity.Connectivity, {
+            Connectivity.layer({
               status: SubscriptionRef.get(networkStatus),
               changes: SubscriptionRef.changes(networkStatus),
             }),

@@ -27,16 +27,22 @@ The operating system's network signal cannot tell "you are offline" from "the
 environment is offline": a joined Wi-Fi network with no upstream still reports
 online, so every environment fails and the backoff climbs to minutes. The
 [liveness layer](../../packages/client-runtime/src/connection/liveness.ts) wraps
-that signal with a probe of two captive-portal checks and provides the
+that signal with a probe of two connectivity checks and provides the
 `Connectivity` service every consumer already reads.
 
 A probe never takes the client offline by itself while the OS reports online: a
 network that blocks both probe endpoints would otherwise lock every environment
-out. A failed connection attempt on a route that needs the network reports
+out. A failed connection attempt on a route that needs the internet reports
 `unreachable`, and that is the evidence a failed probe needs. A successful
 connection, a successful probe, or the OS reporting online clears it. While
-offline the client probes every two to ten seconds, so recovery costs at most
-one probe interval rather than the rest of a five-minute backoff.
+offline the client probes every two to ten seconds, and every thirty while the
+OS already reports offline, so recovery costs at most one probe interval rather
+than the rest of a five-minute backoff. Queued checks fold into one probe, so an
+outage with many environments does not cost one request per environment.
+
+An offline device parks only the routes that need the internet. Loopback and LAN
+hosts answer without it, so those environments keep attempting and a single
+failing environment cannot strand them.
 
 Foregrounding, a network change, an explicit retry, and an offline report probe
 the established session, and only a failed probe reconnects. Offline reports are

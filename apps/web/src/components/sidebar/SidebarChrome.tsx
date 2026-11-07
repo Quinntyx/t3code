@@ -175,7 +175,6 @@ const SidebarOfflineIndicator = memo(function SidebarOfflineIndicator() {
               className="flex h-7 min-w-0 items-center gap-1 text-2xs font-medium text-destructive"
             >
               <WifiOffIcon className="size-3.5 shrink-0" />
-              {/* A narrow sidebar keeps the icon and drops the word. */}
               <span className="hidden truncate @[13rem]:inline">Disconnected</span>
             </span>
           }

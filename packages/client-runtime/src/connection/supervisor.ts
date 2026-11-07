@@ -33,6 +33,7 @@ import * as ConnectionWakeups from "./wakeups.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
+  connectionRouteNeedsInternet,
   connectionRoutes,
   type ConnectionRouteKind,
   entryWithRoutes,
@@ -897,9 +898,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     }
 
     const connectedAt = yield* Clock.currentTimeMillis;
-    // Reaching a host proves the network works, which clears a probe's false alarm.
-    if ((yield* leaseRouteKind(active.lease)) !== "loopback") {
-      yield* connectivity.report?.("reachable") ?? Effect.void;
+    // Reaching a host that needs the internet proves the network works, which
+    // clears a probe's false alarm. A LAN host proves nothing about the internet.
+    const connectedRouteKind = yield* leaseRouteKind(active.lease);
+    if (connectedRouteKind !== undefined && connectionRouteNeedsInternet(connectedRouteKind)) {
+      yield* connectivity.report("reachable");
     }
     yield* SubscriptionRef.set(prepared, Option.some(active.lease.prepared));
     yield* SubscriptionRef.set(session, Option.some(active.lease.session));
@@ -1021,12 +1024,18 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       if (!currentIntent.desired) {
         resetRetryLadder();
         latestFailure = null;
+        bypassOffline = false;
         yield* clearLease;
         yield* setState(availableState(currentIntent, generation));
         yield* waitForSignal;
         continue;
       }
-      if (currentIntent.network === "offline" && !replacing && !bypassOffline) {
+      // A LAN or loopback host answers without the internet, so being offline
+      // must not park a route that could still work.
+      const needsInternet = (yield* currentRoutes).every((route) =>
+        connectionRouteNeedsInternet(connectionRouteKind(route)),
+      );
+      if (currentIntent.network === "offline" && !replacing && !bypassOffline && needsInternet) {
         yield* clearLease;
         yield* setState(offlineState(currentIntent, generation, failureCount + 1, latestFailure));
         const next = yield* waitForSignal;
@@ -1039,9 +1048,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         continue;
       }
 
-      const needsNetwork = (yield* currentRoutes).some(
-        (route) => connectionRouteKind(route) !== "loopback",
-      );
       const attempt = failureCount + 1;
       const nextGeneration = generation + 1;
       const outcome: AttemptOutcome = yield* Effect.scoped(
@@ -1050,7 +1056,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           nextGeneration,
           latestFailure,
           pendingRetry,
-          replacing || bypassOffline,
+          replacing || bypassOffline || !needsInternet,
         ),
       );
       replacing = false;
@@ -1099,10 +1105,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         continue;
       }
 
-      // A failed attempt on a networked route is the evidence a probe needs to
-      // call this device offline; a loopback route says nothing about the network.
-      if (error.reason !== "session-pending" && needsNetwork) {
-        yield* connectivity.report?.("unreachable") ?? Effect.void;
+      // Only a failure to reach anything is evidence the device is offline. A
+      // status or a hop that answered means this device did reach the host.
+      const unreachable =
+        needsInternet &&
+        error.httpStatus === undefined &&
+        (error.reason === "network" || error.reason === "timeout" || error.reason === "transport");
+      if (unreachable) {
+        yield* connectivity.report("unreachable");
       }
 
       if (failedProbe) {
@@ -1178,7 +1188,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const retryNow = Ref.set(resetRetryState, true).pipe(
     Effect.andThen(signal({ _tag: "RetryRequested" })),
-    Effect.andThen(connectivity.checkNow ?? Effect.void),
+    Effect.andThen(connectivity.checkNow),
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );
 

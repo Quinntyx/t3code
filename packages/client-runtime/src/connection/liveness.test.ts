@@ -27,8 +27,9 @@ const harness = Effect.fn("TestLivenessHarness.make")(function* (options?: {
     options?.networkStatus ?? "online",
   );
   const reachable = yield* Ref.make(options?.reachable ?? false);
+  const probeCount = yield* Ref.make(0);
   const layer = NetworkLiveness.layer({
-    probe: Ref.get(reachable),
+    probe: Ref.update(probeCount, (count) => count + 1).pipe(Effect.andThen(Ref.get(reachable))),
   }).pipe(
     Layer.provide(
       Connectivity.layer({
@@ -37,7 +38,7 @@ const harness = Effect.fn("TestLivenessHarness.make")(function* (options?: {
       }),
     ),
   );
-  return { networkStatus, reachable, layer };
+  return { networkStatus, reachable, probeCount, layer };
 });
 
 describe("NetworkLiveness", () => {
@@ -46,8 +47,9 @@ describe("NetworkLiveness", () => {
       const test = yield* harness({ reachable: false });
       yield* Effect.gen(function* () {
         const connectivity = yield* Connectivity.Connectivity;
-        yield* connectivity.report!("unreachable");
+        yield* connectivity.report("unreachable");
         yield* awaitStatus(connectivity, "offline");
+        expect(yield* Ref.get(test.probeCount)).toBeGreaterThan(0);
       }).pipe(Effect.provide(test.layer));
     }).pipe(Effect.provide(TestClock.layer())),
   );
@@ -57,9 +59,10 @@ describe("NetworkLiveness", () => {
       const test = yield* harness({ reachable: true });
       yield* Effect.gen(function* () {
         const connectivity = yield* Connectivity.Connectivity;
-        yield* connectivity.report!("unreachable");
+        yield* connectivity.report("unreachable");
         yield* TestClock.adjust("1 second");
         expect(yield* connectivity.status).toBe("online");
+        expect(yield* Ref.get(test.probeCount)).toBeGreaterThan(0);
       }).pipe(Effect.provide(test.layer));
     }).pipe(Effect.provide(TestClock.layer())),
   );
@@ -69,9 +72,10 @@ describe("NetworkLiveness", () => {
       const test = yield* harness({ reachable: false });
       yield* Effect.gen(function* () {
         const connectivity = yield* Connectivity.Connectivity;
-        yield* connectivity.checkNow!;
+        yield* connectivity.checkNow;
         yield* TestClock.adjust("1 second");
         expect(yield* connectivity.status).toBe("online");
+        expect(yield* Ref.get(test.probeCount)).toBeGreaterThan(0);
       }).pipe(Effect.provide(test.layer));
     }).pipe(Effect.provide(TestClock.layer())),
   );
@@ -81,7 +85,7 @@ describe("NetworkLiveness", () => {
       const test = yield* harness({ reachable: false });
       yield* Effect.gen(function* () {
         const connectivity = yield* Connectivity.Connectivity;
-        yield* connectivity.report!("unreachable");
+        yield* connectivity.report("unreachable");
         yield* awaitStatus(connectivity, "offline");
 
         yield* Ref.set(test.reachable, true);
@@ -101,16 +105,33 @@ describe("NetworkLiveness", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("reports offline at once when the OS does and the probe agrees", () =>
+  it.effect("reports offline at once when the OS does", () =>
     Effect.gen(function* () {
       const test = yield* harness({ reachable: false });
       yield* Effect.gen(function* () {
         const connectivity = yield* Connectivity.Connectivity;
-        yield* connectivity.checkNow!;
+        yield* connectivity.checkNow;
         yield* TestClock.adjust("1 second");
 
         yield* SubscriptionRef.set(test.networkStatus, "offline");
         yield* awaitStatus(connectivity, "offline");
+      }).pipe(Effect.provide(test.layer));
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("lets the OS report online clear a device the probe cannot reach", () =>
+    Effect.gen(function* () {
+      const test = yield* harness({ reachable: false });
+      yield* Effect.gen(function* () {
+        const connectivity = yield* Connectivity.Connectivity;
+        yield* connectivity.report("unreachable");
+        yield* awaitStatus(connectivity, "offline");
+
+        // A network that blocks the probe endpoints must still come back.
+        yield* SubscriptionRef.set(test.networkStatus, "offline");
+        yield* TestClock.adjust("1 second");
+        yield* SubscriptionRef.set(test.networkStatus, "online");
+        yield* awaitStatus(connectivity, "online");
       }).pipe(Effect.provide(test.layer));
     }).pipe(Effect.provide(TestClock.layer())),
   );

@@ -183,7 +183,12 @@ function layerPairingOnboarding(
     Layer.mock(ClientCapabilities.SshEnvironmentGateway)({}),
     Layer.succeed(
       Connectivity.Connectivity,
-      Connectivity.Connectivity.of({ status: Effect.succeed("online"), changes: Stream.never }),
+      Connectivity.Connectivity.of({
+        status: Effect.succeed("online"),
+        changes: Stream.never,
+        checkNow: Effect.void,
+        report: () => Effect.void,
+      }),
     ),
     Layer.mock(ConnectionDriver.ConnectionDriver)({ connect: () => Effect.never }),
     Layer.succeed(

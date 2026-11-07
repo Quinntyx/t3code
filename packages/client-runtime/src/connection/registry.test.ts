@@ -311,6 +311,8 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
   const connectivity = Connectivity.Connectivity.of({
     status: SubscriptionRef.get(networkStatus),
     changes: SubscriptionRef.changes(networkStatus),
+    checkNow: Effect.void,
+    report: () => Effect.void,
   });
   const profileStore = ConnectionProfileStore.ConnectionProfileStore.of({
     get: (connectionId) =>

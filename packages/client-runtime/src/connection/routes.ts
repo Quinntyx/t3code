@@ -102,6 +102,14 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
   }
 }
 
+/**
+ * A loopback or LAN host answers without the internet, so a route to one says
+ * nothing about whether this device is offline.
+ */
+export function connectionRouteNeedsInternet(kind: ConnectionRouteKind): boolean {
+  return kind !== "loopback" && kind !== "lan";
+}
+
 const ROUTE_KIND_RANK: Record<ConnectionRouteKind, number> = {
   loopback: 0,
   lan: 1,
