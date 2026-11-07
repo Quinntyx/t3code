@@ -167,9 +167,12 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
     ReadonlyArray<Deferred.Deferred<never, ConnectionTransientError>>
   >([]);
 
+  const reports = yield* Ref.make<ReadonlyArray<"reachable" | "unreachable">>([]);
   const connectivity = Connectivity.Connectivity.of({
     status: SubscriptionRef.get(networkStatus),
     changes: SubscriptionRef.changes(networkStatus),
+    checkNow: Effect.void,
+    report: (outcome) => Ref.update(reports, (all) => [...all, outcome]),
   });
 
   const prepare = Effect.fn("TestConnectionDriver.prepare")(function* (target: ConnectionTarget) {
@@ -257,6 +260,7 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
     prepareCount,
     sessionCount,
     releaseCount,
+    reports,
     setNetworkStatus: (status: NetworkStatus) => SubscriptionRef.set(networkStatus, status),
     wake: (reason: ConnectionWakeups.ConnectionWakeup) =>
       SubscriptionRef.update(wakeups, (event) => ({
@@ -325,6 +329,72 @@ describe("EnvironmentSupervisor", () => {
         lastFailure: null,
       });
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+    }),
+  );
+
+  it.effect("an explicit retry attempts once while the network reports offline", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ networkStatus: "offline" });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "offline");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(0);
+
+      yield* supervisor.retryNow;
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+    }),
+  );
+
+  it.effect("a network that comes back starts the retry ladder over", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        prepare: () => Effect.fail(transient("Relay connection timed out.")),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 1,
+      );
+      yield* TestClock.adjust("3 seconds");
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 2,
+      );
+
+      yield* harness.setNetworkStatus("offline");
+      yield* awaitState(supervisor.state, (state) => state.phase === "offline");
+      yield* harness.setNetworkStatus("online");
+
+      const retried = yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 1,
+      );
+      expect(retried.network).toBe("online");
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("reports what a networked attempt showed the network liveness", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        prepare: (attempt) =>
+          attempt === 1 ? Effect.fail(transient()) : Effect.succeed(PREPARED_CONNECTION),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      expect(yield* Ref.get(harness.reports)).toEqual(["unreachable"]);
+
+      yield* supervisor.retryNow;
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(yield* Ref.get(harness.reports)).toEqual(["unreachable", "reachable"]);
     }),
   );
 

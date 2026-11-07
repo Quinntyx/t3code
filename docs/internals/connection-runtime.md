@@ -16,6 +16,28 @@ client of a restarted server reconnects in the same second; with a short cap, a
 client that can never connect retries all day. Offline states and authentication
 failures wait for a wakeup instead of spending attempts on unchanged conditions.
 
+A network that comes back starts the ladder over, so a delay that grew during
+an outage does not outlive it. An explicit retry attempts once even while the
+client believes it is offline, which is the way out of a network report the
+client got wrong.
+
+## Knowing the device is offline
+
+The operating system's network signal cannot tell "you are offline" from "the
+environment is offline": a joined Wi-Fi network with no upstream still reports
+online, so every environment fails and the backoff climbs to minutes. The
+[liveness layer](../../packages/client-runtime/src/connection/liveness.ts) wraps
+that signal with a probe of two captive-portal checks and provides the
+`Connectivity` service every consumer already reads.
+
+A probe never takes the client offline by itself while the OS reports online: a
+network that blocks both probe endpoints would otherwise lock every environment
+out. A failed connection attempt on a route that needs the network reports
+`unreachable`, and that is the evidence a failed probe needs. A successful
+connection, a successful probe, or the OS reporting online clears it. While
+offline the client probes every two to ten seconds, so recovery costs at most
+one probe interval rather than the rest of a five-minute backoff.
+
 Foregrounding, a network change, an explicit retry, and an offline report probe
 the established session, and only a failed probe reconnects. Offline reports are
 often wrong, for example for a loopback server. The OS can kill a suspended

@@ -13,6 +13,7 @@ import {
   ConnectionTransientError,
   Connectivity,
   mapRemoteEnvironmentError,
+  NetworkLiveness,
   type PlatformConnectionRegistration,
   PrimaryConnectionRegistration,
   PrimaryConnectionTarget,
@@ -72,7 +73,7 @@ function currentNetworkStatus(): "unknown" | "offline" | "online" {
   return navigator.onLine ? "online" : "offline";
 }
 
-const layerConnectivity = Connectivity.layer({
+const layerOsConnectivity = Connectivity.layer({
   status: Effect.sync(currentNetworkStatus),
   changes: Stream.callback((queue) =>
     Effect.acquireRelease(
@@ -91,6 +92,12 @@ const layerConnectivity = Connectivity.layer({
     ).pipe(Effect.asVoid),
   ),
 });
+
+// A joined network with no upstream reports online, so the OS signal alone
+// cannot tell the user they are offline.
+const layerConnectivity = NetworkLiveness.layer({
+  probe: NetworkLiveness.fetchProbe(),
+}).pipe(Layer.provide(layerOsConnectivity));
 
 interface NetworkInformationLike extends EventTarget {
   readonly type?: string;

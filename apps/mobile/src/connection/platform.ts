@@ -7,6 +7,7 @@ import {
   ConnectionBlockedError,
   ConnectionTransientError,
   Connectivity,
+  NetworkLiveness,
   Wakeups,
 } from "@t3tools/client-runtime/connection";
 import { managedRelayAccountChanges, managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
@@ -40,7 +41,7 @@ function networkStatus(state: Network.NetworkState): "unknown" | "offline" | "on
   return "unknown";
 }
 
-const layerConnectivity = Connectivity.layer({
+const layerOsConnectivity = Connectivity.layer({
   status: Effect.tryPromise({
     try: () => Network.getNetworkStateAsync(),
     catch: () => undefined,
@@ -81,6 +82,12 @@ const layerConnectivity = Connectivity.layer({
     ).pipe(Effect.asVoid),
   ),
 });
+
+// A joined network with no upstream reports connected, so the OS signal alone
+// cannot tell the user they are offline.
+const layerConnectivity = NetworkLiveness.layer({
+  probe: NetworkLiveness.fetchProbe(),
+}).pipe(Layer.provide(layerOsConnectivity));
 
 /** Wake connections on network path changes; online/offline misses Wi-Fi-to-cellular moves. */
 const networkPathChanges = Stream.callback<"network-changed">((queue) =>

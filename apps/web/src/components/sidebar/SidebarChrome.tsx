@@ -1,8 +1,10 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, WifiOffIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
 
+import { environmentCatalog } from "../../connection/catalog";
 import { useClientSettings, useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
@@ -158,6 +160,32 @@ function SidebarUtilityItem({
   );
 }
 
+/** Only while this device is offline: the environment is not the thing that is down. */
+const SidebarOfflineIndicator = memo(function SidebarOfflineIndicator() {
+  const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
+  if (networkStatus !== "offline") return null;
+  return (
+    <SidebarMenuItem className="min-w-0 shrink">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              aria-label="Disconnected"
+              role="status"
+              className="flex h-7 min-w-0 items-center gap-1 text-2xs font-medium text-destructive"
+            >
+              <WifiOffIcon className="size-3.5 shrink-0" />
+              {/* A narrow sidebar keeps the icon and drops the word. */}
+              <span className="hidden truncate @[13rem]:inline">Disconnected</span>
+            </span>
+          }
+        />
+        <TooltipPopup side="top">Disconnected</TooltipPopup>
+      </Tooltip>
+    </SidebarMenuItem>
+  );
+});
+
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
@@ -196,7 +224,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
 
   return (
-    <SidebarMenu className="flex-row items-center">
+    <SidebarMenu className="@container flex-row items-center">
       {isOnUtilityPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
@@ -223,6 +251,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          <SidebarOfflineIndicator />
         </>
       )}
       <SidebarUpdatePill />

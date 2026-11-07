@@ -897,6 +897,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     }
 
     const connectedAt = yield* Clock.currentTimeMillis;
+    // Reaching a host proves the network works, which clears a probe's false alarm.
+    if ((yield* leaseRouteKind(active.lease)) !== "loopback") {
+      yield* connectivity.report?.("reachable") ?? Effect.void;
+    }
     yield* SubscriptionRef.set(prepared, Option.some(active.lease.prepared));
     yield* SubscriptionRef.set(session, Option.some(active.lease.session));
     if (options?.learnRoutes !== undefined) {
@@ -985,10 +989,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const waitForSignal = Queue.take(signals).pipe(
     Effect.repeat({ while: (next) => next._tag === "BetterRouteAvailable" }),
-    Effect.map(
-      (next) => next._tag === "Wakeup" && ConnectionWakeups.resetsRetryBackoff(next.reason),
-    ),
   );
+
+  // A suspension and a network that came back both make the failures before
+  // them stale: the next attempt starts a fresh ladder instead of continuing one.
+  const resetsRetryLadder = (next: SupervisorSignal) =>
+    next._tag === "Wakeup"
+      ? ConnectionWakeups.resetsRetryBackoff(next.reason)
+      : next._tag === "NetworkChanged" && next.network !== "offline";
 
   const run = Effect.fnUntraced(function* () {
     let failureCount = 0;
@@ -1000,6 +1008,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       pendingRetry = Option.none();
     };
     let replacing = false;
+    // An explicit retry is the way out of a network report the client got wrong.
+    let bypassOffline = false;
 
     for (;;) {
       if (yield* Ref.getAndSet(resetRetryState, false)) {
@@ -1016,22 +1026,35 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         yield* waitForSignal;
         continue;
       }
-      if (currentIntent.network === "offline" && !replacing) {
+      if (currentIntent.network === "offline" && !replacing && !bypassOffline) {
         yield* clearLease;
         yield* setState(offlineState(currentIntent, generation, failureCount + 1, latestFailure));
-        const applicationActivated = yield* waitForSignal;
-        if (applicationActivated) {
+        const next = yield* waitForSignal;
+        if (resetsRetryLadder(next)) {
           resetRetryLadder();
+        }
+        if (next._tag === "RetryRequested") {
+          bypassOffline = true;
         }
         continue;
       }
 
+      const needsNetwork = (yield* currentRoutes).some(
+        (route) => connectionRouteKind(route) !== "loopback",
+      );
       const attempt = failureCount + 1;
       const nextGeneration = generation + 1;
       const outcome: AttemptOutcome = yield* Effect.scoped(
-        runAttempt(attempt, nextGeneration, latestFailure, pendingRetry, replacing),
+        runAttempt(
+          attempt,
+          nextGeneration,
+          latestFailure,
+          pendingRetry,
+          replacing || bypassOffline,
+        ),
       );
       replacing = false;
+      bypassOffline = false;
       const failedProbe = yield* Ref.getAndSet(probeUnanswered, false);
       if (outcome.established) {
         generation = nextGeneration;
@@ -1069,11 +1092,17 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           lastFailure: error,
           retryAt: null,
         });
-        const applicationActivated = yield* waitForSignal;
-        if (applicationActivated) {
+        const next = yield* waitForSignal;
+        if (next._tag === "Wakeup" && ConnectionWakeups.resetsRetryBackoff(next.reason)) {
           resetRetryLadder();
         }
         continue;
+      }
+
+      // A failed attempt on a networked route is the evidence a probe needs to
+      // call this device offline; a loopback route says nothing about the network.
+      if (error.reason !== "session-pending" && needsNetwork) {
+        yield* connectivity.report?.("unreachable") ?? Effect.void;
       }
 
       if (failedProbe) {
@@ -1149,6 +1178,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const retryNow = Ref.set(resetRetryState, true).pipe(
     Effect.andThen(signal({ _tag: "RetryRequested" })),
+    Effect.andThen(connectivity.checkNow ?? Effect.void),
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );
 

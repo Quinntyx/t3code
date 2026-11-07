@@ -67,6 +67,7 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
     autoUpdateEnvironments,
   } = input;
   const navigate = useNavigate();
+  const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const setEnvironmentEnabled = useAtomCommand(environmentCatalog.setEnabled, {
     reportFailure: false,
@@ -175,9 +176,12 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
         unavailableConnection.phase === "reconnecting");
     const suppressUnavailableBanner =
       environmentReconnecting && (updateRunning || !reconnectWarningGraceElapsed);
+    // This device being offline already has its own banner; a second one would
+    // blame the machine for the network.
     const showUnavailableBanner =
       activeEnvironmentUnavailableState !== null &&
       unavailableConnection !== null &&
+      networkStatus !== "offline" &&
       !suppressUnavailableBanner;
     if (showUnavailableBanner) {
       items.push({

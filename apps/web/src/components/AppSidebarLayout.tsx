@@ -41,6 +41,7 @@ import {
 import { AmbientShimmer } from "./AmbientShimmer";
 import { FloatingControlBubble } from "./FloatingControlBubble";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
+import { OfflineBanner } from "./OfflineBanner";
 import ThreadSidebar from "./Sidebar";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
@@ -500,6 +501,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           <SidebarRail onDoubleClick={resetSidebarWidth} />
         </Sidebar>
         {children}
+        <OfflineBanner />
         <BackgroundThreadAnnouncer />
         <SidebarControl />
       </SidebarProvider>
