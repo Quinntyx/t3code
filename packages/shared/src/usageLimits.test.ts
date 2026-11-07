@@ -181,6 +181,26 @@ describe("usage limit recovery time", () => {
       usageLimitResetAt(provider({ usageLimits: { checkedAt: window.resetsAt, windows } }), now),
     ).toBe(expected);
   });
+  // Pi reports the OpenCode Go login beside its own, so a ChatGPT model must not inherit Go's reset.
+  it("classifies windows by the login that owns them", () => {
+    const goMonthly = {
+      ...session,
+      id: "go_monthly",
+      kind: "monthly" as const,
+      resetsAt: "2026-09-10T12:00:00.000Z",
+    };
+    const pi = provider({
+      driver: ProviderDriverKind.make("pi"),
+      usageLimits: {
+        checkedAt: window.resetsAt,
+        ownerDriver: ProviderDriverKind.make("opencode"),
+        windows: [goMonthly],
+      },
+    });
+
+    expect(usageLimitResetAt(pi, now, "cliproxyapi/gpt-6.1-sol")).toBeNull();
+    expect(usageLimitResetAt(pi, now, "opencode-go/deepseek-v4.1-flash")).toBe(goMonthly.resetsAt);
+  });
   it.each([
     ["cursor", "composer-2.5", ["autoPercentUsed", "apiPercentUsed"], session.resetsAt],
     ["cursor", "claude-opus-5-5", ["autoPercentUsed", "apiPercentUsed"], weekly.resetsAt],

@@ -96,7 +96,8 @@ function exhaustedUsageWindows(
         Date.parse(window.resetsAt) > now),
   );
   if (model === undefined) return exhausted;
-  switch (provider?.driver) {
+  // A provider reading another provider's login reports that login's pool, so classify by its owner.
+  switch (provider?.usageLimits?.ownerDriver ?? provider?.driver) {
     case "cursor": {
       const api = exhausted.find((window) => window.id === "apiPercentUsed");
       const auto = exhausted.find((window) => window.id === "autoPercentUsed");
