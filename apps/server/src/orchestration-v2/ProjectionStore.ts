@@ -185,6 +185,7 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "updatedAt"
   | "limitRecovery"
   | "snoozedUntil"
+  | "providerInstanceId"
 > & {
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
@@ -496,6 +497,8 @@ export interface ProjectionStoreV2Shape {
     readonly now: DateTime.Utc;
     readonly autoResume: boolean;
     readonly snooze: boolean;
+    /** Also return armed threads still waiting on their reset time, for a provider that just reset. */
+    readonly resetObserved?: boolean;
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
   /** A pull-request thread is still working, so lower-priority resumes wait behind it. */
   readonly hasActivePullRequestThread: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
@@ -3887,10 +3890,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
                 AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
                 AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
-                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                AND (
+                  ${booleanInt(options.resetObserved === true)} = 1
+                  OR julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                )
                 AND (
                   json_extract(t.payload_json, '$.snoozedUntil') IS NULL
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
+                  OR (
+                    ${booleanInt(options.resetObserved === true)} = 1
+                    AND julianday(json_extract(t.payload_json, '$.snoozedUntil')) = julianday(json_extract(item.payload_json, '$.failure.resetAt'))
+                  )
                 )
               )
               OR (
@@ -3921,6 +3931,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           if (summary.lastErrorClass !== "usage_limit") continue;
           candidates.push({
             id: thread.id,
+            providerInstanceId: thread.providerInstanceId,
             status: "failed",
             lastErrorClass: summary.lastErrorClass,
             usageLimitResetAt: summary.usageLimitResetAt,

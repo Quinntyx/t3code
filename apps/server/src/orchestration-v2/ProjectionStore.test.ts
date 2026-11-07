@@ -4178,6 +4178,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         if (lastErrorClass === "usage_limit") {
           assert.deepEqual(candidate, {
             id: sqlShell.id,
+            providerInstanceId: sqlShell.providerInstanceId,
             status: sqlShell.status,
             lastErrorClass: sqlShell.lastErrorClass,
             usageLimitResetAt: sqlShell.usageLimitResetAt,
@@ -4386,6 +4387,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           (row) => row.id === threadId,
         ),
       );
+      // A provider that already reported the allowance back ends the wait before its clock.
+      const observed = (yield* store.getLimitRecoveryCandidates({
+        ...recoveryOptions,
+        autoResume: true,
+        resetObserved: true,
+      })).find((row) => row.id === threadId)!;
+      assert.deepEqual(observed.limitRecovery, recovery);
+      assert.equal(observed.providerInstanceId, providerInstanceId);
       const due = (yield* store.getLimitRecoveryCandidates({
         ...recoveryOptions,
         now: reset,
@@ -4407,6 +4416,25 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         (yield* store.getLimitRecoveryCandidates({ ...recoveryOptions, now: reset })).find(
           (row) => row.id === threadId,
         ),
+      );
+      // A snooze past the old reset time is the user's own, so a reported reset does not lift it.
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({
+          ...recoveryOptions,
+          now: reset,
+          resetObserved: true,
+        })).find((row) => row.id === threadId),
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.snoozedUntil', ${DateTime.formatIso(reset)})
+        WHERE thread_id = ${threadId}`;
+      // The snooze that only lasted until the reset ends with the allowance.
+      assert.isDefined(
+        (yield* store.getLimitRecoveryCandidates({
+          ...recoveryOptions,
+          now: reset,
+          resetObserved: true,
+        })).find((row) => row.id === threadId),
       );
       yield* sql`UPDATE orchestration_v2_projection_threads
         SET payload_json = json_set(payload_json, '$.snoozedUntil', NULL, '$.limitRecovery.autoResume', json('false'))

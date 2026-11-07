@@ -3227,6 +3227,8 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
+    /** The provider reported the limit available again, so the recorded reset time no longer holds. */
+    usageLimitResetObserved: Schema.optional(Schema.Boolean),
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
