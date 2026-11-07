@@ -212,6 +212,7 @@ export function ThreadPullRequestBadgeControl({
   status,
   onOpenList,
   onOpenPullRequest,
+  onContextMenu,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   badge: ThreadPullRequestBadge | null;
@@ -221,6 +222,8 @@ export function ThreadPullRequestBadgeControl({
   status: PrStatusIndicator | null;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  /** Replaces the enclosing row's menu with the pull request's own. */
+  onContextMenu?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
 }) {
   const presentation = resolveThreadPullRequestBadgePresentation({ badge, number, url, status });
   if (presentation === null) return null;
@@ -235,6 +238,7 @@ export function ThreadPullRequestBadgeControl({
       pullRequests={pullRequests}
       onOpenList={onOpenList}
       onOpenPullRequest={onOpenPullRequest}
+      onContextMenu={onContextMenu}
     />
   );
 }
@@ -249,6 +253,7 @@ function PullRequestBadge({
   pullRequests,
   onOpenList,
   onOpenPullRequest,
+  onContextMenu,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   presentation: NonNullable<ReturnType<typeof resolveThreadPullRequestBadgePresentation>>;
@@ -259,6 +264,7 @@ function PullRequestBadge({
   pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  onContextMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
 }) {
   const onClick = opensList
     ? (event: MouseEvent<HTMLElement>) => {
@@ -279,6 +285,15 @@ function PullRequestBadge({
       "aria-label": presentation.label,
       onPointerDown: (event: MouseEvent<HTMLElement>) => event.stopPropagation(),
       onClick,
+      ...(onContextMenu === undefined
+        ? {}
+        : {
+            onContextMenu: (event: MouseEvent<HTMLElement>) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onContextMenu(event);
+            },
+          }),
     },
   });
   return (

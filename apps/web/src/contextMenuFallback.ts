@@ -232,6 +232,7 @@ export function showContextMenuFallback<T extends string>(
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const menuStack: HTMLDivElement[] = [];
     const submenuTriggerStack: Array<HTMLButtonElement | undefined> = [];
+    const disarmers: Array<() => void> = [];
     let isDisposed = false;
     let canDismissFromPointer = false;
 
@@ -250,6 +251,8 @@ export function showContextMenuFallback<T extends string>(
       document.removeEventListener("contextmenu", onContextMenu, true);
       document.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("blur", onWindowBlur);
+      for (const disarm of disarmers) disarm();
+      disarmers.length = 0;
       const shouldRestoreFocus =
         restoreFocus && isNodeWithinMenuStack(document.activeElement, menuStack);
       for (const menu of menuStack) {
@@ -432,6 +435,7 @@ export function showContextMenuFallback<T extends string>(
           button.style.pointerEvents = "none";
         }
 
+        let iconNode: SVGSVGElement | null = null;
         if (typeof item.checked === "boolean") {
           button.setAttribute("role", "menuitemradio");
           button.setAttribute("aria-checked", item.checked ? "true" : "false");
@@ -449,8 +453,10 @@ export function showContextMenuFallback<T extends string>(
           const icon = createIconElement(item.icon, isLeafDestructive ? "destructive" : "neutral");
           if (icon) {
             button.appendChild(icon);
+            iconNode = icon;
           }
         }
+        const originalIcon = iconNode;
 
         const label = document.createElement("span");
         label.className = "min-w-0 flex-1 truncate";
@@ -508,6 +514,49 @@ export function showContextMenuFallback<T extends string>(
             updateHighlight();
           });
 
+          const confirmLabel =
+            hasChildren || typeof item.confirmLabel !== "string" ? null : item.confirmLabel;
+          const armedLabel = confirmLabel ?? item.label;
+          let armed = false;
+          let disarmTimer: ReturnType<typeof setTimeout> | null = null;
+          const setArmed = (next: boolean) => {
+            if (armed === next) return;
+            armed = next;
+            if (disarmTimer !== null) {
+              clearTimeout(disarmTimer);
+              disarmTimer = null;
+            }
+            label.textContent = next ? armedLabel : item.label;
+            button.dataset.contextMenuArmed = String(next);
+            if (next) {
+              const check = createIconElement(
+                "check",
+                isLeafDestructive ? "destructive" : "neutral",
+              );
+              if (check) {
+                if (iconNode) button.replaceChild(check, iconNode);
+                else button.insertBefore(check, label);
+                iconNode = check;
+              }
+              disarmTimer = setTimeout(() => setArmed(false), 3000);
+            } else if (iconNode) {
+              if (originalIcon) button.replaceChild(originalIcon, iconNode);
+              else iconNode.remove();
+              iconNode = originalIcon;
+            }
+          };
+          if (confirmLabel !== null) {
+            disarmers.push(() => {
+              if (disarmTimer !== null) {
+                clearTimeout(disarmTimer);
+                disarmTimer = null;
+              }
+            });
+            button.addEventListener("blur", () => {
+              if (armed) setArmed(false);
+            });
+          }
+
           if (hasChildren) {
             const openSubmenu = (focusFirstItem = false) => {
               const rect = button.getBoundingClientRect();
@@ -542,7 +591,12 @@ export function showContextMenuFallback<T extends string>(
               closeMenusFromLevel(level + 1);
             });
             button.addEventListener("click", () => {
-              if (canDismissFromPointer) cleanup(item.id);
+              if (!canDismissFromPointer) return;
+              if (confirmLabel !== null && !armed) {
+                setArmed(true);
+                return;
+              }
+              cleanup(item.id);
             });
           }
         }

@@ -16,7 +16,7 @@ import { useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProjects, useProjects } from "../state/entities";
 import { environmentServerConfigsAtom, serverEnvironment } from "../state/server";
-import { usePrimaryEnvironmentId } from "../state/environments";
+import { readPrimaryEnvironmentId } from "../state/environments";
 
 export function usePullRequestPreviewTarget(environmentId: EnvironmentId | null, url: string) {
   const projects = useProjects();
@@ -36,6 +36,55 @@ function shouldOpenPullRequestExternally(
   return event.metaKey || event.ctrlKey || event.button === 1;
 }
 
+// Read at click time: every provider status push replaces the config map, and subscribing
+// would hand every rendered link a new handler. Projects likewise, so a link can resolve
+// against a snapshot that arrived after this handler was built.
+function readChangeRequestLinkTarget(
+  url: string,
+  environmentId: EnvironmentId | undefined,
+  lendHostProject: boolean,
+) {
+  const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
+  return resolveChangeRequestLinkTarget({
+    url,
+    projects: readProjects(),
+    configLoaded: (candidate) => serverConfigs.has(candidate),
+    ...(environmentId === undefined ? {} : { environmentId }),
+    primaryEnvironmentId: readPrimaryEnvironmentId(),
+    lendHostProject,
+  });
+}
+
+function openChangeRequestInPanel(input: {
+  readonly panelRef: ScopedThreadRef;
+  readonly target: NonNullable<ReturnType<typeof readChangeRequestLinkTarget>>;
+  readonly url: string;
+}) {
+  const { project, repository, number, host } = input.target;
+  useRightPanelStore.getState().openPullRequest(input.panelRef, {
+    // The standalone PR panel has a synthetic ref; each tab keeps its real environment.
+    ...(input.panelRef.environmentId === project.environmentId
+      ? {}
+      : { environmentId: project.environmentId }),
+    projectId: project.id,
+    ...(host === undefined ? {} : { host }),
+    repository,
+    url: input.url,
+    number,
+  });
+}
+
+/** Opens a link's pull request in the thread's right panel, whatever the link setting says. */
+export function openChangeRequestInRightPanel(input: {
+  readonly threadRef: ScopedThreadRef;
+  readonly url: string;
+}): boolean {
+  const target = readChangeRequestLinkTarget(input.url, input.threadRef.environmentId, true);
+  if (target === null) return false;
+  openChangeRequestInPanel({ panelRef: input.threadRef, target, url: input.url });
+  return true;
+}
+
 export function useOpenChangeRequestLink(
   threadRef?: ScopedThreadRef,
   panelRef?: ScopedThreadRef,
@@ -49,24 +98,16 @@ export function useOpenChangeRequestLink(
   targetEnvironmentId?: EnvironmentId,
 ) => boolean {
   const navigate = useNavigate();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const openInApp = useClientSettings((settings) => settings.pullRequestLinksOpenInApp);
   return (event, targetUrl, targetThreadRef, targetEnvironmentId) => {
     if (!openInApp || shouldOpenPullRequestExternally(event)) return false;
-    // Read at click time: every provider status push replaces the config map, and
-    // subscribing would hand every rendered link a new handler. Projects likewise, so a
-    // link can resolve against a snapshot that arrived after this handler was built.
-    const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const resolvedThreadRef = targetThreadRef ?? threadRef;
     const resolvedPanelRef = panelRef ?? resolvedThreadRef;
-    const target = resolveChangeRequestLinkTarget({
-      url: targetUrl,
-      projects: readProjects(),
-      configLoaded: (environmentId) => serverConfigs.has(environmentId),
-      environmentId: resolvedThreadRef?.environmentId ?? targetEnvironmentId,
-      primaryEnvironmentId,
-      lendHostProject: resolvedPanelRef !== undefined,
-    });
+    const target = readChangeRequestLinkTarget(
+      targetUrl,
+      resolvedThreadRef?.environmentId ?? targetEnvironmentId,
+      resolvedPanelRef !== undefined,
+    );
     if (target === null) return false;
     const { project, repository, number, host } = target;
     event.preventDefault();
@@ -79,17 +120,7 @@ export function useOpenChangeRequestLink(
       selectedEnvironmentId: project.environmentId,
     };
     if (resolvedPanelRef) {
-      useRightPanelStore.getState().openPullRequest(resolvedPanelRef, {
-        // The standalone PR panel has a synthetic ref; each tab keeps its real environment.
-        ...(resolvedPanelRef.environmentId === project.environmentId
-          ? {}
-          : { environmentId: project.environmentId }),
-        projectId: project.id,
-        ...(host === undefined ? {} : { host }),
-        repository,
-        url: targetUrl,
-        number,
-      });
+      openChangeRequestInPanel({ panelRef: resolvedPanelRef, target, url: targetUrl });
       if (!resolvedThreadRef) {
         void navigate({
           to: "/pull-requests",
