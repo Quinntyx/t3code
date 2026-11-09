@@ -114,6 +114,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL, enabled),
+  encryptVoiceKey: (key) => ipcRenderer.invoke(IpcChannels.ENCRYPT_VOICE_KEY_CHANNEL, key),
+  decryptVoiceKey: (encrypted) =>
+    ipcRenderer.invoke(IpcChannels.DECRYPT_VOICE_KEY_CHANNEL, encrypted),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),

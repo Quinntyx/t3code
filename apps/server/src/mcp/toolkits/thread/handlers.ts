@@ -93,6 +93,23 @@ const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A,
 ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
 
 export const layer = McpToolAccess.toLayer(ThreadToolkit, {
+  notify_voice: McpToolAccess.writesThreads(
+    () => [undefined],
+    (input) =>
+      Effect.gen(function* () {
+        const { threads, projection } = yield* readThread(undefined);
+        yield* threads
+          .dispatch({
+            type: "thread.notify-voice",
+            commandId: yield* newCommandId(),
+            threadId: projection.thread.id,
+            message: input.message,
+            urgency: input.urgency,
+          })
+          .pipe(Effect.mapError(dispatchFailure));
+        return { recorded: true as const };
+      }),
+  ),
   run_scheduled_task_now: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;

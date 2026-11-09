@@ -1,0 +1,44 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-10-08T01:02:17.119Z",
+  "controls": {
+    "renderer": ["webgl"],
+    "language": ["en-US"],
+    "refThickness": 9.1,
+    "refDistance": 0.02,
+    "refFactor": 4,
+    "refDispersion": 30,
+    "refFresnelRange": 13.75,
+    "refFresnelHardness": 64.5,
+    "refFresnelFactor": 20,
+    "glareRange": 24,
+    "glareHardness": 3.75,
+    "glareFactor": 90,
+    "glareConvergence": 50,
+    "glareOppositeFactor": 80,
+    "glareAngle": -45,
+    "blurRadius": 1,
+    "blurEdge": false,
+    "tint": {
+      "r": 255,
+      "g": 255,
+      "b": 255,
+      "a": 0
+    },
+    "shadowExpand": 25,
+    "shadowFactor": 15,
+    "shadowPosition": {
+      "x": 0,
+      "y": -10
+    },
+    "bgType": 3,
+    "shapeWidth": 606,
+    "shapeHeight": 67,
+    "shapeRadius": 100,
+    "shapeRoundness": 2,
+    "mergeRate": 0.05,
+    "showShape1": false,
+    "springSizeFactor": 40.53,
+    "step": 9
+  }
+}

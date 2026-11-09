@@ -48,6 +48,8 @@ import type {
 } from "@t3tools/contracts";
 import {
   IDLE_COMPACTION_TEXT,
+  VOICE_NOTIFICATION_LIMIT,
+  OrchestrationV2VoiceNotificationEntry,
   idleCompactionOf,
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
@@ -1064,6 +1066,9 @@ const encodeContextTransferPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ContextTransferJsonSchema),
 );
 
+const decodeVoiceNotificationEntry = Schema.decodeEffect(
+  Schema.fromJsonString(OrchestrationV2VoiceNotificationEntry),
+);
 const decodeThreadPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
 );
@@ -6615,6 +6620,24 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const readShellSnapshotRows = Effect.fn("ProjectionStore.readShellSnapshotRows")(function* (
       options: ShellSnapshotOptions | undefined,
     ) {
+      const recentVoiceNotificationRows = yield* sql<PayloadRow>`
+        SELECT json_object(
+          'threadId', item.thread_id,
+          'notification', json_object(
+            'id', item.turn_item_id,
+            'message', json_extract(item.payload_json, '$.message'),
+            'urgency', json_extract(item.payload_json, '$.voiceNotification.urgency'),
+            'occurredAt', item.updated_at
+          )
+        ) AS payload_json
+        FROM orchestration_v2_projection_turn_items item
+        JOIN orchestration_v2_projection_threads thread ON thread.thread_id = item.thread_id
+        WHERE item.type = 'system_notice'
+          AND json_type(item.payload_json, '$.voiceNotification') = 'object'
+          AND thread.deleted_at IS NULL
+        ORDER BY item.updated_at DESC, item.ordinal DESC, item.turn_item_id DESC
+        LIMIT ${VOICE_NOTIFICATION_LIMIT}
+      `;
       const targetThreadRows = yield* selectShellThreadRows(undefined, options);
       const targetThreadIds = new Set(targetThreadRows.map((row) => ThreadId.make(row.thread_id)));
       const rowsByThreadId = new Map(
@@ -6672,6 +6695,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       ]);
       return {
+        recentVoiceNotificationRows,
         targetThreadIds,
         threadRows,
         runRows,
@@ -6684,6 +6708,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     });
 
     const decodeShellSnapshot = Effect.fn("ProjectionStore.decodeShellSnapshot")(function* ({
+      recentVoiceNotificationRows,
       targetThreadIds,
       threadRows,
       runRows,
@@ -6729,6 +6754,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         snapshotSequence: sequenceRows[0]?.snapshot_sequence ?? 0,
         threads: shells.filter((thread) => thread.archivedAt === null),
         archivedThreads: shells.filter((thread) => thread.archivedAt !== null),
+        recentVoiceNotifications: yield* Effect.forEach(
+          recentVoiceNotificationRows.toReversed(),
+          (row) => decodeVoiceNotificationEntry(row.payload_json),
+        ),
       };
     }, Effect.mapError(shellSnapshotReadError));
 

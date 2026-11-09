@@ -3,6 +3,26 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/commandPermissions": {
+      "types": "./src/state/commandPermissions.ts",
+      "default": "./src/state/commandPermissions.ts"
+    },
+    "./voice/session": {
+      "types": "./src/voice/session.ts",
+      "default": "./src/voice/session.ts"
+    },
+    "./voice/notifications": {
+      "types": "./src/voice/notifications.ts",
+      "default": "./src/voice/notifications.ts"
+    },
+    "./voice/tools": {
+      "types": "./src/voice/tools.ts",
+      "default": "./src/voice/tools.ts"
+    },
+    "./voice/awaitAtom": {
+      "types": "./src/voice/awaitAtom.ts",
+      "default": "./src/voice/awaitAtom.ts"
+    },
     "./zip/bounded-zip": {
       "types": "./src/zip/boundedZip.ts",
       "default": "./src/zip/boundedZip.ts"
@@ -521,6 +541,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@google/genai": "2.31.0",
     "@pierre/diffs": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/provider-acp-registry": "workspace:*",

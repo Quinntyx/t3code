@@ -32,6 +32,9 @@ const DevicePanel = lazy(() =>
 );
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
 const NotebookPanel = lazy(() => import("../notebook/NotebookPanel"));
+const VoicePanel = lazy(() =>
+  import("../../voice/VoicePanel").then((module) => ({ default: module.VoicePanel })),
+);
 
 type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
@@ -172,6 +175,12 @@ export function RightPanelSurfaceContent(props: {
       ) : null;
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
+    case "voice":
+      return (
+        <Suspense fallback={null}>
+          <VoicePanel visible={visible && props.activeSurfaceId === surface.id} />
+        </Suspense>
+      );
     case "device":
       return (
         <Suspense fallback={null}>
