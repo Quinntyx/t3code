@@ -1,4 +1,5 @@
 import { resolvePullRequestDetailChecks } from "@t3tools/client-runtime/pull-request-checks";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import {
   capitalizeTerm,
   sourceControlClients,
@@ -39,7 +40,6 @@ import {
   describePullRequestChecks,
   isPullRequestConflicting,
   resolvePullRequestMergeMethod,
-  allowedPullRequestMergeMethods,
   resolveThreadPanelPullRequestAction,
 } from "../pullRequest/pullRequestDetail.logic";
 import { PullRequestChecksPopover } from "../pullRequest/PullRequestChecksPopover";

@@ -7,13 +7,13 @@ import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 import { View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { Button } from "../../components/ui/Button";
 import { SplitButton } from "../../components/ui/SplitButton";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
-  allowedMergeMethods,
   canPerformPullRequestAction,
   mergeUnavailableReason,
   MERGE_METHODS,
@@ -46,7 +46,7 @@ export function PullRequestMergeControls(props: {
   const [selectedMethod, setSelectedMethod] = useState<PullRequestMergeMethod | null>(null);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
-  const methods = allowedMergeMethods(pr);
+  const methods = allowedPullRequestMergeMethods(pr);
   const preferred =
     selectedMethod ??
     (AsyncResult.isSuccess(preferences) ? preferences.value.pullRequestMergeMethod : undefined) ??
@@ -155,7 +155,7 @@ export function PullRequestMergeControls(props: {
                 resolveMergeMethod: (fresh) => {
                   if (
                     !canPerformPullRequestAction(fresh, "merge") ||
-                    !allowedMergeMethods(fresh).includes(method)
+                    !allowedPullRequestMergeMethods(fresh).includes(method)
                   )
                     throw new Error(`The ${terminology.singular} changed. Refresh before merging.`);
                   return method;
