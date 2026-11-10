@@ -15,7 +15,7 @@ function RunningDuration(props: { durationMs: number; updatedAt: number }) {
 function ThreadUsageFigures({ threadRef }: { threadRef: ScopedThreadRef }) {
   const { data, dataUpdatedAt, shell } = useThreadUsage(threadRef);
   if (data === null) return null;
-  const cost = formatThreadUsageCost(data.models);
+  const cost = formatThreadUsageCost(data.models, data.incompleteGroups !== undefined);
   const status = shell?.latestRun?.status;
   const running = status === "starting" || status === "running" || status === "waiting";
   return (

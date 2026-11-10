@@ -287,6 +287,7 @@ export function normalizeClaudeTurnTokenUsage(
     ...(otherUsage === undefined ? {} : { otherUsage }),
     ...(mainAgentUsage.length > 1 ? { mainAgentUsage } : {}),
     ...(subagentUsage.length === 0 ? {} : { subagentUsage }),
+    ...(observed.ledger?.complete === false ? { otherUsageStatus: "partial" as const } : {}),
   };
   // Native subagents and workflows can bill a turn whose main agent reported nothing.
   return main.usageStatus === "unavailable" && subagentUsage.length > 0

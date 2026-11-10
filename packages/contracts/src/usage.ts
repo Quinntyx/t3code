@@ -211,6 +211,8 @@ export const ThreadUsage = Schema.Struct({
   series: Schema.Array(ThreadUsageSeries),
   /** When the thread's own context was compacted. */
   compactedAt: Schema.Array(IsoDateTime),
+  /** Groups missing usage a provider could not measure, so their totals are a floor. */
+  incompleteGroups: Schema.optional(Schema.Array(ThreadUsageGroup)),
 });
 export type ThreadUsage = typeof ThreadUsage.Type;
 

@@ -9,10 +9,12 @@ import {
   usageSourceMessages,
 } from "./usageFormat.ts";
 
-it("shows thread cost as a floor when only some models are priced", () => {
+it("shows thread cost as a floor when some models are unpriced or usage went unmeasured", () => {
   expect(formatThreadUsageCost([{ costUsd: 1.25 }, { costUsd: 2.5 }])).toBe("$3.75");
   expect(formatThreadUsageCost([{ costUsd: 1.25 }, { costUsd: null }])).toBe("$1.25+");
   expect(formatThreadUsageCost([{ costUsd: 0 }])).toBe("$0.00");
+  expect(formatThreadUsageCost([{ costUsd: 2 }], true)).toBe("$2.00+");
+  expect(formatThreadUsageCost([{ costUsd: 0.002 }], true)).toBe("$0.00+");
   expect(formatThreadUsageCost([{ costUsd: null }])).toBeNull();
   expect(formatThreadUsageCost([])).toBeNull();
 });

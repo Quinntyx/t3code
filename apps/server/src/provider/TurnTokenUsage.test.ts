@@ -126,7 +126,7 @@ describe("billable native turn usage", () => {
     },
     { previous: 150, input: 280, output: 55, expected: { inputTokens: 30, outputTokens: 5 } },
     // A ledger that went backwards, as after /clear, leaves the turn's growth unknown.
-    { previous: 500, input: 120, output: 25, expected: undefined },
+    { previous: 500, input: 120, output: 25, expected: undefined, otherUsageStatus: "partial" },
   ])("separates cumulative Claude model usage from the main loop: $previous", (row) => {
     const modelUsage = (inputTokens: number, outputTokens: number) => ({
       inputTokens,
@@ -155,6 +155,7 @@ describe("billable native turn usage", () => {
       },
     );
     expect(current).toMatchObject({ inputTokens: 100, outputTokens: 20 });
+    expect(current.otherUsageStatus).toBe(row.otherUsageStatus);
     expect(current.otherUsage).toEqual(row.expected);
     expect(current.subagentUsage).toEqual(
       row.expected && [

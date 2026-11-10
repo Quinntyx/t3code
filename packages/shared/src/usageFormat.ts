@@ -60,14 +60,15 @@ export function formatUsd(value: number): string {
   return CURRENCY.format(value);
 }
 
-/** Unpriced models leave the sum short, so it reads as a floor. */
+/** Unpriced models or unmeasured usage leave the sum short, so it reads as a floor. */
 export function formatThreadUsageCost(
   models: ReadonlyArray<Pick<ThreadUsageModel, "costUsd">>,
+  incomplete = false,
 ): string | null {
   const priced = models.filter((model) => model.costUsd !== null);
   if (priced.length === 0) return null;
   const total = formatUsd(priced.reduce((sum, model) => sum + (model.costUsd ?? 0), 0));
-  return priced.length < models.length ? `${total}+` : total;
+  return incomplete || priced.length < models.length ? `${total}+` : total;
 }
 
 export function formatCount(value: number): string {

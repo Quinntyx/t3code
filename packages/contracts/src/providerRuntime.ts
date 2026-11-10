@@ -82,6 +82,8 @@ const TurnTokenUsageCommonFields = {
   mainAgentUsage: Schema.optional(Schema.Array(TurnModelTokenUsage)),
   // The ledger counts beyond the main agent, by model: native subagents, workflows, compaction.
   subagentUsage: Schema.optional(Schema.Array(TurnModelTokenUsage)),
+  // The ledger could not measure all usage beyond the main agent; any counts above are a floor.
+  otherUsageStatus: Schema.optional(Schema.Literal("partial")),
 };
 export const TurnTokenUsage = Schema.Union([
   Schema.Struct({

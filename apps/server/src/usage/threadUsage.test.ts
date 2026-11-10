@@ -241,7 +241,12 @@ describe("thread usage", () => {
           {
             from: 2,
             to: 3,
-            usage: { ...usage(0, 0), localCommand: true, subagentUsage: [nativeUsage] },
+            usage: {
+              ...usage(0, 0),
+              localCommand: true,
+              subagentUsage: [nativeUsage],
+              otherUsageStatus: "partial",
+            },
           },
         ]),
         T0,
@@ -297,6 +302,7 @@ describe("thread usage", () => {
         ...(mixed ? [{ model: "claude-sonnet-4-6", totalTokens: 220 }] : []),
         { model: "claude-haiku-4-5", totalTokens: 340 },
       ]);
+      expect(report.incompleteGroups).toBeUndefined();
     },
   );
 
@@ -328,7 +334,7 @@ describe("thread usage", () => {
       "main",
       records("main", claude, "claude-opus-5-5", [
         { from: 0, to: 20, usage: usage(150_000, 50_000) },
-        { from: 40, to: 40, usage: usage(10_000, 0) },
+        { from: 40, to: 40, usage: { ...usage(10_000, 0), otherUsageStatus: "partial" } },
       ]),
       T0,
     );
@@ -367,6 +373,7 @@ describe("thread usage", () => {
       { group: "main", model: "claude-opus-5-5", threads: 1, totalTokens: 210_000, costUsd: 4.1 },
       { group: "delegates", model: "gpt-5.5", threads: 2, totalTokens: 130_000, costUsd: null },
     ]);
+    expect(result.incompleteGroups).toEqual(["delegates"]);
 
     const [opus, gpt] = result.series;
     expect(opus?.buckets).toHaveLength(41);

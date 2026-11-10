@@ -6452,7 +6452,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 cachedInputTokens: failed ? 2000 : 11455,
                 cacheCreationTokens: failed ? 500 : 2847,
                 models: ["claude-sonnet-4-6"],
-                ...(failed ? {} : { otherUsage: { inputTokens: 20, outputTokens: 10 } }),
+                ...(failed
+                  ? { otherUsageStatus: "partial" }
+                  : { otherUsage: { inputTokens: 20, outputTokens: 10 } }),
                 subagentUsage: [
                   {
                     model: "claude-haiku-4-5",
