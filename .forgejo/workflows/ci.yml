@@ -17,11 +17,9 @@ concurrency:
 jobs:
   changed:
     runs-on: ubuntu-latest
-    # Bookworm's git 2.39 fails the checkpoint and worktree cache tests, and tests that stop
-    # process groups need an init to reap them.
+    # Bookworm's git 2.39 fails the sparse checkpoint and worktree cache tests.
     container:
       image: node:26.12.1-trixie
-      options: --init
     steps:
       - uses: https://data.forgejo.org/actions/checkout@v4
         with:
@@ -29,18 +27,21 @@ jobs:
       - uses: ./.forgejo/actions/setup
       - name: Install Chromium for browser tests
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+      # The job container's PID 1 is `tail`, which never reaps the process groups tests stop.
+      - name: Install a subreaper for test processes
+        run: apt-get update && apt-get install -y --no-install-recommends tini
       - name: Check changed files
         env:
           BEFORE: ${{ github.event.before }}
           EVENT: ${{ github.event_name }}
-          # An upstream sync changes every file, so this one job runs the whole suite.
+          # An upstream sync changes thousands of files, so this check can run for half an hour.
           CHECK_CHANGED_TIMEOUT: 3600
         run: |
           base=origin/main
           if [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
             base="$BEFORE"
           fi
-          pnpm exec vp run check:changed "$base"
+          tini -s -- pnpm exec vp run check:changed "$base"
       - name: Check publication behavior
         run: node --test .forgejo/scripts/*.test.cjs
 
