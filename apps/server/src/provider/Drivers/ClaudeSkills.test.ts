@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
@@ -597,6 +598,15 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       assert.deepEqual(
         skills.map((skill) => skill.name),
+        ["env-skill"],
+      );
+
+      assert.deepEqual(
+        (yield* discoverClaudeSkills({ homePath: "" }).pipe(
+          Effect.provideService(HostProcess.Environment, {
+            CLAUDE_CONFIG_DIR: environmentConfigDir,
+          }),
+        )).map((skill) => skill.name),
         ["env-skill"],
       );
 

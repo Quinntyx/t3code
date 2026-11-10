@@ -11,6 +11,7 @@ import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { parse as parseYamlDocument } from "yaml";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { resolveClaudeHomePath } from "./ClaudeConfigDir.ts";
 
 type ClaudeSkillScope = "user" | "project";
 
@@ -414,25 +415,6 @@ const discoverPluginSkillRoots = Effect.fn("discoverPluginSkillRoots")(function*
   return roots;
 });
 
-const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
-  config: Pick<ClaudeSettings, "homePath">,
-  environment: NodeJS.ProcessEnv,
-  cwd?: string,
-): Effect.fn.Return<string, never, Path.Path> {
-  const path = yield* Path.Path;
-  const home = yield* HostProcess.HomeDirectory;
-  const homePath = config.homePath.trim();
-  if (homePath.length > 0) {
-    return path.resolve(expandHomePath(homePath, home));
-  }
-  // Match the spawned CLI: preserve a literal ~ and resolve relative config against workspace cwd.
-  const environmentConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
-  if (environmentConfigDir.length > 0) {
-    return cwd ? path.resolve(cwd, environmentConfigDir) : path.resolve(environmentConfigDir);
-  }
-  return path.join(home, ".claude");
-});
-
 const SettingsEnv = Schema.Struct({
   ANTHROPIC_BASE_URL: Schema.optional(Schema.String),
   CLAUDE_CODE_ENTRYPOINT: Schema.optional(Schema.String),
@@ -453,7 +435,7 @@ export const readClaudeSettingsEnv = Effect.fn("readClaudeSettingsEnv")(function
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
-  const configDirPath = yield* resolveClaudeConfigDirPath(config, environment, cwd);
+  const configDirPath = yield* resolveClaudeHomePath(config, environment, cwd);
   const settingsEnv: typeof SettingsEnv.Type = {};
   for (const settingsPath of claudeSettingsPaths(
     path,
@@ -500,11 +482,12 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
 ): Effect.fn.Return<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const configDirPath = yield* resolveClaudeConfigDirPath(config, environment ?? process.env, cwd);
+  const resolvedEnvironment = environment ?? (yield* HostProcess.Environment);
+  const configDirPath = yield* resolveClaudeHomePath(config, resolvedEnvironment, cwd);
   const { skillOverrides, enabledPlugins } = yield* readSkillSettings(
     configDirPath,
     cwd,
-    environment ?? process.env,
+    resolvedEnvironment,
   );
 
   const roots: ReadonlyArray<ClaudeSkillRoot> = [
@@ -516,12 +499,7 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
         directory: path.join(path.resolve(cwd ?? ".", directory), ".claude", "skills"),
         scope: "project" as const,
       })),
-    ...(yield* discoverPluginSkillRoots(
-      configDirPath,
-      cwd,
-      enabledPlugins,
-      environment ?? process.env,
-    )),
+    ...(yield* discoverPluginSkillRoots(configDirPath, cwd, enabledPlugins, resolvedEnvironment)),
   ];
 
   const skillsByName = new Map<string, ServerProviderSkill>();

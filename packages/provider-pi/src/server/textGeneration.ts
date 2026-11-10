@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -27,8 +28,9 @@ const piTurnErrorDetail = (errorMessage: string | undefined) => {
 
 export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* (
   piSettings: PiSettings,
-  environment: NodeJS.ProcessEnv = process.env,
+  environment?: NodeJS.ProcessEnv,
 ) {
+  const resolvedEnvironment = environment ?? (yield* HostProcess.Environment);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const runPiJson: TextGenerationOperations.Runner = Effect.fn("PiTextGeneration.runPiJson")(
@@ -44,7 +46,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       }
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment,
+        environment: resolvedEnvironment,
         mcpSession: undefined,
         extensionPath: undefined,
         ephemeral: true,

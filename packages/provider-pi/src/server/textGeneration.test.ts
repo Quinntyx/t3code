@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -78,13 +79,21 @@ it.effect("runs Pi offline, since the process is stopped as soon as it answers",
     const pi = yield* makeFakePi(JSON.stringify({ subject: "Update README", body: "" }));
     const launches: Array<ReadonlyArray<string>> = [];
     const spawner = ChildProcessSpawner.make((command) => {
-      if (ChildProcess.isStandardCommand(command)) launches.push(command.args.map(String));
+      if (ChildProcess.isStandardCommand(command)) {
+        launches.push(command.args.map(String));
+        assert.equal(command.options.env?.["T3_TEST_PI_ENV"], "injected");
+      }
       return pi.spawner.spawn(command);
     });
-    const textGeneration = yield* makePiTextGeneration(
-      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
-      {},
-    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+    const textGeneration = yield* makePiTextGeneration({
+      enabled: true,
+      binaryPath: "pi",
+      launchArgs: "",
+      customModels: [],
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HostProcess.Environment, { T3_TEST_PI_ENV: "injected" }),
+    );
 
     const result = yield* textGeneration.generateCommitMessage({
       cwd: process.cwd(),

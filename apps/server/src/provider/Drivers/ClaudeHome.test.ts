@@ -5,6 +5,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
   makeClaudeCapabilitiesCacheKey,
@@ -41,6 +42,24 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* makeClaudeContinuationGroupKey({ homePath: "" }, environment)).toBe(
           `claude:home:${inherited}`,
         );
+
+        expect(
+          yield* makeClaudeEnvironment({ homePath: "" }).pipe(
+            Effect.provideService(HostProcess.Environment, environment),
+          ),
+        ).toEqual(environment);
+        expect(
+          yield* makeClaudeEnvironment({ homePath: "" }, { ONLY_EXPLICIT: "1" }).pipe(
+            Effect.provideService(HostProcess.Environment, environment),
+          ),
+        ).toEqual({ ONLY_EXPLICIT: "1" });
+        expect(
+          yield* makeClaudeCapabilitiesCacheKey(
+            { binaryPath: "claude", homePath: "" },
+            "/workspace",
+            { CLAUDE_CONFIG_DIR: "relative-config" },
+          ),
+        ).toBe(`claude\0${path.resolve("/workspace", "relative-config")}\0/workspace`);
 
         const explicit = path.resolve(NodeOS.homedir(), ".claude-work");
         expect(yield* resolveClaudeHomePath({ homePath: "~/.claude-work" }, environment)).toBe(
