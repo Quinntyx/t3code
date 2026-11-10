@@ -68,15 +68,14 @@ function WorkspaceRoot() {
                 : { ...insets, bottom: 0 }
           }
         >
-          <LiquidGlassTarget style={{ flex: 1 }}>
-            {enabled.length === 0 ? (
-              layout.usesSplitView ? (
-                <View className="flex-1 bg-screen" />
-              ) : (
-                <WorkspaceNoTabs />
-              )
-            ) : (
-              <WorkspaceAppBarScope enabled={!layout.usesSplitView}>
+          {enabled.length === 0 ? (
+            <LiquidGlassTarget style={{ flex: 1 }}>
+              {layout.usesSplitView ? <View className="flex-1 bg-screen" /> : <WorkspaceNoTabs />}
+            </LiquidGlassTarget>
+          ) : (
+            <WorkspaceAppBarScope enabled={!layout.usesSplitView}>
+              {/* The shared bar stays outside the target: glass inside its own target finds nothing to sample. */}
+              <LiquidGlassTarget style={{ flex: 1 }}>
                 <WorkspaceTabPanes
                   tabs={TABS}
                   selected={tab}
@@ -105,9 +104,9 @@ function WorkspaceRoot() {
                     )
                   }
                 />
-              </WorkspaceAppBarScope>
-            )}
-          </LiquidGlassTarget>
+              </LiquidGlassTarget>
+            </WorkspaceAppBarScope>
+          )}
         </SafeAreaInsetsContext>
         {layout.usesSplitView ? null : floatingTabsEnabled ? (
           <FloatingWorkspaceTabs fillWidth glass onNewThread={startNewTask} />
