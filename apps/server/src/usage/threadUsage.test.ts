@@ -126,6 +126,110 @@ describe("thread usage", () => {
     ]);
   });
 
+  it.each(
+    (["main", "delegates"] as const).flatMap((group) =>
+      [false, true].map((mixed) => ({ group, mixed })),
+    ),
+  )(
+    "includes native workflow usage for $group with mixed main models=$mixed without double counting",
+    ({ group, mixed }) => {
+      const nativeUsage = {
+        model: "claude-haiku-4-5",
+        inputTokens: 150,
+        cachedInputTokens: 40,
+        cacheCreationTokens: 10,
+        outputTokens: 20,
+        reasoningTokens: 5,
+      };
+      const turns = threadUsageTurns(
+        group,
+        records("main", claude, "claude-opus-5-5", [
+          {
+            from: 0,
+            to: 1,
+            usage: {
+              ...usage(1_000, 100),
+              subagentUsage: [nativeUsage],
+              ...(mixed
+                ? {
+                    mainAgentUsage: [
+                      {
+                        model: "claude-opus-5-5",
+                        inputTokens: 800,
+                        outputTokens: 80,
+                        cachedInputTokens: 0,
+                        cacheCreationTokens: 0,
+                      },
+                      {
+                        model: "claude-sonnet-4-6",
+                        inputTokens: 200,
+                        outputTokens: 20,
+                        cachedInputTokens: 0,
+                        cacheCreationTokens: 0,
+                      },
+                    ],
+                  }
+                : {}),
+            },
+          },
+          { from: 1, to: 2, usage: { ...usage(0, 0), subagentUsage: [nativeUsage] } },
+        ]),
+        T0,
+      );
+      expect(turns.map(({ group, model, totals }) => ({ group, model, totals }))).toEqual([
+        {
+          group,
+          model: "claude-opus-5-5",
+          totals: {
+            uncachedInputTokens: mixed ? 800 : 1_000,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: mixed ? 80 : 100,
+            reasoningTokens: 0,
+          },
+        },
+        ...(mixed
+          ? [
+              {
+                group,
+                model: "claude-sonnet-4-6",
+                totals: {
+                  uncachedInputTokens: 200,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                  outputTokens: 20,
+                  reasoningTokens: 0,
+                },
+              },
+            ]
+          : []),
+        ...Array.from({ length: 2 }, () => ({
+          group: "delegates",
+          model: "claude-haiku-4-5",
+          totals: {
+            uncachedInputTokens: 100,
+            cachedInputTokens: 40,
+            cacheCreationTokens: 10,
+            outputTokens: 20,
+            reasoningTokens: 5,
+          },
+        })),
+      ]);
+      const report = buildThreadUsage({
+        turns,
+        compactedAtMs: [],
+        pricing,
+        nowMs: T0,
+        active: false,
+      });
+      expect(report.models.map(({ model, totalTokens }) => ({ model, totalTokens }))).toEqual([
+        { model: "claude-opus-5-5", totalTokens: mixed ? 880 : 1_100 },
+        ...(mixed ? [{ model: "claude-sonnet-4-6", totalTokens: 220 }] : []),
+        { model: "claude-haiku-4-5", totalTokens: 340 },
+      ]);
+    },
+  );
+
   it("sums own run durations without quota gaps, inherited runs, or a usage requirement", () => {
     const main = records("main", claude, "claude-opus-5-5", [
       { from: 0, to: 15, usage: usage(1_000, 100) },

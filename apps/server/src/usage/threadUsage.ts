@@ -133,30 +133,45 @@ export function threadUsageTurns(
     if (attempt === undefined || run?.threadId !== records.thread.id || driver === undefined) {
       continue;
     }
-    const input = usage.inputTokens ?? 0;
-    const cachedInputTokens = usage.cachedInputTokens ?? 0;
-    const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
-    const outputTokens = usage.outputTokens ?? 0;
-    if (input + outputTokens === 0) continue;
     const completedAtMs =
       turn.completedAt === null ? nowMs : DateTime.toEpochMillis(turn.completedAt);
-    turns.push({
-      group,
-      threadId: records.thread.id,
-      providerInstanceId: attempt.providerInstanceId,
-      driver,
-      model: run.modelSelection.model,
-      speed: usageSpeed(run.modelSelection),
-      startedAtMs: turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt),
-      completedAtMs,
-      totals: {
-        uncachedInputTokens: Math.max(0, input - cachedInputTokens - cacheCreationTokens),
-        cachedInputTokens,
-        cacheCreationTokens,
-        outputTokens,
-        reasoningTokens: usage.reasoningTokens ?? 0,
-      },
-    });
+    const entries = [
+      ...(usage.mainAgentUsage ?? [{ ...usage, model: run.modelSelection.model }]).map((main) => ({
+        ...main,
+        group,
+        speed: usageSpeed(run.modelSelection),
+      })),
+      ...(usage.subagentUsage ?? []).map((subagent) => ({
+        ...subagent,
+        group: "delegates" as const,
+        speed: "standard" as const,
+      })),
+    ];
+    for (const entry of entries) {
+      const input = entry.inputTokens ?? 0;
+      const cachedInputTokens = entry.cachedInputTokens ?? 0;
+      const cacheCreationTokens = entry.cacheCreationTokens ?? 0;
+      const outputTokens = entry.outputTokens ?? 0;
+      if (input + outputTokens === 0) continue;
+      turns.push({
+        group: entry.group,
+        threadId: records.thread.id,
+        providerInstanceId: attempt.providerInstanceId,
+        driver,
+        model: entry.model,
+        speed: entry.speed,
+        startedAtMs:
+          turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt),
+        completedAtMs,
+        totals: {
+          uncachedInputTokens: Math.max(0, input - cachedInputTokens - cacheCreationTokens),
+          cachedInputTokens,
+          cacheCreationTokens,
+          outputTokens,
+          reasoningTokens: entry.reasoningTokens ?? 0,
+        },
+      });
+    }
   }
   return turns;
 }
