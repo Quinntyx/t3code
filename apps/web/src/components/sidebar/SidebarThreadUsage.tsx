@@ -36,7 +36,7 @@ function ThreadUsageFigures({ threadRef }: { threadRef: ScopedThreadRef }) {
       {cost !== null ? (
         <div className="flex min-w-0 items-center gap-2">
           <DollarSignIcon aria-hidden className="size-3 shrink-0 stroke-muted-foreground" />
-          <div className="text-foreground/75 tabular-nums">Usage {cost}</div>
+          <div className="text-foreground/75 tabular-nums">Consumption {cost}</div>
         </div>
       ) : null}
     </>
