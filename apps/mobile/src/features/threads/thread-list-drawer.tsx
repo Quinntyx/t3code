@@ -50,7 +50,9 @@ const ThreadDrawersContext = createContext<ReturnType<typeof useDrawers> | null>
 function useDrawers() {
   const [active, setActive] = useState<ThreadDrawerSide | null>(null);
   const activeRef = useRef<ThreadDrawerSide | null>(null);
-  const [detailsMounted, setDetailsMounted] = useState(false);
+  // Each side mounts on its first opening and stays, so a closed drawer renders nothing beside
+  // the screen it covers until it is used, and reopening keeps its scroll.
+  const [mounted, setMounted] = useState({ left: false, right: false });
   const panTagsRef = useRef<Record<string, ReadonlyArray<number>>>({});
   const blockingTagsRef = useRef<ReadonlyArray<number>>(EMPTY_TAGS);
   const left = useSharedValue(0);
@@ -67,7 +69,7 @@ function useDrawers() {
     animateTo(next);
   };
   const prepareOpen = (side: ThreadDrawerSide) => {
-    if (side === "right") setDetailsMounted(true);
+    setMounted((current) => (current[side] ? current : { ...current, [side]: true }));
   };
   // A row tap can close before its pan finalizes with an older render's state.
   const settleProgress = () => animateTo(activeRef.current);
@@ -97,7 +99,7 @@ function useDrawers() {
     active,
     left,
     right,
-    detailsMounted,
+    mounted,
     blockingTagsRef,
     registerPanTags,
     setOpen,
@@ -138,7 +140,7 @@ function useThreadDrawer(side: ThreadDrawerSide) {
   return {
     open: drawers.active === side,
     progress: drawers[side],
-    mounted: side === "left" || drawers.detailsMounted,
+    mounted: drawers.mounted[side],
     registerPanTags: drawers.registerPanTags,
     setOpen,
     prepareOpen,
