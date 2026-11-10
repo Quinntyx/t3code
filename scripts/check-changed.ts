@@ -246,7 +246,8 @@ const steps = [
       "--parallel",
       "--verbose",
       "--concurrency-limit",
-      "4",
+      // Bound compiler memory on shared CI runners.
+      process.env.CI ? "1" : "4",
       ...filters(affected),
       "typecheck",
     ],
