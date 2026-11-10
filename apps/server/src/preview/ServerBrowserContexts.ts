@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import type { Browser, BrowserContext, CDPSession } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
 
@@ -87,6 +87,7 @@ export class ServerBrowserContexts {
   private readonly clearing = new Map<string, Promise<void>>();
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
+  private relaunching: Promise<void> | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingSharedContexts = 0;
 
@@ -162,7 +163,8 @@ export class ServerBrowserContexts {
 
   private retireWhenIdle(launched: Promise<Browser>) {
     const delay = this.options.idleBrowserMs;
-    if (delay === undefined || this.closing || this.pendingSharedContexts > 0) return;
+    if (delay === undefined || this.closing || this.relaunching || this.pendingSharedContexts > 0)
+      return;
     clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => void this.retire(launched), delay);
     this.idleTimer.unref();
@@ -179,6 +181,8 @@ export class ServerBrowserContexts {
 
   contextFor(profileId: string, isolationKey?: string): Promise<BrowserContext> {
     if (this.closing) return Promise.reject(new Error("The preview browser is closed."));
+    if (this.relaunching)
+      return this.relaunching.then(() => this.contextFor(profileId, isolationKey));
     const key = JSON.stringify([profileId, isolationKey ?? null]);
     const cached = this.contexts.get(key);
     if (cached) return cached;
@@ -231,7 +235,11 @@ export class ServerBrowserContexts {
     );
   }
 
-  async scratchPage() {
+  async scratchPage(): Promise<Page> {
+    if (this.relaunching) {
+      await this.relaunching;
+      return this.scratchPage();
+    }
     if (this.closing) throw new Error("The preview browser is closed.");
     const context = await this.sharedContext();
     const page = await context.newPage();
@@ -278,17 +286,26 @@ export class ServerBrowserContexts {
   }
 
   /** Closes every browser so the next page launches with the current rendering options. */
-  async relaunch() {
-    if (this.closing) return;
+  relaunch() {
+    if (this.closing) return this.closing;
+    this.relaunching ??= this.restart().finally(() => {
+      this.relaunching = undefined;
+    });
+    return this.relaunching;
+  }
+
+  private async restart() {
+    clearTimeout(this.idleTimer);
     const contexts = [...this.contexts.values()];
-    const browser = this.browser;
     this.contexts.clear();
-    this.browser = undefined;
     await Promise.allSettled(contexts.map(async (pending) => (await pending).close()));
+    const browser = this.browser;
+    this.browser = undefined;
     await (await browser?.catch(() => undefined))?.close().catch(constVoid);
   }
 
   private async dispose() {
+    await this.relaunching;
     clearTimeout(this.idleTimer);
     await Promise.allSettled(
       [...this.contexts.values()].map(async (pending) => (await pending).close()),
