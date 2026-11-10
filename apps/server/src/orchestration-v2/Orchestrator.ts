@@ -6243,85 +6243,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       dispatchMode = { type: "queue_after_active" };
     }
-    // Codex and Claude own /goal. Everywhere else T3 Code keeps the goal on the thread and
-    // drives its turns, so its control commands are not provider input.
     const goalCommand = parseGoalCommand(command);
-    const t3GoalCommand =
-      goalCommand !== null &&
-      (yield* goalDriverFor(command, modelSelection.instanceId)) === undefined
-        ? goalCommand
-        : null;
-    if (t3GoalCommand !== null && t3GoalCommand.type !== "set") {
-      const now = yield* DateTime.now;
-      const current = projection.thread.goal ?? null;
-      const nextGoal =
-        t3GoalCommand.type === "clear" || current === null
-          ? null
-          : {
-              ...current,
-              status: t3GoalCommand.type === "pause" ? ("paused" as const) : ("active" as const),
-            };
-      // `show` changes nothing: the thread's goal line already answers it.
-      if (t3GoalCommand.type !== "show" && nextGoal?.status !== current?.status) {
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.metadata-updated",
-          threadId: command.threadId,
-          providerInstanceId: projection.thread.providerInstanceId,
-          occurredAt: now,
-          payload: { ...projection.thread, goal: nextGoal },
-        });
-        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-      }
-      const target = projection.runs.findLast(isLiveRun);
-      if (
-        target !== undefined &&
-        goalCommandStopsActiveRun(t3GoalCommand, current?.status ?? null)
-      ) {
-        yield* stopRunForGoalCommand({
-          command,
-          events,
-          effects,
-          targetRunId: target.id,
-        });
-      }
-      return;
-    }
-    if (t3GoalCommand !== null) {
-      const now = yield* DateTime.now;
-      yield* emit(
-        events,
-        command,
-      )({
-        type: "thread.metadata-updated",
-        threadId: command.threadId,
-        providerInstanceId: projection.thread.providerInstanceId,
-        occurredAt: now,
-        payload: {
-          ...projection.thread,
-          goal: { objective: t3GoalCommand.objective, status: "active" },
-        },
-      });
-      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-    }
     let goalStopRunId: RunId | undefined;
     if (goalCommand !== null) {
-      // A provider's native goal takes over from the one T3 Code was driving.
-      if (t3GoalCommand === null && projection.thread.goal != null) {
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.metadata-updated",
-          threadId: command.threadId,
-          providerInstanceId: projection.thread.providerInstanceId,
-          occurredAt: yield* DateTime.now,
-          payload: { ...projection.thread, goal: null },
-        });
-        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-      }
       // A goal command never joins a running turn. One that starts or ends goal
       // work stops the run and goes first in the queue; the rest wait. A send
       // that asked to be queued (no delivery intent) only queues, and a run
@@ -6570,6 +6494,83 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       modelSelection = queueTailModelSelection(projection);
     }
     yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
+    // Codex and Claude own /goal. Everywhere else T3 Code keeps the goal on the thread and
+    // drives its turns, so its control commands are not provider input. Ownership follows
+    // the provider the command runs on, which a pick queued ahead of it may have chosen.
+    const t3GoalCommand =
+      goalCommand !== null &&
+      (yield* goalDriverFor(command, modelSelection.instanceId)) === undefined
+        ? goalCommand
+        : null;
+    if (t3GoalCommand !== null && t3GoalCommand.type !== "set") {
+      const now = yield* DateTime.now;
+      const current = projection.thread.goal ?? null;
+      const nextGoal =
+        t3GoalCommand.type === "clear" || current === null
+          ? null
+          : {
+              ...current,
+              status: t3GoalCommand.type === "pause" ? ("paused" as const) : ("active" as const),
+            };
+      // `show` changes nothing: the thread's goal line already answers it.
+      if (t3GoalCommand.type !== "show" && nextGoal?.status !== current?.status) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: { ...projection.thread, goal: nextGoal },
+        });
+        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      }
+      const target = projection.runs.findLast(isLiveRun);
+      if (
+        target !== undefined &&
+        goalCommandStopsActiveRun(t3GoalCommand, current?.status ?? null)
+      ) {
+        yield* stopRunForGoalCommand({
+          command,
+          events,
+          effects,
+          targetRunId: target.id,
+        });
+      }
+      return;
+    }
+    if (t3GoalCommand !== null) {
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...projection.thread,
+          goal: { objective: t3GoalCommand.objective, status: "active" },
+        },
+      });
+      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    }
+    // A provider's native goal takes over from the one T3 Code was driving.
+    if (goalCommand !== null && t3GoalCommand === null && projection.thread.goal != null) {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: { ...projection.thread, goal: null },
+      });
+      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    }
     // Client messages resume held queues; server continuations and scheduled tasks do not.
     // Provider failure or usage limits re-hold the queue.
     const worktreeSetupUnresolved = worktreeSetupPending(projection);

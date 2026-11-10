@@ -482,6 +482,7 @@ const composerSelection = {
   ...runSelection,
   options: [...runSelection.options, { id: "fastMode", value: false }],
 };
+const pickedInstanceId = ProviderInstanceId.make("picked");
 
 const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (
   name: string,
@@ -490,6 +491,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   interruptTurn: Effect.Effect<void> = Effect.void,
   steeringAcceptsAttachments = true,
   driverKind: ProviderDriverKind = driver,
+  pickedDriverKind?: ProviderDriverKind,
 ) {
   const driver = driverKind;
   const cwd = yield* checkpointWorkspace(name);
@@ -609,7 +611,13 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   };
   const layer = ProviderReplayHarness.layerWithRegistry(
     { name },
-    ProviderAdapterRegistry.layerSingle(adapter),
+    ProviderAdapterRegistry.layerFromAdapters([
+      adapter,
+      // A picked provider only queues behind the first turn, so its session never opens.
+      ...(pickedDriverKind === undefined
+        ? []
+        : [{ ...adapter, instanceId: pickedInstanceId, driver: pickedDriverKind }]),
+    ]),
     { runEffectWorker: false },
   );
   const startFirstTurn = Effect.gen(function* () {
@@ -2486,6 +2494,84 @@ it.effect("clears a goal T3 Code owns without sending the command to the provide
       }).pipe(Effect.provide(layer));
     }),
   ),
+);
+
+// A goal that names no model runs on the pick queued ahead of it, so that provider owns it.
+it.effect.each([
+  {
+    name: "native to T3 Code",
+    current: "codex",
+    picked: "grok",
+    text: "/goal ship it",
+    expected: {
+      goal: { objective: "ship it", status: "active" },
+      provider: pickedInstanceId,
+      refusal: null,
+    },
+  },
+  {
+    name: "T3 Code to native",
+    current: "grok",
+    picked: "claudeAgent",
+    text: "/goal ship it",
+    expected: { goal: null, provider: pickedInstanceId, refusal: null },
+  },
+  {
+    name: "a T3 Code pause to Claude",
+    current: "grok",
+    picked: "claudeAgent",
+    text: "/goal pause",
+    expected: {
+      goal: { objective: "all tests pass", status: "active" },
+      provider: null,
+      refusal: "Claude goals cannot be paused or resumed. Send /goal clear to remove the goal.",
+    },
+  },
+] as const)(
+  "gives a goal queued behind a pick to the picked provider: $name",
+  ({ current, picked, text, expected }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `goal-behind-pick-${current}-${picked}-${text.length}`,
+          false,
+          true,
+          Effect.void,
+          true,
+          ProviderDriverKind.make(current),
+          ProviderDriverKind.make(picked),
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const threadId = yield* startFirstTurn;
+          const queue = (id: string, message: string, modelSelection?: ModelSelection) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(id),
+              threadId,
+              messageId: MessageId.make(`message:${id}`),
+              text: message,
+              attachments: [],
+              ...(modelSelection === undefined ? {} : { modelSelection }),
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+          yield* queue("current-goal", "/goal all tests pass", runSelection);
+          yield* queue("pick", "picked", { ...runSelection, instanceId: pickedInstanceId });
+          const result = yield* Effect.result(queue("goal", text));
+
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(result._tag === "Failure" ? result.failure.cause : null, expected.refusal);
+          assert.deepEqual(projection.thread.goal ?? null, expected.goal);
+          assert.equal(
+            projection.runs.find((run) => run.userMessageId === MessageId.make("message:goal"))
+              ?.providerInstanceId ?? null,
+            expected.provider,
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );
 
 it.effect("a side chat that opens with /goal gets its context on the next question", () =>
