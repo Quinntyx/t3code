@@ -1,3 +1,4 @@
+import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -16,6 +17,7 @@ import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ScratchThreadPromotion from "../project/ScratchThreadPromotion.ts";
 import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
@@ -296,6 +298,16 @@ const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
     ),
   ),
 );
+const layerScratchThreadPromotionProvided = ScratchThreadPromotion.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerProjectService,
+      layerManagedProjectFoldersProvided,
+      layerThreadManagementProvided,
+      layerScheduledTaskProvided,
+    ),
+  ),
+);
 const layerProviderContinuationWorkerProvided = ProviderContinuationService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -364,6 +376,9 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
+  WorktreeBranchSync.layer.pipe(
+    Layer.provide(Layer.merge(layerThreadManagementProvided, ProjectionStore.layer)),
+  ),
   layer.pipe(Layer.provide(layerProjectService)),
   layerProjectService,
   layerManagedProjectFoldersProvided,
@@ -379,6 +394,7 @@ export const layerProduction = Layer.mergeAll(
     ),
   ),
   layerScheduledTaskProvided,
+  layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
   layerEmailRequestsProvided,
   GuestShareService.layer.pipe(

@@ -13,7 +13,7 @@ import type {
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { videoMimeType } from "@t3tools/shared/video";
-import { Platform, Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ReviewCommentCard, useReviewCommentColors } from "../features/review/ReviewCommentCard";
 import {
@@ -22,8 +22,8 @@ import {
   type DraftComposerAttachment,
 } from "../lib/composerImages";
 import { contextImageGallery } from "../lib/contextImageGallery";
-import { FilePreviewModal } from "./FilePreviewModal";
-import { VideoPreviewModal } from "./VideoPreviewModal";
+import { FilePreviewModal } from "./ui/FilePreviewModal";
+import { VideoPreviewModal } from "./ui/VideoPreviewModal";
 import { ComposerContextAttachment } from "./ComposerContextAttachment";
 import { AppText as Text } from "./ui/AppText";
 import { Sheet } from "./ui/Sheet";
@@ -191,7 +191,7 @@ export function ComposerContextSheet(props: {
       <ScrollView
         nestedScrollEnabled
         className="flex-1"
-        contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: 12,

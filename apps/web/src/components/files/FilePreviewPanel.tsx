@@ -5,6 +5,7 @@ import {
   AuthPreviewOperateScope,
   type EditorId,
   type EnvironmentId,
+  type ProjectId,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -87,6 +88,7 @@ import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import { PreviewImage } from "./PreviewImage";
 import FileBrowserPanel from "./FileBrowserPanel";
+import { FileExplorerPane } from "./FileExplorerPane";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { breadcrumbPathOf, retainedBreadcrumbTrail, trailChildOf } from "./filePath";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
@@ -116,10 +118,10 @@ import {
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
   resolveFilePreviewPath,
-  setMarkdownTaskChecked,
   shouldShowFileExplorer,
   workspaceAssetResource,
 } from "./filePreviewMode";
+import { setMarkdownTaskChecked } from "@t3tools/shared/markdownTaskList";
 import { changeFileSaveSession, useFileSaveSession } from "./fileSaveSessions";
 import { revisionedQuery } from "~/state/revisionedQuery";
 import {
@@ -136,6 +138,7 @@ interface FilePreviewPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
+  projectId?: ProjectId | undefined;
   relativePath: string | null;
   attachment?: ChatFileAttachment;
   threadRef: ScopedThreadRef;
@@ -298,7 +301,7 @@ function WorkspaceModelPreview(props: {
   );
 }
 
-function WorkspaceBrowserPreview(props: {
+export function WorkspaceBrowserPreview(props: {
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef;
   readonly draft: boolean;
@@ -307,18 +310,25 @@ function WorkspaceBrowserPreview(props: {
   readonly title: string;
   readonly workspaceMutationId: string | null;
 }) {
+  const pdf = isPdfPreviewFile(props.absolutePath);
   const resource = workspaceAssetResource({
-    kind: "workspace-file",
+    kind: pdf ? "media-file" : "workspace-file",
     threadRef: props.threadRef,
     draft: props.draft,
     workspaceRoot: props.workspaceRoot,
     absolutePath: props.absolutePath,
   });
-  const assetUrl = useAssetUrlState(props.environmentId, resource);
+  const assetUrl = useAssetUrlState(
+    props.environmentId,
+    resource,
+    pdf ? props.workspaceMutationId : undefined,
+  );
+  const fileRevision = pdf && assetUrl._tag === "Success" ? assetUrl.fileRevision : undefined;
+  const revision = fileRevision ?? props.workspaceMutationId;
   const revisionSuffix =
-    props.workspaceMutationId === null
+    revision === null
       ? ""
-      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
+      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}${fileRevision !== undefined ? "file" : "workspace"}-revision=${encodeURIComponent(revision)}`;
 
   if (assetUrl._tag === "Failure") {
     return (
@@ -327,7 +337,10 @@ function WorkspaceBrowserPreview(props: {
       </div>
     );
   }
-  if (assetUrl._tag !== "Success") {
+  if (
+    assetUrl._tag !== "Success" ||
+    (pdf && assetUrl.fileRevision === undefined && assetUrl.waiting)
+  ) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
         <Spinner size="lg" />
@@ -337,9 +350,10 @@ function WorkspaceBrowserPreview(props: {
   return (
     <BrowserDocumentFrame
       src={`${assetUrl.url}${revisionSuffix}`}
-      documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${props.workspaceMutationId}`}
+      documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${revision}`}
+      documentId={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}`}
       title={props.title}
-      pdf={isPdfPreviewFile(props.absolutePath)}
+      pdf={pdf}
     />
   );
 }
@@ -387,6 +401,7 @@ function WorkspaceVideoPreview(props: {
         revision={revision}
         preload="metadata"
         className="flex h-full min-h-0 w-full max-w-5xl items-center justify-center"
+        videoClassName="aspect-auto max-h-full w-auto max-w-full"
         onRetry={refreshAssetUrl}
         actionsSource={{
           kind: "video",
@@ -714,6 +729,7 @@ function useEditableAfterHighlight(file: FileContents) {
 
 interface EditableFileSurfaceProps {
   environmentId: EnvironmentId;
+  projectId?: ProjectId | undefined;
   cwd: string;
   relativePath: string;
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -732,6 +748,7 @@ interface FileSelectionOverride {
 
 function EditableFileSurface({
   environmentId,
+  projectId,
   cwd,
   relativePath,
   composerDraftTarget,
@@ -961,6 +978,14 @@ function EditableFileSurface({
                 {annotation.metadata.entries.map((entry) => (
                   <DiffCommentAnnotation
                     key={entry.id}
+                    environmentId={environmentId}
+                    projectId={projectId}
+                    ownerKey={JSON.stringify([
+                      environmentId,
+                      composerDraftTarget,
+                      relativePath,
+                      entry.id,
+                    ])}
                     kind={entry.kind}
                     rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine)}
                     text={entry.text}
@@ -1053,6 +1078,7 @@ export default function FilePreviewPanel({
   environmentId,
   cwd,
   projectName,
+  projectId,
   relativePath: requestedPath,
   attachment,
   threadRef,
@@ -1564,7 +1590,7 @@ export default function FilePreviewPanel({
                 threadRef={threadRef}
                 contents={file.data.contents}
                 workspaceMutationId={workspaceMutationId}
-                readOnly={isHostFile || !canWriteFiles}
+                readOnly={file.data.truncated || isHostFile || !canWriteFiles}
                 onPendingChange={onPendingChange}
               />
             ) : tableDelimiter && renderTable ? (
@@ -1587,6 +1613,7 @@ export default function FilePreviewPanel({
                 <EditableFileSurface
                   key={`${relativePath}:${resolvedTheme}`}
                   environmentId={environmentId}
+                  projectId={projectId}
                   cwd={cwd}
                   relativePath={relativePath}
                   composerDraftTarget={composerDraftTarget}
@@ -1602,14 +1629,7 @@ export default function FilePreviewPanel({
           ) : null}
         </div>
         {showExplorer ? (
-          <aside
-            className={cn(
-              "flex min-h-0 shrink-0 bg-background",
-              previewPath
-                ? "w-[min(22rem,46%)] min-w-64 border-l border-border/60"
-                : "min-w-0 flex-1",
-            )}
-          >
+          <FileExplorerPane resizable={Boolean(previewPath)}>
             <FileBrowserPanel
               key={`${environmentId}:${hostFolderPath ?? cwd}`}
               environmentId={environmentId}
@@ -1633,7 +1653,7 @@ export default function FilePreviewPanel({
                   }
                 : {})}
             />
-          </aside>
+          </FileExplorerPane>
         ) : null}
       </div>
     </div>

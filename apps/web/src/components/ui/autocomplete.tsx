@@ -107,7 +107,8 @@ function AutocompletePopup({
           )}
         >
           <AutocompletePrimitive.Popup
-            className="flex min-w-0 max-h-[min(var(--available-height),23rem)] flex-1 flex-col overflow-hidden rounded-[calc(var(--radius-glass)-1px)] text-foreground"
+            // Electron drag hit-testing ignores z-index; items over a drag region would swallow clicks.
+            className="flex min-w-0 max-h-[min(var(--available-height),23rem)] flex-1 flex-col overflow-hidden rounded-[calc(var(--radius-glass)-1px)] text-foreground [-webkit-app-region:no-drag]"
             data-slot="autocomplete-popup"
             {...props}
           >

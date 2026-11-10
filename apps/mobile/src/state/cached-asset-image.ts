@@ -23,7 +23,7 @@ function fileUri(path: string): string {
 
 /**
  * The URI to show for an asset image. Until its signed URL is minted, an image whose bytes
- * cannot change (attachments, tool output) shows from the disk cache when it is there.
+ * cannot change (attachments, immutable host media) shows from the disk cache when it is there.
  */
 export function useCachedAssetImageUri(
   environmentId: EnvironmentId | null,

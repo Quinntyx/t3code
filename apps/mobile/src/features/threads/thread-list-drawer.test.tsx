@@ -20,7 +20,6 @@ const harness = vi.hoisted(() => ({
   pans: [] as PanHandlers[],
   nextPanTag: 1000,
   split: false,
-  keyboard: false,
   dismissKeyboard: vi.fn(() => Promise.resolve()),
   back: undefined as (() => boolean) | undefined,
 }));
@@ -121,7 +120,6 @@ vi.mock("../../lib/backHandler", () => ({
 vi.mock("../layout/adaptive-workspace-context", () => ({
   useAdaptiveWorkspaceLayout: () => ({
     layout: { usesSplitView: harness.split, listPaneWidth: null },
-    composerKeyboardActive: harness.keyboard,
   }),
 }));
 
@@ -159,7 +157,6 @@ function setup() {
   harness.pans = [];
   harness.nextPanTag = 1000;
   harness.split = false;
-  harness.keyboard = false;
   harness.back = undefined;
   harness.dismissKeyboard.mockClear();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -274,14 +271,6 @@ describe("thread list drawer", () => {
     expect(screen.drawers().left.open).toBe(true);
     expect(screen.drawers().right.open).toBe(false);
     expect(harness.timingTargets.slice(animationsBeforeCancel)).toEqual([0]);
-  });
-
-  it("disables feed opening gestures while the composer owns the keyboard", () => {
-    using screen = setup();
-    expect(harness.pans.at(-1)?.enabled).toBe(true);
-    harness.keyboard = true;
-    act(screen.render);
-    expect(harness.pans.at(-1)?.enabled).toBe(false);
   });
 
   it("hands markdown the drawer pans' tags so over-wide blocks can win their drags", () => {

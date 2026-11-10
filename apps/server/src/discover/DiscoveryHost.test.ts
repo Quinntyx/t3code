@@ -94,7 +94,7 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallB
         ServerConfig.layerTest(process.cwd(), { prefix: "t3-discovery-host-" }).pipe(
           Layer.provide(NodeServices.layer),
         ),
-        Layer.succeed(DirectEndpoints.DirectEndpoints, {
+        Layer.mock(DirectEndpoints.DirectEndpoints)({
           resolve: () => Effect.succeed([{ kind: "lan", httpBaseUrl: address }]),
         }),
         Layer.mock(ServerEnvironment.ServerEnvironment)({

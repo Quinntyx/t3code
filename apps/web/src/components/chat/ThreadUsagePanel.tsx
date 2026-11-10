@@ -397,8 +397,8 @@ export function ThreadUsagePanel(props: {
 
   return (
     <ThreadDetailsSection
-      headingId="thread-details-usage-heading"
-      title="Usage"
+      headingId="thread-details-consumption-heading"
+      title="Consumption"
       showHeading={false}
       onContextMenu={handleContextMenu}
     >

@@ -12,7 +12,6 @@ import { cn } from "~/lib/utils";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Skeleton } from "../ui/skeleton";
 import {
   Menu,
   MenuItem,
@@ -192,7 +191,7 @@ export function PullRequestResolveConflictsButton({
 export function PullRequestPrimaryAction({
   pullRequestKey,
   primaryAction,
-  awaitingStack,
+  mergeBlockedReason,
   autoMergeArmed,
   armedAutoMergeLabel,
   pendingAutoMergeLabel,
@@ -205,8 +204,7 @@ export function PullRequestPrimaryAction({
 }: {
   pullRequestKey: string;
   primaryAction: ReturnType<typeof resolvePullRequestPrimaryControl> | null;
-  /** The merge control waits on stack membership, so it shows as a placeholder of its size. */
-  awaitingStack: boolean;
+  mergeBlockedReason: string | null;
   autoMergeArmed: boolean;
   armedAutoMergeLabel: string;
   pendingAutoMergeLabel: string;
@@ -236,23 +234,7 @@ export function PullRequestPrimaryAction({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      {awaitingStack && (primaryAction === "merge" || primaryAction === "enable-auto-merge") ? (
-        <span
-          role="status"
-          aria-label="Checking merge options"
-          className="relative inline-flex shrink-0"
-        >
-          <span aria-hidden className="invisible inline-flex">
-            <Button size="xs" variant="default" disabled tabIndex={-1}>
-              <PullRequestGlyph.merged className="size-3.5" />
-              <span className="@max-[30rem]/pr-header:hidden">
-                {primaryAction === "merge" ? selectedMergeMethodLabel : pendingAutoMergeLabel}
-              </span>
-            </Button>
-          </span>
-          <Skeleton aria-hidden className="absolute inset-0" />
-        </span>
-      ) : primaryAction === "resolve" ? (
+      {primaryAction === "resolve" ? (
         resolveConflicts
       ) : primaryAction === "ready" ? (
         <Tooltip>
@@ -283,10 +265,14 @@ export function PullRequestPrimaryAction({
                   size="xs"
                   variant="default"
                   disabled={actionPending}
-                  {...inlineConfirm.props(
-                    "enable-auto-merge",
-                    () => void perform("enable-auto-merge", selectedMergeMethod),
-                  )}
+                  aria-disabled={mergeBlockedReason !== null || undefined}
+                  aria-description={mergeBlockedReason ?? undefined}
+                  {...(mergeBlockedReason === null
+                    ? inlineConfirm.props(
+                        "enable-auto-merge",
+                        () => void perform("enable-auto-merge", selectedMergeMethod),
+                      )
+                    : {})}
                   aria-label={
                     pendingAction === "enable-auto-merge"
                       ? "Enabling..."
@@ -319,11 +305,12 @@ export function PullRequestPrimaryAction({
             }
           />
           <TooltipPopup side="top">
-            {pendingAction === "enable-auto-merge"
-              ? "Enabling..."
-              : inlineConfirm.isArmed("enable-auto-merge")
-                ? "Confirm auto-merge?"
-                : pendingAutoMergeLabel}
+            {mergeBlockedReason ??
+              (pendingAction === "enable-auto-merge"
+                ? "Enabling..."
+                : inlineConfirm.isArmed("enable-auto-merge")
+                  ? "Confirm auto-merge?"
+                  : pendingAutoMergeLabel)}
           </TooltipPopup>
         </Tooltip>
       ) : primaryAction === "auto-merge-armed" ? (
@@ -349,10 +336,11 @@ export function PullRequestPrimaryAction({
                   size="xs"
                   variant="default"
                   disabled={actionPending}
-                  {...inlineConfirm.props(
-                    "merge",
-                    () => void perform("merge", selectedMergeMethod),
-                  )}
+                  aria-disabled={mergeBlockedReason !== null || undefined}
+                  aria-description={mergeBlockedReason ?? undefined}
+                  {...(mergeBlockedReason === null
+                    ? inlineConfirm.props("merge", () => void perform("merge", selectedMergeMethod))
+                    : {})}
                   aria-label={
                     pendingAction === "merge"
                       ? "Merging..."
@@ -385,11 +373,12 @@ export function PullRequestPrimaryAction({
             }
           />
           <TooltipPopup side="top">
-            {pendingAction === "merge"
-              ? "Merging..."
-              : inlineConfirm.isArmed("merge")
-                ? "Confirm merge?"
-                : selectedMergeMethodLabel}
+            {mergeBlockedReason ??
+              (pendingAction === "merge"
+                ? "Merging..."
+                : inlineConfirm.isArmed("merge")
+                  ? "Confirm merge?"
+                  : selectedMergeMethodLabel)}
           </TooltipPopup>
         </Tooltip>
       ) : (primaryAction === "merged" || primaryAction === "closed") &&

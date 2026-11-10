@@ -1,3 +1,4 @@
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   SOURCE_CONTROL_MEDIA_ASSET,
   type AssetResource,
@@ -6,8 +7,9 @@ import {
 import type { ImageSource } from "expo-image";
 
 /**
- * Signed URLs change on each mint and reconnect, so the disk cache keys bytes by what
- * they are: immutable attachments and tool images by id, files by their revision.
+ * Signed URLs change on each mint and reconnect, so a URL-keyed cache misses every time.
+ * Content that cannot change caches under its identity, and host files under the revision the
+ * server read. Anything else stays keyed by URL.
  */
 export function assetImageCacheKey(
   environmentId: EnvironmentId,
@@ -17,16 +19,24 @@ export function assetImageCacheKey(
   switch (resource._tag) {
     case "attachment":
       return `t3-attachment:${JSON.stringify([environmentId, resource.attachmentId])}`;
-    // Host media URLs name immutable uploads; the signed proxy URL around them does not.
-    case SOURCE_CONTROL_MEDIA_ASSET:
-      return `t3-host-media:${JSON.stringify([environmentId, resource.url])}`;
-    case "tool-output-image":
-      return `t3-tool-output:${JSON.stringify([environmentId, resource.threadId, resource.itemId, resource.index])}`;
+    case SOURCE_CONTROL_MEDIA_ASSET: {
+      const media = sourceControlClients.mediaUrl(resource.url);
+      return media?.immutable
+        ? `t3-media:${JSON.stringify([environmentId, media.fetchUrl])}`
+        : undefined;
+    }
     case "media-file":
     case "workspace-file":
+    case "draft-workspace-file":
       return fileRevision === undefined
         ? undefined
-        : `t3-file:${JSON.stringify([environmentId, resource.threadId, resource.path, fileRevision])}`;
+        : `t3-file:${JSON.stringify([
+            environmentId,
+            resource._tag === "draft-workspace-file" ? resource.cwd : resource.threadId,
+            resource.path,
+            fileRevision,
+          ])}`;
+    // A tool can replace the image at its index, and nothing cheap identifies its bytes.
     default:
       return undefined;
   }

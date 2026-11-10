@@ -10,8 +10,6 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -26,7 +24,6 @@ export function DraftThreadHeader(props: {
   readonly cwd: string | null;
 }) {
   const navigation = useNavigation();
-  const { themeVariables } = useAppearancePreferences();
   const environmentId = props.thread.environmentId;
   const runtime = useRemoteEnvironmentRuntime(environmentId);
   const canReadFiles = useEnvironmentScope(environmentId, AuthFilesystemReadScope);
@@ -58,13 +55,8 @@ export function DraftThreadHeader(props: {
       project={props.project}
       cwd={props.cwd}
       worktreePath={props.thread.worktreePath}
-      headerColor={themeVariables["--color-header"]}
-      usesNativeHeaderGlass={NATIVE_LIQUID_GLASS_SUPPORTED}
-      fileInspectorSupported={false}
       inspectorMode={null}
-      onToggleInspector={openFiles}
       onOpenFilesInspector={openFiles}
-      onOpenGitInspector={requiresThread}
       gitControls={{
         environmentId,
         threadId: props.thread.id,
@@ -95,7 +87,11 @@ export function DraftThreadHeader(props: {
         },
         onRunAction: async (input) => {
           if (!canWriteGit || !props.cwd) return null;
-          const result = await runAction({ ...input, actionId: uuidv4() });
+          const result = await runAction({
+            ...input,
+            projectId: props.project.id,
+            actionId: uuidv4(),
+          });
           if (AsyncResult.isFailure(result)) {
             Dialog.alert("Git action failed", String(Cause.squash(result.cause)));
             return null;

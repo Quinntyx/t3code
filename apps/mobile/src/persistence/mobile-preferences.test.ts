@@ -14,7 +14,7 @@ function fixture(payload?: unknown) {
   let stored: MobileDatabase.StoredPreferencesJson | undefined =
     payload === undefined ? undefined : { payload: JSON.stringify(payload), updatedAt: 1 };
   const database = MobileDatabase.MobileDatabase.of({
-    loadCache: () => Effect.succeed(Option.none()),
+    loadCache: () => Effect.succeedNone,
     listCache: () => Effect.succeed([]),
     saveCache: () => Effect.void,
     removeCache: () => Effect.void,
@@ -33,9 +33,7 @@ function fixture(payload?: unknown) {
     setItem: () => Effect.void,
     removeItem: () => Effect.void,
   });
-  return Effect.gen(function* () {
-    return yield* MobilePreferences.MobilePreferencesStore;
-  }).pipe(
+  return Effect.service(MobilePreferences.MobilePreferencesStore).pipe(
     Effect.provide(
       MobilePreferences.layer.pipe(
         Layer.provide(Layer.succeed(MobileDatabase.MobileDatabase, database)),

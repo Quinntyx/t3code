@@ -35,7 +35,7 @@ export function ThreadNotebookSheet({ route }: StaticScreenProps<NotebookTarget>
   const active = useSyncExternalStore(subscribeAppState, appActive, () => false);
   return (
     <View className="flex-1 bg-sheet">
-      <SheetHeader title="Notebook" onClose={() => navigation.goBack()} presentation="inline" />
+      <SheetHeader title="Notebook" onClose={() => navigation.goBack()} />
       <NotebookContent
         key={scopedThreadKey(route.params)}
         target={route.params}

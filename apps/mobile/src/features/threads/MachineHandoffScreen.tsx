@@ -20,7 +20,7 @@ import {
 import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
 import { AsyncResult } from "effect/reactivity";
 import { use, useRef, useState, type ReactNode } from "react";
-import { Alert, View, type ColorValue } from "react-native";
+import { Alert, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
@@ -32,6 +32,7 @@ import {
   applyProviderOptionSelection,
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { uuidv4 } from "../../lib/uuid";
 import { useEnvironments } from "../../state/environments";
 import {
@@ -49,7 +50,7 @@ import { sourceControlEnvironment } from "../../state/sourceControl";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AddProjectDestinationScreen } from "../projects/AddProjectScreen";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { ChoiceRow } from "./ThreadSettingsRows";
 import { ThreadHandoffDivider } from "./thread-handoff-row";
 import { selectableChoices } from "./thread-settings-options";
@@ -68,9 +69,8 @@ function Section(props: { readonly title: string; readonly children: ReactNode }
 export function MachineHandoffScreen(props: {
   readonly sourceRef: ScopedThreadRef;
   readonly modelSelection: ModelSelection;
-  readonly iconColor: ColorValue;
-  readonly surfaceColor: string;
 }) {
+  const theme = useUniwindTheme();
   const registry = use(RegistryContext);
   const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(props.sourceRef);
@@ -553,15 +553,15 @@ export function MachineHandoffScreen(props: {
           <ThreadHandoffDivider
             environmentId={props.sourceRef.environmentId}
             endpoints={{ from: [], to: props.modelSelection }}
-            iconColor={props.iconColor}
-            surfaceColor={props.surfaceColor}
+            iconColor={theme["--color-foreground-muted"]}
+            surfaceColor={theme["--color-grouped-card"]}
             label={`From ${source?.label ?? "source machine"}`}
           />
           <ThreadHandoffDivider
             environmentId={target.environmentId}
             endpoints={{ from: [], to: selection }}
-            iconColor={props.iconColor}
-            surfaceColor={props.surfaceColor}
+            iconColor={theme["--color-foreground-muted"]}
+            surfaceColor={theme["--color-grouped-card"]}
             label={`To ${target.label}`}
           />
         </View>

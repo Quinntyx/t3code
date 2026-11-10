@@ -1,8 +1,9 @@
-import type {
-  EnvironmentId,
-  EnvironmentMachineKind,
-  ScopedThreadRef,
-  ThreadId,
+import {
+  isListedThreadLineage,
+  type EnvironmentId,
+  type EnvironmentMachineKind,
+  type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 
@@ -39,7 +40,7 @@ interface ComposerThreadMatchInput {
 
 /**
  * The agent reads threads on its own server and on the machines it links to, so
- * candidates stay within those. Subagent threads are left out.
+ * candidates stay within those. Subagent and side chat threads are left out.
  */
 function mentionableThreads(input: ComposerThreadMatchInput) {
   return input.shells.filter(
@@ -48,7 +49,7 @@ function mentionableThreads(input: ComposerThreadMatchInput) {
         input.linkedEnvironments.has(shell.environmentId)) &&
       shell.id !== input.excludeThreadId &&
       shell.archivedAt === null &&
-      shell.lineage.relationshipToParent !== "subagent",
+      isListedThreadLineage(shell.lineage),
   );
 }
 

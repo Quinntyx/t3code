@@ -1,12 +1,10 @@
 import { createContext, useContext, useState } from "react";
-import { pullRequestMediaSource, pullRequestImageSource } from "./pullRequestMediaSource";
-import { useFilePreviewGallery } from "../../components/FilePreviewGallery";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
-  SOURCE_CONTROL_MEDIA_ASSET,
-  type AssetResource,
-  type EnvironmentId,
-} from "@t3tools/contracts";
+  pullRequestMediaSource,
+  pullRequestImageSource,
+  type PullRequestMediaLocation,
+} from "./pullRequestMediaSource";
+import { useFilePreviewGallery } from "../../components/ui/FilePreviewGallery";
 import { videoMimeType } from "@t3tools/shared/video";
 import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
@@ -16,41 +14,35 @@ import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
 import { VideoAttachmentTile } from "../../components/VideoAttachmentTile";
-import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
+import { VideoPreviewModal, type VideoPreviewSource } from "../../components/ui/VideoPreviewModal";
 import { ThreadMarkdownImageView } from "../threads/ThreadMarkdownImage";
 import {
   FilePreviewModal,
   type FilePreviewSource,
   type FilePreviewItem,
-} from "../../components/FilePreviewModal";
+} from "../../components/ui/FilePreviewModal";
 
 export const PullRequestMediaVisibleContext = createContext(true);
 
-export const PullRequestMediaContext = createContext<{
-  readonly environmentId: EnvironmentId;
-  readonly cwd: string;
-} | null>(null);
+export const PullRequestMediaContext = createContext<PullRequestMediaLocation | null>(null);
 
 export function usePullRequestMediaUrl(url: string) {
   const context = useContext(PullRequestMediaContext);
-  const fetchUrl = sourceControlClients.mediaUrl(url)?.fetchUrl;
-  const resource: AssetResource | null =
-    context && fetchUrl
-      ? { _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd: context.cwd, url: fetchUrl }
-      : null;
+  const source = pullRequestMediaSource(url, context);
+  const resource = "resource" in source ? (source.resource ?? null) : null;
   const environmentId = context?.environmentId ?? null;
   const asset = useAssetUrlState(environmentId, resource);
   const refresh = useRefreshAssetUrl(environmentId, resource);
-  const signedUri = asset._tag === "Success" ? asset.url : resource ? null : url;
-  const uri = useCachedAssetImageUri(environmentId, resource, signedUri);
+  const uri = useCachedAssetImageUri(
+    environmentId,
+    resource,
+    asset._tag === "Success" ? asset.url : resource ? null : url,
+  );
   return {
     uri,
-    cacheKey:
-      environmentId === null || resource === null
-        ? undefined
-        : assetImageCacheKey(environmentId, resource),
+    cacheKey: context && resource ? assetImageCacheKey(context.environmentId, resource) : undefined,
     unavailable: resource !== null && asset._tag === "Failure" && uri === null,
-    source: pullRequestMediaSource(url, context),
+    source,
     resolvePlaybackUri: resource ? async () => (await refresh()) ?? null : undefined,
   };
 }
@@ -73,8 +65,8 @@ export function PullRequestMedia(props: {
       <>
         <ThreadMarkdownImageView
           uri={media.uri}
-          cacheKey={media.cacheKey}
           sourceKey={props.url}
+          cacheKey={media.cacheKey}
           unavailable={media.unavailable}
           alt={name}
           onPressPreview={(source) =>
@@ -144,13 +136,7 @@ export function PullRequestImageAttachment(props: {
       >
         <View className="overflow-hidden rounded-2xl border border-border-subtle bg-grouped-card">
           <Image
-            source={
-              media.uri === null
-                ? null
-                : media.cacheKey === undefined
-                  ? { uri: media.uri }
-                  : { uri: media.uri, cacheKey: media.cacheKey }
-            }
+            source={media.uri ? { uri: media.uri, cacheKey: media.cacheKey } : null}
             style={{ width: 174, height: 112 }}
             contentFit="contain"
             cachePolicy="memory-disk"

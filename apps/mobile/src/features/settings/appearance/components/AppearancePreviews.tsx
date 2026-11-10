@@ -1,4 +1,4 @@
-import { ScrollView, type StyleProp, type TextStyle, View } from "react-native";
+import { Platform, ScrollView, type StyleProp, type TextStyle, View } from "react-native";
 
 import { AppText as Text } from "../../../../components/ui/AppText";
 import {
@@ -41,7 +41,7 @@ export function TerminalAppearancePreview(props: {
   const theme = getMobileTerminalTheme(themeId, scheme);
   const lineHeight = Math.round(props.fontSize * 1.6);
   const lineStyle = {
-    fontFamily: props.fontFamily ?? "Menlo",
+    fontFamily: props.fontFamily ?? (Platform.OS === "android" ? "monospace" : "Menlo"),
     fontSize: props.fontSize,
     lineHeight,
   } as const;

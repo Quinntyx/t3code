@@ -41,6 +41,7 @@ import {
 import { AmbientShimmer } from "./AmbientShimmer";
 import { FloatingControlBubble } from "./FloatingControlBubble";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
+import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
 import ThreadSidebar from "./Sidebar";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
@@ -314,7 +315,7 @@ function registerAppShellCommands(router: AnyRouter, shellElement: Element): () 
   };
 }
 
-function SidebarControl() {
+function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
   const router = useRouter();
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -324,13 +325,15 @@ function SidebarControl() {
   const floatingPanels = useClientSettings((settings) => settings.floatingPanelsEnabled);
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
   // Floating panels turn the toggle into a bottom-corner bubble that follows the card's edge.
-  const floatingBubble = floatingPanels && !isMobile;
+  const floatingBubble = floatingPanels && !isMobile && showSidebar;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
     context: { usagePageOpen },
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window keydown listener that toggles the sidebar on its shortcut
   useEffect(() => {
+    // A hidden sidebar would still save the toggle, so the shortcut does nothing without one.
+    if (!showSidebar) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (
@@ -367,7 +370,7 @@ function SidebarControl() {
       window.removeEventListener("keydown", onKeyDown, true);
       unsubscribe?.();
     };
-  }, [keybindings, toggleSidebar, usagePageOpen]);
+  }, [keybindings, showSidebar, toggleSidebar, usagePageOpen]);
 
   // The control lives as long as the shell, so it carries the shell's commands. Created
   // once so re-renders never re-register them.
@@ -412,12 +415,24 @@ function SidebarControl() {
       data-sidebar-control=""
       data-floating-dock-bubble={floatingBubble ? "" : undefined}
     >
-      {floatingBubble ? <FloatingControlBubble>{trigger}</FloatingControlBubble> : trigger}
+      {showSidebar ? (
+        floatingBubble ? (
+          <FloatingControlBubble>{trigger}</FloatingControlBubble>
+        ) : (
+          trigger
+        )
+      ) : null}
     </div>
   );
 }
 
-export function AppSidebarLayout({ children }: { children: ReactNode }) {
+export function AppSidebarLayout({
+  children,
+  showSidebar = true,
+}: {
+  children: ReactNode;
+  showSidebar?: boolean;
+}) {
   const sidebarArea = workspaceAreaProps("sidebar", 0, "Threads");
   const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
     observedKey: null,
@@ -472,36 +487,41 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <SidebarProvider
         className="h-dvh! min-h-0!"
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
-        defaultOpen
+        storageKey="chat_thread_sidebar_open"
         style={sidebarProviderStyle}
       >
         <AmbientShimmer />
-        <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
-        <Sidebar
-          side="left"
-          variant={floatingPanels ? "floating" : "sidebar"}
-          collapsible="offcanvas"
-          data-app-sidebar=""
-          {...sidebarArea}
-          role="navigation"
-          aria-label="Threads"
-          resizable={{
-            maxWidth: sidebarMaximumWidth,
-            minWidth: sidebarMinimumWidth,
-            shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-              nextWidth <= currentWidth ||
-              wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-            storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-            onResize: setSidebarWidth,
-          }}
-          style={windowControlsInsetStyle}
-        >
-          <ThreadSidebar routeReveal={sidebarRouteReveal} />
-          <SidebarRail onDoubleClick={resetSidebarWidth} />
-        </Sidebar>
+        {showSidebar ? (
+          <>
+            <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
+            <Sidebar
+              side="left"
+              variant={floatingPanels ? "floating" : "sidebar"}
+              collapsible="offcanvas"
+              data-app-sidebar=""
+              {...sidebarArea}
+              role="navigation"
+              aria-label="Threads"
+              resizable={{
+                maxWidth: sidebarMaximumWidth,
+                minWidth: sidebarMinimumWidth,
+                shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                  nextWidth <= currentWidth ||
+                  wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+                storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+                onResize: setSidebarWidth,
+              }}
+              style={windowControlsInsetStyle}
+            >
+              <ThreadSidebar routeReveal={sidebarRouteReveal} />
+              <SidebarRail onDoubleClick={resetSidebarWidth} />
+            </Sidebar>
+          </>
+        ) : null}
         {children}
         <BackgroundThreadAnnouncer />
-        <SidebarControl />
+        <SidebarControl showSidebar={showSidebar} />
+        {isElectron ? <HistorySwipeNavigation /> : null}
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );

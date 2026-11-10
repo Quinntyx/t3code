@@ -33,7 +33,7 @@ import {
 } from "../../state/use-remote-environment-registry";
 import { LinkedPullRequestRow, linkedPullRequestKey } from "./LinkedPullRequestList";
 import { ThreadProjectActions } from "./ThreadProjectActions";
-import type { ThreadGitControls } from "./ThreadGitControls";
+import type { ThreadGitControlsProps } from "./ThreadGitControls";
 import {
   ThreadListDrawerHost,
   threadListDrawerWidth,
@@ -47,7 +47,7 @@ export function ThreadDetailsDrawer(props: {
   readonly project: EnvironmentProject | null;
   readonly cwd: string | null;
   readonly worktreePath: string | null;
-  readonly gitControls: Parameters<typeof ThreadGitControls>[0];
+  readonly gitControls: ThreadGitControlsProps;
   readonly onCloseThread: () => void;
   readonly onReturnToThread?: (() => void) | undefined;
 }) {

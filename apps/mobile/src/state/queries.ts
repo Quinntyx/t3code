@@ -31,7 +31,7 @@ import * as Cause from "effect/Cause";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import { orchestrationEnvironment } from "./orchestration";
@@ -287,15 +287,11 @@ export function useBranches(input: {
 
 export function usePaginatedBranches(target: VcsRefTarget) {
   const query = target.query?.trim() ?? "";
+  const remoteName = target.remoteName ?? null;
+  const remoteRefsOnly = target.remoteRefsOnly === true;
   const targetKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([
-          target.environmentId,
-          target.cwd,
-          query,
-          target.remoteName ?? null,
-          target.remoteRefsOnly === true,
-        ])
+      ? JSON.stringify([target.environmentId, target.cwd, query, remoteName, remoteRefsOnly])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
@@ -305,23 +301,30 @@ export function usePaginatedBranches(target: VcsRefTarget) {
     cursors: INITIAL_BRANCH_CURSORS,
   });
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_BRANCH_CURSORS;
-  const pageAtoms =
-    target.environmentId !== null && target.cwd !== null
-      ? cursors.map((cursor) =>
-          vcsEnvironment.listRefs({
-            environmentId: target.environmentId!,
-            input: {
-              cwd: target.cwd!,
-              ...(query.length > 0 ? { query } : {}),
-              ...vcsRefTargetListInput(target),
-              ...(cursor === undefined ? {} : { cursor }),
-              limit: VCS_REF_LIST_LIMIT,
-            },
-          }),
-        )
-      : [];
-  const pagesAtom = Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
-    Atom.withLabel(`mobile:vcs-ref-pages:${targetKey ?? "empty"}`),
+  const pageAtoms = useMemo(
+    () =>
+      target.environmentId !== null && target.cwd !== null
+        ? cursors.map((cursor) =>
+            vcsEnvironment.listRefs({
+              environmentId: target.environmentId!,
+              input: {
+                cwd: target.cwd!,
+                ...(query.length > 0 ? { query } : {}),
+                ...vcsRefTargetListInput({ remoteName, remoteRefsOnly }),
+                ...(cursor === undefined ? {} : { cursor }),
+                limit: VCS_REF_LIST_LIMIT,
+              },
+            }),
+          )
+        : [],
+    [target.environmentId, target.cwd, query, remoteName, remoteRefsOnly, cursors],
+  );
+  const pagesAtom = useMemo(
+    () =>
+      Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
+        Atom.withLabel(`mobile:vcs-ref-pages:${targetKey ?? "empty"}`),
+      ),
+    [pageAtoms, targetKey],
   );
   const results = useAtomValue(pagesAtom);
   const values = results.flatMap((result) => {
@@ -418,7 +421,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
           environmentId: debouncedTarget.environmentId,
           input: {
             cwd: debouncedTarget.cwd,
-            query: debouncedTarget.query,
+            query: debouncedTarget.query.slice(0, 256).replace(/[\uD800-\uDBFF]$/, ""),
             limit: COMPOSER_PATH_SEARCH_LIMIT,
           },
         }

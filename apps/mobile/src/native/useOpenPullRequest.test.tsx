@@ -6,7 +6,7 @@ import {
   selectWorkspaceDetail,
   workspaceDetailRouter,
   type WorkspaceDetail,
-} from "../features/workspace/workspace-detail-selection";
+} from "../features/layout/workspace/workspace-detail-selection";
 
 const harness = vi.hoisted(() => ({
   os: "android",
@@ -31,12 +31,15 @@ vi.mock("@react-navigation/native", async () => {
     useNavigation: () => harness.navigation,
   };
 });
-vi.mock("../features/workspace/useSelectWorkspaceDetail", () => ({
+vi.mock("../features/layout/workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => harness.select,
 }));
 vi.mock("../state/entities", () => ({ useProjects: () => [], useThreadShell: () => null }));
 vi.mock("../state/atom-registry", () => ({ appAtomRegistry: { get: () => new Map() } }));
 vi.mock("../state/server", () => ({ environmentServerConfigsAtom: {} }));
+vi.mock("../state/use-thread-pr", () => ({
+  withKnownPullRequestSummary: <Params,>(params: Params) => params,
+}));
 vi.mock("../lib/openExternalUrl", () => ({ tryOpenExternalUrl: () => Promise.resolve(false) }));
 vi.mock("../lib/pullRequestNavigation", () => ({
   nativePullRequestDestination: () => ({

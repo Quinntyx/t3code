@@ -2,7 +2,7 @@
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { PiSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -49,6 +49,7 @@ const DRIVER_KIND = ProviderDriverKind.make("pi");
 const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@earendil-works/pi-coding-agent",
+  mise: { tool: "pi" },
   nativeUpdate: { args: ["update", "--self"] },
   extensionUpdateArgs: ["update", "--extensions"],
 });
@@ -57,7 +58,7 @@ export type PiDriverEnv =
   | PiAdapterV2DriverEnv
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -100,7 +101,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     const fileSystem = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const host = yield* ProviderHost.ProviderHost;
     const { cwd } = host.paths;
@@ -191,7 +192,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       Effect.map(stampIdentity),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(Digest.Digest, digest),
     );
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);

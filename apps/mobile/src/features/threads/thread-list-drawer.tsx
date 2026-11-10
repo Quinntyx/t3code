@@ -290,11 +290,10 @@ export function ThreadListDrawerGestureWrapper({
 }) {
   const threads = useThreadListDrawer();
   const details = useThreadDetailsDrawer();
-  const { layout, composerKeyboardActive } = useAdaptiveWorkspaceLayout();
+  const { layout } = useAdaptiveWorkspaceLayout();
   const { width: viewportWidth } = useWindowDimensions();
   const width = threadListDrawerWidth(layout.listPaneWidth, viewportWidth);
-  const enabled =
-    !layout.usesSplitView && !composerKeyboardActive && !threads.open && !details.open;
+  const enabled = !layout.usesSplitView && !threads.open && !details.open;
   const left = useDrawerGesture(
     "left",
     threads,
