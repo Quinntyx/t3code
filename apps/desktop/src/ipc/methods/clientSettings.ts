@@ -1,10 +1,12 @@
-import { ClientSettingsSchema } from "@t3tools/contracts";
+import { ClientSettingsSchema, type ClientSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
+import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
@@ -25,7 +27,20 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.clientSettings.set")(function* (settings) {
     const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
     const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
+    const previousSettings = yield* clientSettings.get.pipe(
+      Effect.orElseSucceed(() => Option.none<ClientSettings>()),
+    );
     yield* clientSettings.set(settings);
     yield* snapShot.configure(settings);
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    // macOS traffic lights are native; Windows and Linux own the window chrome and can rebuild it.
+    if (
+      environment.platform !== "darwin" &&
+      Option.isSome(previousSettings) &&
+      previousSettings.value.hideWindowControls !== settings.hideWindowControls
+    ) {
+      const desktopWindow = yield* DesktopWindow.DesktopWindow;
+      yield* desktopWindow.recreateMain;
+    }
   }),
 });
