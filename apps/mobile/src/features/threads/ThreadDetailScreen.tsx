@@ -198,7 +198,8 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
-import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
+import { ThreadFeed } from "./ThreadFeed";
+import type { ThreadFeedHistoryControls } from "./ThreadFeedHistory";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import {
   THREAD_FLOATING_CONTROL_ROW_OFFSET,

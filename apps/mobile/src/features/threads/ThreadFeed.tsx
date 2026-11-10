@@ -19,6 +19,7 @@ import {
   ThreadFeedHistoryProvider,
   ThreadFeedLoadEarlierControl,
   ThreadHistoryScrollView,
+  type ThreadFeedHistoryControls,
 } from "./ThreadFeedHistory";
 import {
   ThreadHandoffDivider,
@@ -313,15 +314,6 @@ const FRESH_ENTRY_WINDOW_MS = 3_000;
 function isFreshTimestamp(input: string): boolean {
   const timestamp = Date.parse(input);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
-}
-
-export interface ThreadFeedHistoryControls {
-  readonly hasMoreHistory: boolean;
-  readonly loading: boolean;
-  readonly error: string | null;
-  readonly onLoadEarlier: () => void;
-  /** Loads earlier history down to the entry, in one request. */
-  readonly onLoadThrough: (entryId: string) => void;
 }
 
 export interface ThreadFeedProps {
