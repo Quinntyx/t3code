@@ -1,7 +1,11 @@
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+import {
+  CHATGPT_USAGE_LIMIT_CODE,
+  CHATGPT_WORKSPACE_USAGE_LIMIT_CODE,
+  resolveNewThreadModelSelection,
+} from "@t3tools/shared/usageLimits";
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
@@ -978,11 +982,11 @@ export default function ChatView(props: ChatViewProps) {
   );
   const browserAvailable = isPreviewSupportedInRuntime() || activeEnvironmentServerBrowser;
   const activeThreadShell = serverThread;
-  // A consumption cap is the user's own limit: no provider reset to wait for or snooze until.
   const limitRecoveryRun =
     serverRuntime?.status === "failed" &&
-    serverRuntime.lastErrorClass === "usage_limit" &&
-    activeThreadShell?.consumptionCapHit == null
+    (serverRuntime.lastErrorClass === "usage_limit" ||
+      serverRuntime.lastErrorCode === CHATGPT_USAGE_LIMIT_CODE ||
+      serverRuntime.lastErrorCode === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE)
       ? (activeThreadShell?.latestRun ?? null)
       : null;
   // The recovery banner offers Wake now for a snooze it set.
@@ -2567,6 +2571,7 @@ export default function ChatView(props: ChatViewProps) {
           settled: activeThreadShell.settledOverride === "settled",
           requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
           recovery: activeThreadShell.limitRecovery ?? null,
+          consumptionCapHit: activeThreadShell.consumptionCapHit ?? null,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
           onChange: async (limitRecovery) => {
