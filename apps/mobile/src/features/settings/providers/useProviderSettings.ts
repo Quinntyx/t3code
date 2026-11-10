@@ -141,11 +141,19 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     { reportFailure: false },
   );
 
+  // Rendering checks scopes once; deferred commits and confirmations run later, so recheck then.
+  const allowed = (scope: typeof AuthProvidersManageScope | typeof AuthSettingsWriteScope) => {
+    if (readEnvironmentScope(environmentId, scope)) return true;
+    Dialog.alert("Not allowed", "This connection can no longer change these settings.");
+    return false;
+  };
+
   const persistInstance = async (
     instanceId: ProviderInstanceId,
     instance: ProviderInstanceConfig,
     patch: ServerSettingsPatch = {},
   ) =>
+    allowed(AuthProvidersManageScope) &&
     reportCommandFailure(
       await mutate({
         environmentId,
@@ -175,6 +183,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
   };
 
   const createInstance = async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) =>
+    allowed(AuthProvidersManageScope) &&
     reportCommandFailure(
       await mutate({
         environmentId,
@@ -190,6 +199,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     instanceId: ProviderInstanceId,
     instance: ProviderInstanceConfig,
   ) => {
+    if (!allowed(AuthProvidersManageScope)) return false;
     const removed = reportCommandFailure(
       await mutate({
         environmentId,
@@ -210,6 +220,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
   };
 
   const resetDefaultInstance = async (driver: ProviderDriverKind) =>
+    allowed(AuthProvidersManageScope) &&
     reportCommandFailure(
       await mutate({
         environmentId,
@@ -225,6 +236,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     );
 
   const updateSettings = async (patch: ServerSettingsPatch) =>
+    allowed(AuthSettingsWriteScope) &&
     reportCommandFailure(
       await saveSettings({ environmentId, input: { patch } }),
       "Could not save settings",
