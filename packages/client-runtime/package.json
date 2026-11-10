@@ -7,10 +7,6 @@
       "types": "./src/assemblyHighlighting.ts",
       "default": "./src/assemblyHighlighting.ts"
     },
-    "./state/commandPermissions": {
-      "types": "./src/state/commandPermissions.ts",
-      "default": "./src/state/commandPermissions.ts"
-    },
     "./voice/session": {
       "types": "./src/voice/session.ts",
       "default": "./src/voice/session.ts"
