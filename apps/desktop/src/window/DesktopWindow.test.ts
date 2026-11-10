@@ -96,12 +96,16 @@ function makeFakeBrowserWindow() {
     toggleDevTools: vi.fn(),
   };
 
+  let destroyed = false;
   const window = {
     close: vi.fn(),
+    destroy: vi.fn(() => {
+      destroyed = true;
+    }),
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
-    isDestroyed: vi.fn(() => false),
+    isDestroyed: vi.fn(() => destroyed),
     isFullScreen: vi.fn(() => false),
     isMaximized: vi.fn(() => false),
     isMinimized: vi.fn(() => false),
@@ -129,6 +133,7 @@ function makeFakeBrowserWindow() {
 
   return {
     window: window as unknown as Electron.BrowserWindow,
+    destroy: window.destroy,
     getBounds: window.getBounds,
     getNormalBounds: window.getNormalBounds,
     isDestroyed: window.isDestroyed,
@@ -240,6 +245,7 @@ function layerTest(input: {
   readonly focusedWindow?: Electron.BrowserWindow;
   readonly platform?: NodeJS.Platform;
   readonly clientSettings?: Option.Option<ClientSettings>;
+  readonly createWindow?: () => Electron.BrowserWindow;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerEnvironment =
@@ -289,7 +295,7 @@ function layerTest(input: {
       }).pipe(
         Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
         Effect.andThen(input.onWindowCreate ?? Effect.void),
-        Effect.as(input.window),
+        Effect.map(() => input.createWindow?.() ?? input.window),
       ),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow),
@@ -317,7 +323,6 @@ function layerTest(input: {
         }),
         layerEnvironment,
         layerDesktopAppSettings,
-        layerClientSettings,
         layerDesktopServerExposure,
         DesktopState.layer,
         layerElectronApp,
@@ -358,6 +363,7 @@ function layerTest(input: {
         }),
       ),
     ),
+    Layer.provideMerge(layerClientSettings),
     Layer.merge(DesktopState.layer),
   );
 }
@@ -550,6 +556,45 @@ describe("DesktopWindow", () => {
           height: 40,
           symbolColor: "#1f2937",
         });
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("rebuilds the main window when window controls change on Linux", () =>
+    Effect.gen(function* () {
+      const firstWindow = makeFakeBrowserWindow();
+      const secondWindow = makeFakeBrowserWindow();
+      const windows = [firstWindow, secondWindow];
+      let nextWindow = 0;
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = layerTest({
+        window: firstWindow.window,
+        createWindow: () => windows[nextWindow++]!.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        clientSettings: Option.some(DEFAULT_CLIENT_SETTINGS),
+        platform: "linux",
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
+        yield* desktopWindow.createMain;
+        firstWindow.windowListeners.get("ready-to-show")?.();
+        yield* clientSettings.set({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true });
+        yield* desktopWindow.recreateMain;
+
+        // The old frame stays visible until the replacement has painted.
+        assert.equal(firstWindow.destroy.mock.calls.length, 0);
+        assert.equal(createdWindowOptions[1]?.titleBarStyle, "hidden");
+        assert.isUndefined(createdWindowOptions[1]?.titleBarOverlay);
+        assert.deepEqual(secondWindow.loadURL.mock.calls, [["t3code-dev://app/"]]);
+
+        secondWindow.windowListeners.get("ready-to-show")?.();
+        assert.deepEqual(firstWindow.destroy.mock.calls, [[]]);
       }).pipe(Effect.provide(layer));
     }),
   );
