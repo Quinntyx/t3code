@@ -10,6 +10,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
 
@@ -140,8 +141,16 @@ describe("PiProvider", () => {
 
   it.effect("keeps compatible Pi selectable when optional discovery fails", () =>
     Effect.gen(function* () {
+      const probe = piProbeSpawner("0.84.3");
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (ChildProcess.isStandardCommand(command)) {
+          assert.equal(command.options.env?.["T3_TEST_PI_ENV"], "injected");
+        }
+        return probe.spawn(command);
+      });
       const snapshot = yield* checkPiProviderStatus(settings).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, piProbeSpawner("0.84.3")),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(HostProcess.Environment, { T3_TEST_PI_ENV: "injected" }),
       );
       assert.equal(snapshot.status, "ready");
       assert.equal(snapshot.auth.status, "unknown");

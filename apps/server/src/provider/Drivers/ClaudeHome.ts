@@ -5,36 +5,20 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
+import { resolveClaudeHomePath } from "./ClaudeConfigDir.ts";
+
+export { resolveClaudeHomePath };
 
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
-
-export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function* (
-  config: Pick<ClaudeSettings, "homePath">,
-  environment?: NodeJS.ProcessEnv,
-): Effect.fn.Return<string, never, Path.Path> {
-  const path = yield* Path.Path;
-  const home = yield* HostProcess.HomeDirectory;
-  const homePath = config.homePath.trim();
-  if (homePath.length > 0) {
-    return path.resolve(expandHomePath(homePath, home));
-  }
-  // Inherited env vars are not shell-expanded, so a literal `~` stays literal.
-  const inherited = environment?.CLAUDE_CONFIG_DIR?.trim() ?? "";
-  if (inherited.length > 0) {
-    return path.resolve(inherited);
-  }
-  return path.resolve(path.join(home, ".claude"));
-});
 
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   baseEnv?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
-  const resolvedBaseEnv = baseEnv ?? process.env;
+  const resolvedBaseEnv = baseEnv ?? (yield* HostProcess.Environment);
   const homePath = config.homePath.trim();
   if (homePath.length === 0) return resolvedBaseEnv;
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
@@ -116,7 +100,7 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
     cwd?: string,
     environment?: NodeJS.ProcessEnv,
   ): Effect.fn.Return<string, never, Path.Path> {
-    const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
+    const resolvedHomePath = yield* resolveClaudeHomePath(config, environment, cwd);
     return `${config.binaryPath}\0${resolvedHomePath}\0${cwd ?? ""}`;
   },
 );

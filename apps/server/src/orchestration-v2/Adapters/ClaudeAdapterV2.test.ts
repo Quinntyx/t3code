@@ -10197,6 +10197,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                       run_in_background: true,
                     },
                   },
+                  {
+                    type: "tool_use",
+                    id: "toolu_moved_shell",
+                    name: "Bash",
+                    input: { command: "make build" },
+                  },
                 ],
               },
               parent_tool_use_id: null,
@@ -10205,6 +10211,20 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             }),
           );
           yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: "moved-shell",
+              tool_use_id: "toolu_moved_shell",
+              description: "Foreground build",
+              is_backgrounded: false,
+              task_type: "local_bash",
+              uuid: "00000000-0000-4000-8000-000000000204",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
           yield* Queue.offer(harness.sdkMessages, turnOneResult);
           yield* harness.awaitTerminal(1);
 
@@ -10214,7 +10234,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.isAtLeast(afterStart.length, 1);
           const started = (afterStart.at(-1)?.providerThread.pendingBackgroundTasks ?? [])[0];
           assert.equal(started?.taskId, WAKE_TASK_ID);
-          assert.equal(started?.nativeItemId, WAKE_TOOL_USE_ID);
+          assert.isUndefined(started?.nativeItemId);
 
           const command = harness.events.find(
             (event) =>
@@ -10227,6 +10247,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const details = {
             command: "python3 audit.py > audit.log 2>&1",
             itemId: command.turnItem.id,
+            sourceThreadId: harness.threadId,
           };
           assert.deepInclude(
             afterStart.at(-1)?.providerThread.pendingBackgroundTasks?.[0],
@@ -10247,21 +10268,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             details,
           );
 
-          // A foreground command that later moves to the background keeps its tool call too.
-          yield* Queue.offer(
-            harness.sdkMessages,
-            claudeSdkFrame({
-              type: "system",
-              subtype: "task_started",
-              task_id: "moved-shell",
-              tool_use_id: "toolu_moved_shell",
-              description: "Foreground build",
-              is_backgrounded: false,
-              task_type: "local_bash",
-              uuid: "00000000-0000-4000-8000-000000000204",
-              session_id: WAKE_NATIVE_SESSION,
-            }),
-          );
           yield* Queue.offer(
             harness.sdkMessages,
             claudeSdkFrame({
@@ -10293,10 +10299,21 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             providerThreadRosterEvents(harness.events).some(
               (event) =>
                 event.providerThread.pendingBackgroundTasks?.[0]?.parentTaskId === "agent-1" &&
-                event.providerThread.pendingBackgroundTasks[1]?.nativeItemId === WAKE_TOOL_USE_ID &&
-                event.providerThread.pendingBackgroundTasks[2]?.nativeItemId ===
-                  "toolu_moved_shell",
+                event.providerThread.pendingBackgroundTasks[1]?.itemId === command.turnItem.id &&
+                event.providerThread.pendingBackgroundTasks[2]?.command === "make build",
             ),
+          );
+          const moved = harness.events.find(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "toolu_moved_shell",
+          );
+          assert.equal(moved?.type, "turn_item.updated");
+          if (moved?.type !== "turn_item.updated") return;
+          assert.deepInclude(
+            providerThreadRosterEvents(harness.events).at(-1)?.providerThread
+              .pendingBackgroundTasks?.[2],
+            { itemId: moved.turnItem.id, sourceThreadId: harness.threadId },
           );
 
           yield* Queue.offer(harness.sdkMessages, emptyRoster);

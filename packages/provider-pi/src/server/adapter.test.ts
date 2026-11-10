@@ -3515,6 +3515,8 @@ describe("PiAdapterV2", () => {
         createdAt: at(10),
         updatedAt: at(10),
       } satisfies OrchestrationV2ProviderThread;
+      fake.queueState({ model: { provider: "anthropic", id: "large", contextWindow: 1_000_000 } });
+      fake.queueEntries({ entries: TURN_ONE_ENTRIES, leafId: "a1b" });
       fake.queueEntries({ entries: TURN_ONE_ENTRIES, leafId: "a1b" });
       const snapshot = yield* runtime.rollbackThread({
         providerThread,
@@ -3547,6 +3549,7 @@ describe("PiAdapterV2", () => {
         ["a1b"],
       );
       assert.equal(snapshot.providerThread.id, providerThread.id);
+      assert.equal(runtime.getModelContextWindow?.(modelSelection("default")), 1_000_000);
       // A cold bind consumes the session's one implicit registration, so the next unbound thread needs a new one.
       const rebound = yield* runtime.ensureThread({
         threadId: THREAD_ID,
@@ -4753,6 +4756,17 @@ describe("PiAdapterV2", () => {
           retry.turnItem.failure.class === "usage_limit" &&
           retry.turnItem.failure.retryable === true,
       );
+      yield* fake.emit({
+        type: "auto_retry_end",
+        success: false,
+        attempt: 2,
+        finalError: "usage_limit_reached: The usage limit has been reached",
+      });
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* fake.emit({ type: "compaction_end", reason: "manual", willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.failure?.class === "usage_limit");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -5242,6 +5256,17 @@ describe("PiAdapterV2", () => {
       });
       const delivered = yield* fake.takeRequest("prompt");
       assert.equal(delivered["message"], "Steer during compaction");
+      yield* fake.emit({
+        type: "message_start",
+        message: { role: "user", content: "Steer during compaction" },
+      });
+      const delivery = yield* takeEvent(
+        (event) => event.type === "user_message.delivery" && event.status === "completed",
+      );
+      assert.isTrue(
+        delivery.type === "user_message.delivery" &&
+          delivery.messageId === "message:thread-pi-test:steer-during-compaction",
+      );
       yield* fake.emit({ type: "agent_start" });
       fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
       yield* fake.emit({ type: "agent_settled" });
@@ -5413,6 +5438,36 @@ describe("PiAdapterV2", () => {
         "First response",
         "message:steer-second:completed",
       ]);
+      for (const index of [1, 2]) {
+        yield* runtime.steerTurn({
+          threadId: THREAD_ID,
+          runId: RunId.make("run:thread-pi-test:1"),
+          providerThread,
+          providerTurnId: running.providerTurn.id,
+          message: {
+            messageId: MessageId.make(`message:identical-${index}`),
+            text: "same steer",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        });
+        yield* fake.takeRequest("prompt");
+        yield* takeEvent((event) => event.type === "user_message.delivery");
+        yield* fake.emit({ type: "response", command: "prompt", success: true });
+      }
+      for (const index of [1, 2]) {
+        yield* fake.emit({
+          type: "message_start",
+          message: { role: "user", content: "same steer" },
+        });
+        const delivery = yield* takeEvent((event) => event.type === "user_message.delivery");
+        assert.isTrue(
+          delivery.type === "user_message.delivery" &&
+            delivery.messageId === `message:identical-${index}` &&
+            delivery.status === "completed",
+        );
+      }
       for (const outcome of ["failed", "cancelled"] as const) {
         yield* runtime.steerTurn({
           threadId: THREAD_ID,

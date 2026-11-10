@@ -3259,10 +3259,15 @@ function claudePendingBackgroundTasksFromRoster(
   );
 }
 
+type ClaudeBackgroundTaskLaunch = Pick<
+  OrchestrationV2PendingBackgroundTask,
+  "nativeItemId" | "itemId" | "sourceThreadId" | "command"
+>;
+
 function parseClaudeBackgroundTaskEntry(
   entry: unknown,
   monitorTasks: ReadonlyMap<string, unknown>,
-  toolUseIds: ReadonlyMap<string, string>,
+  launches: ReadonlyMap<string, ClaudeBackgroundTaskLaunch>,
 ): OrchestrationV2PendingBackgroundTask | null {
   if (entry === null || typeof entry !== "object") {
     return null;
@@ -3277,14 +3282,17 @@ function parseClaudeBackgroundTaskEntry(
     return null;
   }
   const description = Reflect.get(entry, "description");
-  return claudePendingBackgroundTask({
-    taskId,
-    taskType,
-    startedByMonitor: monitorTasks.has(taskId),
-    description: typeof description === "string" ? description : undefined,
-    parentTaskId: Reflect.get(entry, "parent_task_id"),
-    toolUseId: toolUseIds.get(taskId),
-  });
+  return {
+    ...claudePendingBackgroundTask({
+      taskId,
+      taskType,
+      startedByMonitor: monitorTasks.has(taskId),
+      description: typeof description === "string" ? description : undefined,
+      parentTaskId: Reflect.get(entry, "parent_task_id"),
+      toolUseId: undefined,
+    }),
+    ...launches.get(taskId),
+  };
 }
 
 function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
@@ -5331,7 +5339,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           new Map<string, OrchestrationV2PendingBackgroundTask>(),
         );
         // Roster entries carry only Claude's task id; the timeline item is keyed by the tool call.
-        const toolUseIdsByTaskId = yield* Ref.make(new Map<string, string>());
+        const launchesByTaskId = yield* Ref.make(new Map<string, ClaudeBackgroundTaskLaunch>());
         const claudeMonitors = yield* Ref.make<{
           readonly calls: ReadonlySet<string>;
           readonly tasks: ReadonlyMap<
@@ -8726,19 +8734,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (taskId, task) =>
                 task.nativeThreadId === input.nativeThreadId && !listedTaskIds.has(taskId),
             );
-            const toolUseIds = new Map(yield* Ref.get(toolUseIdsByTaskId));
-            // A live task keeps its tool call after the bounded map evicts it.
+            const launches = new Map(yield* Ref.get(launchesByTaskId));
+            // A live task keeps its launch metadata after the bounded map evicts it.
             const current = rosterForNativeThread(
               yield* Ref.get(pendingBackgroundTasksByNativeThread),
               input.nativeThreadId,
             );
             for (const [taskId, task] of current) {
-              if (task.nativeItemId !== undefined && !toolUseIds.has(taskId)) {
-                toolUseIds.set(taskId, task.nativeItemId);
+              if (!launches.has(taskId)) {
+                launches.set(taskId, {
+                  ...(task.itemId === undefined
+                    ? { nativeItemId: task.nativeItemId }
+                    : { itemId: task.itemId, sourceThreadId: task.sourceThreadId }),
+                  ...(task.command === undefined ? {} : { command: task.command }),
+                });
               }
             }
             for (const entry of roster) {
-              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks, toolUseIds);
+              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks, launches);
               if (task !== null) {
                 nextTasks.push(task);
               }
@@ -8750,20 +8763,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               return false;
             }
             const toolUseId = message.tool_use_id?.trim() || undefined;
-            if (toolUseId !== undefined) {
-              // A foreground command can move to the background later, so remember every one.
-              yield* Ref.update(toolUseIdsByTaskId, (current) => {
-                const updated = new Map(current).set(message.task_id, toolUseId);
-                for (const oldest of updated.keys()) {
-                  if (updated.size <= 64) break;
-                  updated.delete(oldest);
-                }
-                return updated;
-              });
-            }
-            if (message.is_backgrounded === false) {
-              return false;
-            }
             const launch =
               message.tool_use_id === undefined || input.activeContext === null
                 ? undefined
@@ -8772,17 +8771,33 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               launch?.classification.itemType === "command_execution"
                 ? firstStringInputField(launch.input, ["command"])
                 : undefined;
-            yield* upsertPendingBackgroundTask(input.nativeThreadId, {
-              ...(launch === undefined || command === undefined
-                ? {}
+            const taskLaunch: ClaudeBackgroundTaskLaunch =
+              launch === undefined || command === undefined
+                ? toolUseId === undefined
+                  ? {}
+                  : { nativeItemId: toolUseId }
                 : {
                     itemId: idAllocator.derive.turnItemFromProviderItem({
                       driver: CLAUDE_PROVIDER,
                       nativeItemId: launch.nativeItemId,
                     }),
                     sourceThreadId: launch.threadId,
-                  }),
-              ...(command === undefined ? {} : { command }),
+                    command,
+                  };
+            // Foreground commands can move to the background after the turn ends.
+            yield* Ref.update(launchesByTaskId, (current) => {
+              const updated = new Map(current).set(message.task_id, taskLaunch);
+              for (const oldest of updated.keys()) {
+                if (updated.size <= 64) break;
+                updated.delete(oldest);
+              }
+              return updated;
+            });
+            if (message.is_backgrounded === false) {
+              return false;
+            }
+            yield* upsertPendingBackgroundTask(input.nativeThreadId, {
+              ...taskLaunch,
               ...claudePendingBackgroundTask({
                 taskId: message.task_id,
                 taskType: claudeTaskTypeFromSdkMessage(message),
@@ -8794,13 +8809,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 description:
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
-                toolUseId,
+                toolUseId: undefined,
               }),
             });
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
-            yield* Ref.update(toolUseIdsByTaskId, (current) => {
+            yield* Ref.update(launchesByTaskId, (current) => {
               if (!current.has(message.task_id)) return current;
               const updated = new Map(current);
               updated.delete(message.task_id);

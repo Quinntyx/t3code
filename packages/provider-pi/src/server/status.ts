@@ -11,6 +11,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Stream from "effect/Stream";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -375,11 +376,12 @@ export const buildInitialPiProviderSnapshot = Effect.fn(
 
 export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function* (
   piSettings: PiSettings,
-  environment: NodeJS.ProcessEnv = process.env,
+  environmentOverride?: NodeJS.ProcessEnv,
   cwd?: string,
   /** Registers discovered services so their models reach the picker, not just a live session. */
   discoverExtensionPath?: string,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
+  const environment = environmentOverride ?? (yield* HostProcess.Environment);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = piModelsFromSettings(piSettings.customModels);
 

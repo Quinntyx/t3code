@@ -2840,36 +2840,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         if (resumeId === null || resumeId === undefined || closed || stopRequested) {
           return yield* protocolError("Pi session has no registered thread");
         }
-        registrationAttempted = true;
-        const switched = yield* lifecycleRequest({
-          type: "switch_session",
-          sessionPath: resumeId,
-        });
-        if (recordField(switched, "cancelled") === true) {
-          return yield* protocolError("A Pi extension cancelled the session switch");
-        }
-        const stateData = yield* request({ type: "get_state" });
-        const nativeId = recordString(stateData, "sessionFile");
-        if (nativeId === undefined) {
-          return yield* protocolError("get_state returned no persisted sessionFile", stateData);
-        }
-        lastNativeThreadId = nativeId;
-        appliedModel = null;
-        appliedThinking = null;
-        appliedSessionName = null;
-        baselineModel = null;
-        baselineThinking = null;
-        contextWindow = null;
-        leafCursorStale = true;
-        const bound: PiThreadState = {
-          providerThread: {
-            ...providerThread,
-            providerSessionId: input.providerSessionId,
-            nativeThreadRef: providerRef(nativeId),
-            status: "idle",
+        const registered = yield* registerThread(
+          {
+            threadId: providerThread.appThreadId ?? input.threadId,
+            modelSelection: input.modelSelection,
+            runtimePolicy: input.runtimePolicy,
+            existingProviderThread: providerThread,
           },
-          activeTurn: null,
-        };
+          false,
+        );
+        const bound: PiThreadState = { providerThread: registered, activeTurn: null };
         threadState = bound;
         return bound;
       });
