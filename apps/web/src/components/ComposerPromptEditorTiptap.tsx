@@ -157,6 +157,8 @@ export interface ComposerPromptEditorProps {
   disabled: boolean;
   placeholder: string;
   ariaLabel?: string | undefined;
+  ariaDescription?: string | undefined;
+  ariaInvalid?: boolean | undefined;
   suggestionListId?: string | undefined;
   activeSuggestionId?: string | undefined;
   isPathQueryActive?: () => boolean;
@@ -935,6 +937,8 @@ function ComposerPromptEditorTiptapInner(
     disabled,
     placeholder,
     ariaLabel,
+    ariaDescription,
+    ariaInvalid,
     suggestionListId,
     activeSuggestionId,
     isPathQueryActive,
@@ -1082,6 +1086,8 @@ function ComposerPromptEditorTiptapInner(
     role: "textbox",
     "aria-multiline": "true",
     ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
+    ...(ariaDescription ? { "aria-description": ariaDescription } : {}),
+    ...(ariaInvalid ? { "aria-invalid": "true" } : {}),
     ...(disabled ? { "aria-readonly": "true" } : {}),
     ...(!disabled && suggestionListId
       ? {

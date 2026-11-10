@@ -4,6 +4,7 @@ import {
   MessageId,
   ThreadId,
 } from "@t3tools/contracts";
+import type { TiptapEditorHTMLElement } from "@tiptap/core";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -64,17 +65,13 @@ function mount(sourceAnchor: AssistantCitationSourceAnchor, onSave: () => boolea
   return render(<Composer />);
 }
 
-const textarea = () =>
-  document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Comment on selected text"]');
+const commentInput = () =>
+  document.querySelector<TiptapEditorHTMLElement>('[aria-label="Comment on selected text"]');
 
 async function typeComment(value: string) {
-  const input = textarea()!;
+  const editor = commentInput()!.editor!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      input,
-      value,
-    );
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    editor.chain().selectAll().insertContent(value).run();
   });
 }
 
@@ -91,6 +88,22 @@ async function clickButton(label: string) {
   await act(async () => button!.click());
 }
 
+describe("citation comment editing", () => {
+  it("formats markdown as it is typed and saves it on Enter", async () => {
+    using source = setup();
+    const onSave = vi.fn(() => true);
+    await using _screen = await mount(source.sourceAnchor, onSave);
+    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
+    await userEvent.keyboard("needs to *spawn agents*{Shift>}{Enter}{/Shift}twice");
+
+    expect(commentInput()?.querySelector("em")?.textContent).toBe("spawn agents");
+    expect(onSave).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Enter}");
+    expect(onSave).toHaveBeenCalledWith("needs to *spawn agents*\ntwice");
+    expect(commentInput()).toBeNull();
+  });
+});
+
 describe("citation comment source disappearance", () => {
   it("preserves an over-length draft at the composer until it can be shortened and saved", async () => {
     using source = setup();
@@ -100,8 +113,8 @@ describe("citation comment source disappearance", () => {
     await typeComment(draft);
     await removeSource();
 
-    expect(textarea()?.value).toBe(draft);
-    expect(textarea()?.getAttribute("aria-invalid")).toBe("true");
+    expect(commentInput()?.textContent).toBe(draft);
+    expect(commentInput()?.getAttribute("aria-invalid")).toBe("true");
     expect(onSave).not.toHaveBeenCalled();
     expect(mocks.dispose).toHaveBeenCalled();
     expect(mocks.observeSource).toHaveBeenCalledTimes(1);
@@ -109,7 +122,7 @@ describe("citation comment source disappearance", () => {
     await typeComment("shortened comment");
     await clickButton("Save");
     expect(onSave).toHaveBeenCalledWith("shortened comment");
-    expect(textarea()).toBeNull();
+    expect(commentInput()).toBeNull();
   });
 
   it("preserves a rejected save and allows a later retry", async () => {
@@ -120,11 +133,11 @@ describe("citation comment source disappearance", () => {
     await removeSource();
 
     expect(onSave).toHaveBeenCalledWith("keep this draft");
-    expect(textarea()?.value).toBe("keep this draft");
+    expect(commentInput()?.textContent).toBe("keep this draft");
     onSave.mockReturnValue(true);
     await clickButton("Save");
     expect(onSave).toHaveBeenLastCalledWith("keep this draft");
-    expect(textarea()).toBeNull();
+    expect(commentInput()).toBeNull();
   });
 });
 
@@ -167,7 +180,7 @@ describe("citation comment popup position", () => {
     // sideways when the box is off screen.
     await userEvent.keyboard("note");
 
-    expect(textarea()?.value).toBe("note");
+    expect(commentInput()?.textContent).toBe("note");
     expect(document.scrollingElement?.scrollLeft).toBe(0);
     expect(document.body.scrollLeft).toBe(0);
     const rect = popup()!.getBoundingClientRect();

@@ -1,24 +1,43 @@
-import { ASSISTANT_CITATION_MAX_COMMENT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
-import { useState, type Ref } from "react";
+import {
+  ASSISTANT_CITATION_MAX_COMMENT_LENGTH,
+  type AssistantCitation,
+  type ServerProviderSkill,
+} from "@t3tools/contracts";
+import { useState, type RefObject } from "react";
 
+import { collapseExpandedComposerCursor } from "~/composer-logic";
+import { useClientSettings } from "~/hooks/useSettings";
+import {
+  ComposerPromptEditorTiptap,
+  type ComposerPromptEditorHandle,
+} from "../ComposerPromptEditorTiptap";
+import { EMPTY_COMPOSER_CONTEXT_RECORDS } from "../composerContextPresentation";
 import { Button } from "../ui/button";
+
+const NO_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
+
+function noop() {}
 
 export function AssistantCitationCommentEditor({
   citation,
-  inputRef,
+  editorRef,
   onSubmit,
   onSubmitAndSend,
   onCancel,
   onDraftChange,
 }: {
   citation: AssistantCitation;
-  inputRef?: Ref<HTMLTextAreaElement>;
+  editorRef: RefObject<ComposerPromptEditorHandle | null>;
   onSubmit: (comment: string) => boolean;
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
   onDraftChange?: (comment: string) => void;
 }) {
+  const richTextEnabled = useClientSettings((settings) => settings.composerRichTextEnabled);
   const [comment, setComment] = useState(citation.comment ?? "");
+  const [cursor, setCursor] = useState(() =>
+    collapseExpandedComposerCursor(comment, comment.length),
+  );
   const commentTooLong = comment.length > ASSISTANT_CITATION_MAX_COMMENT_LENGTH;
   const submit = () => {
     if (!commentTooLong) onSubmit(comment);
@@ -44,34 +63,34 @@ export function AssistantCitationCommentEditor({
         }
       }}
     >
-      <textarea
-        ref={inputRef}
-        aria-label="Comment on selected text"
-        aria-description="Enter to save the citation comment; Command/Ctrl+Enter to save and send; Shift+Enter for a new line."
-        aria-invalid={commentTooLong || undefined}
-        placeholder="Add an optional comment..."
-        rows={2}
-        className="field-sizing-content block max-h-40 min-h-16 w-full resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
+      <ComposerPromptEditorTiptap
+        editorRef={editorRef}
         value={comment}
-        onChange={(event) => {
-          setComment(event.currentTarget.value);
-          onDraftChange?.(event.currentTarget.value);
+        cursor={cursor}
+        richTextEnabled={richTextEnabled}
+        contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}
+        skills={NO_SKILLS}
+        disabled={false}
+        ariaLabel="Comment on selected text"
+        ariaDescription="Enter to save the citation comment; Command/Ctrl+Enter to save and send; Shift+Enter for a new line."
+        ariaInvalid={commentTooLong}
+        placeholder="Add an optional comment..."
+        className="max-h-40"
+        onChange={(nextComment, nextCursor) => {
+          setComment(nextComment);
+          setCursor(nextCursor);
+          onDraftChange?.(nextComment);
         }}
-        onKeyDown={(event) => {
-          if (
-            event.key === "Enter" &&
-            !event.shiftKey &&
-            !event.nativeEvent.isComposing &&
-            event.keyCode !== 229
-          ) {
-            event.preventDefault();
-            if (event.metaKey || event.ctrlKey) {
-              submitAndSend();
-            } else {
-              submit();
-            }
+        onCommandKeyDown={(key, event) => {
+          if (key !== "Enter" || event.shiftKey || event.altKey) return false;
+          if (event.metaKey || event.ctrlKey) {
+            submitAndSend();
+          } else {
+            submit();
           }
+          return true;
         }}
+        onPaste={noop}
       />
       {commentTooLong ? (
         <p role="status" className="pt-1 text-xs text-destructive">
