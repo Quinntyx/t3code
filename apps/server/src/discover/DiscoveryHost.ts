@@ -27,6 +27,8 @@ import { resolveTailscalePairingBase } from "../cli/pair.ts";
 import * as ServerConfig from "../config.ts";
 import * as DirectEndpoints from "../environment/DirectEndpoints.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import * as ManagedLimits from "../policy/managedLimits.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import { buildPairingUrl } from "../startupAccess.ts";
 
@@ -98,6 +100,7 @@ export const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const endpoints = yield* DirectEndpoints.DirectEndpoints;
   const config = yield* ServerConfig.ServerConfig;
+  const policy = yield* ManagedPolicy.ManagedPolicy;
   const http = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const lock = yield* Semaphore.make(1);
@@ -198,6 +201,11 @@ export const make = Effect.gen(function* () {
   const configure = Effect.fn("DiscoveryHost.configure")(function* (
     input: DiscoverHostConfiguration,
   ) {
+    if (!ManagedLimits.allowsRemoteClients(policy)) {
+      return yield* new DiscoverError({
+        message: ManagedLimits.refuseRemoteClients(policy).message,
+      });
+    }
     const url = yield* Effect.try({
       try: () => new URL(input.brokerOrigin),
       catch: () => new DiscoverError({ message: "Enter a valid discovery server URL." }),
@@ -267,6 +275,10 @@ export const make = Effect.gen(function* () {
 
   const tick = Effect.fn("DiscoveryHost.tick")(function* () {
     if (current === null) return;
+    if (!ManagedLimits.allowsRemoteClients(policy)) {
+      lastError = ManagedLimits.refuseRemoteClients(policy).message;
+      return;
+    }
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     if (cachedRegistration === undefined || now >= registrationExpiresAt) {
       cachedRegistration = yield* registration(current.transport);

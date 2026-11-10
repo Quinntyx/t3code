@@ -277,6 +277,7 @@ export class GitLabCli extends Context.Service<
 
     readonly listMergeRequests: (input: {
       readonly cwd: string;
+      readonly targetRepository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -378,12 +379,6 @@ function sourceRefName(input: {
   readonly source?: SourceControlProvider.SourceControlRefSelector;
 }): string {
   return input.source?.refName ?? normalizeHeadSelector(input.headSelector);
-}
-
-function sourceProjectIdentifier(
-  source: SourceControlProvider.SourceControlRefSelector | undefined,
-): string | null {
-  return source?.repository ?? source?.owner ?? null;
 }
 
 function toSummaryWithOptionalUpdatedAt(
@@ -490,6 +485,7 @@ export const make = Effect.gen(function* () {
           String(input.limit ?? 20),
           "--output",
           "json",
+          ...(input.targetRepository ? ["--repo", input.targetRepository] : []),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -631,20 +627,35 @@ export const make = Effect.gen(function* () {
         Effect.map(normalizeRepositoryCloneUrls),
       );
     }),
-    createMergeRequest: Effect.fn("GitLabCli.createMergeRequest")(function (input) {
-      const sourceProject = sourceProjectIdentifier(input.source);
-      return execute({
+    createMergeRequest: Effect.fn("GitLabCli.createMergeRequest")(function* (input) {
+      const targetProject = input.target?.repository
+        ? (yield* execute({
+            cwd: input.cwd,
+            args: ["api", `projects/${encodeURIComponent(input.target.repository)}`, "--jq", ".id"],
+          })).stdout.trim()
+        : undefined;
+      if (targetProject !== undefined && !/^[1-9]\d*$/u.test(targetProject)) {
+        return yield* new GitLabCliCommandError({
+          operation: "execute",
+          command: "glab",
+          cwd: input.cwd,
+          cause: new Error("GitLab did not return a numeric target project ID."),
+        });
+      }
+      return yield* execute({
         cwd: input.cwd,
         args: [
           "api",
           "--method",
           "POST",
-          "projects/:fullpath/merge_requests",
+          input.source?.repository
+            ? `projects/${encodeURIComponent(input.source.repository)}/merge_requests`
+            : "projects/:fullpath/merge_requests",
           "--raw-field",
           `source_branch=${sourceRefName(input)}`,
           "--raw-field",
           `target_branch=${input.target?.refName ?? input.baseBranch}`,
-          ...(sourceProject ? ["--raw-field", `source_project_id=${sourceProject}`] : []),
+          ...(targetProject ? ["--field", `target_project_id=${targetProject}`] : []),
           "--raw-field",
           `title=${input.title}`,
           "--field",

@@ -26,6 +26,9 @@ import {
   crossesReleaseTrack,
 } from "@t3tools/shared/cliRelease";
 
+import { resolveEntryPath } from "../cli/invocation.ts";
+import { detectManagedPackage, managedUpdateMessage } from "../cli/packageManager.ts";
+
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
@@ -138,6 +141,12 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     mirror?.feedUrl ??
     Option.getOrUndefined(yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option));
   const inFlight = yield* Ref.make(false);
+  const entryPath = yield* resolveEntryPath;
+  const packageOwnership = detectManagedPackage(entryPath).pipe(
+    Effect.provideService(ProcessRunner.ProcessRunner, runner),
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+  );
 
   yield* pruneRuntimesOnStart({ baseDir: serverConfig.baseDir, managed: launcher.managed }).pipe(
     Effect.forkScoped,
@@ -188,6 +197,9 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         "Remote updates require the T3 Code background service. Run `t3 service install` on the server machine.",
       );
     }
+
+    const managed = yield* packageOwnership;
+    if (managed !== undefined) return yield* failWith(managedUpdateMessage(managed));
 
     const unsafeCrossing = crossesTrackUnsafely(input);
     if (unsafeCrossing !== null) return yield* failWith(unsafeCrossing);

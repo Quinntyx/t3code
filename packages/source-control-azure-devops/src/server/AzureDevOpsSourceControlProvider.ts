@@ -103,6 +103,7 @@ export const make = Effect.gen(function* () {
         return azure
           .listPullRequests({
             cwd: input.cwd,
+            ...(input.targetRepository ? { targetRepository: input.targetRepository } : {}),
             headSelector: input.headSelector,
             ...(source !== undefined ? { source } : {}),
             state: input.state,

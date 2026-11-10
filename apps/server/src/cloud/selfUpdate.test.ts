@@ -26,6 +26,7 @@ import * as ServerSelfUpdate from "./selfUpdate.ts";
 interface HarnessOptions {
   readonly mode?: "web" | "desktop";
   readonly managed?: boolean;
+  readonly packageOwner?: string;
   readonly preflight?: "ready" | "blocked";
   readonly preflightDuration?: Duration.Input;
   readonly preflightStarted?: Deferred.Deferred<void>;
@@ -64,9 +65,23 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
   const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-self-update-test-" });
   const order: string[] = [];
   const urls: string[] = [];
+  const packageProbes: string[] = [];
   const runner = ProcessRunner.ProcessRunner.of({
     run: (input) =>
       Effect.gen(function* () {
+        if (input.command === "pacman") {
+          packageProbes.push(input.args[1] ?? "");
+          return {
+            stdout: options.packageOwner ?? "",
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(options.packageOwner === undefined ? 1 : 0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          };
+        }
         if (input.command === "tar") {
           order.push("extract");
           const stagingDir = input.args[input.args.indexOf("-C") + 1];
@@ -156,7 +171,7 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
       ),
     ),
   );
-  return { selfUpdate, order, urls };
+  return { selfUpdate, order, urls, packageProbes };
 });
 
 it.layer(NodeServices.layer)("server self update", (it) => {
@@ -172,6 +187,13 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         (yield* desktop.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
       ).toContain("desktop app");
       expect([...web.order, ...desktop.order]).toEqual([]);
+      const packaged = yield* makeHarness({ packageOwner: "t3code-fork-bin" });
+      expect(
+        (yield* packaged.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
+      ).toContain("pacman manages this t3, as package t3code-fork-bin");
+      expect(packaged.packageProbes).toHaveLength(1);
+      expect(packaged.order).toEqual([]);
+      expect(packaged.urls).toEqual([]);
     }),
   );
 
@@ -182,7 +204,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         organization: "Example Corp",
         limits: { updates: { mode: "off" } },
       };
-      const service = yield* makeHarness({ policy });
+      const service = yield* makeHarness({ policy, packageOwner: "t3code-fork-bin" });
       const desktop = yield* makeHarness({
         mode: "desktop",
         policy,
@@ -198,6 +220,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         ).toBe("Example Corp manages T3 Code updates.");
       }
       expect([...service.order, ...desktop.order]).toEqual([]);
+      expect(service.packageProbes).toEqual([]);
     }),
   );
 
@@ -238,6 +261,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       const stages: string[] = [];
       const { selfUpdate, order } = yield* makeHarness({
         mode: "desktop",
+        packageOwner: "unrelated-cli-package",
         desktopAppUpdate: {
           available: true,
           run: (reportProgress) =>

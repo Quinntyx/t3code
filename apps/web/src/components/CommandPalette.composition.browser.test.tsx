@@ -6,6 +6,7 @@ import { act, render } from "../../test/render";
 import { CommandPalette } from "./CommandPalette";
 import { openCommandPalette } from "../commandPaletteBus";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { useAtomCommand } from "../state/use-atom-command";
 
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
@@ -39,7 +40,7 @@ vi.mock("../hooks/useHandleNewThread", () => ({
 vi.mock("../hooks/useOpenPanelPullRequestUrl", () => ({ useOpenPanelPullRequestUrl: () => null }));
 vi.mock("../connection/useDesktopLocalBootstraps", () => ({ useDesktopLocalBootstraps: () => [] }));
 vi.mock("../state/use-atom-command", () => ({
-  useAtomCommand: () => async () => ({ _tag: "Success", value: undefined }),
+  useAtomCommand: vi.fn(() => vi.fn(async () => ({ _tag: "Success", value: undefined }))),
 }));
 vi.mock("../state/use-atom-query-runner", () => ({
   useAtomQueryRunner: () => async () => ({ _tag: "Success", value: undefined }),
@@ -99,12 +100,17 @@ vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [],
 }));
 
+function setup() {
+  vi.mocked(useAtomCommand).mockClear();
+}
+
 // The real palette and Base UI input must agree that confirming composition is typing.
 describe.each(["repository", "folder", "destination"] as const)("add-project %s", (step) => {
   it.each([
     { isComposing: true, keyCode: 13 },
     { isComposing: false, keyCode: 229 },
   ])("keeps Enter in the input during composition: %j", async (composition) => {
+    setup();
     await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
     await act(() => openCommandPalette({ open: "add-project" }));
     await page.getByText(step === "folder" ? "Local folder" : "Git URL", { exact: true }).click();
@@ -112,6 +118,9 @@ describe.each(["repository", "folder", "destination"] as const)("add-project %s"
     if (step === "destination") {
       await input().fill("https://example.com/team/project.git");
       await userEvent.keyboard("{Enter}");
+      page.getByRole("checkbox").element().focus();
+      await userEvent.keyboard(" ");
+      await expect.element(page.getByRole("checkbox")).toBeChecked();
     }
     const value = step === "repository" ? "https://example.com/team/計画.git" : "/workspace/計画";
     await input().fill(value);
@@ -130,11 +139,24 @@ describe.each(["repository", "folder", "destination"] as const)("add-project %s"
     } else {
       await userEvent.keyboard("{Enter}");
       await expect.element(page.getByRole("combobox")).not.toBeInTheDocument();
+      if (step === "destination") {
+        const calls = vi
+          .mocked(useAtomCommand)
+          .mock.results.flatMap((result) =>
+            result.type === "return" ? vi.mocked(result.value).mock.calls : [],
+          );
+        expect(calls).toContainEqual([
+          expect.objectContaining({
+            input: expect.objectContaining({ destinationPath: "/workspace/計画/main" }),
+          }),
+        ]);
+      }
     }
   });
 });
 
 it("keeps the caret in place when an edit briefly makes the folder path not a path", async () => {
+  setup();
   await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
   await act(() => openCommandPalette({ open: "add-project" }));
   await page.getByText("Local folder", { exact: true }).click();

@@ -241,11 +241,26 @@ describe("AzureDevOpsCli.layer", () => {
       yield* az.listPullRequests({
         cwd: "/somewhere",
         headSelector: "user/feat/1-(#2)-slug",
+        targetRepository: "base-project/base-repo",
         state: "open",
       });
 
       const args = mockRun.mock.calls.at(-1)?.[0].args ?? [];
       assert.strictEqual(args[args.indexOf("--source-branch") + 1], "user%2Ffeat%2F1-(%232)-slug");
+      assert.include(args, "--repository=base-repo");
+      assert.include(args, "--project=base-project");
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+      yield* az.createPullRequest({
+        cwd: "/somewhere",
+        baseBranch: "main",
+        headSelector: "feature",
+        target: { repository: "base-project/base-repo", refName: "main" },
+        title: "Changes",
+        bodyFile: "/body.md",
+      });
+      const createArgs = mockRun.mock.calls.at(-1)?.[0].args ?? [];
+      assert.include(createArgs, "--repository=base-repo");
+      assert.include(createArgs, "--project=base-project");
 
       for (const prefix of ["refs/heads/", "refs/pull/", "refs/tags/"]) {
         mockRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));

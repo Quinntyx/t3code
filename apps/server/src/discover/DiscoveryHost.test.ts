@@ -1,5 +1,6 @@
 import {
   AuthStandardClientScopes,
+  type ManagedPolicyDocument,
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_VERSION,
 } from "@t3tools/contracts";
@@ -10,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -20,6 +22,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as DirectEndpoints from "../environment/DirectEndpoints.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { ServerActivation } from "../serverActivation.ts";
 import { fulfillPairingRequest, make } from "./DiscoveryHost.ts";
 
@@ -31,7 +34,11 @@ const request = {
   expiresAt: 120_000,
 };
 
-const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallBody = false) {
+const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (
+  stallBody = false,
+  policy?: ManagedPolicyDocument,
+  restored = false,
+) {
   const activated = yield* Deferred.make<void>();
   const firstHeartbeat = yield* Deferred.make<void>();
   const secondHeartbeat = yield* Deferred.make<void>();
@@ -39,10 +46,12 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallB
   const stalled = yield* Deferred.make<void>();
   const body = yield* Deferred.make<null>();
   const addresses: string[] = [];
+  const requests: string[] = [];
   let address = "http://192.168.1.2:3773/";
   let removed = false;
   const http = HttpClient.make((req) =>
     Effect.gen(function* () {
+      requests.push(req.url);
       if (req.url.endsWith("/hosts/heartbeat")) {
         addresses.push(address);
         const payload = req.body;
@@ -80,10 +89,24 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallB
   const service = yield* make.pipe(
     Effect.provide(
       Layer.mergeAll(
+        ManagedPolicy.layerTest(policy),
         Layer.succeed(HttpClient.HttpClient, http),
         Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({}),
         Layer.mock(ServerSecretStore.ServerSecretStore)({
-          get: () => Effect.succeedNone,
+          get: () =>
+            Effect.succeed(
+              restored
+                ? Option.some(
+                    new TextEncoder().encode(
+                      JSON.stringify({
+                        brokerOrigin: "http://localhost:3775",
+                        hostToken: "host-token",
+                        transport: "lan",
+                      }),
+                    ),
+                  )
+                : Option.none(),
+            ),
           set: () => Effect.void,
           remove: () =>
             Effect.sync(() => {
@@ -111,11 +134,12 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallB
     ),
     Effect.provideService(ServerActivation, Deferred.await(activated)),
   );
-  yield* service.configure({
-    brokerOrigin: "http://localhost:3775",
-    memberToken: "member-token",
-    transport: "lan",
-  });
+  if (!restored)
+    yield* service.configure({
+      brokerOrigin: "http://localhost:3775",
+      memberToken: "member-token",
+      transport: "lan",
+    });
   yield* Deferred.succeed(activated, undefined);
   return {
     service,
@@ -124,6 +148,7 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallB
     workFinished,
     stalled,
     addresses,
+    requests,
     move: () => {
       address = "http://192.168.1.3:3773/";
     },
@@ -132,6 +157,40 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (stallB
 });
 
 describe("discovery host delegation", () => {
+  it.effect(
+    "denies discovery enrollment for local-only clients but not for Connect-only denial",
+    () =>
+      Effect.gen(function* () {
+        const denied = yield* makeHarness(false, {
+          schemaVersion: 1,
+          organization: "Example",
+          limits: { clients: ["desktop", "local-browser"] },
+        }).pipe(Effect.flip);
+        expect(denied.message).toContain("Example's policy does not allow remote clients");
+        const restored = yield* makeHarness(
+          false,
+          {
+            schemaVersion: 1,
+            organization: "Example",
+            limits: { clients: ["desktop", "local-browser"] },
+          },
+          true,
+        );
+        yield* TestClock.adjust("3 seconds");
+        expect(restored.requests).toEqual([]);
+        expect((yield* restored.service.status()).error).toContain("Example's policy");
+        yield* restored.service.revoke();
+        expect((yield* restored.service.status()).brokerOrigin).toBeNull();
+        const allowed = yield* makeHarness(false, {
+          schemaVersion: 1,
+          organization: "Example",
+          limits: { connect: false },
+        });
+        yield* Deferred.await(allowed.firstHeartbeat);
+        expect((yield* allowed.service.status()).brokerOrigin).toBe("http://localhost:3775");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("refuses requests outside the enrolled environment, transport, or lifetime", () =>
     Effect.gen(function* () {
       let issued = 0;

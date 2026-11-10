@@ -222,6 +222,7 @@ export class AzureDevOpsCli extends Context.Service<
 
     readonly listPullRequests: (input: {
       readonly cwd: string;
+      readonly targetRepository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -332,6 +333,12 @@ function parseRepositorySpecifier(repository: string): {
   };
 }
 
+function targetRepositoryArgs(repository: string | undefined): ReadonlyArray<string> {
+  if (repository === undefined) return [];
+  const { project, name } = parseRepositorySpecifier(repository);
+  return [`--repository=${name}`, ...(project ? [`--project=${project}`] : [])];
+}
+
 function decodeAzureDevOpsJson<S extends Schema.Top>(
   raw: string,
   schema: S,
@@ -422,6 +429,7 @@ export const make = Effect.gen(function* () {
           toAzureStatus(input.state),
           "--top",
           String(input.limit ?? 20),
+          ...targetRepositoryArgs(input.targetRepository),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -549,6 +557,7 @@ export const make = Effect.gen(function* () {
           input.title,
           "--description",
           `@${input.bodyFile}`,
+          ...targetRepositoryArgs(input.target?.repository),
         ],
       }).pipe(Effect.asVoid);
     }),

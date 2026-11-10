@@ -322,17 +322,32 @@ describe("ServerBrowserContexts", () => {
       .mockResolvedValueOnce(browsers[1] as unknown as Browser);
     launches.persistent.mockResolvedValue(human as unknown as BrowserContext);
     let rendering = { args: ["--disable-gpu"], scale: 2 };
+    let pause = false;
+    const pendingRendering = Promise.withResolvers<void>();
+    const resumeRendering = Promise.withResolvers<void>();
     const onContextClose = vi.fn();
     const pool = new ServerBrowserContexts({
       ...options(),
-      rendering: async () => rendering,
+      rendering: async () => {
+        if (pause) {
+          pause = false;
+          pendingRendering.resolve();
+          await resumeRendering.promise;
+        }
+        return rendering;
+      },
       onContextClose,
     });
     await pool.contextFor("default");
-    await pool.contextFor("default", "agent");
+    pause = true;
+    const opening = pool.contextFor("default", "agent");
+    await pendingRendering.promise;
 
     rendering = { args: ["--enable-gpu"], scale: 1 };
-    await pool.relaunch();
+    const restarting = pool.relaunch();
+    resumeRendering.resolve();
+    await restarting;
+    await opening;
     expect(human.close).toHaveBeenCalledTimes(1);
     expect(browsers[0]!.close).toHaveBeenCalledTimes(1);
     expect(onContextClose).toHaveBeenCalledTimes(2);

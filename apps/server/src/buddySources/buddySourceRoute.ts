@@ -1,8 +1,17 @@
+import { AuthOrchestrationReadScope } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import {
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+  HttpServerRespondable,
+} from "effect/http";
 
+import { authenticateMediaRequest } from "../auth/http.ts";
+
+import { requestUrl } from "../requestUrl.ts";
 import { buddyCatalogEntries, buddyClipPath } from "./BuddySourceService.ts";
 
 const CATALOG_ROUTE = "/api/buddies/catalog";
@@ -25,23 +34,31 @@ const layerCatalogRoute = HttpRouter.add(
   "GET",
   CATALOG_ROUTE,
   Effect.gen(function* () {
+    yield* authenticateMediaRequest(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
+    const url = requestUrl(request);
     if (url._tag === "None") return json({ error: "Bad request." }, 400);
     // Every configured source is pulled on load; `refresh` forces a re-clone.
     const sources = url.value.searchParams.getAll("source").filter((entry) => entry.length > 0);
     const refresh = url.value.searchParams.get("refresh") === "1";
     const entries = yield* buddyCatalogEntries(sources, { refresh });
     return json({ sources: entries });
-  }),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 const layerClipRoute = HttpRouter.add(
   "GET",
   CLIP_ROUTE,
   Effect.gen(function* () {
+    yield* authenticateMediaRequest(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
+    const url = requestUrl(request);
     if (url._tag === "None") return HttpServerResponse.text("Bad Request", { status: 400 });
     const { source, buddy, file } = query(url.value);
     if (source.length === 0 || buddy.length === 0 || file.length === 0) {
@@ -59,7 +76,13 @@ const layerClipRoute = HttpRouter.add(
       // Clips are immutable for a given source commit; a short private cache is enough.
       headers: { "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" },
     });
-  }),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const layer = Layer.mergeAll(layerCatalogRoute, layerClipRoute);
