@@ -8911,13 +8911,11 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
           ),
           [run.id],
         );
-        assert.isTrue(
-          resumed.turnItems.some(
-            (item) =>
-              item.type === "notification" &&
-              item.runId === resumed.runs.at(-1)!.id &&
-              visible(item),
+        assert.deepEqual(
+          resumed.turnItems.flatMap((item) =>
+            item.type === "notification" && visible(item) ? [item.runId] : [],
           ),
+          scenario === "resume-untagged" ? [] : [resumed.runs.at(-1)!.id],
         );
         assert.deepEqual(
           resumed.runs.map((row) => row.status),
