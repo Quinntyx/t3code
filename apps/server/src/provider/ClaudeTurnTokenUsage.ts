@@ -1,5 +1,5 @@
 import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { RuntimeTurnState, TurnTokenUsage } from "@t3tools/contracts";
+import type { RuntimeTurnState, TurnModelTokenUsage, TurnTokenUsage } from "@t3tools/contracts";
 
 function finiteNonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -53,14 +53,197 @@ function withEarlierSegmentUsage(
   return total;
 }
 
+type ClaudeModelUsage = SDKResultMessage["modelUsage"];
+type ClaudeUsageResult = {
+  readonly subtype: SDKResultMessage["subtype"];
+  readonly usage?: unknown;
+  readonly modelUsage?: ClaudeModelUsage | undefined;
+};
+
+const MODEL_USAGE_FIELDS = [
+  "inputTokens",
+  "cacheReadInputTokens",
+  "cacheCreationInputTokens",
+  "outputTokens",
+] as const;
+
+const TOKEN_FIELDS = [
+  "inputTokens",
+  "cachedInputTokens",
+  "cacheCreationTokens",
+  "outputTokens",
+  "reasoningTokens",
+] as const;
+
+export function recordClaudeMainMessageUsage(
+  messages: Map<string, TurnModelTokenUsage>,
+  messageId: string,
+  model: string,
+  usage: unknown,
+): void {
+  if (model === "<synthetic>") return;
+  const current = normalizeClaudeMainAgentTokenUsage(
+    { subtype: "success", usage },
+    false,
+    "completed",
+  );
+  const previous = messages.get(messageId);
+  const counts = {
+    model,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 0,
+  };
+  for (const field of TOKEN_FIELDS) {
+    if (field === "reasoningTokens") continue;
+    counts[field] = Math.max(current[field] ?? 0, previous?.[field] ?? 0);
+  }
+  messages.set(messageId, {
+    ...counts,
+    ...(current.reasoningTokens === undefined && previous?.reasoningTokens === undefined
+      ? {}
+      : {
+          reasoningTokens: Math.max(current.reasoningTokens ?? 0, previous?.reasoningTokens ?? 0),
+        }),
+  });
+}
+
 export function normalizeClaudeTurnTokenUsage(
+  result: ClaudeUsageResult | undefined,
+  hasSubagents: boolean,
+  terminalStatus: RuntimeTurnState,
+  earlierSegmentUsage: ReadonlyArray<unknown> = [],
+  accounting: {
+    readonly previousModelUsage?: ClaudeModelUsage | undefined;
+    readonly mainModel?: string;
+    readonly mainMessages?: ReadonlyMap<string, TurnModelTokenUsage>;
+  } = {},
+): TurnTokenUsage {
+  const main = normalizeClaudeMainAgentTokenUsage(
+    result,
+    hasSubagents,
+    terminalStatus,
+    earlierSegmentUsage,
+  );
+  const entries = Object.entries(result?.modelUsage ?? {});
+  // /clear resets every model's counters; a zeroed crash result is not a new baseline.
+  const reset = entries.some(([model, usage]) =>
+    MODEL_USAGE_FIELDS.some(
+      (field) => usage[field] < (accounting.previousModelUsage?.[model]?.[field] ?? 0),
+    ),
+  );
+  const remaining = {
+    inputTokens: main.inputTokens ?? 0,
+    cachedInputTokens: main.cachedInputTokens ?? 0,
+    cacheCreationTokens: main.cacheCreationTokens ?? 0,
+    outputTokens: main.outputTokens ?? 0,
+    reasoningTokens: main.reasoningTokens ?? 0,
+  };
+  const mainByModel = new Map<string, typeof remaining>();
+  const canonicalModel = (model: string) =>
+    result?.modelUsage?.[model]?.canonicalModel?.trim() || model;
+  for (const message of accounting.mainMessages?.values() ?? []) {
+    const model = canonicalModel(message.model);
+    const counts = mainByModel.get(model) ?? {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    };
+    for (const field of TOKEN_FIELDS) {
+      const count = Math.min(remaining[field], message[field] ?? 0);
+      counts[field] += count;
+      remaining[field] -= count;
+    }
+    mainByModel.set(model, counts);
+  }
+  const mainModel = accounting.mainModel ?? (entries.length === 1 ? entries[0]![0] : "");
+  if (mainModel !== "") {
+    const model = canonicalModel(mainModel);
+    const counts = mainByModel.get(model) ?? {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    };
+    for (const field of TOKEN_FIELDS) counts[field] += remaining[field];
+    mainByModel.set(model, counts);
+  }
+  const deductions = new Map([...mainByModel].map(([model, counts]) => [model, { ...counts }]));
+  const subagentUsage: TurnModelTokenUsage[] = [];
+  for (const [key, usage] of entries) {
+    if (!MODEL_USAGE_FIELDS.some((field) => usage[field] > 0)) continue;
+    const model = canonicalModel(key);
+    const previous = reset ? undefined : accounting.previousModelUsage?.[key];
+    const delta = (field: (typeof MODEL_USAGE_FIELDS)[number] | "thinkingTokens") =>
+      Math.max(
+        0,
+        (finiteNonNegativeInteger(usage[field]) ?? 0) -
+          (finiteNonNegativeInteger(previous?.[field]) ?? 0),
+      );
+    const cachedInputTokens = delta("cacheReadInputTokens");
+    const cacheCreationTokens = delta("cacheCreationInputTokens");
+    const counts = {
+      inputTokens: delta("inputTokens") + cachedInputTokens + cacheCreationTokens,
+      cachedInputTokens,
+      cacheCreationTokens,
+      outputTokens: delta("outputTokens"),
+      reasoningTokens: delta("thinkingTokens"),
+    };
+    const mainCounts = deductions.get(model);
+    for (const field of TOKEN_FIELDS) {
+      const count = Math.min(counts[field], mainCounts?.[field] ?? 0);
+      counts[field] -= count;
+      if (mainCounts !== undefined) mainCounts[field] -= count;
+    }
+    if (counts.inputTokens + counts.outputTokens === 0) continue;
+    subagentUsage.push({
+      model,
+      inputTokens: counts.inputTokens,
+      cachedInputTokens: counts.cachedInputTokens,
+      cacheCreationTokens: counts.cacheCreationTokens,
+      outputTokens: counts.outputTokens,
+      ...(usage.thinkingTokens === undefined
+        ? {}
+        : { reasoningTokens: Math.min(counts.outputTokens, counts.reasoningTokens) }),
+    });
+  }
+  const mainAgentUsage = [...mainByModel].flatMap(([model, { reasoningTokens, ...counts }]) =>
+    counts.inputTokens + counts.outputTokens === 0
+      ? []
+      : [{ model, ...counts, ...(main.reasoningTokens === undefined ? {} : { reasoningTokens }) }],
+  );
+  const additionalUsage = {
+    ...(mainAgentUsage.length > 1 ? { mainAgentUsage } : {}),
+    ...(subagentUsage.length === 0 ? {} : { hasSubagents: true, subagentUsage }),
+  };
+  if (main.usageStatus === "unavailable" && subagentUsage.length > 0) {
+    return { ...main, ...additionalUsage, usageStatus: "partial" };
+  }
+  return { ...main, ...additionalUsage };
+}
+
+function normalizeClaudeMainAgentTokenUsage(
   result: { readonly subtype: SDKResultMessage["subtype"]; readonly usage?: unknown } | undefined,
   hasSubagents: boolean,
   terminalStatus: RuntimeTurnState,
   earlierSegmentUsage: ReadonlyArray<unknown> = [],
 ): TurnTokenUsage {
   const finalUsage = result?.usage as Record<string, unknown> | undefined;
-  const usage = finalUsage && withEarlierSegmentUsage(finalUsage, earlierSegmentUsage);
+  const segmentUsage =
+    finalUsage ??
+    (earlierSegmentUsage.length === 0
+      ? undefined
+      : {
+          input_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          output_tokens: 0,
+        });
+  const usage = segmentUsage && withEarlierSegmentUsage(segmentUsage, earlierSegmentUsage);
   if (!usage) {
     return {
       usageStatus: "unavailable",

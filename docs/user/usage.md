@@ -58,10 +58,10 @@ update model pricing.
 
 On web and desktop, **Usage** in the thread details card charts the tokens a thread used over time,
 with its estimated API-equivalent cost. **Main agent** is the thread's own turns; **Delegates** are
-the subagent threads it started and any those started. A group that ran more than one model reads
-**Mixed**; select it for the per-model breakdown. A dotted line marks each time the thread's
-context was compacted. Only Claude Code and Codex report per-turn usage, and subagents a provider
-runs inside its own turn count toward the main agent.
+the subagent threads it started and any those started, including Claude's native subagents and
+workflows. A group that ran more than one model reads **Mixed**; select it for the per-model
+breakdown. A dotted line marks each time the thread's context was compacted. Other providers may
+include native subagent usage in the main agent's totals rather than report it separately.
 
 ## Cap a thread's consumption
 

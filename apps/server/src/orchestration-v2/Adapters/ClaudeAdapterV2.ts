@@ -21,7 +21,10 @@ import {
 } from "./claudeWorkflowProgress.ts";
 
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
+import {
+  normalizeClaudeTurnTokenUsage,
+  recordClaudeMainMessageUsage,
+} from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
   forkSession as forkClaudeSession,
@@ -103,6 +106,7 @@ import {
   type ProviderThreadId,
   type RunId,
   type ThreadId,
+  type TurnModelTokenUsage,
   resolveIdleCompaction,
 } from "@t3tools/contracts";
 
@@ -3883,7 +3887,10 @@ interface ActiveClaudeTurnContext {
   // Claude's error text when it sent one.
   compactionFailure: { readonly message: string | undefined } | null;
   // Steers end segments whose usage is excluded from the final result; bill them too, oldest first.
-  readonly steeredSegmentUsage: Array<SDKResultMessage["usage"]>;
+  readonly steeredSegments: Array<SDKResultMessage>;
+  readonly previousModelUsage: SDKResultMessage["modelUsage"] | undefined;
+  readonly mainMessages: Map<string, TurnModelTokenUsage>;
+  mainUsageModel: string;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly promptUuid: string | null;
@@ -3920,6 +3927,7 @@ interface ActiveClaudeSubagent {
 }
 
 interface ClaudeLiveQueryContext {
+  modelUsage: SDKResultMessage["modelUsage"] | undefined;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   readonly nativeThreadId: string;
   readonly query: ClaudeAgentSdkQuerySession;
@@ -7316,6 +7324,39 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
 
+          const latestUsageResult = [
+            ...input.context.steeredSegments,
+            ...(input.result === undefined ? [] : [input.result]),
+          ].findLast(
+            (result) =>
+              result.subtype === "success" ||
+              Object.values(result.modelUsage).some(
+                (usage) =>
+                  usage.inputTokens +
+                    usage.cacheReadInputTokens +
+                    usage.cacheCreationInputTokens +
+                    usage.outputTokens >
+                  0,
+              ),
+          );
+          const turnTokenUsage = normalizeClaudeTurnTokenUsage(
+            {
+              ...input.result,
+              subtype: input.result?.subtype ?? "error_during_execution",
+              modelUsage: latestUsageResult?.modelUsage,
+            },
+            input.context.subagentsByTaskId.size > 0 || input.context.subagentsByToolUseId.size > 0,
+            input.status,
+            input.context.steeredSegments.map((segment) => segment.usage),
+            {
+              previousModelUsage: input.context.previousModelUsage,
+              mainModel: input.context.mainUsageModel,
+              mainMessages: input.context.mainMessages,
+            },
+          );
+          if (liveQuery !== null && latestUsageResult !== undefined) {
+            liveQuery.modelUsage = latestUsageResult.modelUsage;
+          }
           const threadDisposition = input.threadDisposition ?? "reusable";
           const terminalEvent: ProviderAdapter.ProviderAdapterV2Event =
             input.status === "failed"
@@ -7360,13 +7401,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     status: input.status,
                     completedAt: input.completedAt,
                   }),
-                  turnTokenUsage: normalizeClaudeTurnTokenUsage(
-                    input.result,
-                    input.context.subagentsByTaskId.size > 0 ||
-                      input.context.subagentsByToolUseId.size > 0,
-                    input.status,
-                    input.context.steeredSegmentUsage,
-                  ),
+                  turnTokenUsage,
                 },
               }),
               // Emit the roster before root settlement so writeFinalRunEvents preserves it.
@@ -8193,12 +8228,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const usage: ClaudeMessageUsage | undefined = event.message.usage;
               context.streamUsage =
                 usage === undefined ? null : { messageId: event.message.id, usage };
-              if (usage !== undefined) yield* emitContextUsage(context, usage, true);
+              if (usage !== undefined) {
+                context.mainUsageModel = event.message.model;
+                recordClaudeMainMessageUsage(
+                  context.mainMessages,
+                  event.message.id,
+                  event.message.model,
+                  usage,
+                );
+                yield* emitContextUsage(context, usage, true);
+              }
             } else if (event.type === "message_delta") {
               const usage: typeof event.usage | undefined = event.usage;
               const stream = context.streamUsage;
               if (stream?.usage && usage !== undefined) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
+                recordClaudeMainMessageUsage(
+                  context.mainMessages,
+                  stream.messageId,
+                  context.mainUsageModel,
+                  stream.usage,
+                );
                 yield* emitContextUsage(context, stream.usage);
               }
             } else if (
@@ -8578,6 +8628,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
+              recordClaudeMainMessageUsage(
+                context.mainMessages,
+                message.message.id,
+                message.message.model,
+                snapshotUsage,
+              );
               const stream = context.streamUsage;
               if (stream === null || stream.messageId !== message.message.id) {
                 context.streamUsage = { messageId: message.message.id, usage: snapshotUsage };
@@ -8595,6 +8651,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
+            if (parentToolUseId === null && message.message.model !== "<synthetic>") {
+              context.mainUsageModel = message.message.model;
+            }
             const snapshotModel =
               typeof message.message.model === "string" ? message.message.model.trim() : "";
             // "<synthetic>" identifies CLI notices, not the subagent model.
@@ -9188,7 +9247,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
-              context.steeredSegmentUsage.push(message.usage);
+              context.steeredSegments.push(message);
               return;
             }
             yield* Ref.update(steeredTurns, (current) => {
@@ -10001,6 +10060,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
           const closed = yield* Deferred.make<void, never>();
           const context: ClaudeLiveQueryContext = {
+            modelUsage: undefined,
             queryPolicy,
             nativeThreadId,
             query: querySession,
@@ -10185,7 +10245,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               rateLimitResetTimes: new Map(),
               latestAssistantRateLimit: null,
               compactionFailure: null,
-              steeredSegmentUsage: [],
+              steeredSegments: [],
+              previousModelUsage: querySession.modelUsage,
+              mainMessages: new Map(),
+              mainUsageModel: turnInput.modelSelection.model,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               promptUuid,
