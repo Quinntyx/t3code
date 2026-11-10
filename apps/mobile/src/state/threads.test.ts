@@ -19,6 +19,10 @@ const loads = vi.hoisted(() => [] as string[]);
 vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
 vi.mock("../connection/catalog", () => ({ environmentCatalog: {} }));
 vi.mock("./shell", () => ({ environmentShell: {} }));
+vi.mock("./hidden-threads", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { deviceHiddenThreadKeysAtom: Atom.make(new Set<string>()) };
+});
 vi.mock("@t3tools/client-runtime/state/threads", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
   const stateAtom = Atom.family((key: string) =>
