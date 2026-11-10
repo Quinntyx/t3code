@@ -12,6 +12,7 @@ import {
   getCloneDestinationPath,
   getCloneDirectoryLeafName,
   getCloneDirectoryPath,
+  getProjectCloneCheckoutPath,
   getDefaultCloneUrl,
   getNewProjectPathPreview,
   getNewProjectPublishTarget,
@@ -48,6 +49,7 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
+  type ProjectCloneLayout,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
@@ -516,6 +518,7 @@ function OpenCommandPaletteDialog(props: {
   );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
+  const [cloneLayout, setCloneLayout] = useState<ProjectCloneLayout>("standard");
   const [newProjectFlow, setNewProjectFlow] = useState<{
     readonly environmentId: EnvironmentId;
     readonly sourcesEnvironmentId: EnvironmentId | null;
@@ -987,6 +990,7 @@ function OpenCommandPaletteDialog(props: {
     source: AddProjectRemoteSource,
   ): void => {
     setAddProjectEnvironmentId(environmentId);
+    setCloneLayout("standard");
     setAddProjectCloneFlow({ step: "repository", environmentId, source });
     pushPaletteView({
       addonIcon: remoteProjectSourceIcon(source, ADDON_ICON_CLASS),
@@ -2174,7 +2178,7 @@ function OpenCommandPaletteDialog(props: {
         // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,
-        destinationPath,
+        destinationPath: getProjectCloneCheckoutPath(destinationPath, cloneLayout),
       },
     });
     setIsRemoteProjectCloning(false);
@@ -2930,13 +2934,30 @@ function OpenCommandPaletteDialog(props: {
         />
       ) : null}
       {addProjectCloneFlow?.step === "confirm" ? (
-        <RemoteRepositorySummary
-          source={addProjectCloneFlow.source}
-          title={
-            addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput
-          }
-          description={addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl}
-        />
+        <div className="shrink-0">
+          <RemoteRepositorySummary
+            source={addProjectCloneFlow.source}
+            title={
+              addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput
+            }
+            description={addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl}
+          />
+          <div className="flex flex-col gap-2 px-4 pb-3 text-xs">
+            <label className="flex items-center gap-2">
+              <Checkbox
+                checked={cloneLayout === "worktree-container"}
+                onCheckedChange={(checked) =>
+                  setCloneLayout(checked ? "worktree-container" : "standard")
+                }
+                disabled={isRemoteProjectCloning}
+              />
+              Clone into main; use sibling worktrees
+            </label>
+            <p className="truncate font-mono text-muted-foreground">
+              Checkout: {getProjectCloneCheckoutPath(resolvedAddProjectPath, cloneLayout)}
+            </p>
+          </div>
+        </div>
       ) : null}
       {browseAccessError ? (
         <div role="alert" className="px-4 py-3 text-sm text-muted-foreground">
