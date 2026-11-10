@@ -1099,6 +1099,9 @@ export default function ChatView(props: ChatViewProps) {
   const floatingPanelControls =
     floatingPanels && !embedded && !prefersPlanSidebarSheet && !isMobileViewport;
   const floatingSidebarBubble = floatingPanels && !embedded && !isSidebarSheetViewport;
+  // Embedded in a floating card, the card's glass is the chat's canvas.
+  const chatCanvasClassName =
+    embedded && floatingPanels ? "bg-transparent" : "bg-background ambient-shimmer:bg-transparent";
   const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
@@ -3337,10 +3340,7 @@ export default function ChatView(props: ChatViewProps) {
       ref={setWorkspaceLayoutElement}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 overflow-hidden",
-        // Embedded in a floating card, the card's glass is the background.
-        embedded && floatingPanels
-          ? "bg-transparent"
-          : "bg-background ambient-shimmer:bg-transparent",
+        chatCanvasClassName,
         floatingPanelControls && "[--floating-bubble-inset-end:var(--floating-bubble-clearance)]",
         floatingSidebarBubble && "[--floating-bubble-inset-start:var(--floating-bubble-clearance)]",
       )}
@@ -3457,7 +3457,7 @@ export default function ChatView(props: ChatViewProps) {
             />
             <div
               {...conversationArea}
-              className="relative flex min-h-0 flex-1 flex-col bg-background ambient-shimmer:bg-transparent"
+              className={cn("relative flex min-h-0 flex-1 flex-col", chatCanvasClassName)}
             >
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
