@@ -12,6 +12,7 @@ import {
   ProviderThreadId,
   RunId,
   RuntimeRequestId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -317,6 +318,57 @@ it.effect(
           pendingBackgroundTasks: [{ taskId: "running-task", kind: "subagent" }],
         },
       });
+      yield* createRun(
+        yield* createThread("active-goal", {
+          goal: { objective: "Finish the work", status: "active" },
+        }),
+      );
+      yield* createRun(
+        yield* createThread("awaited-automation", {
+          awaitedScheduledTaskIds: [ScheduledTaskId.make("task:recurring")],
+        }),
+      );
+      for (const type of ["secret_request", "email_request"] as const) {
+        const threadId = yield* createThread(type);
+        const runId = yield* createRun(threadId, "waiting");
+        yield* store.apply({
+          id: EventId.make(`event:settlement:${type}`),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: old,
+          payload: {
+            id: TurnItemId.make(`item:${type}`),
+            threadId,
+            runId,
+            nodeId: NodeId.make(`node:${type}`),
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "waiting",
+            title: null,
+            startedAt: old,
+            completedAt: null,
+            updatedAt: old,
+            ...(type === "secret_request"
+              ? { type, label: "Token", reason: "Sign in", secretStatus: "pending" }
+              : {
+                  type,
+                  accounts: [],
+                  emailStatus: "pending",
+                  draft: {
+                    account: "work",
+                    to: ["user@example.com"],
+                    cc: [],
+                    bcc: [],
+                    subject: "Review",
+                    body: "Draft",
+                  },
+                }),
+          },
+        });
+      }
       const candidates = yield* store.getSettlementCandidates();
       const shell = yield* store.getShellSnapshot({ location: "active" });
       const eligible = candidates.filter((thread) =>

@@ -215,7 +215,7 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
   const listedSettled = sections.settled.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettled);
   const visibleSettled = listedSettled.slice(0, settledVisibleCount);
-  const settledCount = sections.settled.length + olderSettledShelf.unloadedCount(threads);
+  const settledCount = sections.settled.length + olderSettledShelf.unloadedCount();
   const planners = useMemo(() => {
     const planner = (section: "pinned" | "active") =>
       createThreadMovePlanner({

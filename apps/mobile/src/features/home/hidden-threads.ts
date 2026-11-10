@@ -19,11 +19,3 @@ export function updateHiddenThreadKeys(
       : [...keys, key]
     : keys.filter((item) => item !== key);
 }
-
-export function filterHiddenThreads<T extends ThreadIdentity>(
-  threads: readonly T[],
-  hiddenKeys: ReadonlySet<string>,
-  showHidden: boolean,
-): readonly T[] {
-  return showHidden ? threads : threads.filter((thread) => !hiddenKeys.has(keyOf(thread)));
-}

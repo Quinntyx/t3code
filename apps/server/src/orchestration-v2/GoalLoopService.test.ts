@@ -94,6 +94,7 @@ const dispatchedFor = (input: {
   readonly thread?: OrchestrationV2AppThread;
   readonly runs?: ReadonlyArray<OrchestrationV2Run>;
   readonly runtimeRequests?: ReadonlyArray<{ readonly status: string }>;
+  readonly turnItems?: ReadonlyArray<{ readonly type: string; readonly status: string }>;
   readonly subagents?: ReadonlyArray<OrchestrationV2Subagent>;
 }) =>
   Effect.gen(function* () {
@@ -116,6 +117,7 @@ const dispatchedFor = (input: {
                   runs: [run("review-run-1", "completed")],
                   messages: [],
                   runtimeRequests: [],
+                  turnItems: [],
                   subagents: [],
                 }
               : {
@@ -123,6 +125,7 @@ const dispatchedFor = (input: {
                   runs: input.runs ?? [run("run-1", "completed")],
                   messages: [],
                   runtimeRequests: input.runtimeRequests ?? [],
+                  turnItems: input.turnItems ?? [],
                   subagents: input.subagents ?? [],
                 },
           ),
@@ -238,6 +241,9 @@ it.effect.each(
         { thread: appThread({ snoozedUntil: DateTime.makeUnsafe(4_102_444_800_000) }) },
       ],
       ["a pending question", { runtimeRequests: [{ status: "pending" }] }],
+      ["an email draft", { turnItems: [{ type: "email_request", status: "waiting" }] }],
+      ["a secret request", { turnItems: [{ type: "secret_request", status: "waiting" }] }],
+      ["an earlier live run", { runs: [run("run-0", "running"), run("run-1", "completed")] }],
       ["a live run", { runs: [run("run-1", "completed"), run("run-2", "running")] }],
       ["a queued run", { runs: [run("run-1", "completed"), run("run-2", "queued")] }],
       ["no runs", { runs: [] }],
@@ -246,7 +252,7 @@ it.effect.each(
 )("leaves $label alone", ({ input }) =>
   Effect.gen(function* () {
     const dispatched = yield* dispatchedFor({
-      events: [completedRun("run-1")],
+      events: [completedRun("run-1"), goalUpdated("active")],
       ...input,
     });
 

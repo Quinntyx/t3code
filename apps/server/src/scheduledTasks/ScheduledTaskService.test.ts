@@ -575,6 +575,91 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
+it.effect.each([
+  { schedule: "interval", fails: false },
+  { schedule: "once", fails: false },
+  { schedule: "once", fails: true },
+] as const)(
+  "keeps only future $schedule deliveries awaited (failure: $fails)",
+  ({ schedule, fails }) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:automation-wait");
+      const waits = yield* Ref.make<ReadonlyArray<ScheduledTaskId>>([]);
+      const layer = ScheduledTaskService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ManagedPolicy.layerTest(),
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: () => Effect.succeed(threadShell(ProjectId.make("project:test"))),
+              getThreadRecords: () =>
+                Ref.get(waits).pipe(
+                  Effect.map(
+                    (awaitedScheduledTaskIds) =>
+                      ({ thread: { deletedAt: null, awaitedScheduledTaskIds } }) as never,
+                  ),
+                ),
+              dispatch: (command) => {
+                assert.equal(command.type, "thread.metadata.update");
+                if (
+                  command.type !== "thread.metadata.update" ||
+                  command.scheduledTaskWait === undefined
+                )
+                  return Effect.die("Expected automation wait metadata");
+                const { taskIds, awaited } = command.scheduledTaskWait;
+                return Ref.update(waits, (current) =>
+                  awaited
+                    ? [...new Set([...current, ...taskIds])]
+                    : current.filter((id) => !taskIds.includes(id)),
+                ).pipe(Effect.as({} as never));
+              },
+              sendToThread: () =>
+                fails ? Effect.die("Dispatch failed") : Effect.succeed({} as never),
+            }),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+              namedProjectsRoot: "/projects",
+              isScratchProject: () => Effect.succeed(false),
+            }),
+            NodeCrypto.layer,
+            Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const now = yield* DateTime.now;
+        const { task } = yield* service.upsert({
+          id: ScheduledTaskId.make("task:automation-wait"),
+          title: "Check in",
+          prompt: "Check progress",
+          enabled: true,
+          schedule:
+            schedule === "once"
+              ? { type: "once", runAt: DateTime.formatIso(DateTime.add(now, { minutes: 1 })) }
+              : { type: "interval", everyMs: 60_000 },
+          projectId: ProjectId.make("project:test"),
+          threadId,
+          threadMode: "fresh_session",
+          workspaceStrategy: { type: "root" },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        });
+        const wait = () => service.awaitTasks({ threadId, taskIds: [task.id], awaited: true });
+        assert.deepEqual((yield* wait()).matched, [task.id]);
+        yield* TestClock.adjust("1 minute");
+        yield* service.runNow({ id: task.id }).pipe(Effect.exit);
+        assert.deepEqual(yield* Ref.get(waits), schedule === "once" ? [] : [task.id]);
+        assert.deepEqual((yield* wait()).matched, schedule === "once" ? [] : [task.id]);
+        if (schedule === "interval") {
+          yield* service.setEnabled({ id: task.id, enabled: false });
+          assert.deepEqual(yield* Ref.get(waits), []);
+        }
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
 it.effect("a first run whose thread was deleted before it bound removes the task", () =>
   Effect.gen(function* () {
     const layer = ScheduledTaskService.layer.pipe(

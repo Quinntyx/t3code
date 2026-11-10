@@ -44,14 +44,21 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
       ]),
     ),
   });
+  const deviceHiddenThreadKeysAtom = Atom.make(new Set<string>());
+  const hiddenThreadTagsAtom = Atom.family((_id: EnvironmentId) =>
+    Atom.make<ReadonlyArray<string> | null>(null),
+  );
   return {
     registry: AtomRegistry.make(),
     snapshotAtom,
     catalogValueAtom,
+    deviceHiddenThreadKeysAtom,
+    hiddenThreadTagsAtom,
     threads: createEnvironmentThreadShellAtoms({
       catalogValueAtom,
       snapshotAtom,
-      hiddenThreadTagsAtom: () => Atom.make(null),
+      hiddenThreadTagsAtom,
+      deviceHiddenThreadKeysAtom,
     }),
   };
 }
@@ -108,6 +115,63 @@ describe("v2 thread shell lists", () => {
     });
     expect(registry.get(threads.navigationThreadShellsAtom)).toBe(before);
     expect(registry.get(threads.threadShellsAtom)).toHaveLength(3);
+    dispose();
+    registry.dispose();
+  });
+
+  it("composes device hides with parent and tag visibility without removing point reads", () => {
+    const { registry, threads, snapshotAtom, deviceHiddenThreadKeysAtom, hiddenThreadTagsAtom } =
+      makeHarness([environmentId, remoteEnvironmentId]);
+    const root = { ...v2ThreadShell, tags: ["private"] };
+    const child = {
+      ...root,
+      id: ThreadId.make("child"),
+      tags: [],
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "fork" as const,
+        sideChat: true,
+      },
+    };
+    const delegated = {
+      ...v2ThreadShell,
+      id: ThreadId.make("delegated"),
+      delegatedFrom: {
+        environmentId,
+        threadId: root.id,
+        title: root.title,
+      },
+    };
+    const key = `${environmentId}:${root.id}`;
+    const offShellKey = `${environmentId}:off-shell`;
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
+    registry.set(snapshotAtom(remoteEnvironmentId), {
+      ...v2ShellSnapshot,
+      threads: [v2ThreadShell, delegated],
+    });
+    const dispose = registry.mount(threads.visibleThreadShellsAtom);
+    registry.set(deviceHiddenThreadKeysAtom, new Set([key, offShellKey]));
+    expect(
+      registry
+        .get(threads.visibleThreadShellsAtom)
+        .map((thread) => `${thread.environmentId}:${thread.id}`),
+    ).toEqual([`${remoteEnvironmentId}:${root.id}`]);
+    expect(registry.get(threads.hiddenThreadKeysAtom).has(`${environmentId}\u0000off-shell`)).toBe(
+      true,
+    );
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id })),
+    ).not.toBeNull();
+    expect(registry.get(threads.threadShellsAtom)).toHaveLength(4);
+    registry.set(hiddenThreadTagsAtom(environmentId), ["private"]);
+    // Showing local hides never reveals a tagged parent or its children.
+    registry.set(deviceHiddenThreadKeysAtom, new Set());
+    expect(registry.get(threads.visibleThreadShellsAtom).map((thread) => thread.id)).toEqual([
+      root.id,
+    ]);
+    registry.set(hiddenThreadTagsAtom(environmentId), null);
+    expect(registry.get(threads.visibleThreadShellsAtom)).toHaveLength(4);
     dispose();
     registry.dispose();
   });

@@ -771,7 +771,11 @@ export const layer = Layer.effect(
     )(function* (input) {
       const rows = yield* sql<{ task_id: string }>`SELECT task_id FROM scheduled_tasks
         WHERE thread_id = ${input.threadId} AND ${sql.in("task_id", input.taskIds)}
-          AND (${input.awaited ? 1 : 0} = 0 OR enabled = 1)`.pipe(
+          AND (${input.awaited ? 1 : 0} = 0 OR (
+            enabled = 1 AND thread_mode != 'new_thread'
+            AND (json_extract(schedule_json, '$.type') != 'once'
+              OR next_run_at IS NOT NULL OR last_run_status = 'running')
+          ))`.pipe(
         Effect.mapError((cause) => taskError("Could not load scheduled tasks.", { cause })),
       );
       const matched = rows.map((row) => ScheduledTaskId.make(row.task_id));
@@ -781,6 +785,19 @@ export const layer = Layer.effect(
         unmatched: input.taskIds.filter((id) => !matched.includes(ScheduledTaskId.make(id))),
       };
     }, mutationPermit.withPermits(1));
+
+    const releaseExhaustedAwait = Effect.fn("ScheduledTaskService.releaseExhaustedAwait")(
+      function* (task: ScheduledTask) {
+        if (
+          task.schedule.type === "once" &&
+          task.nextRunAt === null &&
+          task.lastRunStatus !== "running" &&
+          task.threadId !== null
+        ) {
+          yield* updateAwait(ThreadId.make(task.threadId), [task.id], false);
+        }
+      },
+    );
 
     const deleteRow = (id: ScheduledTaskId) =>
       sql
@@ -866,6 +883,8 @@ export const layer = Layer.effect(
               ) THEN 0 ELSE 1 END
           WHERE task_id = ${task.id} AND last_run_status = 'running'
         `;
+        const released = yield* findTask(task.id);
+        if (released !== null) yield* releaseExhaustedAwait(released);
         yield* notifyChanged;
       },
       (effect, task, _startedAtIso, _message, _pendingDeliveryId) =>
@@ -1130,7 +1149,10 @@ export const layer = Layer.effect(
                   ),
             ),
           );
-        if (written) yield* notifyChanged;
+        if (written) {
+          yield* releaseExhaustedAwait(recorded);
+          yield* notifyChanged;
+        }
         // The stored row can belong to a replacement, so report this dispatch separately.
         return { task: recorded, threadId, dispatchFailed: !runSucceeded };
       }).pipe(
@@ -1258,6 +1280,11 @@ export const layer = Layer.effect(
                     ) THEN 0 ELSE 1 END
                 WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
               `;
+              yield* releaseExhaustedAwait({
+                ...decoded.success,
+                lastRunStatus: "failed",
+                nextRunAt: nextRunAfterRun(decoded.success, now),
+              });
               return;
             }
             yield* Effect.logWarning(

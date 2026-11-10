@@ -5,7 +5,8 @@ import type {
   OrchestrationV2UserMessageInputIntent,
 } from "@t3tools/contracts";
 
-type TimelineRun = Pick<OrchestrationV2Run, "id" | "status">;
+type TimelineRun = Pick<OrchestrationV2Run, "id" | "status"> &
+  Partial<Pick<OrchestrationV2Run, "startedAt">>;
 type TimelineRunAttempt = Pick<OrchestrationV2RunAttempt, "runId" | "rootNodeId" | "status">;
 type TimelineTurnItem = Pick<OrchestrationV2TurnItem, "type" | "runId" | "nodeId"> & {
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
@@ -62,6 +63,16 @@ export function isOrchestrationV2TurnItemVisible(input: {
     return false;
   }
 
+  if (
+    item.type === "notification" &&
+    item.runId !== null &&
+    input.runs.some(
+      (run) => run.id === item.runId && run.status === "cancelled" && run.startedAt === null,
+    )
+  ) {
+    return false;
+  }
+
   return !isOrchestrationV2SupersededInterrupt({
     item,
     attempts: input.attempts,
@@ -75,10 +86,13 @@ export function createOrchestrationV2TurnItemVisibility(input: {
   readonly items: ReadonlyArray<TimelineTurnItem>;
 }): (item: TimelineTurnItem) => boolean {
   const statuses = new Map<TimelineRun["id"], TimelineRun["status"]>();
+  const cancelledBeforeStart = new Set<TimelineRun["id"]>();
   for (const run of input.runs) {
     if (run.status === "rolled_back" || run.status === "cancelled")
       statuses.set(run.id, run.status);
     else statuses.delete(run.id);
+    if (run.status === "cancelled" && run.startedAt === null) cancelledBeforeStart.add(run.id);
+    else cancelledBeforeStart.delete(run.id);
   }
   const supersededRoots = new Map<
     TimelineRunAttempt["runId"],
@@ -100,6 +114,8 @@ export function createOrchestrationV2TurnItemVisibility(input: {
   return (item) => {
     const status = item.runId === null ? undefined : statuses.get(item.runId);
     if (status === "rolled_back") return false;
+    if (item.type === "notification" && item.runId !== null && cancelledBeforeStart.has(item.runId))
+      return false;
     if (
       status === "cancelled" &&
       item.type === "user_message" &&

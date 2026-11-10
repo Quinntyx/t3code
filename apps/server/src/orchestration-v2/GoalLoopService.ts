@@ -47,7 +47,11 @@ export const make = Effect.gen(function* () {
 
   const continueGoal = Effect.fn("GoalLoopService.continueGoal")(
     function* (threadId: ThreadId) {
-      const records = yield* projections.getThreadRecords(threadId, ["runs", "runtimeRequests"]);
+      const records = yield* projections.getThreadRecords(
+        threadId,
+        ["runs", "runtimeRequests", "turnItems"],
+        { turnItemTypes: ["secret_request", "email_request"], turnItemStatuses: ["waiting"] },
+      );
       const goal = records.thread.goal ?? null;
       if (goal?.status !== "active") return;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -60,6 +64,7 @@ export const make = Effect.gen(function* () {
           DateTime.toEpochMillis(records.thread.snoozedUntil) > now) ||
         // The agent is waiting on an answer, not on more work.
         records.runtimeRequests.some((request) => request.status === "pending") ||
+        records.turnItems.length > 0 ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
@@ -93,7 +98,11 @@ export const make = Effect.gen(function* () {
    */
   const reviewGoal = Effect.fn("GoalLoopService.reviewGoal")(
     function* (threadId: ThreadId) {
-      const records = yield* projections.getThreadRecords(threadId, ["runs", "runtimeRequests"]);
+      const records = yield* projections.getThreadRecords(
+        threadId,
+        ["runs", "runtimeRequests", "turnItems"],
+        { turnItemTypes: ["secret_request", "email_request"], turnItemStatuses: ["waiting"] },
+      );
       const goal = records.thread.goal ?? null;
       if (goal?.status !== "active") return;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -103,7 +112,9 @@ export const make = Effect.gen(function* () {
         records.thread.settledOverride === "settled" ||
         (records.thread.snoozedUntil != null &&
           DateTime.toEpochMillis(records.thread.snoozedUntil) > now) ||
-        records.runtimeRequests.some((request) => request.status === "pending")
+        records.runtimeRequests.some((request) => request.status === "pending") ||
+        records.turnItems.length > 0 ||
+        records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
       }

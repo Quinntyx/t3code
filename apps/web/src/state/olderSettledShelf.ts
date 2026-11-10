@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   isListedSettledThread,
@@ -9,10 +9,10 @@ import {
   type OlderSettledScope,
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { olderSettledThreads, threadFamilies } from "./threads";
+import { environmentThreadShells, olderSettledThreads, threadFamilies } from "./threads";
 
 const NO_PAGES: ReadonlyMap<EnvironmentId, number> = new Map();
 
@@ -28,6 +28,7 @@ export function useOlderSettledShelf(input: {
   /** Rows the shelf shows; pages are read until it lists that many. */
   readonly visibleCount: number;
 }) {
+  const registry = useContext(RegistryContext);
   const scopes = sortOlderSettledScopes(input.scopes);
   const scopeKey = JSON.stringify(scopes);
   const [requested, setRequested] = useState({ scopeKey, pages: NO_PAGES });
@@ -68,8 +69,14 @@ export function useOlderSettledShelf(input: {
     grow: (next: ReadonlyMap<EnvironmentId, number>) => setRequested({ scopeKey, pages: next }),
     isListed: (thread: EnvironmentThreadShell) => isListedSettledThread(thread.source, frontier),
     /** Older settled threads in scope that are not local; add it to the local Settled rows. */
-    unloadedCount: (threads: ReadonlyArray<EnvironmentThreadShell>) =>
-      unloadedOlderSettledCount({ olderSettled: olderOf, scopes, threads }),
+    unloadedCount: () =>
+      unloadedOlderSettledCount({
+        olderSettled: olderOf,
+        scopes,
+        threads: registry
+          .get(environmentThreadShells.threadShellsAtom)
+          .filter((thread) => thread.archivedAt === null),
+      }),
     loading: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "pending"),
     failed: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "failed"),
     retry: () => {

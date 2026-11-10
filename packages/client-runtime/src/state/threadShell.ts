@@ -4,12 +4,12 @@ import type {
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
-  ThreadId,
 } from "@t3tools/contracts";
 import {
   isListedThreadLineage,
   isProviderNativeSubagentThread,
   OrchestrationV2ThreadShell,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
@@ -209,6 +209,8 @@ export function createEnvironmentThreadShellAtoms(input: {
   readonly hiddenThreadTagsAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<string> | null>;
+  /** Persisted device keys use environmentId:threadId, independently of internal entity keys. */
+  readonly deviceHiddenThreadKeysAtom?: Atom.Atom<ReadonlySet<string>>;
 }) {
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
@@ -605,17 +607,39 @@ export function createEnvironmentThreadShellAtoms(input: {
         hiddenTags: get(input.hiddenThreadTagsAtom(environmentId)),
       }),
     );
-    // Read shells only while some environment hides tags, so streaming ticks cost nothing otherwise.
-    if (!environments.some((environment) => environment.hiddenTags !== null)) {
+    const storedDeviceHidden =
+      input.deviceHiddenThreadKeysAtom === undefined
+        ? NO_HIDDEN_THREADS
+        : get(input.deviceHiddenThreadKeysAtom);
+    const deviceHidden = new Set<string>();
+    for (const environment of environments) {
+      const prefix = `${environment.environmentId}:`;
+      for (const key of storedDeviceHidden) {
+        if (key.startsWith(prefix))
+          deviceHidden.add(
+            threadKey({
+              environmentId: environment.environmentId,
+              threadId: ThreadId.make(key.slice(prefix.length)),
+            }),
+          );
+      }
+    }
+    // With no visibility filter, avoid subscriptions to streaming shells.
+    if (
+      deviceHidden.size === 0 &&
+      !environments.some((environment) => environment.hiddenTags !== null)
+    ) {
       previousHiddenThreadKeys = NO_HIDDEN_THREADS;
       return NO_HIDDEN_THREADS;
     }
-    const next = hiddenThreadKeys(
+    const derived = hiddenThreadKeys(
       environments.map((environment) => ({
         ...environment,
         threads: get(environmentThreadsAtom(environment.environmentId)),
       })),
+      deviceHidden,
     );
+    const next = deviceHidden.size === 0 ? derived : new Set([...deviceHidden, ...derived]);
     if (
       next.size === previousHiddenThreadKeys.size &&
       [...next].every((key) => previousHiddenThreadKeys.has(key))
