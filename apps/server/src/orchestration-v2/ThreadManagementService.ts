@@ -57,6 +57,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import { isActiveRun } from "./CommandPolicy.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
@@ -66,6 +67,8 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+
+export { isActiveRun } from "./CommandPolicy.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -507,15 +510,6 @@ export class ThreadManagementService extends Context.Service<
   ThreadManagementService,
   ThreadManagementServiceShape
 >()("t3/orchestration-v2/ThreadManagementService") {}
-
-export function isActiveRun(run: OrchestrationV2Run): boolean {
-  return (
-    run.status === "preparing" ||
-    run.status === "starting" ||
-    run.status === "running" ||
-    run.status === "waiting"
-  );
-}
 
 export function isTerminalRunStatus(
   status: OrchestrationV2Run["status"],
