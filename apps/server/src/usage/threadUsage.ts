@@ -44,8 +44,6 @@ export interface ThreadUsageTurn {
   readonly startedAtMs: number;
   readonly completedAtMs: number;
   readonly totals: UsageTokenTotals;
-  /** The group this turn's unmeasured provider usage belongs to. */
-  readonly incompleteGroup?: ThreadUsageGroup;
 }
 
 export interface ThreadUsagePricing {
@@ -126,11 +124,16 @@ export function threadUsageTurns(
   group: ThreadUsageGroup,
   records: ThreadUsageRecords,
   nowMs: number,
-): ReadonlyArray<ThreadUsageTurn> {
+): {
+  readonly turns: ReadonlyArray<ThreadUsageTurn>;
+  /** Groups with usage a provider could not measure, kept apart from rows so it never counts. */
+  readonly incompleteGroups: ReadonlyArray<ThreadUsageGroup>;
+} {
   const runs = new Map(records.runs.map((run) => [run.id, run]));
   const attempts = new Map(records.attempts.map((attempt) => [attempt.id, attempt]));
   const drivers = new Map(records.providerThreads.map((thread) => [thread.id, thread.driver]));
   const turns: ThreadUsageTurn[] = [];
+  const incompleteGroups = new Set<ThreadUsageGroup>();
   for (const turn of records.providerTurns) {
     const usage = turn.turnTokenUsage;
     if (usage === undefined || usage.usageStatus === "unavailable" || usage.localCommand) continue;
@@ -147,8 +150,8 @@ export function threadUsageTurns(
     const mainModel =
       usage.models?.length === 1 ? usage.models[0]! : (turn.model ?? run.modelSelection.model);
     const speed = usageSpeed(run.modelSelection);
-    const incomplete =
-      usage.otherUsageStatus === undefined ? {} : { incompleteGroup: "delegates" as const };
+    // Unmeasured usage beyond the main agent belongs with the delegates, as measured usage does.
+    if (usage.otherUsageStatus !== undefined) incompleteGroups.add("delegates");
     const entries = [
       ...(usage.mainAgentUsage ?? [{ ...usage, model: mainModel }]).map((main) => ({
         ...main,
@@ -174,11 +177,10 @@ export function threadUsageTurns(
         startedAtMs,
         completedAtMs,
         totals,
-        ...incomplete,
       });
     }
   }
-  return turns;
+  return { turns, incompleteGroups: [...incompleteGroups] };
 }
 
 const addTotals = (left: UsageTokenTotals, right: UsageTokenTotals): UsageTokenTotals => ({
@@ -202,6 +204,7 @@ function bucketStep(spanMs: number): number {
  */
 export function buildThreadUsage(input: {
   readonly turns: ReadonlyArray<ThreadUsageTurn>;
+  readonly incompleteGroups?: ReadonlyArray<ThreadUsageGroup>;
   readonly compactedAtMs: ReadonlyArray<number>;
   readonly pricing: ThreadUsagePricing;
   readonly nowMs: number;
@@ -246,7 +249,7 @@ export function buildThreadUsage(input: {
     models.set(key, entry);
   }
 
-  const incompleteGroups = new Set(turns.flatMap((turn) => turn.incompleteGroup ?? []));
+  const incompleteGroups = new Set(input.incompleteGroups);
   const compactedAt = input.compactedAtMs.toSorted((a, b) => a - b);
   const starts = [...turns.map((turn) => turn.startedAtMs), ...compactedAt];
   if (turns.length === 0 || starts.length === 0) {

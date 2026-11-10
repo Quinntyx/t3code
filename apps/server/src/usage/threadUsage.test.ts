@@ -106,7 +106,7 @@ describe("thread usage", () => {
   });
 
   it("reads input net of cache and skips turns another thread ran", () => {
-    const turns = threadUsageTurns(
+    const { turns } = threadUsageTurns(
       "main",
       records("main", claude, "claude-opus-5-5", [
         { from: 0, to: 1, usage: usage(1_000, 100, 800) },
@@ -144,7 +144,7 @@ describe("thread usage", () => {
   });
 
   it("uses a reported model rather than pricing an automatic selection literally", () => {
-    const turns = threadUsageTurns(
+    const { turns } = threadUsageTurns(
       "main",
       records("main", claude, "opus", [
         { from: 0, to: 1, usage: { ...usage(1_000, 100), models: ["claude-opus-5-5"] } },
@@ -172,7 +172,7 @@ describe("thread usage", () => {
           })),
         },
         T0,
-      )[0]?.model,
+      ).turns[0]?.model,
     ).toBe("claude-opus-5-5");
     expect(
       buildThreadUsage({
@@ -206,7 +206,7 @@ describe("thread usage", () => {
         outputTokens: 20,
         reasoningTokens: 5,
       };
-      const turns = threadUsageTurns(
+      const { turns, incompleteGroups } = threadUsageTurns(
         group,
         records("main", claude, "claude-opus-5-5", [
           {
@@ -292,6 +292,7 @@ describe("thread usage", () => {
       ]);
       const report = buildThreadUsage({
         turns,
+        incompleteGroups,
         compactedAtMs: [],
         pricing,
         nowMs: T0,
@@ -334,7 +335,9 @@ describe("thread usage", () => {
       "main",
       records("main", claude, "claude-opus-5-5", [
         { from: 0, to: 20, usage: usage(150_000, 50_000) },
-        { from: 40, to: 40, usage: { ...usage(10_000, 0), otherUsageStatus: "partial" } },
+        { from: 40, to: 40, usage: usage(10_000, 0) },
+        // Nothing measured, yet native work it could not measure still makes delegates a floor.
+        { from: 40, to: 40, usage: { ...usage(0, 0), otherUsageStatus: "partial" } },
       ]),
       T0,
     );
@@ -343,15 +346,16 @@ describe("thread usage", () => {
         "delegates",
         records("child-a", codex, "gpt-5.5", [{ from: 5, to: 15, usage: usage(80_000, 20_000) }]),
         T0,
-      ),
+      ).turns,
       ...threadUsageTurns(
         "delegates",
         records("child-b", codex, "gpt-5.5", [{ from: 10, to: 15, usage: usage(30_000, 0) }]),
         T0,
-      ),
+      ).turns,
     ];
     const result = buildThreadUsage({
-      turns: [...main, ...delegates],
+      turns: [...main.turns, ...delegates],
+      incompleteGroups: main.incompleteGroups,
       compactedAtMs: [T0 + 30 * MINUTE],
       pricing,
       nowMs: T0 + 60 * MINUTE,
@@ -392,7 +396,7 @@ describe("thread usage", () => {
         "main",
         records("main", claude, "claude-opus-5-5", [{ from: 0, to: 10, usage: usage(1_000, 0) }]),
         T0,
-      ),
+      ).turns,
       compactedAtMs: [],
       pricing,
       nowMs: T0 + 3 * 60 * MINUTE,
