@@ -102,17 +102,17 @@ import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
-import { readCodexSetupMode } from "./CodexSetupSection.logic";
+import { readCodexSetupMode } from "@t3tools/client-runtime/provider-settings/codex-setup";
 import { providerClients } from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
 import { CompactIdleThreadsRow } from "./SettingsPanels";
 import {
   backgroundActivityOverrideSettings,
-  buildProviderInstanceUpdatePatch,
   durationToSeconds,
   normalizeIntervalSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
-} from "./SettingsPanels.logic";
+} from "@t3tools/client-runtime/provider-settings/background-activity";
+import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
 import {
   PolicyTooltip,
   SettingResetButton,
@@ -121,6 +121,12 @@ import {
   SettingsSection,
   useSettingsSearchTargetId,
 } from "./settingsLayout";
+import {
+  deriveProviderInstanceRows,
+  modelListChanges,
+  readConfigString,
+  type ProviderInstanceRow as ProviderInstanceRowModel,
+} from "@t3tools/client-runtime/provider-settings/instance";
 import {
   buildProviderEnvironmentOptions,
   buildProviderInstanceOverridePatch,
@@ -131,25 +137,6 @@ import {
   resolveRemoteOperateAccess,
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
-
-function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<string>) {
-  const currentSet = new Set(current);
-  const nextSet = new Set(next.map((model) => model.trim()).filter(Boolean));
-  return [...new Set([...currentSet, ...nextSet])]
-    .filter((model) => currentSet.has(model) !== nextSet.has(model))
-    .map((model) => ({ model, selected: nextSet.has(model) }));
-}
-
-function providerConfigString(config: unknown, key: string): string | null {
-  if (config === null || typeof config !== "object") return null;
-  const value = (config as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
-  provider: definition.driverKind,
-  hasDefaultInstance: definition.hasDefaultInstance !== false,
-}));
 
 function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
@@ -610,14 +597,6 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  const visibleProviderSettings = PROVIDER_SETTINGS.filter(
-    (providerSettings) =>
-      providerSettings.provider !== "cursor" ||
-      serverProviders.some(
-        (provider) =>
-          provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
-      ),
-  );
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const providerHealthPreset = getBackgroundActivityPresetSettings(
     resolvedBackgroundActivity.profile,
@@ -695,80 +674,11 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  interface InstanceRow {
-    readonly instanceId: ProviderInstanceId;
-    /** Undefined for a default slot the user never configured. */
-    readonly explicitInstance: ProviderInstanceConfig | undefined;
-    readonly driver: ProviderDriverKind;
-    readonly isDefault: boolean;
-    readonly isDirty?: boolean;
-  }
-
-  const instancesByDriver = new Map<
-    ProviderDriverKind,
-    Array<[ProviderInstanceId, ProviderInstanceConfig]>
-  >();
-  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
-    const driver = instance.driver;
-    const list = instancesByDriver.get(driver) ?? [];
-    list.push([rawId as ProviderInstanceId, instance]);
-    instancesByDriver.set(driver, list);
-  }
-
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
-  const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
-
-  for (const providerSettings of visibleProviderSettings) {
-    const driver = providerSettings.provider;
-    const defaultInstanceId = defaultInstanceIdForDriver(driver);
-    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
-    const isDirty = explicitInstance !== undefined;
-    const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
-    if (
-      hasDefaultSlot &&
-      (driver === "codex" ||
-        driver === "claudeAgent" ||
-        isDirty ||
-        resolveProviderInstanceEnabled(explicitInstance ?? { driver }) ||
-        defaultInstanceId === targetInstanceId)
-    ) {
-      rows.push({
-        instanceId: defaultInstanceId,
-        explicitInstance,
-        driver,
-        isDefault: true,
-        isDirty,
-      });
-    }
-    for (const [id, instance] of instancesByDriver.get(providerSettings.provider) ?? []) {
-      if (id === defaultInstanceId) continue;
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: false,
-      });
-    }
-  }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
+  const rows = deriveProviderInstanceRows({
+    providerInstances: settings.providerInstances,
+    serverProviders,
+    targetInstanceId,
+  });
 
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
@@ -846,8 +756,8 @@ export function EnvironmentProviderSettings({
       }
 
       if (instance.driver !== ProviderDriverKind.make("acpRegistry")) return;
-      if (providerConfigString(instance.config, "source") === "local") return;
-      const agentId = providerConfigString(instance.config, "agentId");
+      if (readConfigString(instance.config, "source") === "local") return;
+      const agentId = readConfigString(instance.config, "agentId");
       if (agentId === null) return;
 
       // Concurrent removals race client snapshots; let the server decide whether the agent remains in use.
@@ -912,7 +822,7 @@ export function EnvironmentProviderSettings({
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
-  const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
+  const renderProviderInstance = (row: ProviderInstanceRowModel, mode: "list" | "editor") => {
     const showProjectOverride =
       representativeProjectId !== undefined && supportsProjectProviderOverrides;
     return (

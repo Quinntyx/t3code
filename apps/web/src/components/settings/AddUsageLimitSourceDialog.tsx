@@ -1,4 +1,5 @@
-import { type EnvironmentId, UsageLimitSourceId } from "@t3tools/contracts";
+import { type EnvironmentId } from "@t3tools/contracts";
+import { sourceIdFromUrl } from "@t3tools/client-runtime/provider-settings/usage-hubs";
 import { useState } from "react";
 
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -15,18 +16,6 @@ import {
 import { Input } from "../ui/input";
 import { SecretInput } from "./SecretInput";
 import { Label } from "../ui/label";
-
-function sourceIdFromUrl(url: string): UsageLimitSourceId {
-  let host = url;
-  try {
-    host = new URL(url).host;
-  } catch {}
-  const slug = host
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return UsageLimitSourceId.make(`cliproxy-${slug || "hub"}`);
-}
 
 /** Send the management key once to server secret storage; settings retain only a redaction marker. */
 export function AddUsageLimitSourceDialog({

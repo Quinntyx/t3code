@@ -1,98 +1,28 @@
 import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
-  ProviderDriverKind,
+  type ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import {
-  type CustomModelDefinition,
-  createModelHiddenPredicate,
-  normalizeCustomModelSlug,
-} from "@t3tools/shared/model";
+import { type CustomModelDefinition, createModelHiddenPredicate } from "@t3tools/shared/model";
 
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { cn } from "../../lib/utils";
-import { sortModelsForProviderInstance } from "../../modelOrdering";
-import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import {
+  CUSTOM_MODEL_PLACEHOLDER_BY_KIND,
+  describeModelCapabilities,
+  groupModelsForDisplay,
+  nextHiddenModelsForBulkToggle,
+  validateCustomModelSlug,
+} from "@t3tools/client-runtime/provider-settings/models";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { CustomModelEditor } from "./CustomModelEditor";
 
-const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, string>> = {
-  [ProviderDriverKind.make("codex")]: "gpt-6.7-codex-ultra-preview",
-  [ProviderDriverKind.make("claudeAgent")]: "claude-sonnet-5",
-  [ProviderDriverKind.make("cursor")]: "claude-sonnet-4-6",
-  [ProviderDriverKind.make("opencode")]: "openai/gpt-5",
-  [ProviderDriverKind.make("pi")]: "anthropic/claude-sonnet-5",
-};
-
 const FILTER_THRESHOLD = 8;
-
-function describeModelCapabilities(model: ServerProviderModel): string[] {
-  const descriptors = model.capabilities?.optionDescriptors ?? [];
-  const labels: string[] = [];
-  const hasFastMode = descriptors.some(
-    (descriptor) =>
-      descriptor.id === "fastMode" ||
-      (descriptor.id === "serviceTier" &&
-        descriptor.type === "select" &&
-        descriptor.options.some((option) => option.id === "fast" || option.label === "Fast")),
-  );
-  if (hasFastMode) labels.push("Fast mode");
-  if (descriptors.some((descriptor) => descriptor.id === "thinking")) labels.push("Thinking");
-  if (
-    descriptors.some(
-      (descriptor) =>
-        descriptor.type === "select" &&
-        (descriptor.id === "reasoningEffort" ||
-          descriptor.id === "effort" ||
-          descriptor.id === "reasoning" ||
-          descriptor.id === "variant"),
-    )
-  ) {
-    labels.push("Reasoning");
-  }
-  return labels;
-}
-
-function groupModelsForDisplay<T extends { readonly slug: string; readonly isCustom: boolean }>(
-  models: ReadonlyArray<T>,
-  options: {
-    readonly favoriteModels: ReadonlySet<string>;
-    readonly hiddenModels: ReadonlySet<string>;
-    readonly modelOrder: ReadonlyArray<string>;
-  },
-): T[] {
-  const ordered = sortModelsForProviderInstance(models, {
-    favoriteModels: options.favoriteModels,
-    groupFavorites: true,
-    modelOrder: options.modelOrder,
-  });
-  const isHidden = (model: T) => !model.isCustom && options.hiddenModels.has(model.slug);
-  return [
-    ...ordered.filter((model) => options.favoriteModels.has(model.slug)),
-    ...ordered.filter((model) => !options.favoriteModels.has(model.slug) && !isHidden(model)),
-    ...ordered.filter((model) => !options.favoriteModels.has(model.slug) && isHidden(model)),
-  ];
-}
-
-function nextHiddenModelsForBulkToggle(
-  models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
-  hiddenModels: ReadonlyArray<string>,
-): string[] {
-  const builtInSlugs = models.filter((model) => !model.isCustom).map((model) => model.slug);
-  const builtInSlugSet = new Set(builtInSlugs);
-  const allBuiltInModelsHidden = builtInSlugs.every((slug) => hiddenModels.includes(slug));
-
-  if (allBuiltInModelsHidden) {
-    return hiddenModels.filter((slug) => !builtInSlugSet.has(slug));
-  }
-
-  return [...new Set([...hiddenModels, ...builtInSlugs])];
-}
 
 interface ProviderModelsSectionProps {
   readonly instanceId: ProviderInstanceId;
@@ -194,23 +124,12 @@ export function ProviderModelsSection({
 
   const handleAdd = () => {
     if (!canManageCustomModels || driverKind === "antigravity") return;
-    const normalized = normalizeCustomModelSlug(input);
-    if (!normalized) {
-      setError("Enter a model slug.");
+    const validated = validateCustomModelSlug(input, models, customModels);
+    if ("error" in validated) {
+      setError(validated.error);
       return;
     }
-    if (models.some((model) => !model.isCustom && model.slug === normalized)) {
-      setError("That model is already built in.");
-      return;
-    }
-    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-      setError(`Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`);
-      return;
-    }
-    if (customModels.some((entry) => entry.slug === normalized)) {
-      setError("That custom model is already saved.");
-      return;
-    }
+    const normalized = validated.slug;
 
     scrollToSlugRef.current = normalized;
     setFilter("");

@@ -31,10 +31,10 @@ import {
   deriveProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
 } from "./providerInstances";
-import { sortModelsForProviderInstance } from "./modelOrdering";
+import { sortModelsForProviderInstance } from "@t3tools/client-runtime/model-ordering";
+import { MAX_CUSTOM_MODEL_LENGTH } from "@t3tools/client-runtime/provider-settings/models";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 
-export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
 
 // Legacy per-driver buckets would leak custom-instance models into stock instances.

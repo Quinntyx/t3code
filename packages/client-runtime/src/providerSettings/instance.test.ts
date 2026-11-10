@@ -4,7 +4,7 @@ import type { ServerProviderModel } from "@t3tools/contracts";
 import {
   deriveProviderModelsForDisplay,
   nextProviderEnvironmentWithFieldValue,
-} from "./ProviderInstanceCard";
+} from "./instance.ts";
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {

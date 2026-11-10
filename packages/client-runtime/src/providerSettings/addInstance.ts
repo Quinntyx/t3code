@@ -1,3 +1,30 @@
+/** Limit the slug to 48 chars so the composed ProviderInstanceId fits its 64-char cap. */
+function slugifyLabel(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+}
+
+export function deriveInstanceId(driver: string, label: string): string {
+  const slug = slugifyLabel(label);
+  return slug ? `${driver}_${slug}` : "";
+}
+
+const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+export function validateInstanceId(id: string, existing: ReadonlySet<string>): string | null {
+  if (id.length === 0) return "Instance ID is required.";
+  if (id.length > 64) return "Instance ID must be 64 characters or fewer.";
+  if (!INSTANCE_ID_PATTERN.test(id)) {
+    return "Instance ID must start with a letter and use only letters, digits, '-', or '_'.";
+  }
+  if (existing.has(id)) return `An instance named '${id}' already exists.`;
+  return null;
+}
+
 export type WizardNavigation =
   | { readonly kind: "navigate"; readonly step: number }
   | { readonly kind: "blocked"; readonly step: number; readonly error: string };

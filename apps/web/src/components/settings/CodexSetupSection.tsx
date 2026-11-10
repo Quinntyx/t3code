@@ -34,7 +34,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { waitForQuerySettled } from "../../state/waitForQuerySettled";
+import { waitForQuerySettled } from "@t3tools/client-runtime/state/wait-for-query-settled";
 import { Button } from "../ui/button";
 import { ChatGptConnectionButton } from "./ChatGptConnectionButton";
 import { ChatGptUsageButton } from "./ChatGptUsageButton";
@@ -45,12 +45,12 @@ import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
-import { getProviderSummary } from "./providerStatus";
+import { getProviderSummary } from "@t3tools/client-runtime/provider-settings/status";
 import {
   settleAuthorizationPage,
   settleHandoffAuthorizationPage,
   settleProviderInstall,
-} from "./CodexSetupSection.logic";
+} from "@t3tools/client-runtime/provider-settings/codex-setup";
 
 const noop = () => undefined;
 

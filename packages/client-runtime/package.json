@@ -514,6 +514,54 @@
     "./provider-clients": {
       "types": "./src/providerClients.ts",
       "default": "./src/providerClients.ts"
+    },
+    "./model-ordering": {
+      "types": "./src/modelOrdering.ts",
+      "default": "./src/modelOrdering.ts"
+    },
+    "./provider-settings/status": {
+      "types": "./src/providerSettings/status.ts",
+      "default": "./src/providerSettings/status.ts"
+    },
+    "./provider-settings/form": {
+      "types": "./src/providerSettings/form.ts",
+      "default": "./src/providerSettings/form.ts"
+    },
+    "./provider-settings/instance": {
+      "types": "./src/providerSettings/instance.ts",
+      "default": "./src/providerSettings/instance.ts"
+    },
+    "./provider-settings/add-instance": {
+      "types": "./src/providerSettings/addInstance.ts",
+      "default": "./src/providerSettings/addInstance.ts"
+    },
+    "./provider-settings/models": {
+      "types": "./src/providerSettings/models.ts",
+      "default": "./src/providerSettings/models.ts"
+    },
+    "./provider-settings/custom-model-editor": {
+      "types": "./src/providerSettings/customModelEditor.ts",
+      "default": "./src/providerSettings/customModelEditor.ts"
+    },
+    "./provider-settings/acp-registry": {
+      "types": "./src/providerSettings/acpRegistry.ts",
+      "default": "./src/providerSettings/acpRegistry.ts"
+    },
+    "./provider-settings/background-activity": {
+      "types": "./src/providerSettings/backgroundActivity.ts",
+      "default": "./src/providerSettings/backgroundActivity.ts"
+    },
+    "./provider-settings/codex-setup": {
+      "types": "./src/providerSettings/codexSetup.ts",
+      "default": "./src/providerSettings/codexSetup.ts"
+    },
+    "./state/wait-for-query-settled": {
+      "types": "./src/state/waitForQuerySettled.ts",
+      "default": "./src/state/waitForQuerySettled.ts"
+    },
+    "./provider-settings/usage-hubs": {
+      "types": "./src/providerSettings/usageHubs.ts",
+      "default": "./src/providerSettings/usageHubs.ts"
     }
   },
   "scripts": {

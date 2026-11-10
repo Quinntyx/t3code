@@ -2,13 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { makeProviderSettingsSchema, ProviderDriverKind, TrimmedString } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import { providerClients } from "./providerDriverMeta";
+import { providerClients } from "../providerClients.ts";
 import {
   deriveProviderSettingsFields,
   nextProviderConfigWithFieldValue,
   reconcileRowsDraft,
   seedRowsDraft,
-} from "./ProviderSettingsForm";
+} from "./form.ts";
 
 describe("ProviderSettingsForm helpers", () => {
   it("keeps every masked field as a stored secret", () => {

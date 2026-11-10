@@ -34,10 +34,12 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   backgroundActivityOverrideSettings,
-  backgroundActivitySharedPolicySettings,
   durationToSeconds,
   normalizeIntervalSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
+} from "@t3tools/client-runtime/provider-settings/background-activity";
+import {
+  backgroundActivitySharedPolicySettings,
   resolveBackgroundActivityProfileOption,
 } from "./SettingsPanels.logic";
 import { PolicyTooltip, SettingResetButton, SettingsRow } from "./settingsLayout";
