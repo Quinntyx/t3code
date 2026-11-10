@@ -1,21 +1,10 @@
+import type {
+  VoiceAudioConnection,
+  VoiceAudioHandlers,
+} from "@t3tools/client-runtime/voice/client";
 import { decodePcm16 } from "./pcm";
 import { hasAudio, quietSpectrum, type VoiceMeter } from "./spectrum";
 
-export interface VoiceConnection {
-  readonly offer: (bytes: Uint8Array) => Promise<boolean>;
-  readonly control: (action: "mute" | "resume" | "interrupt-response") => Promise<boolean>;
-  readonly dispose: () => Promise<void>;
-}
-export interface VoiceHandlers {
-  readonly audio: (bytes: Uint8Array, epoch: number) => void;
-  readonly epoch: (epoch: number) => void;
-  readonly event: (event: {
-    readonly type: string;
-    readonly state?: string;
-    readonly error?: { readonly message: string };
-  }) => void;
-  readonly closed: () => void;
-}
 export interface VoicePlatform {
   check: () => void;
   createContext: () => AudioContext;
@@ -57,8 +46,8 @@ export class VoiceAudio {
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private capture: { stop: () => void } | null = null;
-  private connection: VoiceConnection | null = null;
-  private pendingAttachment: Promise<VoiceConnection | null> | null = null;
+  private connection: VoiceAudioConnection | null = null;
+  private pendingAttachment: Promise<VoiceAudioConnection | null> | null = null;
   private unwatch: (() => void) | null = null;
   private inputMeter: VoiceMeter | null = null;
   private outputMeter: VoiceMeter | null = null;
@@ -123,7 +112,7 @@ export class VoiceAudio {
     }
   }
 
-  async connect(attach: (handlers: VoiceHandlers) => Promise<VoiceConnection>) {
+  async connect(attach: (handlers: VoiceAudioHandlers) => Promise<VoiceAudioConnection>) {
     if (
       this.starting ||
       this.stopping ||

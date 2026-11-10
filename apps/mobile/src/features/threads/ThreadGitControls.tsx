@@ -79,6 +79,7 @@ type ThreadGitHeaderActionItems = {
   readonly terminal: HeaderItem;
   readonly files: HeaderItem;
   readonly git: HeaderItem;
+  readonly voice: HeaderItem | null;
 };
 type QuickActionIcon =
   | "arrow.down.circle"
@@ -115,6 +116,7 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly onOpenTerminal: (terminalId?: string | null) => void;
   readonly onOpenNewTerminal: () => void;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
+  readonly onOpenVoice?: () => void;
 };
 
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
@@ -337,6 +339,18 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       type: "menu",
       variant: "plain",
     },
+    voice: props.onOpenVoice
+      ? {
+          accessibilityLabel: "Open Voice",
+          icon: { name: "waveform", type: "sfSymbol" },
+          identifier: "thread-right-voice",
+          label: "Voice",
+          onPress: props.onOpenVoice,
+          sharesBackground: true,
+          type: "button",
+          variant: "plain",
+        }
+      : null,
     files: {
       accessibilityLabel: "Open files",
       disabled: !props.canOpenFiles,
@@ -419,12 +433,16 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
 
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
-  return [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems;
+  return [actionItems.git, actionItems.files, actionItems.terminal, actionItems.voice].filter(
+    (item) => item !== null,
+  ) as HeaderItems;
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
-  return [actionItems.files, actionItems.git, actionItems.terminal] as HeaderItems;
+  return [actionItems.files, actionItems.git, actionItems.terminal, actionItems.voice].filter(
+    (item) => item !== null,
+  ) as HeaderItems;
 }
 
 export function ThreadGitControls(props: ThreadGitControlsProps) {
@@ -512,6 +530,14 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
         />
       ) : null}
       {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(props, model)) : null}
+      {showActionControls && props.onOpenVoice ? (
+        <Toolbar.Button
+          accessibilityLabel="Open Voice"
+          icon="waveform"
+          onPress={props.onOpenVoice}
+          separateBackground
+        />
+      ) : null}
     </Toolbar>
   );
 }

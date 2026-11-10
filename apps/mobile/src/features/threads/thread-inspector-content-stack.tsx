@@ -4,7 +4,7 @@ import { View } from "react-native";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { NativeInspectorContent } from "../../native/NativeInspectorContent";
 
-export type ThreadInspectorMode = "route" | "git" | "files" | "preview";
+export type ThreadInspectorMode = "route" | "git" | "files" | "preview" | "voice";
 
 const INSPECTOR_PREWARM_DELAY_MS = 350;
 
@@ -49,6 +49,7 @@ export function ThreadInspectorContentStack(props: {
   readonly renderPreview?: () => ReactNode;
   readonly renderFiles: () => ReactNode;
   readonly renderGit?: () => ReactNode;
+  readonly renderVoice?: () => ReactNode;
   readonly mode: ThreadInspectorMode;
   readonly resetKeys: readonly [string | null, string | null];
   readonly renderRoute?: () => ReactNode;
@@ -67,7 +68,7 @@ export function ThreadInspectorContentStack(props: {
       return new Set([...current, props.mode]);
     });
 
-    if (props.mode === "route" || props.mode === "preview") {
+    if (props.mode === "route" || props.mode === "preview" || props.mode === "voice") {
       return;
     }
 
@@ -87,6 +88,12 @@ export function ThreadInspectorContentStack(props: {
 
   return (
     <View className="flex-1">
+      {props.mode === "voice" && props.renderVoice ? (
+        // Voice stays mounted only while shown: its panel owns the Gemini session.
+        <InspectorContentPane mounted resetKeys={props.resetKeys} visible>
+          <InspectorRenderer render={props.renderVoice} />
+        </InspectorContentPane>
+      ) : null}
       {props.mode === "preview" && props.renderPreview ? (
         <InspectorContentPane mounted resetKeys={props.resetKeys} visible>
           <InspectorRenderer render={props.renderPreview} />

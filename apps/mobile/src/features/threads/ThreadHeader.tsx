@@ -30,7 +30,7 @@ export function ThreadHeader(
   const goBack = useWorkspaceBackNavigation("threads");
   const { layout, panes, toggleAuxiliaryPane, composerKeyboardActive } =
     useAdaptiveWorkspaceLayout();
-  const { onOpenTerminal, onMergeBack } = props.gitControls;
+  const { onOpenTerminal, onMergeBack, onOpenVoice } = props.gitControls;
   const hasThreadCwd = props.cwd !== null;
   const hasWorkspaceRoot = Boolean(props.project?.workspaceRoot);
   const details = useThreadDetailsDrawer();
@@ -68,6 +68,9 @@ export function ThreadHeader(
       icon: "point.topleft.down.curvedto.point.bottomright.up",
       onPress: props.onOpenGitInspector,
     });
+    if (onOpenVoice) {
+      actions.push({ accessibilityLabel: "Open Voice", icon: "waveform", onPress: onOpenVoice });
+    }
     if (onMergeBack) {
       actions.push({
         accessibilityLabel: "Merge back to source",
@@ -82,6 +85,7 @@ export function ThreadHeader(
     props.onOpenFilesInspector,
     onOpenTerminal,
     onMergeBack,
+    onOpenVoice,
     props.onOpenGitInspector,
     toggleAuxiliaryPane,
     props.onReturnToThread,

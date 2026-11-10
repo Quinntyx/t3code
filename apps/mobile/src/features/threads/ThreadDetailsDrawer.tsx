@@ -425,6 +425,13 @@ function ActionDock(
             )
           }
         />
+        {controls.onOpenVoice ? (
+          <DockTile
+            icon="waveform"
+            label="Voice"
+            onPress={() => navigate(() => controls.onOpenVoice?.())}
+          />
+        ) : null}
         {hasThread ? (
           <DockTile
             icon="text.bubble"

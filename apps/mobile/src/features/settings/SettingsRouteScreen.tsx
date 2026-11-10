@@ -241,6 +241,7 @@ function useSettingsIndexSections(): SettingsListSection[] {
         page("SettingsOrganization", "gearshape", "General"),
         page("SettingsAppearance", "paintbrush", "Appearance"),
         page("SettingsFollowUp", "bubble.left.and.bubble.right", "Chat"),
+        page("SettingsVoice", "waveform", "Voice"),
         ...(navigationCustomizationAvailable()
           ? [page("SettingsNavigation", "line.3.horizontal", "Navigation tabs")]
           : []),

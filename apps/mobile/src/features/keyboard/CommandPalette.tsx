@@ -305,6 +305,13 @@ export function CommandPalette(props: {
         run: () => navigation.navigate("AddProject"),
       },
       {
+        key: "voice",
+        kind: "action",
+        title: "Voice",
+        searchTerms: ["talk", "speak", "assistant", "gemini"],
+        run: () => navigation.navigate("Voice"),
+      },
+      {
         key: "settings",
         kind: "action",
         title: "Open settings",

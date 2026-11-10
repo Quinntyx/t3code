@@ -87,6 +87,7 @@ import {
   useRegisterWorkspaceInspector,
 } from "../layout/AdaptiveWorkspaceLayout";
 import { ThreadFileNavigatorPane } from "../files/thread-file-navigator-pane";
+import { VoicePanel } from "../voice/VoicePanel";
 import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
@@ -589,6 +590,15 @@ function ThreadRouteContent(
     setChosenInspectorMode(props.renderInspector === undefined ? "files" : "route");
     showAuxiliaryPane("inspector");
   };
+  const handleOpenVoice = () => {
+    if (!fileInspector.supported) {
+      navigation.navigate("Voice");
+      return;
+    }
+    navigation.setParams({ inspector: undefined });
+    setChosenInspectorMode("voice");
+    showAuxiliaryPane("inspector");
+  };
   const handleToggleInspector = () => {
     if (inspectorMode === null) {
       handleOpenFilesInspector();
@@ -631,6 +641,15 @@ function ThreadRouteContent(
         onSelectFile={handleSelectInspectorFile}
       />
     ) : null;
+  const renderVoiceInspector = () => (
+    <VoicePanel
+      presentation="inspector"
+      headerInset={inspectorHeaderInset}
+      onClose={toggleAuxiliaryPane}
+      onOpenThread={(target) => selectDetail({ name: "Thread", params: target })}
+      onOpenSettings={() => openSettings(navigation, "SettingsVoice")}
+    />
+  );
   const renderRouteInspector = () => props.renderInspector?.(inspectorHeaderInset);
   const renderPreviewInspector = () =>
     previewTarget && panes.auxiliaryPaneVisible ? (
@@ -657,6 +676,7 @@ function ThreadRouteContent(
         renderPreview={renderPreviewInspector}
         renderFiles={renderFilesInspector}
         renderGit={renderGitInspector}
+        renderVoice={renderVoiceInspector}
         mode={inspectorMode}
         resetKeys={[routeThreadIdentity, selectedThreadCwd]}
         renderRoute={props.renderInspector ? renderRouteInspector : undefined}
@@ -813,6 +833,7 @@ function ThreadRouteContent(
         : undefined,
     onOpenFilesInspector: selectedThreadCwd !== null ? handleOpenFilesInspector : undefined,
     onOpenGitInspector: fileInspector.supported ? handleOpenGitInspector : undefined,
+    onOpenVoice: handleOpenVoice,
     onMergeBack:
       mergeBackTargetThreadId !== null && mergeBackRun !== null
         ? () => void handleMergeBack()

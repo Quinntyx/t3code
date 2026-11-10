@@ -66,6 +66,7 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { VoiceSheet } from "./features/voice/VoiceSheet";
 import { ThreadNotebookSheet } from "./features/threads/ThreadNotebookSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
@@ -119,6 +120,7 @@ import {
 import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboardRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsMicrophoneRouteScreen } from "./features/settings/SettingsMicrophoneRouteScreen";
+import { SettingsVoiceRouteScreen } from "./features/settings/SettingsVoiceRouteScreen";
 import {
   SettingsOpenSourceLicenseRouteScreen,
   SettingsOpenSourceLicensesRouteScreen,
@@ -372,6 +374,14 @@ const SETTINGS_SCREENS = {
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Microphone",
+    },
+  }),
+  SettingsVoice: createNativeStackScreen({
+    screen: SettingsVoiceRouteScreen,
+    linking: "settings/voice",
+    options: {
+      ...SETTINGS_PAGE_OPTIONS,
+      title: "Voice",
     },
   }),
   SettingsFollowUp: createNativeStackScreen({
@@ -919,6 +929,18 @@ const RootStackConfig = createWorkspaceStackNavigator({
         headerShown: false,
         sheetAllowedDetents: formSheetDetents(0.5, 0.9),
         sheetGrabberVisible: true,
+      },
+    }),
+    Voice: createNativeStackScreen({
+      screen: VoiceSheet,
+      linking: "voice",
+      options: {
+        // Android formSheets cannot host the keyboard-driven composer.
+        ...(Platform.OS === "android"
+          ? { presentation: "fullScreenModal" as const, headerShown: false }
+          : { ...SHEET_GLASS_HEADER_OPTIONS, ...HORIZONTAL_FORM_SHEET_OPTIONS }),
+        sheetAllowedDetents: Platform.OS === "android" ? undefined : formSheetDetents(0.7),
+        sheetGrabberVisible: Platform.OS !== "android",
       },
     }),
     GitOverview: createNativeStackScreen({

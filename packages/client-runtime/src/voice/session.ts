@@ -1,21 +1,32 @@
 import type {
   Behavior,
-  Modality,
+  Blob as LiveBlob,
+  Content,
   FunctionDeclaration,
+  FunctionResponse,
   LiveCallbacks,
   LiveConnectConfig,
   LiveServerMessage,
-  Session,
+  Modality,
 } from "@google/genai";
+import { connectLiveSocket } from "./liveSocket.ts";
 import { notificationScheduling, type VoiceNotificationFeed } from "./notifications.ts";
 
 export interface VoiceKeyStore {
   readonly read: () => Promise<string | null>;
 }
-export type VoiceConnection = Pick<
-  Session,
-  "sendClientContent" | "sendToolResponse" | "sendRealtimeInput" | "close"
->;
+/** The Live messages Voice sends; the SDK's `Session` satisfies it too. */
+export interface VoiceConnection {
+  readonly sendClientContent: (params: {
+    readonly turns: Content[];
+    readonly turnComplete: boolean;
+  }) => void;
+  readonly sendToolResponse: (params: { readonly functionResponses: FunctionResponse[] }) => void;
+  readonly sendRealtimeInput: (
+    params: { readonly audio: LiveBlob } | { readonly audioStreamEnd: true },
+  ) => void;
+  readonly close: () => void;
+}
 export type VoiceConnector = (
   key: string,
   callbacks: LiveCallbacks,
@@ -45,15 +56,6 @@ export interface VoiceSessionState {
 }
 
 export const DEFAULT_VOICE_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-09-2025";
-
-const connectLive: VoiceConnector = async (key, callbacks, config, model) => {
-  const { GoogleGenAI } = await import("@google/genai");
-  return new GoogleGenAI({ apiKey: key, httpOptions: { apiVersion: "v1alpha" } }).live.connect({
-    model,
-    config,
-    callbacks,
-  });
-};
 
 export function createVoiceSession(options: {
   readonly key: VoiceKeyStore;
@@ -233,7 +235,7 @@ export function createVoiceSession(options: {
       }
       if (generation !== epoch) return;
       update({ status: "connecting", error: null });
-      const live = await (options.connector ?? connectLive)(
+      const live = await (options.connector ?? connectLiveSocket)(
         key,
         {
           onmessage: (message) => receive(message, generation),

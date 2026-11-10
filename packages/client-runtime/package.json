@@ -23,6 +23,14 @@
       "types": "./src/voice/awaitAtom.ts",
       "default": "./src/voice/awaitAtom.ts"
     },
+    "./voice/client": {
+      "types": "./src/voice/client.ts",
+      "default": "./src/voice/client.ts"
+    },
+    "./voice/storage": {
+      "types": "./src/voice/storage.ts",
+      "default": "./src/voice/storage.ts"
+    },
     "./zip/bounded-zip": {
       "types": "./src/zip/boundedZip.ts",
       "default": "./src/zip/boundedZip.ts"

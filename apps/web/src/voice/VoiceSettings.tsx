@@ -12,7 +12,7 @@ import {
 import { searchableSetting } from "../components/settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { shortcutLabelForCommand } from "../keybindings";
-import { voiceStorage, voiceSession, disconnectVoice } from "./controller";
+import { voiceStorage, disconnectVoice, reloadVoice } from "./controller";
 
 const shortcuts = [
   ["voice.toggle", "Toggle Voice"],
@@ -31,10 +31,8 @@ export function VoiceSettings() {
       disconnectVoice();
       await voiceStorage.key.write(value);
       setKey("");
-      if (voiceSession.getSnapshot().open) {
-        // Refresh credentials without reopening a collapsed panel over Settings.
-        await voiceSession.open();
-      }
+      // Refresh credentials without reopening a collapsed panel over Settings.
+      await reloadVoice();
       setStatus(value ? "Key saved on this device." : "Device key removed. Voice is off.");
     } catch {
       setStatus(

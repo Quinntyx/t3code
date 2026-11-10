@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import {
-  VoiceAudio,
-  type VoicePlatform,
-  type VoiceConnection,
-  type VoiceHandlers,
-} from "./VoiceAudio";
+import type {
+  VoiceAudioConnection,
+  VoiceAudioHandlers,
+} from "@t3tools/client-runtime/voice/client";
+import { VoiceAudio, type VoicePlatform } from "./VoiceAudio";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -57,9 +56,9 @@ function setup() {
     }),
   };
   let input!: (bytes: Uint8Array) => Promise<boolean>;
-  let handlers!: VoiceHandlers;
+  let handlers!: VoiceAudioHandlers;
   const capture = { stop: vi.fn() };
-  const connection: VoiceConnection = {
+  const connection: VoiceAudioConnection = {
     offer: vi.fn(async () => true),
     control: vi.fn(async () => true),
     dispose: vi.fn(async () => {}),
@@ -79,7 +78,7 @@ function setup() {
       return capture;
     }),
   };
-  const attach = vi.fn(async (next: VoiceHandlers) => {
+  const attach = vi.fn(async (next: VoiceAudioHandlers) => {
     handlers = next;
     return connection;
   });
@@ -216,7 +215,7 @@ describe("project voice audio owner with controlled WebAudio/device boundary", (
 
   it("retains failed disposal of a late attachment for the same close retry", async () => {
     const f = setup();
-    const attached = deferred<VoiceConnection>();
+    const attached = deferred<VoiceAudioConnection>();
     const reached = deferred<void>();
     const connecting = f.owner.connect(() => {
       reached.resolve();
@@ -293,7 +292,7 @@ describe("project voice audio owner with controlled WebAudio/device boundary", (
 
   it("disposes an attachment that completes after a disconnect", async () => {
     const f = setup();
-    const attached = deferred<VoiceConnection>();
+    const attached = deferred<VoiceAudioConnection>();
     const reached = deferred<void>();
     const connecting = f.owner.connect(() => {
       reached.resolve();
