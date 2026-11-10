@@ -28,6 +28,8 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           EVENT: ${{ github.event_name }}
+          # An upstream sync changes every file, so this one job runs the whole suite.
+          CHECK_CHANGED_TIMEOUT: 3600
         run: |
           base=origin/main
           if [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
