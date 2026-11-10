@@ -1115,7 +1115,6 @@ const make = Effect.gen(function* () {
           .streamStoredEventsFrom({
             threadId: input.threadId,
             afterSequence,
-            eventType: "run.updated",
           })
           .pipe(Stream.mapEffect(() => trySettle)),
       ),

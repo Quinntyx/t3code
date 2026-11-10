@@ -2829,6 +2829,46 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         DateTime.toEpochMillis(untaggedShell.updatedAt),
       );
 
+      for (const policy of ["goal", "automation"] as const) {
+        yield* orchestrator.dispatch({
+          commandId: CommandId.make(`runtime-layer-lifecycle-${policy}-hold`),
+          threadId,
+          ...(policy === "goal"
+            ? ({
+                type: "thread.goal.update",
+                goal: { objective: "Finish the work", status: "active" },
+              } as const)
+            : ({
+                type: "thread.metadata.update",
+                scheduledTaskWait: { taskIds: [ScheduledTaskId.make("automation")], awaited: true },
+              } as const)),
+        });
+        const held = yield* orchestrator.getThreadProjection(threadId);
+        assert.instanceOf(
+          yield* orchestrator
+            .dispatch({
+              type: "thread.auto-settle",
+              commandId: CommandId.make(`runtime-layer-lifecycle-${policy}-auto-settle`),
+              threadId,
+              snapshotAt: held.thread.updatedAt,
+            })
+            .pipe(Effect.flip),
+          Orchestrator.OrchestratorDispatchError,
+        );
+        yield* orchestrator.dispatch({
+          commandId: CommandId.make(`runtime-layer-lifecycle-${policy}-release`),
+          threadId,
+          ...(policy === "goal"
+            ? ({ type: "thread.goal.update", goal: null } as const)
+            : ({
+                type: "thread.metadata.update",
+                scheduledTaskWait: {
+                  taskIds: [ScheduledTaskId.make("automation")],
+                  awaited: false,
+                },
+              } as const)),
+        });
+      }
       const preAutoProjection = yield* orchestrator.getThreadProjection(threadId);
       const staleAutoSettle = yield* orchestrator
         .dispatch({
