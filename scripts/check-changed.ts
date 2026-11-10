@@ -244,6 +244,7 @@ const steps = [
       "run",
       "--cache",
       "--parallel",
+      "--verbose",
       "--concurrency-limit",
       "4",
       ...filters(affected),
