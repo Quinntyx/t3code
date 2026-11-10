@@ -82,7 +82,7 @@ export function AssistantCitationCommentEditor({
           onDraftChange?.(nextComment);
         }}
         onCommandKeyDown={(key, event) => {
-          if (key !== "Enter" || event.shiftKey || event.altKey) return false;
+          if (key !== "Enter" || event.shiftKey) return false;
           if (event.metaKey || event.ctrlKey) {
             submitAndSend();
           } else {
