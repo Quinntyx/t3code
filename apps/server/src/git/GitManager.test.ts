@@ -114,6 +114,7 @@ type FakeProviderCall =
       readonly headSelector: string;
       readonly title: string;
       readonly targetRepository?: string;
+      readonly sourceRepository?: string;
     }
   | { readonly operation: "getChangeRequest"; readonly reference: string }
   | {
@@ -482,6 +483,7 @@ function createFakeSourceControlProvider(scenario: FakeProviderScenario = {}): {
           headSelector: input.headSelector,
           title: input.title,
           ...(input.target?.repository ? { targetRepository: input.target.repository } : {}),
+          ...(input.source?.repository ? { sourceRepository: input.source.repository } : {}),
         }),
       getDefaultBranch: (input) =>
         record(input.cwd, { operation: "getDefaultBranch" }).pipe(
@@ -4494,6 +4496,12 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             : [],
         );
         expect(targets).toEqual(targets.map(() => target));
+        const creation = calls.find((call) => call.operation === "createChangeRequest");
+        expect(creation?.sourceRepository).toBe(
+          target !== undefined && headSelector.includes(":")
+            ? `${headOwner}/codething-mvp`
+            : undefined,
+        );
       }),
   );
 

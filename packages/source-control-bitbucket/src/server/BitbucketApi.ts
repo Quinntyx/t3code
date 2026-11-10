@@ -1133,6 +1133,12 @@ export const make = Effect.gen(function* () {
         ),
       );
       const sourceOwner = sourceWorkspace(input);
+      const sourceRepository = input.source?.repository;
+      const sourceRepositoryName = sourceRepository?.includes("/")
+        ? sourceRepository
+        : sourceOwner
+          ? `${sourceOwner}/${sourceRepository ?? repository.repoSlug}`
+          : undefined;
       const body = {
         title: input.title,
         description,
@@ -1140,10 +1146,10 @@ export const make = Effect.gen(function* () {
           branch: {
             name: SourceControlProvider.sourceBranch(input),
           },
-          ...(sourceOwner
+          ...(sourceRepositoryName
             ? {
                 repository: {
-                  full_name: `${sourceOwner}/${input.source?.repository ?? repository.repoSlug}`,
+                  full_name: sourceRepositoryName,
                 },
               }
             : {}),

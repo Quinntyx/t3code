@@ -596,6 +596,7 @@ it.effect("creates pull requests using the official REST payload shape", () => {
       cwd: "/repo",
       baseBranch: "main",
       headSelector: "owner:feature/provider",
+      source: { owner: "owner", repository: "owner/fork", refName: "feature/provider" },
       target: { repository: "base/upstream", refName: "main" },
       title: "Provider PR",
       bodyFile,
@@ -615,7 +616,7 @@ it.effect("creates pull requests using the official REST payload shape", () => {
       description: "PR body",
       source: {
         branch: { name: "feature/provider" },
-        repository: { full_name: "owner/upstream" },
+        repository: { full_name: "owner/fork" },
       },
       destination: {
         branch: { name: "main" },

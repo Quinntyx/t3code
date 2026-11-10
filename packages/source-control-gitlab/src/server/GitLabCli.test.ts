@@ -168,6 +168,7 @@ layer("GitLabCli.layer", (it) => {
 
   it.effect("creates merge requests in the recorded base project", () =>
     Effect.gen(function* () {
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("100")));
       mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
       const glab = yield* GitLabCli.GitLabCli;
       yield* glab.createMergeRequest({
@@ -179,9 +180,16 @@ layer("GitLabCli.layer", (it) => {
         title: "Changes",
         bodyFile: "/body.md",
       });
-      const args = mockedRun.mock.calls[0]?.[0].args ?? [];
-      assert.include(args, "projects/Group%2FNested%2FBase/merge_requests");
-      assert.include(args, "source_project_id=Group/Fork");
+      assert.deepEqual(mockedRun.mock.calls[0]?.[0].args, [
+        "api",
+        "projects/Group%2FNested%2FBase",
+        "--jq",
+        ".id",
+      ]);
+      const args = mockedRun.mock.calls[1]?.[0].args ?? [];
+      assert.include(args, "projects/Group%2FFork/merge_requests");
+      assert.include(args, "target_project_id=100");
+      assert.notInclude(args, "source_project_id=Group/Fork");
     }),
   );
 

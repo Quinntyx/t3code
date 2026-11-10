@@ -2463,6 +2463,19 @@ export const make = Effect.gen(function* () {
                 repository: headContext.targetRepositoryNameWithOwner,
               },
             }),
+        ...(headContext.targetRepositoryNameWithOwner !== null &&
+        headContext.isCrossRepository &&
+        headContext.headRepositoryNameWithOwner !== null
+          ? {
+              source: {
+                refName: headContext.headBranch,
+                repository: headContext.headRepositoryNameWithOwner,
+                ...(headContext.headRepositoryOwnerLogin === null
+                  ? {}
+                  : { owner: headContext.headRepositoryOwnerLogin }),
+              },
+            }
+          : {}),
         headSelector: headContext.preferredHeadSelector,
         title: generated.title,
         bodyFile,
