@@ -71,11 +71,6 @@ type WindowTitleBarOptions = Pick<
   "titleBarOverlay" | "titleBarStyle" | "trafficLightPosition"
 >;
 
-type CreateWindowOptions = {
-  readonly initialUrl?: string;
-  readonly onRevealed?: () => void;
-};
-
 type DesktopWindowRuntimeServices =
   | DesktopEnvironment.DesktopEnvironment
   | DesktopState.DesktopState
@@ -101,7 +96,6 @@ export class DesktopWindow extends Context.Service<
   DesktopWindow,
   {
     readonly createMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
-    readonly recreateMain: Effect.Effect<void, DesktopWindowError>;
     readonly ensureMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
     readonly revealOrCreateMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
     readonly activate: Effect.Effect<void, DesktopWindowError>;
@@ -325,7 +319,7 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
 
-  // Window chrome forms at creation: macOS applies changes on the next launch, others via recreateMain.
+  // Window chrome forms at creation, so the setting can only apply on the next launch.
   const readHideWindowControls = Effect.gen(function* () {
     const settings = yield* clientSettings.get.pipe(
       Effect.catch((error) =>
@@ -370,9 +364,10 @@ export const make = Effect.gen(function* () {
     yield* previewManager.reapplyZoom();
   });
 
-  const createWindow = Effect.fn("desktop.window.createWindow")(function* (
-    options?: CreateWindowOptions,
-  ): Effect.fn.Return<Option.Option<Electron.BrowserWindow>, DesktopWindowError> {
+  const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
+    Option.Option<Electron.BrowserWindow>,
+    DesktopWindowError
+  > {
     if (yield* Ref.get(desktopState.quitting)) return Option.none();
     yield* previewManager.getBrowserSession();
     const applicationUrl = getDesktopUrl(environment.isDevelopment);
@@ -734,7 +729,7 @@ export const make = Effect.gen(function* () {
       if (window.isDestroyed()) {
         return;
       }
-      void window.loadURL(options?.initialUrl ?? applicationUrl).catch(() => undefined);
+      void window.loadURL(applicationUrl).catch(() => undefined);
     };
     const scheduleDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber !== undefined || window.isDestroyed()) {
@@ -849,7 +844,6 @@ export const make = Effect.gen(function* () {
         window.maximize();
       }
       void runPromise(Effect.andThen(electronWindow.reveal(window), dismissConnectingSplash));
-      options?.onRevealed?.();
     });
 
     loadApplication();
@@ -866,49 +860,14 @@ export const make = Effect.gen(function* () {
     return Option.some(window);
   });
 
-  const createMain = Effect.fn("desktop.window.createMain")(function* (
-    options?: CreateWindowOptions,
-  ) {
-    const window = yield* createWindow(options);
+  const createMain = Effect.gen(function* () {
+    const window = yield* createWindow();
     if (Option.isSome(window)) {
       yield* electronWindow.setMain(window.value);
       yield* logWindowInfo("main window created");
     }
     return window;
-  });
-
-  // Electron fixes the window controls overlay at creation, so changing the setting means
-  // replacing the window. The old one stays visible until the new one paints.
-  const recreateMain = Effect.fn("desktop.window.recreateMain")(function* () {
-    const existingWindow = yield* currentMainWindow;
-    if (Option.isNone(existingWindow)) return;
-    const previousWindow = existingWindow.value;
-    if (previousWindow.isDestroyed()) return;
-    const applicationUrl = getDesktopUrl(environment.isDevelopment);
-    const currentUrl = previousWindow.webContents.getURL();
-    const initialUrl = isSameOriginRendererNavigation({
-      applicationUrl,
-      navigationUrl: currentUrl,
-    })
-      ? currentUrl
-      : undefined;
-    yield* flushMainWindowBounds;
-    let previousDestroyed = false;
-    const destroyPrevious = () => {
-      if (previousDestroyed) return;
-      previousDestroyed = true;
-      if (!previousWindow.isDestroyed()) {
-        previousWindow.destroy();
-      }
-    };
-    const window = yield* createMain({
-      ...(initialUrl === undefined ? {} : { initialUrl }),
-      onRevealed: destroyPrevious,
-    });
-    if (Option.isNone(window)) {
-      destroyPrevious();
-    }
-  });
+  }).pipe(Effect.withSpan("desktop.window.createMain"));
 
   const ensureMain = Effect.gen(function* () {
     if (yield* Ref.get(desktopState.quitting)) return Option.none<Electron.BrowserWindow>();
@@ -916,7 +875,7 @@ export const make = Effect.gen(function* () {
     if (Option.isSome(existingWindow)) {
       return existingWindow;
     }
-    return yield* createMain();
+    return yield* createMain;
   }).pipe(Effect.withSpan("desktop.window.ensureMain"));
 
   const requireWindow = (window: Option.Option<Electron.BrowserWindow>) =>
@@ -941,7 +900,7 @@ export const make = Effect.gen(function* () {
     if (yield* waitingForBackend) return;
     const existingWindow = yield* currentMainWindow;
     if (Option.isSome(existingWindow)) return;
-    yield* createMain();
+    yield* createMain;
   }).pipe(Effect.withSpan("desktop.window.createMainIfBackendReady"));
 
   const showConnectingSplash = Effect.gen(function* () {
@@ -1021,8 +980,7 @@ export const make = Effect.gen(function* () {
   });
 
   return DesktopWindow.of({
-    createMain: createMain().pipe(Effect.flatMap(requireWindow)),
-    recreateMain: recreateMain(),
+    createMain: createMain.pipe(Effect.flatMap(requireWindow)),
     ensureMain: ensureMain.pipe(Effect.flatMap(requireWindow)),
     revealOrCreateMain,
     prepareCaptureReveal: Effect.gen(function* () {

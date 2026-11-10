@@ -19,7 +19,6 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { isElectron } from "../../env";
-import { isMacPlatform } from "../../lib/utils";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -597,11 +596,7 @@ export function AppearanceSettingsPanel() {
         <SettingsSection id="window" title="Window">
           <SettingsRow
             {...searchableSetting("hide-window-controls")}
-            description={
-              isMacPlatform(navigator.platform)
-                ? "Hides the window minimize, maximize, and close buttons. Restart T3 to apply."
-                : "Hides the window minimize, maximize, and close buttons."
-            }
+            description="Hides the window minimize, maximize, and close buttons. Restart T3 to apply."
             resetAction={
               settings.hideWindowControls !== DEFAULT_UNIFIED_SETTINGS.hideWindowControls ? (
                 <SettingResetButton
