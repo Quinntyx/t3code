@@ -26,6 +26,8 @@ import { ContextChipPopover } from "../contextChipParts";
 import { Button } from "../ui/button";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
+import ChatMarkdown from "../ChatMarkdown";
+import type { ComposerPromptEditorHandle } from "../ComposerPromptEditorTiptap";
 import { AssistantCitationCommentEditor } from "./AssistantCitationCommentEditor";
 import { resolveAssistantCitationCommentDismissal } from "./assistantCitationCommentDismissal";
 import { observeAssistantCitationCommentSource } from "./AssistantCitationSource";
@@ -51,7 +53,7 @@ export function AssistantCitationChip({
   };
 }) {
   const navigate = useNavigate();
-  const commentInputRef = useRef<HTMLTextAreaElement>(null);
+  const commentEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const commentPopupRef = useRef<HTMLDivElement>(null);
   const draftCommentRef = useRef<string | null>(null);
   const [unavailableSourceAnchor, setUnavailableSourceAnchor] =
@@ -187,7 +189,7 @@ export function AssistantCitationChip({
               align="end"
               anchor={popupAnchor}
               initialFocus={() => {
-                commentInputRef.current?.focus({ preventScroll: true });
+                commentEditorRef.current?.focusAtEnd();
                 return false;
               }}
               finalFocus={
@@ -213,7 +215,7 @@ export function AssistantCitationChip({
               <AssistantCitationCommentEditor
                 key={serializeAssistantCitation(citation)}
                 citation={citation}
-                inputRef={commentInputRef}
+                editorRef={commentEditorRef}
                 onDraftChange={(comment) => {
                   draftCommentRef.current = comment;
                   commentEditor.onDraftChange?.(comment);
@@ -264,14 +266,16 @@ function AssistantCitationQuote({ citation }: { citation: AssistantCitation }) {
       ref={observeFade}
       onScroll={(event) => updateFade(event.currentTarget)}
       className={cn(
-        "max-h-64 min-h-0 space-y-3 self-stretch overflow-y-auto whitespace-pre-wrap wrap-break-word",
+        "max-h-64 min-h-0 space-y-3 self-stretch overflow-y-auto wrap-break-word",
         getVirtualizedScrollFadeClassName(fade),
       )}
     >
-      <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">
+      <blockquote className="border-l-2 border-border pl-3 whitespace-pre-wrap text-muted-foreground">
         {citation.text}
       </blockquote>
-      {citation.comment ? <p>{citation.comment}</p> : null}
+      {citation.comment ? (
+        <ChatMarkdown text={citation.comment} cwd={undefined} lineBreaks parseRawHtml={false} />
+      ) : null}
     </div>
   );
 }
