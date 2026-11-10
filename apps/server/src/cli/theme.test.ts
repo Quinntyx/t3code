@@ -16,8 +16,8 @@ import { cli } from "../binCli.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-// Windows chmod cannot force these directory or file permission failures.
-const windowsHost = HostProcess.Platform.defaultValue() === "win32";
+// Windows chmod cannot force these directory or file permission failures, and root ignores them.
+const chmodIgnored = HostProcess.Platform.defaultValue() === "win32" || process.getuid?.() === 0;
 
 const runCli = (args: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
@@ -132,7 +132,7 @@ describe("t3 theme", () => {
     }),
   );
 
-  it.effect.skipIf(windowsHost)("restores the previous theme when a re-publish fails to set", () =>
+  it.effect.skipIf(chmodIgnored)("restores the previous theme when a re-publish fails to set", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
       writeSettings(baseDir, {});
@@ -156,7 +156,7 @@ describe("t3 theme", () => {
     }),
   );
 
-  it.effect.skipIf(windowsHost)("refuses to write when the settings file cannot be read", () =>
+  it.effect.skipIf(chmodIgnored)("refuses to write when the settings file cannot be read", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
       writeSettings(baseDir, { enableProviderUpdateChecks: false });

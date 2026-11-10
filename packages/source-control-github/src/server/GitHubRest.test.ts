@@ -560,6 +560,7 @@ describe("GitHubCredentials", () => {
       Layer.provide(TestSourceControlHost.layer({ process: { run } })),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(Layer.succeed(HttpClient.HttpClient, unexpectedHttp)),
+      Layer.provide(Layer.succeed(HostProcess.Environment, {})),
     );
 
   it.effect("does not cache a gh failure that is not about signing in", () => {
