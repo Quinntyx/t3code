@@ -166,6 +166,25 @@ layer("GitLabCli.layer", (it) => {
     }),
   );
 
+  it.effect("creates merge requests in the recorded base project", () =>
+    Effect.gen(function* () {
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+      const glab = yield* GitLabCli.GitLabCli;
+      yield* glab.createMergeRequest({
+        cwd: "/repo",
+        baseBranch: "main",
+        headSelector: "feature",
+        source: { repository: "Group/Fork", refName: "feature" },
+        target: { repository: "Group/Nested/Base", refName: "main" },
+        title: "Changes",
+        bodyFile: "/body.md",
+      });
+      const args = mockedRun.mock.calls[0]?.[0].args ?? [];
+      assert.include(args, "projects/Group%2FNested%2FBase/merge_requests");
+      assert.include(args, "source_project_id=Group/Fork");
+    }),
+  );
+
   it.effect("surfaces a friendly error when the merge request is not found", () =>
     Effect.gen(function* () {
       const cause = new VcsProcessExitError({

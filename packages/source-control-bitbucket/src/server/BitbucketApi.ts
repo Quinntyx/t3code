@@ -351,6 +351,7 @@ export class BitbucketApi extends Context.Service<
     }) => Effect.Effect<{ readonly body: string; readonly truncated: boolean }, BitbucketApiError>;
     readonly listPullRequests: (input: {
       readonly cwd: string;
+      readonly repository?: string;
       readonly context?: SourceControlProvider.SourceControlProviderContext;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
@@ -1117,7 +1118,10 @@ export const make = Effect.gen(function* () {
       );
     }),
     createPullRequest: Effect.fn("BitbucketApi.createPullRequest")(function* (input) {
-      const repository = yield* resolveRepository(input);
+      const repository = yield* resolveRepository({
+        ...input,
+        ...(input.target?.repository ? { repository: input.target.repository } : {}),
+      });
       const description = yield* fileSystem.readFileString(input.bodyFile).pipe(
         Effect.mapError(
           (cause) =>

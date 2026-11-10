@@ -277,6 +277,7 @@ export class GitLabCli extends Context.Service<
 
     readonly listMergeRequests: (input: {
       readonly cwd: string;
+      readonly targetRepository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -490,6 +491,7 @@ export const make = Effect.gen(function* () {
           String(input.limit ?? 20),
           "--output",
           "json",
+          ...(input.targetRepository ? ["--repo", input.targetRepository] : []),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -639,7 +641,9 @@ export const make = Effect.gen(function* () {
           "api",
           "--method",
           "POST",
-          "projects/:fullpath/merge_requests",
+          input.target?.repository
+            ? `projects/${encodeURIComponent(input.target.repository)}/merge_requests`
+            : "projects/:fullpath/merge_requests",
           "--raw-field",
           `source_branch=${sourceRefName(input)}`,
           "--raw-field",

@@ -50,6 +50,7 @@ export const make = Effect.gen(function* () {
         return bitbucket
           .listPullRequests({
             cwd: input.cwd,
+            ...(input.targetRepository ? { repository: input.targetRepository } : {}),
             ...(input.context ? { context: input.context } : {}),
             headSelector: input.headSelector,
             ...(source ? { source } : {}),
