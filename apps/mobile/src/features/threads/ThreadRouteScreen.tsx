@@ -117,7 +117,12 @@ import {
   type ThreadInspectorPresentation,
 } from "./thread-inspector-preview";
 import { useStartSideChat } from "./useStartSideChat";
-import type { ThreadInspectorMode, ThreadInspectorTarget } from "./thread-inspector-navigation";
+import {
+  resolveThreadInspectorMode,
+  type ThreadInspectorMode,
+  type ThreadInspectorTarget,
+} from "./thread-inspector-navigation";
+import { ThreadDetailsInspectorPane } from "./ThreadDetails";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 
 const terminalDebugLog = createDebugLogger("terminal").log;
@@ -427,6 +432,7 @@ function ThreadRouteContent(
     };
   })();
   const navigation = useNavigation();
+  const closeThread = useWorkspaceBackNavigation("threads");
   const selectDetail = useSelectWorkspaceDetail();
   const openPullRequest = useOpenPullRequest();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack, "merge thread back");
@@ -466,22 +472,14 @@ function ThreadRouteContent(
   const threadId = firstRouteParam(params.threadId);
   const routeThreadIdentity =
     environmentIdRaw !== null && threadId !== null ? `${environmentIdRaw}:${threadId}` : null;
-  // The chosen mode survives thread switches; "route" only applies while the route
-  // supplies an inspector, which is also the default whenever it does.
   const [chosenInspectorMode, setChosenInspectorMode] = useState<ThreadInspectorMode | null>(null);
   const previewTarget = props.inspectorPresentation ? undefined : params.inspector;
-  const inspectorMode = (() => {
-    if (previewTarget) return "preview";
-    const mode =
-      props.renderInspector === undefined
-        ? chosenInspectorMode === "route"
-          ? null
-          : chosenInspectorMode
-        : chosenInspectorMode === null || chosenInspectorMode === "route"
-          ? "route"
-          : chosenInspectorMode;
-    return mode === "files" && selectedThreadCwd === null ? null : mode;
-  })();
+  const inspectorMode = resolveThreadInspectorMode({
+    previewing: previewTarget !== undefined,
+    routeInspector: props.renderInspector !== undefined,
+    chosen: chosenInspectorMode,
+    hasCwd: selectedThreadCwd !== null,
+  });
   const revealPreview = useEffectEvent(() => showInspector());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the workspace navigator's inspector pane when route params bring a preview target
   useEffect(() => {
@@ -563,6 +561,11 @@ function ThreadRouteContent(
     setChosenInspectorMode(props.renderInspector === undefined ? "files" : "route");
     showInspector();
   };
+  const handleOpenDetailsInspector = () => {
+    navigation.setParams({ inspector: undefined });
+    setChosenInspectorMode("details");
+    showInspector();
+  };
   const handleSelectInspectorFile = (path: string) => {
     if (selectedThread === null) {
       return;
@@ -617,27 +620,6 @@ function ThreadRouteContent(
         }}
       />
     ) : null;
-  const inspectorContent: InspectorContent | null =
-    inspectorMode === null
-      ? null
-      : {
-          active: inspectorMode,
-          resetKeys: [routeThreadIdentity, selectedThreadCwd],
-          panes: [
-            ...(inspectorMode === "preview"
-              ? [
-                  {
-                    key: "preview",
-                    render: renderPreviewInspector,
-                  },
-                ]
-              : []),
-            { key: "files", render: renderFilesInspector, prewarm: true },
-            { key: "git", render: renderGitInspector, prewarm: true },
-            ...(props.renderInspector ? [{ key: "route", render: props.renderInspector }] : []),
-          ],
-        };
-
   const handleOpenConnectionEditor = () => {
     void navigation.navigate("Connections");
   };
@@ -796,6 +778,39 @@ function ThreadRouteContent(
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
+  const renderDetailsInspector = () => (
+    <ThreadDetailsInspectorPane
+      title={selectedThread?.title ?? "Thread"}
+      project={selectedThreadProject}
+      cwd={selectedThreadCwd}
+      worktreePath={selectedThread?.worktreePath ?? selectedThreadDetailWorktreePath}
+      gitControls={threadGitControlProps}
+      onCloseThread={closeThread}
+      onReturnToThread={props.onReturnToThread}
+    />
+  );
+  const inspectorContent: InspectorContent | null =
+    inspectorMode === null
+      ? null
+      : {
+          active: inspectorMode,
+          resetKeys: [routeThreadIdentity, selectedThreadCwd],
+          panes: [
+            ...(inspectorMode === "preview"
+              ? [
+                  {
+                    key: "preview",
+                    render: renderPreviewInspector,
+                  },
+                ]
+              : []),
+            { key: "files", render: renderFilesInspector, prewarm: true },
+            { key: "git", render: renderGitInspector, prewarm: true },
+            { key: "details", render: renderDetailsInspector },
+            ...(props.renderInspector ? [{ key: "route", render: props.renderInspector }] : []),
+          ],
+        };
+
   const handleEditFailedCreation = async () => {
     const creation = selectedThreadCreation?.message;
     if (!creation?.creation || routeThreadIdentity === null) {
@@ -961,6 +976,7 @@ function ThreadRouteContent(
                 worktreePath={selectedThread.worktreePath ?? selectedThreadDetailWorktreePath}
                 inspectorMode={inspectorMode}
                 onOpenFilesInspector={handleOpenFilesInspector}
+                onOpenDetailsInspector={handleOpenDetailsInspector}
                 onReturnToThread={props.onReturnToThread}
               />
             )

@@ -8,6 +8,8 @@ need a separate branch and working directory.
 On phones, swipe left across the conversation or tap **Thread details** to open
 its workspace and source-control drawer. Dismiss the keyboard before swiping.
 Swipe right, tap outside, or close the drawer to return to the conversation.
+On tablets and wide windows, **Thread details** opens the same details beside the
+conversation, or as a sheet where there is no room.
 
 Use the drawer to run or edit project actions, import actions from `t3.json`,
 review changes, and manage branches and worktrees. Source-control and terminal
