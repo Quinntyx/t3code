@@ -1,13 +1,6 @@
 {
   "customNotices": [
     {
-      "name": "liquid-glass-studio",
-      "bundles": ["web", "desktop"],
-      "license": "MIT",
-      "sourceUrl": "https://github.com/iyinchao/liquid-glass-studio",
-      "noticeFile": "apps/web/src/voice/vendor/liquid-glass-studio/LICENSE"
-    },
-    {
       "name": "opencode Office viewers",
       "bundles": ["web"],
       "license": "MIT",

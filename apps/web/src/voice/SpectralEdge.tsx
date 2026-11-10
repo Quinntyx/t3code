@@ -49,10 +49,7 @@ export function SpectralEdge({
         reducedMotion: motion.matches,
       });
     };
-    const repaint = () => {
-      renderer.updateBackground();
-      update();
-    };
+
     const lost = (event: Event) => {
       event.preventDefault();
       failed = true;
@@ -64,13 +61,13 @@ export function SpectralEdge({
     document.addEventListener("visibilitychange", update);
     motion.addEventListener("change", update);
     const stopAudio = voiceAudio.subscribe(update);
-    const stopResize = observeResize(element, repaint);
-    const theme = new MutationObserver(repaint);
+    const stopResize = observeResize(element, update);
+    const theme = new MutationObserver(update);
     theme.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["class", "style"],
     });
-    repaint();
+    update();
     return () => {
       loop.dispose();
       stopAudio();
