@@ -190,6 +190,17 @@ describe("project voice audio owner with controlled WebAudio/device boundary", (
     await f.owner.disconnect();
   });
 
+  it("queues a reply that Gemini streams faster than it plays", async () => {
+    const f = setup();
+    await f.owner.connect(f.attach);
+    // Ten seconds of 24 kHz speech arriving at once, as Live sends a whole reply.
+    for (let chunk = 0; chunk < 25; chunk++) f.handlers().audio(new Uint8Array(19_200), 0);
+    expect(f.owner.snapshot().error).toBeNull();
+    expect(f.sources).toHaveLength(25);
+    expect(f.sources.at(-1)!.start.mock.calls[0]![0]).toBeCloseTo(1 + 9.6);
+    await f.owner.disconnect();
+  });
+
   it("ignores already-dispatched playback callbacks after a reconnect", async () => {
     const f = setup();
     await f.owner.connect(f.attach);
@@ -317,13 +328,14 @@ describe("project voice audio owner with controlled WebAudio/device boundary", (
     const f = setup();
     await f.owner.connect(f.attach);
     const old = f.handlers();
-    old.audio(new Uint8Array(24000), 0);
-    old.audio(new Uint8Array(24000), 0);
+    const minute = new Uint8Array(24_000 * 2 * 60);
+    old.audio(minute, 0);
+    old.audio(minute, 0);
     const stopped = deferred<void>();
     f.owner.subscribe(() => {
       if (f.owner.snapshot().phase === "error") stopped.resolve();
     });
-    old.audio(new Uint8Array(24000), 0);
+    old.audio(minute, 0);
     await stopped.promise;
     await f.owner.disconnect();
     expect(f.sources.length).toBeLessThanOrEqual(2);

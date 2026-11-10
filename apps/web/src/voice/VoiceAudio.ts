@@ -38,6 +38,8 @@ export interface VoiceState {
   readonly cleanupRequired: boolean;
   readonly flowing: boolean;
 }
+// Live streams a reply faster than it plays, so the queue holds a whole spoken reply.
+const MAX_QUEUED_PLAYBACK_SECONDS = 120;
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Voice failed. Connect again explicitly.";
 
@@ -291,8 +293,8 @@ export class VoiceAudio {
       const samples = decodePcm16(bytes);
       const start = Math.max(context.currentTime, this.nextPlay);
       const end = start + samples.length / 24000;
-      if (this.sources.size >= 32 || end - context.currentTime > 1)
-        throw new Error("Voice playback exceeded its one-second queue. Connect again explicitly.");
+      if (end - context.currentTime > MAX_QUEUED_PLAYBACK_SECONDS)
+        throw new Error("Voice playback fell too far behind. Connect again explicitly.");
       const buffer = context.createBuffer(1, samples.length, 24000);
       buffer.copyToChannel(samples, 0);
       const source = context.createBufferSource();
