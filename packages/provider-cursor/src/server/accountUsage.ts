@@ -1,4 +1,4 @@
-import type { UsageRecord } from "@t3tools/provider-core/server/usage";
+import { normalizeUsageTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -17,10 +17,6 @@ function object(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function tokens(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
 }
 
 // Grok's xAI first-party rate entry has no bare alias.
@@ -254,13 +250,15 @@ export const readCursorAccountUsage = Effect.fn("readCursorAccountUsage")(functi
           normalized.push(null);
           continue;
         }
-        const totals = {
-          uncachedInputTokens: tokens(usage.inputTokens),
-          cachedInputTokens: tokens(usage.cacheReadTokens),
-          cacheCreationTokens: tokens(usage.cacheWriteTokens),
-          outputTokens: tokens(usage.outputTokens),
-          reasoningTokens: 0,
-        };
+        const totals = normalizeUsageTokens(
+          {
+            inputTokens: usage.inputTokens,
+            cachedInputTokens: usage.cacheReadTokens,
+            cacheCreationTokens: usage.cacheWriteTokens,
+            outputTokens: usage.outputTokens,
+          },
+          "uncached",
+        );
         const reportedCostUsd =
           typeof usage.totalCents === "number" ? usage.totalCents / 100 : null;
         const sessionId = typeof event.conversationId === "string" ? event.conversationId : "";

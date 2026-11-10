@@ -59,7 +59,7 @@ update model pricing.
 
 ## See one thread's usage
 
-On web and desktop, **Usage** in the thread details card charts the tokens a thread used over time,
+On web and desktop, **Consumption** in the thread details card charts the tokens a thread used over time,
 with its estimated API-equivalent cost. **Main agent** is the thread's own turns; **Delegates** are
 the subagent threads it started and any those started. A group that ran more than one model reads
 **Mixed**; select it for the per-model breakdown. A dotted line marks each time the thread's
@@ -67,11 +67,13 @@ context was compacted. Only Claude Code, Codex, and Pi report per-turn usage, an
 runs inside its own turn count toward the main agent.
 
 Choose whether the card shows it under **Consumption** in Settings → Appearance → Thread details,
-or by right-clicking the card.
+or by right-clicking the card. **Usage limits** shows the current account's remaining allowance;
+**Context window** shows how much of the model's context the thread uses. The sidebar hover shows
+runtime and estimated cost; **Usage** shows totals across your environments.
 
 ## Cap a thread's consumption
 
-Right-click **Usage** in the thread details card to add consumption limits for that thread. Add as
+Right-click **Consumption** in the thread details card to add consumption limits for that thread. Add as
 many as you need; the thread stops when any one of them is reached, and delegates count toward the
 same thread.
 

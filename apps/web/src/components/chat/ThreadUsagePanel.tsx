@@ -405,7 +405,7 @@ export function ThreadUsagePanel(props: {
       <div className="flex flex-col">
         <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
           <GaugeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Usage</span>
+          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Consumption</span>
           {hasUsage ? (
             <UsageFigures models={data.models} />
           ) : (

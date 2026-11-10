@@ -14,7 +14,12 @@ import type {
   ThreadUsageModel,
   UsageTokenTotals,
 } from "@t3tools/contracts";
-import { EMPTY_TOTALS, type UsageSpeed } from "@t3tools/provider-core/server/usage";
+import {
+  EMPTY_TOTALS,
+  normalizeUsageTokens,
+  totalTokens,
+  type UsageSpeed,
+} from "@t3tools/provider-core/server/usage";
 import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
@@ -62,7 +67,7 @@ export interface ThreadUsageRecords {
   readonly providerTurns: ReadonlyArray<
     Pick<
       OrchestrationV2ProviderTurn,
-      "providerThreadId" | "runAttemptId" | "startedAt" | "completedAt" | "turnTokenUsage"
+      "providerThreadId" | "runAttemptId" | "startedAt" | "completedAt" | "turnTokenUsage" | "model"
     >
   >;
 }
@@ -126,18 +131,15 @@ export function threadUsageTurns(
   const turns: ThreadUsageTurn[] = [];
   for (const turn of records.providerTurns) {
     const usage = turn.turnTokenUsage;
-    if (usage === undefined || usage.usageStatus === "unavailable") continue;
+    if (usage === undefined || usage.usageStatus === "unavailable" || usage.localCommand) continue;
     const attempt = turn.runAttemptId === null ? undefined : attempts.get(turn.runAttemptId);
     const run = attempt === undefined ? undefined : runs.get(attempt.runId);
     const driver = drivers.get(turn.providerThreadId);
     if (attempt === undefined || run?.threadId !== records.thread.id || driver === undefined) {
       continue;
     }
-    const input = usage.inputTokens ?? 0;
-    const cachedInputTokens = usage.cachedInputTokens ?? 0;
-    const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
-    const outputTokens = usage.outputTokens ?? 0;
-    if (input + outputTokens === 0) continue;
+    const totals = normalizeUsageTokens(usage, "inclusive");
+    if (totalTokens(totals) === 0) continue;
     const completedAtMs =
       turn.completedAt === null ? nowMs : DateTime.toEpochMillis(turn.completedAt);
     turns.push({
@@ -145,27 +147,16 @@ export function threadUsageTurns(
       threadId: records.thread.id,
       providerInstanceId: attempt.providerInstanceId,
       driver,
-      model: run.modelSelection.model,
+      model:
+        usage.models?.length === 1 ? usage.models[0]! : (turn.model ?? run.modelSelection.model),
       speed: usageSpeed(run.modelSelection),
       startedAtMs: turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt),
       completedAtMs,
-      totals: {
-        uncachedInputTokens: Math.max(0, input - cachedInputTokens - cacheCreationTokens),
-        cachedInputTokens,
-        cacheCreationTokens,
-        outputTokens,
-        reasoningTokens: usage.reasoningTokens ?? 0,
-      },
+      totals,
     });
   }
   return turns;
 }
-
-const totalTokens = (totals: UsageTokenTotals) =>
-  totals.uncachedInputTokens +
-  totals.cachedInputTokens +
-  totals.cacheCreationTokens +
-  totals.outputTokens;
 
 const addTotals = (left: UsageTokenTotals, right: UsageTokenTotals): UsageTokenTotals => ({
   uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,

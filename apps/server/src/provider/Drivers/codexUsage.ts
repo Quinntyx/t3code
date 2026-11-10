@@ -4,13 +4,13 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import {
+  normalizeUsageTokens,
   parseTimestampMs,
   type ProviderUsageReader,
   type TranscriptUsageFormat,
   type UsageRecord,
   type UsageSpeed,
 } from "@t3tools/provider-core/server/usage";
-import type { UsageTokenTotals } from "@t3tools/contracts";
 
 import * as CodexUsageHistory from "../../usage/CodexUsageHistory.ts";
 import { resolveCodexHomeLayout } from "./CodexHomeLayout.ts";
@@ -368,20 +368,16 @@ function codexRequestRecord(
   usage: CodexTokenUsage,
   { timestampMs, model, turnId, speed, sawThreadSettings }: CodexRequestAttribution,
 ): UsageRecord {
-  const inputTokens = usage.input_tokens;
-  const cachedInputTokens = usage.cached_input_tokens;
-  const cacheCreationTokens = usage.cache_write_input_tokens;
-  const outputTokens = usage.output_tokens;
-
-  const totals: UsageTokenTotals = {
-    // Codex reports `input_tokens` inclusive of the cached portion.
-    uncachedInputTokens: inputTokens - cachedInputTokens - cacheCreationTokens,
-    cachedInputTokens,
-    cacheCreationTokens,
-    outputTokens,
-    // Reported inside output_tokens, surfaced separately for the token mix.
-    reasoningTokens: usage.reasoning_output_tokens,
-  };
+  const totals = normalizeUsageTokens(
+    {
+      inputTokens: usage.input_tokens,
+      cachedInputTokens: usage.cached_input_tokens,
+      cacheCreationTokens: usage.cache_write_input_tokens,
+      outputTokens: usage.output_tokens,
+      reasoningTokens: usage.reasoning_output_tokens,
+    },
+    "inclusive",
+  );
 
   return {
     provider: "codex",

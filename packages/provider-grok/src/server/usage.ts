@@ -4,6 +4,7 @@ import * as Path from "effect/Path";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
+  normalizeUsageTokens,
   tokenCount,
   totalTokens,
   type ProviderUsageReader,
@@ -47,21 +48,10 @@ function readGrokUsageTotals(value: unknown): GrokUsageTotals | null {
 }
 
 function grokTotalsToUsage(totals: GrokUsageTotals): UsageTokenTotals {
-  const cachedInputTokens = totals.cachedReadTokens;
-  const cacheCreationTokens = totals.cacheCreationTokens;
-  // Grok reports `inputTokens` inclusive of the cached portion, matching Codex.
-  const uncachedInputTokens = Math.max(
-    0,
-    totals.inputTokens - cachedInputTokens - cacheCreationTokens,
+  return normalizeUsageTokens(
+    { ...totals, cachedInputTokens: totals.cachedReadTokens },
+    "inclusive",
   );
-  const outputTokens = totals.outputTokens;
-  return {
-    uncachedInputTokens,
-    cachedInputTokens,
-    cacheCreationTokens,
-    outputTokens,
-    reasoningTokens: Math.min(outputTokens, totals.reasoningTokens),
-  };
 }
 
 export function parseGrokLine(line: string): readonly UsageRecord[] {

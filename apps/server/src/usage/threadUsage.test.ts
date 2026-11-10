@@ -112,6 +112,16 @@ describe("thread usage", () => {
         { from: 0, to: 1, usage: usage(1_000, 100, 800) },
         { from: 1, to: 2, usage: usage(5_000, 500), runThreadId: "source" },
         { from: 2, to: 3, usage: { ...usage(0, 0), usageStatus: "unavailable" } },
+        { from: 3, to: 4, usage: { ...usage(5_000, 500), localCommand: true } },
+        {
+          from: 4,
+          to: 5,
+          usage: {
+            ...usage(1_000, 100, 800),
+            cacheCreationTokens: 400,
+            reasoningTokens: 150,
+          },
+        },
       ]),
       T0,
     );
@@ -123,7 +133,62 @@ describe("thread usage", () => {
         outputTokens: 100,
         reasoningTokens: 0,
       },
+      {
+        uncachedInputTokens: 0,
+        cachedInputTokens: 800,
+        cacheCreationTokens: 200,
+        outputTokens: 100,
+        reasoningTokens: 100,
+      },
     ]);
+  });
+
+  it("uses a reported model rather than pricing an automatic selection literally", () => {
+    const turns = threadUsageTurns(
+      "main",
+      records("main", claude, "opus", [
+        { from: 0, to: 1, usage: { ...usage(1_000, 100), models: ["claude-opus-5-5"] } },
+      ]),
+      T0,
+    );
+    const result = buildThreadUsage({
+      turns,
+      compactedAtMs: [],
+      pricing,
+      nowMs: T0,
+      active: false,
+    });
+    expect(result.models[0]?.model).toBe("claude-opus-5-5");
+    expect(result.models[0]?.costUsd).toBeCloseTo(0.015);
+    const saved = records("main", claude, "opus", [{ from: 0, to: 1, usage: usage(1_000, 100) }]);
+    expect(
+      threadUsageTurns(
+        "main",
+        {
+          ...saved,
+          providerTurns: saved.providerTurns.map((turn) => ({
+            ...turn,
+            model: "claude-opus-5-5",
+          })),
+        },
+        T0,
+      )[0]?.model,
+    ).toBe("claude-opus-5-5");
+    expect(
+      buildThreadUsage({
+        turns,
+        compactedAtMs: [],
+        pricing: {
+          ...pricing,
+          modelAliases: new Map([["claude-opus-5-5", "account-price"]]),
+          overrides: createOverrideRateTable({
+            "account-price": { inputCostPerMillionTokens: 20, outputCostPerMillionTokens: 100 },
+          }),
+        },
+        nowMs: T0,
+        active: false,
+      }).models[0]?.costUsd,
+    ).toBeCloseTo(0.03);
   });
 
   it("sums own run durations without quota gaps, inherited runs, or a usage requirement", () => {
