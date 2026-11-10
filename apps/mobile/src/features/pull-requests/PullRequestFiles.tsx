@@ -4,17 +4,18 @@ import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import type { PullRequestChangeBreakdown } from "@t3tools/contracts";
 import { useState } from "react";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { HeaderIconButton } from "../../components/ui/HeaderIconButton";
+import { IconButton } from "../../components/ui/IconButton";
 import { Menu } from "../../components/ui/Menu";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { ScreenHeaderButton } from "../../components/ui/ScreenHeaderButton";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
@@ -170,11 +171,20 @@ function FileFilterMenu({ filter }: { readonly filter: ChangedFiles["filter"] })
       onPressAction={filter.toggle}
     >
       <View pointerEvents="none">
-        <HeaderIconButton
-          icon="line.3.horizontal.decrease"
-          accessibilityLabel="Filter review files"
-          selected={filter.hideTestFiles}
-        />
+        {/* Android draws it as the floating chip its bars use; iOS bars are native, so a plain icon. */}
+        {Platform.OS === "android" ? (
+          <ScreenHeaderButton
+            icon="line.3.horizontal.decrease"
+            accessibilityLabel="Filter review files"
+            selected={filter.hideTestFiles}
+          />
+        ) : (
+          <IconButton
+            icon="line.3.horizontal.decrease"
+            accessibilityLabel="Filter review files"
+            selected={filter.hideTestFiles}
+          />
+        )}
       </View>
     </Menu>
   );

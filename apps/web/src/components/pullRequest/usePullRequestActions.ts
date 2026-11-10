@@ -1,4 +1,5 @@
 import { useAtomCommand } from "~/state/use-atom-command";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -50,7 +51,6 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { toastManager } from "../ui/toast";
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import {
-  allowedPullRequestMergeMethods,
   checkoutFailureDescription,
   appendHandoff,
   readableFailure,

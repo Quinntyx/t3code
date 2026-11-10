@@ -2,7 +2,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { AuthFilesystemReadScope, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Clipboard from "expo-clipboard";
-import { useState, type ReactNode } from "react";
+import { use, useState, type ReactNode } from "react";
 import {
   Platform,
   Pressable,
@@ -13,14 +13,18 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { FloatingHeaderButtonBackdrop } from "../../components/ui/FloatingHeaderButtonBackdrop";
 import { ListRow } from "../../components/ui/ListRow";
 import { ListSection } from "../../components/ui/ListSection";
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { cn } from "../../lib/cn";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { InspectorSheetContext } from "../layout/workspace-inspector-sheet";
 import { getTerminalStatusLabel } from "../terminal/terminalMenu";
 import { GitBranchesContent } from "./git/GitBranchesSheet";
 import { useGitOverview, type GitOverview } from "./git/useGitOverview";
@@ -34,15 +38,9 @@ import {
 import { LinkedPullRequestRow, linkedPullRequestKey } from "./LinkedPullRequestList";
 import { ThreadProjectActions } from "./ThreadProjectActions";
 import type { ThreadGitControlsProps } from "./ThreadGitControls";
-import {
-  ThreadListDrawerHost,
-  threadListDrawerWidth,
-  useThreadDetailsDrawer,
-} from "./thread-list-drawer";
+import { ThreadListDrawerHost, threadListDrawerWidth } from "./thread-list-drawer";
 
-type DetailsProps = Parameters<typeof ThreadDetailsDrawer>[0];
-
-export function ThreadDetailsDrawer(props: {
+interface DetailsProps {
   readonly title: string;
   readonly project: EnvironmentProject | null;
   readonly cwd: string | null;
@@ -50,33 +48,21 @@ export function ThreadDetailsDrawer(props: {
   readonly gitControls: ThreadGitControlsProps;
   readonly onCloseThread: () => void;
   readonly onReturnToThread?: (() => void) | undefined;
-}) {
+}
+
+/** Compact windows: the details slide in from the right edge over the thread. */
+export function ThreadDetailsDrawer(props: DetailsProps) {
   const { layout } = useAdaptiveWorkspaceLayout();
   const { width } = useWindowDimensions();
   return (
     <ThreadListDrawerHost side="right" width={threadListDrawerWidth(layout.listPaneWidth, width)}>
-      {() => <ThreadDetailsContent {...props} />}
+      {(drawer) => <ThreadDetailsDrawerPanel {...props} onClose={drawer.closeDrawer} />}
     </ThreadListDrawerHost>
   );
 }
 
-// Read-only facts sit at the top; the actions people reach for most sit in a dock under the thumb.
-function ThreadDetailsContent(props: DetailsProps) {
-  const navigation = useNavigation();
+function ThreadDetailsDrawerPanel(props: DetailsProps & { readonly onClose: () => void }) {
   const insets = useSafeAreaInsets();
-  const { closeDrawer } = useThreadDetailsDrawer();
-  const controls = props.gitControls;
-  const hasThread = controls.hasThread !== false;
-  const git = useGitOverview({
-    environmentId: String(controls.environmentId),
-    threadId: String(controls.threadId),
-    presentation: "drawer",
-    onNavigate: closeDrawer,
-  });
-  const navigate = (action: () => void) => {
-    closeDrawer();
-    action();
-  };
   return (
     <View
       className="flex-1 bg-header"
@@ -94,18 +80,74 @@ function ThreadDetailsContent(props: DetailsProps) {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Close thread details"
-          onPress={closeDrawer}
+          onPress={props.onClose}
           className="h-11 w-11 items-center justify-center rounded-full active:bg-subtle"
         >
           {Platform.OS === "android" ? <FloatingHeaderButtonBackdrop /> : null}
           <SymbolView name="xmark" size={20} tintColorClassName="accent-header-foreground" />
         </Pressable>
       </View>
-      <ScrollView
+      <ThreadDetailsBody {...props} presentation="drawer" onLeave={props.onClose} />
+    </View>
+  );
+}
+
+/** Split windows: the same details as an inspector pane, in its column or sheet. */
+export function ThreadDetailsInspectorPane(props: DetailsProps) {
+  return (
+    <View collapsable={false} className="flex-1 android:bg-header ios:bg-screen">
+      <AppBar title="Thread details" subtitle={props.title} />
+      <ScreenContent insetHorizontal>
+        <ThreadDetailsBody {...props} presentation="inspector" />
+      </ScreenContent>
+    </View>
+  );
+}
+
+type BodyProps = DetailsProps & {
+  readonly presentation: "drawer" | "inspector";
+  /** Closes the host before the details hand off to another surface. */
+  readonly onLeave?: () => void;
+};
+
+// Read-only facts sit at the top; the actions people reach for most sit in a dock under the thumb.
+function ThreadDetailsBody(props: BodyProps) {
+  const navigation = useNavigation();
+  const closeInspectorSheet = use(InspectorSheetContext);
+  const controls = props.gitControls;
+  const hasThread = controls.hasThread !== false;
+  const git = useGitOverview({
+    environmentId: String(controls.environmentId),
+    threadId: String(controls.threadId),
+    presentation: props.presentation,
+    onNavigate: props.onLeave,
+  });
+  // A route presented over the inspector sheet would race its dismissal, so the sheet goes first.
+  const navigate = (action: () => void) => {
+    props.onLeave?.();
+    if (closeInspectorSheet) closeInspectorSheet(action);
+    else action();
+  };
+  // A thread's files are another inspector pane, shown in place; a draft's are a route.
+  const openFiles = () => {
+    const open = () => controls.onOpenFilesInspector?.();
+    if (!hasThread) {
+      navigate(open);
+      return;
+    }
+    props.onLeave?.();
+    open();
+  };
+  // The pane's scroll view registers with its own bar; the drawer's must not take the thread's.
+  const Scroll = props.presentation === "inspector" ? NativeScrollView : ScrollView;
+  return (
+    <View className="flex-1">
+      <Scroll
         className="flex-1"
+        contentInsetAdjustmentBehavior={props.presentation === "inspector" ? "automatic" : "never"}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator
-        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 20, gap: 20 }}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 20, gap: 20 }}
         refreshControl={
           hasThread ? (
             <RefreshControl refreshing={git.isRefreshing} onRefresh={() => void git.refresh()} />
@@ -184,13 +226,19 @@ function ThreadDetailsContent(props: DetailsProps) {
             onPress={() => navigate(controls.onOpenNewTerminal)}
           />
         </ListSection>
-      </ScrollView>
-      <ActionDock {...props} git={git} hasThread={hasThread} navigate={navigate} />
+      </Scroll>
+      <ActionDock
+        {...props}
+        git={git}
+        hasThread={hasThread}
+        navigate={navigate}
+        openFiles={openFiles}
+      />
     </View>
   );
 }
 
-function WorkspaceSummary(props: DetailsProps & { git: GitOverview; hasThread: boolean }) {
+function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: boolean }) {
   const { git, cwd } = props;
   const controls = props.gitControls;
   const environmentId = EnvironmentId.make(String(controls.environmentId));
@@ -296,7 +344,7 @@ function SummaryFact(props: { readonly label: string; readonly children: ReactNo
 }
 
 function ManageSection(
-  props: DetailsProps & {
+  props: BodyProps & {
     git: GitOverview;
     hasThread: boolean;
     navigate: (action: () => void) => void;
@@ -349,10 +397,11 @@ function ManageSection(
 }
 
 function ActionDock(
-  props: DetailsProps & {
+  props: BodyProps & {
     git: GitOverview;
     hasThread: boolean;
     navigate: (action: () => void) => void;
+    openFiles: () => void;
   },
 ) {
   const insets = useSafeAreaInsets();
@@ -410,7 +459,7 @@ function ActionDock(
           icon="folder"
           label="Files"
           disabled={!controls.canOpenFiles || !canReadFiles}
-          onPress={() => navigate(() => controls.onOpenFilesInspector?.())}
+          onPress={props.openFiles}
         />
         <DockTile
           icon="terminal"

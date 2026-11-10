@@ -6,6 +6,7 @@ import {
   sourceControlClients,
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import * as Schema from "effect/Schema";
 import {
   GitCommandError,
@@ -284,14 +285,6 @@ type PullRequestActionableDetail = Pick<
   PullRequestDetail,
   "state" | "isDraft" | "mergeability" | "capabilities" | "viewerPermissions" | "mergeCapabilities"
 >;
-
-export function allowedPullRequestMergeMethods(
-  detail: Pick<PullRequestActionableDetail, "capabilities" | "mergeCapabilities"> | null,
-): ReadonlyArray<PullRequestMergeMethod> {
-  return detail === null
-    ? []
-    : detail.capabilities.mergeMethods.filter((method) => detail.mergeCapabilities[method]);
-}
 
 function canPerformPullRequestAction(
   detail: Pick<PullRequestActionableDetail, "capabilities" | "viewerPermissions"> | null,

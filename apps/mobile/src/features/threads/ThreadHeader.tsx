@@ -13,7 +13,7 @@ import {
   useThreadGitMenuDefinition,
   type ThreadGitControlsProps,
 } from "./ThreadGitControls";
-import { ThreadDetailsDrawer } from "./ThreadDetailsDrawer";
+import { ThreadDetailsDrawer } from "./ThreadDetails";
 import { useThreadDetailsDrawer } from "./thread-list-drawer";
 import {
   ThreadFloatingHeader,
@@ -32,6 +32,7 @@ export function ThreadHeader(props: {
   readonly worktreePath: string | null;
   readonly inspectorMode: ThreadInspectorMode | null;
   readonly onOpenFilesInspector: () => void;
+  readonly onOpenDetailsInspector: () => void;
 }) {
   const goBack = useWorkspaceBackNavigation("threads");
   const { layout, toggleAuxiliaryPane, startNewTask } = useAdaptiveWorkspaceLayout();
@@ -40,17 +41,24 @@ export function ThreadHeader(props: {
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
   const terminalMenu = threadTerminalMenu(props.gitControls);
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
+  const detailsVisible = props.inspectorMode === "details" && panes.auxiliaryPaneVisible;
   // Without columns, the details drawer holds files, git and terminals behind one button.
-  const actions: AppBarAction[] = !layout.usesSplitView
-    ? [
-        {
-          accessibilityLabel: "Open thread details",
-          icon: "sidebar.right",
-          selected: details.open,
-          onPress: details.openDrawer,
-        },
-      ]
-    : props.cwd !== null
+  // With them, the same details are an inspector pane beside the thread's own actions.
+  const detailsAction: AppBarAction = layout.usesSplitView
+    ? {
+        accessibilityLabel: detailsVisible ? "Close thread details" : "Open thread details",
+        icon: "sidebar.right",
+        selected: detailsVisible,
+        onPress: detailsVisible ? toggleAuxiliaryPane : props.onOpenDetailsInspector,
+      }
+    : {
+        accessibilityLabel: "Open thread details",
+        icon: "sidebar.right",
+        selected: details.open,
+        onPress: details.openDrawer,
+      };
+  const actions: AppBarAction[] =
+    layout.usesSplitView && props.cwd !== null
       ? [
           {
             accessibilityLabel: filesVisible ? "Close files" : "Open files",
@@ -60,8 +68,9 @@ export function ThreadHeader(props: {
             separateBackground: false,
             onPress: filesVisible ? toggleAuxiliaryPane : props.onOpenFilesInspector,
           },
+          detailsAction,
         ]
-      : [];
+      : [detailsAction];
   const menus = layout.usesSplitView
     ? [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null)
     : [];

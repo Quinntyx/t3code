@@ -215,11 +215,13 @@ function setup() {
 }
 
 describe("thread list drawer", () => {
-  it("mounts details on first opening and switches sides exclusively", () => {
+  it("mounts each drawer on first opening and switches sides exclusively", () => {
     using screen = setup();
     expect(screen.thread()).toBeUndefined();
+    expect(screen.drawers().left.mounted).toBe(false);
 
     act(() => screen.drawers().left.openDrawer());
+    expect(screen.drawers().left.mounted).toBe(true);
     expect(screen.drawers().left.open).toBe(true);
     expect(screen.drawers().right.open).toBe(false);
     expect(harness.dismissKeyboard).toHaveBeenCalledOnce();
