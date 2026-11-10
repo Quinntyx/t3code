@@ -138,22 +138,40 @@ export function threadUsageTurns(
     if (attempt === undefined || run?.threadId !== records.thread.id || driver === undefined) {
       continue;
     }
-    const totals = normalizeUsageTokens(usage, "inclusive");
-    if (totalTokens(totals) === 0) continue;
     const completedAtMs =
       turn.completedAt === null ? nowMs : DateTime.toEpochMillis(turn.completedAt);
-    turns.push({
-      group,
-      threadId: records.thread.id,
-      providerInstanceId: attempt.providerInstanceId,
-      driver,
-      model:
-        usage.models?.length === 1 ? usage.models[0]! : (turn.model ?? run.modelSelection.model),
-      speed: usageSpeed(run.modelSelection),
-      startedAtMs: turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt),
-      completedAtMs,
-      totals,
-    });
+    const startedAtMs =
+      turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt);
+    const mainModel =
+      usage.models?.length === 1 ? usage.models[0]! : (turn.model ?? run.modelSelection.model);
+    const speed = usageSpeed(run.modelSelection);
+    const entries = [
+      ...(usage.mainAgentUsage ?? [{ ...usage, model: mainModel }]).map((main) => ({
+        ...main,
+        group,
+        speed,
+      })),
+      ...(usage.subagentUsage ?? []).map((subagent) => ({
+        ...subagent,
+        group: "delegates" as const,
+        speed: "standard" as const,
+      })),
+    ];
+    for (const entry of entries) {
+      const totals = normalizeUsageTokens(entry, "inclusive");
+      if (totalTokens(totals) === 0) continue;
+      turns.push({
+        group: entry.group,
+        threadId: records.thread.id,
+        providerInstanceId: attempt.providerInstanceId,
+        driver,
+        model: entry.model,
+        speed: entry.speed,
+        startedAtMs,
+        completedAtMs,
+        totals,
+      });
+    }
   }
   return turns;
 }

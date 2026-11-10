@@ -32,8 +32,9 @@ import {
   claudeModelLedger,
   claudeReportedContextWindows,
   normalizeClaudeTurnTokenUsage,
-  type ClaudeLedgerUsage,
+  recordClaudeMainMessageUsage,
   type ClaudeModelLedger,
+  type ClaudeTurnLedger,
 } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
 import {
@@ -127,6 +128,7 @@ import {
   type ProviderThreadId,
   type RunId,
   type ThreadId,
+  type TurnModelTokenUsage,
   resolveIdleCompaction,
   isDelegatedAppThread,
 } from "@t3tools/contracts";
@@ -4404,9 +4406,12 @@ interface ActiveClaudeTurnContext {
   compactionFailure: { readonly message: string | undefined } | null;
   // Steers end segments whose usage is excluded from the final result; bill them too, oldest first.
   readonly steeredSegmentUsage: Array<SDKResultMessage["usage"]>;
-  // Ledger growth of the steered segments; undefined once any segment's growth is unknown.
-  steeredLedgerUsage: ClaudeLedgerUsage | undefined;
+  // Ledger growth of the steered segments; incomplete once any segment's growth is unknown.
+  steeredLedgerUsage: ClaudeTurnLedger;
   readonly rootModels: Set<string>;
+  // Root messages' usage by id and the main agent's latest model split its usage by model.
+  readonly mainMessages: Map<string, TurnModelTokenUsage>;
+  mainUsageModel: string;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly promptUuid: string | null;
@@ -5183,7 +5188,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         // Wake buffers replay result frames, so ledger growth is measured once on arrival.
-        const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeLedgerUsage>();
+        const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeModelLedger>();
         const resultsReportingNewContextWindow = new WeakSet<SDKMessage>();
         // A worktree handoff changes the project settings even within one session.
         let bypassCache: { cwd: string | null; availability: ClaudeBypassAvailability } | null =
@@ -8177,14 +8182,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     input.context.steeredSegmentUsage,
                     {
                       rootModels: input.context.rootModels,
-                      ...(input.result === undefined
-                        ? {}
-                        : {
-                            ledger: addClaudeLedgerUsage(
-                              input.context.steeredLedgerUsage,
-                              resultLedgerUsage.get(input.result),
-                            ),
-                          }),
+                      // Without a final result the turn's last segment is unmeasured.
+                      ledger: addClaudeLedgerUsage(
+                        input.context.steeredLedgerUsage,
+                        input.result === undefined
+                          ? undefined
+                          : resultLedgerUsage.get(input.result),
+                      ),
+                      mainMessages: input.context.mainMessages,
+                      mainModel: input.context.mainUsageModel,
                     },
                   ),
                 },
@@ -9123,12 +9129,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const usage: ClaudeMessageUsage | undefined = event.message.usage;
               context.streamUsage =
                 usage === undefined ? null : { messageId: event.message.id, usage };
-              if (usage !== undefined) yield* emitContextUsage(context, usage, true);
+              if (usage !== undefined) {
+                context.mainUsageModel = event.message.model;
+                recordClaudeMainMessageUsage(
+                  context.mainMessages,
+                  event.message.id,
+                  event.message.model,
+                  usage,
+                );
+                yield* emitContextUsage(context, usage, true);
+              }
             } else if (event.type === "message_delta") {
               const usage: typeof event.usage | undefined = event.usage;
               const stream = context.streamUsage;
               if (stream?.usage && usage !== undefined) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
+                recordClaudeMainMessageUsage(
+                  context.mainMessages,
+                  stream.messageId,
+                  context.mainUsageModel,
+                  stream.usage,
+                );
                 yield* emitContextUsage(context, stream.usage);
               }
             } else if (
@@ -9487,6 +9508,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
+              recordClaudeMainMessageUsage(
+                context.mainMessages,
+                message.message.id,
+                message.message.model,
+                snapshotUsage,
+              );
               const stream = context.streamUsage;
               if (stream === null || stream.messageId !== message.message.id) {
                 context.streamUsage = { messageId: message.message.id, usage: snapshotUsage };
@@ -9504,6 +9531,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
+            if (parentToolUseId === null && message.message.model !== "<synthetic>") {
+              context.mainUsageModel = message.message.model;
+            }
             const snapshotModel =
               typeof message.message.model === "string" ? message.message.model.trim() : "";
             // "<synthetic>" identifies CLI notices, not the subagent model.
@@ -11367,8 +11397,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               latestAssistantRateLimit: null,
               compactionFailure: null,
               steeredSegmentUsage: [],
-              steeredLedgerUsage: { inputTokens: 0, outputTokens: 0 },
+              steeredLedgerUsage: { growth: new Map(), complete: true },
               rootModels: new Set(),
+              mainMessages: new Map(),
+              mainUsageModel: turnInput.modelSelection.model,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               promptUuid,

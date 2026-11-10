@@ -57,14 +57,15 @@ saved totals first, then updates them when Cursor's API responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
-## See one thread's usage
+## See one thread's consumption
 
-On web and desktop, **Consumption** in the thread details card charts the tokens a thread used over time,
-with its estimated API-equivalent cost. **Main agent** is the thread's own turns; **Delegates** are
-the subagent threads it started and any those started. A group that ran more than one model reads
-**Mixed**; select it for the per-model breakdown. A dotted line marks each time the thread's
-context was compacted. Only Claude Code, Codex, and Pi report per-turn usage, and subagents a provider
-runs inside its own turn count toward the main agent.
+On web and desktop, **Consumption** in the thread details card charts the tokens a thread used
+over time, with its estimated API-equivalent cost. **Main agent** is the thread's own turns;
+**Delegates** are the subagent threads it started and any those started, including Claude's native
+subagents and workflows. A group that ran more than one model reads **Mixed**; select it for the
+per-model breakdown. A dotted line marks each time the thread's context was compacted. Only Claude
+Code, Codex, and Pi report per-turn usage; Codex and Pi may include native subagent usage in the
+main agent's totals rather than report it separately.
 
 Choose whether the card shows it under **Consumption** in Settings → Appearance → Thread details,
 or by right-clicking the card. **Usage limits** shows the current account's remaining allowance;

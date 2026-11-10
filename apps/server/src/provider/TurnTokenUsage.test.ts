@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  addClaudeLedgerUsage,
   claudeLedgerDelta,
   claudeModelLedger,
   normalizeClaudeTurnTokenUsage,
+  recordClaudeMainMessageUsage,
 } from "./ClaudeTurnTokenUsage.ts";
 import {
   accumulateCodexTurnTokenUsage,
@@ -18,6 +20,15 @@ const breakdown = (input: number, cached: number, output: number) => ({
   outputTokens: output,
   reasoningOutputTokens: 0,
 });
+// A turn's ledger growth; without `previous` the CLI process started fresh.
+const ledgerSince = (previous: unknown, current: unknown) =>
+  addClaudeLedgerUsage(
+    { growth: new Map(), complete: true },
+    claudeLedgerDelta(
+      previous === undefined ? new Map() : claudeModelLedger(previous),
+      claudeModelLedger(current),
+    ),
+  );
 const update = (total: ReturnType<typeof breakdown>, last = total) => ({
   total,
   last,
@@ -104,6 +115,150 @@ describe("billable native turn usage", () => {
       outputTokens: 20,
       reasoningTokens: 20,
     });
+  });
+
+  it.each([
+    {
+      previous: undefined,
+      input: 150,
+      output: 30,
+      expected: { inputTokens: 50, outputTokens: 10 },
+    },
+    { previous: 150, input: 280, output: 55, expected: { inputTokens: 30, outputTokens: 5 } },
+    // A ledger that went backwards, as after /clear, leaves the turn's growth unknown.
+    { previous: 500, input: 120, output: 25, expected: undefined },
+  ])("separates cumulative Claude model usage from the main loop: $previous", (row) => {
+    const modelUsage = (inputTokens: number, outputTokens: number) => ({
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      costUSD: 0,
+      contextWindow: 200_000,
+      maxOutputTokens: 32_000,
+      webSearchRequests: 0,
+      canonicalModel: "claude-opus-5-5",
+    });
+    const current = normalizeClaudeTurnTokenUsage(
+      { subtype: "success", usage: { input_tokens: 100, output_tokens: 20 } },
+      false,
+      "completed",
+      [],
+      {
+        mainModel: "claude-opus-5-5",
+        ledger: ledgerSince(
+          row.previous === undefined
+            ? undefined
+            : { "provider-opus": modelUsage(row.previous, row.previous === 150 ? 30 : 100) },
+          { "provider-opus": modelUsage(row.input, row.output) },
+        ),
+      },
+    );
+    expect(current).toMatchObject({ inputTokens: 100, outputTokens: 20 });
+    expect(current.otherUsage).toEqual(row.expected);
+    expect(current.subagentUsage).toEqual(
+      row.expected && [
+        { model: "claude-opus-5-5", ...row.expected, cachedInputTokens: 0, cacheCreationTokens: 0 },
+      ],
+    );
+  });
+
+  it("separates a shared delegate model after the main agent switches models", () => {
+    const modelUsage = (inputTokens: number, outputTokens: number) => ({
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      costUSD: 0,
+      contextWindow: 200_000,
+      maxOutputTokens: 32_000,
+      webSearchRequests: 0,
+    });
+    const main = (model: string, inputTokens: number, outputTokens: number) => ({
+      model,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    const mainMessages = new Map([
+      ["sonnet-response", main("claude-sonnet-4-6", 0, 0)],
+      ["opus-response", main("claude-opus-5-5", 0, 0)],
+    ]);
+    recordClaudeMainMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
+      input_tokens: 100,
+      output_tokens: 1,
+    });
+    recordClaudeMainMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
+      input_tokens: 100,
+      output_tokens: 20,
+    });
+    recordClaudeMainMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
+      input_tokens: 0,
+      output_tokens: 20,
+    });
+    recordClaudeMainMessageUsage(mainMessages, "opus-response", "claude-opus-5-5", {
+      input_tokens: 20,
+      output_tokens: 4,
+    });
+    recordClaudeMainMessageUsage(mainMessages, "notice", "<synthetic>", {
+      input_tokens: 500,
+      output_tokens: 100,
+    });
+    const current = normalizeClaudeTurnTokenUsage(
+      { subtype: "success", usage: { input_tokens: 120, output_tokens: 24 } },
+      true,
+      "completed",
+      [],
+      {
+        mainModel: "claude-opus-5-5",
+        mainMessages,
+        ledger: ledgerSince(undefined, {
+          "claude-sonnet-4-6": modelUsage(100, 20),
+          "claude-opus-5-5": modelUsage(70, 14),
+        }),
+      },
+    );
+    expect(current.subagentUsage).toEqual([main("claude-opus-5-5", 50, 10)]);
+    expect(current.mainAgentUsage).toEqual([
+      main("claude-sonnet-4-6", 100, 20),
+      main("claude-opus-5-5", 20, 4),
+    ]);
+  });
+
+  it("includes workflow models, cache writes and thinking even without main-loop usage", () => {
+    const result = normalizeClaudeTurnTokenUsage(
+      { subtype: "error_during_execution", usage: { input_tokens: 0, output_tokens: 0 } },
+      false,
+      "failed",
+      [],
+      {
+        ledger: ledgerSince(undefined, {
+          "claude-haiku-4-5": {
+            inputTokens: 10,
+            cacheReadInputTokens: 30,
+            cacheCreationInputTokens: 20,
+            outputTokens: 40,
+            thinkingTokens: 50,
+            costUSD: 0,
+            contextWindow: 200_000,
+            maxOutputTokens: 32_000,
+            webSearchRequests: 0,
+          },
+        }),
+      },
+    );
+    expect(result.usageStatus).toBe("partial");
+    expect(result.subagentUsage).toEqual([
+      {
+        model: "claude-haiku-4-5",
+        inputTokens: 60,
+        cachedInputTokens: 30,
+        cacheCreationTokens: 20,
+        outputTokens: 40,
+        reasoningTokens: 40,
+      },
+    ]);
   });
 
   it("does not turn a zeroed Claude crash result into a measured zero-cost turn", () => {
@@ -216,7 +371,10 @@ describe("billable native turn usage", () => {
   it("measures Claude ledger growth only from a known, nondecreasing baseline", () => {
     const ledger = (output: number) =>
       claudeModelLedger({ "claude-sonnet-4-6": { inputTokens: 100, outputTokens: output } });
-    expect(claudeLedgerDelta(ledger(10), ledger(25))).toEqual({ inputTokens: 0, outputTokens: 15 });
+    expect(claudeLedgerDelta(ledger(10), ledger(25))?.get("claude-sonnet-4-6")).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 15,
+    });
     expect(claudeLedgerDelta(ledger(25), ledger(10))).toBeUndefined();
     expect(claudeLedgerDelta(undefined, ledger(10))).toBeUndefined();
     expect(claudeModelLedger({})).toBeUndefined();

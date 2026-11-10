@@ -54,6 +54,16 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
 // Input includes cache reads/writes; output includes the optional reasoningTokens subset.
+export const TurnModelTokenUsage = Schema.Struct({
+  model: TrimmedNonEmptyStringSchema,
+  inputTokens: NonNegativeInt,
+  cachedInputTokens: NonNegativeInt,
+  cacheCreationTokens: NonNegativeInt,
+  outputTokens: NonNegativeInt,
+  reasoningTokens: Schema.optional(NonNegativeInt),
+});
+export type TurnModelTokenUsage = typeof TurnModelTokenUsage.Type;
+
 const TurnTokenUsageCommonFields = {
   usageScope: Schema.Literal("main_agent"),
   cachedInputTokens: Schema.optional(NonNegativeInt),
@@ -68,6 +78,10 @@ const TurnTokenUsageCommonFields = {
   otherUsage: Schema.optional(
     Schema.Struct({ inputTokens: NonNegativeInt, outputTokens: NonNegativeInt }),
   ),
+  // The main agent's counts by model, present when it ran more than one.
+  mainAgentUsage: Schema.optional(Schema.Array(TurnModelTokenUsage)),
+  // The ledger counts beyond the main agent, by model: native subagents, workflows, compaction.
+  subagentUsage: Schema.optional(Schema.Array(TurnModelTokenUsage)),
 };
 export const TurnTokenUsage = Schema.Union([
   Schema.Struct({

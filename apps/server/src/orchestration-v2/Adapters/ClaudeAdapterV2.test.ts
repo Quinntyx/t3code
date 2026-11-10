@@ -3031,6 +3031,16 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       uuid: input.uuid,
       session_id: WAKE_NATIVE_SESSION,
     });
+  const billedModelUsage = (inputTokens: number, outputTokens: number) => ({
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+    contextWindow: 200_000,
+    maxOutputTokens: 32_000,
+  });
   const makeResultFrame = (input: {
     readonly uuid: string;
     readonly result: string;
@@ -6257,85 +6267,139 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   it.effect.each(
     (["aborted_tools", "aborted_streaming"] as const).flatMap((terminalReason) =>
-      [
-        { steered: false, queryExits: false },
-        { steered: true, queryExits: false },
-        { steered: true, queryExits: true },
-      ].map((scenario) => ({ terminalReason, ...scenario })),
+      ["completed", "failed", "query_exit", "not_steered"].map((outcome) => ({
+        terminalReason,
+        steered: outcome !== "not_steered",
+        failed: outcome === "failed" || outcome === "query_exit",
+        queryExited: outcome === "query_exit",
+      })),
     ),
-  )("handles $terminalReason (steered=$steered, exits=$queryExits)", (scenario) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { terminalReason, steered, queryExits } = scenario;
-        const harness = yield* makeWakeHarness;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const attemptId = RunAttemptId.make("attempt-steering-abort");
-        const input = makeClaudeTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now: yield* DateTime.now,
-          attemptId,
-          text: "Audit the settings pages.",
-          attachments: [],
-        });
-        yield* harness.runtime.startTurn(input);
-        if (steered) {
-          yield* harness.runtime.steerTurn({
+  )(
+    "handles $terminalReason with active steering=$steered, failed=$failed, query exit=$queryExited",
+    ({ terminalReason, steered, failed, queryExited }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarnessWithOptions({ close: Queue.shutdown });
+          const idAllocator = yield* IdAllocator.IdAllocatorV2;
+          if (queryExited) {
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-before-steering-abort"),
+                text: "Prepare the audit.",
+                attachments: [],
+              }),
+            );
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000900",
+                result: "Ready.",
+                usage: {
+                  input_tokens: 100,
+                  output_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
+                },
+                modelUsage: {
+                  "claude-sonnet-4-6": billedModelUsage(100, 0),
+                  "claude-haiku-4-5": billedModelUsage(50, 0),
+                },
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+          }
+          const attemptId = RunAttemptId.make("attempt-steering-abort");
+          const input = makeClaudeTestTurnInput({
             threadId: harness.threadId,
-            runId: input.runId,
             providerThread: harness.providerThread,
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              nativeTurnId: `turn:${attemptId}`,
-            }),
-            message: {
-              createdBy: "user",
-              creationSource: "web",
-              messageId: MessageId.make("message-steering-abort"),
-              text: "Include the hierarchy mock.",
-              attachments: [],
-            },
+            now: yield* DateTime.now,
+            attemptId,
+            text: "Audit the settings pages.",
+            attachments: [],
           });
-          assert.equal(harness.offeredMessages[1]?.priority, "now");
-        }
-        yield* harness.offerAndWait(
-          makeResultFrame({
-            uuid: "00000000-0000-4000-8000-000000000901",
-            result: "",
-            terminalReason,
-            usage: {
-              input_tokens: 600,
-              output_tokens: 40,
-              cache_creation_input_tokens: 500,
-              cache_read_input_tokens: 2000,
-            },
-          }),
-        );
-        if (queryExits) {
-          yield* Queue.shutdown(harness.sdkMessages);
-        } else if (steered) {
-          yield* Queue.offer(harness.sdkMessages, wakeAssistant);
-          yield* Queue.offer(
-            harness.sdkMessages,
+          yield* harness.runtime.startTurn(input);
+          if (steered) {
+            yield* harness.runtime.steerTurn({
+              threadId: harness.threadId,
+              runId: input.runId,
+              providerThread: harness.providerThread,
+              providerTurnId: idAllocator.derive.providerTurn({
+                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                nativeTurnId: `turn:${attemptId}`,
+              }),
+              message: {
+                createdBy: "user",
+                creationSource: "web",
+                messageId: MessageId.make("message-steering-abort"),
+                text: "Include the hierarchy mock.",
+                attachments: [],
+              },
+            });
+            assert.equal(harness.offeredMessages.at(-1)?.priority, "now");
+          }
+          yield* harness.offerAndWait(
             makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000000902",
-              result: "Audit finished after the steer.",
+              uuid: "00000000-0000-4000-8000-000000000901",
+              result: "",
+              terminalReason,
+              modelUsage: {
+                "claude-sonnet-4-6": {
+                  ...billedModelUsage(queryExited ? 700 : 600, 40),
+                  cacheCreationInputTokens: 500,
+                  cacheReadInputTokens: 2000,
+                },
+                "claude-haiku-4-5": billedModelUsage(queryExited ? 60 : 10, 5),
+              },
               usage: {
-                input_tokens: 3,
-                output_tokens: 6,
-                cache_creation_input_tokens: 2347,
-                cache_read_input_tokens: 9455,
+                input_tokens: 600,
+                output_tokens: 40,
+                cache_creation_input_tokens: 500,
+                cache_read_input_tokens: 2000,
               },
             }),
           );
-        }
-        const terminal = yield* Queue.take(harness.terminalReceipts);
-        assert.equal(
-          terminal.status,
-          queryExits ? "failed" : steered ? "completed" : "interrupted",
-        );
-        if (steered) {
-          if (!queryExits)
+          if (steered) {
+            yield* harness.offerAndWait(wakeAssistant);
+          }
+          if (queryExited) {
+            yield* Queue.shutdown(harness.sdkMessages);
+          } else if (steered) {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000902",
+                result: failed ? "" : "Audit finished after the steer.",
+                subtype: failed ? "error_during_execution" : "success",
+                ...(failed ? { errors: ["Execution failed after steering."] } : {}),
+                terminalReason: failed ? "api_error" : "completed",
+                modelUsage: failed
+                  ? {}
+                  : {
+                      "claude-sonnet-4-6": {
+                        ...billedModelUsage(603, 46),
+                        cacheCreationInputTokens: 2847,
+                        cacheReadInputTokens: 11455,
+                      },
+                      "claude-haiku-4-5": billedModelUsage(20, 10),
+                    },
+                usage: {
+                  input_tokens: failed ? 0 : 3,
+                  output_tokens: failed ? 0 : 6,
+                  cache_creation_input_tokens: failed ? 0 : 2347,
+                  cache_read_input_tokens: failed ? 0 : 9455,
+                },
+              }),
+            );
+          }
+          const terminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(
+            terminal.status,
+            steered ? (failed ? "failed" : "completed") : "interrupted",
+          );
+          if (steered) {
             assert.isTrue(
               harness.events.some(
                 (event) =>
@@ -6344,37 +6408,47 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   event.turnItem.text === WAKE_ASSISTANT_TEXT,
               ),
             );
-          const completed = harness.events.findLast(
-            (event) => event.type === "provider_turn.updated",
-          );
-          assert.deepEqual(
-            completed?.type === "provider_turn.updated"
-              ? completed.providerTurn.turnTokenUsage
-              : undefined,
-            {
-              usageScope: "main_agent",
-              usageStatus: queryExits ? "partial" : "complete",
-              hasSubagents: false,
-              inputTokens: queryExits ? 3100 : 603 + 2847 + 11455,
-              outputTokens: queryExits ? 40 : 46,
-              cachedInputTokens: queryExits ? 2000 : 11455,
-              cacheCreationTokens: queryExits ? 500 : 2847,
-              ...(queryExits ? {} : { models: ["claude-sonnet-4-6"] }),
-            },
-          );
-        }
-        assert.lengthOf(harness.terminalEvents(), 1);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            IdAllocator.layer,
-            McpProviderSessions.layer,
-            NodeServices.layer,
-            NodeCrypto.layer,
+            const completed = harness.events.findLast(
+              (event) => event.type === "provider_turn.updated",
+            );
+            assert.deepEqual(
+              completed?.type === "provider_turn.updated"
+                ? completed.providerTurn.turnTokenUsage
+                : undefined,
+              {
+                usageScope: "main_agent",
+                usageStatus: failed ? "partial" : "complete",
+                hasSubagents: false,
+                inputTokens: failed ? 600 + 500 + 2000 : 603 + 2847 + 11455,
+                outputTokens: failed ? 40 : 46,
+                cachedInputTokens: failed ? 2000 : 11455,
+                cacheCreationTokens: failed ? 500 : 2847,
+                models: ["claude-sonnet-4-6"],
+                ...(failed ? {} : { otherUsage: { inputTokens: 20, outputTokens: 10 } }),
+                subagentUsage: [
+                  {
+                    model: "claude-haiku-4-5",
+                    inputTokens: failed ? 10 : 20,
+                    cachedInputTokens: 0,
+                    cacheCreationTokens: 0,
+                    outputTokens: failed ? 5 : 10,
+                  },
+                ],
+              },
+            );
+          }
+          assert.lengthOf(harness.terminalEvents(), queryExited ? 2 : 1);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
           ),
         ),
       ),
-    ),
   );
 
   it.effect("announces usage-limit pauses once per window and again on a new turn", () =>
@@ -9086,7 +9160,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const openedOptions = harness.getOpenedOptions();
         assert.equal(openedOptions?.permissionMode, "auto");
         yield* harness.offerAndWait(claudeSdkFrame({ ...wakeTurnInit, permissionMode: "default" }));
-        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "result-model-usage-1",
+            result: "Done.",
+            modelUsage: {
+              [modelSelection.model]: billedModelUsage(1, 1),
+              "claude-opus-5-5": billedModelUsage(10, 5),
+            },
+          }),
+        );
         yield* Queue.take(harness.terminalReceipts);
 
         yield* harness.runtime.startTurn(
@@ -9113,6 +9197,35 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(harness.offeredMessages, 2);
         assert.deepEqual(harness.permissionModeChanges, []);
         assert.deepEqual(harness.liveSelectionChanges, []);
+        const reused = nextModel === modelSelection.model;
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "result-model-usage-2",
+            result: "Done again.",
+            modelUsage: {
+              [nextModel]: billedModelUsage(reused ? 2 : 1, reused ? 2 : 1),
+              "claude-opus-5-5": billedModelUsage(reused ? 20 : 10, reused ? 10 : 5),
+            },
+          }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+        const billed = harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.turnTokenUsage !== undefined
+            ? [event.providerTurn.turnTokenUsage]
+            : [],
+        );
+        assert.lengthOf(billed, 2);
+        for (const usage of billed) {
+          assert.deepEqual(usage.subagentUsage, [
+            {
+              model: "claude-opus-5-5",
+              inputTokens: 10,
+              outputTokens: 5,
+              cachedInputTokens: 0,
+              cacheCreationTokens: 0,
+            },
+          ]);
+        }
       }).pipe(
         Effect.scoped,
         Effect.provide(
