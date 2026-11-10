@@ -17,6 +17,11 @@ concurrency:
 jobs:
   changed:
     runs-on: ubuntu-latest
+    # Bookworm's git 2.39 fails the checkpoint and worktree cache tests, and tests that stop
+    # process groups need an init to reap them.
+    container:
+      image: node:26.12.1-trixie
+      options: --init
     steps:
       - uses: https://data.forgejo.org/actions/checkout@v4
         with:
