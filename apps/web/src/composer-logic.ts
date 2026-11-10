@@ -9,7 +9,10 @@ import {
   serializeAssistantCitation,
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
-import { isCurrencyAmountQuery, isPathWord } from "@t3tools/shared/composerTrigger";
+import {
+  type ComposerTokenTrigger,
+  detectComposerTokenTrigger,
+} from "@t3tools/shared/composerTrigger";
 import {
   splitPromptIntoComposerSegments,
   type ComposerPromptSegment,
@@ -17,16 +20,11 @@ import {
 
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
-export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill" | "thread";
+// `/model` opens the picker as a command here, so the chat composer reads only the word at the cursor.
+export type ComposerTrigger = ComposerTokenTrigger;
+export type ComposerTriggerKind = ComposerTrigger["kind"];
 export type ComposerSlashCommand = "model" | "side" | "btw" | "clear";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
-
-export interface ComposerTrigger {
-  kind: ComposerTriggerKind;
-  query: string;
-  rangeStart: number;
-  rangeEnd: number;
-}
 
 export function isPathSuggestionCurrent(
   searchTarget: ComposerPathSearchTarget,
@@ -95,18 +93,6 @@ export function composerSubmissionIntentForKey(input: {
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
   return Math.max(0, Math.min(text.length, Math.floor(cursor)));
-}
-
-function isWhitespace(char: string): boolean {
-  return char === " " || char === "\n" || char === "\t" || char === "\r";
-}
-
-function tokenStartForCursor(text: string, cursor: number): number {
-  let index = cursor - 1;
-  while (index >= 0 && !isWhitespace(text[index] ?? "")) {
-    index -= 1;
-  }
-  return index + 1;
 }
 
 export function expandCollapsedComposerCursor(
@@ -249,57 +235,7 @@ export function collapseExpandedComposerCursor(
 }
 
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
-  const cursor = clampCursor(text, cursorInput);
-  const tokenStart = tokenStartForCursor(text, cursor);
-  const token = text.slice(tokenStart, cursor);
-  if (token.startsWith("/")) {
-    if (isPathWord(text, tokenStart, cursor, isWhitespace)) return null;
-    return {
-      kind: "slash-command",
-      query: token.slice(1),
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
-  }
-  const pullRequestMatch = /^#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
-  if (pullRequestMatch) {
-    return {
-      kind: "pull-request",
-      query: pullRequestMatch[1] ?? "",
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
-  }
-  // A second `%` makes the word text, such as `%APPDATA%`.
-  const threadMatch = /^%([^%]*)$/u.exec(token);
-  if (threadMatch) {
-    return {
-      kind: "thread",
-      query: threadMatch[1] ?? "",
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
-  }
-  const skillPrefix = /^\p{Sc}/u.exec(token);
-  if (skillPrefix) {
-    if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;
-    return {
-      kind: "skill",
-      query: token.slice(skillPrefix[0].length),
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
-  }
-  if (!token.startsWith("@")) {
-    return null;
-  }
-
-  return {
-    kind: "path",
-    query: token.slice(1),
-    rangeStart: tokenStart,
-    rangeEnd: cursor,
-  };
+  return detectComposerTokenTrigger(text, cursorInput);
 }
 
 export function pastedPathQueryLength(
