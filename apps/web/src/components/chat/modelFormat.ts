@@ -1,4 +1,4 @@
-const MODEL_EXTENSIONS = new Set(["glb", "obj", "stl"]);
+import { modelMimeTypeFromExtension } from "@t3tools/shared/mediaPreview";
 
 function decodedPath(candidate: string): string {
   const path = candidate.split(/[?#]/, 1)[0] ?? "";
@@ -13,7 +13,8 @@ function decodedPath(candidate: string): string {
 export function modelExtension(name: string, src: string): string {
   for (const candidate of [src, name]) {
     const extension = decodedPath(candidate).split(".").at(-1)?.toLowerCase();
-    if (extension !== undefined && MODEL_EXTENSIONS.has(extension)) return extension;
+    if (extension !== undefined && modelMimeTypeFromExtension(`.${extension}`) !== null)
+      return extension;
   }
   return "";
 }
