@@ -1,4 +1,5 @@
 import { NodeId, RunId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -88,14 +89,16 @@ describe.each([
   it.each([
     { startedAt: null, visible: false },
     { startedAt: undefined, visible: true },
-    { startedAt: "2026-01-01T00:00:00Z", visible: true },
+    { startedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"), visible: true },
   ])(
     "keeps only delivered notifications on cancelled runs ($startedAt)",
     ({ startedAt, visible }) => {
       expect(
         isVisible({
           item: { type: "notification", runId, nodeId },
-          runs: [{ id: runId, status: "cancelled", startedAt }],
+          runs: [
+            { id: runId, status: "cancelled", ...(startedAt === undefined ? {} : { startedAt }) },
+          ],
           attempts: [],
           items: [],
         }),
