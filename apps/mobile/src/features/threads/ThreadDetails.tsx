@@ -22,6 +22,7 @@ import { ListRow } from "../../components/ui/ListRow";
 import { ListSection } from "../../components/ui/ListSection";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { cn } from "../../lib/cn";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { InspectorSheetContext } from "../layout/workspace-inspector-sheet";
 import { getTerminalStatusLabel } from "../terminal/terminalMenu";
@@ -137,10 +138,13 @@ function ThreadDetailsBody(props: BodyProps) {
     props.onLeave?.();
     open();
   };
+  // The pane's scroll view registers with its own bar; the drawer's must not take the thread's.
+  const Scroll = props.presentation === "inspector" ? NativeScrollView : ScrollView;
   return (
     <View className="flex-1">
-      <ScrollView
+      <Scroll
         className="flex-1"
+        contentInsetAdjustmentBehavior={props.presentation === "inspector" ? "automatic" : "never"}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator
         contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 20, gap: 20 }}
@@ -222,7 +226,7 @@ function ThreadDetailsBody(props: BodyProps) {
             onPress={() => navigate(controls.onOpenNewTerminal)}
           />
         </ListSection>
-      </ScrollView>
+      </Scroll>
       <ActionDock
         {...props}
         git={git}
