@@ -13,8 +13,6 @@ import {
   threadListV2LayoutTime,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
-import { filterHiddenThreads } from "../home/hidden-threads";
-import { useHiddenThreads } from "../home/use-hidden-threads";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -68,12 +66,7 @@ export function useThreadListV2(input: {
   readonly settledShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
 }) {
-  const { threads: loadedThreads, workingShelfEnabled } = input;
-  const { hiddenThreadKeys, showHidden } = useHiddenThreads();
-  const threads = useMemo(
-    () => filterHiddenThreads(loadedThreads, hiddenThreadKeys, showHidden),
-    [loadedThreads, hiddenThreadKeys, showHidden],
-  );
+  const { threads, workingShelfEnabled } = input;
   const layoutTime = useMemo(
     () => threadListV2LayoutTime({ threads, now: input.now, searchQuery: input.searchQuery }),
     [threads, input.now, input.searchQuery],
@@ -160,22 +153,11 @@ export function useThreadListV2(input: {
         settledShelfExpanded: input.settledShelfExpanded,
         selectedThreadKey: input.selectedThreadKey,
         isListedSettled: isListed,
-        unloadedSettledCount: unloadedCount(
-          loadedThreads.filter(
-            (thread) =>
-              thread.archivedAt === null &&
-              scopes.some(
-                (scope) =>
-                  scope.environmentId === thread.environmentId &&
-                  (scope.projectIds === null || scope.projectIds.includes(thread.projectId)),
-              ),
-          ),
-        ),
+        unloadedSettledCount: unloadedCount(),
       }),
     [
       input.pendingOrder,
       threads,
-      loadedThreads,
       input.environmentId,
       input.projectRefs,
       input.searchQuery,
@@ -194,7 +176,6 @@ export function useThreadListV2(input: {
       input.selectedThreadKey,
       isListed,
       unloadedCount,
-      scopes,
     ],
   );
   useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);

@@ -8,25 +8,28 @@ import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
-import { olderSettledThreads } from "../../state/threads";
+import { environmentThreadShells, olderSettledThreads } from "../../state/threads";
 import { makeRawThreadShell } from "../../test-fixtures";
 import { useThreadListV2 } from "./useThreadListV2";
 
-vi.mock("../../state/threads", () => ({
-  olderSettledThreads: { shelfAtom: vi.fn() },
-  threadFamilies: { mountRows: () => () => {} },
-}));
+vi.mock("../../state/threads", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentThreadShells: { threadShellsAtom: Atom.make([]).pipe(Atom.keepAlive) },
+    olderSettledThreads: { shelfAtom: vi.fn() },
+    threadFamilies: { mountRows: () => () => {} },
+  };
+});
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: undefined }));
-const visibility = vi.hoisted(() => ({
-  hiddenThreadKeys: new Set(["environment-test:hidden"]),
-  showHidden: false,
-}));
-vi.mock("../home/use-hidden-threads", () => ({
-  useHiddenThreads: () => ({
-    hiddenThreadKeys: visibility.hiddenThreadKeys,
-    showHidden: visibility.showHidden,
-  }),
-}));
+
+function setLoadedThreads(
+  registry: AtomRegistry.AtomRegistry,
+  threads: Parameters<typeof useThreadListV2>[0]["threads"],
+) {
+  const atom = environmentThreadShells.threadShellsAtom;
+  if (!Atom.isWritable(atom)) throw new Error("Expected writable thread fixture");
+  registry.set(atom, threads);
+}
 
 it("reuses a large thread list across tab renders and updates when its inputs change", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -48,6 +51,7 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
       }),
     ),
   );
+  setLoadedThreads(registry, threads);
   const environmentIds = new Set([environmentId, otherEnvironmentId]);
   const input: Parameters<typeof useThreadListV2>[0] = {
     threads,
@@ -253,8 +257,7 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
   expect(loaded.items).not.toBe(loading.items);
 });
 
-it("hides loaded settled rows without counting them as unloaded, and restores them", () => {
-  visibility.showHidden = false;
+it("counts filtered loaded settled rows as local, then restores their visible count", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const environmentId = EnvironmentId.make("environment-test");
   const before = "2026-10-20T00:00:00.000Z";
@@ -285,10 +288,12 @@ it("hides loaded settled rows without counting them as unloaded, and restores th
       settledOverride: "settled",
     }),
   );
+  setLoadedThreads(registry, [thread]);
+  let visibleThreads: readonly (typeof thread)[] = [];
   let result: ReturnType<typeof useThreadListV2> | undefined;
   function ListProbe() {
     const list = useThreadListV2({
-      threads: [thread],
+      threads: visibleThreads,
       pendingTasks: [],
       environmentId,
       projectRefs: null,
@@ -331,7 +336,7 @@ it("hides loaded settled rows without counting them as unloaded, and restores th
   expect(result?.layout.listedSettledThreads).toEqual([]);
   expect(result?.layout.settledCount).toBe(0);
 
-  visibility.showHidden = true;
+  visibleThreads = [thread];
   act(() => root.render(probe()));
   expect(result?.layout.listedSettledThreads).toEqual([thread]);
   expect(result?.layout.settledCount).toBe(1);

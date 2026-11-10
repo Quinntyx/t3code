@@ -61,7 +61,7 @@ import {
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
 describe("filterSidebarV2VisibleThreads", () => {
-  it("omits locally hidden threads without hiding the same ID in another environment", () => {
+  it("omits archived and delegated rows within the selected project scope", () => {
     const thread = {
       id: ThreadId.make("thread-1"),
       environmentId: localEnvironmentId,
@@ -79,23 +79,14 @@ describe("filterSidebarV2VisibleThreads", () => {
       id: ThreadId.make("archived"),
       archivedAt: "2026-10-27T12:00:00Z",
     };
-    const hidden = new Set(["environment-local:thread-1"]);
     const threads = [thread, otherEnvironment, archived];
 
     const delegated = new Set(["other\u0000thread-1"]);
-    expect(filterSidebarV2VisibleThreads(threads, null, delegated, hidden)).toEqual([]);
-    expect(filterSidebarV2VisibleThreads(threads, null, new Set(), hidden)).toEqual([
-      otherEnvironment,
-    ]);
+    expect(filterSidebarV2VisibleThreads(threads, null, delegated)).toEqual([thread]);
     expect(filterSidebarV2VisibleThreads(threads, null)).toEqual([thread, otherEnvironment]);
     expect(
-      filterSidebarV2VisibleThreads(
-        threads,
-        new Set(["environment-local:project-1"]),
-        new Set(),
-        hidden,
-      ),
-    ).toEqual([]);
+      filterSidebarV2VisibleThreads(threads, new Set(["environment-local:project-1"])),
+    ).toEqual([thread]);
     expect(threads).toEqual([thread, otherEnvironment, archived]);
   });
 });

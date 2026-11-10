@@ -2,6 +2,7 @@ import { Debouncer } from "@tanstack/react-pacer";
 import type { PullRequestMergeMethod } from "@t3tools/contracts";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
+import { Atom } from "effect/reactivity";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 2;
@@ -482,6 +483,21 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
+
+const NO_DEVICE_HIDES: ReadonlySet<string> = new Set();
+export const showHiddenThreadsAtom = Atom.make(false).pipe(Atom.keepAlive);
+const storedHiddenThreadKeysAtom = Atom.make((get) => {
+  get.addFinalizer(
+    useUiStateStore.subscribe((state, previous) => {
+      if (state.hiddenThreadKeys !== previous.hiddenThreadKeys)
+        get.setSelf(new Set(state.hiddenThreadKeys));
+    }),
+  );
+  return new Set(useUiStateStore.getState().hiddenThreadKeys);
+});
+export const deviceHiddenThreadKeysAtom = Atom.make((get) =>
+  get(showHiddenThreadsAtom) ? NO_DEVICE_HIDES : get(storedHiddenThreadKeysAtom),
+);
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {

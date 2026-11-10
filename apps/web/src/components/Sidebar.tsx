@@ -11,7 +11,7 @@ import {
 import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { setThreadHiddenOnClient } from "../lib/threadVisibility";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
@@ -121,7 +121,7 @@ import {
   getSidebarProjectSettingsKey,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import { resolveProjectExpanded, useUiStateStore } from "../uiStateStore";
+import { resolveProjectExpanded, showHiddenThreadsAtom, useUiStateStore } from "../uiStateStore";
 import {
   getThreadKeysToDeselectAfterDelete,
   useThreadSelectionStore,
@@ -353,7 +353,6 @@ type SidebarOptimisticDrop = {
 
 interface SidebarThreadPartitionInput {
   readonly threads: readonly EnvironmentThreadShell[];
-  readonly hiddenThreadKeys: ReadonlySet<string>;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   /** Tasks linked environments run for a listed thread; they show under it. */
   readonly delegatedUnderParent: ReadonlySet<string>;
@@ -428,7 +427,6 @@ function useSidebarThreads(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly routeRowThreadKey: string | null;
-  readonly hiddenThreadKeys: ReadonlySet<string>;
   // Set in boring mode: the project groups to fold active threads into, in order.
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
@@ -443,7 +441,6 @@ function useSidebarThreads(input: {
     threads,
     delegatedUnderParent,
     routeRowThreadKey,
-    hiddenThreadKeys,
     folderGroups,
     keepEmptyFolders: keepEmpty,
   } = input;
@@ -487,7 +484,6 @@ function useSidebarThreads(input: {
 
   const partition = partitionSidebarThreads({
     threads,
-    hiddenThreadKeys,
     scopedProjectKeys,
     delegatedUnderParent,
     serverConfigs,
@@ -508,8 +504,7 @@ function useSidebarThreads(input: {
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
-  const settledCount =
-    settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
+  const settledCount = settledThreads.length + olderSettledShelf.unloadedCount();
   const visibleSettledThreads = (() => {
     const visible = listedSettledThreads.slice(0, settledVisibleCount);
     if (
@@ -632,12 +627,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     sortActiveBySend,
   } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(
-    threads,
-    scopedProjectKeys,
-    delegatedUnderParent,
-    input.hiddenThreadKeys,
-  );
+  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -1319,7 +1309,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const hiddenThreadKeys = useUiStateStore((state) => state.hiddenThreadKeys);
   const hiddenThreadKeySet = new Set(hiddenThreadKeys);
-  const [showHiddenThreads, setShowHiddenThreads] = useState(false);
+  const [showHiddenThreads, setShowHiddenThreads] = useAtom(showHiddenThreadsAtom);
 
   const {
     workingShelfEnabled,
@@ -1366,7 +1356,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     threads,
     delegatedUnderParent,
     routeRowThreadKey,
-    hiddenThreadKeys: showHiddenThreads ? new Set<string>() : hiddenThreadKeySet,
     folderGroups: boringSidebarEnabled
       ? scopedProjectGroups.length === 0
         ? // An archived project keeps a folder for its active threads, below the rest.

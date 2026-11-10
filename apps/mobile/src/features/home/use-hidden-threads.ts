@@ -1,18 +1,12 @@
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback } from "react";
 
 import * as Dialog from "../../components/ui/Dialog";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { hiddenThreadKeysAtom, showHiddenThreadsAtom } from "../../state/hidden-threads";
+import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { updateHiddenThreadKeys } from "./hidden-threads";
 import { showLocalThreadUndoNotice } from "./thread-undo-notice";
-
-const showHiddenThreadsAtom = Atom.make(false).pipe(Atom.keepAlive);
-const hiddenThreadKeysAtom = Atom.make((get) => {
-  const result = get(mobilePreferencesAtom);
-  return new Set(AsyncResult.isSuccess(result) ? (result.value.hiddenThreadKeys ?? []) : []);
-}).pipe(Atom.keepAlive);
 
 export function useHiddenThreads() {
   const hiddenThreadKeys = useAtomValue(hiddenThreadKeysAtom);
