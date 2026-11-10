@@ -290,6 +290,7 @@ describe("ChatMarkdown streaming", () => {
       ["- Command\n\n  ```bash\n  echo list\n  ```", "echo list"],
       ["```bash\r\necho crlf\r\n```\r", "echo crlf"],
       ["```bash\necho one\necho two\n```", "echo one\necho two"],
+      ["```bash\necho\tone\n```", "echo\tone"],
       ["```bash\necho hello\n\n```", "echo hello"],
       [
         '```bash\nsudo sdkmanager --licenses\nsudo sdkmanager \\\n  "ndk;27.1.12297006"\n```',
@@ -309,6 +310,7 @@ describe("ChatMarkdown streaming", () => {
       "```bash\necho hello\\\n```",
       "```bash\necho one\\\necho two\\\n```",
       "```bash\necho safe \u202e#\n```",
+      "```bash\necho \u001b[31mred\n```",
       "```bash\necho incomplete",
       "~~~bash\necho incomplete",
       "````bash\necho incomplete\n```",
