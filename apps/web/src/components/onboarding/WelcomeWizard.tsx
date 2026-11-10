@@ -74,11 +74,11 @@ import {
 import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { connectPairing } from "../../connection/onboarding";
-import { getProviderSummary } from "../settings/providerStatus";
+import { getProviderSummary } from "@t3tools/client-runtime/provider-settings/status";
 import { providerClients } from "../settings/providerDriverMeta";
 import { ChatGptWelcomeCoordinator } from "../settings/ChatGptWelcomeCoordinator";
 import { AddManagedCodexAccountDialog, CodexSetupSection } from "../settings/CodexSetupSection";
-import { readCodexSetupMode } from "../settings/CodexSetupSection.logic";
+import { readCodexSetupMode } from "@t3tools/client-runtime/provider-settings/codex-setup";
 import { buildProviderInstanceUpdatePatch } from "../settings/SettingsPanels.logic";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";

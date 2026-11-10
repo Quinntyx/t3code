@@ -18,6 +18,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { useState } from "react";
+import { parseProviderHeaders } from "@t3tools/client-runtime/provider-settings/acp-registry";
 
 import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
@@ -42,32 +43,6 @@ function reportFailure(title: string, result: AtomCommandResult<unknown, unknown
     title,
     description: error instanceof Error ? error.message : "The ACP operation failed.",
   });
-}
-
-function parseProviderHeaders(
-  text: string,
-):
-  | { readonly ok: true; readonly headers: Record<string, string> | undefined }
-  | { readonly ok: false; readonly error: string } {
-  if (text.trim().length === 0) return { ok: true, headers: undefined };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : "Headers must be valid JSON.",
-    };
-  }
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    Array.isArray(parsed) ||
-    !Object.values(parsed).every((value) => typeof value === "string")
-  ) {
-    return { ok: false, error: "Headers must be a JSON object with string values." };
-  }
-  return { ok: true, headers: parsed as Record<string, string> };
 }
 
 export function AcpSessionManagementSection(props: {

@@ -2,7 +2,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
-import { waitForQuerySettled } from "./waitForQuerySettled";
+import { waitForQuerySettled } from "./waitForQuerySettled.ts";
 
 const settle = (value: number | null) =>
   value !== null && value >= 2 ? `settled:${value}` : undefined;

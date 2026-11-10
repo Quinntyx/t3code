@@ -1,111 +1,41 @@
-import * as Dialog from "../../components/ui/Dialog";
+import * as Dialog from "../../../components/ui/Dialog";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  AuthProvidersManageScope,
+  type EnvironmentId,
   type ProviderAuthResponse,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
 import { Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { MenuAction } from "@react-native-menu/menu";
 
-import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
-import { AppText as Text } from "../../components/ui/AppText";
-import { ControlPill } from "../../components/ui/ControlPill";
-import { Menu } from "../../components/ui/Menu";
-import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
-import { environmentPresentations } from "../../state/presentation";
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
-import { useEnvironmentsWithScope } from "../../state/session";
-import { useAtomCommand } from "../../state/use-atom-command";
-import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
-import {
-  AndroidSettingsEnvironmentFilter,
-  SettingsEnvironmentFilterHeader,
-} from "./components/SettingsEnvironmentFilterHeader";
-import { SettingsScreen } from "./components/SettingsScreen";
-import { SettingsSection } from "./components/SettingsSection";
-import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
+import { AppActivityIndicator } from "../../../components/ui/AppActivityIndicator";
+import { AppText as Text } from "../../../components/ui/AppText";
+import { ControlPill } from "../../../components/ui/ControlPill";
+import { Menu } from "../../../components/ui/Menu";
+import { useEnvironmentQuery } from "../../../state/query";
+import { serverEnvironment } from "../../../state/server";
+import { useAtomCommand } from "../../../state/use-atom-command";
+import { ListActionRow as SettingsActionRow } from "../../../components/ui/ListActionRow";
 
-export function SettingsProviderAccountsRouteScreen() {
-  const { selectedTargets } = useSettingsEnvironmentFilter();
-  const permittedEnvironments = useEnvironmentsWithScope(selectedTargets, AuthProvidersManageScope);
-  const providersByEnvironment = useAtomValue(environmentPresentations.providersByEnvironmentAtom);
-  const insets = useSafeAreaInsets();
-  return (
-    <>
-      <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Providers" trailing={<AndroidSettingsEnvironmentFilter />}>
-        <ScreenScrollView
-          className="flex-1"
-          contentInsetAdjustmentBehavior="automatic"
-          contentContainerClassName="gap-6 px-5 pt-4"
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-        >
-          {selectedTargets.length === 0 ? (
-            <Text className="text-foreground-muted">Select a connected environment.</Text>
-          ) : (
-            selectedTargets.map((environment) => (
-              <SettingsSection key={environment.environmentId} title={environment.label}>
-                {!permittedEnvironments.has(environment.environmentId) ? (
-                  <View className="gap-1 p-4">
-                    <Text className="text-base text-foreground">Limited permissions</Text>
-                    <Text className="text-sm text-foreground-muted">
-                      {`This session can view ${environment.label}'s providers but can't change their settings.`}
-                    </Text>
-                  </View>
-                ) : (
-                  <>
-                    {(providersByEnvironment.get(environment.environmentId) ?? [])
-                      .filter(canManageProvider)
-                      .map((provider, index) => (
-                        <ProviderAccount
-                          key={provider.instanceId}
-                          environment={environment}
-                          provider={provider}
-                          divider={index > 0}
-                        />
-                      ))}
-                    {!(providersByEnvironment.get(environment.environmentId) ?? []).some(
-                      canManageProvider,
-                    ) ? (
-                      <Text className="p-4 text-foreground-muted">
-                        Configure a provider with in-app sign-in in web or desktop Settings.
-                      </Text>
-                    ) : null}
-                  </>
-                )}
-              </SettingsSection>
-            ))
-          )}
-        </ScreenScrollView>
-      </SettingsScreen>
-    </>
-  );
-}
-
-function canManageProvider(provider: ServerProvider) {
+/** Whether the desktop shows in-app sign-in for this provider instead of external setup. */
+export function canManageProviderSignIn(provider: ServerProvider) {
   return Boolean(
     provider.setup?.canAuthenticate || (provider.driver === "acpRegistry" && provider.installed),
   );
 }
 
-function ProviderAccount({
+export function ProviderSignInSection({
   environment,
   provider,
-  divider,
 }: {
-  readonly environment: SettingsTarget;
+  readonly environment: { readonly environmentId: EnvironmentId; readonly label: string };
   readonly provider: ServerProvider;
-  readonly divider: boolean;
 }) {
   const environmentId = environment.environmentId;
   const instanceId = provider.instanceId;
@@ -335,7 +265,7 @@ function ProviderAccount({
     />
   ) : null;
   return (
-    <View className={divider ? "border-t border-border-subtle" : undefined}>
+    <View>
       <View
         className={
           stacked
@@ -343,7 +273,7 @@ function ProviderAccount({
             : "min-h-16 flex-row items-center gap-3 px-4 py-3"
         }
       >
-        <ProviderAccountSummary key={email} name={name} status={status} email={email} />
+        <ProviderAccountSummary key={email} name="Account" status={status} email={email} />
         {trailing}
       </View>
       {interaction?.type === "deviceCode" ||

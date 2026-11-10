@@ -3,7 +3,7 @@ import {
   ADD_PROVIDER_WIZARD_STEPS,
   resolveWizardNavigation,
   type WizardNavigation,
-} from "./AddProviderInstanceDialog.logic";
+} from "@t3tools/client-runtime/provider-settings/add-instance";
 
 interface AddProviderInstanceWizardStepsProps {
   readonly currentStep: number;

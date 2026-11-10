@@ -113,8 +113,8 @@ project's configured model takes precedence; resetting that project setting
 returns to the remembered selection.
 
 To keep a provider's growing catalog out of your model picker, turn off **Enable new models by
-default** in Settings → Providers → Models on web or desktop. On mobile, open Thread settings,
-turn on **Manage hidden models**, and change the toggle under that provider. Existing choices
+default** in Settings → Providers → Models on web or desktop, or **Turn on new models** in
+Settings → Providers → a provider → Models on mobile. Existing choices
 stay unchanged; newly discovered models stay hidden until you enable them individually. The
 setting is per provider instance and shared across devices connected to that environment.
 Custom models you add remain enabled.
