@@ -127,6 +127,9 @@ vi.mock("../lib/composerContextClipboard", () => ({ importComposerContextClipboa
 vi.mock("../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));
 vi.mock("../lib/nativeComposerTheme", () => ({ createNativeComposerTheme: () => ({}) }));
 vi.mock("../lib/contextChipIconSource", () => ({ contextChipIconUri: () => "" }));
+vi.mock("../features/settings/appearance/AppearancePreferencesProvider", () => ({
+  useAppearancePreferences: () => ({ appearance: { uiFont: { regular: "System" } } }),
+}));
 vi.mock("../features/settings/appearance/useScaledTextRole", () => ({
   useScaledTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
 }));

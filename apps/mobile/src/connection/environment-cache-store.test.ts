@@ -133,6 +133,7 @@ const THREAD_SNAPSHOT: OrchestrationV2ThreadDetailSnapshot = {
       settledAt: NOW,
       lastVisitedAt: null,
       deletedAt: null,
+      goal: null,
     },
     runs: [],
     attempts: [],
