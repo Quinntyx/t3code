@@ -62,6 +62,53 @@ const layerTest = Layer.mergeAll(
   ),
 );
 
+it.effect("persists Voice notifications without a listener and replays them to subscribers", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("voice-notification");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("voice-create"),
+      threadId,
+      projectId: ProjectId.make("voice-project"),
+      title: "Notification source",
+      createdBy: "user",
+      creationSource: "web",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+    });
+    const command = {
+      type: "thread.notify-voice" as const,
+      commandId: CommandId.make("voice-notify"),
+      threadId,
+      message: "The build needs a decision.",
+      urgency: "when_idle" as const,
+    };
+    const recorded = yield* orchestrator.dispatch(command);
+    const retried = yield* orchestrator.dispatch(command);
+    assert.equal(retried.sequence, recorded.sequence);
+    const projection = yield* projections.getThreadProjection(threadId);
+    const notice = projection.turnItems.find((item) => item.type === "system_notice");
+    assert.match(notice?.message ?? "", /The build needs a decision/);
+    assert.deepEqual(notice?.voiceNotification, { urgency: "when_idle" });
+    assert.deepEqual(yield* outbox.listByCommandId(command.commandId), []);
+    const replayed = yield* orchestrator
+      .streamStoredEventsFrom({ afterSequence: recorded.sequence - 1 })
+      .pipe(
+        Stream.filter((stored) => stored.event.type === "turn-item.updated"),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+    assert.equal(replayed[0]?.event.threadId, threadId);
+    assert.deepEqual(replayed[0]?.event.payload, notice);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect(
   "imports portable machine history once, stays idle, and supplies it on the next user turn",
   () =>

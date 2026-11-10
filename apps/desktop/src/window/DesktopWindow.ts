@@ -1,4 +1,5 @@
 import * as Clock from "effect/Clock";
+import { installAppMediaPermissions } from "./MediaPermission.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -474,6 +475,7 @@ export const make = Effect.gen(function* () {
     }
 
     pendingMainReveals.set(window, Effect.void);
+    installAppMediaPermissions(window.webContents, applicationUrl);
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);

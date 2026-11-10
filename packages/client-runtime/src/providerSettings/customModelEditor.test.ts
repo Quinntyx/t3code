@@ -9,7 +9,7 @@ import {
   draftFromDefinition,
   validateDraft,
   type CustomModelDraft,
-} from "./customModelEditor.logic";
+} from "./customModelEditor.ts";
 
 const draft = (overrides: Partial<CustomModelDraft>): CustomModelDraft => ({
   slug: "my-model",

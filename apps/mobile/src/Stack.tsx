@@ -92,7 +92,12 @@ import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavig
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
-import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
+import { ProvidersRouteScreen } from "./features/settings/providers/ProvidersRouteScreen";
+import { ProviderDetailRouteScreen } from "./features/settings/providers/ProviderDetailRouteScreen";
+import { AddProviderRouteScreen } from "./features/settings/providers/AddProviderRouteScreen";
+import { ProviderModelsRouteScreen } from "./features/settings/providers/ProviderModelsRouteScreen";
+import { ProviderEnvironmentOptionsRouteScreen } from "./features/settings/providers/ProviderEnvironmentOptionsRouteScreen";
+import { AddChatGptAccountRouteScreen } from "./features/settings/providers/CodexSetup";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
@@ -204,9 +209,34 @@ const SETTINGS_SCREENS = {
     options: settingsPage("Labs"),
   }),
   SettingsProviderAccounts: createNativeStackScreen({
-    screen: SettingsProviderAccountsRouteScreen,
+    screen: ProvidersRouteScreen,
     linking: "settings/provider-accounts",
     options: settingsPage("Providers"),
+  }),
+  SettingsProviderInstance: createNativeStackScreen({
+    screen: ProviderDetailRouteScreen,
+    linking: "settings/providers/:environmentId/:instanceId",
+    options: settingsPage("Provider"),
+  }),
+  SettingsProviderModels: createNativeStackScreen({
+    screen: ProviderModelsRouteScreen,
+    linking: "settings/providers/:environmentId/:instanceId/models",
+    options: settingsPage("Models"),
+  }),
+  SettingsProviderAdd: createNativeStackScreen({
+    screen: AddProviderRouteScreen,
+    linking: "settings/providers/:environmentId/new",
+    options: settingsPage("Add provider"),
+  }),
+  SettingsProviderAddChatGpt: createNativeStackScreen({
+    screen: AddChatGptAccountRouteScreen,
+    linking: "settings/providers/:environmentId/new/chatgpt",
+    options: settingsPage("ChatGPT account"),
+  }),
+  SettingsProviderEnvironmentOptions: createNativeStackScreen({
+    screen: ProviderEnvironmentOptionsRouteScreen,
+    linking: "settings/providers/:environmentId/options",
+    options: settingsPage("Usage and background checks"),
   }),
   SettingsEnvironmentMaintenance: createNativeStackScreen({
     screen: SettingsEnvironmentMaintenanceRouteScreen,

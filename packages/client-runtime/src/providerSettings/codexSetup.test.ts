@@ -5,7 +5,7 @@ import {
   settleAuthorizationPage,
   settleHandoffAuthorizationPage,
   settleProviderInstall,
-} from "./CodexSetupSection.logic";
+} from "./codexSetup.ts";
 
 const install = (overrides: Partial<ProviderInstallState>) =>
   ({

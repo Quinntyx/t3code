@@ -27,9 +27,11 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   backgroundActivityOverrideSettings,
-  backgroundActivitySharedPolicySettings,
   durationToSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
+} from "@t3tools/client-runtime/provider-settings/background-activity";
+import {
+  backgroundActivitySharedPolicySettings,
   resolveBackgroundActivityProfileOption,
 } from "./SettingsPanels.logic";
 import { IntervalSecondsField } from "./IntervalSecondsField";

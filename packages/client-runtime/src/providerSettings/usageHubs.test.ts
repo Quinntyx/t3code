@@ -2,7 +2,7 @@ import { DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@t3tools/contracts
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { describe, expect, it } from "vite-plus/test";
 
-import { sourceIdFromUrl } from "./AddUsageLimitSourceDialog.logic";
+import { sourceIdFromUrl } from "./usageHubs.ts";
 
 describe("adding usage limit sources", () => {
   it.each([

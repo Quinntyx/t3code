@@ -12,7 +12,10 @@ import {
 import { getProviderClient } from "@t3tools/client-runtime/provider-clients";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
-import { deriveProviderSettingsFields, type SettingsFormDefinition } from "./ProviderSettingsForm";
+import {
+  deriveProviderSettingsFields,
+  type SettingsFormDefinition,
+} from "@t3tools/client-runtime/provider-settings/form";
 
 type SecretUseSettings = Pick<
   ServerSettings,

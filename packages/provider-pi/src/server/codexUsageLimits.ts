@@ -6,10 +6,12 @@ import {
 } from "@t3tools/provider-core/server/usageLimits";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -38,9 +40,25 @@ const CodexUsage = Schema.Struct({
   ),
 });
 
+const TokenClaims = Schema.Struct({
+  "https://api.openai.com/auth": Schema.optional(
+    Schema.Struct({ chatgpt_account_id: Schema.optional(Schema.String) }),
+  ),
+});
+const decodeTokenClaims = Schema.decodeUnknownOption(Schema.fromJsonString(TokenClaims));
+
 export interface PiCodexUsageLimits {
   readonly limits: ServerProviderUsageLimits;
   readonly email: string | undefined;
+  readonly workspaceId?: string | undefined;
+}
+
+// Hub and native Codex logins key on this claim; wham's account_id is a different id.
+function chatGptAccountId(token: string): string | undefined {
+  const payload = Base64Url.decodeString(token.split(".")[1] ?? "");
+  if (Result.isFailure(payload)) return undefined;
+  const claims = Option.getOrUndefined(decodeTokenClaims(payload.success));
+  return claims?.["https://api.openai.com/auth"]?.chatgpt_account_id?.trim() || undefined;
 }
 
 function isoFromEpochSeconds(value: number | null | undefined): string | undefined {
@@ -100,14 +118,18 @@ export const readPiCodexUsageLimits = Effect.fn("readPiCodexUsageLimits")(functi
     Effect.orElseSucceed(() => undefined),
   );
   if (!token) return { limits: unsupported, email: undefined };
+  const workspaceId = chatGptAccountId(token);
 
   const read = Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
     const response = yield* client.execute(
       HttpClientRequest.get(USAGE_URL).pipe(
         HttpClientRequest.bearerToken(token),
-        HttpClientRequest.setHeader("OpenAI-Beta", "codex-1"),
-        HttpClientRequest.setHeader("Originator", "Codex Desktop"),
+        HttpClientRequest.setHeaders({
+          "OpenAI-Beta": "codex-1",
+          Originator: "Codex Desktop",
+          ...(workspaceId ? { "ChatGPT-Account-Id": workspaceId } : {}),
+        }),
       ),
     );
     const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
@@ -125,6 +147,7 @@ export const readPiCodexUsageLimits = Effect.fn("readPiCodexUsageLimits")(functi
     return {
       limits: makeUsageLimits({ checkedAt, windows }),
       email: body.email?.trim() || undefined,
+      workspaceId,
     };
   });
 

@@ -1,15 +1,29 @@
-import { ASSISTANT_CITATION_MAX_COMMENT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
+import {
+  ASSISTANT_CITATION_MAX_COMMENT_LENGTH,
+  type AssistantCitation,
+  type ServerProviderSkill,
+} from "@t3tools/contracts";
 import { use, useEffect, useRef, useState, type RefObject } from "react";
 
-import { TextFieldSpeechControls, useTextFieldSpeech } from "~/speech/useTextFieldSpeech";
-import { textDirection } from "~/textDirection";
+import { collapseExpandedComposerCursor } from "~/composer-logic";
+import { useClientSettings } from "~/hooks/useSettings";
+import { TextFieldSpeechControls, useDraftFieldSpeech } from "~/speech/useTextFieldSpeech";
 
+import {
+  ComposerPromptEditorTiptap,
+  type ComposerPromptEditorHandle,
+} from "../ComposerPromptEditorTiptap";
 import { ComposerContextActionsContext } from "../composerContextActions";
+import { EMPTY_COMPOSER_CONTEXT_RECORDS } from "../composerContextPresentation";
 import { Button } from "../ui/button";
+
+const NO_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
+
+function noop() {}
 
 export function AssistantCitationCommentEditor({
   citation,
-  inputRef,
+  editorRef,
   onSubmit,
   onSubmitAndSend,
   onCancel,
@@ -17,22 +31,25 @@ export function AssistantCitationCommentEditor({
   onVoiceSetupOpenChange,
 }: {
   citation: AssistantCitation;
-  inputRef?: RefObject<HTMLTextAreaElement | null>;
+  editorRef: RefObject<ComposerPromptEditorHandle | null>;
   onSubmit: (comment: string) => boolean;
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
   onDraftChange?: (comment: string) => void;
   onVoiceSetupOpenChange?: (open: boolean) => void;
 }) {
+  const richTextEnabled = useClientSettings((settings) => settings.composerRichTextEnabled);
   const [comment, setComment] = useState(citation.comment ?? "");
-  const localInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const textareaRef = inputRef ?? localInputRef;
+  const [cursor, setCursor] = useState(() =>
+    collapseExpandedComposerCursor(comment, comment.length),
+  );
+  const fieldRef = useRef<HTMLDivElement>(null);
   const { environmentId, projectId } = use(ComposerContextActionsContext);
   const updateComment = (text: string) => {
     setComment(text);
     onDraftChange?.(text);
   };
-  const speech = useTextFieldSpeech({
+  const speech = useDraftFieldSpeech({
     environmentId: environmentId ?? citation.environmentId,
     projectId,
     ownerKey: JSON.stringify([
@@ -44,8 +61,20 @@ export function AssistantCitationCommentEditor({
       citation.end,
     ]),
     text: comment,
-    textareaRef,
-    onTextChange: updateComment,
+    targetRef: fieldRef,
+    readDraft: () => {
+      const editor = editorRef.current;
+      const snapshot = editor?.readSnapshot();
+      const text = snapshot?.value ?? comment;
+      const caret = snapshot?.expandedCursor ?? text.length;
+      return { text, selection: editor?.readSelectionRange() ?? { start: caret, end: caret } };
+    },
+    commitDraft: (text, selection) => {
+      const next = collapseExpandedComposerCursor(text, selection.start);
+      updateComment(text);
+      setCursor(next);
+      window.requestAnimationFrame(() => editorRef.current?.focusAt(next));
+    },
   });
   const setupOpen = speech.setup.open;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the citation popover open while the voice setup dialog owns focus
@@ -67,6 +96,7 @@ export function AssistantCitationCommentEditor({
 
   return (
     <div
+      ref={fieldRef}
       data-citation-comment-editor="true"
       onKeyDown={(event) => {
         event.stopPropagation();
@@ -78,33 +108,33 @@ export function AssistantCitationCommentEditor({
         }
       }}
     >
-      <textarea
-        ref={textareaRef}
-        readOnly={speech.freezesEditor}
-        aria-label="Comment on selected text"
-        aria-description="Enter to save the citation comment; Command/Ctrl+Enter to save and send; Shift+Enter for a new line."
-        aria-invalid={commentTooLong || undefined}
-        placeholder="Add an optional comment..."
-        rows={2}
-        dir={textDirection(comment)}
-        className="field-sizing-content block max-h-40 min-h-16 w-full resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
+      <ComposerPromptEditorTiptap
+        editorRef={editorRef}
         value={comment}
-        onChange={(event) => updateComment(event.currentTarget.value)}
-        onKeyDown={(event) => {
-          if (
-            event.key === "Enter" &&
-            !event.shiftKey &&
-            !event.nativeEvent.isComposing &&
-            event.keyCode !== 229
-          ) {
-            event.preventDefault();
-            if (event.metaKey || event.ctrlKey) {
-              submitAndSend();
-            } else {
-              submit();
-            }
-          }
+        cursor={cursor}
+        richTextEnabled={richTextEnabled}
+        contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}
+        skills={NO_SKILLS}
+        disabled={speech.freezesEditor}
+        ariaLabel="Comment on selected text"
+        ariaDescription="Enter to save the citation comment; Command/Ctrl+Enter to save and send; Shift+Enter for a new line."
+        ariaInvalid={commentTooLong}
+        placeholder="Add an optional comment..."
+        className="max-h-40"
+        onChange={(nextComment, nextCursor) => {
+          updateComment(nextComment);
+          setCursor(nextCursor);
         }}
+        onCommandKeyDown={(key, event) => {
+          if (key !== "Enter" || event.shiftKey) return false;
+          if (event.metaKey || event.ctrlKey) {
+            submitAndSend();
+          } else {
+            submit();
+          }
+          return true;
+        }}
+        onPaste={noop}
       />
       {commentTooLong ? (
         <p role="status" className="pt-1 text-xs text-destructive">

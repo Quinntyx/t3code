@@ -1,3 +1,43 @@
+import { deriveAvailableInstanceId, deriveInstanceId } from "../providerInstanceIds.ts";
+
+const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+export function validateInstanceId(id: string, existing: ReadonlySet<string>): string | null {
+  if (id.length === 0) return "Instance ID is required.";
+  if (id.length > 64) return "Instance ID must be 64 characters or fewer.";
+  if (!INSTANCE_ID_PATTERN.test(id)) {
+    return "Instance ID must start with a letter and use only letters, digits, '-', or '_'.";
+  }
+  if (existing.has(id)) return `An instance named '${id}' already exists.`;
+  return null;
+}
+
+/** Codex and Claude default slots run before anyone configures them, so their ids stay reserved. */
+export function reservedInstanceIds(
+  providerInstances: Readonly<Record<string, unknown>> | undefined,
+): ReadonlySet<string> {
+  return new Set(["codex", "claudeAgent", ...Object.keys(providerInstances ?? {})]);
+}
+
+/** A free id for a new instance; a blank or default label claims the driver's own slot first. */
+export function deriveNewInstanceId(input: {
+  readonly driver: string;
+  readonly driverLabel: string;
+  readonly label: string;
+  readonly existingIds: ReadonlySet<string>;
+}): string {
+  return deriveAvailableInstanceId(
+    (candidate) =>
+      !candidate.trim() || candidate === input.driverLabel
+        ? input.driver === "acpRegistry"
+          ? `${input.driver}_custom`
+          : input.driver
+        : deriveInstanceId(input.driver, candidate),
+    input.label,
+    input.existingIds,
+  );
+}
+
 export type WizardNavigation =
   | { readonly kind: "navigate"; readonly step: number }
   | { readonly kind: "blocked"; readonly step: number; readonly error: string };

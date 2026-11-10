@@ -13,8 +13,6 @@ import {
   XIcon,
 } from "lucide-react";
 import { Lock as LockGlyph, LockOpen } from "lucide";
-import * as Arr from "effect/Array";
-import * as Result from "effect/Result";
 import { Fragment, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
@@ -28,7 +26,6 @@ import {
   type ProviderDriverKind,
   type SecretReference,
   type ServerProvider,
-  type ServerProviderModel,
 } from "@t3tools/contracts";
 
 import {
@@ -48,7 +45,7 @@ import { SecretSourceInput, type SecretSource } from "./SecretSourceInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { ManagedControl, ManagedNotice } from "../ManagedPolicy";
-import { managedInstanceLocks, useManagedPolicy } from "../../state/managedPolicy";
+import { useManagedPolicy } from "../../state/managedPolicy";
 import { disallowedProviderMessage, isManagedDriverAllowed } from "@t3tools/contracts";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -56,12 +53,24 @@ import type {
   ProviderClientDefinition,
   ProviderEnvironmentField,
 } from "@t3tools/provider-core/client";
+import { deriveProviderSettingsFields } from "@t3tools/client-runtime/provider-settings/form";
 import {
-  deriveProviderSettingsFields,
-  ProviderSettingsForm,
-  reconcileRowsDraft,
-  seedRowsDraft,
-} from "./ProviderSettingsForm";
+  deriveProviderModelsForDisplay,
+  environmentDraftRowWithSecret,
+  managedInstanceLocks,
+  nextConfigBlobWithValue,
+  nextEnvironmentVariableDraftId,
+  nextProviderEnvironmentWithFieldSecret,
+  nextProviderEnvironmentWithFieldValue,
+  providerEnvironmentWithoutNames,
+  publishEnvironmentDraftRows,
+  readConfigString,
+  readProviderEnvironmentVariable,
+  reconcileEnvironmentDraft,
+  seedEnvironmentDraft,
+  type EnvironmentDraftRow,
+} from "@t3tools/client-runtime/provider-settings/instance";
+import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
@@ -69,16 +78,14 @@ import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
-import { readCodexSetupMode } from "./CodexSetupSection.logic";
+import { readCodexSetupMode } from "@t3tools/client-runtime/provider-settings/codex-setup";
 import {
   getProviderVersionAdvisoryPresentation,
-  PROVIDER_STATUS_STYLES,
   getProviderStatusKey,
   getProviderSummary,
   getProviderVersionLabel,
-} from "./providerStatus";
-
-const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+} from "@t3tools/client-runtime/provider-settings/status";
+import { PROVIDER_STATUS_STYLES } from "./providerStatus";
 
 function ProviderStatusDiagnostic({
   detail,
@@ -96,107 +103,6 @@ function ProviderStatusDiagnostic({
   );
 }
 
-let environmentVariableDraftId = 0;
-const DRAFT_ROW_ID_PREFIX = "provider-env-";
-const nextEnvironmentVariableDraftId = () =>
-  `${DRAFT_ROW_ID_PREFIX}${environmentVariableDraftId++}`;
-
-type EnvironmentDraftRow = {
-  readonly id: string;
-  readonly name: string;
-  readonly value: ProviderInstanceEnvironmentVariable["value"];
-  readonly sensitive: boolean;
-  readonly valueRedacted?: boolean;
-};
-
-function makeEnvironmentDraftRow(
-  variable: ProviderInstanceEnvironmentVariable,
-  index: number,
-): EnvironmentDraftRow {
-  return {
-    id: `${index}:${variable.name}`,
-    name: variable.name,
-    value: variable.value,
-    sensitive: variable.sensitive,
-    ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
-  };
-}
-
-const toEnvironmentDraftRows = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) =>
-  environment.map(makeEnvironmentDraftRow);
-
-function environmentValuesEqual(
-  left: ProviderInstanceEnvironmentVariable["value"],
-  right: ProviderInstanceEnvironmentVariable["value"],
-): boolean {
-  if (typeof left === "string" || typeof right === "string") return left === right;
-  return left.provider === right.provider && left.reference === right.reference;
-}
-
-function providerEnvironmentsEqual(
-  left: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
-  right: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((variable, index) => {
-      const other = right[index];
-      return (
-        other !== undefined &&
-        variable.name === other.name &&
-        environmentValuesEqual(variable.value, other.value) &&
-        variable.sensitive === other.sensitive &&
-        variable.valueRedacted === other.valueRedacted
-      );
-    })
-  );
-}
-
-function readConfigString(config: unknown, key: string): string | null {
-  if (config === null || typeof config !== "object") return null;
-  const value = (config as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-/** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
-function nextConfigBlobWithValue(
-  config: unknown,
-  key: string,
-  value: unknown,
-): Record<string, unknown> {
-  const base: Record<string, unknown> =
-    config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
-  base[key] = value;
-  return base;
-}
-
-export function deriveProviderModelsForDisplay(input: {
-  readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<CustomModelDefinition>;
-}): ReadonlyArray<ServerProviderModel> {
-  const liveCustomModelsBySlug = new Map(
-    Arr.filterMap(input.liveModels ?? [], (model) =>
-      model.isCustom ? Result.succeed([model.slug, model] as const) : Result.failVoid,
-    ),
-  );
-  const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const serverSlugs = new Set(serverModels.map((model) => model.slug));
-  const customModels = input.customModels.flatMap((entry) =>
-    serverSlugs.has(entry.slug)
-      ? []
-      : [
-          {
-            slug: entry.slug,
-            name: entry.name,
-            isCustom: true,
-            capabilities:
-              entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
-          },
-        ],
-  );
-  return [...serverModels, ...customModels];
-}
-
 function ProviderAuthEmail(props: { readonly email: string | undefined }) {
   const email = props.email?.trim();
   if (!email) return null;
@@ -210,66 +116,6 @@ function ProviderAuthEmail(props: { readonly email: string | undefined }) {
       className="max-w-full truncate"
     />
   );
-}
-
-function readProviderEnvironmentVariable(
-  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
-  name: string,
-): ProviderInstanceEnvironmentVariable | undefined {
-  return environment?.find((variable) => variable.name === name);
-}
-
-function providerEnvironmentWithoutNames(
-  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
-  names: ReadonlySet<string>,
-): ReadonlyArray<ProviderInstanceEnvironmentVariable> {
-  return (environment ?? []).filter((variable) => !names.has(variable.name));
-}
-
-export function nextProviderEnvironmentWithFieldValue(
-  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
-  field: ProviderEnvironmentField,
-  value: string,
-): ReadonlyArray<ProviderInstanceEnvironmentVariable> {
-  const trimmed = value.trim();
-  const next: ProviderInstanceEnvironmentVariable[] = [];
-  let found = false;
-
-  for (const variable of environment ?? []) {
-    if (variable.name !== field.name) {
-      next.push(variable);
-      continue;
-    }
-    found = true;
-    if (trimmed.length > 0) {
-      next.push({
-        name: variable.name,
-        value: trimmed,
-        sensitive: field.sensitive ?? true,
-      });
-    }
-  }
-
-  if (!found && trimmed.length > 0) {
-    next.push({
-      name: field.name,
-      value: trimmed,
-      sensitive: field.sensitive ?? true,
-    });
-  }
-
-  return next;
-}
-
-export function nextProviderEnvironmentWithFieldSecret(
-  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
-  field: ProviderEnvironmentField,
-  secret: SecretReference | undefined,
-): ReadonlyArray<ProviderInstanceEnvironmentVariable> {
-  const others = providerEnvironmentWithoutNames(environment, new Set([field.name]));
-  return secret === undefined
-    ? others
-    : [...others, { name: field.name, value: secret, sensitive: true }];
 }
 
 function ProviderEnvironmentFieldRow(props: {
@@ -345,49 +191,16 @@ export function ProviderEnvironmentSection(props: {
   readonly managed?: { readonly names: ReadonlySet<string>; readonly reason: string } | undefined;
   readonly secretSources?: ReadonlyArray<SecretSource>;
 }) {
-  const [storedDraft, setDraft] = useState(() =>
-    seedRowsDraft(props.environment, toEnvironmentDraftRows),
-  );
-  let draft = reconcileRowsDraft(
-    storedDraft,
-    props.environment,
-    providerEnvironmentsEqual,
-    toEnvironmentDraftRows,
-  );
-  if (draft.rows !== storedDraft.rows) {
-    // Keep rows the server never acknowledged, even across an external reseed.
-    const acknowledged = new Set(storedDraft.seen.map((variable) => variable.name));
-    const unpublished = storedDraft.rows.filter(
-      (row) =>
-        row.id.startsWith(DRAFT_ROW_ID_PREFIX) &&
-        !acknowledged.has(row.name) &&
-        !draft.rows.some((incoming) => incoming.name === row.name),
-    );
-    if (unpublished.length > 0) draft = { ...draft, rows: [...draft.rows, ...unpublished] };
-  }
+  const [storedDraft, setDraft] = useState(() => seedEnvironmentDraft(props.environment));
+  const draft = reconcileEnvironmentDraft(storedDraft, props.environment);
   if (draft !== storedDraft) setDraft(draft);
   const rows = draft.rows;
   const setRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) =>
     setDraft({ ...draft, rows: nextRows });
 
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
-    const published: ProviderInstanceEnvironmentVariable[] = [];
-    for (const row of nextRows) {
-      const name = row.name.trim();
-      if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
-        if (
-          name.length > 0 ||
-          row.value !== "" ||
-          row.sensitive !== true ||
-          row.valueRedacted !== undefined
-        ) {
-          return;
-        }
-        continue;
-      }
-      const { id: _id, ...rest } = row;
-      published.push({ ...rest, name });
-    }
+    const published = publishEnvironmentDraftRows(nextRows);
+    if (published === null) return;
     setDraft({ rows: nextRows, seen: draft.seen, lastPublished: published });
     props.onChange(published);
   };
@@ -409,11 +222,9 @@ export function ProviderEnvironmentSection(props: {
   };
 
   const setVariableSecret = (id: string, secret: SecretReference | undefined) => {
-    const nextRows = rows.map((row) => {
-      if (row.id !== id) return row;
-      const { valueRedacted: _valueRedacted, ...rest } = row;
-      return { ...rest, value: secret ?? "" };
-    });
+    const nextRows = rows.map((row) =>
+      row.id === id ? environmentDraftRowWithSecret(row, secret) : row,
+    );
     setRows(nextRows);
     publishRows(nextRows);
   };

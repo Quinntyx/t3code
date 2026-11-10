@@ -8,7 +8,8 @@ declare function registerProcessor(name: string, processor: typeof AudioWorkletP
 
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   private readonly resampler = new PcmResampler(sampleRate);
-  private chunk = new Float32Array(8_000);
+  private readonly chunk: Float32Array;
+  private readonly maxSamples: number;
   private length = 0;
   private recording = false;
   private flushed = false;
@@ -18,9 +19,15 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   private level = 0;
   private readonly meterOnly: boolean;
 
-  constructor(options?: { readonly processorOptions?: { readonly meterOnly?: boolean } }) {
+  constructor(options?: {
+    readonly processorOptions?: { readonly meterOnly?: boolean; readonly live?: boolean };
+  }) {
     super();
     this.meterOnly = options?.processorOptions?.meterOnly === true;
+    // A live conversation streams 20 ms frames for its whole session instead of capped half-second chunks.
+    const live = options?.processorOptions?.live === true;
+    this.chunk = new Float32Array(live ? 320 : 8_000);
+    this.maxSamples = live ? Number.POSITIVE_INFINITY : 16_000 * 300;
     this.port.onmessage = ({ data }) => {
       if (data === "start") this.recording = true;
       if (data === "stop") {
@@ -42,7 +49,7 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 
   private append(pcm: Float32Array) {
     for (const sample of pcm) {
-      if (this.samples === 16_000 * 300) {
+      if (this.samples === this.maxSamples) {
         this.recording = false;
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AudioWorklet MessagePorts do not accept a target origin
         this.port.postMessage("limit");

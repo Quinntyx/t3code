@@ -67,7 +67,7 @@ import {
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
+import { providerModelKey, sortProviderModelItems } from "@t3tools/client-runtime/model-ordering";
 
 type ModelPickerItem = {
   slug: string;

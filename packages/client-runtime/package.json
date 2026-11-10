@@ -7,6 +7,26 @@
       "types": "./src/assemblyHighlighting.ts",
       "default": "./src/assemblyHighlighting.ts"
     },
+    "./state/commandPermissions": {
+      "types": "./src/state/commandPermissions.ts",
+      "default": "./src/state/commandPermissions.ts"
+    },
+    "./voice/session": {
+      "types": "./src/voice/session.ts",
+      "default": "./src/voice/session.ts"
+    },
+    "./voice/notifications": {
+      "types": "./src/voice/notifications.ts",
+      "default": "./src/voice/notifications.ts"
+    },
+    "./voice/tools": {
+      "types": "./src/voice/tools.ts",
+      "default": "./src/voice/tools.ts"
+    },
+    "./voice/awaitAtom": {
+      "types": "./src/voice/awaitAtom.ts",
+      "default": "./src/voice/awaitAtom.ts"
+    },
     "./zip/bounded-zip": {
       "types": "./src/zip/boundedZip.ts",
       "default": "./src/zip/boundedZip.ts"
@@ -566,6 +586,54 @@
     "./provider-instance-ids": {
       "types": "./src/providerInstanceIds.ts",
       "default": "./src/providerInstanceIds.ts"
+    },
+    "./model-ordering": {
+      "types": "./src/modelOrdering.ts",
+      "default": "./src/modelOrdering.ts"
+    },
+    "./provider-settings/status": {
+      "types": "./src/providerSettings/status.ts",
+      "default": "./src/providerSettings/status.ts"
+    },
+    "./provider-settings/form": {
+      "types": "./src/providerSettings/form.ts",
+      "default": "./src/providerSettings/form.ts"
+    },
+    "./provider-settings/instance": {
+      "types": "./src/providerSettings/instance.ts",
+      "default": "./src/providerSettings/instance.ts"
+    },
+    "./provider-settings/add-instance": {
+      "types": "./src/providerSettings/addInstance.ts",
+      "default": "./src/providerSettings/addInstance.ts"
+    },
+    "./provider-settings/models": {
+      "types": "./src/providerSettings/models.ts",
+      "default": "./src/providerSettings/models.ts"
+    },
+    "./provider-settings/custom-model-editor": {
+      "types": "./src/providerSettings/customModelEditor.ts",
+      "default": "./src/providerSettings/customModelEditor.ts"
+    },
+    "./provider-settings/acp-registry": {
+      "types": "./src/providerSettings/acpRegistry.ts",
+      "default": "./src/providerSettings/acpRegistry.ts"
+    },
+    "./provider-settings/background-activity": {
+      "types": "./src/providerSettings/backgroundActivity.ts",
+      "default": "./src/providerSettings/backgroundActivity.ts"
+    },
+    "./provider-settings/codex-setup": {
+      "types": "./src/providerSettings/codexSetup.ts",
+      "default": "./src/providerSettings/codexSetup.ts"
+    },
+    "./state/wait-for-query-settled": {
+      "types": "./src/state/waitForQuerySettled.ts",
+      "default": "./src/state/waitForQuerySettled.ts"
+    },
+    "./provider-settings/usage-hubs": {
+      "types": "./src/providerSettings/usageHubs.ts",
+      "default": "./src/providerSettings/usageHubs.ts"
     }
   },
   "scripts": {
@@ -573,6 +641,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@google/genai": "2.31.0",
     "@pierre/diffs": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/provider-acp-registry": "workspace:*",

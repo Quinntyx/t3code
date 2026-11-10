@@ -4,6 +4,7 @@ import type {
   OrchestrationV2OlderSettledCount,
   OrchestrationV2OlderSettledThreads,
   OrchestrationV2ShellSnapshot,
+  OrchestrationV2VoiceNotification,
   OrchestrationV2ThreadShell,
   OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellStreamItem,
@@ -45,6 +46,8 @@ export const bufferShellLiveStream = <E, R>(
     source,
     (item) => {
       switch (item.kind) {
+        case "voice.notification":
+          return `voice:${item.threadId}:${item.notification.id}`;
         case "project.updated":
           return `project:${item.project.id}`;
         case "project.removed":
@@ -69,6 +72,7 @@ function buildActiveShellSnapshot(input: {
     projects: input.projects,
     threads: input.threads.threads,
     archivedThreads: [],
+    recentVoiceNotifications: input.threads.recentVoiceNotifications ?? [],
   };
 }
 
@@ -409,6 +413,7 @@ export type ShellApplicationEvent =
   | {
       readonly sequence: number;
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
+      readonly notification?: OrchestrationV2VoiceNotification;
     };
 
 /** Focused subagents receive these updates through their thread subscription. */
@@ -418,6 +423,12 @@ export function shouldPublishShellApplicationEvent(
 ): boolean {
   if ("aggregateKind" in stored) return true;
   const { event } = stored;
+  if (
+    event.type === "turn-item.updated" &&
+    event.payload.type === "system_notice" &&
+    event.payload.voiceNotification
+  )
+    return true;
   if (event.type === "thread.created") {
     if (event.payload.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(event.threadId);
@@ -446,7 +457,22 @@ export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellAp
         type: stored.type,
         sequence: stored.sequence,
       }
-    : { sequence: stored.sequence, event: { threadId: stored.event.threadId } };
+    : {
+        sequence: stored.sequence,
+        event: { threadId: stored.event.threadId },
+        ...(stored.event.type === "turn-item.updated" &&
+        stored.event.payload.type === "system_notice" &&
+        stored.event.payload.voiceNotification
+          ? {
+              notification: {
+                id: stored.event.payload.id,
+                message: stored.event.payload.message,
+                urgency: stored.event.payload.voiceNotification.urgency,
+                occurredAt: DateTime.formatIso(stored.event.payload.updatedAt),
+              },
+            }
+          : {}),
+      };
 }
 
 export function coalesceShellApplicationEvents<A extends ShellApplicationEvent>(
@@ -457,7 +483,9 @@ export function coalesceShellApplicationEvents<A extends ShellApplicationEvent>(
     const key =
       "aggregateKind" in stored
         ? `project:${stored.aggregateId}`
-        : `thread:${stored.event.threadId}`;
+        : stored.notification
+          ? `voice:${stored.event.threadId}:${stored.notification.id}`
+          : `thread:${stored.event.threadId}`;
     latestByAggregate.set(key, stored);
   }
   return Array.from(latestByAggregate.values()).sort(
@@ -670,8 +698,16 @@ export function shellStreamItemFromThreadShell(input: {
   readonly shell: OrchestrationV2ThreadShell | null;
 }): Extract<
   OrchestrationV2ShellStreamItem,
-  { readonly kind: "thread.updated" | "thread.removed" }
+  { readonly kind: "thread.updated" | "thread.removed" | "voice.notification" }
 > {
+  if (input.stored.notification) {
+    return {
+      kind: "voice.notification",
+      sequence: input.stored.sequence,
+      threadId: input.stored.event.threadId,
+      notification: input.stored.notification,
+    };
+  }
   if (input.shell !== null) {
     if (input.shell.archivedAt !== null) {
       return {

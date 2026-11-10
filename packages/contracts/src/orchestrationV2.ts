@@ -1834,6 +1834,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("system_notice"),
     message: Schema.String,
+    voiceNotification: Schema.optional(
+      Schema.Struct({ urgency: Schema.Literals(["interrupt", "when_idle", "silent"]) }),
+    ),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2328,11 +2331,29 @@ export const OrchestrationV2OlderSettledThreads = Schema.Struct({
 });
 export type OrchestrationV2OlderSettledThreads = typeof OrchestrationV2OlderSettledThreads.Type;
 
+export const VOICE_NOTIFICATION_LIMIT = 50;
+
+export const OrchestrationV2VoiceNotification = Schema.Struct({
+  id: TurnItemId,
+  message: Schema.String,
+  urgency: Schema.Literals(["interrupt", "when_idle", "silent"]),
+  occurredAt: IsoDateTime,
+});
+export type OrchestrationV2VoiceNotification = typeof OrchestrationV2VoiceNotification.Type;
+
+export const OrchestrationV2VoiceNotificationEntry = Schema.Struct({
+  threadId: ThreadId,
+  notification: OrchestrationV2VoiceNotification,
+});
+export type OrchestrationV2VoiceNotificationEntry =
+  typeof OrchestrationV2VoiceNotificationEntry.Type;
+
 export const OrchestrationV2ThreadShellSnapshot = Schema.Struct({
   schemaVersion: PositiveInt,
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
   archivedThreads: Schema.Array(OrchestrationV2ThreadShell),
+  recentVoiceNotifications: Schema.optionalKey(Schema.Array(OrchestrationV2VoiceNotificationEntry)),
 });
 export type OrchestrationV2ThreadShellSnapshot = typeof OrchestrationV2ThreadShellSnapshot.Type;
 
@@ -2358,6 +2379,11 @@ export const OrchestrationV2ShellStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshot: OrchestrationV2ShellSnapshot,
     resolvedRepositoryIdentityRoots: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("voice.notification"),
+    sequence: NonNegativeInt,
+    ...OrchestrationV2VoiceNotificationEntry.fields,
   }),
   Schema.Struct({
     kind: Schema.Literal("project.updated"),
@@ -2678,6 +2704,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("system_notice"),
     message: Schema.String,
+    voiceNotification: Schema.optional(
+      Schema.Struct({ urgency: Schema.Literals(["interrupt", "when_idle", "silent"]) }),
+    ),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3544,6 +3573,13 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread.notify-voice"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    message: TrimmedNonEmptyString.check(Schema.isMaxLength(16000)),
+    urgency: Schema.Literals(["interrupt", "when_idle", "silent"]),
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.machine-import"),
     ...OrchestrationV2CreationFields,

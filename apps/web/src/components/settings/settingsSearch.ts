@@ -695,6 +695,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["test voice speech model transcription recognition"],
   },
   {
+    id: "voice-key",
+    title: "Device Gemini API key",
+    to: "/settings/voice",
+    searchTerms: ["voice panel assistant gemini local device key save remove privacy"],
+  },
+  {
+    id: "voice-model",
+    title: "Live model",
+    to: "/settings/voice",
+    searchTerms: ["voice panel gemini live audio model"],
+  },
+  {
+    id: "voice-shortcuts",
+    title: "Voice panel shortcuts",
+    to: "/settings/voice",
+    searchTerms: ["voice keyboard keybindings microphone mute connect disconnect"],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/threads",

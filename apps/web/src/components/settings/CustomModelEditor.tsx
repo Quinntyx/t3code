@@ -21,7 +21,7 @@ import {
   emptyEditorChoice,
   emptyEditorDescriptor,
   validateDraft,
-} from "./customModelEditor.logic";
+} from "@t3tools/client-runtime/provider-settings/custom-model-editor";
 
 const CUSTOM_ID_VALUE = "__custom__";
 const START_FROM_NONE = "__none__";

@@ -1,6 +1,7 @@
 import {
   OrchestrationProjectShell,
   OrchestrationV2ThreadShell,
+  VOICE_NOTIFICATION_LIMIT,
   RepositoryIdentity,
   ThreadPullRequestLink,
   type OrchestrationV2ShellSnapshot,
@@ -84,6 +85,15 @@ export function mergeShellSnapshotProjects(
   next: OrchestrationV2ShellSnapshot,
   options?: MergeShellSnapshotOptions,
 ): OrchestrationV2ShellSnapshot {
+  if (
+    options === undefined &&
+    (next.recentVoiceNotifications?.length ?? 0) > VOICE_NOTIFICATION_LIMIT
+  ) {
+    next = {
+      ...next,
+      recentVoiceNotifications: next.recentVoiceNotifications!.slice(-VOICE_NOTIFICATION_LIMIT),
+    };
+  }
   if (previous === null || previous === undefined) {
     return next;
   }
@@ -136,6 +146,18 @@ export function applyShellStreamEvent(
   if (event.sequence <= snapshot.snapshotSequence) return snapshot;
 
   switch (event.kind) {
+    case "voice.notification":
+      return {
+        ...snapshot,
+        recentVoiceNotifications: [
+          ...(snapshot.recentVoiceNotifications ?? []).filter(
+            (entry) =>
+              entry.notification.id !== event.notification.id || entry.threadId !== event.threadId,
+          ),
+          { threadId: event.threadId, notification: event.notification },
+        ].slice(-VOICE_NOTIFICATION_LIMIT),
+        snapshotSequence: event.sequence,
+      };
     case "project.updated": {
       // Enrichment is async. A project mutation can land with null
       // repositoryIdentity while an earlier snapshot already resolved it.

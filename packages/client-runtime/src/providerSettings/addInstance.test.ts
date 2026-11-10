@@ -5,7 +5,7 @@ import {
   resolveAcpRegistryWizardNavigation,
   resolveWizardNavigation,
   updateProviderIdentityDraft,
-} from "./AddProviderInstanceDialog.logic";
+} from "./addInstance.ts";
 
 describe("resolveWizardNavigation", () => {
   const invalidId = { instanceIdError: "Instance ID is required." };

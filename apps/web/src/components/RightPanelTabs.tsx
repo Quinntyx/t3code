@@ -37,6 +37,7 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   Smartphone,
+  AudioLines,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -142,6 +143,7 @@ export interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
+  onAddVoice?: () => void;
   onAddDevice: () => void;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
@@ -324,6 +326,7 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
+  onAddVoice?: () => void;
   onAddDevice: () => void;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
@@ -395,6 +398,14 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: "Voice",
+      icon: AudioLines,
+      shortcut: "V",
+      available: props.onAddVoice !== undefined,
+      disabledReason: "Open a thread to use Voice.",
+      onClick: props.onAddVoice ?? (() => undefined),
     },
     {
       label: "Device",
@@ -603,6 +614,8 @@ function surfaceTitle(
       return "Notebook";
     case "pull-requests":
       return "Pull requests";
+    case "voice":
+      return "Voice";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "side-chat":
@@ -699,6 +712,8 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "side-chat":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
+    case "voice":
+      return <AudioLines className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1163,6 +1178,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddPullRequests,
     },
     {
+      label: "Voice",
+      icon: AudioLines,
+      shortcut: "V",
+      available: props.onAddVoice !== undefined,
+      disabledReason: "Open a thread to use Voice.",
+      onClick: props.onAddVoice ?? (() => undefined),
+    },
+    {
       label: "Device",
       icon: Smartphone,
       shortcut: "M",
@@ -1556,6 +1579,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddNotebook={props.onAddNotebook}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
+            {...(props.onAddVoice ? { onAddVoice: props.onAddVoice } : {})}
             onAddDevice={props.onAddDevice}
             onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}

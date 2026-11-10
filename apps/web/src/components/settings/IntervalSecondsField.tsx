@@ -6,7 +6,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
-import { normalizeIntervalSeconds } from "./SettingsPanels.logic";
+import { normalizeIntervalSeconds } from "@t3tools/client-runtime/provider-settings/background-activity";
 
 export function IntervalSecondsField({
   label,

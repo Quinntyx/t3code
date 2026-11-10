@@ -6,7 +6,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type {
-  AcpRegistryPrepareResult,
   AcpRegistrySearchAgent,
   EnvironmentId,
   ProviderInstanceConfig,
@@ -23,33 +22,15 @@ import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
+import { isConfiguredAcpRegistryAgent } from "@t3tools/client-runtime/provider-settings/add-instance";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { providerClients } from "./providerDriverMeta";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : "The ACP could not be prepared.";
-}
-
-const ACP_REGISTRY_SEARCH_DEBOUNCE_MS = 300;
-const FIRST_CLASS_REGISTRY_AGENT_IDS = new Set(
-  providerClients.definitions.flatMap((definition) => definition.acpRegistryAgentIds ?? []),
-);
-
-function applyAcpRegistryPrepareResult(
-  agent: AcpRegistrySearchAgent,
-  prepared: AcpRegistryPrepareResult,
-): AcpRegistrySearchAgent {
-  return {
-    ...agent,
-    id: prepared.agentId,
-    version: prepared.version,
-    distribution: prepared.distribution,
-  };
-}
+import {
+  ACP_REGISTRY_SEARCH_DEBOUNCE_MS,
+  acpRegistryPrepareErrorMessage,
+  applyAcpRegistryPrepareResult,
+  FIRST_CLASS_REGISTRY_AGENT_IDS,
+} from "@t3tools/client-runtime/provider-settings/acp-registry";
 
 /**
  * Registry search and agent preparation. Owned by the dialog, which needs the
@@ -112,7 +93,7 @@ export function useAcpRegistrySearch(environmentId: EnvironmentId, enabled: bool
         return;
       }
       if (!isAtomCommandInterrupted(result)) {
-        pipe(squashAtomCommandFailure(result), errorMessage, setPrepareError);
+        pipe(squashAtomCommandFailure(result), acpRegistryPrepareErrorMessage, setPrepareError);
       }
     },
   };

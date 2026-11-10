@@ -11,16 +11,55 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useDictationShortcut } from "./useDictationShortcut";
 import { useEnvironmentSpeechInput } from "./useEnvironmentSpeechInput";
 
-/** Binds dictation to a plain textarea draft; the shortcut targets it only while it has focus. */
-export function useTextFieldSpeech(input: {
+interface FieldSpeechInput {
   readonly environmentId: EnvironmentId;
   readonly projectId?: ProjectId | null | undefined;
   readonly ownerKey: string;
   readonly text: string;
-  readonly textareaRef: RefObject<HTMLTextAreaElement | null>;
-  readonly onTextChange: (text: string) => void;
   readonly disabled?: boolean | undefined;
-}) {
+}
+
+type FieldSelection = { readonly start: number; readonly end: number };
+
+/** Binds dictation to a plain textarea draft; the shortcut targets it only while it has focus. */
+export function useTextFieldSpeech(
+  input: FieldSpeechInput & {
+    readonly textareaRef: RefObject<HTMLTextAreaElement | null>;
+    readonly onTextChange: (text: string) => void;
+  },
+) {
+  const { textareaRef } = input;
+  return useDraftFieldSpeech({
+    ...input,
+    targetRef: textareaRef,
+    readDraft: () => {
+      const field = textareaRef.current;
+      const cursor = field?.selectionStart ?? input.text.length;
+      return {
+        text: field?.value ?? input.text,
+        selection: { start: cursor, end: field?.selectionEnd ?? cursor },
+      };
+    },
+    commitDraft: (text, selection) => {
+      input.onTextChange(text);
+      window.requestAnimationFrame(() => {
+        const field = textareaRef.current;
+        if (!field) return;
+        field.focus({ preventScroll: true });
+        field.setSelectionRange(selection.start, selection.end);
+      });
+    },
+  });
+}
+
+/** Binds dictation to any draft editor; the shortcut targets it only while `targetRef` has focus. */
+export function useDraftFieldSpeech(
+  input: FieldSpeechInput & {
+    readonly targetRef: RefObject<HTMLElement | null>;
+    readonly readDraft: () => { readonly text: string; readonly selection: FieldSelection };
+    readonly commitDraft: (text: string, selection: FieldSelection) => void;
+  },
+) {
   const latest = useRef(input);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed field callbacks to the asynchronous recording controller
   useEffect(() => {
@@ -34,23 +73,8 @@ export function useTextFieldSpeech(input: {
     draftText: input.text,
     disabled: input.disabled,
     offerSetup: false,
-    readDraft: () => {
-      const field = latest.current.textareaRef.current;
-      const cursor = field?.selectionStart ?? latest.current.text.length;
-      return {
-        text: field?.value ?? latest.current.text,
-        selection: { start: cursor, end: field?.selectionEnd ?? cursor },
-      };
-    },
-    commitDraft: (text, selection) => {
-      latest.current.onTextChange(text);
-      window.requestAnimationFrame(() => {
-        const field = latest.current.textareaRef.current;
-        if (!field) return;
-        field.focus({ preventScroll: true });
-        field.setSelectionRange(selection.start, selection.end);
-      });
-    },
+    readDraft: () => latest.current.readDraft(),
+    commitDraft: (text, selection) => latest.current.commitDraft(text, selection),
   });
   const shortcutLabel = useDictationShortcut({
     keybindings,
@@ -58,7 +82,7 @@ export function useTextFieldSpeech(input: {
     disabled: input.disabled ?? false,
     terminalOpen: false,
     modelPickerOpen: false,
-    targetRef: input.textareaRef,
+    targetRef: input.targetRef,
   });
   return { ...speech, shortcutLabel };
 }

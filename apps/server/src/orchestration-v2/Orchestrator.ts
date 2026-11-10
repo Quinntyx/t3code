@@ -643,6 +643,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "delegated_task.completion-delivery.dispose":
     case "thread.created.record":
       return command.parentThreadId;
+    case "thread.notify-voice":
     case "secret_request.record":
     case "email_request.record":
     case "link_request.record":
@@ -9436,6 +9437,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const dispatchVoiceNotification = Effect.fn("orchestrationV2.dispatch.voiceNotification")(
+    function* (
+      command: Extract<OrchestrationV2InternalCommand, { readonly type: "thread.notify-voice" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["turnItems"], { turnItemTypes: [] })
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make(`voice:${command.commandId}`),
+          type: "system_notice",
+          threadId: command.threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: yield* nextTurnItemOrdinal(projection),
+          status: "completed",
+          title: "Notification to Voice",
+          message: command.message,
+          voiceNotification: { urgency: command.urgency },
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        },
+      });
+    },
+  );
+
   const dispatchSecretRequestRecord = Effect.fn("orchestrationV2.dispatch.secretRequestRecord")(
     function* (
       command: Extract<OrchestrationV2InternalCommand, { readonly type: "secret_request.record" }>,
@@ -14266,6 +14309,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.created.record":
         yield* dispatchCreatedThreadRecord(command, events);
+        break;
+      case "thread.notify-voice":
+        yield* dispatchVoiceNotification(command, events);
         break;
       case "secret_request.record":
         yield* dispatchSecretRequestRecord(command, events);

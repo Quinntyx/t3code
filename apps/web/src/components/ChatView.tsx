@@ -45,6 +45,7 @@ import { openMachineHandoff, useMachineHandoffRequest } from "./machineHandoffRe
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
+import { followVoiceInto } from "../voice/controller";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -120,7 +121,15 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
-import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type SetStateAction,
+  use,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { useAmbientShimmerProminence } from "~/ambient-shimmer/prominence";
 import { WorkspaceMutationIdContext } from "./chat/ChatMarkdownMedia";
@@ -1076,6 +1085,19 @@ export default function ChatView(props: ChatViewProps) {
   const canReuseTerminal = activeThreadKnownSessionsRaw !== null;
   const previewPanelOpen = activeRightPanelKind === "preview" && browserAvailable;
   const rightPanelOpen = rightPanelState.isOpen;
+  const voiceVisible = rightPanelOpen && activeRightPanelSurface?.kind === "voice";
+  const voiceWasVisibleRef = useRef(false);
+  const followVoice = useEffectEvent(() => {
+    if (activeThreadRef && voiceWasVisibleRef.current) followVoiceInto(activeThreadRef);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Voice is client-wide; it follows navigation into the next thread when it was on screen.
+  useEffect(() => {
+    if (activeThreadKey) followVoice();
+  }, [activeThreadKey]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records whether Voice was on screen, read by the navigation effect above.
+  useEffect(() => {
+    voiceWasVisibleRef.current = voiceVisible;
+  }, [voiceVisible]);
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const rightPanelPresenceValue = {
@@ -2364,6 +2386,7 @@ export default function ChatView(props: ChatViewProps) {
     addFilesSurfaceStable,
     addPullRequestSurfaceStable,
     addPullRequestsSurfaceStable,
+    addVoiceSurfaceStable,
     closePreviewPanelStable,
     copyRightPanelFilePathStable,
     createBrowserSurface,
@@ -4076,6 +4099,7 @@ export default function ChatView(props: ChatViewProps) {
           }
           onAddPullRequest={addPullRequestSurfaceStable}
           onAddPullRequests={addPullRequestsSurfaceStable}
+          onAddVoice={addVoiceSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
           onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
           browserAvailable={canOperatePreview && browserAvailable}

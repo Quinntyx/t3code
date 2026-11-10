@@ -325,7 +325,11 @@ it.layer(layerTest)("PiDriver ChatGPT limits and usage routes", (it) => {
   it.effect("reports ChatGPT windows and routes hub models to their origin", () =>
     Effect.gen(function* () {
       const { spawner, launches } = yield* makePiSpawner({
-        codexToken: "codex-token",
+        codexToken: `header.${Buffer.from(
+          JSON.stringify({
+            "https://api.openai.com/auth": { chatgpt_account_id: "workspace-team" },
+          }),
+        ).toString("base64url")}.signature`,
         models: [
           {
             provider: "cliproxyapi",
@@ -364,6 +368,8 @@ it.layer(layerTest)("PiDriver ChatGPT limits and usage routes", (it) => {
       assert.equal(source?.label, "ChatGPT");
       assert.equal(source?.driver, "codex");
       assert.equal(source?.email, "pilot@example.com");
+      // One email can sign in to several workspaces; the hub keys each by this claim.
+      assert.equal(source?.workspaceId, "workspace-team");
       assert.deepEqual(
         source?.limits.windows.map((window) => [
           window.id,

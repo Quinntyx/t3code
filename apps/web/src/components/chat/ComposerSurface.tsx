@@ -57,26 +57,28 @@ const outlineClasses =
 
 // The strip carries the body's lower edge, so the card's own bottom outline stops where it starts.
 const contextSeamClasses =
-  "supports-[clip-path:shape(from_0_0,line_to_1px_1px)]:group-data-[context-row=true]/composer-surface:after:[clip-path:polygon(0_0,100%_0,100%_100%,calc(100%-var(--chat-composer-drawer-inset))_100%,calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_100%,0_100%)]";
+  "group-data-[context-row=true]/composer-surface:after:[clip-path:polygon(0_0,100%_0,100%_100%,calc(100%-var(--chat-composer-drawer-inset))_100%,calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_100%,0_100%)]";
 
 // Everything but the strip's footprint, so the card's shadow stops at the seam instead of crossing
-// it, and the strip draws the body's shadow from there down.
+// it, and the strip draws the body's shadow from there down. Clipped on ::before: a clip-path on
+// the host would make it a backdrop root and strip the frost from banners and the card inside it.
 const contextShadowClasses =
-  "group-data-[context-row=true]/composer-surface:[clip-path:polygon(-100px_-100px,calc(100%_+_100px)_-100px,calc(100%_+_100px)_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%_+_100px),-100px_calc(100%_+_100px))]";
+  "group-data-[context-row=true]/composer-surface:before:[clip-path:polygon(-100px_-100px,calc(100%_+_100px)_-100px,calc(100%_+_100px)_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%_+_100px),-100px_calc(100%_+_100px))]";
 
 function Host({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="composer-host"
       className={cn(
-        "relative z-10 w-full rounded-(--chat-composer-radius) shadow-float after:z-1",
+        "relative z-10 w-full rounded-(--chat-composer-radius) after:z-1",
+        "before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:shadow-float",
         outlineClasses,
         contextSeamClasses,
         contextShadowClasses,
         // Shaped liquid glass draws the outline and one body shadow around the drawers and strip.
-        "group-data-liquid-glass-shaped/composer-surface:shadow-none",
+        "group-data-liquid-glass-shaped/composer-surface:before:hidden",
         "group-data-liquid-glass-shaped/composer-surface:after:hidden",
-        "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-none group-has-data-[composer-banner-surface=attached]/composer-surface:after:hidden",
+        "group-has-data-[composer-banner-surface=attached]/composer-surface:before:hidden group-has-data-[composer-banner-surface=attached]/composer-surface:after:hidden",
         className,
       )}
       {...props}
@@ -95,6 +97,9 @@ function Main({ className, ...props }: ComponentProps<"div">) {
         "after:z-20 after:hidden group-has-data-[composer-banner-surface=attached]/composer-surface:after:block",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:bg-(--chat-composer-glass-fill) group-has-data-[composer-banner-surface=attached]/composer-surface:composer-frost",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:shadow-float",
+        // The host's seam clip, here because the card's shadow and outline move here. Main's own
+        // frost already makes it a backdrop root, so the clip-path costs nothing.
+        "group-data-[context-row=true]/composer-surface:group-has-data-[composer-banner-surface=attached]/composer-surface:[clip-path:polygon(-100px_-100px,calc(100%_+_100px)_-100px,calc(100%_+_100px)_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%_+_100px),calc(100%-var(--chat-composer-drawer-inset))_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%-2px),var(--chat-composer-drawer-inset)_calc(100%_+_100px),-100px_calc(100%_+_100px))]",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:group-has-data-[composer-banner-surface=attached]/composer-surface:bg-(--chat-composer-glass-surface)",
         "group-has-data-[composer-banner-surface=attached]/composer-surface:**:data-[chat-composer-mobile-collapsed=true]:min-h-[calc(1rem+1px)]",
         className,

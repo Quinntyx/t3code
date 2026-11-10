@@ -181,9 +181,8 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
                   id: "chatgpt",
                   label: "ChatGPT",
                   driver: ProviderDriverKind.make("codex"),
-                  // Hub and native Codex logins key on chatgpt_account_id; wham's account_id is a
-                  // different claim, so leaving it out lets the shared registry bind this login.
                   ...(codexUsage.email ? { email: codexUsage.email } : {}),
+                  ...(codexUsage.workspaceId ? { workspaceId: codexUsage.workspaceId } : {}),
                   limits: codexUsage.limits,
                 },
               ],

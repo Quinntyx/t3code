@@ -35,6 +35,12 @@ import { openDeviceSetupDialog } from "./ChatOverlayHosts";
 import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
+import {
+  connectVoiceMicrophone,
+  disconnectVoice,
+  muteVoice,
+  toggleVoice,
+} from "../../voice/controller";
 interface RightPanelActionsInput {
   readonly activeThreadRef: ScopedThreadRef | null;
   readonly activeProject: EnvironmentProject | null;
@@ -152,6 +158,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
   };
   const addPullRequestsSurfaceStable = useStableCallback(addPullRequestsSurface);
+  const addVoiceSurfaceStable = useStableCallback(() => {
+    if (activeThreadRef) useRightPanelStore.getState().open(activeThreadRef, "voice");
+  });
   const addDeviceSurface = () => {
     if (!activeThreadRef) return;
     if (!deviceState.onboardingCompleted || deviceState.hostStatus === "disabled") {
@@ -338,6 +347,17 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
       if (!event.repeat) closeRightPanelSurface(activeRightPanelSurface);
     },
     "diff.toggle": () => onToggleDiff(),
+    "voice.toggle": ({ event }) => {
+      if (!activeThreadRef) return false;
+      if (!event.repeat) toggleVoice(activeThreadRef);
+    },
+    "voice.connect": ({ event }) => {
+      if (!event.repeat) void connectVoiceMicrophone().catch(() => {});
+    },
+    "voice.disconnect": () => disconnectVoice(),
+    "voice.mute": ({ event }) => {
+      if (!event.repeat) muteVoice();
+    },
   } satisfies ChatShortcutCommands;
 
   return {
@@ -348,6 +368,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     addFilesSurfaceStable,
     addPullRequestSurfaceStable,
     addPullRequestsSurfaceStable,
+    addVoiceSurfaceStable,
     closePreviewPanelStable,
     copyRightPanelFilePathStable,
     createBrowserSurface,

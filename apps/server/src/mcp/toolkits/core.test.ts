@@ -3,10 +3,17 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { LiveServerMessage } from "@google/genai";
+import { createVoiceSession } from "@t3tools/client-runtime/voice/session";
+import {
+  createNotificationFeed,
+  notificationsFromShell,
+} from "@t3tools/client-runtime/voice/notifications";
 import {
   DEFAULT_SERVER_SETTINGS,
   ChatImageAttachment,
   CommandId,
+  MessageId,
   EnvironmentId,
   NodeId,
   OrchestratorMcpThreadReadResult,
@@ -24,6 +31,23 @@ import {
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
+import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import * as ProviderReplayHarness from "../../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as CommandReceiptStore from "../../orchestration-v2/CommandReceiptStore.ts";
+import {
+  coalesceShellApplicationEvents,
+  loadSubscriberShellSnapshot,
+  shellStreamItemFromThreadShell,
+  shouldPublishShellApplicationEvent,
+  toShellApplicationEvent,
+} from "../../orchestration-v2/ShellStream.ts";
+import { applyShellStreamEvent } from "../../../../../packages/client-runtime/src/state/shellReducer.ts";
+import { CodexProviderCapabilitiesV2 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
@@ -127,6 +151,207 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+
+it.effect(
+  "notify_voice records activity without a listener and delivers it through the stored subscription",
+  () => {
+    const database = SqlitePersistence.layerMemory;
+    const replay = ProviderReplayHarness.layerWithRegistry(
+      { name: "notify-voice" },
+      ProviderAdapterRegistry.layerFromAdapters([
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+          planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+          openSession: () => Effect.die("notification must not start a provider"),
+        } as ProviderAdapter.ProviderAdapterV2["Service"],
+      ]),
+      { databaseLayer: database, runEffectWorker: false },
+    );
+    const management = ThreadManagement.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          replay,
+          CommandReceiptStore.layer.pipe(Layer.provide(database)),
+          ServerSettings.layerTest({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sql = yield* SqlClient.SqlClient;
+      // The snapshot a client subscribing to the shell receives.
+      const subscriberShell = (snapshotSequence: number) =>
+        loadSubscriberShellSnapshot({
+          sql,
+          listShellIndex: orchestrator.listActiveShellIndex(),
+          readThreads: (threadIds) =>
+            orchestrator.readShellSnapshot({
+              location: "active",
+              ...(threadIds === undefined ? {} : { threadIds }),
+            }),
+          listProjects: Effect.succeed([]),
+          latestSequence: Effect.succeed(snapshotSequence),
+          options: { omitIdleSubagents: true, omitOlderSettled: true },
+        }).pipe(Effect.map(({ snapshot }) => snapshot));
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("notify-create"),
+        threadId,
+        projectId: ProjectId.make("notify-project"),
+        title: "Build",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("notify-start"),
+        threadId,
+        messageId: MessageId.make("notify-start-message"),
+        text: "Build",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const before = yield* subscriberShell(0);
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "notify_voice",
+          arguments: { message: "Choose a release target.", urgency: "interrupt" },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      expect(result.structuredContent).toEqual({ recorded: true });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const notice = projection.turnItems.find(
+        (item) => item.type === "system_notice" && item.voiceNotification,
+      );
+      expect(projection.visibleTurnItems.some((row) => row.item.id === notice?.id)).toBe(true);
+      expect(notice).toMatchObject({
+        type: "system_notice",
+        message: "Choose a release target.",
+        voiceNotification: { urgency: "interrupt" },
+      });
+      const events = yield* orchestrator.streamStoredEventsFrom({ afterSequence: 0 }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "turn-item.updated" && stored.event.payload.id === notice?.id,
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      expect(events[0]?.event.payload).toEqual(notice);
+      const seen = new Set<string>();
+      const responses: unknown[] = [];
+      const feed = createNotificationFeed(
+        { has: (id) => seen.has(id), mark: (ids) => ids.forEach((id) => seen.add(id)) },
+        (notification) =>
+          notification.environmentId === "visible" && notification.threadId === threadId,
+      );
+      const session = createVoiceSession({
+        key: { read: async () => "fake-key" },
+        feed,
+        tools: { declarations: [], execute: async () => ({}) },
+        connector: async (_key, callbacks) => ({
+          sendClientContent: () =>
+            callbacks.onmessage(
+              Object.assign(new LiveServerMessage(), {
+                toolCall: { functionCalls: [{ id: "live-monitor", name: "monitor_threads" }] },
+              }),
+            ),
+          sendToolResponse: (response) => {
+            responses.push(response);
+          },
+          sendRealtimeInput: () => {},
+          close: () => {},
+        }),
+      });
+      yield* Effect.promise(() => session.open());
+      const notificationEvent = events[0]?.event;
+      if (notificationEvent?.type !== "turn-item.updated")
+        throw new Error("missing persisted notification");
+      const stored = events[0]!;
+      expect(shouldPublishShellApplicationEvent(stored, new Set([threadId]))).toBe(true);
+      const projected = toShellApplicationEvent(stored);
+      if (!("event" in projected)) throw new Error("expected thread notification");
+      const shellItem = shellStreamItemFromThreadShell({ stored: projected, shell: null });
+      expect(shellItem).toEqual({
+        kind: "voice.notification",
+        sequence: stored.sequence,
+        threadId,
+        notification: {
+          id: notice!.id,
+          message: "Choose a release target.",
+          urgency: "interrupt",
+          occurredAt: DateTime.formatIso(notice!.updatedAt),
+        },
+      });
+      expect(
+        coalesceShellApplicationEvents([
+          projected,
+          { sequence: stored.sequence + 1, event: { threadId } },
+        ]),
+      ).toHaveLength(2);
+      const snapshot = applyShellStreamEvent(before, shellItem);
+      feed.update(notificationsFromShell("visible", snapshot));
+      expect(responses).toEqual([
+        {
+          functionResponses: [
+            {
+              id: "live-monitor",
+              name: "monitor_threads",
+              response: {
+                notifications: [
+                  expect.objectContaining({ message: "Choose a release target.", threadId }),
+                ],
+              },
+              willContinue: true,
+              scheduling: "INTERRUPT",
+            },
+          ],
+        },
+      ]);
+      expect(seen.size).toBe(1);
+      session.close();
+      for (let index = 0; index < 55; index++) {
+        yield* orchestrator.dispatch({
+          type: "thread.notify-voice",
+          commandId: CommandId.make(`catch-up-${index}`),
+          threadId,
+          message: `Catch-up ${index}`,
+          urgency: "silent",
+        });
+      }
+      const catchUp = yield* subscriberShell(stored.sequence);
+      expect(catchUp.recentVoiceNotifications).toHaveLength(50);
+      expect(catchUp.recentVoiceNotifications?.at(-1)?.notification.message).toBe("Catch-up 54");
+      expect(
+        catchUp.recentVoiceNotifications?.some((entry) => entry.notification.id === notice!.id),
+      ).toBe(false);
+    }).pipe(
+      Effect.provide(
+        layerThreadToolkit.pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(management),
+          Layer.provideMerge(replay),
+          Layer.provideMerge(database),
+        ),
+      ),
+    );
+  },
+);
 
 it.effect("checks capability through the production registration", () =>
   Effect.gen(function* () {

@@ -5,7 +5,7 @@ import {
   getProviderSummary,
   getProviderVersionAdvisoryPresentation,
   getProviderStatusKey,
-} from "./providerStatus";
+} from "./status.ts";
 
 const provider: ServerProvider = {
   instanceId: ProviderInstanceId.make("codex"),
