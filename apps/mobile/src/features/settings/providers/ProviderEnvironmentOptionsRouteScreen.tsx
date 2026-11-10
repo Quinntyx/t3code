@@ -145,9 +145,10 @@ function UsageHubs(props: {
           sources={sources}
           onCancel={() => setAdding(false)}
           onSave={async (hub) => {
+            const sourceId = sourceIdFromUrl(hub.url, settings.usageLimitSources);
             const saved = await props.actions.updateSettings({
               usageLimitSources: {
-                [sourceIdFromUrl(hub.url, settings.usageLimitSources)]: {
+                [sourceId]: {
                   kind: "cliproxy",
                   ...(hub.label ? { label: hub.label } : {}),
                   url: hub.url,

@@ -248,90 +248,93 @@ export function MachineHandoffScreen(props: {
     executing.current = true;
     setBusy(true);
     setError(null);
-    try {
-      const result = await relayMachineHandoff({
-        eligibility,
-        attempt,
-        exportSnapshot: async () => {
-          const result = await exportHandoff({
-            environmentId: props.sourceRef.environmentId,
-            input: { threadId: props.sourceRef.threadId },
-          });
-          if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-          setChosenProject({ environmentId: targetId, projectId: destinationProject.id });
-          setChosenModel(selection);
-          setPrepared(true);
-          return result.value;
-        },
-        importSnapshot: async (snapshot) => {
-          const result = await importHandoff({
-            environmentId: targetId,
-            input: {
-              ...ids,
-              projectId: destinationProject.id,
-              modelSelection: selection,
-              snapshot,
-            },
-          });
-          if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-          return result.value;
-        },
-      });
-      const openThread = () =>
-        selectDetail({
-          name: "Thread",
-          params: { environmentId: targetId, threadId: result.threadId },
+    const handoff = relayMachineHandoff({
+      eligibility,
+      attempt,
+      exportSnapshot: async () => {
+        const result = await exportHandoff({
+          environmentId: props.sourceRef.environmentId,
+          input: { threadId: props.sourceRef.threadId },
         });
-      if (result.warnings?.length) {
-        Alert.alert("Thread transferred; workspace setup needed", result.warnings.join("\n"), [
-          { text: "Open thread", onPress: openThread },
-        ]);
-      } else {
-        openThread();
-      }
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not hand off the thread. Your source is unchanged.",
+        if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
+        setChosenProject({ environmentId: targetId, projectId: destinationProject.id });
+        setChosenModel(selection);
+        setPrepared(true);
+        return result.value;
+      },
+      importSnapshot: async (snapshot) => {
+        const result = await importHandoff({
+          environmentId: targetId,
+          input: {
+            ...ids,
+            projectId: destinationProject.id,
+            modelSelection: selection,
+            snapshot,
+          },
+        });
+        if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
+        return result.value;
+      },
+    });
+    await handoff
+      .then((result) => {
+        const openThread = () =>
+          selectDetail({
+            name: "Thread",
+            params: { environmentId: targetId, threadId: result.threadId },
+          });
+        if (result.warnings?.length) {
+          Alert.alert("Thread transferred; workspace setup needed", result.warnings.join("\n"), [
+            { text: "Open thread", onPress: openThread },
+          ]);
+        } else {
+          openThread();
+        }
+      })
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not hand off the thread. Your source is unchanged.",
+        ),
       );
-    } finally {
-      executing.current = false;
-      setBusy(false);
-    }
+    executing.current = false;
+    setBusy(false);
   };
 
   const finishClone = async () => {
     if (busy || !clonedProject || !cloneProject || !cloneReady || subdirectory === null) return;
     setBusy(true);
     setError(null);
-    try {
-      let destination = clonedProject;
-      if (subdirectory) {
-        const projectId = ProjectId.make(uuidv4());
-        const input = buildProjectCreateCommand({
-          commandId: CommandId.make(uuidv4()),
-          projectId,
-          workspaceRoot: `${cloneProject.workspaceRoot.replace(/[/\\]+$/, "")}/${subdirectory}`,
-        });
-        const result = await createProject({ environmentId: clonedProject.environmentId, input });
-        if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-        destination = { environmentId: clonedProject.environmentId, projectId };
-        if (!(await waitForProject(destination)))
-          throw new Error(
-            "The cloned project has not reached this device yet. Reopen handoff when it appears.",
-          );
-      }
-      setChosenProject(destination);
-      setCloning(false);
-      setChosenModel(null);
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Could not prepare the destination project.",
+    const prepareDestination = async () => {
+      if (!subdirectory) return clonedProject;
+      const projectId = ProjectId.make(uuidv4());
+      const input = buildProjectCreateCommand({
+        commandId: CommandId.make(uuidv4()),
+        projectId,
+        workspaceRoot: `${cloneProject.workspaceRoot.replace(/[/\\]+$/, "")}/${subdirectory}`,
+      });
+      const result = await createProject({ environmentId: clonedProject.environmentId, input });
+      if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
+      const destination = { environmentId: clonedProject.environmentId, projectId };
+      if (!(await waitForProject(destination)))
+        throw new Error(
+          "The cloned project has not reached this device yet. Reopen handoff when it appears.",
+        );
+      return destination;
+    };
+    await prepareDestination()
+      .then((destination) => {
+        setChosenProject(destination);
+        setCloning(false);
+        setChosenModel(null);
+      })
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Could not prepare the destination project.",
+        ),
       );
-    } finally {
-      setBusy(false);
-    }
+    setBusy(false);
   };
 
   if (cloning && target && sourceProject && remoteUrl) {
