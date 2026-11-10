@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  detectComposerTokenTrigger,
   detectComposerTrigger,
   parseSideChatCommand,
   serializeComposerFileLink,
@@ -57,6 +58,8 @@ describe("detectComposerTrigger", () => {
   });
 
   it.each([
+    "It costs $5",
+    "is it $5?",
     "budget $9.99",
     "only $.99",
     "about €20",
@@ -86,6 +89,53 @@ describe("detectComposerTrigger", () => {
   it.each(["50%", "Open %APPDATA%", "Use %auth "])("does not open the thread menu for %j", (text) =>
     expect(detectComposerTrigger(text, text.length)).toBeNull(),
   );
+});
+
+describe("detectComposerTokenTrigger", () => {
+  it("reads only the word at the cursor, so /model arguments close the menu", () => {
+    expect(detectComposerTokenTrigger("/model spark", "/model spark".length)).toBeNull();
+    expect(detectComposerTokenTrigger("/model", "/model".length)).toEqual({
+      kind: "slash-command",
+      query: "model",
+      rangeStart: 0,
+      rangeEnd: "/model".length,
+    });
+  });
+
+  it.each(["Use ", "Use\t", "Use\n  "])("detects inline slash skills after %j", (prefix) => {
+    const text = `${prefix}/skill:review later`;
+    const cursor = `${prefix}/skill:review`.length;
+    expect(detectComposerTokenTrigger(text, cursor)).toEqual({
+      kind: "slash-command",
+      query: "skill:review",
+      rangeStart: prefix.length,
+      rangeEnd: cursor,
+    });
+  });
+
+  it("detects a pull request number at a token boundary, not in headings or words", () => {
+    const text = "Compare this with #8737";
+    expect(detectComposerTokenTrigger(text, text.length)).toEqual({
+      kind: "pull-request",
+      query: "8737",
+      rangeStart: "Compare this with ".length,
+      rangeEnd: text.length,
+    });
+    expect(detectComposerTokenTrigger("# Heading", "# Heading".length)).toBeNull();
+    expect(detectComposerTokenTrigger("issue#123", "issue#123".length)).toBeNull();
+  });
+
+  // regression: #936 @file autocomplete used the wrong cursor when typing mid-text
+  it("detects @path trigger in the middle of existing text", () => {
+    const text = "Please inspect @in this sentence";
+    const cursorAfterAt = "Please inspect @".length;
+    expect(detectComposerTokenTrigger(text, cursorAfterAt)).toEqual({
+      kind: "path",
+      query: "",
+      rangeStart: "Please inspect ".length,
+      rangeEnd: cursorAfterAt,
+    });
+  });
 });
 
 describe("serializeComposerFileLink", () => {
