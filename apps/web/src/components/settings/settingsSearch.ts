@@ -29,6 +29,7 @@ export type SettingsPath =
   | "/settings/browser"
   | "/settings/devices"
   | "/settings/email"
+  | "/settings/voice"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
@@ -98,6 +99,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
   "/settings/email": "Email",
+  "/settings/voice": "Voice",
   "/settings/scheduled-tasks": "Scheduled tasks",
   "/settings/source-control": "Source control",
   "/settings/worktrees": "Worktrees",
@@ -135,7 +137,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/scheduled-tasks",
     ],
   },
-  { heading: "Capabilities", paths: ["/settings/email"] },
+  { heading: "Capabilities", paths: ["/settings/voice", "/settings/email"] },
   {
     heading: "Code",
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
@@ -929,6 +931,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["device pixel ratio dpr resolution sharp hidpi retina 1x 2x"],
   },
   {
+    id: "voice-key",
+    title: "Device Gemini API key",
+    to: "/settings/voice",
+    searchTerms: ["voice assistant local device key save remove privacy"],
+  },
+  {
+    id: "voice-model",
+    title: "Live model",
+    to: "/settings/voice",
+    searchTerms: ["voice gemini audio model"],
+  },
+  {
+    id: "voice-shortcuts",
+    title: "Voice shortcuts",
+    to: "/settings/voice",
+    searchTerms: ["voice keyboard keybindings microphone mute connect disconnect"],
+  },
+  {
     id: "email-enabled",
     title: "Agents can draft emails",
     to: "/settings/email",
@@ -1297,6 +1317,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/browser": null,
   "/settings/devices": null,
   "/settings/email": "environment",
+  "/settings/voice": null,
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",

@@ -63,6 +63,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  AudioLinesIcon,
   MessageSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
@@ -73,6 +74,7 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
+import { toggleVoice } from "../voice/controller";
 import {
   useDeferredValue,
   useEffect,
@@ -1520,6 +1522,17 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (activeThread)
+    actionItems.push({
+      kind: "action",
+      value: "action:voice",
+      searchTerms: ["voice", "assistant", "talk", "microphone"],
+      title: "Toggle Voice",
+      icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        toggleVoice(scopeThreadRef(activeThread.environmentId, activeThread.id));
+      },
+    });
   actionItems.push({
     kind: "action",
     value: "action:settings",

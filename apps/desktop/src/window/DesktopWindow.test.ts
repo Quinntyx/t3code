@@ -72,6 +72,7 @@ function makeFakeBrowserWindow() {
   const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
   let zoomLevel = 0;
   const webContents = {
+    session: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() },
     copyImageAt: vi.fn(),
     focus: vi.fn(),
     isDestroyed: vi.fn(() => false),

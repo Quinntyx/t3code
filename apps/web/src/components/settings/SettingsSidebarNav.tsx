@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  AudioLinesIcon,
   FlaskConicalIcon,
   BotIcon,
   createLucideIcon,
@@ -99,6 +100,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/email": MailIcon,
+  "/settings/voice": AudioLinesIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/worktrees": FolderTreeIcon,

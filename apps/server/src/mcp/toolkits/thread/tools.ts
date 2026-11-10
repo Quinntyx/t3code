@@ -236,7 +236,26 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const NotifyVoiceTool = Tool.make("notify_voice", {
+  description:
+    "Record a visible notification in this thread for client-side Voice assistants. Recording does not mean anyone heard it. Use interrupt for urgent decisions, when_idle for normal updates, silent for background context.",
+  parameters: Schema.Struct({
+    message: TrimmedNonEmptyString.check(Schema.isMaxLength(16000)),
+    urgency: Schema.Literals(["interrupt", "when_idle", "silent"]),
+  }),
+  success: Schema.Struct({ recorded: Schema.Literal(true) }),
+  failure: OrchestratorMcpFailure,
+  dependencies: [
+    ThreadManagementService.ThreadManagementService,
+    McpInvocationContext.McpInvocationContext,
+    Crypto.Crypto,
+  ],
+})
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
+
 export const ThreadToolkit = Toolkit.make(
+  NotifyVoiceTool,
   ScheduledTaskRunTool,
   GoalTool,
   ThreadSearchTool,

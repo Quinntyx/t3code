@@ -1033,6 +1033,8 @@ export interface DesktopBridge {
   getLocalEnvironmentEnabled: () => boolean;
   setLocalEnvironmentEnabled: (enabled: boolean) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
+  encryptVoiceKey: (key: string) => Promise<string>;
+  decryptVoiceKey: (encrypted: string) => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   getConnectionCatalog: () => Promise<string | null>;
