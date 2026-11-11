@@ -85,9 +85,13 @@ const readUsage = Effect.fn("readOpenCodeGoUsage")(function* (input: OpenCodeGoU
   const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(UsageResponse)),
   );
-  // Unkeyed hashes match across environments; random Go keys resist offline guessing.
+  // Zen names no account, and machines often hold different keys for one subscription; its
+  // monthly reset is the billing anchor, so it identifies the subscription across environments.
   const credentialFingerprint = yield* digest
-    .digest(Digest.sha256, new TextEncoder().encode(`opencode-go\0${apiKey}`))
+    .digest(
+      Digest.sha256,
+      new TextEncoder().encode(`opencode-go\0${DateTime.formatIso(body.usage.monthly.resetsAt)}`),
+    )
     .pipe(Effect.map(Hex.encode), Effect.orDie);
   return {
     _tag: "limits",
