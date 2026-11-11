@@ -61,8 +61,15 @@ function accountHue(email: string): number {
   return Math.abs(hash) % 360;
 }
 
-function AccountChip({ email }: { readonly email: string }) {
-  const hue = accountHue(email);
+function AccountChip({
+  email,
+  workspaceId,
+}: {
+  readonly email: string;
+  // One e-mail can hold seats in several workspaces; each seat gets its own color.
+  readonly workspaceId: string | undefined;
+}) {
+  const hue = accountHue(workspaceId ? `${email}\0${workspaceId}` : email);
   return (
     <span
       role="img"
@@ -99,7 +106,9 @@ function AccountAvatar({
       />
     );
   }
-  return account.email ? <AccountChip email={account.email} /> : null;
+  return account.email ? (
+    <AccountChip email={account.email} workspaceId={account.workspaceId} />
+  ) : null;
 }
 
 function AccountName({
@@ -113,7 +122,7 @@ function AccountName({
   if (account.email) {
     return (
       <span className={cn("inline-flex min-w-0 items-center", className)}>
-        <AccountChip email={account.email} />
+        <AccountChip email={account.email} workspaceId={account.workspaceId} />
       </span>
     );
   }
