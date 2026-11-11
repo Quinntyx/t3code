@@ -102,6 +102,25 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         );
       }),
     }),
+    threadSubagents: createEnvironmentQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:thread-subagents",
+      execute: Effect.fn("orchestration.threadSubagents")(function* (input: {
+        readonly threadId: ThreadId;
+      }) {
+        const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+        const session = yield* SubscriptionRef.get(supervisor.session);
+        if (Option.isNone(session)) {
+          return yield* new EnvironmentRpcUnavailableError({
+            environmentId: supervisor.target.environmentId,
+            message: "The environment has no session.",
+          });
+        }
+        const config = yield* session.value.initialConfig;
+        // Older servers answer with the thread snapshot alone.
+        if (config.threadSubagents !== true) return [];
+        return yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadSubagents, input);
+      }),
+    }),
     threadTranscript: createEnvironmentCommand(runtime, {
       label: "environment-data:orchestration:thread-transcript",
       execute: Effect.fn("orchestration.execute")(function* (input: {

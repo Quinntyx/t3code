@@ -3816,6 +3816,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadFamily: "orchestration.getThreadFamily",
   getThreadTitles: "orchestration.getThreadTitles",
+  getThreadSubagents: "orchestration.getThreadSubagents",
   getThreadLinkMetadata: "orchestration.getThreadLinkMetadata",
   getWorktreeThreadIds: "orchestration.getWorktreeThreadIds",
   getOlderSettledThreads: "orchestration.getOlderSettledThreads",
@@ -3958,6 +3959,11 @@ export const OrchestrationV2ThreadFamily = Schema.Struct({
   threads: Schema.Array(OrchestrationV2ThreadShell),
 });
 export type OrchestrationV2ThreadFamily = typeof OrchestrationV2ThreadFamily.Type;
+
+/** Every subagent a thread started, not only those of its loaded history window. */
+export const OrchestrationV2GetThreadSubagentsInput = Schema.Struct({
+  threadId: ThreadId,
+});
 
 export const OrchestrationV2GetThreadTitlesInput = Schema.Struct({
   threadIds: Schema.Array(ThreadId),
@@ -4497,6 +4503,10 @@ export const OrchestrationV2RpcSchemas = {
   getThreadTitles: {
     input: OrchestrationV2GetThreadTitlesInput,
     output: OrchestrationV2ThreadTitles,
+  },
+  getThreadSubagents: {
+    input: OrchestrationV2GetThreadSubagentsInput,
+    output: Schema.Array(OrchestrationV2Subagent),
   },
   getThreadLinkMetadata: {
     input: OrchestrationV2GetThreadTitlesInput,
