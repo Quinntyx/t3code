@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   matchComposerEnvironmentItems,
-  matchComposerThreadItems,
   matchComposerThreadTriggerItems,
   type ComposerThreadCandidate,
 } from "./composerThreadItems.ts";
@@ -33,8 +32,8 @@ function shell(
   };
 }
 
-it("ranks thread mentions like the palette and leaves out subagent threads", () => {
-  const items = matchComposerThreadItems({
+it("leaves subagent threads and unlinked machines' threads out of thread mentions", () => {
+  const items = matchComposerThreadTriggerItems({
     shells: [
       shell("newer-mid-word", "Remodel the settings page", {
         updatedAt: "2026-10-20T00:00:00.000Z",
@@ -55,12 +54,12 @@ it("ranks thread mentions like the palette and leaves out subagent threads", () 
     query: "model",
     now: Date.parse("2026-10-23T00:00:00.000Z"),
   });
-  expect(items.map((item) => item.thread.threadId)).toEqual(["word", "newer-mid-word"]);
+  expect(items.map((item) => item.thread.threadId)).toEqual(["newer-mid-word", "word"]);
 });
 
 it("also offers threads on linked machines, naming the machine, but no other machine's", () => {
   const vps = EnvironmentId.make("env-vps");
-  const items = matchComposerThreadItems({
+  const items = matchComposerThreadTriggerItems({
     shells: [
       shell("here", "Deploy script"),
       shell("there", "Deploy script", { environmentId: vps }),
@@ -73,11 +72,11 @@ it("also offers threads on linked machines, naming the machine, but no other mac
     now: Date.parse("2026-10-23T00:00:00.000Z"),
   });
   expect(items.map(({ thread, label, description }) => ({ thread, label, description }))).toEqual([
-    { thread: { environmentId, threadId: "here" }, label: "Deploy script", description: "Thread" },
+    { thread: { environmentId, threadId: "here" }, label: "Deploy script", description: "Active" },
     {
       thread: { environmentId: vps, threadId: "there" },
       label: "Deploy script",
-      description: "Thread on Hetzner VPS",
+      description: "Active on Hetzner VPS",
     },
   ]);
 });

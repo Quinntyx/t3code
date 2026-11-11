@@ -12,7 +12,6 @@ import { threadSearchSubject, type ThreadSearchShell } from "./state/threadSearc
 import { effectiveSnoozed, type ThreadSnoozeShell } from "./state/threadSettled.ts";
 import { getThreadSortTimestamp } from "./state/threadSort.ts";
 
-const COMPOSER_THREAD_RESULT_LIMIT = 5;
 const COMPOSER_THREAD_TRIGGER_RESULT_LIMIT = 20;
 
 export type ComposerThreadCandidate = ThreadSearchShell &
@@ -85,15 +84,6 @@ function composerThreadItem(
   };
 }
 
-/** Threads to reference from the `@` picker, matched and ranked like the command palette. */
-export function matchComposerThreadItems(input: ComposerThreadMatchInput): ComposerThreadItem[] {
-  const query = foldSearchQuery(input.query);
-  if (query.length === 0) return [];
-  return rankThreadMatches(mentionableThreads(input), query, input.now)
-    .slice(0, COMPOSER_THREAD_RESULT_LIMIT)
-    .map((shell) => composerThreadItem(shell, input, "Thread"));
-}
-
 const THREAD_SECTION_LABELS = ["Active", "Snoozed", "Settled"] as const;
 
 function threadSectionIndex(shell: ComposerThreadCandidate, now: string): number {
@@ -142,8 +132,7 @@ export interface ComposerEnvironmentItem {
 
 /**
  * The user's machines the `@` picker offers, so the agent can link or work there. The
- * composer's own environment is left out. Like threads, they need a query: bare `@` stays a
- * file picker.
+ * composer's own environment is left out. They need a query: bare `@` stays a file picker.
  */
 export function matchComposerEnvironmentItems(input: {
   environments: ReadonlyArray<ComposerEnvironmentCandidate>;
