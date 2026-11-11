@@ -1,6 +1,5 @@
 import {
   matchComposerEnvironmentItems,
-  matchComposerThreadItems,
   matchComposerThreadTriggerItems,
 } from "@t3tools/client-runtime/composerThreadItems";
 import { useAtomValue } from "@effect/atom-react";
@@ -119,7 +118,7 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
-  const mentionsThreads = isPathTrigger || composerTriggerKind === "thread";
+  const mentionsThreads = composerTriggerKind === "thread";
   const environmentThreadShells = useVisibleThreadShells(mentionsThreads);
   // Mounts older settled threads matching the mention, which shells may leave out.
   useThreadSearch(
@@ -203,14 +202,6 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
-        ...matchComposerThreadItems({
-          shells: environmentThreadShells,
-          environmentId,
-          linkedEnvironments,
-          excludeThreadId: activeThreadId,
-          query: composerTrigger.query,
-          now,
-        }),
         // An answer to an agent's question carries thread links, not machines.
         ...(questionAttachmentTarget === null && offersMachines
           ? matchComposerEnvironmentItems({

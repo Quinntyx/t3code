@@ -9,7 +9,6 @@ import type {
 import {
   type ComposerEnvironmentCandidate,
   matchComposerEnvironmentItems,
-  matchComposerThreadItems,
   matchComposerThreadTriggerItems,
 } from "@t3tools/client-runtime/composerThreadItems";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
@@ -346,7 +345,7 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
-  const mentionsThreads = trigger?.kind === "path" || trigger?.kind === "thread";
+  const mentionsThreads = trigger?.kind === "thread";
   // Mounts older settled threads matching the mention, which shells may leave out.
   useThreadSearch(
     mentionsThreads && environmentId ? [environmentId] : [],
@@ -518,16 +517,6 @@ export function useComposerCommandMenu({
     }
 
     if (trigger.kind === "path") {
-      const threadItems = environmentId
-        ? matchComposerThreadItems({
-            shells: threadShells,
-            environmentId,
-            linkedEnvironments,
-            excludeThreadId: currentThreadId,
-            query: trigger.query,
-            now,
-          })
-        : [];
       const environmentItems = environmentId
         ? matchComposerEnvironmentItems({ environments, environmentId, query: trigger.query })
         : [];
@@ -536,7 +525,6 @@ export function useComposerCommandMenu({
           ? buildComposerModelItems(modelOptions, trigger.query, modelProviders)
           : [];
       return [
-        ...threadItems,
         ...environmentItems,
         ...modelItems,
         ...pathSearch.entries.map((entry) => {
@@ -585,7 +573,7 @@ export function useComposerCommandMenu({
       return;
     }
     if (item.type === "thread") {
-      if (!ownerKey || (trigger.kind !== "path" && trigger.kind !== "thread")) return;
+      if (!ownerKey || trigger.kind !== "thread") return;
       const shell = threadShells.find(
         (candidate) =>
           candidate.environmentId === item.thread.environmentId &&
