@@ -405,14 +405,6 @@ export function ThreadRelationshipsPanel(props: {
   const providersByEnvironment = useEnvironmentProviders();
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const relationshipShells = useThreadRelationshipShells(ref);
-  const allSubagents = useEnvironmentQuery(
-    props.showLineage
-      ? orchestrationEnvironment.threadSubagents({
-          environmentId: props.environmentId,
-          input: { threadId: props.threadId },
-        })
-      : null,
-  );
   const hiddenKeys = useHiddenThreadKeys();
   const hidingAnywhere = useAnyEnvironmentHiding();
   const allProjects = useProjects();
@@ -463,13 +455,7 @@ export function ThreadRelationshipsPanel(props: {
   const parentNativeStatus = parentProjection
     ? deriveProviderSubagentStatus(parentProjection)?.status
     : undefined;
-  // The snapshot window carries only its own turns' subagents; its live rows win.
-  const liveSubagents = projection?.subagents ?? [];
-  const liveSubagentIds = new Set(liveSubagents.map((subagent) => subagent.id));
-  const projected = [
-    ...(allSubagents.data ?? []).filter((subagent) => !liveSubagentIds.has(subagent.id)),
-    ...liveSubagents,
-  ];
+  const projected = projection?.subagents ?? [];
   const runtimeSubagents = projectedSubagentsToRuntime(projected);
   const byId = new Map(runtimeSubagents.map((agent) => [agent.id, agent]));
   const subagentsByThreadId = new Map(
@@ -498,10 +484,7 @@ export function ThreadRelationshipsPanel(props: {
     ...relationshipShells,
     ...(archivedShells ?? []),
   ];
-  const graph = deriveThreadRelationshipGraph({
-    threads: shells,
-    projection: projection === null ? null : { ...projection, subagents: projected },
-  });
+  const graph = deriveThreadRelationshipGraph({ threads: shells, projection });
   const isHiddenRelation = (threadId: ThreadId) =>
     hiddenKeys.has(threadKey({ environmentId: props.environmentId, threadId }));
   // While hiding, an unloaded parent, fork or transfer may be hidden; unloaded subagent
@@ -572,7 +555,7 @@ export function ThreadRelationshipsPanel(props: {
     return isFinishedAgentStatus(edge.status) ? "previous" : "active";
   });
   const { remoteActive = [], remotePrevious = [] } = groupBy(
-    projected
+    (projection?.subagents ?? [])
       .filter((agent): agent is RemoteSubagent => agent.remoteChild !== undefined)
       .map((remote) => ({ remote })),
     ({ remote }) => (isFinishedAgentStatus(remote.status) ? "remotePrevious" : "remoteActive"),
@@ -593,8 +576,9 @@ export function ThreadRelationshipsPanel(props: {
     },
   ];
   const runningCount =
-    liveSubagents.filter((agent) => agent.childThreadId === null && agent.status === "running")
-      .length + active.filter(({ edge }) => edge.status === "running").length;
+    (projection?.subagents.filter(
+      (agent) => agent.childThreadId === null && agent.status === "running",
+    ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
 
   // A linked environment's agent may have delegated this thread from there.
   const delegatedFrom = currentThread?.delegatedFrom;

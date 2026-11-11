@@ -1991,7 +1991,6 @@ export const layerWsRpc = (
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
           threadLinkMetadata: true,
-          threadSubagents: true,
           shellOlderSettled: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
@@ -2185,17 +2184,6 @@ export const layerWsRpc = (
           getOrchestrationV2ArchivedShellSnapshot,
         [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: (input) =>
           readOmittableShellRows({ familyOf: input.threadId }, "Failed to load the thread family"),
-        [ORCHESTRATION_V2_WS_METHODS.getThreadSubagents]: (input) =>
-          threadManagement.getThreadSubagents(input.threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2GetThreadProjectionError({
-                  threadId: input.threadId,
-                  message: "Failed to load the thread's subagents",
-                  cause,
-                }),
-            ),
-          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadLinkMetadata]: (input) =>
           threadManagement.getThreadLinkMetadata(input.threadIds).pipe(
             Effect.mapError(

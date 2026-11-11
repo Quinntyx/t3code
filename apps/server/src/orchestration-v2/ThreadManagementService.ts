@@ -26,7 +26,6 @@ import {
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
   type OrchestrationV2Run,
-  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadTranscript,
@@ -433,10 +432,6 @@ export interface ThreadManagementServiceShape {
   readonly listAppOwnedChildThreadIds: Orchestrator.OrchestratorV2["Service"]["listAppOwnedChildThreadIds"];
   readonly getThreadLinkMetadata: Orchestrator.OrchestratorV2["Service"]["getThreadLinkMetadata"];
   readonly getThreadTitles: Orchestrator.OrchestratorV2["Service"]["getThreadTitles"];
-  /** Every subagent the thread started; a thread snapshot window carries only its own turns'. */
-  readonly getThreadSubagents: (
-    threadId: ThreadId,
-  ) => Effect.Effect<ReadonlyArray<OrchestrationV2Subagent>, Orchestrator.OrchestratorV2Error>;
   /** Omit `projectId` to list every project's threads. Side chats are never listed. */
   readonly listProjectThreads: (input: {
     readonly projectId?: ProjectId | undefined;
@@ -1618,12 +1613,6 @@ const make = Effect.gen(function* () {
       },
     ),
     getThreadTitles: orchestrator.getThreadTitles,
-    getThreadSubagents: Effect.fn("ThreadManagementService.getThreadSubagents")(
-      function* (threadId) {
-        const { subagents } = yield* orchestrator.getThreadRecords(threadId, ["subagents"]);
-        return subagents;
-      },
-    ),
     getThreadLinkMetadata: orchestrator.getThreadLinkMetadata,
     listProjectThreads,
     sendToThread,
