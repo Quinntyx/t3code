@@ -29,6 +29,15 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  buildThreadStackForest,
+  flattenThreadStack,
+  partitionThreadStacks,
+  rankThreadStacks,
+  resolveThreadStackParents,
+  threadStackKey,
+  type ThreadStackNode,
+} from "@t3tools/client-runtime/threadStacks";
 import { isListedThreadLineage, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -351,6 +360,13 @@ export function getThreadListV2OrderedSection(input: {
   return applyPendingThreadOrder(ordered, input.section, pending);
 }
 
+export interface ThreadListV2StackPlacement {
+  /** 0 for the stack's root. */
+  readonly depth: number;
+  /** Branches other members own, one per line; their pull requests are theirs. */
+  readonly foreignBranches: string;
+}
+
 export interface ThreadListV2Item {
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
@@ -358,6 +374,8 @@ export interface ThreadListV2Item {
   readonly pinned: boolean;
   readonly wokeAt: string | null;
   readonly isLast: boolean;
+  /** Set on members of a stack of two or more threads. */
+  readonly stack: ThreadListV2StackPlacement | null;
 }
 
 export interface ThreadListV2Layout {
@@ -458,6 +476,8 @@ export function threadListV2ListItemsAreEqual(
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
         previous.item.wokeAt === item.item.wokeAt &&
+        previous.item.stack?.depth === item.item.stack?.depth &&
+        previous.item.stack?.foreignBranches === item.item.stack?.foreignBranches &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -550,8 +570,9 @@ export function buildThreadListV2ListItems(input: {
       canSnooze(item.thread, { now: input.snoozeLabelNow })
         ? input.snoozeLabelNow
         : undefined;
+    // A stacked member moves with its stack.
     const move =
-      item.variant === "card"
+      item.variant === "card" && (item.stack?.depth ?? 0) === 0
         ? input.moveAvailability?.get(`${item.thread.environmentId}:${item.thread.id}`)
         : undefined;
     return {
@@ -675,6 +696,8 @@ export function buildThreadListV2Items(input: {
   readonly isListedSettled?: (thread: EnvironmentThreadShell) => boolean;
   /** Settled threads in scope that are not local (older settled threads not loaded). */
   readonly unloadedSettledCount?: number;
+  /** Each stacked thread's parent, by thread key; resolved from `threads` when absent. */
+  readonly stackParents?: ReadonlyMap<string, EnvironmentThreadShell>;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -695,9 +718,10 @@ export function buildThreadListV2Items(input: {
     : null;
 
   const workingShelfEnabled = input.workingShelfEnabled === true;
+  const isWorking = input.isWorking ?? isThreadWorking;
   const pinned: EnvironmentThreadShell[] = [];
-  const active: EnvironmentThreadShell[] = [];
-  const working: EnvironmentThreadShell[] = [];
+  const inbox: EnvironmentThreadShell[] = [];
+  const shelfWorking = new Set<EnvironmentThreadShell>();
   const settled: EnvironmentThreadShell[] = [];
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
@@ -752,10 +776,9 @@ export function buildThreadListV2Items(input: {
       settled.push(thread);
     } else if (thread.pinnedAt != null) {
       pinned.push(thread);
-    } else if (workingShelfEnabled && (input.isWorking ?? isThreadWorking)(thread)) {
-      working.push(thread);
     } else {
-      active.push(thread);
+      inbox.push(thread);
+      if (workingShelfEnabled && isWorking(thread)) shelfWorking.add(thread);
     }
   }
 
@@ -785,6 +808,7 @@ export function buildThreadListV2Items(input: {
         pinned: pinnedThreads.has(thread),
         wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
         isLast: index === results.length - 1,
+        stack: null,
       })),
       hiddenSettledCount: 0,
       listedSettledThreads: [],
@@ -799,21 +823,44 @@ export function buildThreadListV2Items(input: {
     };
   }
 
+  const stackParents = input.stackParents ?? resolveThreadStackParents(input.threads);
+  // A stack is one item: it waits on the shelf only while every member works.
+  const { matching: working, others: active } = workingShelfEnabled
+    ? partitionThreadStacks(inbox, stackParents, (thread) => shelfWorking.has(thread))
+    : { matching: [], others: inbox };
+  const wokeAtByThread = new Map<EnvironmentThreadShell, string | null>();
+  const wokeAtOf = (thread: EnvironmentThreadShell) => {
+    let wokeAt = wokeAtByThread.get(thread);
+    if (wokeAt === undefined) {
+      wokeAt = resolveThreadListV2WokeAt(thread, { now });
+      wokeAtByThread.set(thread, wokeAt);
+    }
+    return wokeAt;
+  };
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+  const activeForest = buildThreadStackForest(orderedActive, stackParents);
+  // The inbox places a stack at its newest member; manual order follows its root.
+  const activeStacks = workingShelfEnabled
+    ? rankThreadStacks(activeForest, orderedActive)
+    : activeForest;
   const orderedWorking = sortWorkingThreadsBySend(working);
+  const workingStacks = rankThreadStacks(
+    buildThreadStackForest(orderedWorking, stackParents),
+    orderedWorking,
+  );
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
   );
   const selectedThreadKey = input.selectedThreadKey ?? null;
+  const holdsSelected = (node: ThreadStackNode<EnvironmentThreadShell>) =>
+    selectedThreadKey !== null &&
+    flattenThreadStack(node).some((thread) => threadStackKey(thread) === selectedThreadKey);
+  // A closed shelf still shows the stack holding the open thread.
   const visibleWorking =
-    input.workingShelfExpanded === true
-      ? orderedWorking
-      : orderedWorking.filter(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
-        );
+    input.workingShelfExpanded === true ? workingStacks : workingStacks.filter(holdsSelected);
   const visibleSnoozed =
     input.snoozedShelfExpanded === true
       ? orderedSnoozed
@@ -858,29 +905,50 @@ export function buildThreadListV2Items(input: {
       pinned: true,
       wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
+      stack: null,
     });
   }
-  for (const thread of orderedActive) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
-      isLast: false,
-    });
-  }
+  const pushStack = (node: ThreadStackNode<EnvironmentThreadShell>) => {
+    if (node.children.length === 0) {
+      items.push({
+        thread: node.thread,
+        variant: "card",
+        snoozed: false,
+        pinned: false,
+        wokeAt: wokeAtOf(node.thread),
+        isLast: false,
+        stack: null,
+      });
+      return;
+    }
+    const members = flattenThreadStack(node);
+    const branches = [
+      ...new Set(members.flatMap((member) => (member.branch === null ? [] : [member.branch]))),
+    ];
+    const visit = (member: ThreadStackNode<EnvironmentThreadShell>, depth: number) => {
+      const { thread } = member;
+      items.push({
+        thread,
+        variant: "card",
+        snoozed: false,
+        pinned: false,
+        wokeAt: wokeAtOf(thread),
+        isLast: false,
+        stack: {
+          depth,
+          foreignBranches: branches
+            .filter((branch) => branch !== thread.branch)
+            .sort()
+            .join("\n"),
+        },
+      });
+      for (const child of member.children) visit(child, depth + 1);
+    };
+    visit(node, 0);
+  };
+  for (const node of activeStacks) pushStack(node);
   const workingShelfHeaderIndex = orderedWorking.length > 0 ? items.length : null;
-  for (const thread of visibleWorking) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
-      isLast: false,
-    });
-  }
+  for (const node of visibleWorking) pushStack(node);
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
   for (const thread of visibleSnoozed) {
     items.push({
@@ -890,6 +958,7 @@ export function buildThreadListV2Items(input: {
       pinned: false,
       wokeAt: null,
       isLast: false,
+      stack: null,
     });
   }
   const settledShelfHeaderIndex = settledTotal > 0 ? items.length : null;
@@ -901,6 +970,7 @@ export function buildThreadListV2Items(input: {
       pinned: false,
       wokeAt: null,
       isLast: false,
+      stack: null,
     });
   }
   const last = items.at(-1);

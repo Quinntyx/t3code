@@ -709,6 +709,17 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("updateChangeRequest"))),
 
+    changeBaseBranch: (input) =>
+      cli
+        .changePullRequestBase({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          baseBranch: input.baseBranch,
+        })
+        .pipe(Effect.mapError(fail("changeBaseBranch"))),
+
     comment: (input) => cli.commentOnPullRequest(input).pipe(Effect.mapError(fail("comment"))),
 
     updateComment: (input) =>

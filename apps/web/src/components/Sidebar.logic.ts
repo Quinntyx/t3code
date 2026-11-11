@@ -577,16 +577,20 @@ export function isSidebarHiddenThread(thread: Pick<SidebarThreadSummary, "lineag
 // Subagent and side-chat threads have no sidebar row, so an open one is represented by
 // its nearest listed ancestor. A broken chain (missing parent, cycle,
 // other environment) resolves to the thread itself, which then matches no row.
-export function resolveSidebarRowThreadId(
+export function resolveSidebarRowThreadId<
+  T extends Pick<SidebarThreadSummary, "id" | "environmentId" | "lineage">,
+>(
   threadId: ThreadId,
   environmentId: EnvironmentId,
-  threads: readonly Pick<SidebarThreadSummary, "id" | "environmentId" | "lineage">[],
+  threads: readonly T[],
+  /** A subagent stacked under a listed thread has its own row. */
+  hasOwnRow: (thread: T) => boolean = () => false,
 ): ThreadId {
   const findThread = (id: ThreadId) =>
     threads.find((thread) => thread.id === id && thread.environmentId === environmentId);
   const visited = new Set<ThreadId>();
   let thread = findThread(threadId);
-  while (thread !== undefined && isSidebarHiddenThread(thread)) {
+  while (thread !== undefined && isSidebarHiddenThread(thread) && !hasOwnRow(thread)) {
     if (thread.lineage.parentThreadId === null || visited.has(thread.id)) return threadId;
     visited.add(thread.id);
     thread = findThread(thread.lineage.parentThreadId);
@@ -597,6 +601,8 @@ export function resolveSidebarRowThreadId(
 /**
  * `delegatedUnderParent` holds the tasks linked environments run for a thread
  * the sidebar lists, by thread key; they show under that thread, as subagents do.
+ * A subagent or task stacked on a listed thread (`stackParents`, by thread key) is
+ * listed too, as a member of that thread's stack.
  */
 export function filterSidebarV2VisibleThreads<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "environmentId" | "id" | "lineage"> & {
@@ -606,18 +612,40 @@ export function filterSidebarV2VisibleThreads<
   threads: readonly T[],
   scopedProjectKeys: ReadonlySet<string> | null,
   delegatedUnderParent: ReadonlySet<string> = new Set(),
+  stackParents?: ReadonlyMap<string, Pick<SidebarThreadSummary, "environmentId" | "id">>,
 ): T[] {
-  return threads.filter(
-    (thread) =>
-      thread.archivedAt === null &&
-      !isShownUnderParent(
-        { environmentId: thread.environmentId, threadId: thread.id },
-        thread.lineage,
-        delegatedUnderParent,
-      ) &&
-      (scopedProjectKeys === null ||
-        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-  );
+  const keyOf = (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) =>
+    `${thread.environmentId}:${thread.id}`;
+  const listable = (thread: T) =>
+    thread.archivedAt === null &&
+    (scopedProjectKeys === null ||
+      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`));
+  const shownUnderParent = (thread: T) =>
+    isShownUnderParent(
+      { environmentId: thread.environmentId, threadId: thread.id },
+      thread.lineage,
+      delegatedUnderParent,
+    );
+  if (stackParents === undefined || stackParents.size === 0) {
+    return threads.filter((thread) => listable(thread) && !shownUnderParent(thread));
+  }
+  const byKey = new Map(threads.map((thread) => [keyOf(thread), thread]));
+  const visibility = new Map<string, boolean>();
+  const visible = (thread: T): boolean => {
+    const key = keyOf(thread);
+    const known = visibility.get(key);
+    if (known !== undefined) return known;
+    visibility.set(key, false);
+    let result = listable(thread);
+    if (result && shownUnderParent(thread)) {
+      const parent = stackParents.get(key);
+      const parentThread = parent === undefined ? undefined : byKey.get(keyOf(parent));
+      result = parentThread !== undefined && visible(parentThread);
+    }
+    visibility.set(key, result);
+    return result;
+  };
+  return threads.filter(visible);
 }
 
 export function buildBulkTitleRegenerationContextMenuItem(input: {

@@ -1,4 +1,5 @@
 import {
+  GitRestackThreadsResult,
   WorktreeMcpFailure,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -12,6 +13,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as PullRequestStackService from "../../../pullRequest/PullRequestStackService.ts";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -82,8 +84,27 @@ const WorktreeListTool = Tool.make("t3_worktree_list", {
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
+const WorktreeRestackTool = Tool.make("t3_worktree_restack", {
+  description:
+    "Rebase threads stacked on this branch onto its latest commit and force-push them. Busy, dirty, or conflicting ones get the commands instead.",
+  success: GitRestackThreadsResult,
+  failure: WorktreeToolFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    PullRequestStackService.PullRequestStackService,
+  ],
+})
+  .annotate(Tool.Title, "Restack stacked threads")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
 export const WorktreeToolkit = Toolkit.make(
   WorktreeHandoffTool,
   WorktreeStatusTool,
   WorktreeListTool,
+  WorktreeRestackTool,
 );

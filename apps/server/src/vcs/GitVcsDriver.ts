@@ -306,6 +306,19 @@ export interface GitWorktreeBaseRemote {
   branchName: string;
 }
 
+export interface GitRebaseOntoInput {
+  readonly cwd: string;
+  /** Where the checked-out branch's own commits go. */
+  readonly onto: string;
+  /** The old base: commits reachable from where the branch forked from it are left behind. */
+  readonly from: string;
+}
+
+export type GitRebaseOntoResult =
+  | { readonly status: "rebased" | "up-to-date" }
+  /** The rebase stopped on a conflict and was aborted, leaving the branch as it was. */
+  | { readonly status: "conflicted"; readonly forkPoint: string };
+
 export interface GitSetBranchUpstreamInput {
   cwd: string;
   branch: string;
@@ -451,6 +464,19 @@ export class GitVcsDriver extends Context.Service<
     readonly writeConfigValue: (
       input: GitWriteConfigValueInput,
     ) => Effect.Effect<void, GitCommandError>;
+    /** Records the branch `branch` lands on, keeping the remote of a remote-qualified base. */
+    readonly writeBranchBase: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+      readonly baseBranch: string;
+    }) => Effect.Effect<void, GitCommandError>;
+    readonly rebaseOnto: (
+      input: GitRebaseOntoInput,
+    ) => Effect.Effect<GitRebaseOntoResult, GitCommandError>;
+    /** Force-pushes HEAD with a lease when the branch tracks its own remote branch. */
+    readonly forcePushCurrentBranch: (
+      cwd: string,
+    ) => Effect.Effect<"pushed" | "no-upstream", GitCommandError>;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;

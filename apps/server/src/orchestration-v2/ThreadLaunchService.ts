@@ -372,6 +372,7 @@ const make = Effect.gen(function* () {
       );
 
       const requestedBranch = input.workspaceStrategy.branch;
+      let baseBranch: string | null = null;
       let branch: string | null;
       if (input.workspaceStrategy.type === "worktree" && requestedBranch === undefined) {
         const uuid = yield* randomUuidV4;
@@ -459,6 +460,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
+        baseBranch = worktree.baseBranch ?? null;
         createdWorktreePath = worktreePath;
         createdBranch = branch;
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
@@ -474,6 +476,7 @@ const make = Effect.gen(function* () {
             threadId,
             branch,
             worktreePath,
+            ...(baseBranch === null ? {} : { baseBranch }),
           })
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }

@@ -1,6 +1,7 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { OrchestratorMcpFailure, WorktreeMcpFailure } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Project from "../../../project/ProjectService.ts";
+import * as PullRequestStackService from "../../../pullRequest/PullRequestStackService.ts";
 import { readThread, unavailable } from "../../threadAccess.ts";
 import * as Effect from "effect/Effect";
 
@@ -44,6 +45,25 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* WorktreeMcpService.WorktreeMcpService;
       return yield* service.handoff(scope, input);
+    }),
+  ),
+  t3_worktree_restack: McpToolAccess.actsAsCaller(() =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (scope.thread === undefined || !scope.capabilities.has("worktree")) {
+        return yield* new WorktreeMcpFailure({
+          code: "capability_denied",
+          message: "This credential cannot restack worktrees.",
+        });
+      }
+      const stacks = yield* PullRequestStackService.PullRequestStackService;
+      return yield* stacks
+        .restackDependents({ threadId: scope.thread.threadId })
+        .pipe(
+          Effect.mapError(
+            (error) => new WorktreeMcpFailure({ code: "operation_failed", message: error.detail }),
+          ),
+        );
     }),
   ),
   t3_worktree_status: McpToolAccess.readsAsCaller(() =>

@@ -89,6 +89,38 @@ describe("filterSidebarV2VisibleThreads", () => {
     ).toEqual([thread]);
     expect(threads).toEqual([thread, otherEnvironment, archived]);
   });
+
+  it("lists a subagent stacked on a listed thread, and only that subagent", () => {
+    const listed = (id: string, parentId: string | null = null) =>
+      ({
+        id: ThreadId.make(id),
+        environmentId: localEnvironmentId,
+        projectId: ProjectId.make("project-1"),
+        archivedAt: null,
+        lineage: {
+          rootThreadId: ThreadId.make(parentId ?? id),
+          parentThreadId: parentId === null ? null : ThreadId.make(parentId),
+          relationshipToParent: parentId === null ? null : ("subagent" as const),
+        },
+      }) as const;
+    const parent = listed("parent");
+    const stacked = listed("stacked", "parent");
+    const nested = listed("nested", "stacked");
+    const sharing = listed("sharing", "parent");
+    const underArchived = listed("under-archived", "archived");
+    const archivedParent = { ...listed("archived"), archivedAt: "2026-01-01T00:00:00.000Z" };
+    const stackParents = new Map<string, Pick<typeof parent, "environmentId" | "id">>([
+      ["environment-local:stacked", parent],
+      ["environment-local:nested", stacked],
+      ["environment-local:under-archived", archivedParent],
+    ]);
+    const threads = [parent, stacked, nested, sharing, underArchived, archivedParent];
+    expect(
+      filterSidebarV2VisibleThreads(threads, null, new Set(), stackParents).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["parent", "stacked", "nested"]);
+  });
 });
 
 describe("deleteSelectedThreadEntries", () => {
@@ -203,6 +235,15 @@ describe("sidebar thread lineage helpers", () => {
     expect(resolveSidebarRowThreadId(forkChild.id, environmentId, threads)).toBe(fork.id);
     expect(resolveSidebarRowThreadId(elsewhere.id, otherEnvironmentId, threads)).toBe(elsewhere.id);
     expect(resolveSidebarRowThreadId(orphan.id, environmentId, threads)).toBe(orphan.id);
+    // A subagent stacked on its parent's branch has its own row.
+    expect(
+      resolveSidebarRowThreadId(
+        grandchild.id,
+        environmentId,
+        threads,
+        (thread) => thread === child,
+      ),
+    ).toBe(child.id);
     const loopA = subagentOf("thread-loop-a", ThreadId.make("thread-loop-b"));
     const loopB = subagentOf("thread-loop-b", loopA.id);
     expect(resolveSidebarRowThreadId(loopA.id, environmentId, [loopA, loopB])).toBe(loopA.id);

@@ -323,6 +323,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-sidebar-row-active: var(--sidebar-row-active);
   --color-sidebar-row-selected: var(--sidebar-row-selected);
   --color-sidebar-border: var(--contrast-sidebar-border);
+  /* A selected row's outline (border at 70% over the row fill), as one opaque colour. */
+  --color-sidebar-stack-guide: color-mix(
+    in srgb,
+    var(--color-sidebar-border) 70%,
+    var(--color-sidebar-row-active)
+  );
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -691,6 +697,28 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   /* Transparent until the engine hands over the blurred silhouette. */
   mask: var(--glass-liquid-shadow, linear-gradient(transparent, transparent)) 0 0 / 100% 100%
     no-repeat;
+}
+
+/* One-line text that fades out at its end instead of ending in an ellipsis. */
+@utility truncate-fade {
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+
+  &:dir(rtl) {
+    -webkit-mask-image: linear-gradient(to left, black calc(100% - 1.5rem), transparent);
+    mask-image: linear-gradient(to left, black calc(100% - 1.5rem), transparent);
+  }
+}
+
+/* A stack guide's elbow: an inset shadow, like the selected row's ring, so both draw alike. */
+@utility stack-guide-elbow {
+  box-shadow: inset 1px -1px 0 0 var(--color-sidebar-stack-guide);
+}
+
+@utility stack-guide-corner {
+  box-shadow: inset 1px 1px 0 0 var(--color-sidebar-stack-guide);
 }
 
 @utility topbar-scroll-fade {

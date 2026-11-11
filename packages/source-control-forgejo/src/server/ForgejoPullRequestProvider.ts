@@ -644,6 +644,13 @@ export const make = Effect.gen(function* () {
           ...(input.body === undefined ? {} : { body: input.body }),
         },
       }),
+    changeBaseBranch: (input) =>
+      write({
+        ...input,
+        path: pullPath(input),
+        method: "PATCH",
+        body: { base: input.baseBranch },
+      }),
     comment: (input) =>
       write({
         ...input,
