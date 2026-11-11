@@ -34,6 +34,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -71,6 +72,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import { increment, terminalSessionsTotal } from "../observability/Metrics.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { makeRecoverMissingWorktree } from "./WorktreeRecovery.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
@@ -1427,6 +1433,7 @@ interface TerminalManagerOptions {
     readonly threadId: string;
     readonly terminalId: string;
   }) => Effect.Effect<void>;
+  recoverMissingCwd?: (input: TerminalOpenInput) => Effect.Effect<void, TerminalCwdError>;
   resolveProviderInstanceEnvironment?: (
     providerInstanceId: string,
     env: Record<string, string> | undefined,
@@ -1485,6 +1492,22 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const path = yield* Path.Path;
+  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+  const projectStore = yield* ProjectStore.ProjectStoreV2;
+  const git = yield* GitVcsDriver.GitVcsDriver;
+  const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+  const getThreadWorkspace = Effect.fn("terminal.getThreadWorkspace")(function* (threadId: string) {
+    const thread = yield* projectionStore.getThreadShell(ThreadId.make(threadId));
+    if (!thread) return null;
+    const project = yield* projectStore.get(thread.projectId);
+    return Option.isSome(project)
+      ? {
+          workspaceRoot: project.value.workspaceRoot,
+          worktreePath: thread.worktreePath,
+          branch: thread.branch,
+        }
+      : null;
+  });
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
   )((rawProviderInstanceId: string, env: Record<string, string> | undefined) =>
@@ -1507,6 +1530,11 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
     managedBinaryToolsDir: path.join(baseDir, "tools"),
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
+    recoverMissingCwd: makeRecoverMissingWorktree({
+      getThreadWorkspace,
+      isManagedWorktreePath,
+      git,
+    }),
     resolveProviderInstanceEnvironment,
   });
 });
@@ -2833,7 +2861,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     requestedInput: TerminalOpenInput,
   ) {
     const terminalId = requestedInput.terminalId;
-    yield* assertValidCwd(requestedInput.cwd);
+    yield* assertValidCwd(requestedInput.cwd).pipe(
+      Effect.catchTags({
+        TerminalCwdNotFoundError: (error) =>
+          options.recoverMissingCwd
+            ? options
+                .recoverMissingCwd(requestedInput)
+                .pipe(Effect.andThen(assertValidCwd(requestedInput.cwd)))
+            : Effect.fail(error),
+      }),
+    );
 
     const sessionKey = toSessionKey(requestedInput.threadId, terminalId);
     const input = withSharedGrid(sessionKey, requestedInput);
