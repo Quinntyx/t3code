@@ -597,6 +597,18 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("updateChangeRequest"))),
     ),
 
+    changeBaseBranch: writing((input) =>
+      cli
+        .updateMergeRequest({
+          cwd: input.cwd,
+          host: input.host,
+          repository: input.repository,
+          number: input.number,
+          targetBranch: input.baseBranch,
+        })
+        .pipe(Effect.mapError(fail("changeBaseBranch"))),
+    ),
+
     comment: writing((input) =>
       cli.commentOnMergeRequest(input).pipe(Effect.mapError(fail("comment"))),
     ),

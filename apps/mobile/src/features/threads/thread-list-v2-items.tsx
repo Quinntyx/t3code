@@ -30,6 +30,7 @@ import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3t
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import { ownStackPullRequests } from "@t3tools/client-runtime/threadStacks";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
 import { Platform, Pressable, Text as RNText, useWindowDimensions, View } from "react-native";
@@ -386,6 +387,9 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
   );
 });
 
+/** Left indent per stack level; stacked rows still run to the right edge. */
+const STACK_INDENT = 14;
+
 const PENDING_TASK_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
@@ -692,6 +696,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly selected?: boolean;
   /** Outside the selected thread's project; settled and snoozed rows ignore it. */
   readonly offFocusProject?: boolean;
+  /** Nesting under a stack's root; stacked members share the root's project. */
+  readonly stackDepth?: number;
+  /** Branches other members of this thread's stack own, one per line. */
+  readonly stackForeignBranches?: string;
   readonly fullSwipeWidth?: number;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenThreadPullRequests: (
@@ -803,7 +811,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         showBadge: providerInstance.showBadge,
       })
     : null;
-  const pr = useThreadPr(thread);
+  const stackDepth = props.stackDepth ?? 0;
+  const project = stackDepth > 0 ? null : props.project;
+  const stackForeignBranches = props.stackForeignBranches ?? "";
+  const pullRequests = useMemo(
+    () =>
+      ownStackPullRequests(
+        thread.pullRequests,
+        new Set(stackForeignBranches === "" ? [] : stackForeignBranches.split("\n")),
+      ),
+    [thread.pullRequests, stackForeignBranches],
+  );
+  const pr = useThreadPr(thread, pullRequests);
   const prBadgeLabel = pr ? resolveThreadPrBadgeAction(pr).accessibilityLabel : null;
   const handleOpenPullRequests = useCallback(() => {
     if (pr) onOpenThreadPullRequests(thread, pr);
@@ -1222,19 +1241,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ? `Opens the thread. Swipe ${swipeRowSide === "left" ? "right" : "left"} to ${primaryAction.label.toLowerCase()}.`
       : `Opens the thread. Swipe ${swipeRowSide === "left" ? "right" : "left"} for ${primaryAction.label.toLowerCase()} and snooze actions.`;
 
-  const titleTextInset = props.project ? projectIconSize + 8 : 0;
+  const titleTextInset = project ? projectIconSize + 8 : 0;
   const cardContent = (
     <>
       <View className="flex-row items-start gap-2">
-        {props.project ? (
+        {project ? (
           <View className="justify-center" style={{ height: titleLineHeight }}>
             <ProjectFavicon
               environmentId={thread.environmentId}
-              faviconPath={props.project.faviconPath}
-              projectIcon={props.project.projectIcon}
+              faviconPath={project.faviconPath}
+              projectIcon={project.projectIcon}
               size={projectIconSize}
-              projectTitle={props.project.title}
-              workspaceRoot={props.project.workspaceRoot}
+              projectTitle={project.title}
+              workspaceRoot={project.workspaceRoot}
             />
           </View>
         ) : null}
@@ -1547,15 +1566,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             sidebarPane && "px-3",
           )}
         >
-          {props.project ? (
+          {project ? (
             <View className="opacity-40">
               <ProjectFavicon
                 environmentId={thread.environmentId}
-                faviconPath={props.project.faviconPath}
-                projectIcon={props.project.projectIcon}
+                faviconPath={project.faviconPath}
+                projectIcon={project.projectIcon}
                 size={projectIconSize}
-                projectTitle={props.project.title}
-                workspaceRoot={props.project.workspaceRoot}
+                projectTitle={project.title}
+                workspaceRoot={project.workspaceRoot}
               />
             </View>
           ) : null}
@@ -1616,7 +1635,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
 
   return (
-    <View collapsable={false}>
+    <View
+      collapsable={false}
+      style={stackDepth > 0 ? { marginLeft: stackDepth * STACK_INDENT } : undefined}
+    >
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}

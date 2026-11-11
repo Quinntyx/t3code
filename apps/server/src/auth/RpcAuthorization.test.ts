@@ -87,6 +87,27 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("adds operate permission to stack writes that can hand a rebase to an agent", () => {
+    const ref = { projectId: "project", repository: "acme/app", number: 1 };
+    const both = [AuthSourceControlWriteScope, AuthOrchestrationOperateScope];
+    expect(
+      clientRpcRequiredScopes(WS_METHODS.pullRequestsRunAction, { ...ref, action: "merge" }),
+    ).toEqual([AuthSourceControlWriteScope]);
+    expect(
+      clientRpcRequiredScopes(WS_METHODS.pullRequestsRunAction, {
+        ...ref,
+        action: "merge",
+        restackDependents: true,
+      }),
+    ).toEqual(both);
+    expect(clientRpcRequiredScopes(WS_METHODS.gitRestackThreads, { threadId: "thread" })).toEqual(
+      both,
+    );
+    expect(clientRpcRequiredScopes(WS_METHODS.pullRequestsMergeStack, ref)).toEqual([
+      AuthSourceControlWriteScope,
+    ]);
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

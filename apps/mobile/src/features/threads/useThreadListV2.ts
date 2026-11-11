@@ -1,4 +1,5 @@
 import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
+import { resolveThreadStackParents } from "@t3tools/client-runtime/threadStacks";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
@@ -71,6 +72,14 @@ export function useThreadListV2(input: {
     () => threadListV2LayoutTime({ threads, now: input.now, searchQuery: input.searchQuery }),
     [threads, input.now, input.searchQuery],
   );
+  const unarchivedThreads = useMemo(
+    () => threads.filter((thread) => thread.archivedAt === null),
+    [threads],
+  );
+  const stackParents = useMemo(
+    () => resolveThreadStackParents(unarchivedThreads),
+    [unarchivedThreads],
+  );
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(
     threadListInboxReturns.subscribe,
@@ -135,7 +144,7 @@ export function useThreadListV2(input: {
     () =>
       buildThreadListV2Items({
         pendingOrder: input.pendingOrder,
-        threads: threads.filter((thread) => thread.archivedAt === null),
+        threads: unarchivedThreads,
         environmentId: input.environmentId,
         projectRefs: input.projectRefs,
         searchQuery: input.searchQuery,
@@ -154,10 +163,11 @@ export function useThreadListV2(input: {
         selectedThreadKey: input.selectedThreadKey,
         isListedSettled: isListed,
         unloadedSettledCount: unloadedCount(),
+        stackParents,
       }),
     [
       input.pendingOrder,
-      threads,
+      unarchivedThreads,
       input.environmentId,
       input.projectRefs,
       input.searchQuery,
@@ -176,6 +186,7 @@ export function useThreadListV2(input: {
       input.selectedThreadKey,
       isListed,
       unloadedCount,
+      stackParents,
     ],
   );
   useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);

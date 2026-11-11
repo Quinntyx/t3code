@@ -4515,6 +4515,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         path: worktreePath,
         refName: checkoutRef,
       },
+      ...(newRefName && base ? { baseBranch: base.branchName } : {}),
     };
   });
 
@@ -5162,6 +5163,121 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ),
     );
 
+  const writeBranchBase: GitVcsDriver.GitVcsDriver["Service"]["writeBranchBase"] = Effect.fn(
+    "GitVcsDriver.writeBranchBase",
+  )(function* (input) {
+    const refKey = `branch.${input.branch}.t3-merge-base-ref`;
+    const previousBase = yield* readBranchBase(input.cwd, input.branch);
+    const previousRef = yield* readConfigValue(input.cwd, refKey);
+    yield* writeConfigValue({
+      cwd: input.cwd,
+      key: branchBaseConfigKey(input.branch),
+      value: input.baseBranch,
+    });
+    if (previousRef === null) return;
+    const remotePrefix =
+      previousBase !== null &&
+      previousRef.startsWith("refs/remotes/") &&
+      previousRef.endsWith(`/${previousBase}`)
+        ? previousRef.slice(0, -previousBase.length)
+        : null;
+    if (remotePrefix !== null) {
+      yield* writeConfigValue({
+        cwd: input.cwd,
+        key: refKey,
+        value: `${remotePrefix}${input.baseBranch}`,
+      });
+      return;
+    }
+    yield* executeGitWithStableDiagnostics(
+      "GitVcsDriver.writeBranchBase.unsetRef",
+      input.cwd,
+      ["config", "--unset", refKey],
+      { writesSharedConfig: true, allowNonZeroExit: true },
+    ).pipe(retryWhileConfigLocked);
+  });
+
+  const rebaseOnto: GitVcsDriver.GitVcsDriver["Service"]["rebaseOnto"] = Effect.fn(
+    "GitVcsDriver.rebaseOnto",
+  )(function* (input) {
+    yield* refuseOptionLikeRefName("GitVcsDriver.rebaseOnto", input.cwd, input.onto);
+    yield* refuseOptionLikeRefName("GitVcsDriver.rebaseOnto", input.cwd, input.from);
+    // The old base's reflog finds the fork point even after that branch was rewritten.
+    const forkPoint = yield* executeGit(
+      "GitVcsDriver.rebaseOnto.forkPoint",
+      input.cwd,
+      ["merge-base", "--fork-point", input.from, "HEAD"],
+      { allowNonZeroExit: true },
+    ).pipe(
+      Effect.flatMap((result) =>
+        result.exitCode === 0 && result.stdout.trim().length > 0
+          ? Effect.succeed(result.stdout.trim())
+          : runGitStdout("GitVcsDriver.rebaseOnto.mergeBase", input.cwd, [
+              "merge-base",
+              input.from,
+              "HEAD",
+            ]).pipe(Effect.map((stdout) => stdout.trim())),
+      ),
+    );
+    const before = yield* runGitStdout("GitVcsDriver.rebaseOnto.head", input.cwd, [
+      "rev-parse",
+      "HEAD",
+    ]).pipe(Effect.map((stdout) => stdout.trim()));
+    const rebase = yield* executeGitWithStableDiagnostics(
+      "GitVcsDriver.rebaseOnto.rebase",
+      input.cwd,
+      ["rebase", "--onto", input.onto, forkPoint],
+      { allowNonZeroExit: true, timeoutMs: null, env: { GIT_EDITOR: "true" } },
+    );
+    if (rebase.exitCode !== 0) {
+      const abort = yield* executeGit(
+        "GitVcsDriver.rebaseOnto.abort",
+        input.cwd,
+        ["rebase", "--abort"],
+        { allowNonZeroExit: true },
+      );
+      if (abort.exitCode === 0) return { status: "conflicted" as const, forkPoint };
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.rebaseOnto.rebase",
+          cwd: input.cwd,
+          args: ["rebase", "--onto"],
+        }),
+        detail: "git rebase failed before it started.",
+        ...(rebase.exitCode === null ? {} : { exitCode: rebase.exitCode }),
+        stdoutLength: rebase.stdout.length,
+        stderrLength: rebase.stderr.length,
+      });
+    }
+    const after = yield* runGitStdout("GitVcsDriver.rebaseOnto.head", input.cwd, [
+      "rev-parse",
+      "HEAD",
+    ]).pipe(Effect.map((stdout) => stdout.trim()));
+    return { status: after === before ? ("up-to-date" as const) : ("rebased" as const) };
+  });
+
+  const forcePushCurrentBranch: GitVcsDriver.GitVcsDriver["Service"]["forcePushCurrentBranch"] =
+    Effect.fn("GitVcsDriver.forcePushCurrentBranch")(function* (cwd) {
+      const branch = yield* runGitStdout(
+        "GitVcsDriver.forcePushCurrentBranch.branch",
+        cwd,
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        true,
+      ).pipe(Effect.map((stdout) => stdout.trim()));
+      const upstream = yield* resolveCurrentUpstream(cwd);
+      // An upstream named differently is the base the branch was cut from, not its publish target.
+      if (branch.length === 0 || upstream === null || upstream.branchName !== branch) {
+        return "no-upstream" as const;
+      }
+      yield* runGit(
+        "GitVcsDriver.forcePushCurrentBranch.push",
+        cwd,
+        ["push", "--force-with-lease", "--", upstream.remoteName, `HEAD:refs/heads/${branch}`],
+        { timeoutMs: null },
+      );
+      return "pushed" as const;
+    });
+
   // Forwarders retain the underlying Git operation spans.
   return GitVcsDriver.GitVcsDriver.of({
     execute,
@@ -5240,6 +5356,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return yield* withListRefsInvalidation(input.cwd, createBranch(input));
     }),
     writeConfigValue,
+    writeBranchBase,
+    rebaseOnto: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, rebaseOnto(input));
+    }),
+    forcePushCurrentBranch: Effect.fnUntraced(function* (cwd) {
+      return yield* withListRefsInvalidation(cwd, forcePushCurrentBranch(cwd));
+    }),
     removeWorktree: Effect.fnUntraced(function* (input) {
       return yield* withListRefsInvalidation(input.cwd, removeWorktree(input));
     }),

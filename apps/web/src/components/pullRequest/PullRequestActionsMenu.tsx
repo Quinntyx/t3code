@@ -19,6 +19,8 @@ import {
   BookOpenIcon,
   CopyIcon,
   HammerIcon,
+  InfoIcon,
+  LayersIcon,
   LinkIcon,
   MessageCircleQuestionIcon,
   MoreHorizontalIcon,
@@ -88,6 +90,9 @@ export function PullRequestActionsMenu({
   autoMergeArmed,
   showsDraftToggle,
   showsMergeNow,
+  mergeOnly = null,
+  confirmMerge = null,
+  restack = null,
   showsAutoMerge,
   showsMergeMethods,
   allowedMergeMethods,
@@ -141,6 +146,11 @@ export function PullRequestActionsMenu({
   autoMergeArmed: boolean;
   showsDraftToggle: boolean;
   showsMergeNow: boolean;
+  /** Merging alone into the parent's branch, in place of "Merge now", for a stacked child. */
+  mergeOnly?: { readonly label: string; readonly detail: string; readonly info: string } | null;
+  /** Opens the merge confirmation instead of confirming inline. */
+  confirmMerge?: (() => void) | null;
+  restack?: { readonly label: string; readonly pending: boolean; readonly run: () => void } | null;
   showsAutoMerge: boolean;
   showsMergeMethods: boolean;
   allowedMergeMethods: ReadonlyArray<PullRequestMergeMethod>;
@@ -159,6 +169,13 @@ export function PullRequestActionsMenu({
   const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   const actionPending = pendingAction !== null;
   const maintainerEditsHintId = useId();
+  const mergeItemProps = confirmMerge
+    ? { closeOnClick: true, onClick: confirmMerge }
+    : {
+        closeOnClick: inlineConfirm.isArmed("merge"),
+        ...inlineConfirm.props("merge", () => void perform("merge", selectedMergeMethod)),
+      };
+  const showsMergeItem = showsMergeNow || mergeOnly !== null;
   const updatePullRequest = useAtomCommand(pullRequestEnvironment.update, {
     reportFailure: false,
   });
@@ -314,6 +331,12 @@ export function PullRequestActionsMenu({
         ) : null}
         {detail.state === "open" ? (
           <>
+            {restack ? (
+              <MenuItem disabled={restack.pending} onClick={restack.run}>
+                <LayersIcon className="size-3.5" />
+                {restack.pending ? "Restacking..." : restack.label}
+              </MenuItem>
+            ) : null}
             {showsDraftToggle ? (
               <MenuItem
                 disabled={actionPending}
@@ -327,12 +350,35 @@ export function PullRequestActionsMenu({
                 {detail.isDraft ? "Ready for review" : "Convert to draft"}
               </MenuItem>
             ) : null}
-            {showsMergeNow ? (
+            {mergeOnly ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <MenuItem
+                      aria-label={
+                        inlineConfirm.isArmed("merge") ? "Confirm merge?" : mergeOnly.label
+                      }
+                      disabled={actionPending}
+                      {...mergeItemProps}
+                    />
+                  }
+                >
+                  <PullRequestGlyph.merged className="mt-1 size-3.5 shrink-0 self-start" />
+                  <span className="flex min-w-0 flex-col">
+                    <span>
+                      {inlineConfirm.isArmed("merge") ? "Confirm merge?" : mergeOnly.label}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{mergeOnly.detail}</span>
+                  </span>
+                  <InfoIcon className="mt-1 ml-auto size-3 shrink-0 self-start opacity-60" />
+                </TooltipTrigger>
+                <TooltipPopup side="left">{mergeOnly.info}</TooltipPopup>
+              </Tooltip>
+            ) : showsMergeNow ? (
               <MenuItem
-                closeOnClick={inlineConfirm.isArmed("merge")}
                 aria-label={inlineConfirm.isArmed("merge") ? "Confirm merge?" : "Merge now"}
                 disabled={actionPending}
-                {...inlineConfirm.props("merge", () => void perform("merge", selectedMergeMethod))}
+                {...mergeItemProps}
               >
                 <PullRequestGlyph.merged className="size-3.5" />
                 {inlineConfirm.isArmed("merge") ? "Confirm merge?" : "Merge now"}
@@ -365,7 +411,9 @@ export function PullRequestActionsMenu({
             ) : null}
             {showsMergeMethods ? (
               <>
-                {showsDraftToggle || showsMergeNow || showsAutoMerge ? <MenuSeparator /> : null}
+                {restack !== null || showsDraftToggle || showsMergeItem || showsAutoMerge ? (
+                  <MenuSeparator />
+                ) : null}
                 <MenuRadioGroup
                   value={selectedMergeMethod}
                   onValueChange={(method) => onSelectMergeMethod(method as PullRequestMergeMethod)}
@@ -387,8 +435,8 @@ export function PullRequestActionsMenu({
               </>
             ) : null}
             {pullRequestActionMenuHasGroup(
-              showsDraftToggle,
-              showsAutoMerge || showsMergeNow,
+              showsDraftToggle || restack !== null,
+              showsAutoMerge || showsMergeItem,
               showsMergeMethods,
             ) ? (
               <MenuSeparator />

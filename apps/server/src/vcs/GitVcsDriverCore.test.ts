@@ -6887,6 +6887,121 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
   });
+
+  describe("stack operations", () => {
+    const commitFile = (cwd: string, file: string, contents: string, message: string) =>
+      Effect.gen(function* () {
+        yield* writeTextFile(cwd, file, contents);
+        yield* git(cwd, ["add", file]);
+        yield* git(cwd, ["commit", "-m", message]);
+      });
+
+    it.effect("moves a stacked branch onto the base its parent squash-merged into", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["checkout", "-b", "parent"]);
+        yield* commitFile(cwd, "parent.txt", "parent\n", "parent work");
+        yield* git(cwd, ["checkout", "-b", "child"]);
+        yield* commitFile(cwd, "child.txt", "child\n", "child work");
+        yield* git(cwd, ["checkout", initialBranch]);
+        yield* commitFile(cwd, "parent.txt", "parent\n", "squashed parent");
+        yield* git(cwd, ["checkout", "child"]);
+
+        const result = yield* driver.rebaseOnto({ cwd, onto: initialBranch, from: "parent" });
+
+        assert.deepStrictEqual(result, { status: "rebased" });
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "HEAD~1"]),
+          yield* git(cwd, ["rev-parse", initialBranch]),
+        );
+        assert.equal(
+          yield* git(cwd, ["log", "--format=%s", `${initialBranch}..HEAD`]),
+          "child work",
+        );
+        assert.deepStrictEqual(
+          yield* driver.rebaseOnto({ cwd, onto: initialBranch, from: initialBranch }),
+          {
+            status: "up-to-date",
+          },
+        );
+      }),
+    );
+
+    it.effect("aborts a conflicted restack and leaves the branch where it was", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["checkout", "-b", "parent"]);
+        yield* commitFile(cwd, "parent.txt", "parent\n", "parent work");
+        const forkPoint = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["checkout", "-b", "child"]);
+        yield* commitFile(cwd, "README.md", "# child\n", "child edit");
+        const childHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["checkout", initialBranch]);
+        yield* commitFile(cwd, "README.md", "# base\n", "base edit");
+        yield* git(cwd, ["checkout", "child"]);
+
+        const result = yield* driver.rebaseOnto({ cwd, onto: initialBranch, from: "parent" });
+
+        assert.deepStrictEqual(result, { status: "conflicted", forkPoint });
+        assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), childHead);
+        assert.equal(yield* git(cwd, ["status", "--porcelain"]), "");
+      }),
+    );
+
+    it.effect("moves a recorded base to the new branch on the same remote", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["config", "branch.child.t3-merge-base", "parent"]);
+        yield* git(cwd, [
+          "config",
+          "branch.child.t3-merge-base-ref",
+          "refs/remotes/upstream/parent",
+        ]);
+        yield* git(cwd, ["config", "branch.local.t3-merge-base", "parent"]);
+        yield* git(cwd, ["config", "branch.local.t3-merge-base-ref", "refs/heads/parent"]);
+
+        yield* driver.writeBranchBase({ cwd, branch: "child", baseBranch: "main" });
+        yield* driver.writeBranchBase({ cwd, branch: "local", baseBranch: "main" });
+
+        assert.equal(yield* driver.readBranchBase(cwd, "child"), "main");
+        assert.equal(
+          yield* driver.readConfigValue(cwd, "branch.child.t3-merge-base-ref"),
+          "refs/remotes/upstream/main",
+        );
+        assert.equal(yield* driver.readBranchBase(cwd, "local"), "main");
+        assert.isNull(yield* driver.readConfigValue(cwd, "branch.local.t3-merge-base-ref"));
+      }),
+    );
+
+    it.effect("force-pushes only a branch that tracks its own remote branch", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+        yield* git(cwd, ["checkout", "-b", "child", "--track", `origin/${initialBranch}`]);
+        yield* commitFile(cwd, "child.txt", "child\n", "child work");
+        assert.equal(yield* driver.forcePushCurrentBranch(cwd), "no-upstream");
+
+        yield* git(cwd, ["push", "-u", "origin", "child"]);
+        yield* git(cwd, ["commit", "--amend", "-m", "rewritten child"]);
+        assert.equal(yield* driver.forcePushCurrentBranch(cwd), "pushed");
+        assert.equal(
+          yield* git(remote, ["--git-dir=.", "log", "-1", "--pretty=%s", "child"]),
+          "rewritten child",
+        );
+      }),
+    );
+  });
 });
 
 describe("Windows long path configuration", () => {

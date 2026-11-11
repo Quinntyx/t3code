@@ -789,6 +789,17 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("retargets a pull request's base with one REST edit", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(() => Effect.succeed(output(encodeJson({}))));
+      const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* api.changePullRequestBase({ ...pullRequestInput, baseBranch: "main" });
+      expect(
+        restCallsTo("/pulls/7").map(({ method, path, body }) => ({ method, path, body })),
+      ).toEqual([{ method: "PATCH", path: "repos/acme/web/pulls/7", body: { base: "main" } }]);
+    }),
+  );
+
   it.effect.each(["mixed", "merges", "unavailable"] as const)(
     "reads stats only for displayed non-merge commits (%s)",
     (kind) =>

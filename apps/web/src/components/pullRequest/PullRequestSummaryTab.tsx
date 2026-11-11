@@ -93,6 +93,8 @@ import {
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
+import { PullRequestStackTree } from "./PullRequestStackTree";
+import type { DerivedPullRequestStack } from "./pullRequestStack.logic";
 
 function reviewerKey(login: string): string {
   return login.toLowerCase();
@@ -437,6 +439,8 @@ export function PullRequestSummaryTab({
   onAddToChat,
   onRefresh,
   onRefreshChecks = onRefresh,
+  stack = null,
+  onSelectStackMember,
 }: {
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
@@ -454,6 +458,8 @@ export function PullRequestSummaryTab({
   onAddToChat?: (subject: PullRequestChatSubject) => void;
   onRefresh: () => void;
   onRefreshChecks?: () => void;
+  stack?: DerivedPullRequestStack | null;
+  onSelectStackMember?: ((number: number) => void) | undefined;
 }) {
   const terminology = sourceControlClients.get(detail.provider).changeRequest;
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
@@ -837,6 +843,22 @@ export function PullRequestSummaryTab({
           ) : null}
         </div>
       </section>
+
+      {stack !== null && stack.rows.length > 1 ? (
+        <Section
+          key={`stack:${detail.url}`}
+          title="Stack"
+          actions={
+            stack.rootBase === null ? null : (
+              <span className="min-w-0 truncate font-mono text-2xs text-muted-foreground">
+                base: {stack.rootBase}
+              </span>
+            )
+          }
+        >
+          <PullRequestStackTree rows={stack.rows} onSelect={onSelectStackMember} />
+        </Section>
+      ) : null}
 
       <Section key={`description:${detail.url}`} title="Description" keepMounted>
         <div className="group">

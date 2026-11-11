@@ -209,6 +209,7 @@ import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
+import * as PullRequestStackService from "./pullRequest/PullRequestStackService.ts";
 import * as GoalLoopService from "./orchestration-v2/GoalLoopService.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
@@ -858,10 +859,18 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Retargets and restacks pull requests stacked on one T3 merged.
+  Layer.effectDiscard(
+    PullRequestStackService.PullRequestStackService.pipe(
+      Effect.flatMap((stacks) => stacks.start()),
+    ),
+  ),
 ).pipe(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
+  // WebSocket, /mcp, and the merge follower above share one instance.
+  Layer.provide(PullRequestStackService.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // delegate_task to a linked environment, from /mcp and the follower above.
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.

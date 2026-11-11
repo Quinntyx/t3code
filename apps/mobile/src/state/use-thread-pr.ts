@@ -77,8 +77,13 @@ export function withKnownPullRequestSummary<
   return initialSummary === undefined ? params : { ...params, initialSummary };
 }
 
-export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentation | null {
+export function useThreadPr(
+  thread: EnvironmentThreadShell,
+  /** The links this row presents; a stack member presents only its own. */
+  ownPullRequests?: EnvironmentThreadShell["pullRequests"],
+): ThreadPrPresentation | null {
   const demand = use(ThreadPrDemandContext);
+  const pullRequests = ownPullRequests ?? thread.pullRequests;
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
     (config) => config !== null,
@@ -87,13 +92,13 @@ export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentatio
     () =>
       resolveThreadPrSource(
         {
-          pullRequests: thread.pullRequests,
+          pullRequests,
           linkedPullRequest: thread.linkedPullRequest,
           branchPullRequest: thread.branchPullRequest,
         },
         supportsLinks,
       ),
-    [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
+    [pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
   );
   const key = pullRequestRef === null ? null : snapshotKey(thread.environmentId, pullRequestRef);
   // Select this row's entry so answers for other pull requests do not re-render it.

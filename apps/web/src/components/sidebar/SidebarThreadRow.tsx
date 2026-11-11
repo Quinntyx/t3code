@@ -6,6 +6,7 @@ import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
+import { ownStackPullRequests } from "@t3tools/client-runtime/threadStacks";
 import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { useDraggable } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
@@ -113,6 +114,9 @@ import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Si
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
+import { ThreadStackMiniTree } from "./ThreadStackMiniTree";
+import { sidebarStackClassName } from "./SidebarThreadStack";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
@@ -236,6 +240,8 @@ function SidebarProviderStack(props: {
 
 function SidebarThreadTooltip({
   thread,
+  pullRequests,
+  stackLayout,
   project,
   projectDisplayName,
   environmentLabel,
@@ -250,6 +256,8 @@ function SidebarThreadTooltip({
   terminalProcessCount,
 }: {
   thread: SidebarThreadSummary;
+  pullRequests: SidebarThreadSummary["pullRequests"];
+  stackLayout: string | null;
   project: ProjectFaviconProject | null;
   projectDisplayName: string | null;
   environmentLabel: string | null;
@@ -276,9 +284,16 @@ function SidebarThreadTooltip({
       <ThreadHoverCard
         title={thread.title}
         footer={
-          supportsMultiplePullRequests && thread.pullRequests.length > 0 ? (
+          stackLayout !== null ? (
+            <div className="border-t border-border/60 pt-2 text-xs text-muted-foreground">
+              <ThreadStackMiniTree
+                layout={stackLayout}
+                currentThreadKey={scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))}
+              />
+            </div>
+          ) : supportsMultiplePullRequests && pullRequests.length > 0 ? (
             <div className="border-t border-border/60 pt-2 pl-0.5 text-xs text-muted-foreground">
-              <ThreadPullRequestsMiniList pullRequests={thread.pullRequests} />
+              <ThreadPullRequestsMiniList pullRequests={pullRequests} />
             </div>
           ) : null
         }
@@ -492,6 +507,72 @@ export function SortableThreadRow(
   // Keyed by variant so a card/slim switch remounts the row.
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} thread={thread} sortable={bag} />;
 }
+
+/** A stack member below its root; the stack drags as one item, so members do not sort. */
+export function StackedThreadRow(props: Omit<SidebarThreadRowProps, "sortable">) {
+  const thread =
+    useThreadShell(scopeThreadRef(props.thread.environmentId, props.thread.id)) ?? props.thread;
+  return <SidebarThreadRow key={props.variant} {...props} thread={thread} />;
+}
+
+const noopNodeRef = () => {};
+
+/**
+ * A stack is one sortable item: the bordered container drags, and its root row shows
+ * where the drop lands. `children` are the nested members below the root.
+ */
+export function SortableThreadStack(props: {
+  sortableId: string;
+  sortableDisabled: boolean;
+  contextDrag: boolean;
+  root: Omit<SidebarThreadRowProps, "sortable">;
+  children: ReactNode;
+}) {
+  const { sortableId, sortableDisabled, contextDrag, root } = props;
+  const canOperateThread = useEnvironmentScope(
+    root.thread.environmentId,
+    AuthOrchestrationOperateScope,
+  );
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: sortableId,
+    disabled:
+      sortableDisabled || !canOperateThread
+        ? SIDEBAR_SORTABLE_DRAG_DISABLED
+        : SIDEBAR_SORTABLE_DRAG_ENABLED,
+    animateLayoutChanges: animateSidebarLayoutChanges,
+  });
+  const dragging = isDragging && !contextDrag;
+  const rootBag = {
+    listeners: undefined,
+    setNodeRef: noopNodeRef,
+    transform: null,
+    transition: undefined,
+    isDragging: dragging,
+  };
+  const shownTransform = contextDrag ? null : transform;
+  const thread =
+    useThreadShell(scopeThreadRef(root.thread.environmentId, root.thread.id)) ?? root.thread;
+  return (
+    <li
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(shownTransform),
+        transition: contextDrag && isDragging ? "transform 150ms ease-out" : transition,
+        visibility: !dragging && shownTransform?.scaleY === 0 ? ("hidden" as const) : undefined,
+      }}
+      {...listeners}
+      className={cn(
+        sidebarStackClassName,
+        dragging && "relative z-20 bg-sidebar-row-active shadow-lg",
+      )}
+    >
+      <ul role="presentation" className="flex flex-col">
+        <SidebarThreadRow key={root.variant} {...root} thread={thread} sortable={rootBag} />
+        {props.children}
+      </ul>
+    </li>
+  );
+}
 export type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
 const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
   pin: (
@@ -542,12 +623,18 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
   return <Icon aria-hidden className={cn("shrink-0", props.className)} />;
 }
 
-type SidebarThreadRowProps = {
+export type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
   navigationParent?: string | undefined;
+  /** Stacked under a root in the same project, so the project goes unsaid. */
+  hideProject?: boolean | undefined;
+  /** Branches other members of this thread's stack own, one per line; their PRs are theirs. */
+  stackForeignBranches?: string | undefined;
+  /** The stack's threads as `depth key` lines, for the hover card. */
+  stackLayout?: string | null | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
   snoozeSupported: boolean;
@@ -688,6 +775,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isRouteThread;
+  const stackForeignBranches = props.stackForeignBranches ?? "";
+  const pullRequests = ownStackPullRequests(
+    thread.pullRequests,
+    new Set(stackForeignBranches === "" ? [] : stackForeignBranches.split("\n")),
+  );
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -699,7 +791,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     thread.environmentId,
     thread.linkedPullRequest,
     leaseLiveStatus,
-    thread.pullRequests,
+    pullRequests,
     thread.branchPullRequest,
   );
   const branchTarget =
@@ -722,14 +814,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const pr = linkedPullRequestStatus?.pr ?? null;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   const currentLinkedPr = supportsMultiplePullRequests
-    ? resolveThreadCurrentPullRequestLink(thread.pullRequests)
+    ? resolveThreadCurrentPullRequestLink(pullRequests)
     : null;
   const showPullRequestMenu = useThreadPullRequestContextMenu({
     threadRef,
     projectId: thread.projectId,
     target: resolveThreadPullRequestContextMenuTarget({
       projectId: thread.projectId,
-      links: thread.pullRequests,
+      links: pullRequests,
       pr,
       branchPullRequest: thread.branchPullRequest,
     }),
@@ -851,6 +943,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const detailsTooltip = (
     <SidebarThreadTooltip
       thread={thread}
+      pullRequests={pullRequests}
+      stackLayout={props.stackLayout ?? null}
       project={props.project}
       projectDisplayName={props.projectDisplayName}
       environmentLabel={props.environmentLabel}
@@ -1072,7 +1166,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         shouldRecede ? "font-normal" : "font-medium",
         variant !== "slim"
           ? cn(
-              "truncate",
+              variant === "card" ? "truncate-fade" : "truncate",
               shouldRecede
                 ? "text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
                 : status === "failed" && !isUnread && !isWoke
@@ -1099,7 +1193,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
 
   const prBadgeShape = supportsMultiplePullRequests
-    ? resolveThreadPullRequestBadge(thread.pullRequests)
+    ? resolveThreadPullRequestBadge(pullRequests)
     : null;
   const handlePrListClick = () => {
     useRightPanelStore.getState().open(threadRef, "pull-requests");
@@ -1110,7 +1204,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <ThreadPullRequestBadgeControl
         render={<InlineButton />}
         badge={prBadgeShape}
-        pullRequests={thread.pullRequests}
+        pullRequests={pullRequests}
         number={pr?.number ?? currentLinkedPr?.number}
         url={pr?.url ?? currentLinkedPr?.url}
         status={prStatus}
@@ -1473,14 +1567,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     );
   }
 
+  const pullRequestSlot =
+    prBadge ??
+    (thread.branch ? (
+      <PullRequestGlyph.pullRequest
+        aria-hidden
+        className="size-3 shrink-0 text-muted-foreground/40"
+      />
+    ) : (
+      <span aria-hidden className="inline-flex size-3 shrink-0 items-center justify-center">
+        <span className="h-0.5 w-2 rounded-full bg-muted-foreground/40" />
+      </span>
+    ));
   return (
     <li
       data-thread-item={threadKey}
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        metaLineEmpty && "[contain-intrinsic-size:auto_58px]",
+        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_60px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1506,29 +1611,47 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           }
         >
           {accessibleTitle}
-          <div
-            className={cn(
-              "relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
-              metaLineEmpty && "h-auto",
-            )}
-          >
+          <div className="relative z-10 px-(--sidebar-row-content-inset) py-2">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
-              {props.project ? (
+              {props.project && !props.hideProject ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
               ) : null}
-              {/* Left of the status slot, the pin would slide when hover swaps the
-                label for the wider row controls. */}
               {pinIndicator}
-              {props.projectDisplayName ? (
-                <span
-                  className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
-                >
-                  {props.projectDisplayName}
+              {title}
+            </div>
+            {isRegeneratingTitle ? (
+              <span role="status" className="sr-only">
+                Regenerating title
+              </span>
+            ) : null}
+            <div className="flex h-5 min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+              {pullRequestSlot}
+              {terminalStatusIcon}
+              <span
+                aria-hidden
+                className="inline-flex min-w-4 shrink-0 items-center justify-center"
+              >
+                <SidebarProviderStack
+                  thread={thread}
+                  providerEntryByInstanceId={props.providerEntryByInstanceId}
+                />
+              </span>
+              {showsScratchMachine ? (
+                <span className="flex min-w-0 flex-1 items-center gap-1 truncate-fade">
+                  <EnvironmentMachineIcon
+                    aria-hidden
+                    kind={props.environmentMachine}
+                    className="size-3 shrink-0"
+                  />
+                  {props.scratchMachineLabel}
                 </span>
               ) : (
-                <span className="flex-1" />
+                <span className="min-w-0 flex-1 truncate-fade">
+                  {props.hideProject ? null : props.projectDisplayName}
+                </span>
               )}
+              {remoteMachineIcon}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
@@ -1562,8 +1685,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                                   topStatus.className,
                                 )}
                               >
-                                <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
                                 <span role="status">{topStatus.label}</span>
+                                <AlarmClockIcon aria-hidden className="size-3.5 shrink-0" />
                               </button>
                             }
                           />
@@ -1576,7 +1699,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             topStatus.className,
                           )}
                         >
-                          <TopStatusIcon icon={topStatus.icon} className="size-4" />
                           {/* Not a live region: a collapsed sidebar is inert, so
                             BackgroundThreadAnnouncer and the open thread's
                             timeline speak status changes instead. */}
@@ -1590,6 +1712,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                               <WorkingDuration startedAt={thread.latestRun?.completedAt ?? null} />
                             </span>
                           ) : null}
+                          <TopStatusIcon icon={topStatus.icon} className="size-3.5" />
                         </span>
                       )
                     ) : (
@@ -1656,16 +1779,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {props.sweepAction !== null ? dragDestination : null}
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-              {titleLineIcons}
-            </div>
-            {metaLine}
           </div>
         </TooltipTrigger>
         {detailsTooltip}
@@ -1861,6 +1974,8 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
         </TooltipTrigger>
         <SidebarThreadTooltip
           thread={thread}
+          pullRequests={thread.pullRequests}
+          stackLayout={null}
           project={props.project}
           projectDisplayName={props.projectDisplayName}
           environmentLabel={props.environmentLabel}

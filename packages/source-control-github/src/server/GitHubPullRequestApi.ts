@@ -736,6 +736,14 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly body?: string | undefined;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
+    readonly changePullRequestBase: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly baseBranch: string;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
+
     readonly updateComment: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -2877,6 +2885,21 @@ export const make = Effect.gen(function* () {
         Effect.asVoid,
       );
     }),
+
+    changePullRequestBase: Effect.fn("GitHubPullRequestApi.changePullRequestBase")(
+      function (input) {
+        const { owner, name } = parseRepositorySelector(input.repository);
+        return api
+          .rest({
+            host: input.host,
+            operation: "changePullRequestBase",
+            method: "PATCH",
+            path: `repos/${owner}/${name}/pulls/${input.number}`,
+            body: { base: input.baseBranch },
+          })
+          .pipe(Effect.asVoid);
+      },
+    ),
 
     updateComment: Effect.fn("GitHubPullRequestApi.updateComment")(function (input) {
       return subjectBelongsToPullRequest({

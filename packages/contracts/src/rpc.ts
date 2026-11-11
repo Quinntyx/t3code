@@ -146,6 +146,9 @@ import {
   VcsListRefsResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
+  GitRestackError,
+  GitRestackThreadsInput,
+  GitRestackThreadsResult,
   GitPreparePullRequestThreadResult,
   VcsPullInput,
   GitPullRequestRefInput,
@@ -184,6 +187,8 @@ import {
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
   PullRequestActionInput,
+  PullRequestMergeStackInput,
+  PullRequestMergeStackResult,
   PullRequestActivity,
   PullRequestChangeBreakdown,
   PullRequestCommentInput,
@@ -488,6 +493,7 @@ export const WS_METHODS = {
   gitRunStackedAction: "git.runStackedAction",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
+  gitRestackThreads: "git.restackThreads",
 
   reviewGetBranchCommits: "review.getBranchCommits",
   reviewGetDiffPreview: "review.getDiffPreview",
@@ -609,6 +615,7 @@ export const WS_METHODS = {
   pullRequestsChangeBreakdown: "pullRequests.changeBreakdown",
   pullRequestsSetFilesViewed: "pullRequests.setFilesViewed",
   pullRequestsRunAction: "pullRequests.runAction",
+  pullRequestsMergeStack: "pullRequests.mergeStack",
   pullRequestsUpdate: "pullRequests.update",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsUpdateComment: "pullRequests.updateComment",
@@ -1213,6 +1220,12 @@ const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
   error: PullRequestRpcError,
 });
 
+const WsPullRequestsMergeStackRpc = Rpc.make(WS_METHODS.pullRequestsMergeStack, {
+  payload: PullRequestMergeStackInput,
+  success: PullRequestMergeStackResult,
+  error: PullRequestRpcError,
+});
+
 const WsPullRequestsUpdateRpc = Rpc.make(WS_METHODS.pullRequestsUpdate, {
   payload: PullRequestUpdateInput,
   success: Schema.Void,
@@ -1599,6 +1612,12 @@ const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullReque
   payload: GitPreparePullRequestThreadInput,
   success: GitPreparePullRequestThreadResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+const WsGitRestackThreadsRpc = Rpc.make(WS_METHODS.gitRestackThreads, {
+  payload: GitRestackThreadsInput,
+  success: GitRestackThreadsResult,
+  error: Schema.Union([GitRestackError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
@@ -2257,6 +2276,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsChangeBreakdownRpc,
   WsPullRequestsSetFilesViewedRpc,
   WsPullRequestsRunActionRpc,
+  WsPullRequestsMergeStackRpc,
   WsPullRequestsUpdateRpc,
   WsPullRequestsCommentRpc,
   WsPullRequestsUpdateCommentRpc,
@@ -2318,6 +2338,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsGitRestackThreadsRpc,
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,

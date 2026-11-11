@@ -561,6 +561,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly title?: string | undefined;
       readonly description?: string | undefined;
       readonly allowCollaboration?: boolean | undefined;
+      readonly targetBranch?: string | undefined;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly commentOnMergeRequest: (input: {
@@ -2508,6 +2509,7 @@ export const make = Effect.gen(function* () {
           ...(input.allowCollaboration === undefined
             ? {}
             : { allow_collaboration: input.allowCollaboration }),
+          ...(input.targetBranch === undefined ? {} : { target_branch: input.targetBranch }),
         }),
       }).pipe(Effect.asVoid);
     }),

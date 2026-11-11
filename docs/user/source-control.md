@@ -319,6 +319,16 @@ a badge to open it in the PR viewer, merge it, or stack a new thread on its bran
 composer with that branch as the new worktree's base. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
 Linking and unlinking are available in the web and desktop clients.
 
+In the web and desktop sidebar, a thread whose worktree or pull request builds on another thread's
+branch nests under that thread, and the stack moves as one item: it waits in the Working shelf only
+while every thread in it is working. Hover any thread in a stack to see the whole stack.
+
+A pull request in such a stack shows the whole stack on its Summary tab. When the pull request
+below it is still open, merging merges the stack from the bottom up; **Merge only** in the actions
+menu lands just this one in the branch below it. Merging a pull request that others build on moves
+them to its base, and can rebase their threads' branches too. **Restack** in the actions menu
+rebases the threads above a branch after it changes.
+
 The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
 closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh

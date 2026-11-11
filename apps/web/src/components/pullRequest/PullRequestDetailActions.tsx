@@ -201,6 +201,7 @@ export function PullRequestPrimaryAction({
   pendingAction,
   perform,
   resolveConflicts,
+  mergeControl = null,
 }: {
   pullRequestKey: string;
   primaryAction: ReturnType<typeof resolvePullRequestPrimaryControl> | null;
@@ -214,9 +215,22 @@ export function PullRequestPrimaryAction({
   pendingAction: PullRequestAction | null;
   perform: PerformPullRequestAction;
   resolveConflicts: ReactNode;
+  /** Replaces the merge button's label and action; `confirmInline: false` runs it on click. */
+  mergeControl?: {
+    readonly label: string;
+    readonly tooltip: string;
+    readonly confirmInline: boolean;
+    readonly run: () => void;
+  } | null;
 }) {
   const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   const actionPending = pendingAction !== null;
+  const mergeLabel = mergeControl?.label ?? selectedMergeMethodLabel;
+  const runMerge = mergeControl?.run ?? (() => void perform("merge", selectedMergeMethod));
+  const mergeProps =
+    mergeControl?.confirmInline === false
+      ? { onClick: runMerge }
+      : inlineConfirm.props("merge", runMerge);
   return (
     <>
       {autoMergeArmed && primaryAction !== "auto-merge-armed" ? (
@@ -338,15 +352,13 @@ export function PullRequestPrimaryAction({
                   disabled={actionPending}
                   aria-disabled={mergeBlockedReason !== null || undefined}
                   aria-description={mergeBlockedReason ?? undefined}
-                  {...(mergeBlockedReason === null
-                    ? inlineConfirm.props("merge", () => void perform("merge", selectedMergeMethod))
-                    : {})}
+                  {...(mergeBlockedReason === null ? mergeProps : {})}
                   aria-label={
                     pendingAction === "merge"
                       ? "Merging..."
                       : inlineConfirm.isArmed("merge")
                         ? "Confirm merge?"
-                        : selectedMergeMethodLabel
+                        : mergeLabel
                   }
                 >
                   {inlineConfirm.isArmed("merge") ? (
@@ -357,14 +369,14 @@ export function PullRequestPrimaryAction({
                   <AnimatedWidth className="@max-[30rem]/pr-header:hidden">
                     <span className="grid">
                       <span aria-hidden className="invisible col-start-1 row-start-1">
-                        {selectedMergeMethodLabel}
+                        {mergeLabel}
                       </span>
                       <span className="col-start-1 row-start-1">
                         {pendingAction === "merge"
                           ? "Merging..."
                           : inlineConfirm.isArmed("merge")
                             ? "Confirm merge?"
-                            : selectedMergeMethodLabel}
+                            : mergeLabel}
                       </span>
                     </span>
                   </AnimatedWidth>
@@ -378,7 +390,7 @@ export function PullRequestPrimaryAction({
                 ? "Merging..."
                 : inlineConfirm.isArmed("merge")
                   ? "Confirm merge?"
-                  : selectedMergeMethodLabel)}
+                  : (mergeControl?.tooltip ?? mergeLabel))}
           </TooltipPopup>
         </Tooltip>
       ) : (primaryAction === "merged" || primaryAction === "closed") &&

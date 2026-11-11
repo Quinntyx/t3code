@@ -246,7 +246,7 @@ function LinkRowImpl({
                   <TooltipPopup>
                     {stack.kind === "native"
                       ? `${sourceControlClients.hostLabelForChangeRequestUrl(link.url)} stack of ${stack.size}: merging a layer lands the ones below it.`
-                      : `${stack.size} ${linkHost.changeRequest.plural} chained by base branch.`}
+                      : `${stack.size} ${linkHost.changeRequest.plural} stacked by base branch.`}
                   </TooltipPopup>
                 </Tooltip>
               ) : null}

@@ -501,6 +501,11 @@ export interface PullRequestProviderApi {
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
+  /** Points an open change request at another base branch. Absent where the host cannot. */
+  readonly changeBaseBranch?: (
+    input: ProviderRepositoryRef & { readonly number: number; readonly baseBranch: string },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
   readonly comment: (
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
   ) => Effect.Effect<void, PullRequestProviderError>;

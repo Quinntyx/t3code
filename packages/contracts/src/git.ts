@@ -178,6 +178,49 @@ export const GitPreparePullRequestThreadInput = Schema.Struct({
 });
 export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThreadInput.Type;
 
+/** Rebases the threads stacked on `threadId` onto its branch's current tip. */
+export const GitRestackThreadsInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type GitRestackThreadsInput = typeof GitRestackThreadsInput.Type;
+
+/**
+ * `restacked`: rebased, and force-pushed when the branch has an upstream. `agent-asked`: the
+ * rebase could not run unattended, so the thread's agent was sent the commands to run.
+ */
+export const GitRestackOutcome = Schema.Literals(["restacked", "up-to-date", "agent-asked"]);
+export type GitRestackOutcome = typeof GitRestackOutcome.Type;
+
+/** Why a restack was handed to the agent. */
+export const GitRestackHandoffReason = Schema.Literals(["busy", "dirty", "conflict", "checkout"]);
+export type GitRestackHandoffReason = typeof GitRestackHandoffReason.Type;
+
+export const GitRestackThreadResult = Schema.Struct({
+  threadId: ThreadId,
+  branch: TrimmedNonEmptyStringSchema,
+  onto: TrimmedNonEmptyStringSchema,
+  outcome: GitRestackOutcome,
+  reason: Schema.optional(GitRestackHandoffReason),
+  /** False when the rebase landed locally but the force push failed. */
+  pushed: Schema.optional(Schema.Boolean),
+});
+export type GitRestackThreadResult = typeof GitRestackThreadResult.Type;
+
+export const GitRestackThreadsResult = Schema.Struct({
+  threads: Schema.Array(GitRestackThreadResult),
+});
+export type GitRestackThreadsResult = typeof GitRestackThreadsResult.Type;
+
+export class GitRestackError extends Schema.TaggedError<GitRestackError>()("GitRestackError", {
+  threadId: ThreadId,
+  detail: TrimmedNonEmptyStringSchema,
+  cause: Schema.optional(Schema.Defect()),
+}) {
+  override get message(): string {
+    return `Restacking thread ${this.threadId} failed: ${this.detail}`;
+  }
+}
+
 export const VcsRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
@@ -297,6 +340,8 @@ export type VcsListRefsResult = typeof VcsListRefsResult.Type;
 
 export const VcsCreateWorktreeResult = Schema.Struct({
   worktree: VcsWorktree,
+  /** The branch a new branch was started from, as the host names it. */
+  baseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type VcsCreateWorktreeResult = typeof VcsCreateWorktreeResult.Type;
 

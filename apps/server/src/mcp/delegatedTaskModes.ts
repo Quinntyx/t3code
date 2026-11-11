@@ -88,8 +88,12 @@ export function resolveInteractionMode(
 }
 
 /** The task as its child receives it, with the role the caller asked for. */
-export function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
+export function taskPrompt(input: OrchestratorMcpDelegateTaskInput, stackedOn?: string): string {
+  const task =
+    stackedOn === undefined
+      ? input.task
+      : `${input.task}\n\nYour branch starts from \`${stackedOn}\`. Open any pull request against \`${stackedOn}\`, not the default branch.`;
   return input.role === undefined || input.role === "general"
-    ? input.task
-    : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
+    ? task
+    : `Act as the ${input.role} sub-agent for this task.\n\n${task}`;
 }

@@ -35,6 +35,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -2029,6 +2030,121 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.equal(request.modelSelection.instanceId, altInstanceId);
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
+  );
+
+  it.effect.each([
+    { branch: null, dirty: false, refusal: "this checkout has none" },
+    { branch: "feature/base", dirty: true, refusal: "Commit first" },
+    { branch: "feature/base", dirty: false, refusal: null },
+  ] as const)(
+    "stack isolation starts the child from a clean branch ($branch, dirty $dirty)",
+    ({ branch, dirty, refusal }) =>
+      Effect.gen(function* () {
+        const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
+        const task = {
+          id: taskId,
+          threadId: parentThreadId,
+          runId: parentRunId,
+          parentNodeId,
+          origin: "app_owned",
+          createdBy: "agent",
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          providerThreadId: null,
+          childThreadId,
+          nativeTaskRef: null,
+          prompt: "Try the cache approach.",
+          title: null,
+          model: "gpt-5.4",
+          status: "running",
+          result: null,
+          startedAt: null,
+          completedAt: null,
+        };
+        const layerDependencies = Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            hasReceipt: () => Effect.succeed(false),
+            getThreadRecords: (threadId) =>
+              Ref.get(dispatched).pipe(
+                Effect.map((commands) =>
+                  threadId === parentThreadId
+                    ? parentProjection(commands.length > 0 ? [task] : [])
+                    : childProjection,
+                ),
+              ),
+            isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+            assertProviderInstanceEnabled: () => Effect.void,
+            dispatch: (command) =>
+              Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                Effect.as({
+                  sequence: 1,
+                  storedEvents: [
+                    {
+                      sequence: 1,
+                      commandId: null,
+                      event: { type: "subagent.updated", payload: task },
+                    },
+                  ],
+                } as never),
+              ),
+          }),
+          providerRegistryLayer([
+            providerSnapshot({
+              instanceId: codexInstanceId,
+              driver: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4",
+            }),
+          ]),
+          adapterRegistryLayer([codexInstanceId]),
+          Layer.mock(ProjectService.ProjectService)({
+            getById: () =>
+              Effect.succeedSome({ id: projectId, title: "app", workspaceRoot: "/repo" } as never),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          ServerSettings.layerTest(),
+        );
+        const layerService = OrchestratorMcpService.layer.pipe(
+          Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+          Layer.provide(
+            Layer.mock(GitVcsDriver.GitVcsDriver)({
+              statusDetailsLocal: () =>
+                Effect.succeed({ branch, hasWorkingTreeChanges: dirty } as never),
+              resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
+            }),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* service
+            .delegateTask(scope, {
+              task: "Try the cache approach.",
+              isolation: "stack",
+              clientRequestId: `delegate-stack-${String(branch)}-${dirty}`,
+            })
+            .pipe(Effect.result);
+          const commands = yield* Ref.get(dispatched);
+          if (refusal !== null) {
+            assert.isTrue(Result.isFailure(result));
+            assert.include(Result.isFailure(result) ? result.failure.message : "", refusal);
+            assert.deepStrictEqual(commands, []);
+            return;
+          }
+          const request = commands[0];
+          assert.equal(request?.type, "delegated_task.request");
+          if (request?.type !== "delegated_task.request") return;
+          assert.deepStrictEqual(request.workspaceStrategy, {
+            type: "worktree",
+            baseRef: "feature/base",
+            startFromOrigin: false,
+          });
+          assert.include(request.task, "Open any pull request against `feature/base`");
+        }).pipe(Effect.provide(layerService.pipe(Layer.provide(layerDependencies))));
+      }),
   );
 
   it.effect(

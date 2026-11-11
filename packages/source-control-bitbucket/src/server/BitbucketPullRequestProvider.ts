@@ -350,6 +350,15 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("updateChangeRequest"))),
 
+    changeBaseBranch: (input) =>
+      api
+        .updateChangeRequest({
+          repository: input.repository,
+          number: input.number,
+          destinationBranch: input.baseBranch,
+        })
+        .pipe(Effect.mapError(fail("changeBaseBranch"))),
+
     comment: (input) =>
       api
         .comment({ repository: input.repository, number: input.number, body: input.body })
