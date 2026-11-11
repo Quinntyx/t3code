@@ -603,6 +603,52 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   backdrop-filter: var(--glass-liquid-filter);
 }
 
+/* One frost for the composer card and its context strip. Each backdrop blur stops at its own
+   edge, so two of them leave a hard seam where text crosses the joint. The clip's strip subpath
+   starts inside the card, so no clip edge lands on the joint either. The strip keeps its own frost
+   wherever the card's leaves the shell (shaped glass, attached banners, model transition). */
+@supports (clip-path: shape(from 0 0, line to 0 0)) {
+  [data-slot="composer-shell"][data-context-row]:not(
+      [data-liquid-glass-shaped],
+      [data-model-strip-transition],
+      :has([data-composer-banner-surface="attached"])
+    ) {
+    &::before {
+      --r: var(--chat-composer-radius);
+      --e: var(--chat-composer-context-extension);
+      --d: var(--chat-composer-drawer-inset);
+      --s: var(--chat-composer-strip-radius);
+      bottom: 0;
+      border-radius: 0;
+      clip-path: shape(
+        from var(--r) 0,
+        hline to calc(100% - var(--r)),
+        arc to 100% var(--r) of var(--r) cw,
+        vline to calc(100% - var(--e) - var(--r)),
+        arc to calc(100% - var(--r)) calc(100% - var(--e)) of var(--r) cw,
+        hline to var(--r),
+        arc to 0 calc(100% - var(--e) - var(--r)) of var(--r) cw,
+        vline to var(--r),
+        arc to var(--r) 0 of var(--r) cw,
+        close,
+        move to var(--d) calc(100% - var(--e) - var(--r)),
+        hline to calc(100% - var(--d)),
+        vline to calc(100% - var(--s)),
+        arc to calc(100% - var(--d) - var(--s)) 100% of var(--s) cw,
+        hline to calc(var(--d) + var(--s)),
+        arc to var(--d) calc(100% - var(--s)) of var(--s) cw,
+        close
+      );
+    }
+
+    & [data-slot="composer-context-strip"]::before {
+      background: none;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
+
 /* Glass shaped from several parts (liquid-glass/engine.ts) owns its box and outline, replacing
    the host's radius and clip; ::after draws the host's border along that outline. */
 [data-liquid-glass-shaped]::before,

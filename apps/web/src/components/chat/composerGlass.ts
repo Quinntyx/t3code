@@ -58,7 +58,7 @@ export function composerGlassShape(shell: HTMLElement): LiquidGlassShapePart[] |
       y: cardMiddle,
       width: box.width - inset * 2,
       height: box.height - cardMiddle,
-      // Same radius and fillet as the drawers above, so both joints read as one body.
+      // Same fillet as the drawers above, so both joints read as one body.
       radius: strip
         ? Number.parseFloat(window.getComputedStyle(strip, "::before").borderBottomLeftRadius) || 0
         : 0,

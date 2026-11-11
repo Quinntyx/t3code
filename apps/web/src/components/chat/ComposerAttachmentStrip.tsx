@@ -47,6 +47,10 @@ import {
 } from "./SnapShotAttachmentDetails";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
 
+// Concentric with the composer's corner; its buttons sit 0.25rem inside the 1px border.
+const COMPOSER_TILE_SHAPE_CLASS =
+  "rounded-(--chat-composer-tile-radius) [--control-radius:calc(var(--chat-composer-tile-radius)-0.25rem-1px)]";
+
 function ComposerVideoThumbnail({ file }: { file: File }) {
   const setVideo = (video: HTMLVideoElement | null) => {
     if (!video) return;
@@ -188,7 +192,8 @@ export function ComposerAttachmentMediaRow({
                 "group/attachment shrink-0 snap-start bg-background",
                 source?.kind === "snap-shot"
                   ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
-                  : "relative h-16 w-16 overflow-hidden rounded-lg border border-border/80",
+                  : "relative h-16 w-16 overflow-hidden border border-border/80",
+                COMPOSER_TILE_SHAPE_CLASS,
                 snapShotAnimationPending && "invisible",
               )}
             >
@@ -319,6 +324,7 @@ export function ComposerAttachmentMediaRow({
               }
               className={cn(
                 SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
+                COMPOSER_TILE_SHAPE_CLASS,
                 "invisible shrink-0 snap-start bg-background",
               )}
             />
@@ -333,7 +339,10 @@ export function ComposerAttachmentMediaRow({
         return (
           <div
             key={file.id}
-            className="relative h-16 w-16 shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-black"
+            className={cn(
+              "relative h-16 w-16 shrink-0 snap-start overflow-hidden border border-border/80 bg-black",
+              COMPOSER_TILE_SHAPE_CLASS,
+            )}
           >
             <button
               type="button"
@@ -644,7 +653,10 @@ export function ComposerQueuedAttachmentRow({
       {attachments.map(({ attachment, url }) => (
         <div
           key={attachment.id}
-          className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background"
+          className={cn(
+            "relative h-16 w-16 overflow-hidden border border-border/80 bg-background",
+            COMPOSER_TILE_SHAPE_CLASS,
+          )}
         >
           {attachment.type === "image" && url ? (
             <img src={url} alt={attachment.name} className="h-full w-full object-cover" />
