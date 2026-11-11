@@ -33,6 +33,11 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
 import { expect, vi } from "vite-plus/test";
 
+import * as ServerConfig from "../config.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { makeRecoverMissingWorktree } from "./WorktreeRecovery.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -238,6 +243,7 @@ interface CreateManagerOptions {
   maxRetainedInactiveSessions?: number;
   historyByteLimit?: number;
   ptyAdapter?: FakePtyAdapter;
+  recoverMissingCwd?: Parameters<typeof TerminalManager.makeWithOptions>[0]["recoverMissingCwd"];
   resolveProviderInstanceEnvironment?: Parameters<
     typeof TerminalManager.makeWithOptions
   >[0]["resolveProviderInstanceEnvironment"];
@@ -272,6 +278,9 @@ const createManager = (
         logsDir,
         historyLineLimit,
         ptyAdapter,
+        ...(options.recoverMissingCwd === undefined
+          ? {}
+          : { recoverMissingCwd: options.recoverMissingCwd }),
         ...(options.historyByteLimit !== undefined
           ? { historyByteLimit: options.historyByteLimit }
           : {}),
@@ -414,6 +423,138 @@ it.layer(
   ),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
+  it.effect(
+    "recovers a missing managed checkout at its renamed branch before open and attach",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-terminal-worktree-" });
+        const workspaceRoot = path.join(root, "project");
+        const worktreesDir = path.join(root, "worktrees");
+        const worktreePath = path.join(worktreesDir, "project", "t3-old-name");
+        const branch = "feat/comfyui-flux-klein";
+        const execute = (cwd: string, args: ReadonlyArray<string>) =>
+          git
+            .execute({
+              operation: "test.terminalRecovery",
+              cwd,
+              args,
+            })
+            .pipe(Effect.map((result) => result.stdout.trim()));
+        yield* fs.makeDirectory(workspaceRoot);
+        yield* execute(workspaceRoot, ["init", "-b", "main"]);
+        yield* execute(workspaceRoot, [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "base",
+        ]);
+        yield* execute(workspaceRoot, ["worktree", "add", "-b", "t3/old-name", worktreePath]);
+        yield* fs.writeFileString(path.join(worktreePath, "thread.txt"), "thread work");
+        yield* execute(worktreePath, ["add", "."]);
+        yield* execute(worktreePath, [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "-m",
+          "thread tip",
+        ]);
+        yield* execute(worktreePath, ["branch", "-m", branch]);
+        const tip = yield* execute(worktreePath, ["rev-parse", "HEAD"]);
+        yield* fs.remove(worktreePath, { recursive: true });
+        const isManagedWorktreePath = yield* makeIsManagedWorktreePath.pipe(
+          Effect.provide(
+            Layer.merge(ServerConfig.layerTest(workspaceRoot, root), ServerSettings.layerTest()),
+          ),
+        );
+        let workspace: {
+          workspaceRoot: string;
+          worktreePath: string | null;
+          branch: string | null;
+        } | null = { workspaceRoot, worktreePath, branch };
+        const getThreadWorkspace = vi.fn(() => Effect.succeed(workspace));
+        const recoverMissingCwd = makeRecoverMissingWorktree({
+          getThreadWorkspace,
+          isManagedWorktreePath,
+          git,
+        });
+        const { manager, ptyAdapter } = yield* createManager(5, { recoverMissingCwd });
+        const input = openInput({ cwd: worktreePath, worktreePath });
+        const outside = path.join(root, "outside");
+        for (const candidate of [
+          { workspace: null, input },
+          { workspace: { workspaceRoot, worktreePath, branch: null }, input },
+          { workspace: { workspaceRoot, worktreePath, branch }, input: { ...input, cwd: outside } },
+          {
+            workspace: { workspaceRoot, worktreePath: outside, branch },
+            input: { ...input, cwd: outside, worktreePath: outside },
+          },
+          {
+            workspace: { workspaceRoot, worktreePath, branch },
+            input: { ...input, worktreePath: outside },
+          },
+        ]) {
+          workspace = candidate.workspace;
+          expect(yield* manager.open(candidate.input).pipe(Effect.flip)).toMatchObject({
+            _tag: "TerminalCwdNotFoundError",
+          });
+          expect(yield* fs.exists(candidate.input.cwd)).toBe(false);
+        }
+        workspace = { workspaceRoot, worktreePath, branch };
+        getThreadWorkspace.mockClear();
+        const opened = yield* manager.open(input);
+        expect(opened).toMatchObject({ cwd: worktreePath, worktreePath, status: "running" });
+        expect(yield* execute(worktreePath, ["branch", "--show-current"])).toBe(branch);
+        expect(yield* execute(worktreePath, ["rev-parse", "HEAD"])).toBe(tip);
+        expect(yield* fs.readFileString(path.join(worktreePath, "thread.txt"))).toBe("thread work");
+        yield* manager.open(input);
+        expect(getThreadWorkspace).toHaveBeenCalledOnce();
+        yield* manager.close({ threadId: input.threadId, terminalId: input.terminalId });
+        yield* fs.remove(worktreePath, { recursive: true });
+        const events: TerminalAttachStreamEvent[] = [];
+        const unsubscribe = yield* manager.attachStream(input, (event) =>
+          Effect.sync(() => events.push(event)),
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+        expect(events[0]).toMatchObject({
+          type: "snapshot",
+          snapshot: { cwd: worktreePath, status: "running" },
+        });
+        expect(yield* execute(worktreePath, ["rev-parse", "HEAD"])).toBe(tip);
+        expect(ptyAdapter.spawnInputs.map((spawn) => spawn.cwd)).toEqual([
+          worktreePath,
+          worktreePath,
+        ]);
+        yield* manager.close({ threadId: input.threadId, terminalId: input.terminalId });
+        yield* fs.remove(worktreePath, { recursive: true });
+        yield* execute(workspaceRoot, ["worktree", "prune"]);
+        yield* execute(workspaceRoot, ["remote", "add", "origin", workspaceRoot]);
+        yield* execute(workspaceRoot, ["update-ref", `refs/remotes/origin/${branch}`, tip]);
+        yield* execute(workspaceRoot, ["branch", "-D", branch]);
+        expect(yield* manager.open(input).pipe(Effect.flip)).toMatchObject({
+          _tag: "TerminalCwdStatError",
+        });
+        expect(yield* fs.exists(worktreePath)).toBe(false);
+        expect(yield* execute(workspaceRoot, ["branch", "--list", branch])).toBe("");
+      }).pipe(
+        Effect.provide(
+          GitVcsDriver.layer.pipe(
+            Layer.provide(VcsProcess.layer),
+            Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-terminal-config-" })),
+          ),
+        ),
+        Effect.scoped,
+      ),
+  );
+
   it.effect("spawns lazily and reuses running terminal per thread", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
