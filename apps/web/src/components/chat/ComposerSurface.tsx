@@ -25,7 +25,8 @@ function Shell({
         "[--chat-composer-action-radius:1rem] [--chat-composer-action-inset:1rem] sm:[--chat-composer-action-inset:1.25rem]",
         "has-data-[chat-composer-action-size=large]:[--chat-composer-action-radius:1.125rem] sm:has-data-[chat-composer-action-size=large]:[--chat-composer-action-radius:1rem] sm:has-data-[chat-composer-action-size=small]:[--chat-composer-action-radius:0.875rem]",
         // The outer corner and inset action share a center, including the one-pixel surface border.
-        "[--chat-composer-radius:calc(var(--chat-composer-action-radius)+var(--chat-composer-action-inset)+1px)] [--chat-composer-inner-radius:calc(var(--chat-composer-radius)-1px)]",
+        // Content sits at the action's inset too, so a tile in a corner takes the action's radius.
+        "[--chat-composer-radius:calc(var(--chat-composer-action-radius)+var(--chat-composer-action-inset)+1px)] [--chat-composer-inner-radius:calc(var(--chat-composer-radius)-1px)] [--chat-composer-tile-radius:var(--chat-composer-action-radius)]",
         "has-data-[chat-composer-resting=true]:[--chat-composer-action-inset:calc(1.75rem-var(--chat-composer-action-radius))] has-data-[chat-composer-mobile-collapsed=true]:[--chat-composer-action-inset:calc(1.75rem-var(--chat-composer-action-radius))]",
         "[--chat-composer-drawer-inset:1.75rem] [--chat-composer-glass-surface:var(--card)] [--chat-composer-outline:rgb(0_0_0/8%)]",
         "dark:[--chat-composer-glass-surface:var(--surface-raised)] dark:[--chat-composer-highlight:rgb(255_255_255/3%)] dark:[--chat-composer-outline:color-mix(in_srgb,var(--color-white)_5%,transparent)]",
@@ -38,8 +39,11 @@ function Shell({
         "has-data-[composer-banner-surface=attached]:before:hidden data-model-strip-transition:before:hidden",
         contextRow && [
           "[--chat-composer-context-extension:2.25rem] sm:[--chat-composer-context-extension:2rem]",
-          "[--chat-composer-drawer-padding:calc(var(--chat-composer-drawer-inset)+0.5rem)]",
+          // The strip's controls sit 0.25rem inside its edges, so its corners share their center.
+          "[--chat-composer-strip-inset:0.25rem] [--chat-composer-strip-radius:calc(var(--control-radius)+var(--chat-composer-strip-inset))]",
+          "[--chat-composer-drawer-padding:calc(var(--chat-composer-drawer-inset)+var(--chat-composer-strip-inset))]",
           // The context strip draws its own surface below the card, so the glass stops at the card.
+          // Where clip-path: shape() exists, index.css merges both into one frost instead.
           "before:bottom-(--chat-composer-context-extension)",
         ],
         className,
@@ -118,11 +122,11 @@ function ContextStrip({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="composer-context-strip"
       className={cn(
-        "group/composer-context relative isolate z-20 flex h-(--chat-composer-context-extension) w-full items-center gap-2 overflow-x-clip px-(--chat-composer-drawer-padding,2.25rem) text-muted-foreground",
-        "before:pointer-events-none before:absolute before:inset-x-(--chat-composer-drawer-inset,1.75rem) before:inset-y-0 before:-z-1 before:rounded-b-glass before:border before:border-t-0 before:border-(--chat-composer-outline) before:bg-(--chat-composer-glass-fill) before:composer-frost",
+        "group/composer-context relative isolate z-20 flex h-(--chat-composer-context-extension) w-full items-center gap-2 overflow-x-clip px-(--chat-composer-drawer-padding,2rem) text-muted-foreground",
+        "before:pointer-events-none before:absolute before:inset-x-(--chat-composer-drawer-inset,1.75rem) before:inset-y-0 before:-z-1 before:rounded-b-(--chat-composer-strip-radius) before:border before:border-t-0 before:border-(--chat-composer-outline) before:bg-(--chat-composer-glass-fill) before:composer-frost",
         // The strip's share of the body's shadow sits on its own layer, so shaped liquid glass can
         // draw the fill while the shadow still closes the body's lower edge. Kept off the card.
-        "after:pointer-events-none after:absolute after:inset-x-(--chat-composer-drawer-inset,1.75rem) after:inset-y-0 after:-z-1 after:rounded-b-glass after:shadow-float after:[clip-path:inset(0_-100px_-100px_-100px)]",
+        "after:pointer-events-none after:absolute after:inset-x-(--chat-composer-drawer-inset,1.75rem) after:inset-y-0 after:-z-1 after:rounded-b-(--chat-composer-strip-radius) after:shadow-float after:[clip-path:inset(0_-100px_-100px_-100px)]",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:before:bg-(--chat-composer-glass-surface)",
         // Shaped liquid glass draws the strip as part of the card's body instead.
         "group-data-liquid-glass-shaped/composer-surface:before:hidden group-data-liquid-glass-shaped/composer-surface:after:hidden",

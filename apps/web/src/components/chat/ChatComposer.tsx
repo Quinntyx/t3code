@@ -3380,8 +3380,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               }}
               data-chat-composer-body="true"
               className={cn(
-                "relative px-4 pb-2",
-                "pt-3.5 sm:pt-4",
+                "relative px-(--chat-composer-action-inset) pt-(--chat-composer-action-inset) pb-2",
                 isComposerCollapsedMobile && "hidden",
               )}
             >
