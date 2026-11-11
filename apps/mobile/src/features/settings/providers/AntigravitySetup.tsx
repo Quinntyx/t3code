@@ -107,21 +107,23 @@ function AntigravitySetupActions({
   const queryError = authQuery.error ?? installQuery.error;
   const disabled = pending !== null || queryError !== null;
   const status =
-    installation?.phase === "downloading"
-      ? `Downloading ${(installation.downloadedBytes / 1_000_000).toFixed(1)} MB${installation.totalBytes === null ? "" : ` of ${(installation.totalBytes / 1_000_000).toFixed(1)} MB`}`
-      : installation?.phase === "extracting"
-        ? "Extracting Antigravity"
-        : installation?.phase === "verifying"
-          ? "Checking the downloaded runtime"
-          : installed
-            ? "Installed"
-            : customBinary
-              ? enabled
-                ? "The configured Antigravity runtime is unavailable"
-                : "The configured Antigravity runtime has not been checked"
-              : installation?.totalBytes
-                ? `Not installed · ${Math.ceil(installation.totalBytes / 1_000_000)} MB download`
-                : "Not installed";
+    installation === null
+      ? "Checking the Antigravity runtime"
+      : installation.phase === "downloading"
+        ? `Downloading ${(installation.downloadedBytes / 1_000_000).toFixed(1)} MB${installation.totalBytes === null ? "" : ` of ${(installation.totalBytes / 1_000_000).toFixed(1)} MB`}`
+        : installation?.phase === "extracting"
+          ? "Extracting Antigravity"
+          : installation?.phase === "verifying"
+            ? "Checking the downloaded runtime"
+            : installed
+              ? "Installed"
+              : customBinary
+                ? enabled
+                  ? "The configured Antigravity runtime is unavailable"
+                  : "The configured Antigravity runtime has not been checked"
+                : installation?.totalBytes
+                  ? `Not installed · ${Math.ceil(installation.totalBytes / 1_000_000)} MB download`
+                  : "Not installed";
   const installLabel = installation?.installedVersion
     ? installation.version && installation.version !== installation.installedVersion
       ? "Update Antigravity"
@@ -203,7 +205,7 @@ function AntigravitySetupActions({
             icon="arrow.down.circle"
             tone="secondary"
             loading={pending === "Starting installation"}
-            disabled={disabled || installation === null || authActive}
+            disabled={disabled || authActive}
             onPress={() => void run("Starting installation", () => startInstall(target))}
           />
         ) : null}

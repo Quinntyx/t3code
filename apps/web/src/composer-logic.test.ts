@@ -24,6 +24,7 @@ import {
   isPathSuggestionCurrent,
   replaceTextRange,
 } from "./composer-logic";
+import { slashCommandItemsForPromptPosition } from "./components/chat/composerSlashCommandSearch";
 import { carryDisplacedCustomAnswerIntoPrompt } from "./pendingUserInput";
 import { formatTerminalContextReference } from "./lib/terminalContext";
 
@@ -231,93 +232,6 @@ describe("composerSubmissionIntentForKey", () => {
   ])("does not submit with %j", (override) => {
     expect(composerSubmissionIntentForKey({ ...input, event: enter, ...override })).toBeNull();
   });
-});
-
-describe("detectComposerTrigger", () => {
-  it.each([
-    ["Run /tmp/build.sh", "Run /tmp/build.sh".length],
-    ["/etc/hosts", "/etc/hosts".length],
-    ["Use /etc/hosts now", "Use /et".length],
-  ])("keeps the path in %j out of the slash menu", (text, cursor) => {
-    expect(detectComposerTrigger(text, cursor)).toBeNull();
-  });
-
-  it.each(["Use ", "Use\t", "Use\n  "])("detects inline slash skills after %j", (prefix) => {
-    const text = `${prefix}/skill:review later`;
-    const cursor = `${prefix}/skill:review`.length;
-    expect(detectComposerTrigger(text, cursor)).toEqual({
-      kind: "slash-command",
-      query: "skill:review",
-      rangeStart: prefix.length,
-      rangeEnd: cursor,
-    });
-  });
-
-  it.each(["Use/review", "https://example.com/review", "Use /review "])(
-    "does not trigger for %j",
-    (text) => expect(detectComposerTrigger(text, text.length)).toBeNull(),
-  );
-
-  it("does not keep a subcommand trigger active after /model arguments", () => {
-    const text = "/model spark";
-    const trigger = detectComposerTrigger(text, text.length);
-
-    expect(trigger).toBeNull();
-  });
-
-  it.each([
-    "It costs $5",
-    "budget $9.99",
-    "only $.99",
-    "about €20",
-    "raise $10k",
-    "raise $10k.",
-    "is it $5?",
-  ])("does not detect a skill trigger for the amount in %j", (text) => {
-    expect(detectComposerTrigger(text, text.length)).toBeNull();
-  });
-
-  it("detects a pull request number at a token boundary", () => {
-    const text = "Compare this with #8737";
-
-    expect(detectComposerTrigger(text, text.length)).toEqual({
-      kind: "pull-request",
-      query: "8737",
-      rangeStart: "Compare this with ".length,
-      rangeEnd: text.length,
-    });
-  });
-
-  it("does not keep pull request completion active for headings or embedded hashes", () => {
-    expect(detectComposerTrigger("# Heading", "# Heading".length)).toBeNull();
-    expect(detectComposerTrigger("issue#123", "issue#123".length)).toBeNull();
-  });
-
-  // regression: #936 @file autocomplete used the wrong cursor when typing mid-text
-  it("detects @path trigger in the middle of existing text", () => {
-    const text = "Please inspect @in this sentence";
-    const cursorAfterAt = "Please inspect @".length;
-
-    const trigger = detectComposerTrigger(text, cursorAfterAt);
-    expect(trigger).toEqual({
-      kind: "path",
-      query: "",
-      rangeStart: "Please inspect ".length,
-      rangeEnd: cursorAfterAt,
-    });
-  });
-  it.each(["Compare with %", "Compare with %auth"])("detects the thread trigger in %j", (text) => {
-    expect(detectComposerTrigger(text, text.length)).toEqual({
-      kind: "thread",
-      query: text.slice("Compare with %".length),
-      rangeStart: "Compare with ".length,
-      rangeEnd: text.length,
-    });
-  });
-
-  it.each(["50%", "Open %APPDATA%", "Use %auth "])("does not open the thread menu for %j", (text) =>
-    expect(detectComposerTrigger(text, text.length)).toBeNull(),
-  );
 });
 
 describe("filterComposerPullRequestMatches", () => {
@@ -558,5 +472,20 @@ describe("extendReplacementRangeForTrailingSpace", () => {
     expect(extendReplacementRangeForTrailingSpace("@firest", 3, "@file ")).toBe(3);
     expect(extendReplacementRangeForTrailingSpace("@fi rest", 3, "@file")).toBe(3);
     expect(extendReplacementRangeForTrailingSpace("@fi", 3, "@file ")).toBe(3);
+  });
+});
+
+describe("side chat slash commands", () => {
+  it("are not offered after the start of a message", () => {
+    const items = (["side", "btw", "clear", "model"] as const).map((command) => ({
+      id: `slash:${command}`,
+      type: "slash-command" as const,
+      command,
+      label: `/${command}`,
+      description: "",
+    }));
+    expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
+      "slash:model",
+    ]);
   });
 });

@@ -32,13 +32,13 @@ const zenClient = (
 
 const read = (input: {
   readonly apiKey: string;
-  readonly fallbackApiKey?: string;
+  readonly fallbackApiKeys?: ReadonlyArray<string>;
   readonly client: HttpClient.HttpClient;
 }) =>
   Effect.gen(function* () {
     const result = yield* readOpenCodeGoUsage({
       apiKey: input.apiKey,
-      fallbackApiKey: input.fallbackApiKey,
+      fallbackApiKeys: input.fallbackApiKeys,
       checkedAt,
     });
     return result;
@@ -89,7 +89,7 @@ describe("OpenCode Go usage", () => {
       const seen: Array<string | null> = [];
       const result = yield* read({
         apiKey: "console_key",
-        fallbackApiKey: "oc_sk_stored",
+        fallbackApiKeys: ["oc_sk_stored"],
         client: zenClient((authorization) => {
           seen.push(authorization);
           return authorization === "Bearer oc_sk_stored"

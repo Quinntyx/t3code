@@ -14,7 +14,12 @@ import type {
   ThreadUsageModel,
   UsageTokenTotals,
 } from "@t3tools/contracts";
-import { EMPTY_TOTALS, type UsageSpeed } from "@t3tools/provider-core/server/usage";
+import {
+  EMPTY_TOTALS,
+  normalizeUsageTokens,
+  totalTokens,
+  type UsageSpeed,
+} from "@t3tools/provider-core/server/usage";
 import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
@@ -62,7 +67,7 @@ export interface ThreadUsageRecords {
   readonly providerTurns: ReadonlyArray<
     Pick<
       OrchestrationV2ProviderTurn,
-      "providerThreadId" | "runAttemptId" | "startedAt" | "completedAt" | "turnTokenUsage"
+      "providerThreadId" | "runAttemptId" | "startedAt" | "completedAt" | "turnTokenUsage" | "model"
     >
   >;
 }
@@ -119,14 +124,19 @@ export function threadUsageTurns(
   group: ThreadUsageGroup,
   records: ThreadUsageRecords,
   nowMs: number,
-): ReadonlyArray<ThreadUsageTurn> {
+): {
+  readonly turns: ReadonlyArray<ThreadUsageTurn>;
+  /** Groups with usage a provider could not measure, kept apart from rows so it never counts. */
+  readonly incompleteGroups: ReadonlyArray<ThreadUsageGroup>;
+} {
   const runs = new Map(records.runs.map((run) => [run.id, run]));
   const attempts = new Map(records.attempts.map((attempt) => [attempt.id, attempt]));
   const drivers = new Map(records.providerThreads.map((thread) => [thread.id, thread.driver]));
   const turns: ThreadUsageTurn[] = [];
+  const incompleteGroups = new Set<ThreadUsageGroup>();
   for (const turn of records.providerTurns) {
     const usage = turn.turnTokenUsage;
-    if (usage === undefined || usage.usageStatus === "unavailable") continue;
+    if (usage === undefined || usage.usageStatus === "unavailable" || usage.localCommand) continue;
     const attempt = turn.runAttemptId === null ? undefined : attempts.get(turn.runAttemptId);
     const run = attempt === undefined ? undefined : runs.get(attempt.runId);
     const driver = drivers.get(turn.providerThreadId);
@@ -135,11 +145,18 @@ export function threadUsageTurns(
     }
     const completedAtMs =
       turn.completedAt === null ? nowMs : DateTime.toEpochMillis(turn.completedAt);
+    const startedAtMs =
+      turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt);
+    const mainModel =
+      usage.models?.length === 1 ? usage.models[0]! : (turn.model ?? run.modelSelection.model);
+    const speed = usageSpeed(run.modelSelection);
+    // Unmeasured usage beyond the main agent belongs with the delegates, as measured usage does.
+    if (usage.otherUsageStatus !== undefined) incompleteGroups.add("delegates");
     const entries = [
-      ...(usage.mainAgentUsage ?? [{ ...usage, model: run.modelSelection.model }]).map((main) => ({
+      ...(usage.mainAgentUsage ?? [{ ...usage, model: mainModel }]).map((main) => ({
         ...main,
         group,
-        speed: usageSpeed(run.modelSelection),
+        speed,
       })),
       ...(usage.subagentUsage ?? []).map((subagent) => ({
         ...subagent,
@@ -148,11 +165,8 @@ export function threadUsageTurns(
       })),
     ];
     for (const entry of entries) {
-      const input = entry.inputTokens ?? 0;
-      const cachedInputTokens = entry.cachedInputTokens ?? 0;
-      const cacheCreationTokens = entry.cacheCreationTokens ?? 0;
-      const outputTokens = entry.outputTokens ?? 0;
-      if (input + outputTokens === 0) continue;
+      const totals = normalizeUsageTokens(entry, "inclusive");
+      if (totalTokens(totals) === 0) continue;
       turns.push({
         group: entry.group,
         threadId: records.thread.id,
@@ -160,27 +174,14 @@ export function threadUsageTurns(
         driver,
         model: entry.model,
         speed: entry.speed,
-        startedAtMs:
-          turn.startedAt === null ? completedAtMs : DateTime.toEpochMillis(turn.startedAt),
+        startedAtMs,
         completedAtMs,
-        totals: {
-          uncachedInputTokens: Math.max(0, input - cachedInputTokens - cacheCreationTokens),
-          cachedInputTokens,
-          cacheCreationTokens,
-          outputTokens,
-          reasoningTokens: entry.reasoningTokens ?? 0,
-        },
+        totals,
       });
     }
   }
-  return turns;
+  return { turns, incompleteGroups: [...incompleteGroups] };
 }
-
-const totalTokens = (totals: UsageTokenTotals) =>
-  totals.uncachedInputTokens +
-  totals.cachedInputTokens +
-  totals.cacheCreationTokens +
-  totals.outputTokens;
 
 const addTotals = (left: UsageTokenTotals, right: UsageTokenTotals): UsageTokenTotals => ({
   uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
@@ -203,6 +204,7 @@ function bucketStep(spanMs: number): number {
  */
 export function buildThreadUsage(input: {
   readonly turns: ReadonlyArray<ThreadUsageTurn>;
+  readonly incompleteGroups?: ReadonlyArray<ThreadUsageGroup>;
   readonly compactedAtMs: ReadonlyArray<number>;
   readonly pricing: ThreadUsagePricing;
   readonly nowMs: number;
@@ -247,6 +249,7 @@ export function buildThreadUsage(input: {
     models.set(key, entry);
   }
 
+  const incompleteGroups = new Set(input.incompleteGroups);
   const compactedAt = input.compactedAtMs.toSorted((a, b) => a - b);
   const starts = [...turns.map((turn) => turn.startedAtMs), ...compactedAt];
   if (turns.length === 0 || starts.length === 0) {
@@ -304,5 +307,6 @@ export function buildThreadUsage(input: {
       buckets: buckets.map(Math.round),
     })),
     compactedAt: compactedAt.map((ms) => DateTime.formatIso(DateTime.makeUnsafe(ms))),
+    ...(incompleteGroups.size === 0 ? {} : { incompleteGroups: [...incompleteGroups] }),
   };
 }

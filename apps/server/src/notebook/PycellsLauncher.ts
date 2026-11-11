@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { ServerConfig } from "../config.ts";
 
 const Recipe = Schema.Struct({
@@ -29,6 +30,9 @@ const MAX_REQUEST_BYTES = 1024 * 1024;
 
 const make = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const executable = yield* HostProcess.ExecutablePath;
+  const userId = yield* HostProcess.UserId;
   const ownerScope = yield* Effect.scope;
   const registrations = new Set<string>();
   const socketDirectory = NodePath.dirname(pycellsSocketPath(stateDir, ""));
@@ -47,7 +51,7 @@ const make = Effect.gen(function* () {
         try: async () => {
           await NodeFSP.mkdir(socketDirectory, { recursive: true, mode: 0o700 });
           const directory = await NodeFSP.lstat(socketDirectory);
-          if (!directory.isDirectory() || directory.uid !== process.getuid?.())
+          if (!directory.isDirectory() || directory.uid !== userId)
             throw new PycellsLaunchError({ message: "Invalid pycells socket directory." });
           await NodeFSP.chmod(socketDirectory, 0o700);
           const sockets = new Set<NodeNet.Socket>();
@@ -78,7 +82,7 @@ const make = Effect.gen(function* () {
               throw new PycellsLaunchError({ message: "Invalid pycells entrypoint." });
             if (closing)
               throw new PycellsLaunchError({ message: "Pycells launcher is shutting down." });
-            const environment: NodeJS.ProcessEnv = { ...process.env, ...recipe.environment };
+            const environment: NodeJS.ProcessEnv = { ...hostEnvironment, ...recipe.environment };
             for (const key of Object.keys(environment)) {
               if (key === "T3_THREAD_ID" || key.startsWith("T3_PYCELLS_")) delete environment[key];
             }
@@ -86,7 +90,7 @@ const make = Effect.gen(function* () {
             if (process.versions.electron) environment.ELECTRON_RUN_AS_NODE = "1";
             // This spawn runs in the server, never through the provider's scoped spawner.
             const child = NodeChildProcess.spawn(
-              process.execPath,
+              executable,
               [entry, "--socket", recipe.socketPath, "--root", root],
               {
                 cwd: root,

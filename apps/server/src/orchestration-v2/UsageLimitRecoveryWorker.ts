@@ -16,12 +16,15 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+
+const MAX_OVERDUE_ARM_MS = 24 * 60 * 60 * 1000;
 
 type LimitRecoveryThread = Omit<
   ProjectionStore.ProjectionLimitRecoveryCandidate,
@@ -56,6 +59,7 @@ export function limitRecoveryCommand(
   const identity = `${thread.id}:${thread.latestRunId}:${resetMs}`;
   const recovery = thread.limitRecovery;
   if (recovery?.runId !== thread.latestRunId || recovery.resetAt !== thread.usageLimitResetAt) {
+    if (nowMs - resetMs > MAX_OVERDUE_ARM_MS) return null;
     if (!autoResume && (!snooze || resetMs <= nowMs)) return null;
     return {
       type: "thread.metadata.update",
@@ -95,7 +99,7 @@ export function limitRecoveryCommand(
     text: "Continue where you left off.",
     attachments: [],
     dispatchMode: { type: "start_immediately" },
-    createdBy: "user",
+    createdBy: "agent",
     creationSource: "server",
   };
 }
@@ -193,6 +197,15 @@ export function observeLimitReport(
   return { observed, spent, limits };
 }
 
+// Events that can make a thread a candidate or change its command; streaming items cannot.
+const affectsLimitRecovery = (event: OrchestrationV2DomainEvent) =>
+  event.type.startsWith("thread.") ||
+  event.type === "run.created" ||
+  event.type === "run.updated" ||
+  event.type === "runtime-request.updated" ||
+  event.type.startsWith("provider-session.") ||
+  (event.type === "turn-item.updated" && event.payload.type === "error");
+
 // The usage-limit item and failed run may commit in either order. Both publish after their
 // transaction; sweeping on each one lets the snooze land in the same shell batch instead of
 // waiting for the next five-second tick.
@@ -226,19 +239,26 @@ const limitsByInstance = (providers: ReadonlyArray<ServerProvider>) =>
     ),
   );
 
+const logUnlessInterrupted = (message: string) => (cause: Cause.Cause<unknown>) =>
+  Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logWarning(message, { cause });
+
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
   const providers = yield* ProviderRegistry.ProviderRegistry;
+  const due = DueHint.make();
   // When each instance's allowance came back before the reset time its waiting threads recorded.
   // A thread that failed after that report keeps its own clock, so one report cannot retry it
   // twice, and a window that is spent again clears the instance.
   const resetObservedAt = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(new Map());
   const sweep = Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
-    const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
+    const nowMs = DateTime.toEpochMillis(now);
+    if (yield* due.isIdle(nowMs)) return;
+    const readVersion = yield* due.version;
+    const preferences = yield* settings.getSettings;
     const resets = yield* Ref.get(resetObservedAt);
     const candidates = yield* projections.getLimitRecoveryCandidates({
       now,
@@ -246,7 +266,6 @@ const makeSweep = Effect.gen(function* () {
       snooze: preferences.snoozeLimitedThreads,
       resetObserved: resets.size > 0,
     });
-    const nowMs = DateTime.toEpochMillis(now);
     // Only a thread with a command competes for the first allowance; a waiting one that must keep
     // its own clock cannot hold the others back.
     const ready = candidates.flatMap((thread) => {
@@ -269,10 +288,11 @@ const makeSweep = Effect.gen(function* () {
       ready.every((entry) => !entry.hasLinkedPullRequest)
         ? yield* projections.hasActivePullRequestThread()
         : false;
-    for (const { thread, command } of selectLimitRecoveryCandidates(ready, {
+    const selected = selectLimitRecoveryCandidates(ready, {
       prioritizePullRequests,
       activePullRequestThread,
-    })) {
+    });
+    for (const { thread, command } of selected) {
       yield* Effect.gen(function* () {
         if (command.type === "thread.metadata.update" && command.limitRecovery != null) {
           yield* orchestrator.autoArmLimitRecovery({
@@ -292,12 +312,18 @@ const makeSweep = Effect.gen(function* () {
         ),
       );
     }
+    // A sweep that acted, or failed to, re-checks on the next tick. Threads held behind a working
+    // pull-request thread wait for its run event to invalidate the hint.
+    if (selected.length > 0) return;
+    const wakeAt = yield* projections.getLimitRecoveryWakeAt(now);
+    yield* due.record(readVersion, wakeAt ?? Infinity, nowMs);
   });
   // Coalesce event bursts into one follow-up sweep. A dirty flag is rechecked after each
   // sweep so an event that lands while a sweep is reading still gets its own pass.
   const dirty = yield* Ref.make(false);
   const wake = yield* Queue.dropping<void>(1);
-  const requestSweep = Ref.set(dirty, true).pipe(
+  const requestSweep = due.invalidate.pipe(
+    Effect.andThen(Ref.set(dirty, true)),
     Effect.andThen(Queue.offer(wake, undefined)),
     Effect.asVoid,
   );
@@ -306,34 +332,31 @@ const makeSweep = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!(yield* Ref.getAndSet(dirty, false))) return;
         yield* sweep().pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.void
-              : Effect.logWarning("orchestration-v2.limit-recovery.event-sweep-failed", {
-                  cause,
-                }),
+          Effect.catchCause(
+            logUnlessInterrupted("orchestration-v2.limit-recovery.event-sweep-failed"),
           ),
         );
       }),
     ).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.void
-          : Effect.logWarning("orchestration-v2.limit-recovery.sweep-worker-failed", { cause }),
+      Effect.catchCause(
+        logUnlessInterrupted("orchestration-v2.limit-recovery.sweep-worker-failed"),
       ),
     ),
   );
   yield* forkParked(
     Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-      isLimitRecoverySignal(event) ? requestSweep : Effect.void,
+      isLimitRecoverySignal(event)
+        ? requestSweep
+        : affectsLimitRecovery(event)
+          ? due.invalidate
+          : Effect.void,
     ).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.void
-          : Effect.logWarning("orchestration-v2.limit-recovery.event-stream-failed", { cause }),
+      Effect.catchCause(
+        logUnlessInterrupted("orchestration-v2.limit-recovery.event-stream-failed"),
       ),
     ),
   );
+  yield* forkParked(Stream.runForEach(settings.streamChanges, () => due.invalidate));
   const seen = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>>(
     limitsByInstance(yield* providers.getProviders),
   );
@@ -356,10 +379,8 @@ const makeSweep = Effect.gen(function* () {
         if (observed.length > 0) yield* requestSweep;
       }),
     ).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.void
-          : Effect.logWarning("orchestration-v2.limit-recovery.provider-stream-failed", { cause }),
+      Effect.catchCause(
+        logUnlessInterrupted("orchestration-v2.limit-recovery.provider-stream-failed"),
       ),
     ),
   );

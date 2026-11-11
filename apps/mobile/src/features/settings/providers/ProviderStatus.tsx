@@ -3,8 +3,10 @@ import {
   getProviderSummary,
   type ProviderStatusKey,
 } from "@t3tools/client-runtime/provider-settings/status";
-import { readConfigString } from "@t3tools/client-runtime/provider-settings/instance";
-import { providerClients } from "@t3tools/client-runtime/provider-clients";
+import {
+  providerInstanceName,
+  readConfigString,
+} from "@t3tools/client-runtime/provider-settings/instance";
 import {
   normalizeProviderAccentColor,
   providerAccentForegroundColor,
@@ -30,14 +32,6 @@ const STATUS_DOT_CLASS: Record<ProviderStatusKey, string> = {
 
 export function ProviderStatusDot(props: { readonly status: ProviderStatusKey }) {
   return <View className={`size-2 rounded-full ${STATUS_DOT_CLASS[props.status]}`} />;
-}
-
-export function providerDisplayName(instance: ProviderInstanceConfig) {
-  return (
-    instance.displayName?.trim() ||
-    providerClients.get(instance.driver)?.label ||
-    String(instance.driver)
-  );
 }
 
 export function isProviderUpdating(provider: ServerProvider | undefined) {
@@ -95,7 +89,7 @@ export function ProviderInstanceGlyph(props: {
               color: providerAccentForegroundColor(accentColor),
             }}
           >
-            {providerInstanceInitials(providerDisplayName(props.instance))}
+            {providerInstanceInitials(providerInstanceName(props.instance))}
           </Text>
         </View>
       ) : null}

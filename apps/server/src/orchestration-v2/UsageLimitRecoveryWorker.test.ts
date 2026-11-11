@@ -1,3 +1,4 @@
+import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
   type OrchestrationV2DomainEvent,
@@ -8,12 +9,13 @@ import {
   type ServerProviderUsageLimits,
   ThreadId,
 } from "@t3tools/contracts";
-import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -22,6 +24,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 
 const layerProviderRegistry = (
   changes: Stream.Stream<ReadonlyArray<ServerProvider>> = Stream.never,
@@ -30,6 +33,64 @@ const layerProviderRegistry = (
     getProviders: Effect.succeed([]),
     streamChanges: changes,
   });
+
+it.effect("idle sweeps skip SQL until the next wake time or a relevant event", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-07-01T09:00:00.000Z"));
+    const startMs = Date.parse("2026-07-01T09:00:00.000Z");
+    const queries = yield* Queue.unbounded<number>();
+    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const layer = UsageLimitRecoveryWorker.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Scheduler.layer,
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getLimitRecoveryCandidates: () =>
+              Clock.currentTimeMillis.pipe(
+                Effect.flatMap((nowMs) => Queue.offer(queries, nowMs - startMs)),
+                Effect.as([]),
+              ),
+            // One armed thread resets at 60s.
+            getLimitRecoveryWakeAt: (now) =>
+              Effect.succeed(
+                DateTime.toEpochMillis(now) < startMs + 60_000 ? startMs + 60_000 : null,
+              ),
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({}),
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            streamDomainEvents: Stream.fromQueue(events),
+          }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed({
+              autoResumeLimitedThreads: true,
+              snoozeLimitedThreads: false,
+            } as never),
+            streamChanges: Stream.never,
+          }),
+          layerProviderRegistry(),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      assert.equal(yield* Queue.take(queries), 0);
+      // Eleven idle ticks before the recorded wake time, then the wake tick itself.
+      yield* TestClock.adjust("60 seconds");
+      assert.equal(yield* Queue.take(queries), 60_000);
+      yield* Queue.offer(events, {
+        type: "turn-item.updated",
+        payload: { type: "assistant_message" },
+      } as never);
+      yield* TestClock.adjust("30 seconds");
+      yield* Queue.offer(events, { type: "run.updated", payload: { status: "running" } } as never);
+      yield* TestClock.adjust("5 seconds");
+      // A streaming item at 60s does not wake it; the run update does on the 95s tick.
+      assert.equal(yield* Queue.take(queries), 95_000);
+      // A failed run sweeps as soon as it commits instead of waiting for the next tick.
+      yield* Queue.offer(events, { type: "run.updated", payload: { status: "failed" } } as never);
+      assert.equal(yield* Queue.take(queries), 95_000);
+    }).pipe(Effect.provide(layer));
+  }),
+);
 
 const verifySweep = (event: OrchestrationV2DomainEvent) =>
   Effect.gen(function* () {
@@ -41,6 +102,7 @@ const verifySweep = (event: OrchestrationV2DomainEvent) =>
           Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getLimitRecoveryCandidates: () => Queue.offer(sweeps, undefined).pipe(Effect.as([])),
+            getLimitRecoveryWakeAt: () => Effect.succeed(null),
           }),
           Layer.mock(ThreadManagement.ThreadManagementService)({}),
           Layer.mock(Orchestrator.OrchestratorV2)({
@@ -123,6 +185,7 @@ const limits = (
   extra: Partial<ServerProviderUsageLimits> = {},
 ): ServerProviderUsageLimits => ({ checkedAt: "2026-06-30T00:00:00.000Z", windows, ...extra });
 
+const HOUR_MS = 60 * 60 * 1000;
 const instanceId = ProviderInstanceId.make("codex");
 const nowMs = Date.parse("2026-06-30T12:00:00.000Z");
 const report = (
@@ -251,44 +314,64 @@ const waitingThread = (
   ...overrides,
 });
 
+const failedThread = (failedAgoMs: number, resetAgoMs: number) => {
+  const failedAt = DateTime.makeUnsafe(nowMs - failedAgoMs);
+  return waitingThread(DateTime.formatIso(DateTime.makeUnsafe(nowMs - resetAgoMs)), {
+    latestRunCompletedAt: failedAt,
+    updatedAt: failedAt,
+    limitRecovery: null,
+  });
+};
+
 const resetAt = "2026-07-01T00:00:00.000Z";
-const beforeReset = Date.parse("2026-06-30T12:00:00.000Z");
+
+describe("limitRecoveryCommand arming", () => {
+  it("does not freshly arm a failure whose reset passed days ago", () => {
+    const thread = failedThread(5 * 24 * HOUR_MS, 4 * 24 * HOUR_MS);
+    assert.isNull(limitRecoveryCommand(thread, true, nowMs));
+    assert.isNull(limitRecoveryCommand(thread, true, nowMs, true));
+  });
+
+  it("still arms a failure whose reset only just passed", () => {
+    const thread = failedThread(6 * HOUR_MS, HOUR_MS);
+    const arm = limitRecoveryCommand(thread, true, nowMs);
+    assert.equal(arm?.type, "thread.metadata.update");
+  });
+
+  it("arms a reset that is exactly 24 hours overdue", () => {
+    const thread = failedThread(30 * HOUR_MS, 24 * HOUR_MS);
+    const arm = limitRecoveryCommand(thread, true, nowMs);
+    assert.equal(arm?.type, "thread.metadata.update");
+  });
+
+  it("does not arm a reset that is 24 hours and 1ms overdue", () => {
+    const thread = failedThread(30 * HOUR_MS, 24 * HOUR_MS + 1);
+    assert.isNull(limitRecoveryCommand(thread, true, nowMs));
+  });
+
+  it("keeps an unarmed thread arming instead of resuming it early", () => {
+    const thread = waitingThread(resetAt, { limitRecovery: null });
+    const command = limitRecoveryCommand(thread, true, nowMs, false, nowMs);
+    assert.equal(command?.type, "thread.metadata.update");
+  });
+});
 
 it("waits for the recorded reset time until the provider reports one", () => {
   const thread = waitingThread(resetAt);
-  assert.isNull(UsageLimitRecoveryWorker.limitRecoveryCommand(thread, true, beforeReset));
-  const command = UsageLimitRecoveryWorker.limitRecoveryCommand(
-    thread,
-    true,
-    beforeReset,
-    false,
-    beforeReset,
-  );
+  assert.isNull(limitRecoveryCommand(thread, true, nowMs));
+  const command = limitRecoveryCommand(thread, true, nowMs, false, nowMs);
   assert.equal(command?.type, "message.dispatch");
   assert.isTrue(command?.type === "message.dispatch" && command.usageLimitResetObserved === true);
-});
-
-it("keeps an unarmed thread arming instead of resuming it early", () => {
-  const thread = waitingThread(resetAt, { limitRecovery: null });
-  const command = UsageLimitRecoveryWorker.limitRecoveryCommand(
-    thread,
-    true,
-    beforeReset,
-    false,
-    beforeReset,
+  assert.isTrue(
+    command?.type === "message.dispatch" &&
+      command.createdBy === "agent" &&
+      command.creationSource === "server",
   );
-  assert.equal(command?.type, "thread.metadata.update");
 });
 
 it("ends a snooze that only lasted until the reset", () => {
   const thread = waitingThread(resetAt, { snoozedUntil: DateTime.makeUnsafe(resetAt) });
-  const command = UsageLimitRecoveryWorker.limitRecoveryCommand(
-    thread,
-    true,
-    beforeReset,
-    false,
-    beforeReset,
-  );
+  const command = limitRecoveryCommand(thread, true, nowMs, false, nowMs);
   assert.equal(command?.type, "message.dispatch");
 });
 
@@ -296,9 +379,7 @@ it("holds a snooze that outlasts the reset", () => {
   const thread = waitingThread(resetAt, {
     snoozedUntil: DateTime.makeUnsafe("2026-07-01T02:00:00.000Z"),
   });
-  assert.isNull(
-    UsageLimitRecoveryWorker.limitRecoveryCommand(thread, true, beforeReset, false, beforeReset),
-  );
+  assert.isNull(limitRecoveryCommand(thread, true, nowMs, false, nowMs));
 });
 
 it("holds a thread whose resume the user cancelled", () => {
@@ -310,9 +391,7 @@ it("holds a thread whose resume the user cancelled", () => {
       requestId: CommandId.make("recovery:choice"),
     },
   });
-  assert.isNull(
-    UsageLimitRecoveryWorker.limitRecoveryCommand(thread, true, beforeReset, false, beforeReset),
-  );
+  assert.isNull(limitRecoveryCommand(thread, true, nowMs, false, nowMs));
 });
 
 it("leaves a thread that failed after the report on its own clock", () => {
@@ -320,9 +399,7 @@ it("leaves a thread that failed after the report on its own clock", () => {
     latestRunCompletedAt: DateTime.makeUnsafe("2026-06-30T13:00:00.000Z"),
     updatedAt: DateTime.makeUnsafe("2026-06-30T13:00:00.000Z"),
   });
-  assert.isNull(
-    UsageLimitRecoveryWorker.limitRecoveryCommand(thread, true, beforeReset, false, beforeReset),
-  );
+  assert.isNull(limitRecoveryCommand(thread, true, nowMs, false, nowMs));
 });
 
 it.effect("resumes a waiting thread as soon as the provider reports the limit back", () =>
@@ -350,6 +427,7 @@ it.effect("resumes a waiting thread as soon as the provider reports the limit ba
             // The projection only offers waiting threads when the sweep asks for them.
             getLimitRecoveryCandidates: (options) =>
               Effect.succeed(options.resetObserved === true ? [blocking, thread] : []),
+            getLimitRecoveryWakeAt: () => Effect.succeed(null),
             hasActivePullRequestThread: () => Effect.succeed(false),
           }),
           Layer.mock(ThreadManagement.ThreadManagementService)({

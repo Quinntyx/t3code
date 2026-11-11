@@ -15,7 +15,7 @@ function RunningDuration(props: { durationMs: number; updatedAt: number }) {
 function ThreadUsageFigures({ threadRef }: { threadRef: ScopedThreadRef }) {
   const { data, dataUpdatedAt, shell } = useThreadUsage(threadRef);
   if (data === null) return null;
-  const cost = formatThreadUsageCost(data.models);
+  const cost = formatThreadUsageCost(data.models, data.incompleteGroups !== undefined);
   const status = shell?.latestRun?.status;
   const running = status === "starting" || status === "running" || status === "waiting";
   return (
@@ -36,7 +36,7 @@ function ThreadUsageFigures({ threadRef }: { threadRef: ScopedThreadRef }) {
       {cost !== null ? (
         <div className="flex min-w-0 items-center gap-2">
           <DollarSignIcon aria-hidden className="size-3 shrink-0 stroke-muted-foreground" />
-          <div className="text-foreground/75 tabular-nums">Usage {cost}</div>
+          <div className="text-foreground/75 tabular-nums">Consumption {cost}</div>
         </div>
       ) : null}
     </>

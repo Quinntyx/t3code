@@ -1,5 +1,6 @@
 import {
   ASSISTANT_CITATION_MAX_COMMENT_LENGTH,
+  type AssistantCitation,
   EnvironmentId,
   MessageId,
   ThreadId,
@@ -13,7 +14,24 @@ import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection
 import "~/index.css";
 import { act, render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({ observeSource: vi.fn(), dispose: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  observeSource: vi.fn(),
+  dispose: vi.fn(),
+  dictation: null as null | {
+    readDraft: () => { text: string; selection: { start: number; end: number } };
+    commitDraft: (text: string, selection: { start: number; end: number }) => void;
+  },
+}));
+vi.mock(import("~/speech/useEnvironmentSpeechInput"), async (importOriginal) => {
+  const original = await importOriginal();
+  return {
+    ...original,
+    useEnvironmentSpeechInput: (input) => {
+      mocks.dictation = input;
+      return original.useEnvironmentSpeechInput(input);
+    },
+  };
+});
 vi.mock(import("./AssistantCitationSource"), async (importOriginal) => ({
   ...(await importOriginal()),
   observeAssistantCitationCommentSource: mocks.observeSource,
@@ -51,12 +69,16 @@ function setup() {
   return { sourceAnchor, [Symbol.dispose]: () => source.remove() };
 }
 
-function mount(sourceAnchor: AssistantCitationSourceAnchor, onSave: () => boolean) {
+function mount(
+  sourceAnchor: AssistantCitationSourceAnchor | undefined,
+  onSave: () => boolean,
+  chipCitation: AssistantCitation = citation,
+) {
   function Composer() {
     const [open, setOpen] = useState(true);
     return (
       <AssistantCitationChip
-        citation={citation}
+        citation={chipCitation}
         composer
         commentEditor={{ open, sourceAnchor, onOpenChange: setOpen, onSave }}
       />
@@ -94,13 +116,39 @@ describe("citation comment editing", () => {
     const onSave = vi.fn(() => true);
     await using _screen = await mount(source.sourceAnchor, onSave);
     await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
-    await userEvent.keyboard("needs to *spawn agents*{Shift>}{Enter}{/Shift}twice");
+    // Typing on past the closing marker leaves emphasis, as in the composer.
+    await userEvent.keyboard("needs to *spawn agents* now{Shift>}{Enter}{/Shift}twice");
 
     expect(commentInput()?.querySelector("em")?.textContent).toBe("spawn agents");
     expect(onSave).not.toHaveBeenCalled();
     await userEvent.keyboard("{Enter}");
-    expect(onSave).toHaveBeenCalledWith("needs to *spawn agents*\ntwice");
+    expect(onSave).toHaveBeenCalledWith("needs to *spawn agents* now\ntwice");
     expect(commentInput()).toBeNull();
+  });
+});
+
+describe("citation comment dictation", () => {
+  it("inserts a transcript at the editor's caret and keeps typing after it", async () => {
+    using source = setup();
+    const onSave = vi.fn(() => true);
+    await using _screen = await mount(source.sourceAnchor, onSave, {
+      ...citation,
+      comment: "hello world",
+    });
+    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
+    await userEvent.keyboard("{ArrowLeft>6/}");
+    expect(mocks.dictation!.readDraft()).toEqual({
+      text: "hello world",
+      selection: { start: 5, end: 5 },
+    });
+
+    await act(async () =>
+      mocks.dictation!.commitDraft("hello dictated world", { start: 14, end: 14 }),
+    );
+    await vi.waitFor(() => expect(commentInput()?.textContent).toBe("hello dictated world"));
+    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
+    await userEvent.keyboard("!{Enter}");
+    expect(onSave).toHaveBeenCalledWith("hello dictated! world");
   });
 });
 
@@ -141,7 +189,47 @@ describe("citation comment source disappearance", () => {
   });
 });
 
+describe("citation comment caret", () => {
+  it("opens a saved comment with the caret after its end, scrolled into view", async () => {
+    using _source = setup();
+    const comment = `${"line\n".repeat(40)}end`;
+    const onSave = vi.fn(() => true);
+    await using _screen = await mount(undefined, onSave, { ...citation, comment });
+    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
+    const input = commentInput()!;
+
+    expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
+    await vi.waitFor(() => {
+      const caret = window.getSelection()!.getRangeAt(0).getBoundingClientRect();
+      expect(input.scrollTop).toBeGreaterThan(0);
+      expect(caret.bottom).toBeLessThanOrEqual(input.getBoundingClientRect().bottom);
+    });
+    await userEvent.keyboard("!{Enter}");
+    expect(onSave).toHaveBeenCalledWith(`${comment}!`);
+  });
+});
+
 describe("citation comment popup position", () => {
+  it("opens at its anchor instead of sliding in from the window corner", async () => {
+    using source = setup();
+    await using _screen = await mount(
+      source.sourceAnchor,
+      vi.fn(() => true),
+    );
+    const positioner = () =>
+      document.querySelector<HTMLElement>('[data-slot="popover-positioner"]');
+    await vi.waitFor(() => expect(positioner()?.style.opacity).not.toBe("0"));
+
+    const moves = positioner()!
+      .getAnimations()
+      .filter(
+        (animation) =>
+          animation instanceof CSSTransition &&
+          ["transform", "top", "left"].includes(animation.transitionProperty),
+      );
+    expect(moves).toEqual([]);
+  });
+
   it("stays on screen when the cited text ends in a code block's hidden overflow", async () => {
     using _source = setup();
     const message = document.createElement("div");

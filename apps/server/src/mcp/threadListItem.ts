@@ -56,7 +56,7 @@ export function threadListItemFromShell(
     threadId: shell.id,
     projectId: shell.projectId,
     title: shell.title,
-    link: threadLinkFor(scope, shell.id),
+    link: threadLinkFor(scope, shell.id, shell.title),
     createdBy: shell.createdBy,
     creationSource: shell.creationSource,
     status: shell.activityRunStatus ?? shell.status,

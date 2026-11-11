@@ -1,11 +1,13 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  acceptsSecretReference,
   isSecretSetting,
   type ProviderSettingsFormAnnotation,
   type ProviderSettingsFormControl,
   type ProviderSettingsFormOption,
   type ProviderSettingsFormSchemaAnnotation,
+  type SecretReference,
 } from "@t3tools/contracts";
 import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
 
@@ -27,6 +29,8 @@ export interface ProviderSettingsFieldModel {
   readonly clearWhenEmpty: "omit" | "persist";
   /** Kept in the server's secret store: a saved value arrives as `SECRET_REDACTED` and never shows. */
   readonly secret?: boolean | undefined;
+  /** Typed `SettingsSecretValue`: may name a secret provider reference instead of a value. */
+  readonly acceptsSecretReference?: boolean | undefined;
   readonly defaultBooleanValue?: boolean | undefined;
 
   readonly options?: ReadonlyArray<ProviderSettingsFormOption> | undefined;
@@ -124,6 +128,7 @@ export function deriveProviderSettingsFields(
               : {}),
           clearWhenEmpty: formAnnotation.clearWhenEmpty ?? "omit",
           ...(isSecretSetting(fieldSchema) ? { secret: true } : {}),
+          ...(acceptsSecretReference(fieldSchema) ? { acceptsSecretReference: true } : {}),
           ...(formAnnotation.control === "switch"
             ? { defaultBooleanValue: readFieldBooleanDefault(fieldSchema) }
             : {}),
@@ -207,10 +212,15 @@ export function readProviderConfigBoolean(
 export function nextProviderConfigWithFieldValue(
   config: unknown,
   field: ProviderSettingsFieldModel,
-  value: string | boolean,
+  value: string | boolean | SecretReference,
 ): Record<string, unknown> | undefined {
   const base: Record<string, unknown> =
     config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
+
+  if (typeof value === "object") {
+    base[field.key] = value;
+    return base;
+  }
 
   if (typeof value === "boolean") {
     const emptyBooleanValue = field.defaultBooleanValue ?? false;

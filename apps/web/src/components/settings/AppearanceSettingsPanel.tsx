@@ -20,6 +20,7 @@ import {
 } from "../SidebarStageBackdrop";
 import { isElectron } from "../../env";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
+import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -39,6 +40,7 @@ import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
 import { LiquidGlassPreview } from "./LiquidGlassPreview";
 import { LiquidGlassSettings } from "./LiquidGlassSettings";
+import { ThreadDetailsItemsRow } from "./ThreadDetailsItemsRow";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -110,6 +112,20 @@ export function AppearanceSettingsPanel() {
     environmentIdentificationOptionList.find(
       ([value]) => value === settings.environmentIdentificationMode,
     )?.[1] ?? ENVIRONMENT_IDENTIFICATION_LABELS[settings.environmentIdentificationMode];
+  const effectiveEnvironmentIdentificationMode = useEnvironmentIdentificationMode();
+  const themeHidesEnvironmentArtwork =
+    effectiveEnvironmentIdentificationMode === "pill" &&
+    resolveSidebarStageBackdropVariant(
+      environmentStageLabel,
+      settings.environmentIdentificationMode,
+    ) !== null;
+  const environmentIdentificationDescription = themeHidesEnvironmentArtwork
+    ? environmentStageVariant
+      ? "Only built-in themes show artwork, so this theme shows the version pill."
+      : "Only built-in themes show artwork."
+    : environmentStageVariant
+      ? "Choose how Dev and Nightly environments are identified."
+      : "Show Dev or Nightly artwork in the sidebar header.";
   const glassOpacityRatio =
     (settings.glassOpacity - MIN_GLASS_OPACITY) / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY);
   const glassOpacitySliderStyle = {
@@ -232,6 +248,7 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+        <ThreadDetailsItemsRow />
         <SettingsRow
           {...searchableSetting("setting-floating-panels")}
           description="Float the sidebar, right panel, and terminal drawer as rounded glass cards with a margin from the window edges."
@@ -390,11 +407,10 @@ export function AppearanceSettingsPanel() {
             }
             description={
               <>
-                Refract the backdrop behind the composer, menus, and dialogs using the selected
-                theme and glass opacity. Chromium-only; other browsers keep the flat frost.
+                Refract the backdrop behind the composer, menus, and dialogs. Chromium only; other
+                browsers keep the flat frost.
                 <span className="mt-1 block text-warning-foreground">
-                  Performance warning: may increase GPU usage, reduce frame rates, and use more
-                  battery.
+                  Performance warning: may raise GPU use, lower frame rates, and drain battery.
                 </span>
               </>
             }
@@ -435,11 +451,10 @@ export function AppearanceSettingsPanel() {
             }
             description={
               <>
-                Drift soft bands of the theme&apos;s colors behind the app, strongest on the new
-                thread page and faint elsewhere. Gives liquid glass something to bend.
+                Drift soft bands of theme colors behind the app, strongest on new threads. Gives
+                liquid glass something to bend.
                 <span className="mt-1 block text-warning-foreground">
-                  Performance warning: animates continuously, which keeps the GPU busy, may reduce
-                  frame rates, and uses more battery.
+                  Performance warning: animates continuously, keeping the GPU busy.
                 </span>
               </>
             }
@@ -518,11 +533,7 @@ export function AppearanceSettingsPanel() {
           />
           <SettingsRow
             {...searchableSetting("environment-identification")}
-            description={
-              environmentStageVariant
-                ? "Choose how Dev and Nightly environments are identified."
-                : "Show Dev or Nightly artwork in the sidebar header."
-            }
+            description={environmentIdentificationDescription}
             resetAction={
               settings.environmentIdentificationMode !== DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE ? (
                 <SettingResetButton

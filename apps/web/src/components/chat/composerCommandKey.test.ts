@@ -52,6 +52,7 @@ function createHandler(
     images?: ComposerImageAttachment[];
     files?: ComposerFileAttachment[];
     menuOpen?: boolean;
+    promptSuggestion?: string;
   } = {},
 ) {
   const promptRef = { current: options.prompt ?? "" };
@@ -59,6 +60,7 @@ function createHandler(
   const composerFiles = options.files ?? [];
   const clearComposerAttachments = vi.fn(() => true);
   const dismissComposerTrigger = vi.fn();
+  const dismissPromptSuggestion = vi.fn();
   const handler = composerCommandKeyHandler({
     keybindings: [],
     sendShortcut: "enter",
@@ -67,10 +69,9 @@ function createHandler(
     isCompacting: false,
     followUpBehavior: "queue",
     isSoftwareKeyboardOpen: false,
-    planModeUiEnabled: false,
     isLiteralPendingAnswer: false,
     pendingUserInputs: [],
-    promptHistoryMessages: [],
+    promptHistoryEntries: [],
     promptHistoryPositionRef: { current: null },
     composerDraftTarget: DraftId.make("escape-attachments"),
     promptRef,
@@ -88,7 +89,6 @@ function createHandler(
     setComposerTrigger: vi.fn(),
     setComposerHighlightedItemId: vi.fn(),
     dismissComposerTrigger,
-    toggleInteractionMode: vi.fn(),
     nudgeComposerMenuHighlight: vi.fn(),
     onSelectComposerItem: vi.fn(),
     resolveActiveComposerTrigger: () => ({ trigger: null }),
@@ -96,8 +96,10 @@ function createHandler(
     applyPromptReplacement: () => false,
     submitComposer: vi.fn(),
     clearComposerAttachments,
+    promptSuggestion: options.promptSuggestion ?? null,
+    dismissPromptSuggestion,
   });
-  return { handler, clearComposerAttachments, dismissComposerTrigger };
+  return { handler, clearComposerAttachments, dismissComposerTrigger, dismissPromptSuggestion };
 }
 
 describe("composer Escape", () => {
@@ -144,6 +146,17 @@ describe("composer Escape", () => {
 
     expect(handler("Escape", escapeEvent())).toBe(true);
     expect(dismissComposerTrigger).toHaveBeenCalledOnce();
+    expect(clearComposerAttachments).not.toHaveBeenCalled();
+  });
+
+  it("dismisses a prompt suggestion before clearing attachments", () => {
+    const { handler, clearComposerAttachments, dismissPromptSuggestion } = createHandler({
+      images: [imageAttachment("image-1")],
+      promptSuggestion: "Run the tests",
+    });
+
+    expect(handler("Escape", escapeEvent())).toBe(true);
+    expect(dismissPromptSuggestion).toHaveBeenCalledOnce();
     expect(clearComposerAttachments).not.toHaveBeenCalled();
   });
 });

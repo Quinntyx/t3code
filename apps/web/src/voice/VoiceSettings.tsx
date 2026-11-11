@@ -4,11 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Kbd } from "../components/ui/kbd";
-import {
-  SettingsPageContainer,
-  SettingsSection,
-  SettingsRow,
-} from "../components/settings/settingsLayout";
+import { SettingsSection, SettingsRow } from "../components/settings/settingsLayout";
 import { searchableSetting } from "../components/settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { shortcutLabelForCommand } from "../keybindings";
@@ -21,10 +17,12 @@ const shortcuts = [
   ["voice.disconnect", "Disconnect"],
 ] as const;
 
-export function VoiceSettings() {
+/** The Voice panel's device-only setup, shown on the Voice settings page beside dictation. */
+export function VoicePanelSettings() {
   const [key, setKey] = useState("");
   const [model, setModel] = useState(voiceStorage.model.read);
-  const [status, setStatus] = useState<string | null>(null);
+  const [keyStatus, setKeyStatus] = useState<string | null>(null);
+  const [modelStatus, setModelStatus] = useState<string | null>(null);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const saveKey = async (value: string) => {
     try {
@@ -35,114 +33,109 @@ export function VoiceSettings() {
         // Refresh credentials without reopening a collapsed panel over Settings.
         await voiceSession.open();
       }
-      setStatus(value ? "Key saved on this device." : "Device key removed. Voice is off.");
+      setKeyStatus(value ? "Key saved on this device." : "Device key removed. Voice is off.");
     } catch {
-      setStatus(
+      setKeyStatus(
         "Could not save the device key. Check browser storage or unlock your desktop keyring.",
       );
     }
   };
   return (
-    <SettingsPageContainer>
-      <SettingsSection title="Voice">
-        <SettingsRow
-          {...searchableSetting("voice-key")}
-          title="Device Gemini API key"
-          description={
-            <>
-              Stored only on this device
-              {window.desktopBridge
-                ? ", encrypted by the operating system keyring"
-                : " in browser storage"}
-              . Never sent to a T3 server. Gemini receives conversation and tool results directly.
-              Connecting with a saved key may incur charges.
-            </>
-          }
-        >
-          <div className="space-y-3">
-            <Input
-              type="password"
-              autoComplete="off"
-              aria-label="Device Gemini API key"
-              placeholder="Gemini API key"
-              value={key}
-              onChange={(event) => setKey(event.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                disabled={!key.trim()}
-                onClick={() => {
-                  void saveKey(key);
-                }}
-              >
-                Save device key
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  void saveKey("");
-                }}
-              >
-                Remove key
-              </Button>
-            </div>
-          </div>
-        </SettingsRow>
-        <SettingsRow
-          {...searchableSetting("voice-model")}
-          title="Live model"
-          description="Used on the next connection. Clear to restore the default native-audio model."
-        >
-          <div className="space-y-3">
-            <Input
-              aria-label="Live model"
-              autoComplete="off"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-            />
+    <SettingsSection id="voice-panel" title="Voice panel">
+      <SettingsRow
+        {...searchableSetting("voice-key")}
+        title="Device Gemini API key"
+        description={
+          <>
+            Stored only on this device
+            {window.desktopBridge
+              ? ", encrypted by the operating system keyring"
+              : " in browser storage"}
+            . Never sent to a T3 server. Gemini receives conversation and tool results directly.
+            Connecting with a saved key may incur charges.
+          </>
+        }
+        status={keyStatus ? <span role="status">{keyStatus}</span> : null}
+      >
+        <div className="space-y-3">
+          <Input
+            type="password"
+            autoComplete="off"
+            aria-label="Device Gemini API key"
+            placeholder="Gemini API key"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+          />
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
-              variant="outline"
+              disabled={!key.trim()}
               onClick={() => {
-                try {
-                  voiceStorage.model.write(model);
-                  setModel(voiceStorage.model.read());
-                  setStatus("Device model saved. Used on the next connection.");
-                } catch {
-                  setStatus("Could not save the device model. Check browser storage.");
-                }
+                void saveKey(key);
               }}
             >
-              Save model
+              Save device key
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void saveKey("");
+              }}
+            >
+              Remove key
             </Button>
           </div>
-        </SettingsRow>
-        <SettingsRow
-          {...searchableSetting("voice-shortcuts")}
-          title="Shortcuts"
-          description={
-            <Link to="/settings/keybindings">Customize Voice shortcuts in Keybindings.</Link>
-          }
-        >
-          <dl className="space-y-2 text-sm">
-            {shortcuts.map(([command, label]) => (
-              <div key={command} className="flex items-center justify-between gap-4">
-                <dt>{label}</dt>
-                <dd>
-                  <Kbd>{shortcutLabelForCommand(keybindings, command) ?? "Not assigned"}</Kbd>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </SettingsRow>
-      </SettingsSection>
-      <div className="flex items-center justify-between gap-3 px-4">
-        <p role="status" className="text-sm text-muted-foreground">
-          {status}
-        </p>
-      </div>
-    </SettingsPageContainer>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        {...searchableSetting("voice-model")}
+        title="Live model"
+        description="Used on the next connection. Clear to restore the default native-audio model."
+        status={modelStatus ? <span role="status">{modelStatus}</span> : null}
+      >
+        <div className="space-y-3">
+          <Input
+            aria-label="Live model"
+            autoComplete="off"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              try {
+                voiceStorage.model.write(model);
+                setModel(voiceStorage.model.read());
+                setModelStatus("Device model saved. Used on the next connection.");
+              } catch {
+                setModelStatus("Could not save the device model. Check browser storage.");
+              }
+            }}
+          >
+            Save model
+          </Button>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        {...searchableSetting("voice-shortcuts")}
+        title="Shortcuts"
+        description={
+          <Link to="/settings/keybindings">Customize Voice shortcuts in Keybindings.</Link>
+        }
+      >
+        <dl className="space-y-2 text-sm">
+          {shortcuts.map(([command, label]) => (
+            <div key={command} className="flex items-center justify-between gap-4">
+              <dt>{label}</dt>
+              <dd>
+                <Kbd>{shortcutLabelForCommand(keybindings, command) ?? "Not assigned"}</Kbd>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </SettingsRow>
+    </SettingsSection>
   );
 }

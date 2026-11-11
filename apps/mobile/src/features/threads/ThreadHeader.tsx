@@ -1,137 +1,107 @@
-import { useMemo } from "react";
-import { ThreadDetailsDrawer } from "./ThreadDetailsDrawer";
-import { useThreadDetailsDrawer } from "./thread-list-drawer";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+
 import { AppBar } from "../../components/ui/AppBar";
-import { ScreenHeaderButton } from "../../components/ui/ScreenHeaderButton";
-import type { AppBarAction } from "../../components/ui/AppBar.types";
-import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import type { ThreadInspectorMode } from "./thread-inspector-content-stack";
-import { useThreadHeaderOptions } from "./useThreadHeaderOptions";
-import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
-import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
+import {
+  useAdaptiveWorkspaceLayout,
+  useWorkspacePaneState,
+} from "../layout/AdaptiveWorkspaceLayout";
+import type { ThreadInspectorMode } from "./thread-inspector-navigation";
+import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorkspaceNavigation";
+import {
+  threadTerminalMenu,
+  useThreadGitMenuDefinition,
+  type ThreadGitControlsProps,
+} from "./ThreadGitControls";
+import { ThreadDetailsDrawer } from "./ThreadDetails";
+import { useThreadDetailsDrawer } from "./thread-list-drawer";
 import {
   ThreadFloatingHeader,
   ThreadFloatingTopScrim,
   usesFloatingThreadControls,
 } from "./ThreadFloatingControls";
 
-export function ThreadHeader(
-  props: Parameters<typeof useThreadHeaderOptions>[0] & {
-    readonly project: Parameters<typeof ThreadDetailsDrawer>[0]["project"];
-    readonly cwd: string | null;
-    readonly worktreePath: string | null;
-    readonly fileInspectorSupported: boolean;
-    readonly inspectorMode: ThreadInspectorMode | null;
-    readonly onToggleInspector: () => void;
-    readonly onOpenGitInspector: () => void;
-    readonly onOpenFilesInspector: () => void;
-  },
-) {
+export function ThreadHeader(props: {
+  readonly title: string;
+  readonly subtitle: string;
+  readonly gitControls: ThreadGitControlsProps;
+  readonly onReturnToThread?: () => void;
+  readonly draft?: boolean;
+  readonly project: EnvironmentProject | null;
+  readonly cwd: string | null;
+  readonly worktreePath: string | null;
+  readonly inspectorMode: ThreadInspectorMode | null;
+  readonly onOpenFilesInspector: () => void;
+  readonly onOpenDetailsInspector: () => void;
+}) {
   const goBack = useWorkspaceBackNavigation("threads");
-  const { layout, panes, toggleAuxiliaryPane, composerKeyboardActive } =
-    useAdaptiveWorkspaceLayout();
-  const { onOpenTerminal, onMergeBack } = props.gitControls;
-  const hasThreadCwd = props.cwd !== null;
-  const hasWorkspaceRoot = Boolean(props.project?.workspaceRoot);
+  const { layout, toggleAuxiliaryPane, startNewTask } = useAdaptiveWorkspaceLayout();
+  const { panes } = useWorkspacePaneState();
   const details = useThreadDetailsDrawer();
-  const native = useThreadHeaderOptions({
-    ...props,
-    onOpenThreadDetails: layout.usesSplitView ? undefined : details.openDrawer,
-  });
-  const androidHeaderActions = useMemo<ReadonlyArray<AppBarAction>>(() => {
-    const actions: AppBarAction[] = [];
-    if (props.onReturnToThread) {
-      actions.push({
-        accessibilityLabel: "Return to chat",
-        icon: "chevron.left",
-        onPress: props.onReturnToThread,
-      });
-    }
-    if (hasThreadCwd) {
-      const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
-      actions.push({
-        accessibilityLabel: filesVisible ? "Close files" : "Open files",
-        selected: filesVisible,
-        icon: "folder",
-        onPress: filesVisible ? toggleAuxiliaryPane : props.onOpenFilesInspector,
-      });
-    }
-    if (hasWorkspaceRoot && props.gitControls.canOpenTerminal) {
-      actions.push({
-        accessibilityLabel: "Open terminal",
-        icon: "terminal",
-        onPress: () => onOpenTerminal(null),
-      });
-    }
-    actions.push({
-      accessibilityLabel: "Open git controls",
-      icon: "point.topleft.down.curvedto.point.bottomright.up",
-      onPress: props.onOpenGitInspector,
-    });
-    if (onMergeBack) {
-      actions.push({
-        accessibilityLabel: "Merge back to source",
-        icon: PullRequestGlyph.merged,
-        onPress: onMergeBack,
-      });
-    }
-    return actions;
-  }, [
-    props.inspectorMode,
-    panes.auxiliaryPaneVisible,
-    props.onOpenFilesInspector,
-    onOpenTerminal,
-    onMergeBack,
-    props.onOpenGitInspector,
-    toggleAuxiliaryPane,
-    props.onReturnToThread,
-    hasThreadCwd,
-    hasWorkspaceRoot,
-    props.gitControls.canOpenTerminal,
-  ]);
+  const gitMenu = useThreadGitMenuDefinition(props.gitControls);
+  const terminalMenu = threadTerminalMenu(props.gitControls);
+  const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
+  const detailsVisible = props.inspectorMode === "details" && panes.auxiliaryPaneVisible;
+  // Without columns, the details drawer holds files, git and terminals behind one button.
+  // With them, the same details are an inspector pane beside the thread's own actions.
+  const detailsAction: AppBarAction = layout.usesSplitView
+    ? {
+        accessibilityLabel: detailsVisible ? "Close thread details" : "Open thread details",
+        icon: "sidebar.right",
+        selected: detailsVisible,
+        onPress: detailsVisible ? toggleAuxiliaryPane : props.onOpenDetailsInspector,
+      }
+    : {
+        accessibilityLabel: "Open thread details",
+        icon: "sidebar.right",
+        selected: details.open,
+        onPress: details.openDrawer,
+      };
+  const actions: AppBarAction[] =
+    layout.usesSplitView && props.cwd !== null
+      ? [
+          {
+            accessibilityLabel: filesVisible ? "Close files" : "Open files",
+            icon: "folder",
+            selected: filesVisible,
+            disabled: !props.gitControls.canOpenFiles,
+            separateBackground: false,
+            onPress: filesVisible ? toggleAuxiliaryPane : props.onOpenFilesInspector,
+          },
+          detailsAction,
+        ]
+      : [detailsAction];
+  const menus = layout.usesSplitView
+    ? [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null)
+    : [];
 
   return (
     <>
       {usesFloatingThreadControls(layout) ? (
         <>
           <ThreadFloatingTopScrim />
-          <ThreadFloatingHeader hidden={composerKeyboardActive} />
+          <ThreadFloatingHeader />
         </>
       ) : (
         <AppBar
           title={props.title}
           subtitle={props.subtitle}
-          sidebar={native.sidebar}
-          options={native.options}
-          optionsVersion={native.optionsVersion}
-          trailing={
-            !layout.usesSplitView ? (
-              <ScreenHeaderButton
-                accessibilityLabel="Open thread details"
-                icon="sidebar.right"
-                selected={details.open}
-                onPress={details.openDrawer}
-              />
-            ) : props.fileInspectorSupported && hasThreadCwd ? (
-              <ScreenHeaderButton
-                accessibilityLabel={
-                  props.inspectorMode !== null && panes.auxiliaryPaneVisible
-                    ? "Hide inspector"
-                    : "Show inspector"
+          onBackToList={goBack}
+          onCompose={props.draft ? undefined : startNewTask}
+          backInSplitView={
+            props.onReturnToThread
+              ? {
+                  accessibilityLabel: "Return to chat",
+                  icon: "chevron.left",
+                  onPress: props.onReturnToThread,
                 }
-                icon="sidebar.right"
-                selected={props.inspectorMode !== null && panes.auxiliaryPaneVisible}
-                onPress={props.onToggleInspector}
-              />
-            ) : null
+              : undefined
           }
-          onBack={layout.usesSplitView ? undefined : goBack}
-          actions={androidHeaderActions}
+          actions={actions}
+          menus={menus}
           hideBottomBorder
-          compact={composerKeyboardActive}
         />
       )}
-      {layout.usesSplitView ? native.fallback : null}
       <ThreadDetailsDrawer
         title={props.title}
         project={props.project}

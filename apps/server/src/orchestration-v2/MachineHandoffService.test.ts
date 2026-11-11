@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -269,6 +270,8 @@ it.effect.each([
               faviconPath: null,
               projectIcon: null,
               scripts: [],
+              pinnedAt: null,
+              archivedAt: null,
               createdAt: "2026-10-01T00:00:00Z",
               updatedAt: "2026-10-01T00:00:00Z",
               deletedAt: null,
@@ -292,15 +295,21 @@ it.effect.each([
                   : "feature/transfer";
               expect(command.branch).toBe(expectedBranch);
               expect(git(workspace, "branch", "--show-current")).toBe(command.branch);
-              const parent =
-                layout === "worktree-container" && containerLayout && !configuredDirectory
-                  ? NodePath.dirname(destination)
-                  : NodePath.join(
-                      root,
-                      configuredDirectory ? "configured" : "server-state/worktrees",
-                      NodePath.basename(destination),
-                    );
-              expect(workspace).toBe(NodePath.join(parent, expectedBranch.replaceAll("/", "-")));
+              const directoryName = expectedBranch.replaceAll("/", "-");
+              if (layout === "worktree-container" && containerLayout && !configuredDirectory) {
+                expect(workspace).toBe(NodePath.join(NodePath.dirname(destination), directoryName));
+              } else {
+                expect(NodePath.dirname(workspace)).toBe(
+                  NodePath.join(
+                    root,
+                    configuredDirectory ? "configured" : "server-state/worktrees",
+                    NodePath.basename(destination),
+                  ),
+                );
+                expect(NodePath.basename(workspace)).toMatch(
+                  new RegExp(`^${directoryName}-[0-9a-f]{16}$`),
+                );
+              }
               if (attempts === 1)
                 return yield* new OrchestratorDispatchError({
                   commandId,
@@ -338,7 +347,7 @@ it.effect.each([
       );
       const imported = MachineHandoffService.layer.pipe(
         Layer.provide(Layer.merge(dependencies, manager)),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
       );
       const runImport = Effect.gen(function* () {
         const service = yield* MachineHandoffService.MachineHandoffService;

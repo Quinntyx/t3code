@@ -70,6 +70,7 @@ export const v2Projection: OrchestrationV2ThreadProjection = {
     branch: v2ThreadShell.branch,
     worktreePath: v2ThreadShell.worktreePath,
     activeProviderThreadId: v2ThreadShell.activeProviderThreadId,
+    goal: null,
     lineage: v2ThreadShell.lineage,
     forkedFrom: v2ThreadShell.forkedFrom,
     createdBy: v2ThreadShell.createdBy,

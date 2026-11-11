@@ -44,11 +44,22 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
       ]),
     ),
   });
+  const deviceHiddenThreadKeysAtom = Atom.make(new Set<string>());
+  const hiddenThreadTagsAtom = Atom.family((_id: EnvironmentId) =>
+    Atom.make<ReadonlyArray<string> | null>(null),
+  );
   return {
     registry: AtomRegistry.make(),
     snapshotAtom,
     catalogValueAtom,
-    threads: createEnvironmentThreadShellAtoms({ catalogValueAtom, snapshotAtom }),
+    deviceHiddenThreadKeysAtom,
+    hiddenThreadTagsAtom,
+    threads: createEnvironmentThreadShellAtoms({
+      catalogValueAtom,
+      snapshotAtom,
+      hiddenThreadTagsAtom,
+      deviceHiddenThreadKeysAtom,
+    }),
   };
 }
 
@@ -108,6 +119,63 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
+  it("composes device hides with parent and tag visibility without removing point reads", () => {
+    const { registry, threads, snapshotAtom, deviceHiddenThreadKeysAtom, hiddenThreadTagsAtom } =
+      makeHarness([environmentId, remoteEnvironmentId]);
+    const root = { ...v2ThreadShell, tags: ["private"] };
+    const child = {
+      ...root,
+      id: ThreadId.make("child"),
+      tags: [],
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "fork" as const,
+        sideChat: true,
+      },
+    };
+    const delegated = {
+      ...v2ThreadShell,
+      id: ThreadId.make("delegated"),
+      delegatedFrom: {
+        environmentId,
+        threadId: root.id,
+        title: root.title,
+      },
+    };
+    const key = `${environmentId}:${root.id}`;
+    const offShellKey = `${environmentId}:off-shell`;
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
+    registry.set(snapshotAtom(remoteEnvironmentId), {
+      ...v2ShellSnapshot,
+      threads: [v2ThreadShell, delegated],
+    });
+    const dispose = registry.mount(threads.visibleThreadShellsAtom);
+    registry.set(deviceHiddenThreadKeysAtom, new Set([key, offShellKey]));
+    expect(
+      registry
+        .get(threads.visibleThreadShellsAtom)
+        .map((thread) => `${thread.environmentId}:${thread.id}`),
+    ).toEqual([`${remoteEnvironmentId}:${root.id}`]);
+    expect(registry.get(threads.hiddenThreadKeysAtom).has(`${environmentId}\u0000off-shell`)).toBe(
+      true,
+    );
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id })),
+    ).not.toBeNull();
+    expect(registry.get(threads.threadShellsAtom)).toHaveLength(4);
+    registry.set(hiddenThreadTagsAtom(environmentId), ["private"]);
+    // Showing local hides never reveals a tagged parent or its children.
+    registry.set(deviceHiddenThreadKeysAtom, new Set());
+    expect(registry.get(threads.visibleThreadShellsAtom).map((thread) => thread.id)).toEqual([
+      root.id,
+    ]);
+    registry.set(hiddenThreadTagsAtom(environmentId), null);
+    expect(registry.get(threads.visibleThreadShellsAtom)).toHaveLength(4);
+    dispose();
+    registry.dispose();
+  });
+
   it("keeps a live subagent question inside the parent without flagging its thread", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const root = v2ThreadShell;
@@ -153,6 +221,96 @@ describe("v2 thread shell lists", () => {
     });
     expect(registry.get(inputs)).toEqual([]);
     dispose();
+    registry.dispose();
+  });
+
+  it("rolls a side chat's questions and approvals up to its parent row", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = v2ThreadShell;
+    const sideChat = {
+      ...root,
+      id: ThreadId.make("side-chat"),
+      status: "running" as const,
+      activityRunStatus: "running" as const,
+      latestRunId: RunId.make("side-chat-run"),
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "fork" as const,
+        sideChat: true,
+      },
+    };
+    const request = { id: RuntimeRequestId.make("ask"), createdAt: v2Now };
+    const parentRef = { environmentId, threadId: root.id };
+    const parent = threads.threadShellAtom(parentRef);
+    const inputs = threads.childThreadInputsAtom(parentRef);
+    const disposeParent = registry.mount(parent);
+    const disposeInputs = registry.mount(inputs);
+    const disposeNavigation = registry.mount(threads.navigationThreadShellsAtom);
+    const withRequest = (
+      kind: "user_input" | "command",
+      options: { readonly blocking?: boolean } = {},
+    ) =>
+      registry.set(snapshotAtom(environmentId), {
+        ...v2ShellSnapshot,
+        threads: [
+          root,
+          {
+            ...sideChat,
+            pendingRuntimeRequest: {
+              ...request,
+              kind,
+              ...(options.blocking === undefined ? {} : { blocking: options.blocking }),
+            },
+          },
+        ],
+      });
+
+    withRequest("user_input");
+    expect(registry.get(parent)?.pendingSubagentRequest).toBe("user_input");
+    expect(childThreadInputsTitle(registry.get(inputs))).toBe("Side chat needs input");
+    expect(registry.get(threads.navigationThreadShellsAtom).map((thread) => thread.id)).toEqual([
+      root.id,
+    ]);
+
+    withRequest("user_input", { blocking: false });
+    expect(registry.get(parent)?.pendingSubagentRequest).toBe("user_input");
+
+    withRequest("command");
+    expect(registry.get(parent)?.pendingSubagentRequest).toBe("approval");
+    expect(childThreadInputsTitle(registry.get(inputs))).toBe("Side chat needs approval");
+
+    const helper = {
+      ...sideChat,
+      id: ThreadId.make("side-chat-helper"),
+      creationSource: "mcp" as const,
+      lineage: {
+        ...sideChat.lineage,
+        parentThreadId: sideChat.id,
+        relationshipToParent: "subagent" as const,
+        sideChat: false,
+      },
+      pendingRuntimeRequest: { ...request, kind: "command" as const },
+    };
+    const sideChats = threads.sideChatsAtom(parentRef);
+    const disposeSideChats = registry.mount(sideChats);
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [root, sideChat, helper],
+    });
+    expect(registry.get(parent)?.pendingSubagentRequest).toBe("approval");
+    expect(
+      registry.get(sideChats).map((thread) => [thread.id, thread.pendingSubagentRequest]),
+    ).toEqual([[sideChat.id, "approval"]]);
+
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, sideChat] });
+    expect(registry.get(parent)?.pendingSubagentRequest).toBeNull();
+    expect(registry.get(sideChats).map((thread) => thread.pendingSubagentRequest)).toEqual([null]);
+    expect(registry.get(inputs)).toEqual([]);
+    disposeSideChats();
+    disposeNavigation();
+    disposeInputs();
+    disposeParent();
     registry.dispose();
   });
 

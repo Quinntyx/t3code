@@ -3,7 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 
 export function pycellsSocketPath(stateDir: string, threadId: string): string {
   const identity = JSON.stringify([NodePath.resolve(stateDir), threadId]);
@@ -11,9 +11,10 @@ export function pycellsSocketPath(stateDir: string, threadId: string): string {
   return NodePath.join("/tmp", `pi-pycells-${process.getuid?.() ?? "user"}`, `t3-${digest}.sock`);
 }
 
-export class PycellsLaunchError extends Data.TaggedError("PycellsLaunchError")<{
-  readonly message: string;
-}> {}
+export class PycellsLaunchError extends Schema.TaggedError<PycellsLaunchError>()(
+  "PycellsLaunchError",
+  { message: Schema.String },
+) {}
 
 export const PycellsLauncher = Context.Reference<{
   readonly prepare: (

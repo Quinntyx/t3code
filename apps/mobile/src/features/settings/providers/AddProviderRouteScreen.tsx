@@ -1,11 +1,15 @@
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { providerClients } from "@t3tools/client-runtime/provider-clients";
 import {
-  ACP_REGISTRY_WIZARD_STEPS,
-  ADD_PROVIDER_WIZARD_STEPS,
   deriveAvailableInstanceId,
   deriveInstanceId,
+} from "@t3tools/client-runtime/provider-instance-ids";
+import {
+  ACP_REGISTRY_WIZARD_STEPS,
+  ADD_PROVIDER_WIZARD_STEPS,
+  deriveNewInstanceId,
   LOCAL_ACP_WIZARD_STEPS,
+  reservedInstanceIds,
   resolveAcpRegistryWizardNavigation,
   resolveWizardNavigation,
   updateProviderIdentityDraft,
@@ -17,9 +21,11 @@ import {
   deriveProviderSettingsFields,
   type ProviderClientDefinition,
 } from "@t3tools/client-runtime/provider-settings/form";
+import { managedInstanceLocks } from "@t3tools/client-runtime/provider-settings/instance";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   AuthProvidersManageScope,
+  isManagedDriverAllowed,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveOfficialAcpRegistryIconUrl,
@@ -56,9 +62,11 @@ import {
   useEnvironmentLabel,
   useEnvironmentProviders,
   useProviderInstanceActions,
+  useSecretSources,
 } from "./useProviderSettings";
 
 const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
+const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const DRIVER_OPTIONS = providerClients.definitions.filter(
   (option) => option.driverKind !== ACP_REGISTRY_DRIVER,
 );
@@ -83,9 +91,27 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
   const actions = useProviderInstanceActions(environmentId);
   const providers = useEnvironmentProviders(environmentId);
   const canManage = useEnvironmentScope(environmentId, AuthProvidersManageScope);
+  const sources = useSecretSources(environmentId);
+  // Drivers the administrator's policy leaves out are not offered at all.
+  const policy = actions.managedPolicy;
+  const featuredOptions = FEATURED_DRIVER_OPTIONS.filter((option) =>
+    isManagedDriverAllowed(policy, option.driverKind),
+  );
+  const moreOptions = MORE_DRIVER_OPTIONS.filter((option) =>
+    isManagedDriverAllowed(policy, option.driverKind),
+  );
+  const acpRegistryAllowed = isManagedDriverAllowed(policy, ACP_REGISTRY_DRIVER);
+  // A policy that owns Codex's launch settings also rules out ChatGPT's own runtime.
+  const chatGptAllowed =
+    isManagedDriverAllowed(policy, CODEX_DRIVER) &&
+    managedInstanceLocks(policy, CODEX_DRIVER)?.configKeys.has("setupMode") !== true;
 
   const [step, setStep] = useState(0);
-  const [driver, setDriver] = useState<ProviderDriverKind>(FEATURED_DRIVER_OPTIONS[0]!.driverKind);
+  const [driver, setDriver] = useState<ProviderDriverKind>(
+    () =>
+      (featuredOptions[0] ?? moreOptions[0])?.driverKind ??
+      (acpRegistryAllowed ? ACP_REGISTRY_DRIVER : FEATURED_DRIVER_OPTIONS[0]!.driverKind),
+  );
   const [identityByDriver, setIdentityByDriver] = useState<Record<string, ProviderIdentityDraft>>(
     {},
   );
@@ -100,13 +126,10 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
   const [saving, setSaving] = useState(false);
   const [createdId, setCreatedId] = useState<ProviderInstanceId | null>(null);
 
-  // Codex and Claude default slots run before anyone configures them, so their ids stay reserved.
-  const existingIds = new Set([
-    "codex",
-    "claudeAgent",
-    ...Object.keys(actions.settings.providerInstances ?? {}),
-  ]);
+  const existingIds = reservedInstanceIds(actions.settings.providerInstances);
   const definition = providerClients.get(driver) ?? FEATURED_DRIVER_OPTIONS[0]!;
+  const driverLocks = managedInstanceLocks(policy, driver);
+  const managedConfig = driverLocks && { keys: driverLocks.configKeys, reason: driverLocks.reason };
   const isAcp = driver === ACP_REGISTRY_DRIVER;
   const identity = identityByDriver[driver] ?? {
     label: definition.label,
@@ -115,16 +138,12 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
   };
   const instanceId =
     identity.instanceIdOverride ??
-    deriveAvailableInstanceId(
-      (label) =>
-        !label.trim() || label === definition.label
-          ? isAcp
-            ? `${driver}_custom`
-            : driver
-          : deriveInstanceId(driver, label),
-      identity.label,
+    deriveNewInstanceId({
+      driver,
+      driverLabel: definition.label,
+      label: identity.label,
       existingIds,
-    );
+    });
   const instanceIdError = validateInstanceId(instanceId, existingIds);
   const config = configByDriver[driver] ?? EMPTY_CONFIG;
   const isLocalAcp = isAcp && manualAcp && config.source === "local";
@@ -342,6 +361,8 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                 definition={definition}
                 value={config}
                 disabled={false}
+                sources={sources}
+                managed={managedConfig}
                 onChange={setConfig}
               />
               {isLocalAcp ? (
@@ -349,6 +370,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                   <ProviderEnvironmentVariables
                     environment={localEnvironment}
                     disabled={false}
+                    sources={sources}
                     onChange={setLocalEnvironment}
                   />
                 </View>
@@ -357,17 +379,19 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
             </SettingsSection>
           ) : (
             <>
-              <SettingsSection title="Connect an account">
-                <ListRow
-                  label="Continue with ChatGPT"
-                  description="Sign in a managed Codex account."
-                  onPress={() =>
-                    navigation.navigate("SettingsProviderAddChatGpt", { environmentId })
-                  }
-                />
-              </SettingsSection>
+              {chatGptAllowed ? (
+                <SettingsSection title="Connect an account">
+                  <ListRow
+                    label="Continue with ChatGPT"
+                    description="Sign in a managed Codex account."
+                    onPress={() =>
+                      navigation.navigate("SettingsProviderAddChatGpt", { environmentId })
+                    }
+                  />
+                </SettingsSection>
+              ) : null}
               <SettingsSection title="Providers">
-                {FEATURED_DRIVER_OPTIONS.map((option, index) => (
+                {featuredOptions.map((option, index) => (
                   <DriverRow
                     key={option.driverKind}
                     option={option}
@@ -376,7 +400,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                   />
                 ))}
                 {showMore
-                  ? MORE_DRIVER_OPTIONS.map((option) => (
+                  ? moreOptions.map((option) => (
                       <DriverRow
                         key={option.driverKind}
                         option={option}
@@ -385,8 +409,12 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                       />
                     ))
                   : null}
-                {MORE_DRIVER_OPTIONS.length > 0 ? (
-                  <View className="border-t border-border-subtle">
+                {moreOptions.length > 0 ? (
+                  <View
+                    className={
+                      featuredOptions.length > 0 ? "border-t border-border-subtle" : undefined
+                    }
+                  >
                     <RowPressable
                       accessibilityRole="button"
                       onPress={() => setShowMore((value) => !value)}
@@ -407,18 +435,20 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                   </View>
                 ) : null}
               </SettingsSection>
-              <View className="gap-2">
-                <Text textRole="footnote" className="px-2 font-t3-medium text-foreground-muted">
-                  ACP Registry
-                </Text>
-                <AcpRegistryPicker
-                  environmentId={environmentId}
-                  providerInstances={actions.settings.providerInstances}
-                  onPrepared={prepareAcp}
-                  onManualConfiguration={() => configureAcpManually(false)}
-                  onLocalConfiguration={() => configureAcpManually(true)}
-                />
-              </View>
+              {acpRegistryAllowed ? (
+                <View className="gap-2">
+                  <Text textRole="footnote" className="px-2 font-t3-medium text-foreground-muted">
+                    ACP Registry
+                  </Text>
+                  <AcpRegistryPicker
+                    environmentId={environmentId}
+                    providerInstances={actions.settings.providerInstances}
+                    onPrepared={prepareAcp}
+                    onManualConfiguration={() => configureAcpManually(false)}
+                    onLocalConfiguration={() => configureAcpManually(true)}
+                  />
+                </View>
+              ) : null}
             </>
           )
         ) : null}
@@ -512,6 +542,8 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                 definition={definition}
                 value={config}
                 disabled={false}
+                sources={sources}
+                managed={managedConfig}
                 onChange={setConfig}
               />
             ) : (

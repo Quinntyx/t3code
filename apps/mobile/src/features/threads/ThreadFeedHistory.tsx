@@ -23,8 +23,16 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
-import type { ThreadFeedHistoryControls } from "./ThreadFeed";
 import { INITIAL_THREAD_HISTORY_PULL, reduceThreadHistoryPull } from "./thread-history-pull";
+
+export interface ThreadFeedHistoryControls {
+  readonly hasMoreHistory: boolean;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onLoadEarlier: () => void;
+  /** Loads earlier history down to the entry, in one request. */
+  readonly onLoadThrough: (entryId: string) => void;
+}
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const RING_CIRCUMFERENCE = 2 * Math.PI * 10;

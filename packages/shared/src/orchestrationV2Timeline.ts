@@ -5,7 +5,8 @@ import type {
   OrchestrationV2UserMessageInputIntent,
 } from "@t3tools/contracts";
 
-type TimelineRun = Pick<OrchestrationV2Run, "id" | "status">;
+type TimelineRun = Pick<OrchestrationV2Run, "id" | "status"> &
+  Partial<Pick<OrchestrationV2Run, "startedAt">>;
 type TimelineRunAttempt = Pick<OrchestrationV2RunAttempt, "runId" | "rootNodeId" | "status">;
 type TimelineTurnItem = Pick<OrchestrationV2TurnItem, "type" | "runId" | "nodeId"> & {
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
@@ -62,6 +63,16 @@ export function isOrchestrationV2TurnItemVisible(input: {
     return false;
   }
 
+  if (
+    item.type === "notification" &&
+    item.runId !== null &&
+    input.runs.some(
+      (run) => run.id === item.runId && run.status === "cancelled" && run.startedAt === null,
+    )
+  ) {
+    return false;
+  }
+
   return !isOrchestrationV2SupersededInterrupt({
     item,
     attempts: input.attempts,
@@ -74,7 +85,15 @@ export function createOrchestrationV2TurnItemVisibility(input: {
   readonly attempts: ReadonlyArray<TimelineRunAttempt>;
   readonly items: ReadonlyArray<TimelineTurnItem>;
 }): (item: TimelineTurnItem) => boolean {
-  const statuses = new Map(input.runs.map((run) => [run.id, run.status]));
+  const statuses = new Map<TimelineRun["id"], TimelineRun["status"]>();
+  const cancelledBeforeStart = new Set<TimelineRun["id"]>();
+  for (const run of input.runs) {
+    if (run.status === "rolled_back" || run.status === "cancelled")
+      statuses.set(run.id, run.status);
+    else statuses.delete(run.id);
+    if (run.status === "cancelled" && run.startedAt === null) cancelledBeforeStart.add(run.id);
+    else cancelledBeforeStart.delete(run.id);
+  }
   const supersededRoots = new Map<
     TimelineRunAttempt["runId"],
     Set<TimelineRunAttempt["rootNodeId"]>
@@ -85,12 +104,18 @@ export function createOrchestrationV2TurnItemVisibility(input: {
     if (roots === undefined) supersededRoots.set(attempt.runId, (roots = new Set()));
     roots.add(attempt.rootNodeId);
   }
-  const interruptRuns = new Set(
-    input.items.filter((item) => item.type === "run_interrupt_request").map((item) => item.runId),
-  );
+  if (statuses.size === 0 && supersededRoots.size === 0) return () => true;
+  const interruptRuns = new Set<TimelineTurnItem["runId"]>();
+  if (supersededRoots.size > 0) {
+    for (const item of input.items) {
+      if (item.type === "run_interrupt_request") interruptRuns.add(item.runId);
+    }
+  }
   return (item) => {
     const status = item.runId === null ? undefined : statuses.get(item.runId);
     if (status === "rolled_back") return false;
+    if (item.type === "notification" && item.runId !== null && cancelledBeforeStart.has(item.runId))
+      return false;
     if (
       status === "cancelled" &&
       item.type === "user_message" &&

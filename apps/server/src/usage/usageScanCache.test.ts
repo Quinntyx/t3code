@@ -161,7 +161,7 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([5, 6, 7, 8])(
+  it.each([5, 6, 7, 8, 10])(
     "retains v%s history and compatible positions but invalidates obsolete state",
     (version) => {
       const original = cacheWith([["/gone.jsonl", 100, [record({ speed: "fast" })]]]);
@@ -218,30 +218,51 @@ describe("scan cache round trip", () => {
       };
 
       const restored = decodeScanCache(JSON.parse(JSON.stringify(legacy)), TEST_FORMAT_MAP);
-      expect(restored.get("/gone.jsonl")).toEqual(original.get("/gone.jsonl"));
+      expect(restored.get("/gone.jsonl")).toEqual(
+        version >= 10
+          ? original.get("/gone.jsonl")
+          : {
+              ...original.get("/gone.jsonl"),
+              size: -1,
+              position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+            },
+      );
       expect(restored.get("/gone-codex.jsonl")).toEqual({
         ...original.get("/gone-codex.jsonl"),
         size: -1,
         position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
       });
-      expect(restored.get("/clean-codex.jsonl")).toEqual(
-        version >= 8
-          ? cleanCodex
-          : {
-              ...cleanCodex,
-              size: -1,
-              position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
-            },
-      );
-      expect(restored.get("/gone-pi.jsonl")).toEqual(
-        version >= 6
-          ? original.get("/gone-pi.jsonl")
-          : {
-              ...original.get("/gone-pi.jsonl"),
-              size: -1,
-              position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
-            },
-      );
+      expect(restored.get("/clean-codex.jsonl")).toEqual({
+        ...cleanCodex,
+        size: version >= 8 ? cleanCodex.size : -1,
+        position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+      });
+      expect(restored.get("/gone-pi.jsonl")).toEqual({
+        ...original.get("/gone-pi.jsonl"),
+        size: -1,
+        position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+      });
+    },
+  );
+
+  it.each([
+    { provider: "claude", version: 9 },
+    { provider: "pi", version: 11 },
+    { provider: "grok", version: 11 },
+    { provider: "muse", version: 11 },
+  ] as const)(
+    "re-parses $provider v$version after accounting changes without dropping history",
+    ({ provider, version }) => {
+      const original = cacheWith([["/history.jsonl", 100, [record({ provider })]]]);
+      original.set("/history.jsonl", { ...original.get("/history.jsonl")!, provider });
+      const previous = { ...JSON.parse(makeScanCacheWriter()(original, {})), version };
+
+      const restored = decodeScanCache(JSON.parse(JSON.stringify(previous)), TEST_FORMAT_MAP);
+      expect(restored.get("/history.jsonl")).toEqual({
+        ...original.get("/history.jsonl"),
+        size: -1,
+        position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+      });
     },
   );
 

@@ -2,9 +2,11 @@ import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   resolveProviderInstanceEnabled,
+  type ManagedPolicySummary,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
+  type SecretReference,
   type ServerProvider,
   type ServerProviderModel,
   type ServerSettings,
@@ -15,19 +17,27 @@ import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 
 import { providerClients } from "../providerClients.ts";
+import { reconcileRowsDraft, seedRowsDraft, type RowsDraft } from "./form.ts";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 let environmentVariableDraftId = 0;
-export const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
+const DRAFT_ROW_ID_PREFIX = "provider-env-";
+export const nextEnvironmentVariableDraftId = () =>
+  `${DRAFT_ROW_ID_PREFIX}${environmentVariableDraftId++}`;
 
 export type EnvironmentDraftRow = {
   readonly id: string;
   readonly name: string;
-  readonly value: string;
+  readonly value: ProviderInstanceEnvironmentVariable["value"];
   readonly sensitive: boolean;
   readonly valueRedacted?: boolean;
 };
+
+export type EnvironmentRowsDraft = RowsDraft<
+  ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  EnvironmentDraftRow
+>;
 
 function makeEnvironmentDraftRow(
   variable: ProviderInstanceEnvironmentVariable,
@@ -42,11 +52,18 @@ function makeEnvironmentDraftRow(
   };
 }
 
-export const toEnvironmentDraftRows = (
-  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
-) => environment.map(makeEnvironmentDraftRow);
+const toEnvironmentDraftRows = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) =>
+  environment.map(makeEnvironmentDraftRow);
 
-export function providerEnvironmentsEqual(
+function environmentValuesEqual(
+  left: ProviderInstanceEnvironmentVariable["value"],
+  right: ProviderInstanceEnvironmentVariable["value"],
+): boolean {
+  if (typeof left === "string" || typeof right === "string") return left === right;
+  return left.provider === right.provider && left.reference === right.reference;
+}
+
+function providerEnvironmentsEqual(
   left: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
   right: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
 ): boolean {
@@ -57,12 +74,41 @@ export function providerEnvironmentsEqual(
       return (
         other !== undefined &&
         variable.name === other.name &&
-        variable.value === other.value &&
+        environmentValuesEqual(variable.value, other.value) &&
         variable.sensitive === other.sensitive &&
         variable.valueRedacted === other.valueRedacted
       );
     })
   );
+}
+
+export const seedEnvironmentDraft = (
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+): EnvironmentRowsDraft => seedRowsDraft(environment, toEnvironmentDraftRows);
+
+/**
+ * Reseeds the variable rows on an outside change, keeping rows the server never acknowledged so a
+ * half-typed variable survives another device's write.
+ */
+export function reconcileEnvironmentDraft(
+  stored: EnvironmentRowsDraft,
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+): EnvironmentRowsDraft {
+  const draft = reconcileRowsDraft(
+    stored,
+    environment,
+    providerEnvironmentsEqual,
+    toEnvironmentDraftRows,
+  );
+  if (draft.rows === stored.rows) return draft;
+  const acknowledged = new Set(stored.seen.map((variable) => variable.name));
+  const unpublished = stored.rows.filter(
+    (row) =>
+      row.id.startsWith(DRAFT_ROW_ID_PREFIX) &&
+      !acknowledged.has(row.name) &&
+      !draft.rows.some((incoming) => incoming.name === row.name),
+  );
+  return unpublished.length > 0 ? { ...draft, rows: [...draft.rows, ...unpublished] } : draft;
 }
 
 export function readConfigString(config: unknown, key: string): string | null {
@@ -93,7 +139,7 @@ export function publishEnvironmentDraftRows(
     if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
       if (
         name.length > 0 ||
-        row.value.length > 0 ||
+        row.value !== "" ||
         row.sensitive !== true ||
         row.valueRedacted !== undefined
       ) {
@@ -105,6 +151,15 @@ export function publishEnvironmentDraftRows(
     published.push({ ...rest, name });
   }
   return published;
+}
+
+/** The variable row pointed at a secret provider reference, or back at a value when cleared. */
+export function environmentDraftRowWithSecret(
+  row: EnvironmentDraftRow,
+  secret: SecretReference | undefined,
+): EnvironmentDraftRow {
+  const { valueRedacted: _valueRedacted, ...rest } = row;
+  return { ...rest, value: secret ?? "" };
 }
 
 export function deriveProviderModelsForDisplay(input: {
@@ -183,6 +238,17 @@ export function nextProviderEnvironmentWithFieldValue(
   return next;
 }
 
+export function nextProviderEnvironmentWithFieldSecret(
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
+  field: ProviderEnvironmentField,
+  secret: SecretReference | undefined,
+): ReadonlyArray<ProviderInstanceEnvironmentVariable> {
+  const others = providerEnvironmentWithoutNames(environment, new Set([field.name]));
+  return secret === undefined
+    ? others
+    : [...others, { name: field.name, value: secret, sensitive: true }];
+}
+
 export function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<string>) {
   const currentSet = new Set(current);
   const nextSet = new Set(next.map((model) => model.trim()).filter(Boolean));
@@ -201,6 +267,7 @@ export interface ProviderInstanceRow {
 }
 
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
 
 /** Default slots for every driver this build knows, then each configured custom instance. */
 export function deriveProviderInstanceRows(input: {
@@ -283,4 +350,65 @@ export function deriveProviderInstanceRows(input: {
     }
   }
   return rows;
+}
+
+export function providerInstanceName(instance: ProviderInstanceConfig): string {
+  return (
+    instance.displayName?.trim() ||
+    providerClients.get(instance.driver)?.label ||
+    String(instance.driver)
+  );
+}
+
+/** Removing or resetting drops the instance's saved settings; a reset can also turn it off. */
+export function providerInstanceRemovalPrompt(
+  operation: "remove" | "reset",
+  instance: ProviderInstanceConfig,
+): { readonly question: string; readonly detail: string } {
+  const name = providerInstanceName(instance);
+  const turnsOff =
+    operation === "reset" &&
+    resolveProviderInstanceEnabled(instance) &&
+    !resolveProviderInstanceEnabled({ driver: instance.driver });
+  return {
+    question:
+      operation === "remove"
+        ? `Remove the ${name} provider instance?`
+        : `Reset the ${name} provider to its defaults?`,
+    detail: `Its saved settings, including any custom binary path, will be removed.${turnsOff ? " It will also be turned off." : ""}`,
+  };
+}
+
+/** The registry agent whose managed binary T3 installed for this instance, if any. */
+export function managedAcpRegistryAgentId(instance: ProviderInstanceConfig): string | null {
+  if (instance.driver !== ACP_REGISTRY_DRIVER) return null;
+  if (readConfigString(instance.config, "source") === "local") return null;
+  return readConfigString(instance.config, "agentId");
+}
+
+export interface ManagedInstanceLocks {
+  /** Keys inside the instance's `config` users cannot change. */
+  readonly configKeys: ReadonlySet<string>;
+  /** Environment variables users cannot edit, rename, or remove. */
+  readonly environmentNames: ReadonlySet<string>;
+  /** Under a runtime-mode ceiling every variable is the administrator's, not only named ones. */
+  readonly wholeEnvironment: boolean;
+  readonly reason: string;
+}
+
+/** What the policy pins on instances of `driver`, or undefined when nothing is. */
+export function managedInstanceLocks(
+  policy: ManagedPolicySummary | undefined,
+  driver: ProviderDriverKind,
+): ManagedInstanceLocks | undefined {
+  const paths = policy?.limits?.providers?.lockedInstanceFields?.[driver];
+  if (policy === undefined || paths === undefined || paths.length === 0) return undefined;
+  const fieldsUnder = (prefix: string) =>
+    new Set(paths.flatMap((path) => (path.startsWith(prefix) ? [path.slice(prefix.length)] : [])));
+  return {
+    configKeys: fieldsUnder("config."),
+    environmentNames: fieldsUnder("environment."),
+    wholeEnvironment: paths.includes("environment"),
+    reason: `Managed by ${policy.organization}.`,
+  };
 }

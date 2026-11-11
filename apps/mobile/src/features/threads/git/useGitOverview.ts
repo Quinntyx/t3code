@@ -10,7 +10,7 @@ import {
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
-import { useState } from "react";
+import { use, useState } from "react";
 
 import { useEnvironmentQuery } from "../../../state/query";
 import { useThreadSelection } from "../../../state/use-thread-selection";
@@ -18,6 +18,7 @@ import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import { vcsEnvironment } from "../../../state/vcs";
+import { InspectorSheetContext } from "../../layout/workspace-inspector-sheet";
 import { statusSummary } from "./gitSheetComponents";
 import { useLinkedPullRequestLines } from "../LinkedPullRequestList";
 import { useLinkedPullRequestActions } from "../useLinkedPullRequestActions";
@@ -35,6 +36,12 @@ export function useGitOverview(props: {
   const { presentation, onNavigate } = props;
   const environmentId = EnvironmentId.make(props.environmentId);
   const threadId = ThreadId.make(props.threadId);
+  const closeInspectorSheet = use(InspectorSheetContext);
+  const presentRoute = (present: () => void) => {
+    onNavigate?.();
+    if (closeInspectorSheet) closeInspectorSheet(present);
+    else present();
+  };
   const { selectedThread, selectedThreadProject, selectedEnvironmentRuntime } =
     useThreadSelection();
   const openPullRequest = useOpenPullRequest({
@@ -161,23 +168,24 @@ export function useGitOverview(props: {
       !input.featureBranch &&
       requiresDefaultBranchConfirmation(input.action, isDefaultRef)
     ) {
-      onNavigate?.();
-      navigation.navigate("GitConfirm", {
-        environmentId: String(environmentId),
-        threadId: String(threadId),
-        confirmAction: confirmableAction,
-        branchName,
-        includesCommit: String(
-          (input.action === "commit_push" || input.action === "commit_push_pr") &&
-            !!gitStatus?.hasWorkingTreeChanges,
-        ),
-      });
+      presentRoute(() =>
+        navigation.navigate("GitConfirm", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+          confirmAction: confirmableAction,
+          branchName,
+          includesCommit: String(
+            (input.action === "commit_push" || input.action === "commit_push_pr") &&
+              !!gitStatus?.hasWorkingTreeChanges,
+          ),
+        }),
+      );
       return;
     }
 
-    if (presentation === "sheet") {
-      navigation.goBack();
-    }
+    // Close a sheet so the thread shows the action's progress.
+    if (presentation === "sheet") navigation.goBack();
+    else closeInspectorSheet?.();
     await gitActions.onRunSelectedThreadGitAction(input);
   };
 
@@ -200,11 +208,12 @@ export function useGitOverview(props: {
     }
     if (!canWriteSourceControl) return;
     if (item.dialogAction === "commit") {
-      onNavigate?.();
-      navigation.navigate("GitCommit", {
-        environmentId: String(environmentId),
-        threadId: String(threadId),
-      });
+      presentRoute(() =>
+        navigation.navigate("GitCommit", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+        }),
+      );
       return;
     }
     if (item.dialogAction === "push") {
@@ -217,14 +226,22 @@ export function useGitOverview(props: {
   };
 
   const openReview = () => {
-    onNavigate?.();
     const params = { environmentId, threadId };
-    navigation.dispatch(
-      presentation === "sheet"
-        ? StackActions.replace("ThreadReview", params)
-        : CommonActions.navigate("ThreadReview", params),
-    );
+    if (presentation === "sheet") {
+      onNavigate?.();
+      navigation.dispatch(StackActions.replace("ThreadReview", params));
+    } else {
+      presentRoute(() => navigation.dispatch(CommonActions.navigate("ThreadReview", params)));
+    }
   };
+
+  const openBranches = () =>
+    presentRoute(() =>
+      navigation.navigate("GitBranches", {
+        environmentId: String(environmentId),
+        threadId: String(threadId),
+      }),
+    );
 
   // Background refreshes also report pending; using that query flag would stick the RefreshControl spinner.
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -251,6 +268,7 @@ export function useGitOverview(props: {
     runQuickAction,
     pull: () => void gitActions.onPullSelectedThreadBranch(),
     openReview,
+    openBranches,
     openUrl,
     openLinkedPullRequest,
     isRefreshing,

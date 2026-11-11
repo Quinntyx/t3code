@@ -198,6 +198,88 @@ describe("AzureDevOpsCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("looks up a project/repository path as that project's repository", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            JSON.stringify({
+              name: "repo",
+              webUrl: "https://dev.azure.com/acme/project/_git/repo",
+              remoteUrl: "https://dev.azure.com/acme/project/_git/repo",
+              sshUrl: "git@ssh.dev.azure.com:v3/acme/project/repo",
+              project: { name: "project" },
+            }),
+          ),
+        ),
+      );
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      yield* az.getRepositoryCloneUrls({ cwd: "/somewhere", repository: "project/repo" });
+
+      assert.deepStrictEqual(mockRun.mock.calls.at(-1)?.[0].args, [
+        "repos",
+        "show",
+        "--detect",
+        "true",
+        "--repository",
+        "repo",
+        "--project",
+        "project",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("percent-encodes the source branch while preserving recognized ref prefixes", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      yield* az.listPullRequests({
+        cwd: "/somewhere",
+        headSelector: "user/feat/1-(#2)-slug",
+        targetRepository: "base-project/base-repo",
+        state: "open",
+      });
+
+      const args = mockRun.mock.calls.at(-1)?.[0].args ?? [];
+      assert.strictEqual(args[args.indexOf("--source-branch") + 1], "user%2Ffeat%2F1-(%232)-slug");
+      assert.include(args, "--repository=base-repo");
+      assert.include(args, "--project=base-project");
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+      yield* az.createPullRequest({
+        cwd: "/somewhere",
+        baseBranch: "main",
+        headSelector: "feature",
+        target: { repository: "base-project/base-repo", refName: "main" },
+        title: "Changes",
+        bodyFile: "/body.md",
+      });
+      const createArgs = mockRun.mock.calls.at(-1)?.[0].args ?? [];
+      assert.include(createArgs, "--repository=base-repo");
+      assert.include(createArgs, "--project=base-project");
+
+      for (const prefix of ["refs/heads/", "refs/pull/", "refs/tags/"]) {
+        mockRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));
+        yield* az.listPullRequests({
+          cwd: "/somewhere",
+          headSelector: "fallback",
+          source: { refName: `${prefix}user/feat/1-(#2)-slug` },
+          state: "open",
+        });
+
+        const refArgs = mockRun.mock.calls.at(-1)?.[0].args ?? [];
+        assert.strictEqual(
+          refArgs[refArgs.indexOf("--source-branch") + 1],
+          `${prefix}user%2Ffeat%2F1-(%232)-slug`,
+        );
+      }
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("preserves VCS causes without copying upstream details into messages", () =>
     Effect.gen(function* () {
       const cause = new VcsProcessExitError({

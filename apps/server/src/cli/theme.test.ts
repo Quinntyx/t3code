@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, describe, it } from "@effect/vitest";
@@ -15,12 +16,14 @@ import { cli } from "../binCli.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-// Windows chmod cannot force these directory or file permission failures.
-const windowsHost = HostProcess.Platform.defaultValue() === "win32";
+// Windows chmod cannot force these directory or file permission failures, and root ignores them.
+const chmodIgnored = HostProcess.Platform.defaultValue() === "win32" || process.getuid?.() === 0;
 
 const runCli = (args: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
-    Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)),
+    Effect.provide(
+      Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer, TestConsole.layer),
+    ),
   );
 
 const makeBaseDir = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-theme-cli-"));
@@ -129,7 +132,7 @@ describe("t3 theme", () => {
     }),
   );
 
-  it.effect.skipIf(windowsHost)("restores the previous theme when a re-publish fails to set", () =>
+  it.effect.skipIf(chmodIgnored)("restores the previous theme when a re-publish fails to set", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
       writeSettings(baseDir, {});
@@ -153,7 +156,7 @@ describe("t3 theme", () => {
     }),
   );
 
-  it.effect.skipIf(windowsHost)("refuses to write when the settings file cannot be read", () =>
+  it.effect.skipIf(chmodIgnored)("refuses to write when the settings file cannot be read", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
       writeSettings(baseDir, { enableProviderUpdateChecks: false });

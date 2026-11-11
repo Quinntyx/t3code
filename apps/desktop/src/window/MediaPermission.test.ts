@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { allowsAppMicrophone, installAppMediaPermissions } from "./MediaPermission.ts";
+import { allowsAppMedia, installAppMediaPermissions } from "./MediaPermission.ts";
 import type { Session, WebContents } from "electron";
 
-describe("trusted app microphone permission", () => {
+describe("trusted app media permission", () => {
   const base = {
     appUrl: "t3code://app",
     contentsId: 7,
@@ -13,9 +13,9 @@ describe("trusted app microphone permission", () => {
     mediaTypes: ["audio"],
   };
   it("allows audio only for the installed main app, including its development origin", () => {
-    expect(allowsAppMicrophone(base)).toBe(true);
+    expect(allowsAppMedia(base)).toBe(true);
     expect(
-      allowsAppMicrophone({
+      allowsAppMedia({
         ...base,
         appUrl: "http://localhost:5173",
         mainUrl: "http://localhost:5173/a",
@@ -23,7 +23,7 @@ describe("trusted app microphone permission", () => {
       }),
     ).toBe(true);
   });
-  it("installs request and check handlers that deny preview contents, camera and display capture", () => {
+  it("installs request and check handlers that deny preview contents and the camera", () => {
     let request!: NonNullable<Parameters<Session["setPermissionRequestHandler"]>[0]>;
     let check!: NonNullable<Parameters<Session["setPermissionCheckHandler"]>[0]>;
     const main = {
@@ -91,7 +91,34 @@ describe("trusted app microphone permission", () => {
       );
       expect(result).toBe(false);
     }
-    expect(check(main, "display-capture", "t3code://app", { isMainFrame: true })).toBe(false);
+    // Preview recording calls getDisplayMedia from the app; its display-media handler picks the tab.
+    for (const [permission, securityOrigin, allowed] of [
+      ["media", undefined, true],
+      ["display-capture", undefined, true],
+      ["media", "https://preview.example", false],
+    ] as const) {
+      result = !allowed;
+      request(
+        main,
+        permission,
+        (value) => {
+          result = value;
+        },
+        {
+          requestingUrl: "t3code://app/",
+          isMainFrame: true,
+          mediaTypes: [],
+          ...(securityOrigin ? { securityOrigin } : {}),
+        },
+      );
+      expect(result).toBe(allowed);
+    }
+    expect(check(main, "display-capture", "t3code://app", { isMainFrame: true })).toBe(true);
+    expect(
+      check({ ...main, id: 8 } as WebContents, "display-capture", "t3code://app", {
+        isMainFrame: true,
+      }),
+    ).toBe(false);
     for (const permission of [
       "notifications",
       "clipboard-read",
@@ -119,12 +146,11 @@ describe("trusted app microphone permission", () => {
       { mainUrl: "https://evil.example" },
       { mediaTypes: ["video"] },
       { mediaTypes: ["audio", "video"] },
-      { mediaTypes: [] },
       { mediaTypes: ["unknown"] },
       { requestingUrl: "t3://preview/" },
       { appUrl: "http://localhost:5173", requestingUrl: "http://localhost:5174" },
       { requestingUrl: "not a url" },
     ])
-      expect(allowsAppMicrophone({ ...base, ...override })).toBe(false);
+      expect(allowsAppMedia({ ...base, ...override })).toBe(false);
   });
 });

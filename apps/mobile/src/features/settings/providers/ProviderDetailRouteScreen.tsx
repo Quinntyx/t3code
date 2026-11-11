@@ -5,8 +5,12 @@ import { deriveProviderSettingsFields } from "@t3tools/client-runtime/provider-s
 import {
   deriveProviderInstanceRows,
   deriveProviderModelsForDisplay,
+  managedInstanceLocks,
+  nextProviderEnvironmentWithFieldSecret,
   nextProviderEnvironmentWithFieldValue,
   providerEnvironmentWithoutNames,
+  providerInstanceName,
+  providerInstanceRemovalPrompt,
 } from "@t3tools/client-runtime/provider-settings/instance";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -14,6 +18,9 @@ import {
 } from "@t3tools/client-runtime/provider-settings/status";
 import {
   AuthProvidersManageScope,
+  disallowedProviderMessage,
+  isManagedDriverAllowed,
+  isManagedSettingPath,
   type AcpRegistryUrlAuthAction,
   type EnvironmentId,
   type ProviderInstanceConfig,
@@ -58,7 +65,6 @@ import {
   describeProviderInstance,
   isProviderUpdating,
   ProviderInstanceGlyph,
-  providerDisplayName,
   ProviderStatusDot,
 } from "./ProviderStatus";
 import {
@@ -68,6 +74,7 @@ import {
   useModelPreferences,
   usePendingSwitch,
   useProviderInstanceActions,
+  useSecretSources,
 } from "./useProviderSettings";
 
 type Params = {
@@ -98,7 +105,7 @@ function ProviderDetail({ environmentId, instanceId }: Params) {
   const provider = providers.find((candidate) => candidate.instanceId === instanceId);
   const instance = row ? (row.explicitInstance ?? { driver: row.driver }) : null;
   return (
-    <SettingsScreen title={instance ? providerDisplayName(instance) : "Provider"}>
+    <SettingsScreen title={instance ? providerInstanceName(instance) : "Provider"}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -139,12 +146,20 @@ function ProviderEditor(props: {
 }) {
   const { environmentId, instanceId, instance, provider, actions } = props;
   const navigation = useNavigation();
-  const readOnly = !actions.canManage;
+  const sources = useSecretSources(environmentId);
+  const policy = actions.managedPolicy;
+  // An instance the policy pins as a whole is the administrator's to change, not the user's.
+  const instanceManaged = isManagedSettingPath(policy, `providerInstances.${instanceId}`);
+  const readOnly = !actions.canManage || instanceManaged;
+  const locks = managedInstanceLocks(policy, instance.driver);
   const definition = providerClients.get(instance.driver);
+  const driverDenial = isManagedDriverAllowed(policy, instance.driver)
+    ? undefined
+    : disallowedProviderMessage(policy?.organization, definition?.label ?? String(instance.driver));
   const status = describeProviderInstance(instance, provider);
   const enabledSwitch = usePendingSwitch(status.enabled);
   const modelPreferences = useModelPreferences(actions.settings).preferences;
-  const name = providerDisplayName(instance);
+  const name = providerInstanceName(instance);
   // Each upsert carries the whole instance, so edits build on the last write until its echo lands.
   const [lastWrite, setLastWrite] = useState<ProviderInstanceConfig | null>(null);
   if (lastWrite !== null && JSON.stringify(lastWrite) === JSON.stringify(instance)) {
@@ -178,8 +193,9 @@ function ProviderEditor(props: {
     });
   const codexMode = instance.driver === "codex" ? readCodexSetupMode(instance.config) : "existing";
 
+  // A driver the policy refuses cannot run, so it has nothing to install or sign in to.
   const setup =
-    instance.driver === "antigravity" ? (
+    driverDenial !== undefined ? null : instance.driver === "antigravity" ? (
       <AntigravitySetupSection
         environmentId={environmentId}
         environmentLabel={props.environmentLabel}
@@ -270,11 +286,18 @@ function ProviderEditor(props: {
         </View>
       </View>
 
-      <SettingsSection>
+      <SettingsSection
+        footer={instanceManaged && policy ? `Managed by ${policy.organization}.` : undefined}
+      >
         <ListToggleRow
           label="Turned on"
-          description="Show this provider in pickers and let threads start on it."
-          disabled={readOnly}
+          description={
+            // The policy refuses switching it on; switching it off stays the user's call.
+            !status.enabled && driverDenial
+              ? driverDenial
+              : "Show this provider in pickers and let threads start on it."
+          }
+          disabled={readOnly || (!status.enabled && driverDenial !== undefined)}
           value={enabledSwitch.value}
           onValueChange={(value) =>
             enabledSwitch.change(
@@ -311,9 +334,20 @@ function ProviderEditor(props: {
             environment={instance.environment}
             disabled={readOnly}
             separatedFirst={false}
+            sources={sources}
+            managedReason={(field) =>
+              locks?.wholeEnvironment || locks?.environmentNames.has(field.name)
+                ? locks.reason
+                : undefined
+            }
             onCommit={(field, value) =>
               void updateEnvironment((environment) =>
                 nextProviderEnvironmentWithFieldValue(environment, field, value),
+              )
+            }
+            onSecretChange={(field, secret) =>
+              void updateEnvironment((environment) =>
+                nextProviderEnvironmentWithFieldSecret(environment, field, secret),
               )
             }
             onRemove={(field) =>
@@ -383,6 +417,8 @@ function ProviderEditor(props: {
             definition={definition}
             value={instance.config}
             disabled={readOnly}
+            sources={sources}
+            managed={locks && { keys: locks.configKeys, reason: locks.reason }}
             onChange={(config) => void updateConfig(config)}
           />
         </SettingsSection>
@@ -390,11 +426,17 @@ function ProviderEditor(props: {
 
       <SettingsSection
         title="Environment variables"
-        footer="API keys, base URLs, and other per-instance CLI settings. Sensitive values are stored separately and never returned to the app."
+        footer={
+          locks?.wholeEnvironment
+            ? locks.reason
+            : "API keys, base URLs, and other per-instance CLI settings. Sensitive values are stored separately and never returned to the app."
+        }
       >
         <ProviderEnvironmentVariables
           environment={providerEnvironmentWithoutNames(instance.environment, environmentFieldNames)}
-          disabled={readOnly}
+          disabled={readOnly || locks?.wholeEnvironment === true}
+          sources={sources}
+          managed={locks && { names: locks.environmentNames, reason: locks.reason }}
           onChange={(environment) =>
             void updateEnvironment((current) => [
               ...(current ?? []).filter((variable) => environmentFieldNames.has(variable.name)),
@@ -439,34 +481,36 @@ function ProviderEditor(props: {
               icon="arrow.uturn.backward"
               label="Reset to defaults"
               tone="danger"
-              onPress={() =>
+              onPress={() => {
+                const prompt = providerInstanceRemovalPrompt("reset", instance);
                 Dialog.confirm({
-                  title: `Reset ${name}?`,
-                  message: "Its display name, runtime settings, and variables return to defaults.",
+                  title: prompt.question,
+                  message: prompt.detail,
                   confirmText: "Reset",
                   destructive: true,
                   onConfirm: () => void actions.resetDefaultInstance(instance.driver),
-                })
-              }
+                });
+              }}
             />
           ) : (
             <ListActionRow
               icon="trash"
               label="Delete provider"
               tone="danger"
-              onPress={() =>
+              onPress={() => {
+                const prompt = providerInstanceRemovalPrompt("remove", instance);
                 Dialog.confirm({
-                  title: `Delete ${name}?`,
-                  message: `Removes this provider from ${props.environmentLabel}. Threads that used it keep their history.`,
-                  confirmText: "Delete",
+                  title: prompt.question,
+                  message: prompt.detail,
+                  confirmText: "Remove",
                   destructive: true,
                   onConfirm: () => {
                     void actions.deleteInstance(instanceId, instance).then((deleted) => {
                       if (deleted && navigation.canGoBack()) navigation.goBack();
                     });
                   },
-                })
-              }
+                });
+              }}
             />
           )}
         </SettingsSection>

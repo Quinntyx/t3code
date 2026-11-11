@@ -70,9 +70,20 @@ const TurnTokenUsageCommonFields = {
   cacheCreationTokens: Schema.optional(NonNegativeInt),
   reasoningTokens: Schema.optional(NonNegativeInt),
   hasSubagents: Schema.Boolean,
-  /** Tokens spent outside the main agent during the turn (native subagents, workflows, compaction), by model. */
+  // Native model ids the provider reported for the main agent's work. Absent means unknown.
+  models: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  // The provider ran a local command; its counters describe that result, not model work.
+  localCommand: Schema.optional(Schema.Boolean),
+  // Provider-ledger counts beyond the main agent, such as native subagents and compaction.
+  otherUsage: Schema.optional(
+    Schema.Struct({ inputTokens: NonNegativeInt, outputTokens: NonNegativeInt }),
+  ),
+  // The main agent's counts by model, present when it ran more than one.
   mainAgentUsage: Schema.optional(Schema.Array(TurnModelTokenUsage)),
+  // The ledger counts beyond the main agent, by model: native subagents, workflows, compaction.
   subagentUsage: Schema.optional(Schema.Array(TurnModelTokenUsage)),
+  // The ledger could not measure all usage beyond the main agent; any counts above are a floor.
+  otherUsageStatus: Schema.optional(Schema.Literal("partial")),
 };
 export const TurnTokenUsage = Schema.Union([
   Schema.Struct({

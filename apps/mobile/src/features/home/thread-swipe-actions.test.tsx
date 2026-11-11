@@ -85,7 +85,7 @@ vi.mock("react-native-gesture-handler/ReanimatedSwipeable", async () => {
             translation.set(event.clientX);
           }}
           onPointerUpCapture={() => {
-            if (panActive.current) props.onSwipeableRelease?.(translation);
+            if (panActive.current) props.onSwipeableRelease?.(translation, false);
           }}
           onClickCapture={(event) => {
             if (panActive.current) event.stopPropagation();

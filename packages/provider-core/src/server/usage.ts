@@ -46,6 +46,44 @@ export function tokenCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
 }
 
+/** Input/cache buckets are disjoint; reasoning is already part of output. */
+export function normalizeUsageTokens(
+  usage: {
+    readonly inputTokens?: unknown;
+    readonly outputTokens?: unknown;
+    readonly cachedInputTokens?: unknown;
+    readonly cacheCreationTokens?: unknown;
+    readonly reasoningTokens?: unknown;
+  },
+  inputKind: "inclusive" | "uncached",
+): UsageTokenTotals {
+  const cacheRead = tokenCount(usage.cachedInputTokens);
+  const cacheWrite = tokenCount(usage.cacheCreationTokens);
+  const reasoningTokens = tokenCount(usage.reasoningTokens);
+  // Partial counters still account for measured subsets when the inclusive total is absent.
+  const inputTokens =
+    inputKind === "inclusive" && usage.inputTokens === undefined
+      ? cacheRead + cacheWrite
+      : tokenCount(usage.inputTokens);
+  const cachedInputTokens = Math.min(inputKind === "inclusive" ? inputTokens : Infinity, cacheRead);
+  const cacheCreationTokens = Math.min(
+    inputKind === "inclusive" ? inputTokens - cachedInputTokens : Infinity,
+    cacheWrite,
+  );
+  const outputTokens =
+    usage.outputTokens === undefined ? reasoningTokens : tokenCount(usage.outputTokens);
+  return {
+    uncachedInputTokens:
+      inputKind === "inclusive"
+        ? inputTokens - cachedInputTokens - cacheCreationTokens
+        : inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, reasoningTokens),
+  };
+}
+
 export function parseTimestampMs(value: unknown): number | null {
   if (typeof value !== "string") return null;
   const parsed = Date.parse(value);
@@ -89,7 +127,6 @@ export interface ProviderUsageScan {
   readonly hostId?: string;
   readonly status?: UsageSource["status"];
   readonly message?: string;
-  readonly action?: UsageSource["action"];
   readonly files:
     | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
     | null;

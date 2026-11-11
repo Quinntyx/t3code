@@ -6,7 +6,9 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Platform, View } from "react-native";
+import { View } from "react-native";
+
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { ThreadListDrawerGestureWrapper } from "./thread-list-drawer";
 
@@ -38,17 +40,12 @@ function ThreadScreenOutlet() {
   const content = useSyncExternalStore(store.subscribe, store.getSnapshot);
   if (content === null) return null;
   const body = "props" in content ? <ThreadDetailScreen {...content.props} /> : content.fallback;
+  const header = "props" in content ? content.props.header : content.header;
   return (
     <>
-      {"props" in content ? content.props.header : content.header}
-      <ThreadListDrawerGestureWrapper
-        detailsEnabled={("props" in content ? content.props.header : content.header) != null}
-      >
-        {Platform.OS === "android" ? (
-          <View className="flex-1 overflow-hidden rounded-t-[28px] bg-thread-canvas">{body}</View>
-        ) : (
-          body
-        )}
+      {header}
+      <ThreadListDrawerGestureWrapper detailsEnabled={header != null}>
+        <ScreenContent surface="canvas">{body}</ScreenContent>
       </ThreadListDrawerGestureWrapper>
     </>
   );

@@ -1,3 +1,4 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { AssistantCitation } from "@t3tools/contracts";
 import {
   assistantCitationLabel,
@@ -17,10 +18,11 @@ import {
   type AssistantCitationSourceAnchor,
 } from "~/lib/assistantTextSelection";
 import {
-  assistantCitationHash,
   assistantCitationNavigation,
+  assistantCitationRoute,
 } from "../../lib/assistantCitationNavigation";
 import { cn } from "~/lib/utils";
+import { useQuietThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipAction, ContextChipLabel } from "../ContextChip";
 import { ContextChipPopover } from "../contextChipParts";
 import { Button } from "../ui/button";
@@ -33,6 +35,7 @@ import { resolveAssistantCitationCommentDismissal } from "./assistantCitationCom
 import { observeAssistantCitationCommentSource } from "./AssistantCitationSource";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import { observeResize } from "~/lib/observeResize";
+import { textDirection } from "~/textDirection";
 
 export function AssistantCitationChip({
   citation,
@@ -53,9 +56,13 @@ export function AssistantCitationChip({
   };
 }) {
   const navigate = useNavigate();
+  const sourceThread = useQuietThreadShell(
+    scopeThreadRef(citation.environmentId, citation.threadId),
+  );
   const commentEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const commentPopupRef = useRef<HTMLDivElement>(null);
   const draftCommentRef = useRef<string | null>(null);
+  const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
   const [unavailableSourceAnchor, setUnavailableSourceAnchor] =
     useState<AssistantCitationSourceAnchor | null>(null);
   const commentOpen = commentEditor?.open ?? false;
@@ -112,17 +119,14 @@ export function AssistantCitationChip({
     : undefined;
   const label = assistantCitationLabel(citation);
   const sourceLinkProps = {
-    to: "/$environmentId/$threadId" as const,
-    params: { environmentId: citation.environmentId, threadId: citation.threadId },
-    hash: assistantCitationHash(citation),
+    ...assistantCitationRoute(citation, sourceThread),
     "data-markdown-copy": serializeAssistantCitation(citation),
-    resetScroll: false,
     onClick: (event: ReactMouseEvent<HTMLAnchorElement>) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
         return;
       }
       event.preventDefault();
-      void navigate(assistantCitationNavigation(citation));
+      void navigate(assistantCitationNavigation(citation, sourceThread));
     },
   };
   const composerSourceLink = (
@@ -132,7 +136,9 @@ export function AssistantCitationChip({
       aria-label={`View cited assistant text: ${label}`}
     >
       <QuoteIcon aria-hidden="true" />
-      <ContextChipLabel className="max-w-[16em]">{label}</ContextChipLabel>
+      <ContextChipLabel className="max-w-[16em]" dir={textDirection(label)}>
+        {label}
+      </ContextChipLabel>
     </Link>
   );
   if (!composer) {
@@ -166,7 +172,7 @@ export function AssistantCitationChip({
       {composerSourceLink}
       {commentEditor ? (
         <Popover
-          open={commentEditor.open}
+          open={commentEditor.open && !voiceSetupOpen}
           onOpenChange={(open, eventDetails) => {
             if (!open && !settleDraftOnClose(eventDetails.reason)) {
               eventDetails.cancel();
@@ -184,6 +190,8 @@ export function AssistantCitationChip({
           </PopoverTrigger>
           {commentEditor.open ? (
             <PopoverPopup
+              // The editor stays mounted while its voice setup dialog replaces the popover.
+              keepMounted
               {...composerFloatingLayerProps}
               side={activeSourceAnchor ? "bottom" : "top"}
               align="end"
@@ -216,6 +224,7 @@ export function AssistantCitationChip({
                 key={serializeAssistantCitation(citation)}
                 citation={citation}
                 editorRef={commentEditorRef}
+                onVoiceSetupOpenChange={setVoiceSetupOpen}
                 onDraftChange={(comment) => {
                   draftCommentRef.current = comment;
                   commentEditor.onDraftChange?.(comment);
@@ -270,7 +279,10 @@ function AssistantCitationQuote({ citation }: { citation: AssistantCitation }) {
         getVirtualizedScrollFadeClassName(fade),
       )}
     >
-      <blockquote className="border-l-2 border-border pl-3 whitespace-pre-wrap text-muted-foreground">
+      <blockquote
+        className="border-l-2 border-border pl-3 whitespace-pre-wrap text-muted-foreground"
+        dir={textDirection(citation.text)}
+      >
         {citation.text}
       </blockquote>
       {citation.comment ? (

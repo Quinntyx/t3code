@@ -4,15 +4,20 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { readConfigString } from "@t3tools/client-runtime/provider-settings/instance";
+import { managedAcpRegistryAgentId } from "@t3tools/client-runtime/provider-settings/instance";
+import {
+  configuredSecretSources,
+  type SecretRequestSource,
+} from "@t3tools/client-runtime/secret-request";
 import {
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   defaultInstanceIdForDriver,
-  ProviderDriverKind,
   resolveProviderInstanceEnabled,
   type EnvironmentId,
+  type ManagedPolicySummary,
+  type ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ServerProvider,
@@ -22,6 +27,7 @@ import {
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import { AsyncResult } from "effect/reactivity";
+import Constants from "expo-constants";
 import { useState } from "react";
 
 import * as Dialog from "../../../components/ui/Dialog";
@@ -32,7 +38,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "../../../state/sessio
 import { useAtomCommand } from "../../../state/use-atom-command";
 
 const NO_PROVIDERS: ReadonlyArray<ServerProvider> = [];
-const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
+const NO_SECRET_SOURCES: ReadonlyArray<SecretRequestSource> = [];
 
 export function failureMessage(
   result: { readonly cause: Parameters<typeof squashAtomCommandFailure>[0]["cause"] },
@@ -102,6 +108,20 @@ export function useEnvironmentProviders(environmentId: EnvironmentId) {
   return useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? NO_PROVIDERS;
 }
 
+/** The policy an environment's administrator applies, or undefined when it is unmanaged. */
+export function useManagedPolicy(environmentId: EnvironmentId): ManagedPolicySummary | undefined {
+  return useAtomValue(serverEnvironment.configValueAtom(environmentId))?.managedPolicy;
+}
+
+/** Secret providers a setting can point at; empty when the environment cannot read references. */
+export function useSecretSources(environmentId: EnvironmentId): ReadonlyArray<SecretRequestSource> {
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  if (Constants.expoConfig?.extra?.secretsFeatureEnabled !== true || !config?.secretReferences) {
+    return NO_SECRET_SOURCES;
+  }
+  return configuredSecretSources(config.settings.secretProviders);
+}
+
 export function useEnvironmentServerSettings(environmentId: EnvironmentId) {
   return (
     useAtomValue(serverEnvironment.settingsValueAtom(environmentId)) ?? DEFAULT_SERVER_SETTINGS
@@ -111,6 +131,7 @@ export function useEnvironmentServerSettings(environmentId: EnvironmentId) {
 /** The provider-instance writes the desktop provider settings make, for one environment. */
 export function useProviderInstanceActions(environmentId: EnvironmentId) {
   const settings = useEnvironmentServerSettings(environmentId);
+  const managedPolicy = useManagedPolicy(environmentId);
   const canManage = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const mutate = useAtomCommand(serverEnvironment.mutateProviderInstance, { reportFailure: false });
@@ -120,11 +141,19 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     { reportFailure: false },
   );
 
+  // Rendering checks scopes once; deferred commits and confirmations run later, so recheck then.
+  const allowed = (scope: typeof AuthProvidersManageScope | typeof AuthSettingsWriteScope) => {
+    if (readEnvironmentScope(environmentId, scope)) return true;
+    Dialog.alert("Not allowed", "This connection can no longer change these settings.");
+    return false;
+  };
+
   const persistInstance = async (
     instanceId: ProviderInstanceId,
     instance: ProviderInstanceConfig,
     patch: ServerSettingsPatch = {},
   ) =>
+    allowed(AuthProvidersManageScope) &&
     reportCommandFailure(
       await mutate({
         environmentId,
@@ -154,6 +183,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
   };
 
   const createInstance = async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) =>
+    allowed(AuthProvidersManageScope) &&
     reportCommandFailure(
       await mutate({
         environmentId,
@@ -169,6 +199,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     instanceId: ProviderInstanceId,
     instance: ProviderInstanceConfig,
   ) => {
+    if (!allowed(AuthProvidersManageScope)) return false;
     const removed = reportCommandFailure(
       await mutate({
         environmentId,
@@ -176,9 +207,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
       }),
       "Could not delete provider",
     );
-    if (!removed || instance.driver !== ACP_REGISTRY_DRIVER) return removed;
-    if (readConfigString(instance.config, "source") === "local") return removed;
-    const agentId = readConfigString(instance.config, "agentId");
+    const agentId = removed ? managedAcpRegistryAgentId(instance) : null;
     if (agentId === null) return removed;
     // Concurrent removals race client snapshots; the server decides whether the agent is still used.
     const uninstall = await uninstallManagedBinary({ environmentId, input: { agentId } });
@@ -191,6 +220,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
   };
 
   const resetDefaultInstance = async (driver: ProviderDriverKind) =>
+    allowed(AuthProvidersManageScope) &&
     reportCommandFailure(
       await mutate({
         environmentId,
@@ -206,6 +236,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     );
 
   const updateSettings = async (patch: ServerSettingsPatch) =>
+    allowed(AuthSettingsWriteScope) &&
     reportCommandFailure(
       await saveSettings({ environmentId, input: { patch } }),
       "Could not save settings",
@@ -213,6 +244,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
 
   return {
     settings,
+    managedPolicy,
     canManage,
     canWriteSettings,
     updateInstance,

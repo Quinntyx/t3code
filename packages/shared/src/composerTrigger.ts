@@ -14,6 +14,11 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
+/** A trigger read from the word at the cursor alone, without line-leading `/model` arguments. */
+export interface ComposerTokenTrigger extends ComposerTrigger {
+  kind: Exclude<ComposerTriggerKind, "slash-model">;
+}
+
 function composerFileLinkBasename(path: string): string {
   const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
@@ -47,7 +52,7 @@ function isWhitespace(char: string): boolean {
 }
 
 /** A second slash makes the whole word a path, even when the caret precedes that slash. */
-export function isPathWord(
+function isPathWord(
   text: string,
   wordStart: number,
   cursor: number,
@@ -65,7 +70,7 @@ export function isPathWord(
  * token regexes already refuse to render as skills, plus the punctuation prose puts after
  * one (`$10k.`, `($5)`).
  */
-export function isCurrencyAmountQuery(query: string): boolean {
+function isCurrencyAmountQuery(query: string): boolean {
   return /^\.?[0-9][0-9,._]*(?:[kKmMbBtT]|[eE][0-9]+)?[.,;:!?)]*$/.test(query);
 }
 
@@ -101,7 +106,7 @@ export function detectComposerTrigger(
       };
     }
 
-    const modelMatch = /^\/model(?:\s+(.*))?$/.exec(linePrefix);
+    const modelMatch = /^\/model(?:\s+(.*))?$/i.exec(linePrefix);
     if (modelMatch) {
       return {
         kind: "slash-model",
@@ -112,16 +117,25 @@ export function detectComposerTrigger(
     }
   }
 
-  const wsCheck = isWhitespaceChar ?? isWhitespace;
+  return detectComposerTokenTrigger(text, cursor, isWhitespaceChar);
+}
+
+/** The `/`, `#`, `%`, skill, or `@` trigger of the word that ends at the cursor. */
+export function detectComposerTokenTrigger(
+  text: string,
+  cursorInput: number,
+  isWhitespaceChar: (char: string) => boolean = isWhitespace,
+): ComposerTokenTrigger | null {
+  const cursor = clampCursor(text, cursorInput);
   let tokenIdx = cursor - 1;
-  while (tokenIdx >= 0 && !wsCheck(text[tokenIdx] ?? "")) {
+  while (tokenIdx >= 0 && !isWhitespaceChar(text[tokenIdx] ?? "")) {
     tokenIdx -= 1;
   }
   const tokenStart = tokenIdx + 1;
 
   const token = text.slice(tokenStart, cursor);
   if (token.startsWith("/")) {
-    if (isPathWord(text, tokenStart, cursor, wsCheck)) return null;
+    if (isPathWord(text, tokenStart, cursor, isWhitespaceChar)) return null;
     return {
       kind: "slash-command",
       query: token.slice(1),
@@ -179,4 +193,15 @@ export function replaceTextRange(
   const safeEnd = Math.max(safeStart, Math.min(text.length, rangeEnd));
   const nextText = `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
   return { text: nextText, cursor: safeStart + replacement.length };
+}
+
+/** `/clear` as the whole message arms a fresh session instead of sending. */
+export function isClearComposerCommand(text: string): boolean {
+  return /^\/clear\s*$/i.test(text.trim());
+}
+
+/** `/side [prompt]`, or its alias `/btw [prompt]`, as the whole message. */
+export function parseSideChatCommand(text: string): { prompt: string } | null {
+  const match = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  return match ? { prompt: match[1]?.trim() ?? "" } : null;
 }

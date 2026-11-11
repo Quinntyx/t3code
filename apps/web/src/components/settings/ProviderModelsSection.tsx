@@ -13,6 +13,7 @@ import {
   CUSTOM_MODEL_PLACEHOLDER_BY_KIND,
   describeModelCapabilities,
   groupModelsForDisplay,
+  hasReasoningControl,
   nextHiddenModelsForBulkToggle,
   validateCustomModelSlug,
 } from "@t3tools/client-runtime/provider-settings/models";
@@ -93,6 +94,7 @@ export function ProviderModelsSection({
   const hiddenCount = displayModels.filter(
     (model) => !model.isCustom && hiddenModelSet.has(model.slug),
   ).length;
+  const flagMissingReasoning = models.some(hasReasoningControl);
   const showFilter = models.length > FILTER_THRESHOLD;
   const normalizedFilter = filter.trim().toLowerCase();
   const isFiltering = showFilter && normalizedFilter.length > 0;
@@ -216,6 +218,7 @@ export function ProviderModelsSection({
         canMoveUp={!isFiltering && previousModel !== undefined && groupOf(previousModel) === group}
         canMoveDown={!isFiltering && nextModel !== undefined && groupOf(nextModel) === group}
         isFiltering={isFiltering}
+        flagMissingReasoning={flagMissingReasoning}
         canWritePreferences={canWritePreferences}
         canManageCustomModels={canManageCustomModels}
         {...rowHandlers}
@@ -389,6 +392,7 @@ function ProviderModelRow({
   canMoveUp,
   canMoveDown,
   isFiltering,
+  flagMissingReasoning,
   canWritePreferences,
   canManageCustomModels,
   onToggleFavorite,
@@ -403,6 +407,7 @@ function ProviderModelRow({
   readonly canMoveUp: boolean;
   readonly canMoveDown: boolean;
   readonly isFiltering: boolean;
+  readonly flagMissingReasoning: boolean;
   readonly canWritePreferences: boolean;
   readonly canManageCustomModels: boolean;
   readonly onToggleFavorite: (slug: string) => void;
@@ -411,7 +416,7 @@ function ProviderModelRow({
   readonly onToggleEdit: (slug: string) => void;
   readonly onRemove: (slug: string) => void;
 }) {
-  const capLabels = describeModelCapabilities(model);
+  const capLabels = describeModelCapabilities(model, flagMissingReasoning);
   const nameClassName = cn("text-xs", isHidden ? "text-muted-foreground" : "text-foreground/90");
   const pickerTooltip = model.isCustom
     ? "Custom models are always shown in the picker"

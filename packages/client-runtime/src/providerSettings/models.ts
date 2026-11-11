@@ -2,6 +2,7 @@ import { ProviderDriverKind, type ServerProviderModel } from "@t3tools/contracts
 import { type CustomModelDefinition, normalizeCustomModelSlug } from "@t3tools/shared/model";
 
 import { sortModelsForProviderInstance } from "../modelOrdering.ts";
+import { isReasoningControl } from "../modelTraits.ts";
 
 export const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("codex")]: "gpt-6.7-codex-ultra-preview",
@@ -11,7 +12,19 @@ export const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind
   [ProviderDriverKind.make("pi")]: "anthropic/claude-sonnet-5",
 };
 
-export function describeModelCapabilities(model: ServerProviderModel): string[] {
+const PROVIDER_ALIAS_SLUGS = new Set(["default", "auto"]);
+
+export function hasReasoningControl(model: ServerProviderModel): boolean {
+  return (model.capabilities?.optionDescriptors ?? []).some(isReasoningControl);
+}
+
+// Reasoning is the norm, so only its absence is labeled, and only when other models have it.
+// Custom and null capabilities are fallbacks or user-written, not discovered, so they prove nothing.
+// Alias slugs ("default", Cursor's "auto") defer to the provider's own model choice, so reasoning is unknown.
+export function describeModelCapabilities(
+  model: ServerProviderModel,
+  flagMissingReasoning: boolean,
+): string[] {
   const descriptors = model.capabilities?.optionDescriptors ?? [];
   const labels: string[] = [];
   const hasFastMode = descriptors.some(
@@ -22,18 +35,14 @@ export function describeModelCapabilities(model: ServerProviderModel): string[] 
         descriptor.options.some((option) => option.id === "fast" || option.label === "Fast")),
   );
   if (hasFastMode) labels.push("Fast mode");
-  if (descriptors.some((descriptor) => descriptor.id === "thinking")) labels.push("Thinking");
   if (
-    descriptors.some(
-      (descriptor) =>
-        descriptor.type === "select" &&
-        (descriptor.id === "reasoningEffort" ||
-          descriptor.id === "effort" ||
-          descriptor.id === "reasoning" ||
-          descriptor.id === "variant"),
-    )
+    flagMissingReasoning &&
+    !model.isCustom &&
+    model.capabilities &&
+    !PROVIDER_ALIAS_SLUGS.has(model.slug) &&
+    !hasReasoningControl(model)
   ) {
-    labels.push("Reasoning");
+    labels.push("No reasoning");
   }
   return labels;
 }

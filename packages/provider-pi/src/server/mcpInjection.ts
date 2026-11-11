@@ -36,7 +36,7 @@ const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
   "-v",
 ]);
 
-const PI_ARGUMENTS_WITH_VALUES = new Set([
+export const PI_ARGUMENTS_WITH_VALUES = new Set([
   "--api-key",
   "--append-system-prompt",
   "--exclude-tools",
@@ -224,35 +224,42 @@ function withoutToolSelectionArgs(args: ReadonlyArray<string>): ReadonlyArray<st
   return filtered;
 }
 
-function piT3McpExtensionDestPath(cacheDir: string): string {
-  return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
-}
-
-export const materializePiT3McpExtension = Effect.fn("materializePiT3McpExtension")(function* (
+const materializePiExtension = Effect.fn("materializePiExtension")(function* (
   cacheDir: string,
+  filename: string,
+  source: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(cacheDir, { recursive: true });
-  const dest = piT3McpExtensionDestPath(cacheDir);
+  const dest = `${cacheDir.replace(/\\/g, "/")}/${filename}`;
   const existing = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
-  if (existing !== PI_T3_MCP_EXTENSION_SOURCE) {
-    yield* fs.writeFileString(dest, PI_T3_MCP_EXTENSION_SOURCE);
+  if (existing !== source) {
+    // Concurrent pi launches read this file: stage it in a per-call directory
+    // and rename so readers and other writers never see a partial file.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const stagingDir = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
+        const staging = `${stagingDir.replace(/\\/g, "/")}/${filename}`;
+        yield* fs.writeFileString(staging, source);
+        yield* fs.rename(staging, dest).pipe(Effect.retry({ times: 3 }));
+      }),
+    );
   }
   return dest;
 });
 
-/** Registers discovered services from `T3_DISCOVER_*` variables; idle when none are set. */
+export const materializePiT3McpExtension = Effect.fn("materializePiT3McpExtension")(
+  (cacheDir: string) =>
+    materializePiExtension(cacheDir, PI_T3_MCP_EXTENSION_FILENAME, PI_T3_MCP_EXTENSION_SOURCE),
+);
+
 export const materializePiT3DiscoverExtension = Effect.fn("materializePiT3DiscoverExtension")(
-  function* (cacheDir: string) {
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.makeDirectory(cacheDir, { recursive: true });
-    const dest = `${cacheDir.replace(/\\/g, "/")}/${PI_T3_DISCOVER_EXTENSION_FILENAME}`;
-    const existing = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
-    if (existing !== PI_T3_DISCOVER_EXTENSION_SOURCE) {
-      yield* fs.writeFileString(dest, PI_T3_DISCOVER_EXTENSION_SOURCE);
-    }
-    return dest;
-  },
+  (cacheDir: string) =>
+    materializePiExtension(
+      cacheDir,
+      PI_T3_DISCOVER_EXTENSION_FILENAME,
+      PI_T3_DISCOVER_EXTENSION_SOURCE,
+    ),
 );
 
 export function buildPiRpcLaunch(input: {
@@ -263,6 +270,9 @@ export function buildPiRpcLaunch(input: {
   readonly discoverExtensionPath?: string | undefined;
   readonly sessionPath?: string | undefined;
   readonly ephemeral?: boolean;
+  // T3 stops these processes as soon as they answer. They run --offline because Pi's startup
+  // catalog refresh renews expired OAuth tokens, and a stop mid-request loses the rotated one.
+  readonly shortLived?: boolean;
   readonly disableExtensions?: boolean;
   readonly disableTools?: boolean;
   readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
@@ -287,6 +297,7 @@ export function buildPiRpcLaunch(input: {
         ? ["--session", input.sessionPath]
         : []),
     ...launchArgs,
+    ...(input.shortLived === true && !launchArgs.includes("--offline") ? ["--offline"] : []),
     // Restrictions must follow launch args so user flags cannot re-enable unattended tools/extensions.
     ...(input.disableExtensions === true ? ["--no-extensions"] : []),
     ...(input.disableTools === true ? ["--no-tools"] : []),

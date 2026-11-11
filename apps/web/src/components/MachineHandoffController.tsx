@@ -152,11 +152,10 @@ function MachineHandoff({ attempt: job }: { attempt: MachineHandoffAttempt }) {
     if (startedRetry.current >= retry) return;
     startedRetry.current = retry;
     const handoffSelection = preparedSelection.current ?? selection;
-    let succeeded = false;
-    try {
+    const run = async (): Promise<boolean> => {
       const blocker = eligibility();
       if (blocker) throw new Error(blocker);
-      if (!destinationProject || !handoffSelection) return;
+      if (!destinationProject || !handoffSelection) return false;
       setMachineHandoffSelection(job.session, handoffSelection);
       const imported = await relayMachineHandoff({
         eligibility,
@@ -211,12 +210,13 @@ function MachineHandoff({ attempt: job }: { attempt: MachineHandoffAttempt }) {
           },
         });
       }
-      succeeded = true;
       void navigate({
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams({ environmentId: targetId, threadId: imported.threadId }),
       });
-    } catch (cause) {
+      return true;
+    };
+    const succeeded = await run().catch((cause: unknown) => {
       const target = environments.find((environment) => environment.environmentId === targetId);
       toastManager.add({
         type: "error",
@@ -224,9 +224,9 @@ function MachineHandoff({ attempt: job }: { attempt: MachineHandoffAttempt }) {
         description: cause instanceof Error ? cause.message : "Your source thread is unchanged.",
         actionProps: { children: "Retry", onClick: () => openMachineHandoff(request) },
       });
-    } finally {
-      finishMachineHandoff(job.session, succeeded);
-    }
+      return false;
+    });
+    finishMachineHandoff(job.session, succeeded);
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- executes explicit machine selections independently of the mounted source composer

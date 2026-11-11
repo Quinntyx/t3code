@@ -1,3 +1,4 @@
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import {
   sourceControlClients,
   type ChangeRequestTerminology,
@@ -79,10 +80,6 @@ export const PR_ACTION_ICONS = {
   "approve-workflows": "checkmark",
 } as const satisfies Record<PullRequestAction, AppSymbolName>;
 
-export function allowedMergeMethods(pr: ActionDetail) {
-  return pr.capabilities.mergeMethods.filter((method) => pr.mergeCapabilities[method]);
-}
-
 export function allowedUpdateMethods(pr: ActionDetail) {
   return (pr.capabilities.updateMethods ?? []).filter((method) =>
     pr.viewerPermissions.updateMethods?.includes(method),
@@ -107,17 +104,23 @@ export function canPerformPullRequestAction(pr: ActionDetail, action: PullReques
     case "draft":
       return !pr.isDraft;
     case "merge":
-      return !pr.isDraft && pr.mergeability !== "conflicting" && allowedMergeMethods(pr).length > 0;
+      return (
+        !pr.isDraft &&
+        pr.mergeability !== "conflicting" &&
+        allowedPullRequestMergeMethods(pr).length > 0
+      );
     case "enable-auto-merge":
-      return !pr.isDraft && pr.autoMergeEnabled === false && allowedMergeMethods(pr).length > 0;
+      return (
+        !pr.isDraft &&
+        pr.autoMergeEnabled === false &&
+        allowedPullRequestMergeMethods(pr).length > 0
+      );
     case "disable-auto-merge":
       return pr.autoMergeEnabled === true;
     default:
       return true;
   }
 }
-
-export const MERGE_CONFLICT_REASON = "Resolve the branch conflicts before merging.";
 
 export function mergeUnavailableReason(
   pr: ActionDetail,
@@ -132,8 +135,9 @@ export function mergeUnavailableReason(
   if (!pr.viewerPermissions.actions.includes("merge"))
     return `Your account cannot merge this ${terminology.singular}.`;
   if (pr.isDraft) return "Mark this draft ready for review before merging.";
-  if (pr.mergeability === "conflicting") return MERGE_CONFLICT_REASON;
-  if (!allowedMergeMethods(pr).length) return "This repository has no available merge methods.";
+  if (pr.mergeability === "conflicting") return "Resolve the branch conflicts before merging.";
+  if (!allowedPullRequestMergeMethods(pr).length)
+    return "This repository has no available merge methods.";
   return null;
 }
 

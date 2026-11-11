@@ -9,6 +9,7 @@ import {
   type ProviderAuthResponse,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
 import { Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
 
@@ -47,6 +48,10 @@ export function ProviderSignInSection({
   const complete = useAtomCommand(serverEnvironment.completeProviderAuth, options);
   const cancel = useAtomCommand(serverEnvironment.cancelProviderAuth, options);
   const logout = useAtomCommand(serverEnvironment.logoutProviderAuth, options);
+  const removeMethod = useAtomCommand(serverEnvironment.removeProviderAuthMethod, options);
+  const canRemoveMethod = useAtomValue(
+    serverEnvironment.removeProviderAuthMethod.permissionAtom(environmentId),
+  );
   // Matches ListRowLayout: large text stacks the action below instead of squeezing the status.
   const stacked = useWindowDimensions().fontScale >= 1.5;
   const [pending, setPending] = useState(false);
@@ -134,6 +139,9 @@ export function ProviderSignInSection({
     !active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate);
   const showCallback =
     Boolean(url) && (interaction?.type === "browser" ? interaction.acceptsCallback : !interaction);
+  const usesCredentials =
+    provider.driver === "antigravity" &&
+    (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
   const status =
     active || state?.phase === "failed" || state?.phase === "cancelled"
       ? state.message
@@ -147,12 +155,29 @@ export function ProviderSignInSection({
               ? "No in-app sign-in advertised. Follow the provider's docs to finish setup."
               : !provider.installed
                 ? "Not installed"
-                : "Not signed in";
+                : usesCredentials
+                  ? "Connect to load models"
+                  : "Not signed in";
   // A provider with several sign-in methods picks one from a menu on the same control.
   const methodActions: MenuAction[] = methods.map((method) => ({
     id: `method:${method.id}`,
     title: method.name,
   }));
+  const removableMethods = methods.filter((method) => method.canRemove);
+  const removeActions: MenuAction[] = removableMethods.length
+    ? [
+        {
+          id: "remove",
+          title: "Remove incomplete connection",
+          attributes: { disabled: disabled || active || !canRemoveMethod },
+          subactions: removableMethods.map((method) => ({
+            id: `remove:${method.id}`,
+            title: method.name,
+            attributes: { destructive: true, disabled: disabled || active || !canRemoveMethod },
+          })),
+        },
+      ]
+    : [];
   function startSignIn(methodId?: string) {
     void run(() => start(methodId ? { environmentId, input: { instanceId, methodId } } : target));
   }
@@ -176,10 +201,16 @@ export function ProviderSignInSection({
     if (id === "signOut") signOut();
     // iOS keeps a disabled submenu's children selectable, so sign-in guards here too.
     else if (signInDisabled) return;
-    else if (id.startsWith("method:")) startSignIn(id.slice("method:".length));
+    else if (id.startsWith("remove:")) {
+      if (active || !canRemoveMethod) return;
+      const methodId = id.slice("remove:".length);
+      if (!removableMethods.some((method) => method.id === methodId)) return;
+      void run(() => removeMethod({ environmentId, input: { instanceId, methodId } }));
+    } else if (id.startsWith("method:")) startSignIn(id.slice("method:".length));
     else if (id === "change") startSignIn();
   }
   const accountActions: MenuAction[] = [
+    ...removeActions,
     ...(canSignIn
       ? [
           {
@@ -250,7 +281,7 @@ export function ProviderSignInSection({
       accessibilityRole="button"
       accessibilityLabel={`Sign in to ${name}`}
       title="Sign in with"
-      actions={methodActions}
+      actions={[...methodActions, ...removeActions]}
       onPressAction={({ nativeEvent }) => onMenuAction(nativeEvent.event)}
     >
       <ControlPill variant="primary" label="Sign in" accessibilityLabel={`Sign in to ${name}`} />
@@ -258,8 +289,8 @@ export function ProviderSignInSection({
   ) : canSignIn && !signedIn ? (
     <ControlPill
       variant="primary"
-      label="Sign in"
-      accessibilityLabel={`Sign in to ${name}`}
+      label={usesCredentials ? "Connect" : "Sign in"}
+      accessibilityLabel={usesCredentials ? `Connect to ${name}` : `Sign in to ${name}`}
       disabled={signInDisabled}
       onPress={() => startSignIn()}
     />

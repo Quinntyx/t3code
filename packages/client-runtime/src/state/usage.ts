@@ -1,9 +1,11 @@
 import type {
   EnvironmentId,
-  ServerProvider,
-  UsageSummary,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+  UsageModelFilter,
   UsageSummaryInput,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import type { AtomRegistry } from "effect/reactivity";
 
@@ -14,33 +16,46 @@ import type { createServerEnvironmentAtoms } from "./server.ts";
 
 const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
 
-export function needsCursorKeychainAccess(
-  summary: UsageSummary | null,
-  providers: readonly ServerProvider[] | null,
-): boolean {
-  return (
-    summary?.sources.some((source) => source.action === "enableCursorKeychain") === true &&
-    providers?.some((provider) => provider.driver === "cursor" && provider.status === "ready") ===
-      true
-  );
+/** The Usage tab asks each environment with that environment's configured model filter. */
+export function usageSummaryInput(
+  input: UsageSummaryInput,
+  modelFilter: UsageModelFilter | undefined,
+): UsageSummaryInput {
+  return modelFilter === undefined ? input : { ...input, modelFilter };
 }
 
-/**
- * Any environment reading a Cursor account already reports that account's
- * history from every machine, so the prompt only adds duplicates there.
- */
-export function cursorKeychainAccessEnvironments<
-  E extends { readonly summary: UsageSummary | null; readonly needsCursorKeychainAccess: boolean },
->(environments: readonly E[]): readonly E[] {
-  const hasCursorAccount = environments.some((environment) =>
-    environment.summary?.sources.some(
-      (source) =>
-        source.fingerprint.provider === "cursor" && source.fingerprint.hostId === "cursor.com",
-    ),
+type UsageThread = Pick<
+  OrchestrationV2ThreadShell,
+  "id" | "lineage" | "latestRunId" | "latestRunCompletedAt" | "activeRunId"
+>;
+
+export function threadUsageRevision(threadId: ThreadId, threads: readonly UsageThread[]): string {
+  const children = new Map<ThreadId, UsageThread[]>();
+  for (const thread of threads) {
+    const { parentThreadId, relationshipToParent, sideChat } = thread.lineage;
+    if (parentThreadId === null || relationshipToParent !== "subagent" || sideChat === true)
+      continue;
+    const siblings = children.get(parentThreadId);
+    if (siblings === undefined) children.set(parentThreadId, [thread]);
+    else siblings.push(thread);
+  }
+  const ids = new Set([threadId]);
+  for (const id of ids) {
+    for (const child of children.get(id) ?? []) ids.add(child.id);
+  }
+  return JSON.stringify(
+    threads
+      .filter((thread) => ids.has(thread.id))
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((thread) => [
+        thread.id,
+        thread.latestRunId,
+        thread.latestRunCompletedAt == null
+          ? null
+          : DateTime.toEpochMillis(thread.latestRunCompletedAt),
+        thread.activeRunId,
+      ]),
   );
-  return hasCursorAccount
-    ? []
-    : environments.filter((environment) => environment.needsCursorKeychainAccess);
 }
 
 const limitsRefreshAfter = new Map<EnvironmentId, number>();
@@ -50,16 +65,9 @@ export async function refreshUsageLimits<A>(
   environmentId: EnvironmentId,
   refresh: () => Promise<A>,
   automatic = false,
-  afterPending = false,
 ): Promise<A | undefined> {
   const pending = limitsRefreshes.get(environmentId);
   if (pending !== undefined) {
-    if (afterPending) {
-      try {
-        await pending;
-      } catch {}
-      return refreshUsageLimits(environmentId, refresh, false, true);
-    }
     return automatic ? undefined : ((await pending) as A);
   }
   const refreshAfter = limitsRefreshAfter.get(environmentId) ?? 0;
@@ -86,7 +94,7 @@ export async function refreshUsage({
   registry: AtomRegistry.AtomRegistry;
   server: Pick<
     ReturnType<typeof createServerEnvironmentAtoms>,
-    "usageSummary" | "refreshUsageRates"
+    "usageSummary" | "refreshUsageRates" | "usageModelFilterAtom"
   >;
   presentations: Pick<ReturnType<typeof createEnvironmentPresentationAtoms>, "presentationAtom">;
   environmentIds: readonly EnvironmentId[];
@@ -94,7 +102,10 @@ export async function refreshUsage({
 }): Promise<void> {
   await Promise.all(
     environmentIds.map(async (environmentId) => {
-      const query = server.usageSummary({ environmentId, input });
+      const query = server.usageSummary({
+        environmentId,
+        input: usageSummaryInput(input, registry.get(server.usageModelFilterAtom(environmentId))),
+      });
       const presentation = presentations.presentationAtom(environmentId);
       const controller = new AbortController();
       const abortWhenDisconnected = () => {

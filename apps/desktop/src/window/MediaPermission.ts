@@ -1,6 +1,7 @@
 import type { WebContents } from "electron";
 
-export function allowsAppMicrophone(input: {
+/** Only the app itself captures: its microphone, or getDisplayMedia (an empty list) for previews. */
+export function allowsAppMedia(input: {
   readonly appUrl: string;
   readonly contentsId: number | undefined;
   readonly mainContentsId: number;
@@ -12,8 +13,8 @@ export function allowsAppMicrophone(input: {
   if (
     input.contentsId !== input.mainContentsId ||
     !input.mainFrame ||
-    input.mediaTypes.length !== 1 ||
-    input.mediaTypes[0] !== "audio"
+    input.mediaTypes.length > 1 ||
+    (input.mediaTypes.length === 1 && input.mediaTypes[0] !== "audio")
   )
     return false;
   try {
@@ -37,7 +38,7 @@ export function installAppMediaPermissions(main: WebContents, appUrl: string) {
     mediaTypes: readonly string[],
   ) =>
     !main.isDestroyed() &&
-    allowsAppMicrophone({
+    allowsAppMedia({
       appUrl,
       contentsId: contents?.id,
       mainContentsId: main.id,
@@ -47,8 +48,9 @@ export function installAppMediaPermissions(main: WebContents, appUrl: string) {
       mediaTypes,
     });
   // The main window shares the default session, whose prior handler-less behavior granted the rest.
+  // Display capture stays with the app because preview recording's display-media handler picks its tab.
   main.session.setPermissionRequestHandler((contents, permission, callback, details) => {
-    if (permission !== "media") return callback(permission !== "display-capture");
+    if (permission !== "media" && permission !== "display-capture") return callback(true);
     const mediaTypes = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
     callback(
       allowed(contents, details.requestingUrl, details.isMainFrame, mediaTypes) &&
@@ -63,14 +65,19 @@ export function installAppMediaPermissions(main: WebContents, appUrl: string) {
     );
   });
   main.session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
-    permission !== "media"
-      ? permission !== "display-capture"
+    permission !== "media" && permission !== "display-capture"
+      ? true
       : [
           requestingOrigin,
           details.securityOrigin ?? requestingOrigin,
           details.requestingUrl ?? requestingOrigin,
         ].every((url) =>
-          allowed(contents, url, details.isMainFrame, [details.mediaType ?? "unknown"]),
+          allowed(
+            contents,
+            url,
+            details.isMainFrame,
+            permission === "media" ? [details.mediaType ?? "unknown"] : [],
+          ),
         ),
   );
 }

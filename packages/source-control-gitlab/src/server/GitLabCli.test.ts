@@ -82,6 +82,19 @@ layer("GitLabCli.layer", (it) => {
           args: ["mr", "view", "--output", "json", "--", "42"],
         }),
       );
+      const classifyFailure = mockedRun.mock.calls.at(-1)?.[0].classifyFailure;
+      assert.strictEqual(
+        classifyFailure?.(
+          "x gitlab.example.test has not been authenticated with glab. Run `glab auth login`",
+        ),
+        "authentication",
+      );
+      assert.strictEqual(
+        classifyFailure?.(
+          'Failed to get merge request 42: oauth2: "invalid_grant" "The provided authorization grant is invalid, expired, revoked, does not match the redirection URI used in the authorization request, or was issued to another client."',
+        ),
+        "authentication",
+      );
     }),
   );
 
@@ -150,6 +163,33 @@ layer("GitLabCli.layer", (it) => {
           ],
         }),
       );
+    }),
+  );
+
+  it.effect("creates merge requests in the recorded base project", () =>
+    Effect.gen(function* () {
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("100")));
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+      const glab = yield* GitLabCli.GitLabCli;
+      yield* glab.createMergeRequest({
+        cwd: "/repo",
+        baseBranch: "main",
+        headSelector: "feature",
+        source: { repository: "Group/Fork", refName: "feature" },
+        target: { repository: "Group/Nested/Base", refName: "main" },
+        title: "Changes",
+        bodyFile: "/body.md",
+      });
+      assert.deepEqual(mockedRun.mock.calls[0]?.[0].args, [
+        "api",
+        "projects/Group%2FNested%2FBase",
+        "--jq",
+        ".id",
+      ]);
+      const args = mockedRun.mock.calls[1]?.[0].args ?? [];
+      assert.include(args, "projects/Group%2FFork/merge_requests");
+      assert.include(args, "target_project_id=100");
+      assert.notInclude(args, "source_project_id=Group/Fork");
     }),
   );
 

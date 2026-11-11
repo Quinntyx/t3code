@@ -155,7 +155,7 @@ export function historicalMessage(
       text = item.message;
       break;
     case "file_change":
-      text = `File change: ${item.fileName}`;
+      text = `File change: ${item.changes?.map((change) => change.path).join(", ") ?? item.fileName}`;
       break;
     case "proposed_plan":
       text = item.markdown;
@@ -238,7 +238,7 @@ export function selectHistory(input: {
     historyCost([], contextFor(messages.length, (input.omittedItems ?? 0) + messages.length));
   const tryAdd = (index: number) => {
     const message = messages[index];
-    if (message === undefined || selected.has(index)) return;
+    if (message === undefined || selected.has(index) || message.text.length > remaining) return;
     const cost = Math.max(
       Buffer.byteLength(JSON.stringify(historyResponseItems([message], "")[1])) + 1,
       Buffer.byteLength(JSON.stringify(renderHistoricalMessage(message))) + 4,

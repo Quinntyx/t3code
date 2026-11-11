@@ -1,17 +1,4 @@
-/** Limit the slug to 48 chars so the composed ProviderInstanceId fits its 64-char cap. */
-function slugifyLabel(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48);
-}
-
-export function deriveInstanceId(driver: string, label: string): string {
-  const slug = slugifyLabel(label);
-  return slug ? `${driver}_${slug}` : "";
-}
+import { deriveAvailableInstanceId, deriveInstanceId } from "../providerInstanceIds.ts";
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 
@@ -23,6 +10,32 @@ export function validateInstanceId(id: string, existing: ReadonlySet<string>): s
   }
   if (existing.has(id)) return `An instance named '${id}' already exists.`;
   return null;
+}
+
+/** Codex and Claude default slots run before anyone configures them, so their ids stay reserved. */
+export function reservedInstanceIds(
+  providerInstances: Readonly<Record<string, unknown>> | undefined,
+): ReadonlySet<string> {
+  return new Set(["codex", "claudeAgent", ...Object.keys(providerInstances ?? {})]);
+}
+
+/** A free id for a new instance; a blank or default label claims the driver's own slot first. */
+export function deriveNewInstanceId(input: {
+  readonly driver: string;
+  readonly driverLabel: string;
+  readonly label: string;
+  readonly existingIds: ReadonlySet<string>;
+}): string {
+  return deriveAvailableInstanceId(
+    (candidate) =>
+      !candidate.trim() || candidate === input.driverLabel
+        ? input.driver === "acpRegistry"
+          ? `${input.driver}_custom`
+          : input.driver
+        : deriveInstanceId(input.driver, candidate),
+    input.label,
+    input.existingIds,
+  );
 }
 
 export type WizardNavigation =
@@ -64,21 +77,6 @@ export function updateProviderIdentityDraft(
     ...drafts,
     [driver]: { ...getProviderIdentityDraft(drafts, driver), ...update },
   };
-}
-
-export function deriveAvailableInstanceId(
-  derive: (label: string) => string,
-  label: string,
-  existing: ReadonlySet<string>,
-): string {
-  const base = derive(label);
-  if (!base || !existing.has(base)) return base;
-
-  for (let suffix = 2; ; suffix += 1) {
-    const suffixText = `_${suffix}`;
-    const candidate = `${base.slice(0, 64 - suffixText.length)}${suffixText}`;
-    if (!existing.has(candidate)) return candidate;
-  }
 }
 
 export function isConfiguredAcpRegistryAgent(

@@ -21,7 +21,12 @@ import { type PreviewAnnotationPayload } from "@t3tools/contracts";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
 import { composerTargetKey } from "../../composerDraftStore";
 import { stripInlineContextReferences } from "../../lib/composerContextReferences";
-import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
+import {
+  type ComposerListEdit,
+  listContinuationForEnter,
+  listIndentForTab,
+  listOutdentForTab,
+} from "../../composer-list-continuation";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 
 /** Context chips are composer content, not typed text, so an attachment-only draft counts as empty. */
@@ -34,7 +39,7 @@ function shouldClearComposerAttachmentsOnEscape(input: {
 
 /**
  * The composer's key handling inside the editor: send shortcuts, the slash/mention menu,
- * prompt history on ArrowUp/ArrowDown, plan-mode toggle, and list continuation.
+ * prompt history on ArrowUp/ArrowDown, plan-mode toggle, prompt suggestions on Tab, and list continuation.
  * Returns the editor's key handler; it reads the inputs captured by the render that built it.
  */
 export function composerCommandKeyHandler(input: {
@@ -45,10 +50,9 @@ export function composerCommandKeyHandler(input: {
   readonly isCompacting: boolean;
   readonly followUpBehavior: ChatComposerProps["settings"]["followUpBehavior"];
   readonly isSoftwareKeyboardOpen: boolean;
-  readonly planModeUiEnabled: boolean;
   readonly isLiteralPendingAnswer: boolean;
   readonly pendingUserInputs: ReadonlyArray<PendingUserInput>;
-  readonly promptHistoryMessages: ChatComposerProps["promptHistoryMessages"];
+  readonly promptHistoryEntries: ChatComposerProps["promptHistoryEntries"];
   readonly promptHistoryPositionRef: RefObject<{
     targetKey: string;
     position: ComposerPromptHistoryPosition;
@@ -72,7 +76,6 @@ export function composerCommandKeyHandler(input: {
   readonly setComposerTrigger: (trigger: ComposerTrigger | null) => void;
   readonly setComposerHighlightedItemId: Dispatch<SetStateAction<string | null>>;
   readonly dismissComposerTrigger: (trigger: ComposerTrigger | null) => void;
-  readonly toggleInteractionMode: () => void;
   readonly nudgeComposerMenuHighlight: (key: "ArrowDown" | "ArrowUp") => void;
   readonly onSelectComposerItem: (item: ComposerCommandItem) => void;
   readonly resolveActiveComposerTrigger: () => { trigger: ComposerTrigger | null };
@@ -89,6 +92,9 @@ export function composerCommandKeyHandler(input: {
     submissionIntent: ComposerSubmissionIntent,
   ) => void;
   readonly clearComposerAttachments: () => boolean;
+  /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
+  readonly promptSuggestion: string | null;
+  readonly dismissPromptSuggestion: () => void;
 }) {
   const {
     keybindings,
@@ -98,10 +104,9 @@ export function composerCommandKeyHandler(input: {
     isCompacting,
     followUpBehavior,
     isSoftwareKeyboardOpen,
-    planModeUiEnabled,
     isLiteralPendingAnswer,
     pendingUserInputs,
-    promptHistoryMessages,
+    promptHistoryEntries,
     promptHistoryPositionRef,
     composerDraftTarget,
     promptRef,
@@ -119,7 +124,6 @@ export function composerCommandKeyHandler(input: {
     setComposerTrigger,
     setComposerHighlightedItemId,
     dismissComposerTrigger,
-    toggleInteractionMode,
     nudgeComposerMenuHighlight,
     onSelectComposerItem,
     resolveActiveComposerTrigger,
@@ -127,6 +131,8 @@ export function composerCommandKeyHandler(input: {
     applyPromptReplacement,
     submitComposer,
     clearComposerAttachments,
+    promptSuggestion,
+    dismissPromptSuggestion,
   } = input;
 
   // The composer persists across threads. A recall from thread A must not
@@ -171,7 +177,9 @@ export function composerCommandKeyHandler(input: {
     const step = stepComposerPromptHistory({
       direction,
       // Built on the keypress, not per render: the timeline changes on every streamed delta.
-      entries: buildComposerPromptHistoryEntries(promptHistoryMessages),
+      entries: buildComposerPromptHistoryEntries(
+        promptHistoryEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+      ),
       position,
       currentPrompt: promptRef.current,
     });
@@ -181,6 +189,25 @@ export function composerCommandKeyHandler(input: {
       : null;
     replacePromptFromHistory(step.prompt);
     return true;
+  };
+
+  const applyListEdit = (
+    event: KeyboardEvent,
+    listEdit: (value: string, start: number, end: number) => ComposerListEdit | null,
+  ): boolean => {
+    if (isLiteralPendingAnswer || event.isComposing) return false;
+    const selection = composerEditorRef.current?.readSelectionRange();
+    const snapshot = readComposerSnapshot();
+    if (!selection || selection.start !== selection.end || snapshot.value !== promptRef.current) {
+      return false;
+    }
+    const edit = listEdit(snapshot.value, selection.start, selection.end);
+    return (
+      edit !== null &&
+      applyPromptReplacement(edit.start, edit.end, edit.replacement, {
+        expandedCursorAfterReplace: edit.cursorAfter,
+      })
+    );
   };
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem = false) => {
@@ -194,9 +221,7 @@ export function composerCommandKeyHandler(input: {
       prompt: promptRef.current,
     });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
-      if (!planModeUiEnabled) return false;
-      toggleInteractionMode();
-      return true;
+      return applyListEdit(event, listOutdentForTab);
     }
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive =
@@ -206,6 +231,10 @@ export function composerCommandKeyHandler(input: {
       if (menuIsActive) {
         dismissComposerTrigger(trigger);
         composerMenuOpenRef.current = false;
+        return true;
+      }
+      if (promptSuggestion !== null && promptRef.current.length === 0) {
+        dismissPromptSuggestion();
         return true;
       }
       if (
@@ -235,6 +264,21 @@ export function composerCommandKeyHandler(input: {
         return true;
       }
     }
+    if (
+      key === "Tab" &&
+      promptSuggestion !== null &&
+      promptRef.current.length === 0 &&
+      !menuIsActive &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.isComposing &&
+      event.keyCode !== 229
+    ) {
+      // The typing guard must see this draft, so an approval that lands next is not answered with it.
+      return applyPromptReplacement(0, 0, promptSuggestion);
+    }
     if ((key === "ArrowUp" || key === "ArrowDown") && submissionIntent === null) {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
@@ -252,27 +296,8 @@ export function composerCommandKeyHandler(input: {
       return true;
     }
     if (key === "Enter" && isTaskItem) return false;
-    if (
-      !isLiteralPendingAnswer &&
-      !event.isComposing &&
-      (key === "Enter" || (key === "Tab" && !event.shiftKey))
-    ) {
-      const selection = composerEditorRef.current?.readSelectionRange();
-      const snapshot = readComposerSnapshot();
-      if (selection && selection.start === selection.end && snapshot.value === promptRef.current) {
-        const edit =
-          key === "Enter"
-            ? listContinuationForEnter(snapshot.value, selection.start)
-            : listIndentForTab(snapshot.value, selection.start, selection.end);
-        if (
-          edit &&
-          applyPromptReplacement(edit.start, edit.end, edit.replacement, {
-            expandedCursorAfterReplace: edit.cursorAfter,
-          })
-        ) {
-          return true;
-        }
-      }
+    if (key === "Enter" || (key === "Tab" && !event.shiftKey)) {
+      return applyListEdit(event, key === "Enter" ? listContinuationForEnter : listIndentForTab);
     }
     return false;
   };

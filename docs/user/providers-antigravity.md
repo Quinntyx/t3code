@@ -6,11 +6,10 @@ which models and account access are available through this agent.
 
 ## Set up Antigravity
 
-On web or desktop, open **Settings > Providers**, choose the environment that runs
+Open **Settings > Providers** on web, desktop, or mobile, choose the environment that runs
 your project, and enable Antigravity. Install its runtime there, then choose
 **Sign in** and complete the browser sign-in. Wait for T3 Code to confirm
-account access and load models before starting a thread. Once the runtime is installed,
-you can also sign in from **Settings > Providers** in the mobile app.
+account access and load models before starting a thread.
 
 Installation continues if you leave settings or reconnect. Setup requires
 permission to operate the environment; update an older server if it does not offer
@@ -68,18 +67,26 @@ Leave the field blank to use the managed runtime, or a compatible executable on
 
 ## Models and threads
 
-The model list comes from your Antigravity account and can differ from other
-Antigravity apps. A resumed thread keeps its selected model. If access to that
-model ends, select another available model before continuing.
+The model list comes from your Antigravity account, including Claude and GPT models
+when your plan has them. Pick a thinking level beside the model list in the model picker; it
+shows only the levels the selected model supports. A resumed thread keeps its
+selected model. If access to that model ends, select another available model
+before continuing.
 
-Use Antigravity's native `/plan` command for planning. T3 Code's separate Plan mode
-is unavailable. Tool approvals follow [Permission modes](./permission-modes.md).
+Antigravity creates empty `.gemini/skills` and `.agents/skills` folders in the
+workspace when a session starts. Git does not track empty folders, so they never
+appear in commits.
+
+Use Antigravity's native `/plan` command for planning. Tool approvals follow [Permission modes](./permission-modes.md).
 Questions with fixed choices still need one of the offered answers, even in
 **Full access**.
 
 T3 Code keeps conversation history and file diffs, but Antigravity cannot rewind
 its conversation. Reverting a thread or editing and resubmitting an earlier turn
 is unavailable. Continue with a follow-up message or start a new thread.
+
+Manual context compaction is unavailable through Antigravity's ACP runtime, even
+though its CLI has `/compact`. Send `/clear` when you need a fresh context.
 
 ### Skills and attachments
 
@@ -92,21 +99,25 @@ Skills for every project go in `~/.gemini/config/skills` or
 `~/.gemini/antigravity-cli/skills`. Antigravity does not read `~/.agents/skills`,
 so a skill there only appears when the project itself is your home directory.
 
-Antigravity receives images directly. Every other attachment, including PDFs,
-text, audio, archives, and videos, is passed as a saved file path for the agent
-to inspect with its tools. A video path does not enable native video input.
+Antigravity receives images and audio directly, and reads PDFs and text files as
+documents. With the managed runtime on macOS and Linux, an MP4 video up to 20 MiB
+is sent as video to Gemini models. Other attachments, and videos for other models, are passed as a
+saved file path for the agent to inspect with its tools.
 
 ### Subagents
 
-Antigravity groups subagent activity into batches. You cannot open or control
-individual subagents, and an idle batch does not confirm that every child
-succeeded. See [agent work](./thread-sidebar.md#inspect-agent-work) for where to
-inspect activity.
+Antigravity groups subagent activity into batches. Open a batch and select
+**Subagent work** (**Work** on mobile) to read each child's role, prompt, and recent steps. This view
+is read only: you cannot message or control individual subagents, and an idle
+batch does not confirm that every child succeeded. If Antigravity did not record
+which children a batch started, the view says so. See
+[agent work](./thread-sidebar.md#inspect-agent-work) for where to inspect
+activity.
 
 ## Accounts and removal
 
 Add an Antigravity provider instance for each Google account in
-**Settings > Providers** on web or desktop. Each has its own sign-in; downloaded
+**Settings > Providers** on web, desktop, or mobile. Each has its own sign-in; downloaded
 runtimes are shared on the environment.
 
 | Action                    | Effect                                                            |

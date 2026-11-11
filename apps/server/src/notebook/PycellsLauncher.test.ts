@@ -4,6 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { PycellsLauncher, pycellsSocketPath } from "@t3tools/shared/pycells";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -42,6 +43,7 @@ it.live(
         thread: string;
         owner: string;
         extra: string;
+        injected: string;
       }) => void;
       const ready = new Promise<Parameters<typeof report>[0]>((resolve) => {
         report = resolve;
@@ -75,7 +77,8 @@ it.live(
       const net = require('node:net');
       const socket = net.connect(process.env.READY_SOCKET, () => socket.end(JSON.stringify({
         pid:process.pid, ppid:process.ppid, thread:process.env.T3_THREAD_ID,
-        owner:process.env.T3_PYCELLS_OWNER_PID, extra:process.env.PYCELLS_TEST_EXTRA
+        owner:process.env.T3_PYCELLS_OWNER_PID, extra:process.env.PYCELLS_TEST_EXTRA,
+        injected:process.env.PYCELLS_HOST_ENV
       })));
       net.createServer(s => s.end()).listen(process.env.T3_PYCELLS_SOCKET);
     `,
@@ -132,7 +135,12 @@ it.live(
           thread: "thread-1",
           owner: String(process.pid),
           extra: "preserved",
+          injected: "host-injected",
         });
-      }).pipe(Effect.provide(Launcher.layer.pipe(Layer.provide(config))), Effect.scoped);
+      }).pipe(
+        Effect.provide(Launcher.layer.pipe(Layer.provide(config))),
+        Effect.provideService(HostProcess.Environment, { PYCELLS_HOST_ENV: "host-injected" }),
+        Effect.scoped,
+      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

@@ -1,7 +1,6 @@
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  allowedMergeMethods,
   canPerformPullRequestAction,
   mergeUnavailableReason,
   pullRequestActionLabel,
@@ -26,7 +25,7 @@ const ALL_PR_ACTIONS: readonly PullRequestAction[] = [
   "delete-branch",
 ];
 
-type Detail = Parameters<typeof allowedMergeMethods>[0];
+type Detail = Parameters<typeof canPerformPullRequestAction>[0];
 
 function detail(overrides: Partial<Detail> = {}): Detail {
   return {

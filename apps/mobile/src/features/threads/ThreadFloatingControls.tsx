@@ -1,6 +1,6 @@
 import type { JSX } from "react";
 import { Platform, Pressable, View } from "react-native";
-import Animated, { FadeIn, FadeOut, ReduceMotion } from "react-native-reanimated";
+import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -21,7 +21,6 @@ export const THREAD_FLOATING_TOP_SCRIM_HEIGHT =
   THREAD_FLOATING_CONTROL_ROW_OFFSET + THREAD_FLOATING_TOP_SCRIM_TAIL;
 
 const CONTROLS_ENTERING = FadeIn.duration(160).reduceMotion(ReduceMotion.System);
-const CONTROLS_EXITING = FadeOut.duration(160).reduceMotion(ReduceMotion.System);
 
 const PILL_CLASS_NAME = "items-center justify-center overflow-hidden rounded-full";
 const PILL_STYLE = { width: THREAD_FLOATING_CONTROL_SIZE, height: THREAD_FLOATING_CONTROL_SIZE };
@@ -58,10 +57,7 @@ export function usesFloatingThreadControls(layout: { readonly usesSplitView: boo
 }
 
 /** Two floating pills over the feed: threads on the left, details on the right. */
-export function ThreadFloatingHeader(props: {
-  /** Hidden while the composer owns the keyboard so the pills never cover it. */
-  readonly hidden: boolean;
-}) {
+export function ThreadFloatingHeader() {
   const insets = useSafeAreaInsets();
   const { openDrawer } = useThreadListDrawer();
   const details = useThreadDetailsDrawer();
@@ -72,46 +68,43 @@ export function ThreadFloatingHeader(props: {
       className="absolute inset-x-3"
       style={{ top: insets.top + THREAD_FLOATING_CONTROL_TOP_GAP, zIndex: 20 }}
     >
-      {props.hidden ? null : (
-        <Animated.View
-          entering={CONTROLS_ENTERING}
-          exiting={CONTROLS_EXITING}
-          pointerEvents="box-none"
-          className="flex-row items-center justify-between"
+      <Animated.View
+        entering={CONTROLS_ENTERING}
+        pointerEvents="box-none"
+        className="flex-row items-center justify-between"
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open threads"
+          className={PILL_CLASS_NAME}
+          style={PILL_STYLE}
+          onPress={openDrawer}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open threads"
-            className={PILL_CLASS_NAME}
-            style={PILL_STYLE}
-            onPress={openDrawer}
-          >
-            <FloatingHeaderButtonBackdrop />
-            <SymbolView
-              name="line.3.horizontal"
-              size={24}
-              tintColorClassName="accent-header-foreground"
-              type="monochrome"
-            />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open thread details"
-            accessibilityState={{ expanded: details.open }}
-            className={PILL_CLASS_NAME}
-            style={PILL_STYLE}
-            onPress={details.openDrawer}
-          >
-            <FloatingHeaderButtonBackdrop />
-            <SymbolView
-              name="sidebar.right"
-              size={24}
-              tintColorClassName="accent-header-foreground"
-              type="monochrome"
-            />
-          </Pressable>
-        </Animated.View>
-      )}
+          <FloatingHeaderButtonBackdrop />
+          <SymbolView
+            name="line.3.horizontal"
+            size={24}
+            tintColorClassName="accent-header-foreground"
+            type="monochrome"
+          />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open thread details"
+          accessibilityState={{ expanded: details.open }}
+          className={PILL_CLASS_NAME}
+          style={PILL_STYLE}
+          onPress={details.openDrawer}
+        >
+          <FloatingHeaderButtonBackdrop />
+          <SymbolView
+            name="sidebar.right"
+            size={24}
+            tintColorClassName="accent-header-foreground"
+            type="monochrome"
+          />
+        </Pressable>
+      </Animated.View>
     </View>
   );
 }

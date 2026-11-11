@@ -104,8 +104,14 @@ function providerColor(driver: ProviderDriverKind): string {
   );
 }
 
-function UsageFigures({ models }: { readonly models: ReadonlyArray<ThreadUsageModel> }) {
-  const cost = formatThreadUsageCost(models);
+function UsageFigures({
+  models,
+  incomplete = false,
+}: {
+  readonly models: ReadonlyArray<ThreadUsageModel>;
+  readonly incomplete?: boolean;
+}) {
+  const cost = formatThreadUsageCost(models, incomplete);
   return (
     <span className="flex shrink-0 items-center gap-0.5 text-xs font-normal tabular-nums">
       <span className="text-foreground/85">
@@ -149,12 +155,14 @@ function ModelIcon({
 function UsageGroupRow({
   group,
   models,
+  incomplete,
   present,
   open,
   onToggle,
 }: {
   readonly group: ThreadUsageGroup;
   readonly models: ReadonlyArray<ThreadUsageModel>;
+  readonly incomplete: boolean;
   readonly present: (model: ThreadUsageModel) => ModelPresentation;
   readonly open: boolean;
   readonly onToggle: () => void;
@@ -210,13 +218,13 @@ function UsageGroupRow({
         >
           {icon}
           {label}
-          <UsageFigures models={models} />
+          <UsageFigures models={models} incomplete={incomplete} />
         </ThreadDetailsControl>
       ) : (
         <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
           {icon}
           {label}
-          <UsageFigures models={models} />
+          <UsageFigures models={models} incomplete={incomplete} />
         </div>
       )}
       {mixed && open ? (
@@ -397,17 +405,17 @@ export function ThreadUsagePanel(props: {
 
   return (
     <ThreadDetailsSection
-      headingId="thread-details-usage-heading"
-      title="Usage"
+      headingId="thread-details-consumption-heading"
+      title="Consumption"
       showHeading={false}
       onContextMenu={handleContextMenu}
     >
       <div className="flex flex-col">
         <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
           <GaugeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Usage</span>
+          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Consumption</span>
           {hasUsage ? (
-            <UsageFigures models={data.models} />
+            <UsageFigures models={data.models} incomplete={data.incompleteGroups !== undefined} />
           ) : (
             <span className="text-xs text-muted-foreground">No usage yet</span>
           )}
@@ -449,6 +457,7 @@ export function ThreadUsagePanel(props: {
                 key={group}
                 group={group}
                 models={groupModels(group)}
+                incomplete={data.incompleteGroups?.includes(group) === true}
                 present={present}
                 open={open.has(group)}
                 onToggle={() => toggle(group)}

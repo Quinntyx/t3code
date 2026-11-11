@@ -267,6 +267,7 @@ export class GitLabCli extends Context.Service<
   {
     readonly execute: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly args: ReadonlyArray<string>;
       readonly timeoutMs?: number;
       /** Keeps sensitive payloads out of argv. */
@@ -276,6 +277,7 @@ export class GitLabCli extends Context.Service<
 
     readonly listMergeRequests: (input: {
       readonly cwd: string;
+      readonly targetRepository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -379,12 +381,6 @@ function sourceRefName(input: {
   return input.source?.refName ?? normalizeHeadSelector(input.headSelector);
 }
 
-function sourceProjectIdentifier(
-  source: SourceControlProvider.SourceControlRefSelector | undefined,
-): string | null {
-  return source?.repository ?? source?.owner ?? null;
-}
-
 function toSummaryWithOptionalUpdatedAt(
   record: GitLabMergeRequestSummary & {
     readonly updatedAt: Option.Option<DateTime.Utc>;
@@ -410,11 +406,18 @@ function parseRepositoryPath(repository: string): {
   return { namespacePath, projectPath };
 }
 
-// glab prints a missing project or merge request as a bare 404.
+// glab prints a missing project or merge request as a bare 404, and an expired
+// OAuth login as an `invalid_grant` refresh failure without suggesting `glab auth login`.
 const classifyGlabFailure = (stderr: string): VcsProcessExitFailureKind | null => {
   const normalized = stderr.toLowerCase();
-  if (normalized.includes("glab auth login")) return "authentication";
-  if (normalized.includes("not found") || normalized.includes("404")) return "not-found";
+  if (normalized.includes("glab auth login") || normalized.includes("invalid_grant")) {
+    return "authentication";
+  }
+
+  if (normalized.includes("not found") || normalized.includes("404")) {
+    return "not-found";
+  }
+
   return null;
 };
 
@@ -432,6 +435,8 @@ export const make = Effect.gen(function* () {
         command: "glab",
         args: input.args,
         cwd: input.cwd,
+        // glab may otherwise prefer a different checkout remote.
+        ...(input.host === undefined ? {} : { env: { GITLAB_HOST: input.host } }),
         classifyFailure: classifyGlabFailure,
         notFoundDetail: "Merge request not found.",
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -480,6 +485,7 @@ export const make = Effect.gen(function* () {
           String(input.limit ?? 20),
           "--output",
           "json",
+          ...(input.targetRepository ? ["--repo", input.targetRepository] : []),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -621,20 +627,35 @@ export const make = Effect.gen(function* () {
         Effect.map(normalizeRepositoryCloneUrls),
       );
     }),
-    createMergeRequest: Effect.fn("GitLabCli.createMergeRequest")(function (input) {
-      const sourceProject = sourceProjectIdentifier(input.source);
-      return execute({
+    createMergeRequest: Effect.fn("GitLabCli.createMergeRequest")(function* (input) {
+      const targetProject = input.target?.repository
+        ? (yield* execute({
+            cwd: input.cwd,
+            args: ["api", `projects/${encodeURIComponent(input.target.repository)}`, "--jq", ".id"],
+          })).stdout.trim()
+        : undefined;
+      if (targetProject !== undefined && !/^[1-9]\d*$/u.test(targetProject)) {
+        return yield* new GitLabCliCommandError({
+          operation: "execute",
+          command: "glab",
+          cwd: input.cwd,
+          cause: new Error("GitLab did not return a numeric target project ID."),
+        });
+      }
+      return yield* execute({
         cwd: input.cwd,
         args: [
           "api",
           "--method",
           "POST",
-          "projects/:fullpath/merge_requests",
+          input.source?.repository
+            ? `projects/${encodeURIComponent(input.source.repository)}/merge_requests`
+            : "projects/:fullpath/merge_requests",
           "--raw-field",
           `source_branch=${sourceRefName(input)}`,
           "--raw-field",
           `target_branch=${input.target?.refName ?? input.baseBranch}`,
-          ...(sourceProject ? ["--raw-field", `source_project_id=${sourceProject}`] : []),
+          ...(targetProject ? ["--field", `target_project_id=${targetProject}`] : []),
           "--raw-field",
           `title=${input.title}`,
           "--field",

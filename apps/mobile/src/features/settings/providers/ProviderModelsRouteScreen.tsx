@@ -5,11 +5,13 @@ import {
   deriveProviderModelsForDisplay,
   modelListChanges,
   nextConfigBlobWithValue,
+  providerInstanceName,
 } from "@t3tools/client-runtime/provider-settings/instance";
 import {
   CUSTOM_MODEL_PLACEHOLDER_BY_KIND,
   describeModelCapabilities,
   groupModelsForDisplay,
+  hasReasoningControl,
   nextHiddenModelsForBulkToggle,
   validateCustomModelSlug,
 } from "@t3tools/client-runtime/provider-settings/models";
@@ -45,7 +47,6 @@ import { SettingsScreen } from "../components/SettingsScreen";
 import { SettingsSection } from "../components/SettingsSection";
 import { CustomModelEditor } from "./CustomModelEditor";
 import { FieldBlock } from "./ProviderFields";
-import { providerDisplayName } from "./ProviderStatus";
 import {
   useEnvironmentProviders,
   useModelPreferences,
@@ -83,7 +84,7 @@ function ProviderModels({ environmentId, instanceId }: Params) {
   const instance = row ? (row.explicitInstance ?? { driver: row.driver }) : null;
   const provider = providers.find((candidate) => candidate.instanceId === instanceId);
   return (
-    <SettingsScreen title={instance ? `${providerDisplayName(instance)} models` : "Models"}>
+    <SettingsScreen title={instance ? `${providerInstanceName(instance)} models` : "Models"}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -175,6 +176,7 @@ function ModelsEditor(props: {
         ? "hidden"
         : "visible";
   const builtInModels = models.filter((model) => !model.isCustom);
+  const flagMissingReasoning = models.some(hasReasoningControl);
   const allBuiltInHidden =
     builtInModels.length > 0 && builtInModels.every((model) => hiddenSet.has(model.slug));
   const normalizedFilter = filter.trim().toLowerCase();
@@ -389,6 +391,7 @@ function ModelsEditor(props: {
                 <ModelRow
                   key={model.slug}
                   model={model}
+                  flagMissingReasoning={flagMissingReasoning}
                   separated={index > 0}
                   favorite={group === "favorite"}
                   hidden={group === "hidden"}
@@ -466,6 +469,7 @@ function ModelsEditor(props: {
 
 function ModelRow(props: {
   readonly model: ServerProviderModel;
+  readonly flagMissingReasoning: boolean;
   readonly separated: boolean;
   readonly favorite: boolean;
   readonly hidden: boolean;
@@ -480,7 +484,7 @@ function ModelRow(props: {
   readonly onRemove: () => void;
 }) {
   const { model } = props;
-  const capabilities = describeModelCapabilities(model);
+  const capabilities = describeModelCapabilities(model, props.flagMissingReasoning);
   const detail = [
     model.name !== model.slug ? model.slug : null,
     model.isCustom ? "custom" : null,

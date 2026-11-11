@@ -11,6 +11,7 @@ import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
+  settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -18,7 +19,7 @@ import {
   type EnvironmentId,
   type AcpRegistryUrlAuthAction,
   PROVIDER_DISPLAY_NAMES,
-  ProviderDriverKind,
+  type ProviderDriverKind,
   type ProjectId,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
@@ -47,6 +48,7 @@ import {
   useToggleEnvironmentModelFavorite,
 } from "../../hooks/useSettings";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { ensureLocalApi } from "../../localApi";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { cn } from "../../lib/utils";
 import { resolveAppModelSelectionState } from "../../modelSelection";
@@ -84,20 +86,17 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "../ui/empty";
-import {
-  NumberField,
-  NumberFieldDecrement,
-  NumberFieldGroup,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from "../ui/number-field";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { useManagedPolicy } from "~/state/managedPolicy";
 import { ExpandableText } from "./ExpandableText";
+import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { useSecretSources } from "./SecretSourceInput";
+import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
@@ -109,7 +108,6 @@ import { CompactIdleThreadsRow } from "./SettingsPanels";
 import {
   backgroundActivityOverrideSettings,
   durationToSeconds,
-  normalizeIntervalSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
 } from "@t3tools/client-runtime/provider-settings/background-activity";
 import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
@@ -123,8 +121,9 @@ import {
 } from "./settingsLayout";
 import {
   deriveProviderInstanceRows,
+  managedAcpRegistryAgentId,
   modelListChanges,
-  readConfigString,
+  providerInstanceRemovalPrompt,
   type ProviderInstanceRow as ProviderInstanceRowModel,
 } from "@t3tools/client-runtime/provider-settings/instance";
 import {
@@ -137,6 +136,19 @@ import {
   resolveRemoteOperateAccess,
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
+
+async function confirmProviderInstanceRemoval(
+  operation: "remove" | "reset",
+  instance: ProviderInstanceConfig,
+): Promise<boolean> {
+  const prompt = providerInstanceRemovalPrompt(operation, instance);
+  const confirmed = await settlePromise(() =>
+    ensureLocalApi().dialogs.confirm(`${prompt.question}\n${prompt.detail}`, {
+      variant: "destructive",
+    }),
+  );
+  return confirmed._tag === "Success" && confirmed.value;
+}
 
 function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
@@ -322,25 +334,9 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
       hasServerConfig: environment.serverConfig !== null,
     }),
   )?.environmentId;
-  const searchableCursorEnvironmentId = options.find(
-    (environment) =>
-      environment.serverConfig?.environment.platform.os === "darwin" &&
-      isProviderSettingsEnvironmentAvailable({
-        connectionPhase: environment.connection.phase,
-        hasServerConfig: true,
-      }),
-  )?.environmentId;
   let searchRedirectEnvironmentId: EnvironmentId | undefined;
   {
     if (
-      !target.scoped &&
-      searchTargetId === searchableSetting("cursor-keychain-usage").id &&
-      (!selectedEnvironmentCanRenderSettings ||
-        selectedEnvironment?.serverConfig?.environment.platform.os !== "darwin") &&
-      searchableCursorEnvironmentId !== undefined
-    ) {
-      searchRedirectEnvironmentId = searchableCursorEnvironmentId;
-    } else if (
       !target.scoped &&
       (searchTargetId === searchableSetting("provider-health-check-interval").id ||
         searchTargetId === searchableSetting("usage-providers").id) &&
@@ -534,6 +530,10 @@ export function EnvironmentProviderSettings({
   readonly readOnly?: boolean;
 }) {
   const settings = useEnvironmentSettings(environmentId);
+  const managedPolicy = useManagedPolicy(environmentId);
+  // A policy that allows no provider leaves nothing to add.
+  const canAddProvider =
+    !readOnly && managedPolicy?.limits?.providers?.allowedDrivers?.length !== 0;
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const canRefreshProviders = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
@@ -614,7 +614,7 @@ export function EnvironmentProviderSettings({
     void (async () => {
       const result = await refreshServerProviders({
         environmentId,
-        input: { refreshModels: true },
+        input: { refreshModels: true, reloadSecrets: true },
       });
       refreshingRef.current = false;
       setIsRefreshingProviders(false);
@@ -741,6 +741,8 @@ export function EnvironmentProviderSettings({
 
   const deleteInstance = useStableCallback(
     async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) => {
+      const confirmed = await confirmProviderInstanceRemoval("remove", instance);
+      if (!confirmed) return;
       const updateResult = await persistProviderInstance({
         operation: "remove",
         instanceId,
@@ -755,9 +757,7 @@ export function EnvironmentProviderSettings({
         return;
       }
 
-      if (instance.driver !== ProviderDriverKind.make("acpRegistry")) return;
-      if (readConfigString(instance.config, "source") === "local") return;
-      const agentId = readConfigString(instance.config, "agentId");
+      const agentId = managedAcpRegistryAgentId(instance);
       if (agentId === null) return;
 
       // Concurrent removals race client snapshots; let the server decide whether the agent remains in use.
@@ -777,10 +777,11 @@ export function EnvironmentProviderSettings({
   );
 
   const resetDefaultInstance = useStableCallback(async (driverKind: ProviderDriverKind) => {
-    const result = await persistProviderInstance({
-      operation: "remove",
-      instanceId: defaultInstanceIdForDriver(driverKind),
-    });
+    const instanceId = defaultInstanceIdForDriver(driverKind);
+    const instance = settings.providerInstances?.[instanceId] ?? { driver: driverKind };
+    const confirmed = await confirmProviderInstanceRemoval("reset", instance);
+    if (!confirmed) return;
+    const result = await persistProviderInstance({ operation: "remove", instanceId });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
@@ -871,7 +872,7 @@ export function EnvironmentProviderSettings({
         {...searchableSetting("providers")}
         variant="plain"
         titleAction={
-          !readOnly ? (
+          canAddProvider ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -946,7 +947,7 @@ export function EnvironmentProviderSettings({
             >
               <div className="divide-y divide-border/50">
                 {rows.map((row) => renderProviderInstance(row, "list"))}
-                {!readOnly ? (
+                {canAddProvider ? (
                   <button
                     type="button"
                     className="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted/25 hover:text-foreground focus-visible:bg-muted/25 focus-visible:text-foreground sm:px-4"
@@ -984,9 +985,19 @@ export function EnvironmentProviderSettings({
         environmentId={environmentId}
         environmentLabel={environmentLabel}
         sources={settings.usageLimitSources}
-        cursorKeychainUsageEnabled={settings.cursorKeychainUsageEnabled}
         readOnly={readOnly}
       />
+
+      {/* The server drops text generators under a provider allow-list. */}
+      {managedPolicy?.limits?.providers?.allowedDrivers === undefined ? (
+        <TextGeneratorsSettings
+          key={`text-generators:${environmentId}`}
+          environmentId={environmentId}
+          environmentLabel={environmentLabel}
+          providers={serverProviders}
+          readOnly={readOnly}
+        />
+      ) : null}
 
       <SettingsSection title="Advanced">
         <SettingsRow
@@ -1032,32 +1043,22 @@ export function EnvironmentProviderSettings({
                 !canWriteSettings && "opacity-50 select-none",
               )}
             >
-              <NumberField
+              <IntervalSecondsField
+                label="provider health check interval"
                 value={providerHealthRefreshIntervalSeconds}
                 min={0}
                 step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
-                size="sm"
-                className="w-32"
-                onValueChange={(value) =>
+                onCommit={(seconds, options) =>
                   updateSettings(
                     backgroundActivityOverrideSettings(
                       settings.backgroundActivity,
                       resolvedBackgroundActivity,
-                      {
-                        providerHealthRefreshInterval: Duration.seconds(
-                          normalizeIntervalSeconds(value),
-                        ),
-                      },
+                      { providerHealthRefreshInterval: Duration.seconds(seconds) },
                     ),
+                    options,
                   )
                 }
-              >
-                <NumberFieldGroup>
-                  <NumberFieldDecrement aria-label="Decrease provider health check interval" />
-                  <NumberFieldInput aria-label="Provider health check interval in seconds" />
-                  <NumberFieldIncrement aria-label="Increase provider health check interval" />
-                </NumberFieldGroup>
-              </NumberField>
+              />
               <span className="text-xs text-muted-foreground">seconds</span>
             </div>
           }
@@ -1157,6 +1158,7 @@ function ProviderInstanceRow({
   readonly actions: ProviderInstanceRowActions;
 }) {
   const allProjects = useProjects();
+  const secretSources = useSecretSources(environmentId);
   const acpProjects =
     mode === "editor" && liveProvider?.driver === "acpRegistry"
       ? allProjects.filter((project) => project.environmentId === environmentId)
@@ -1195,6 +1197,7 @@ function ProviderInstanceRow({
   return (
     <ProviderInstanceCard
       environmentId={environmentId}
+      secretSources={secretSources}
       acpProjects={acpProjects}
       projectOverride={projectOverride}
       onAcceptUrlAuth={

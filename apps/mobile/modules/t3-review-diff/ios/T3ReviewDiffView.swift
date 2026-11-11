@@ -344,7 +344,9 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
   private var pendingScrollAnimated = false
   private var isProgrammaticScrollActive = false
   private var rowsDecodeGeneration = 0
+  private var rowsDecodeCancellation: ReviewDiffRowPreparation?
   private var tokensDecodeGeneration = 0
+  private var tokensDecodeCancellation: ReviewDiffRowPreparation?
 
   let onDebug = EventDispatcher()
   let onVisibleFileChange = EventDispatcher()
@@ -391,6 +393,11 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     scrollView.addSubview(contentView)
   }
 
+  deinit {
+    rowsDecodeCancellation?.cancel()
+    tokensDecodeCancellation?.cancel()
+  }
+
   public override func layoutSubviews() {
     super.layoutSubviews()
     let anchor = contentView.viewportWidth != bounds.width ? contentView.viewportRowAnchor() : nil
@@ -430,10 +437,15 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
 
   func setRowsJson(_ rowsJson: String) {
     contentView.cancelRowPreparation()
+    rowsDecodeCancellation?.cancel()
+    let cancellation = ReviewDiffRowPreparation()
+    rowsDecodeCancellation = cancellation
     rowsDecodeGeneration += 1
     let generation = rowsDecodeGeneration
 
     payloadDecodeQueue.async { [weak self] in
+      // Check weak liveness without retaining the view or reading its UIKit state.
+      guard !cancellation.isCancelled, self != nil else { return }
       guard let data = rowsJson.data(using: .utf8) else {
         return
       }
@@ -479,10 +491,15 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
   }
 
   func setTokensJson(_ tokensJson: String) {
+    tokensDecodeCancellation?.cancel()
+    let cancellation = ReviewDiffRowPreparation()
+    tokensDecodeCancellation = cancellation
     tokensDecodeGeneration += 1
     let generation = tokensDecodeGeneration
 
     payloadDecodeQueue.async { [weak self] in
+      // Entered decoding may finish; only skip full payloads already obsolete in the queue.
+      guard !cancellation.isCancelled, self != nil else { return }
       guard let data = tokensJson.data(using: .utf8) else {
         return
       }
@@ -605,8 +622,11 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     self.contentResetKey = contentResetKey
     lastVisibleRangeDebugKey = ""
     contentView.cancelRowPreparation()
+    rowsDecodeCancellation?.cancel()
+    rowsDecodeCancellation = nil
     rowsDecodeGeneration += 1
     tokensDecodeGeneration += 1
+    tokensDecodeCancellation?.cancel()
     contentView.tokensByRowId = [:]
     rows = []
     contentView.rows = []
@@ -1925,8 +1945,8 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
 
   private func maxHorizontalOffset(for target: (fileId: String, kind: ReviewDiffHorizontalPanKind)) -> CGFloat {
     if target.kind == .fileHeaderPath,
-       let row = rows.first(where: { resolvedFileId(for: $0) == target.fileId && $0.kind == "file" }) {
-      return maxHeaderPathOffset(for: row)
+       let rowIndex = fileHeaderRowIndex(forFileId: target.fileId) {
+      return maxHeaderPathOffset(for: rows[rowIndex])
     }
     if codeWrapColumns != nil {
       return 0

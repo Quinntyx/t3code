@@ -1,4 +1,7 @@
-import captureWorkletUrl from "./capture-worklet.ts?worker&url";
+import { MICROPHONE_PERMISSION_ERROR } from "@t3tools/client-runtime/voice-input";
+import { getClientSettings } from "../hooks/useSettings";
+import pcmWorkletUrl from "../speech/pcmWorklet.ts?worker&url";
+import { encodePcm16 } from "./pcm";
 import type { VoicePlatform } from "./VoiceAudio";
 import { AudioMeter } from "./spectrum";
 
@@ -15,52 +18,51 @@ export const browserVoicePlatform: VoicePlatform = {
   },
   createContext: () => new AudioContext({ latencyHint: "interactive" }),
   createMeter: (context) => new AudioMeter(context),
-  getUserMedia: () =>
-    navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    }),
+  getUserMedia: async () => {
+    // The microphone chosen in Voice settings serves dictation and Voice alike.
+    const microphoneId = getClientSettings().voiceMicrophone;
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: {
+          ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError")
+        throw new Error(MICROPHONE_PERMISSION_ERROR, { cause: error });
+      throw error;
+    }
+  },
   createCapture: async (context, stream, onInput, onError, analyser) => {
-    await context.audioWorklet.addModule(captureWorkletUrl);
+    await context.audioWorklet.addModule(pcmWorkletUrl);
     if (
       context.state === "closed" ||
       !stream.getTracks().some((track) => track.readyState === "live")
     )
       return { stop: () => {} };
     const source = context.createMediaStreamSource(stream);
-    const capture = new AudioWorkletNode(context, "voice-capture", {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
+    const capture = new AudioWorkletNode(context, "t3-pcm-capture", {
       channelCount: 1,
-      channelCountMode: "explicit",
+      processorOptions: { live: true },
     });
     let stopped = false;
-    capture.port.onmessage = (event: MessageEvent<unknown>) => {
-      if (stopped) return;
-      if (!(event.data instanceof Uint8Array) || event.data.byteLength !== 640) {
-        onError(new Error("Microphone worklet exceeded its bounded frame queue."));
-        return;
-      }
-      void onInput(event.data).then(
-        (accepted) => {
-          if (!stopped && accepted) capture.port.postMessage("ack", []);
-        },
-        () => {
-          if (!stopped) onError(new Error("Microphone input failed."));
-        },
-      );
+    capture.port.onmessage = ({ data }: MessageEvent<Float32Array | number | string>) => {
+      if (stopped || !(data instanceof Float32Array)) return;
+      void onInput(encodePcm16(data)).catch(() => {
+        if (!stopped) onError(new Error("Microphone input failed."));
+      });
     };
     capture.onprocessorerror = () => onError(new Error("Microphone worklet stopped unexpectedly."));
     source.connect(analyser);
     analyser.connect(capture);
     // A silent output keeps capture processing while assistant audio plays on the same context.
     capture.connect(context.destination);
+    capture.port.postMessage("start", []);
     return {
       stop: () => {
         stopped = true;

@@ -2,11 +2,13 @@ import { useNavigation } from "@react-navigation/native";
 import { getProviderVersionLabel } from "@t3tools/client-runtime/provider-settings/status";
 import {
   deriveProviderInstanceRows,
+  providerInstanceName,
   type ProviderInstanceRow,
 } from "@t3tools/client-runtime/provider-settings/instance";
 import {
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
+  isManagedDriverAllowed,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -28,10 +30,7 @@ import { relativeTime } from "../../../lib/time";
 import { serverEnvironment } from "../../../state/server";
 import { useEnvironmentScope, useEnvironmentsWithScope } from "../../../state/session";
 import { useAtomCommand } from "../../../state/use-atom-command";
-import {
-  AndroidSettingsEnvironmentFilter,
-  SettingsEnvironmentFilterHeader,
-} from "../components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentMenu } from "../components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { SettingsSection } from "../components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "../settings-environment-filter";
@@ -39,7 +38,6 @@ import {
   describeProviderInstance,
   isProviderUpdating,
   ProviderInstanceGlyph,
-  providerDisplayName,
   ProviderStatusDot,
 } from "./ProviderStatus";
 import {
@@ -50,34 +48,32 @@ import {
 } from "./useProviderSettings";
 
 export function ProvidersRouteScreen() {
+  const environmentMenu = useSettingsEnvironmentMenu();
   const { selectedTargets } = useSettingsEnvironmentFilter();
   const permitted = useEnvironmentsWithScope(selectedTargets, AuthProvidersManageScope);
   const insets = useSafeAreaInsets();
   return (
-    <>
-      <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Providers" trailing={<AndroidSettingsEnvironmentFilter />}>
-        <ScreenScrollView
-          className="flex-1"
-          contentInsetAdjustmentBehavior="automatic"
-          contentContainerClassName="gap-6 px-5 pt-4"
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-        >
-          {selectedTargets.length === 0 ? (
-            <Text className="text-foreground-muted">Select a connected environment.</Text>
-          ) : (
-            selectedTargets.map((environment) => (
-              <EnvironmentProviders
-                key={environment.environmentId}
-                environment={environment}
-                readOnly={!permitted.has(environment.environmentId)}
-                showOptionsTitle={selectedTargets.length > 1}
-              />
-            ))
-          )}
-        </ScreenScrollView>
-      </SettingsScreen>
-    </>
+    <SettingsScreen title="Providers" menus={[environmentMenu]}>
+      <ScreenScrollView
+        className="flex-1"
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerClassName="gap-6 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+      >
+        {selectedTargets.length === 0 ? (
+          <Text className="text-foreground-muted">Select a connected environment.</Text>
+        ) : (
+          selectedTargets.map((environment) => (
+            <EnvironmentProviders
+              key={environment.environmentId}
+              environment={environment}
+              readOnly={!permitted.has(environment.environmentId)}
+              showOptionsTitle={selectedTargets.length > 1}
+            />
+          ))
+        )}
+      </ScreenScrollView>
+    </SettingsScreen>
   );
 }
 
@@ -94,6 +90,9 @@ function EnvironmentProviders(props: {
     providerInstances: actions.settings.providerInstances,
     serverProviders: providers,
   });
+  // A policy that allows no provider leaves nothing to add.
+  const canAdd =
+    !props.readOnly && actions.managedPolicy?.limits?.providers?.allowedDrivers?.length !== 0;
   return (
     <View className="gap-6">
       <SettingsSection
@@ -113,13 +112,14 @@ function EnvironmentProviders(props: {
             provider={providers.find((candidate) => candidate.instanceId === row.instanceId)}
             separated={index > 0}
             readOnly={props.readOnly}
+            driverAllowed={isManagedDriverAllowed(actions.managedPolicy, row.driver)}
             onToggle={(enabled) => {
               const instance = row.explicitInstance ?? { driver: row.driver };
               return actions.updateInstance(row.instanceId, instance, { ...instance, enabled });
             }}
           />
         ))}
-        {!props.readOnly ? (
+        {canAdd ? (
           <View className={rows.length > 0 ? "border-t border-border-subtle" : undefined}>
             <ListActionRow
               icon="plus"
@@ -184,7 +184,7 @@ function RefreshProvidersControl(props: {
             setRefreshing(true);
             void refresh({
               environmentId: props.environmentId,
-              input: { refreshModels: true },
+              input: { refreshModels: true, reloadSecrets: true },
             }).then((result) => {
               refreshingRef.current = false;
               setRefreshing(false);
@@ -203,6 +203,7 @@ function ProviderListRow(props: {
   readonly provider: ServerProvider | undefined;
   readonly separated: boolean;
   readonly readOnly: boolean;
+  readonly driverAllowed: boolean;
   readonly onToggle: (enabled: boolean) => Promise<boolean>;
 }) {
   const navigation = useNavigation();
@@ -211,7 +212,7 @@ function ProviderListRow(props: {
   const status = describeProviderInstance(instance, props.provider);
   const enabledSwitch = usePendingSwitch(status.enabled);
   const enabled = enabledSwitch.value;
-  const name = providerDisplayName(instance);
+  const name = providerInstanceName(instance);
   const version = getProviderVersionLabel(props.provider?.version);
   const hasUpdate =
     status.enabled &&
@@ -283,7 +284,8 @@ function ProviderListRow(props: {
         </View>
         <ThemedSwitch
           accessibilityLabel={`Turn on ${name}`}
-          disabled={props.readOnly}
+          // The policy refuses switching it on; switching it off stays the user's call.
+          disabled={props.readOnly || (!enabled && !props.driverAllowed)}
           value={enabled}
           onValueChange={(value) => enabledSwitch.change(value, props.onToggle(value))}
         />

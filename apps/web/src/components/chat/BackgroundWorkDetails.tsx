@@ -14,10 +14,19 @@ import {
   ListTodoIcon,
   TerminalIcon,
 } from "lucide-react";
+import { useState } from "react";
 
 import { useTurnItemDetail } from "../../state/queries";
 import { tickTextContent } from "~/lib/tickTextContent";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
+import {
+  Dialog,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  DialogTrigger,
+} from "../ui/dialog";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -70,22 +79,29 @@ function BackgroundWorkSection(
   const commandItem = fetchedItem?.type === "command_execution" ? fetchedItem : wireCommand;
   const outputFile = backgroundCommandOutputFile(commandItem?.output) ?? detail.outputFile;
   const pendingOutput = fetchesOutput && commandItem === wireCommand && fetchedOutput.isPending;
+  // A finished launch call only holds its launch message; the work's output lives elsewhere.
+  const outputRunning = commandItem?.status === "running";
   const Icon = KIND_ICONS[item.kind];
+  const heading = item.named && !detail.isRawCommand ? item.label : KIND_LABELS[item.kind];
   const waiting = backgroundWorkHoldsCompletion([
     { kind: item.kind, awaited: detail.awaited ? true : undefined },
   ]);
   const description = turnItem?.title?.trim();
   const prHref = pullRequest ? resolveExternalWebLinkHref(pullRequest.url) : null;
   return (
-    <section className="space-y-2 border-b border-border/50 pb-4 last:border-0 last:pb-0">
+    <section className="space-y-2 border-b border-border/50 pb-4 text-sm last:border-0 last:pb-0">
       <div className="flex items-start gap-2">
-        <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1 space-y-1">
-          <h3 className="font-medium wrap-anywhere">{item.label}</h3>
-          <div className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground">
-            <span>{KIND_LABELS[item.kind]}</span>
-            <span aria-hidden>·</span>
-            <span>{waiting ? "Waiting on" : "Running in background"}</span>
+        <Icon aria-hidden className="mt-1 size-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <h3 className="font-medium wrap-anywhere">{heading}</h3>
+          <div className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+            {heading === KIND_LABELS[item.kind] ? null : (
+              <>
+                <span>{KIND_LABELS[item.kind]}</span>
+                <span aria-hidden>·</span>
+              </>
+            )}
+            <span>{waiting ? "Waiting" : "Running"}</span>
             {startedAtMs === null ? null : (
               <>
                 <span aria-hidden>·</span>
@@ -106,7 +122,7 @@ function BackgroundWorkSection(
       ) : null}
       {command === null ? null : (
         <div className="space-y-1.5 rounded-md border border-border/50 bg-muted/15 p-2">
-          <div className="flex items-center justify-between gap-2 text-muted-foreground">
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Command</span>
             <MessageCopyButton text={command} label="Copy command" variant="ghost" size="icon-xs" />
           </div>
@@ -115,31 +131,9 @@ function BackgroundWorkSection(
           </div>
         </div>
       )}
-      {outputFile === null ? (
-        commandItem ? (
-          <div className={MONO_CLASS_NAME}>
-            {pendingOutput ? (
-              <p className="text-muted-foreground italic">Loading output…</p>
-            ) : fetchedOutput.error ? (
-              <p className="text-destructive">Couldn&apos;t load output: {fetchedOutput.error}</p>
-            ) : props.streamsOutput ? (
-              <CommandOutputPanel
-                environmentId={props.environmentId}
-                threadId={commandItem.threadId}
-                itemId={commandItem.id}
-              />
-            ) : commandItem.output ? (
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-muted-foreground">
-                {commandItem.output}
-              </pre>
-            ) : (
-              <p className="text-muted-foreground italic">No output yet.</p>
-            )}
-          </div>
-        ) : null
-      ) : (
+      {outputFile !== null ? (
         <div className="space-y-2">
-          <p className="text-muted-foreground">Output file</p>
+          <p className="text-xs text-muted-foreground">Output file</p>
           <pre className={MONO_CLASS_NAME}>{outputFile}</pre>
           {props.onRunInTerminal ? (
             <Button
@@ -152,7 +146,27 @@ function BackgroundWorkSection(
             </Button>
           ) : null}
         </div>
-      )}
+      ) : commandItem && (outputRunning || pendingOutput || fetchedOutput.error) ? (
+        <div className={MONO_CLASS_NAME}>
+          {pendingOutput ? (
+            <p className="text-muted-foreground italic">Loading output…</p>
+          ) : fetchedOutput.error ? (
+            <p className="text-destructive">Couldn&apos;t load output: {fetchedOutput.error}</p>
+          ) : props.streamsOutput ? (
+            <CommandOutputPanel
+              environmentId={props.environmentId}
+              threadId={commandItem.threadId}
+              itemId={commandItem.id}
+            />
+          ) : commandItem.output ? (
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-muted-foreground">
+              {commandItem.output}
+            </pre>
+          ) : (
+            <p className="text-muted-foreground italic">No output yet.</p>
+          )}
+        </div>
+      ) : null}
       {detail.activity ? (
         <p className="whitespace-pre-wrap text-muted-foreground">{detail.activity}</p>
       ) : null}
@@ -178,7 +192,7 @@ function BackgroundWorkSection(
               #{pullRequest.number} {pullRequest.snapshot?.title ?? "Pull request"}
             </p>
           )}
-          <p className="text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Watching
             {pullRequest.snapshot
               ? ` · ${pullRequest.snapshot.isDraft ? "Draft · " : ""}${pullRequest.snapshot.state}`
@@ -201,27 +215,52 @@ function BackgroundWorkSection(
           }}
         />
       ) : null}
-      {turnItem === undefined && pullRequest === undefined ? (
+      {turnItem === undefined &&
+      command === null &&
+      pullRequest === undefined &&
+      detail.activity === null &&
+      childThreadId === undefined ? (
         <p className="text-muted-foreground">No additional details reported yet.</p>
       ) : null}
     </section>
   );
 }
 
+/** The background work line's Details action: every task with its command, output, and links. */
 export function BackgroundWorkDetails(props: BackgroundWorkDetailsProps) {
+  const [open, setOpen] = useState(false);
   const streamsOutput = useCommandOutputStreaming(props.environmentId);
+  const { onRunInTerminal } = props;
   return (
-    <div className="max-h-[min(32rem,60dvh,var(--available-height))] space-y-4 overflow-y-auto text-xs">
-      {props.details.map((detail) => (
-        <BackgroundWorkSection
-          key={detail.item.taskId}
-          detail={detail}
-          streamsOutput={streamsOutput}
-          environmentId={props.environmentId}
-          onOpenThread={props.onOpenThread}
-          onRunInTerminal={props.onRunInTerminal}
-        />
-      ))}
-    </div>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<InlineButton tone="muted" />}>Details</DialogTrigger>
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>Background work</DialogTitle>
+        </DialogHeader>
+        <DialogPanel>
+          {props.details.map((detail) => (
+            <BackgroundWorkSection
+              key={detail.item.taskId}
+              detail={detail}
+              streamsOutput={streamsOutput}
+              environmentId={props.environmentId}
+              onOpenThread={(threadId) => {
+                setOpen(false);
+                props.onOpenThread(threadId);
+              }}
+              onRunInTerminal={
+                onRunInTerminal
+                  ? (command) => {
+                      setOpen(false);
+                      onRunInTerminal(command);
+                    }
+                  : undefined
+              }
+            />
+          ))}
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }

@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import type { MenuAction } from "@react-native-menu/menu";
 import type { StaticScreenProps } from "@react-navigation/native";
 import {
@@ -7,11 +6,16 @@ import {
   normalizeIntervalSeconds,
 } from "@t3tools/client-runtime/provider-settings/background-activity";
 import {
+  secretRequestReference,
+  type SecretRequestSource,
+} from "@t3tools/client-runtime/secret-request";
+import {
   globalIdleCompaction,
   IDLE_COMPACTION_MODES,
   idleCompactionPatch,
   readsIdleCompactionModes,
   type EnvironmentId,
+  type SecretReference,
 } from "@t3tools/contracts";
 import {
   getBackgroundActivityPresetSettings,
@@ -28,15 +32,16 @@ import { Button } from "../../../components/ui/Button";
 import { ControlPill } from "../../../components/ui/ControlPill";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { ListChoiceRow } from "../../../components/ui/ListChoiceRow";
-import { ListToggleRow } from "../../../components/ui/ListToggleRow";
 import { Menu } from "../../../components/ui/Menu";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
-import { serverEnvironment } from "../../../state/server";
-import { useAtomCommand } from "../../../state/use-atom-command";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { SettingsSection } from "../components/SettingsSection";
 import { FieldBlock } from "./ProviderFields";
-import { useEnvironmentLabel, useProviderInstanceActions } from "./useProviderSettings";
+import {
+  useEnvironmentLabel,
+  useProviderInstanceActions,
+  useSecretSources,
+} from "./useProviderSettings";
 import { sourceIdFromUrl } from "@t3tools/client-runtime/provider-settings/usage-hubs";
 
 type Actions = ReturnType<typeof useProviderInstanceActions>;
@@ -84,42 +89,15 @@ function UsageHubs(props: {
 }) {
   const { settings, canManage } = props.actions;
   const readOnly = !canManage;
-  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
-    reportFailure: false,
-  });
-  const platform = useAtomValue(serverEnvironment.configValueAtom(props.environmentId))?.environment
-    .platform;
+  const sources = useSecretSources(props.environmentId);
   const [adding, setAdding] = useState(false);
-  const [updatingCursor, setUpdatingCursor] = useState(false);
-  const [pendingCursor, setPendingCursor] = useState<boolean | null>(null);
   const entries = Object.entries(settings.usageLimitSources);
-
-  const setCursorUsageEnabled = async (enabled: boolean) => {
-    setUpdatingCursor(true);
-    setPendingCursor(enabled);
-    if (await props.actions.updateSettings({ cursorKeychainUsageEnabled: enabled })) {
-      await refreshProviders({ environmentId: props.environmentId, input: {} });
-    }
-    setPendingCursor(null);
-    setUpdatingCursor(false);
-  };
 
   return (
     <SettingsSection
       title="Usage hubs"
       footer={`Show the quota of every account a CLIProxyAPI hub pools, next to the providers on ${props.environmentLabel}. Management keys stay on that server.`}
     >
-      {platform?.os === "darwin" ? (
-        <View className="border-b border-border-subtle">
-          <ListToggleRow
-            label="Cursor account usage"
-            description="Read your Cursor CLI login from macOS Keychain to show account history and monthly limits. macOS may ask you to allow access."
-            disabled={readOnly || updatingCursor}
-            value={pendingCursor ?? settings.cursorKeychainUsageEnabled}
-            onValueChange={(enabled) => void setCursorUsageEnabled(enabled)}
-          />
-        </View>
-      ) : null}
       {entries.length === 0 && !adding ? (
         <FieldBlock label="No hubs configured" />
       ) : (
@@ -164,11 +142,13 @@ function UsageHubs(props: {
       {readOnly ? null : adding ? (
         <AddHubForm
           separated={entries.length > 0}
+          sources={sources}
           onCancel={() => setAdding(false)}
           onSave={async (hub) => {
+            const sourceId = sourceIdFromUrl(hub.url, settings.usageLimitSources);
             const saved = await props.actions.updateSettings({
               usageLimitSources: {
-                [sourceIdFromUrl(hub.url)]: {
+                [sourceId]: {
                   kind: "cliproxy",
                   ...(hub.label ? { label: hub.label } : {}),
                   url: hub.url,
@@ -191,18 +171,29 @@ function UsageHubs(props: {
 
 function AddHubForm(props: {
   readonly separated: boolean;
+  readonly sources: ReadonlyArray<SecretRequestSource>;
   readonly onCancel: () => void;
   readonly onSave: (hub: {
     readonly url: string;
-    readonly managementKey: string;
+    readonly managementKey: string | SecretReference;
     readonly label: string;
   }) => Promise<void>;
 }) {
   const [url, setUrl] = useState("");
   const [managementKey, setManagementKey] = useState("");
+  const [keySourceId, setKeySourceId] = useState<SecretRequestSource["id"] | null>(null);
+  const keySource = props.sources.find((source) => source.id === keySourceId);
   const [label, setLabel] = useState("");
   const [saving, setSaving] = useState(false);
   const canSave = url.trim().length > 0 && managementKey.trim().length > 0 && !saving;
+  const keySourceActions: MenuAction[] = [
+    { id: "", title: "Stored value", state: keySource === undefined ? "on" : "off" },
+    ...props.sources.map((source) => ({
+      id: source.id,
+      title: source.label,
+      state: source.id === keySourceId ? ("on" as const) : ("off" as const),
+    })),
+  ];
   const inputClassName = "min-h-11 rounded-xl px-3 py-2 text-base";
   return (
     <View className={props.separated ? "border-t border-border-subtle" : undefined}>
@@ -219,12 +210,34 @@ function AddHubForm(props: {
           onChangeText={setUrl}
         />
       </FieldBlock>
-      <FieldBlock label="Management key" separated>
+      <FieldBlock
+        label="Management key"
+        separated
+        trailing={
+          props.sources.length > 0 ? (
+            <Menu
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel={`Management key source: ${keySource?.label ?? "Stored value"}`}
+              title="Value comes from"
+              actions={keySourceActions}
+              onPressAction={({ nativeEvent }) => {
+                setKeySourceId(
+                  props.sources.find((source) => source.id === nativeEvent.event)?.id ?? null,
+                );
+                setManagementKey("");
+              }}
+            >
+              <ControlPill variant="pill" label={keySource?.label ?? "Stored value"} />
+            </Menu>
+          ) : null
+        }
+      >
         <AppTextInput
-          accessibilityLabel="Management key"
+          accessibilityLabel={keySource ? "Management key reference" : "Management key"}
           value={managementKey}
-          placeholder="Not set"
-          secureTextEntry
+          placeholder={keySource?.referencePlaceholder ?? "Not set"}
+          secureTextEntry={keySource === undefined}
           autoCapitalize="none"
           autoCorrect={false}
           className={inputClassName}
@@ -252,13 +265,16 @@ function AddHubForm(props: {
             loading={saving}
             disabled={!canSave}
             onPress={() => {
+              const key = keySource
+                ? secretRequestReference(keySource, managementKey)
+                : managementKey.trim();
+              if (key === undefined) {
+                Dialog.alert("Invalid reference", keySource?.invalidReferenceMessage);
+                return;
+              }
               setSaving(true);
               void props
-                .onSave({
-                  url: url.trim(),
-                  managementKey: managementKey.trim(),
-                  label: label.trim(),
-                })
+                .onSave({ url: url.trim(), managementKey: key, label: label.trim() })
                 .finally(() => setSaving(false));
             }}
           />

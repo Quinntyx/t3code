@@ -1,4 +1,5 @@
 import { useAtomCommand } from "~/state/use-atom-command";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -12,6 +13,8 @@ import {
   type PullRequestDetail,
   type PullRequestMergeMethod,
   type PullRequestRef,
+  type PullRequestSummary,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import {
@@ -49,8 +52,7 @@ import { toastManager } from "../ui/toast";
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import {
   checkoutFailureDescription,
-  handoffPrompt,
-  handoffReviewComments,
+  appendHandoff,
   readableFailure,
   resolvePullRequestMergeMethod,
 } from "./pullRequestDetail.logic";
@@ -132,9 +134,7 @@ export function resolvePullRequestMergeMethodForDetail(
   detail: PullRequestDetail,
   projectDefault: PullRequestMergeMethod | undefined,
 ): PullRequestMergeMethod {
-  const allowed = detail.capabilities.mergeMethods.filter(
-    (method) => detail.mergeCapabilities[method],
-  );
+  const allowed = allowedPullRequestMergeMethods(detail);
   if (allowed.length === 0) throw new Error("No merge method is available for this repository.");
   return resolvePullRequestMergeMethod(
     allowed,
@@ -202,20 +202,30 @@ export function usePullRequestActionRunner({
   environmentId: EnvironmentId;
   reference: PullRequestRef | null;
   terminology: ChangeRequestTerminology;
-  onSuccess?: (action: PullRequestAction) => void;
+  onSuccess?: (action: PullRequestAction, reply: PullRequestSummary | undefined) => void;
   /** Resolve repository settings on click to avoid per-row reads. */
   resolveMergeMethod?: (detail: PullRequestDetail) => PullRequestMergeMethod;
 }) {
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, {
     reportFailure: false,
   });
-  const [actionPending, setActionPending] = useState(false);
-  const pendingRef = useRef(false);
+  const pendingRef = useRef(new Set<string>());
+  const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const actionKey =
+    reference === null
+      ? null
+      : JSON.stringify([
+          environmentId,
+          reference.host ?? null,
+          reference.repository,
+          reference.number,
+        ]);
+  const actionPending = actionKey !== null && pendingKeys.has(actionKey);
 
   const perform = async (action: PullRequestAction, method?: PullRequestMergeMethod) => {
-    if (pendingRef.current || reference === null) return;
-    pendingRef.current = true;
-    setActionPending(true);
+    if (actionKey === null || reference === null || pendingRef.current.has(actionKey)) return;
+    pendingRef.current.add(actionKey);
+    setPendingKeys(new Set(pendingRef.current));
     const result = await runAction({
       environmentId,
       input: {
@@ -224,8 +234,8 @@ export function usePullRequestActionRunner({
         ...(method ? { mergeMethod: method } : resolveMergeMethod ? { resolveMergeMethod } : {}),
       },
     });
-    pendingRef.current = false;
-    setActionPending(false);
+    pendingRef.current.delete(actionKey);
+    setPendingKeys(new Set(pendingRef.current));
     if (result._tag === "Failure") {
       toastManager.add({
         type: "error",
@@ -238,13 +248,15 @@ export function usePullRequestActionRunner({
       return;
     }
     toastManager.add({ type: "success", title: actionSuccessLabels(terminology.singular)[action] });
-    onSuccess?.(action);
+    onSuccess?.(action, result.value);
   };
 
   return { actionPending, perform };
 }
 
-export function usePullRequestCloseBatch(onClosed: (entry: EnvironmentPullRequestEntry) => void) {
+export function usePullRequestCloseBatch(
+  onClosed: (entry: EnvironmentPullRequestEntry, reply: PullRequestSummary | undefined) => void,
+) {
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const pending = useRef(new Set<string>());
   const [closingKeys, setClosingKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -278,7 +290,7 @@ export function usePullRequestCloseBatch(onClosed: (entry: EnvironmentPullReques
           );
           return;
         }
-        onClosed(entry);
+        onClosed(entry, result.value);
         return true;
       }),
     );
@@ -300,12 +312,24 @@ export interface PullRequestThreadTask {
   reviewComments?: ReadonlyArray<ReviewCommentContext>;
 }
 
+export function writeHandoffToComposer(
+  target: ScopedThreadRef | DraftId,
+  task: PullRequestThreadTask,
+) {
+  const store = useComposerDraftStore.getState();
+  const draft = store.getComposerDraft(target);
+  const next = appendHandoff(
+    { prompt: draft?.prompt ?? "", reviewComments: draft?.reviewComments ?? [] },
+    task,
+  );
+  store.setPrompt(target, next.prompt);
+  store.setReviewComments(target, next.reviewComments);
+}
+
 export type PullRequestHandoffDetail = Pick<
   PullRequestDetail,
   "projectId" | "workspaceRoot" | "url"
 >;
-
-const lastHandoffPromptByDraft = new Map<DraftId, string>();
 
 export function usePullRequestHandoffs({
   environmentId,
@@ -340,24 +364,8 @@ export function usePullRequestHandoffs({
         () => null,
       ));
     if (session === null) return null;
-    const store = useComposerDraftStore.getState();
     if (task === null) return session;
-    const draft = store.getComposerDraft(session.draftId);
-    const existingComments = draft?.reviewComments ?? [];
-    const prompt = handoffPrompt(
-      {
-        prompt: draft?.prompt ?? "",
-        lastHandoffPrompt: lastHandoffPromptByDraft.get(session.draftId),
-      },
-      task.prompt,
-    );
-    // Track only the handoff contribution so later handoffs preserve user text.
-    lastHandoffPromptByDraft.set(session.draftId, task.prompt);
-    store.setPrompt(session.draftId, prompt);
-    store.setReviewComments(
-      session.draftId,
-      handoffReviewComments(existingComments, task.reviewComments ?? []),
-    );
+    writeHandoffToComposer(session.draftId, task);
     return session;
   };
 

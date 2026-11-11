@@ -153,11 +153,13 @@ function PreviewPanelShellFrame(
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >
       {isInline && !maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
+      {/* Docked content stays pinned to the right edge, so closing uncovers the chat instead of
+          sliding the tab bar under the title bar controls; a floating card slides out past the edge. */}
       <div
         className={cn(
           "h-full min-h-0 w-full",
-          // A floating card slides in past the window edge instead of being clipped like a curtain.
           collapsible && !floating && "overflow-clip",
+          collapsible && !floating && !maximized && "flex justify-end",
           floating && "py-(--floating-panel-gap)",
           // Maximized, the card reaches the bottom corners, so it stops short of their bubbles.
           floating &&
@@ -169,6 +171,7 @@ function PreviewPanelShellFrame(
         <div
           className={cn(
             "flex h-full min-h-0 min-w-0 flex-col",
+            collapsible && !floating && !maximized && "shrink-0",
             floating &&
               "relative z-0 overflow-hidden rounded-(--floating-panel-radius) shadow-float [&_[data-right-panel-tabbar]]:pl-3.5 [&_[data-right-panel-tabbar]]:pr-3.5",
             // Its shadow would otherwise peek in from beyond the window edge once closed.

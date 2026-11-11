@@ -435,9 +435,11 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
     oppositeAction?.onPress();
   }, [content, oppositeAction]);
   const handleRelease = useCallback(
-    (translation: SharedValue<number>) => {
+    (translation: SharedValue<number>, canceled: boolean) => {
       "worklet";
       if (dismissing.value) return true;
+      // A canceled pan restores the row; it never commits an action.
+      if (canceled) return false;
       const action = resolveThreadSwipeRelease(
         translation.value,
         swipeRowSide,

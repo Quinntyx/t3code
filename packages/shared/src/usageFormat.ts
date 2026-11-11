@@ -3,6 +3,7 @@ import {
   UsageDay,
   type ThreadUsageModel,
   type UsageResolution,
+  type UsageSource,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 
@@ -17,18 +18,57 @@ const CURRENCY = new Intl.NumberFormat("en-US", {
 
 const INTEGER = new Intl.NumberFormat("en-US");
 
+export function formatMalformedUsageWarning(count: number): string {
+  return `${count} malformed or inconsistent usage record(s) were skipped; usage may be incomplete.`;
+}
+
+export function usageSourceMessages(sources: readonly UsageSource[]): readonly string[] {
+  const messages = new Set<string>();
+  const malformedBySource = new Map<string, number>();
+  for (const source of sources) {
+    if (
+      source.status !== "partial" &&
+      source.status !== "failed" &&
+      source.fingerprint.provider !== "cursor" &&
+      !(source.status === "missing" && source.malformedRecords > 0)
+    ) {
+      continue;
+    }
+    let message = source.message;
+    if (source.malformedRecords > 0) {
+      const { hostId, provider, resolvedHomePath, volumeId } = source.fingerprint;
+      const key = JSON.stringify([hostId, provider, resolvedHomePath, volumeId]);
+      malformedBySource.set(
+        key,
+        Math.max(malformedBySource.get(key) ?? 0, source.malformedRecords),
+      );
+      // Servers also append this warning to message; retain any preceding read failure.
+      const warning = formatMalformedUsageWarning(source.malformedRecords);
+      if (message?.endsWith(warning)) message = message.slice(0, -warning.length).trim();
+    }
+    if (message) messages.add(message);
+  }
+  const malformedRecords = [...malformedBySource.values()].reduce(
+    (total, count) => total + count,
+    0,
+  );
+  if (malformedRecords > 0) messages.add(formatMalformedUsageWarning(malformedRecords));
+  return [...messages];
+}
+
 export function formatUsd(value: number): string {
   return CURRENCY.format(value);
 }
 
-/** Unpriced models leave the sum short, so it reads as a floor. */
+/** Unpriced models or unmeasured usage leave the sum short, so it reads as a floor. */
 export function formatThreadUsageCost(
   models: ReadonlyArray<Pick<ThreadUsageModel, "costUsd">>,
+  incomplete = false,
 ): string | null {
   const priced = models.filter((model) => model.costUsd !== null);
   if (priced.length === 0) return null;
   const total = formatUsd(priced.reduce((sum, model) => sum + (model.costUsd ?? 0), 0));
-  return priced.length < models.length ? `${total}+` : total;
+  return incomplete || priced.length < models.length ? `${total}+` : total;
 }
 
 export function formatCount(value: number): string {

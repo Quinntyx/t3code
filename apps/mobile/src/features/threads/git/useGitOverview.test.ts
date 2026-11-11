@@ -11,7 +11,8 @@ const state = vi.hoisted(() => ({
   openPr: vi.fn(async () => true),
 }));
 
-vi.mock("react", () => ({ useState: (value: unknown) => [value, () => {}] }));
+vi.mock("react", () => ({ use: () => null, useState: (value: unknown) => [value, () => {}] }));
+vi.mock("../../layout/workspace-inspector-sheet", () => ({ InspectorSheetContext: null }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ navigate: state.navigate }),
 }));

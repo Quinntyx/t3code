@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -7,7 +8,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { TextGenerationError } from "@t3tools/contracts";
 import type { PiSettings } from "../settings.ts";
 
-import { makePiRpcConnection, parsePiModelSlug } from "./rpc.ts";
+import { makePiRpcConnection, parsePiModelSlug, piRecordString } from "./rpc.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 import { buildStructuredOutputRepairPrompt } from "@t3tools/provider-core/server/textGenerationPrompts";
@@ -16,10 +17,20 @@ const PI_TIMEOUT_MS = 180_000;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
+// Pi's `errorMessage` is the provider's raw response text and can echo
+// credentials, so only a leading HTTP status reaches the error detail.
+const piTurnErrorDetail = (errorMessage: string | undefined) => {
+  const status = errorMessage?.match(/^([45]\d\d)\b/)?.[1];
+  return status === undefined
+    ? "Pi could not generate text: the model provider reported an error."
+    : `Pi could not generate text: the model provider returned HTTP ${status}.`;
+};
+
 export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* (
   piSettings: PiSettings,
-  environment: NodeJS.ProcessEnv = process.env,
+  environment?: NodeJS.ProcessEnv,
 ) {
+  const resolvedEnvironment = environment ?? (yield* HostProcess.Environment);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const runPiJson: TextGenerationOperations.Runner = Effect.fn("PiTextGeneration.runPiJson")(
@@ -35,10 +46,11 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       }
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment,
+        environment: resolvedEnvironment,
         mcpSession: undefined,
         extensionPath: undefined,
         ephemeral: true,
+        shortLived: true,
         disableExtensions: true,
         // Background naming/content helpers must never mutate the workspace.
         disableTools: true,
@@ -79,37 +91,57 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           );
       }
 
+      // Provider failures (bad key, rate limit, 5xx) arrive on the assistant
+      // `message_end`. Keep only the latest, since Pi can retry and still answer.
       const ask = Effect.fn("PiTextGeneration.ask")(function* (message: string) {
         yield* connection.request({ type: "prompt", message });
+        let turnError: string | undefined;
         yield* Effect.gen(function* () {
           while (true) {
             const event = yield* Queue.take(connection.events);
             if (event["type"] === "agent_settled") return;
+            const eventMessage = event["message"];
+            if (
+              event["type"] === "message_end" &&
+              piRecordString(eventMessage, "role") === "assistant"
+            ) {
+              turnError =
+                piRecordString(eventMessage, "stopReason") === "error"
+                  ? piTurnErrorDetail(piRecordString(eventMessage, "errorMessage"))
+                  : undefined;
+            }
           }
         });
         const data = yield* connection.request({ type: "get_last_assistant_text" });
-        return typeof data === "object" &&
+        const text =
+          typeof data === "object" &&
           data !== null &&
           typeof (data as { text?: unknown }).text === "string"
-          ? (data as { text: string }).text.trim()
-          : "";
+            ? (data as { text: string }).text.trim()
+            : "";
+        return { text, turnError };
       });
 
       const reply = yield* ask(prompt);
-      if (!reply) {
+      if (!reply.text) {
         return yield* new TextGenerationError({
           operation,
-          detail: "Pi returned empty output.",
+          detail: reply.turnError ?? "Pi returned empty output.",
         });
       }
 
-      const first = yield* TextGenerationOperations.decodeJsonReplyDetailed(request, reply).pipe(
-        Effect.result,
-      );
+      const first = yield* TextGenerationOperations.decodeJsonReplyDetailed(
+        request,
+        reply.text,
+      ).pipe(Effect.result);
       if (first._tag === "Success") return first.success;
 
       yield* Effect.logDebug("Pi reply did not decode; asking for a repair").pipe(
-        Effect.annotateLogs({ operation, replyLength: reply.length, reason: first.failure.reason }),
+        Effect.annotateLogs({
+          operation,
+          replyLength: reply.text.length,
+          reason: first.failure.reason,
+        }),
       );
       const repaired = yield* ask(
         buildStructuredOutputRepairPrompt({
@@ -117,13 +149,15 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           outputSchema: request.outputSchema,
         }),
       );
-      if (!repaired) {
+      if (!repaired.text) {
         return yield* new TextGenerationError({
           operation,
-          detail: `Pi returned invalid structured output: ${first.failure.reason} (the repair reply was empty).`,
+          detail:
+            repaired.turnError ??
+            `Pi returned invalid structured output: ${first.failure.reason} (the repair reply was empty).`,
         });
       }
-      return yield* TextGenerationOperations.decodeJsonReplyDetailed(request, repaired).pipe(
+      return yield* TextGenerationOperations.decodeJsonReplyDetailed(request, repaired.text).pipe(
         Effect.mapError(
           (failure) =>
             new TextGenerationError({

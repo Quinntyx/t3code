@@ -13,7 +13,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -60,7 +60,7 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const mailer = yield* Mailer.Mailer;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   // One send or close per card at a time; the next one rereads the card after it.
   const sending = new Map<string, Deferred.Deferred<void>>();
   const exclusive = Effect.fn("EmailRequests.exclusive")(function* <A, E>(
@@ -143,7 +143,7 @@ const make = Effect.gen(function* () {
     }
     const runId = run.id;
     const nodeId = run.rootNodeId;
-    const key = request.clientRequestId ?? (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+    const key = request.clientRequestId ?? (yield* random.uuidV4());
     const turnItemId = TurnItemId.make(
       `turn-item:email-request:${encodeURIComponent(threadId)}:${encodeURIComponent(key)}`,
     );

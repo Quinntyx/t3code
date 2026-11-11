@@ -4,10 +4,8 @@ import { useState } from "react";
 import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AndroidSheetHeader } from "../../../components/ui/AndroidScreenHeader";
 import { SheetHeader } from "../../../components/ui/SheetHeader";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
-import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
 import { cn } from "../../../lib/cn";
 import { useEnvironmentQuery } from "../../../state/query";
@@ -30,32 +28,14 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
   return (
     <View
       collapsable={false}
-      className="bg-sheet ios:flex-1"
+      className="bg-sheet ios:flex-1 android:flex-col-reverse"
       style={Platform.OS === "android" ? { maxHeight: windowHeight * 0.92 } : undefined}
     >
-      {Platform.OS === "android" ? (
-        <>
-          <NativeStackScreenOptions
-            options={{ sheetCornerRadius: 28, sheetAllowedDetents: "fitToContents" }}
-          />
-          <AndroidSheetHeader
-            title="Branches & worktrees"
-            onBack={() => navigation.goBack()}
-            hideBottomBorder
-          />
-        </>
-      ) : (
-        <SheetHeader
-          presentation="native"
-          title="Branches & worktrees"
-          onClose={() => navigation.goBack()}
-        />
-      )}
       <ScreenContent fitToContents>
         <ScrollView
           nestedScrollEnabled
           className="android:shrink android:grow-0 ios:flex-1"
-          contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+          contentInsetAdjustmentBehavior="automatic"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
@@ -69,20 +49,21 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
           <GitBranchesContent onDone={() => navigation.goBack()} />
         </ScrollView>
       </ScreenContent>
+      <SheetHeader title="Branches & worktrees" onClose={() => navigation.goBack()} />
     </View>
   );
 }
 
 export function GitBranchesContent({ onDone }: { readonly onDone?: () => void }) {
   const { selectedThread } = useThreadSelection();
-  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const { canChangeThreadBranch } = gitActions;
 
   const gitStatus = useEnvironmentQuery(
     selectedThread !== null && selectedThreadCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.branch({
           environmentId: selectedThread.environmentId,
           input: { cwd: selectedThreadCwd },
         })
@@ -90,15 +71,16 @@ export function GitBranchesContent({ onDone }: { readonly onDone?: () => void })
   );
 
   const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "Detached HEAD";
-  const currentWorktreePath = selectedThreadWorktreePath;
+  const currentWorktreePath = selectedThreadCwd;
   const availableBranches = gitState.selectedThreadBranches;
   const branchesLoading = gitState.selectedThreadBranchesLoading;
   const busy = gitState.gitOperationLabel !== null;
 
   const [newBranchName, setNewBranchName] = useState("");
-  const [worktreeBaseBranch, setWorktreeBaseBranch] = useState(
-    currentBranchLabel === "Detached HEAD" ? "main" : currentBranchLabel,
-  );
+  const [worktreeBaseBranchOverride, setWorktreeBaseBranchOverride] = useState<string | null>(null);
+  const worktreeBaseBranch =
+    worktreeBaseBranchOverride ??
+    (currentBranchLabel === "Detached HEAD" ? "main" : currentBranchLabel);
   const [worktreeBranchName, setWorktreeBranchName] = useState("");
 
   const disabledExistingBranchNames: Array<string> = [];
@@ -110,7 +92,7 @@ export function GitBranchesContent({ onDone }: { readonly onDone?: () => void })
   const disabledExistingBranches = new Set(disabledExistingBranchNames);
 
   return (
-    <View className="gap-4">
+    <View className="android:gap-2 ios:gap-4">
       <View className="bg-card android:gap-3 android:rounded-[20px] android:p-4 ios:gap-2 ios:rounded-[18px] ios:border ios:border-border ios:px-4 ios:py-4">
         <Text className="android:text-foreground android:text-base android:font-t3-medium ios:text-foreground-secondary ios:text-2xs ios:font-t3-bold ios:tracking-[1px] ios:uppercase">
           New branch
@@ -148,7 +130,7 @@ export function GitBranchesContent({ onDone }: { readonly onDone?: () => void })
         ) : null}
         <TextInput
           value={worktreeBaseBranch}
-          onChangeText={setWorktreeBaseBranch}
+          onChangeText={setWorktreeBaseBranchOverride}
           placeholder="main"
           accessibilityLabel="Worktree base branch"
           className="android:rounded-xl android:bg-sheet-solid ios:rounded-[18px]"

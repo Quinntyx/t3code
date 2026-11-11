@@ -8,7 +8,6 @@ import {
   StackActions,
   useIsFocused,
   useNavigation,
-  useRoute,
   type StaticScreenProps,
 } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -33,7 +32,7 @@ import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
 import { autoConnectReport, devAutoConnectAttemptAtom } from "./devAutoConnect";
 import { splitEnvironmentSections } from "./environmentSections";
 import { leaveSettingsPage } from "../settings/settings-navigation";
-import { workspaceHasColumns } from "../workspace/workspace-selection-store";
+import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { directoryDiscovery } from "../../state/discover";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -70,7 +69,6 @@ function PairingForm({
   const { connectionPairingUrl, onChangeConnectionPairingUrl, onConnectPress } =
     useRemoteConnections();
   const navigation = useNavigation();
-  const routeName = useRoute().name;
   const insets = useSafeAreaInsets();
   const enrollDiscovery = useAtomCommand(directoryDiscovery.enroll, { reportFailure: false });
   const [initialPairing] = useState(() => {
@@ -212,7 +210,6 @@ function PairingForm({
 
   return (
     <SettingsScreen
-      formSheet={routeName === "ConnectionsNew"}
       title="Add environment"
       actions={[
         {

@@ -1,4 +1,4 @@
-import { type EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, SecretReference, UnifiedSettings } from "@t3tools/contracts";
 import { sourceIdFromUrl } from "@t3tools/client-runtime/provider-settings/usage-hubs";
 import { useState } from "react";
 
@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { SecretInput } from "./SecretInput";
+import { SecretSourceInput, useSecretSources } from "./SecretSourceInput";
 import { Label } from "../ui/label";
 
 /** Send the management key once to server secret storage; settings retain only a redaction marker. */
@@ -23,35 +23,41 @@ export function AddUsageLimitSourceDialog({
   onOpenChange,
   environmentId,
   environmentLabel,
+  sources,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
+  readonly sources: UnifiedSettings["usageLimitSources"];
 }) {
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
-  const [managementKey, setManagementKey] = useState("");
+  const secretSources = useSecretSources(environmentId);
+  const [keyDraft, setKeyDraft] = useState<string | SecretReference>("");
+  const [keyValid, setKeyValid] = useState(true);
+  const managementKey = typeof keyDraft === "string" ? keyDraft.trim() : keyDraft;
   const trimmedUrl = url.trim();
-  const canSave = trimmedUrl.length > 0 && managementKey.trim().length > 0;
+  const canSave = keyValid && trimmedUrl.length > 0 && managementKey !== "";
 
   const reset = () => {
     setLabel("");
     setUrl("");
-    setManagementKey("");
+    setKeyDraft("");
+    setKeyValid(true);
   };
 
   const save = () => {
     if (!canSave) return;
-    const id = sourceIdFromUrl(trimmedUrl);
+    const id = sourceIdFromUrl(trimmedUrl, sources);
     updateSettings({
       usageLimitSources: {
         [id]: {
           kind: "cliproxy",
           ...(label.trim() ? { label: label.trim() } : {}),
           url: trimmedUrl,
-          managementKey: managementKey.trim(),
+          managementKey,
           enabled: true,
         },
       },
@@ -96,10 +102,14 @@ export function AddUsageLimitSourceDialog({
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="usage-source-key">Management key</Label>
-              <SecretInput
+              <SecretSourceInput
                 id="usage-source-key"
-                value={managementKey}
-                onChange={(event) => setManagementKey(event.target.value)}
+                aria-label="Management key"
+                value={keyDraft}
+                sources={secretSources}
+                onChange={(event) => setKeyDraft(event.target.value)}
+                onSecretChange={(secret) => setKeyDraft(secret ?? "")}
+                onValidityChange={setKeyValid}
               />
             </div>
             <div className="grid gap-1.5">

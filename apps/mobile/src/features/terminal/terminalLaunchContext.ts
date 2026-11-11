@@ -22,6 +22,7 @@ export interface PendingTerminalLaunch {
   readonly worktreePath: string | null;
   readonly env?: Record<string, string>;
   readonly initialInput?: string;
+  readonly stopOnSettle?: boolean;
 }
 
 const pendingTerminalLaunches = new Map<string, PendingTerminalLaunch>();
@@ -39,6 +40,7 @@ export function stagePendingTerminalLaunch(input: {
     worktreePath: input.launch.worktreePath,
     env: input.launch.env ? { ...input.launch.env } : undefined,
     initialInput: input.launch.initialInput,
+    stopOnSettle: input.launch.stopOnSettle,
   });
 }
 
@@ -48,6 +50,7 @@ export function stageCommandTerminalLaunch(input: {
   readonly threadShellWorktreePath: string | null;
   readonly threadDetailWorktreePath: string | null;
   readonly command: string;
+  readonly stopOnSettle?: boolean;
 }) {
   const worktreePath = resolvePreferredThreadWorktreePath(input);
   const project = { cwd: input.workspaceRoot };
@@ -56,6 +59,7 @@ export function stageCommandTerminalLaunch(input: {
     worktreePath,
     env: projectScriptRuntimeEnv({ project, worktreePath }),
     initialInput: projectScriptTerminalInput(input.command),
+    stopOnSettle: input.stopOnSettle,
   };
   stagePendingTerminalLaunch({ target: input.target, launch });
   return launch;

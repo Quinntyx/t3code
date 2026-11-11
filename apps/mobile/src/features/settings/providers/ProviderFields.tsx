@@ -15,14 +15,23 @@ import {
   type SettingsFormDefinition,
 } from "@t3tools/client-runtime/provider-settings/form";
 import {
+  environmentDraftRowWithSecret,
   nextEnvironmentVariableDraftId,
-  providerEnvironmentsEqual,
   publishEnvironmentDraftRows,
-  toEnvironmentDraftRows,
+  reconcileEnvironmentDraft,
+  seedEnvironmentDraft,
   type EnvironmentDraftRow,
 } from "@t3tools/client-runtime/provider-settings/instance";
+import {
+  secretRequestReference,
+  type SecretRequestSource,
+} from "@t3tools/client-runtime/secret-request";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
-import type { ProviderInstanceEnvironmentVariable } from "@t3tools/contracts";
+import {
+  isSecretReference,
+  type ProviderInstanceEnvironmentVariable,
+  type SecretReference,
+} from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
 
@@ -124,8 +133,117 @@ export function CommitTextInput(props: {
   );
 }
 
+const STORED_VALUE = "__stored__";
+
+/**
+ * A sensitive value saved on the server, or, once the environment has secret providers, a
+ * reference the server resolves from one of them.
+ */
+export function SecretValueInput(props: {
+  readonly accessibilityLabel: string;
+  readonly value: string | SecretReference | undefined;
+  /** A value is saved but redacted, so it never comes back to the app. */
+  readonly configured: boolean;
+  readonly sources: ReadonlyArray<SecretRequestSource>;
+  readonly placeholder?: string | undefined;
+  readonly mono?: boolean;
+  readonly editable: boolean;
+  readonly onCommit: (value: string) => void;
+  readonly onSecretChange: (secret: SecretReference) => void;
+}) {
+  const reference = isSecretReference(props.value) ? props.value : undefined;
+  const savedKey = reference ? `${reference.provider}\u0000${reference.reference}` : null;
+  const [chosen, setChosen] = useState(reference?.provider ?? null);
+  const [previousSavedKey, setPreviousSavedKey] = useState(savedKey);
+  if (previousSavedKey !== savedKey) {
+    setPreviousSavedKey(savedKey);
+    setChosen(reference?.provider ?? null);
+  }
+  const source = props.sources.find((candidate) => candidate.id === chosen);
+  // A reference to a provider this app cannot list still shows which one it names.
+  const unknownSource =
+    reference !== undefined &&
+    !props.sources.some((candidate) => candidate.id === reference.provider)
+      ? reference.provider
+      : null;
+  const sourceLabel =
+    chosen === null ? "Stored value" : (source?.label ?? `${chosen} (unavailable)`);
+  const actions: MenuAction[] = [
+    { id: STORED_VALUE, title: "Stored value", state: chosen === null ? "on" : "off" },
+    ...props.sources.map((candidate) => ({
+      id: candidate.id,
+      title: candidate.label,
+      state: candidate.id === chosen ? ("on" as const) : ("off" as const),
+    })),
+    ...(unknownSource !== null
+      ? [{ id: unknownSource, title: `${unknownSource} (unavailable)`, state: "on" as const }]
+      : []),
+  ];
+  return (
+    <View className="gap-2">
+      {props.sources.length > 0 || reference !== undefined ? (
+        <View className="flex-row">
+          <Menu
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={`${props.accessibilityLabel} source: ${sourceLabel}`}
+            title="Value comes from"
+            actions={actions}
+            onPressAction={({ nativeEvent }) => {
+              if (!props.editable) return;
+              setChosen(
+                nativeEvent.event === STORED_VALUE
+                  ? null
+                  : (props.sources.find((candidate) => candidate.id === nativeEvent.event)?.id ??
+                      chosen),
+              );
+            }}
+          >
+            <ControlPill variant="pill" label={sourceLabel} disabled={!props.editable} />
+          </Menu>
+        </View>
+      ) : null}
+      {chosen === null ? (
+        <CommitTextInput
+          accessibilityLabel={props.accessibilityLabel}
+          value=""
+          placeholder={
+            reference !== undefined ? "Enter a value to store instead" : props.placeholder
+          }
+          secret
+          configured={reference === undefined && props.configured}
+          mono={props.mono}
+          editable={props.editable}
+          onCommit={props.onCommit}
+        />
+      ) : (
+        <CommitTextInput
+          accessibilityLabel={`${props.accessibilityLabel} reference`}
+          value={reference?.provider === chosen ? reference.reference : ""}
+          placeholder={source?.referencePlaceholder}
+          mono
+          editable={props.editable && source !== undefined}
+          onCommit={(text) => {
+            if (source === undefined) return;
+            const next = secretRequestReference(source, text);
+            if (next === undefined) {
+              Dialog.alert("Invalid reference", source.invalidReferenceMessage);
+              return;
+            }
+            props.onSecretChange(next);
+          }}
+        />
+      )}
+    </View>
+  );
+}
+
+/** Fields an administrator's policy pins, shown inert with the reason. */
+export type ManagedKeys = { readonly keys: ReadonlySet<string>; readonly reason: string };
+
 function SelectField(props: {
   readonly field: ProviderSettingsFieldModel;
+  readonly description: string | undefined;
   readonly value: unknown;
   readonly separated: boolean;
   readonly disabled: boolean;
@@ -143,7 +261,7 @@ function SelectField(props: {
   return (
     <FieldBlock
       label={props.field.label}
-      description={props.field.description}
+      description={props.description}
       separated={props.separated}
       trailing={
         <Menu
@@ -177,6 +295,8 @@ export function ProviderSettingsFields(props: {
   readonly value: unknown;
   readonly disabled: boolean;
   readonly onChange: (config: Record<string, unknown> | undefined) => void;
+  readonly sources: ReadonlyArray<SecretRequestSource>;
+  readonly managed?: ManagedKeys | undefined;
 }) {
   const fields = deriveProviderSettingsFields(props.definition, props.value);
   const isLocalAcp =
@@ -186,6 +306,12 @@ export function ProviderSettingsFields(props: {
     <>
       {fields.map((field, index) => {
         const separated = index > 0;
+        const managedReason = props.managed?.keys.has(field.key) ? props.managed.reason : undefined;
+        const disabled = props.disabled || managedReason !== undefined;
+        const description =
+          managedReason === undefined
+            ? field.description
+            : [field.description, managedReason].filter(Boolean).join(" ");
         if (field.control === "switch") {
           return (
             <View
@@ -194,8 +320,8 @@ export function ProviderSettingsFields(props: {
             >
               <ListToggleRow
                 label={field.label}
-                description={field.description}
-                disabled={props.disabled}
+                description={description}
+                disabled={disabled}
                 value={readProviderConfigBoolean(props.value, field.key, field.defaultBooleanValue)}
                 onValueChange={(checked) =>
                   props.onChange(nextProviderConfigWithFieldValue(props.value, field, checked))
@@ -209,23 +335,29 @@ export function ProviderSettingsFields(props: {
             <SelectField
               key={field.key}
               field={field}
+              description={description}
               value={props.value}
               separated={separated}
-              disabled={props.disabled}
+              disabled={disabled}
               onChange={props.onChange}
             />
           );
         }
+        const raw =
+          props.value !== null && typeof props.value === "object"
+            ? (props.value as Record<string, unknown>)[field.key]
+            : undefined;
         const saved = readProviderConfigString(props.value, field.key);
-        const secretConfigured = field.secret === true && saved.length > 0;
+        const secretConfigured =
+          field.secret === true && (saved.length > 0 || isSecretReference(raw));
         return (
           <FieldBlock
             key={field.key}
             label={field.label}
-            description={field.description}
+            description={description}
             separated={separated}
             trailing={
-              secretConfigured && !props.disabled ? (
+              secretConfigured && !disabled ? (
                 <ControlPill
                   variant="pill"
                   label="Clear"
@@ -237,25 +369,42 @@ export function ProviderSettingsFields(props: {
               ) : null
             }
           >
-            <CommitTextInput
-              accessibilityLabel={field.label}
-              value={field.secret ? "" : saved}
-              placeholder={field.placeholder}
-              secret={field.secret === true || field.control === "password"}
-              configured={secretConfigured}
-              multiline={field.control === "textarea"}
-              editable={!props.disabled}
-              onCommit={(next) =>
-                props.onChange(nextProviderConfigWithFieldValue(props.value, field, next))
-              }
-            />
+            {field.acceptsSecretReference ? (
+              <SecretValueInput
+                accessibilityLabel={field.label}
+                value={isSecretReference(raw) ? raw : saved}
+                configured={saved.length > 0}
+                sources={props.sources}
+                placeholder={field.placeholder}
+                editable={!disabled}
+                onCommit={(next) =>
+                  props.onChange(nextProviderConfigWithFieldValue(props.value, field, next))
+                }
+                onSecretChange={(secret) =>
+                  props.onChange(nextProviderConfigWithFieldValue(props.value, field, secret))
+                }
+              />
+            ) : (
+              <CommitTextInput
+                accessibilityLabel={field.label}
+                value={field.secret ? "" : saved}
+                placeholder={field.placeholder}
+                secret={field.secret === true || field.control === "password"}
+                configured={secretConfigured}
+                multiline={field.control === "textarea"}
+                editable={!disabled}
+                onCommit={(next) =>
+                  props.onChange(nextProviderConfigWithFieldValue(props.value, field, next))
+                }
+              />
+            )}
           </FieldBlock>
         );
       })}
       {isLocalAcp ? (
         <CommandArguments
           value={props.value}
-          disabled={props.disabled}
+          disabled={props.disabled || props.managed?.keys.has("commandArgs") === true}
           separated={fields.length > 0}
           onChange={props.onChange}
         />
@@ -332,20 +481,24 @@ export function ProviderEnvironmentFieldRows(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined;
   readonly disabled: boolean;
   readonly separatedFirst: boolean;
+  readonly sources: ReadonlyArray<SecretRequestSource>;
+  readonly managedReason: (field: ProviderEnvironmentField) => string | undefined;
   readonly onCommit: (field: ProviderEnvironmentField, value: string) => void;
+  readonly onSecretChange: (field: ProviderEnvironmentField, secret: SecretReference) => void;
   readonly onRemove: (field: ProviderEnvironmentField) => void;
 }) {
   return props.fields.map((field, index) => {
     const variable = props.environment?.find((entry) => entry.name === field.name);
-    const secret = field.sensitive !== false;
+    const managedReason = props.managedReason(field);
+    const disabled = props.disabled || managedReason !== undefined;
     return (
       <FieldBlock
         key={field.name}
         label={field.label}
-        description={field.description}
+        description={[field.description, managedReason].filter(Boolean).join(" ") || undefined}
         separated={index > 0 || props.separatedFirst}
         trailing={
-          variable && !props.disabled ? (
+          variable && !disabled ? (
             <ControlPill
               variant="pill"
               label="Clear"
@@ -355,15 +508,28 @@ export function ProviderEnvironmentFieldRows(props: {
           ) : null
         }
       >
-        <CommitTextInput
-          accessibilityLabel={field.label}
-          value={variable?.valueRedacted || secret ? "" : (variable?.value ?? "")}
-          placeholder={field.placeholder}
-          secret={secret}
-          configured={variable !== undefined}
-          editable={!props.disabled}
-          onCommit={(next) => props.onCommit(field, next)}
-        />
+        {field.sensitive === false ? (
+          <CommitTextInput
+            accessibilityLabel={field.label}
+            value={
+              variable?.valueRedacted || typeof variable?.value !== "string" ? "" : variable.value
+            }
+            placeholder={field.placeholder}
+            editable={!disabled}
+            onCommit={(next) => props.onCommit(field, next)}
+          />
+        ) : (
+          <SecretValueInput
+            accessibilityLabel={field.label}
+            value={variable?.value}
+            configured={variable !== undefined}
+            sources={props.sources}
+            placeholder={field.placeholder}
+            editable={!disabled}
+            onCommit={(next) => props.onCommit(field, next)}
+            onSecretChange={(secret) => props.onSecretChange(field, secret)}
+          />
+        )}
       </FieldBlock>
     );
   });
@@ -373,17 +539,13 @@ export function ProviderEnvironmentFieldRows(props: {
 export function ProviderEnvironmentVariables(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly disabled: boolean;
+  readonly sources: ReadonlyArray<SecretRequestSource>;
+  /** Variables an administrator's policy pins: listed by name, never editable or removable. */
+  readonly managed?: { readonly names: ReadonlySet<string>; readonly reason: string } | undefined;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
 }) {
-  const [storedDraft, setDraft] = useState(() =>
-    seedRowsDraft(props.environment, toEnvironmentDraftRows),
-  );
-  const draft = reconcileRowsDraft(
-    storedDraft,
-    props.environment,
-    providerEnvironmentsEqual,
-    toEnvironmentDraftRows,
-  );
+  const [storedDraft, setDraft] = useState(() => seedEnvironmentDraft(props.environment));
+  const draft = reconcileEnvironmentDraft(storedDraft, props.environment);
   if (draft !== storedDraft) setDraft(draft);
   const publish = (rows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published = publishEnvironmentDraftRows(rows);
@@ -394,7 +556,9 @@ export function ProviderEnvironmentVariables(props: {
     setDraft({ rows, seen: draft.seen, lastPublished: published });
     props.onChange(published);
   };
-  const update = (id: string, patch: Partial<Omit<EnvironmentDraftRow, "id">>) =>
+  const update = (id: string, patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
+    // A row named like a pinned variable renders as the policy's, with no way to edit or remove it.
+    if (patch.name !== undefined && props.managed?.names.has(patch.name)) return;
     publish(
       draft.rows.map((row) =>
         row.id === id
@@ -402,62 +566,100 @@ export function ProviderEnvironmentVariables(props: {
           : row,
       ),
     );
+  };
   return (
     <>
-      {draft.rows.map((variable, index) => (
-        <View
-          key={variable.id}
-          className={cn("gap-2 px-4 py-3", index > 0 && "border-t border-border-subtle")}
-        >
-          <View className="flex-row items-center gap-2">
-            <View className="min-w-0 flex-1">
-              <CommitTextInput
-                accessibilityLabel={`Variable ${index + 1} name`}
-                value={variable.name}
-                placeholder="VARIABLE_NAME"
-                mono
-                editable={!props.disabled}
-                autoFocus={variable.name.length === 0 && variable.value.length === 0}
-                onCommit={(name) => update(variable.id, { name: name.trim() })}
+      {draft.rows.map((variable, index) =>
+        props.managed?.names.has(variable.name) ? (
+          <FieldBlock
+            key={variable.id}
+            label={variable.name}
+            description={props.managed.reason}
+            separated={index > 0}
+          />
+        ) : (
+          <View
+            key={variable.id}
+            className={cn("gap-2 px-4 py-3", index > 0 && "border-t border-border-subtle")}
+          >
+            <View className="flex-row items-center gap-2">
+              <View className="min-w-0 flex-1">
+                <CommitTextInput
+                  accessibilityLabel={`Variable ${index + 1} name`}
+                  value={variable.name}
+                  placeholder="VARIABLE_NAME"
+                  mono
+                  // A saved sensitive value never comes back, so renaming it would drop the value.
+                  editable={!props.disabled && variable.valueRedacted !== true}
+                  autoFocus={variable.name.length === 0 && variable.value === ""}
+                  onCommit={(name) => update(variable.id, { name: name.trim() })}
+                />
+              </View>
+              {typeof variable.value === "string" ? (
+                <ControlPill
+                  icon={variable.sensitive ? "eye.slash" : "eye"}
+                  accessibilityLabel={
+                    variable.sensitive
+                      ? `${variable.name || `Variable ${index + 1}`} is sensitive. Make it plain text`
+                      : `${variable.name || `Variable ${index + 1}`} is plain text. Make it sensitive`
+                  }
+                  disabled={props.disabled || variable.valueRedacted === true}
+                  onPress={() => {
+                    const sensitive = !variable.sensitive;
+                    update(variable.id, {
+                      sensitive,
+                      ...(sensitive && variable.valueRedacted === undefined
+                        ? {}
+                        : { valueRedacted: sensitive ? variable.valueRedacted : false }),
+                    });
+                  }}
+                />
+              ) : null}
+              <ControlPill
+                icon="xmark"
+                accessibilityLabel={`Remove ${variable.name || `variable ${index + 1}`}`}
+                disabled={props.disabled}
+                onPress={() => publish(draft.rows.filter((row) => row.id !== variable.id))}
               />
             </View>
-            <ControlPill
-              icon={variable.sensitive ? "eye.slash" : "eye"}
-              accessibilityLabel={
-                variable.sensitive
-                  ? `${variable.name || `Variable ${index + 1}`} is sensitive. Make it plain text`
-                  : `${variable.name || `Variable ${index + 1}`} is plain text. Make it sensitive`
-              }
-              disabled={props.disabled}
-              onPress={() => {
-                const sensitive = !variable.sensitive;
-                update(variable.id, {
-                  sensitive,
-                  ...(sensitive && variable.valueRedacted === undefined
-                    ? {}
-                    : { valueRedacted: sensitive ? variable.valueRedacted : false }),
-                });
-              }}
-            />
-            <ControlPill
-              icon="xmark"
-              accessibilityLabel={`Remove ${variable.name || `variable ${index + 1}`}`}
-              disabled={props.disabled}
-              onPress={() => publish(draft.rows.filter((row) => row.id !== variable.id))}
-            />
+            {variable.sensitive ? (
+              <SecretValueInput
+                accessibilityLabel={`${variable.name || `Variable ${index + 1}`} value`}
+                value={variable.valueRedacted ? "" : variable.value}
+                configured={variable.valueRedacted === true}
+                sources={props.sources}
+                placeholder="value"
+                mono
+                editable={!props.disabled}
+                onCommit={(value) => update(variable.id, { value })}
+                onSecretChange={(secret) =>
+                  publish(
+                    draft.rows.map((row) =>
+                      row.id === variable.id ? environmentDraftRowWithSecret(row, secret) : row,
+                    ),
+                  )
+                }
+              />
+            ) : (
+              <CommitTextInput
+                accessibilityLabel={`${variable.name || `Variable ${index + 1}`} value`}
+                value={
+                  variable.valueRedacted || typeof variable.value !== "string" ? "" : variable.value
+                }
+                placeholder="value"
+                mono
+                editable={!props.disabled}
+                onCommit={(value) => update(variable.id, { value })}
+              />
+            )}
           </View>
-          <CommitTextInput
-            accessibilityLabel={`${variable.name || `Variable ${index + 1}`} value`}
-            value={variable.valueRedacted ? "" : variable.value}
-            placeholder="value"
-            mono
-            secret={variable.sensitive}
-            configured={variable.valueRedacted === true}
-            editable={!props.disabled}
-            onCommit={(value) => update(variable.id, { value })}
-          />
-        </View>
-      ))}
+        ),
+      )}
+      {draft.rows.some((row) => row.valueRedacted === true) ? (
+        <Text textRole="footnote" className="px-4 pb-3 text-foreground-muted">
+          Enter a new value to rename a saved one or make it plain text.
+        </Text>
+      ) : null}
       {!props.disabled ? (
         <View className={draft.rows.length > 0 ? "border-t border-border-subtle" : undefined}>
           <ListActionRow

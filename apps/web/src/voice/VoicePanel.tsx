@@ -128,7 +128,11 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                 : "Ask about your threads, start new work, or steer what's running. Type or talk."}
             </p>
             {needsKey ? (
-              <Button render={<Link to="/settings/voice" />} variant="outline" size="sm">
+              <Button
+                render={<Link to="/settings/voice" hash="voice-key" />}
+                variant="outline"
+                size="sm"
+              >
                 Set up Voice
               </Button>
             ) : null}
@@ -162,7 +166,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
           {problem ? (
             <p role="alert" className="max-w-[440px] text-center text-xs text-destructive">
               {problem}{" "}
-              <Link to="/settings/voice" className="underline underline-offset-4">
+              <Link to="/settings/voice" hash="voice-key" className="underline underline-offset-4">
                 Voice settings
               </Link>
             </p>

@@ -13,7 +13,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { Lock as LockGlyph, LockOpen } from "lucide";
-import { useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   resolveProviderInstanceEnabled,
@@ -24,6 +24,7 @@ import {
   type EnvironmentId,
   type ProjectId,
   type ProviderDriverKind,
+  type SecretReference,
   type ServerProvider,
 } from "@t3tools/contracts";
 
@@ -40,32 +41,34 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
-import { SecretInput } from "./SecretInput";
+import { SecretSourceInput, type SecretSource } from "./SecretSourceInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
+import { ManagedControl, ManagedNotice } from "../ManagedPolicy";
+import { useManagedPolicy } from "../../state/managedPolicy";
+import { disallowedProviderMessage, isManagedDriverAllowed } from "@t3tools/contracts";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type {
   ProviderClientDefinition,
   ProviderEnvironmentField,
 } from "@t3tools/provider-core/client";
+import { deriveProviderSettingsFields } from "@t3tools/client-runtime/provider-settings/form";
 import {
-  deriveProviderSettingsFields,
-  reconcileRowsDraft,
-  seedRowsDraft,
-} from "@t3tools/client-runtime/provider-settings/form";
-import {
-  type EnvironmentDraftRow,
   deriveProviderModelsForDisplay,
+  environmentDraftRowWithSecret,
+  managedInstanceLocks,
   nextConfigBlobWithValue,
   nextEnvironmentVariableDraftId,
+  nextProviderEnvironmentWithFieldSecret,
   nextProviderEnvironmentWithFieldValue,
   providerEnvironmentWithoutNames,
-  providerEnvironmentsEqual,
   publishEnvironmentDraftRows,
   readConfigString,
   readProviderEnvironmentVariable,
-  toEnvironmentDraftRows,
+  reconcileEnvironmentDraft,
+  seedEnvironmentDraft,
+  type EnvironmentDraftRow,
 } from "@t3tools/client-runtime/provider-settings/instance";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
@@ -120,7 +123,13 @@ function ProviderEnvironmentFieldRow(props: {
   readonly variable: ProviderInstanceEnvironmentVariable | undefined;
   readonly idPrefix: string;
   readonly onCommit: (field: ProviderEnvironmentField, value: string) => void;
+  readonly onSecretChange: (
+    field: ProviderEnvironmentField,
+    secret: SecretReference | undefined,
+  ) => void;
   readonly onRemove: (field: ProviderEnvironmentField) => void;
+  readonly managedReason?: string | undefined;
+  readonly secretSources: ReadonlyArray<SecretSource>;
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
@@ -129,6 +138,7 @@ function ProviderEnvironmentFieldRow(props: {
     <SettingsRow
       title={<label htmlFor={inputId}>{props.field.label}</label>}
       description={props.field.description}
+      managed={props.managedReason}
       control={
         <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
           {props.field.sensitive === false ? (
@@ -137,13 +147,13 @@ function ProviderEnvironmentFieldRow(props: {
               size="sm"
               className="min-w-0 flex-1"
               autoComplete="off"
-              value={value}
+              value={typeof value === "string" ? value : ""}
               onCommit={(next) => props.onCommit(props.field, next)}
               placeholder={props.field.placeholder}
               spellCheck={false}
             />
           ) : (
-            <SecretInput
+            <SecretSourceInput
               id={inputId}
               size="sm"
               className="min-w-0 flex-1"
@@ -152,6 +162,9 @@ function ProviderEnvironmentFieldRow(props: {
               placeholder={props.field.placeholder}
               configured={props.variable?.valueRedacted === true}
               spellCheck={false}
+              aria-label={props.field.label}
+              sources={props.secretSources}
+              onSecretChange={(secret) => props.onSecretChange(props.field, secret)}
             />
           )}
           {props.variable ? (
@@ -174,16 +187,12 @@ function ProviderEnvironmentFieldRow(props: {
 export function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
+  /** Variables an administrator's policy pins: listed by name, never editable or removable. */
+  readonly managed?: { readonly names: ReadonlySet<string>; readonly reason: string } | undefined;
+  readonly secretSources?: ReadonlyArray<SecretSource>;
 }) {
-  const [storedDraft, setDraft] = useState(() =>
-    seedRowsDraft(props.environment, toEnvironmentDraftRows),
-  );
-  const draft = reconcileRowsDraft(
-    storedDraft,
-    props.environment,
-    providerEnvironmentsEqual,
-    toEnvironmentDraftRows,
-  );
+  const [storedDraft, setDraft] = useState(() => seedEnvironmentDraft(props.environment));
+  const draft = reconcileEnvironmentDraft(storedDraft, props.environment);
   if (draft !== storedDraft) setDraft(draft);
   const rows = draft.rows;
   const setRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) =>
@@ -197,6 +206,8 @@ export function ProviderEnvironmentSection(props: {
   };
 
   const updateVariable = (id: string, patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
+    // A row named like a pinned variable renders as the policy's, with no way to edit or remove it.
+    if (patch.name !== undefined && props.managed?.names.has(patch.name)) return;
     const nextRows = rows.map((row) =>
       row.id === id
         ? {
@@ -205,6 +216,14 @@ export function ProviderEnvironmentSection(props: {
             ...(patch.value !== undefined ? { valueRedacted: false } : {}),
           }
         : row,
+    );
+    setRows(nextRows);
+    publishRows(nextRows);
+  };
+
+  const setVariableSecret = (id: string, secret: SecretReference | undefined) => {
+    const nextRows = rows.map((row) =>
+      row.id === id ? environmentDraftRowWithSecret(row, secret) : row,
     );
     setRows(nextRows);
     publishRows(nextRows);
@@ -240,76 +259,31 @@ export function ProviderEnvironmentSection(props: {
     >
       {rows.length > 0 ? (
         <div className="mt-3 min-w-0 space-y-2 pb-2">
-          {rows.map((variable, index) => (
-            <div key={variable.id} className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {rows.map((variable, index) => {
+            if (props.managed?.names.has(variable.name)) {
+              return (
+                <div key={variable.id} className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <code className="min-w-0 truncate text-xs sm:w-44 sm:shrink-0">
+                    {variable.name}
+                  </code>
+                  <span className="text-xs text-muted-foreground">{props.managed.reason}</span>
+                </div>
+              );
+            }
+            const nameInput = (
               <DraftInput
                 size="sm"
                 font="mono"
-                className="w-full min-w-0 sm:w-44 sm:shrink-0"
+                className="min-w-0 flex-1"
                 value={variable.name}
                 onCommit={(name) => updateVariable(variable.id, { name: name.trim() })}
+                disabled={variable.valueRedacted === true}
                 placeholder="VARIABLE_NAME"
                 spellCheck={false}
                 aria-label={`Environment variable name ${index + 1}`}
               />
-              <span className="hidden text-xs text-muted-foreground sm:inline" aria-hidden>
-                =
-              </span>
-              {variable.sensitive ? (
-                <SecretInput
-                  size="sm"
-                  font="mono"
-                  className="min-w-0 flex-1"
-                  value={variable.valueRedacted ? "" : variable.value}
-                  onCommit={(value) => updateVariable(variable.id, { value })}
-                  placeholder="value"
-                  configured={variable.valueRedacted === true}
-                  spellCheck={false}
-                  aria-label={`Environment variable value ${index + 1}`}
-                />
-              ) : (
-                <DraftInput
-                  size="sm"
-                  font="mono"
-                  className="min-w-0 flex-1"
-                  value={variable.valueRedacted ? "" : variable.value}
-                  onCommit={(value) => updateVariable(variable.id, { value })}
-                  autoComplete="off"
-                  placeholder="value"
-                  spellCheck={false}
-                  aria-label={`Environment variable value ${index + 1}`}
-                />
-              )}
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      size="icon-micro"
-                      variant="ghost-muted"
-                      onClick={() => {
-                        const sensitive = !variable.sensitive;
-                        updateVariable(variable.id, {
-                          sensitive,
-                          ...(sensitive && variable.valueRedacted === undefined
-                            ? {}
-                            : { valueRedacted: sensitive ? variable.valueRedacted : false }),
-                        });
-                      }}
-                      aria-pressed={variable.sensitive}
-                      aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
-                    >
-                      <MorphIcon
-                        className="size-3"
-                        icon={variable.sensitive ? LockGlyph : LockOpen}
-                      />
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">
-                  {variable.sensitive ? "Sensitive, stored separately" : "Plain text"}
-                </TooltipPopup>
-              </Tooltip>
+            );
+            const removeButton = (
               <Button
                 type="button"
                 size="icon-micro"
@@ -319,10 +293,100 @@ export function ProviderEnvironmentSection(props: {
               >
                 <XIcon className="size-3" />
               </Button>
-            </div>
-          ))}
+            );
+            const sensitiveToggle =
+              typeof variable.value === "string" ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="icon-micro"
+                        variant="ghost-muted"
+                        disabled={variable.valueRedacted === true}
+                        onClick={() => {
+                          const sensitive = !variable.sensitive;
+                          updateVariable(variable.id, {
+                            sensitive,
+                            ...(sensitive && variable.valueRedacted === undefined
+                              ? {}
+                              : { valueRedacted: sensitive ? variable.valueRedacted : false }),
+                          });
+                        }}
+                        aria-pressed={variable.sensitive}
+                        aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
+                      >
+                        <MorphIcon
+                          className="size-3"
+                          icon={variable.sensitive ? LockGlyph : LockOpen}
+                        />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup side="top">
+                    {variable.sensitive ? "Sensitive, stored separately" : "Plain text"}
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null;
+            const layout = (source: ReactNode, value: ReactNode) => (
+              <div className="flex min-w-0 flex-col gap-1.5 rounded-lg border p-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {nameInput}
+                  {source}
+                  {removeButton}
+                </div>
+                <div className="flex min-w-0 items-start gap-1.5">
+                  {value}
+                  {sensitiveToggle}
+                </div>
+              </div>
+            );
+            return (
+              <Fragment key={variable.id}>
+                {variable.sensitive ? (
+                  <SecretSourceInput
+                    size="sm"
+                    font="mono"
+                    className="min-w-0 flex-1"
+                    value={variable.valueRedacted ? "" : variable.value}
+                    onCommit={(value) => updateVariable(variable.id, { value })}
+                    placeholder="value"
+                    configured={variable.valueRedacted === true}
+                    spellCheck={false}
+                    aria-label={`Environment variable value ${index + 1}`}
+                    sources={props.secretSources ?? []}
+                    onSecretChange={(secret) => setVariableSecret(variable.id, secret)}
+                  >
+                    {(parts) => layout(parts.source, parts.value)}
+                  </SecretSourceInput>
+                ) : (
+                  layout(
+                    null,
+                    <DraftInput
+                      size="sm"
+                      font="mono"
+                      className="min-w-0 flex-1"
+                      value={
+                        variable.valueRedacted || typeof variable.value !== "string"
+                          ? ""
+                          : variable.value
+                      }
+                      onCommit={(value) => updateVariable(variable.id, { value })}
+                      autoComplete="off"
+                      placeholder="value"
+                      spellCheck={false}
+                      aria-label={`Environment variable value ${index + 1}`}
+                    />,
+                  )
+                )}
+              </Fragment>
+            );
+          })}
           <p className="text-xs text-muted-foreground">
             Sensitive values are stored separately and never returned to the app.
+            {rows.some((row) => row.valueRedacted === true)
+              ? " Enter a new value to rename a saved one or make it plain text."
+              : null}
           </p>
         </div>
       ) : null}
@@ -440,6 +504,7 @@ interface ProviderInstanceCardProps {
   readonly isUpdating?: boolean | undefined;
   readonly onAcceptUrlAuth?: ((action: AcpRegistryUrlAuthAction) => void) | undefined;
   readonly environmentId?: EnvironmentId | undefined;
+  readonly secretSources?: ReadonlyArray<SecretSource>;
   readonly projectOverride?: ProjectOverrideControl | undefined;
   readonly acpProjects?:
     | ReadonlyArray<{
@@ -451,6 +516,7 @@ interface ProviderInstanceCardProps {
 }
 
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
+const NO_SECRET_SOURCES: ReadonlyArray<SecretSource> = [];
 const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
 /** Unknown drivers stay read-only to preserve fork config. projectOverride switches affect only the
@@ -486,6 +552,7 @@ export function ProviderInstanceCard({
   onAcceptUrlAuth,
   environmentId,
   acpProjects = EMPTY_ACP_PROJECTS,
+  secretSources = NO_SECRET_SOURCES,
   projectOverride,
 }: ProviderInstanceCardProps) {
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
@@ -533,6 +600,14 @@ export function ProviderInstanceCard({
   const displayName =
     instance.displayName?.trim() || driverOption?.label || String(instance.driver);
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
+  const managedPolicy = useManagedPolicy(environmentId);
+  const instanceLocks = managedInstanceLocks(managedPolicy, instance.driver);
+  const managedDriverReason = isManagedDriverAllowed(managedPolicy, instance.driver)
+    ? undefined
+    : disallowedProviderMessage(
+        managedPolicy?.organization,
+        driverOption?.label ?? String(instance.driver),
+      );
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
       toastManager.add({
@@ -639,6 +714,12 @@ export function ProviderInstanceCard({
   };
   const updateEnvironmentField = (field: ProviderEnvironmentField, value: string) => {
     updateEnvironment(nextProviderEnvironmentWithFieldValue(instance.environment, field, value));
+  };
+  const updateEnvironmentFieldSecret = (
+    field: ProviderEnvironmentField,
+    secret: SecretReference | undefined,
+  ) => {
+    updateEnvironment(nextProviderEnvironmentWithFieldSecret(instance.environment, field, secret));
   };
   const removeEnvironmentField = (field: ProviderEnvironmentField) => {
     updateEnvironment(providerEnvironmentWithoutNames(instance.environment, new Set([field.name])));
@@ -890,12 +971,15 @@ export function ProviderInstanceCard({
               />
             </span>
           ) : null}
-          <Switch
-            checked={enabled}
-            disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
-            onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-            aria-label={`Enable ${displayName}`}
-          />
+          {/* The policy refuses switching it on; switching it off stays the user's call. */}
+          <ManagedControl reason={enabled ? undefined : managedDriverReason}>
+            <Switch
+              checked={enabled}
+              disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
+              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+              aria-label={`Enable ${displayName}`}
+            />
+          </ManagedControl>
         </span>
       </div>
     );
@@ -977,6 +1061,8 @@ export function ProviderInstanceCard({
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"
       onChange={updateConfig}
+      managed={instanceLocks && { keys: instanceLocks.configKeys, reason: instanceLocks.reason }}
+      environmentId={environmentId}
     />
   ) : (
     <SettingsRow
@@ -1041,7 +1127,15 @@ export function ProviderInstanceCard({
                   variable={readProviderEnvironmentVariable(instance.environment, field.name)}
                   idPrefix={`provider-instance-${instanceId}`}
                   onCommit={updateEnvironmentField}
+                  onSecretChange={updateEnvironmentFieldSecret}
                   onRemove={removeEnvironmentField}
+                  managedReason={
+                    instanceLocks?.wholeEnvironment ||
+                    instanceLocks?.environmentNames.has(field.name)
+                      ? instanceLocks.reason
+                      : undefined
+                  }
+                  secretSources={secretSources}
                 />
               ))}
             </div>
@@ -1077,14 +1171,26 @@ export function ProviderInstanceCard({
 
       <SettingsSection
         title="Environment"
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
+        inert={readOnly || instanceLocks?.wholeEnvironment}
+        aria-disabled={readOnly || instanceLocks?.wholeEnvironment || undefined}
         className={readOnly ? "opacity-50 select-none" : undefined}
       >
-        <ProviderEnvironmentSection
-          environment={genericEnvironment}
-          onChange={updateGenericEnvironment}
-        />
+        {instanceLocks?.wholeEnvironment ? (
+          <ManagedNotice>{instanceLocks.reason}</ManagedNotice>
+        ) : null}
+        <div className={instanceLocks?.wholeEnvironment ? "opacity-50" : undefined}>
+          <ProviderEnvironmentSection
+            environment={genericEnvironment}
+            onChange={updateGenericEnvironment}
+            secretSources={secretSources}
+            managed={
+              instanceLocks && {
+                names: instanceLocks.environmentNames,
+                reason: instanceLocks.reason,
+              }
+            }
+          />
+        </div>
       </SettingsSection>
       {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
         <AcpSessionManagementSection

@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { MenuAction } from "@react-native-menu/menu";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
@@ -111,6 +112,10 @@ function ManagedCodexSetup({
   const completeAuth = useAtomCommand(serverEnvironment.completeProviderAuth, options);
   const cancelAuth = useAtomCommand(serverEnvironment.cancelProviderAuth, options);
   const logoutAuth = useAtomCommand(serverEnvironment.logoutProviderAuth, options);
+  const removeAuthMethod = useAtomCommand(serverEnvironment.removeProviderAuthMethod, options);
+  const canRemoveAuthMethod = useAtomValue(
+    serverEnvironment.removeProviderAuthMethod.permissionAtom(environmentId),
+  );
   const startInstall = useAtomCommand(serverEnvironment.startProviderInstall, options);
   const cancelInstall = useAtomCommand(serverEnvironment.cancelProviderInstall, options);
   const [requestedMethodId, setRequestedMethodId] = useState("chatgpt");
@@ -321,14 +326,40 @@ function ManagedCodexSetup({
     unavailable ||
     busy ||
     (!installed ? !provider?.setup?.canInstall : !provider?.setup?.canAuthenticate);
+  const removableProfiles = profiles.filter((profile) => profile.canRemove);
+  const removeDisabled = unavailable || busy || !canRemoveAuthMethod;
   const accountActions: MenuAction[] = [
     ...profiles.map((profile) => ({ id: profile.id, title: profile.name })),
     { id: CHANGE_ACCOUNT_METHOD, title: "Use a different account" },
+    ...(removableProfiles.length > 0
+      ? [
+          {
+            id: "remove",
+            title: "Remove connection",
+            attributes: { disabled: removeDisabled },
+            subactions: removableProfiles.map((profile) => ({
+              id: `remove:${profile.id}`,
+              title: profile.name,
+              attributes: { destructive: true, disabled: removeDisabled },
+            })),
+          } satisfies MenuAction,
+        ]
+      : []),
   ];
-  const chooseAccount = (methodId: string) =>
+  const chooseAccount = (methodId: string) => {
+    if (methodId.startsWith("remove:")) {
+      // iOS keeps a disabled submenu's children selectable, so removal guards here too.
+      const removeId = methodId.slice("remove:".length);
+      if (removeDisabled || !removableProfiles.some((profile) => profile.id === removeId)) return;
+      void run(() =>
+        removeAuthMethod({ environmentId, input: { instanceId, methodId: removeId } }),
+      );
+      return;
+    }
     void setup(
       auth?.methods?.some((method) => method.id === methodId) ? methodId : CHANGE_ACCOUNT_METHOD,
     );
+  };
 
   return (
     <SettingsSection
@@ -466,6 +497,17 @@ function ManagedCodexSetup({
               }
             />
           </Divided>
+          {onUseExistingCli && !readOnly ? (
+            <Divided>
+              <ListActionRow
+                icon="terminal"
+                label="Use existing Codex CLI instead"
+                description="Sign in with the Codex CLI already on this environment."
+                disabled={busy}
+                onPress={onUseExistingCli}
+              />
+            </Divided>
+          ) : null}
           <Divided>
             <ListActionRow
               icon="xmark.circle.fill"

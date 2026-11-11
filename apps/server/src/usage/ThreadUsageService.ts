@@ -49,11 +49,13 @@ const make = Effect.gen(function* () {
       );
       const nowMs = yield* Clock.currentTimeMillis;
       const counted = new Set([threadId, ...delegates]);
+      const usages = [
+        threadUsageTurns("main", main, nowMs),
+        ...children.map((records) => threadUsageTurns("delegates", records, nowMs)),
+      ];
       const result = buildThreadUsage({
-        turns: [
-          ...threadUsageTurns("main", main, nowMs),
-          ...children.flatMap((records) => threadUsageTurns("delegates", records, nowMs)),
-        ],
+        turns: usages.flatMap((usage) => usage.turns),
+        incompleteGroups: usages.flatMap((usage) => usage.incompleteGroups),
         compactedAtMs: main.turnItems.flatMap((item) => {
           const at = item.completedAt ?? item.startedAt;
           return at === null ? [] : [DateTime.toEpochMillis(at)];

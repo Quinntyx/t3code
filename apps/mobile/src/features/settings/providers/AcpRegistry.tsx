@@ -4,7 +4,10 @@ import {
   acpRegistryPrepareErrorMessage,
   applyAcpRegistryPrepareResult,
   FIRST_CLASS_REGISTRY_AGENT_IDS,
+  initialAcpProviderDraft,
   parseProviderHeaders,
+  reloadedAcpProviderDrafts,
+  type AcpProviderDraft,
 } from "@t3tools/client-runtime/provider-settings/acp-registry";
 import { isConfiguredAcpRegistryAgent } from "@t3tools/client-runtime/provider-settings/add-instance";
 import {
@@ -25,7 +28,7 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Linking, View, type TextInputInstance } from "react-native";
 
 import { ProviderIcon } from "../../../components/ProviderIcon";
@@ -238,20 +241,6 @@ function AcpRegistryAgentRow(props: {
   );
 }
 
-type ProviderDraft = {
-  readonly apiType: string;
-  readonly baseUrl: string;
-  readonly headers: string;
-};
-
-function initialProviderDraft(provider: AcpRegistryConfigurableProvider): ProviderDraft {
-  return {
-    apiType: provider.current?.apiType ?? provider.supported[0] ?? "",
-    baseUrl: provider.current?.baseUrl ?? "",
-    headers: "",
-  };
-}
-
 export function AcpSessionsSection(props: {
   readonly environmentId: EnvironmentId;
   readonly instanceId: ProviderInstanceId;
@@ -265,6 +254,14 @@ export function AcpSessionsSection(props: {
   const [selectedProjectId, setProjectId] = useState<ProjectId | null>(null);
   const projectId =
     projects.find((project) => project.id === selectedProjectId)?.id ?? projects[0]?.id ?? null;
+  const projectGeneration = useRef(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Late continuations must not act on a replaced project scope.
+  useLayoutEffect(() => {
+    return () => {
+      projectGeneration.current += 1;
+    };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retiring a project invalidates its pending operations even when the instance stays mounted.
+  }, [projectId]);
   const [sessions, setSessions] = useState<ReadonlyArray<AcpRegistrySession>>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -276,7 +273,20 @@ export function AcpSessionsSection(props: {
   >([]);
   const [loadingProviders, setLoadingProviders] = useState(false);
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Readonly<Record<string, ProviderDraft>>>({});
+  const [drafts, setDrafts] = useState<Readonly<Record<string, AcpProviderDraft>>>({});
+  const [previousProjectId, setPreviousProjectId] = useState(projectId);
+  if (previousProjectId !== projectId) {
+    setPreviousProjectId(projectId);
+    setSessions([]);
+    setNextCursor(null);
+    setLoading(false);
+    setImportingSessionId(null);
+    setDeletingSessionId(null);
+    setAgentProviders([]);
+    setLoadingProviders(false);
+    setSavingProviderId(null);
+    setDrafts({});
+  }
   const options = { reportFailure: false };
   const listSessions = useAtomCommand(serverEnvironment.listAcpRegistrySessions, options);
   const importSession = useAtomCommand(serverEnvironment.importAcpRegistrySession, options);
@@ -301,21 +311,15 @@ export function AcpSessionsSection(props: {
 
   if (!canList && !canLogout && !canConfigureProviders) return null;
 
-  const selectProject = (next: ProjectId) => {
-    setProjectId(next);
-    setSessions([]);
-    setNextCursor(null);
-    setAgentProviders([]);
-    setDrafts({});
-  };
-
   const loadSessions = async (cursor?: string) => {
+    const generation = projectGeneration.current;
     if (projectId === null || loading) return;
     setLoading(true);
     const result = await listSessions({
       environmentId,
       input: { instanceId, projectId, ...(cursor === undefined ? {} : { cursor }) },
     });
+    if (generation !== projectGeneration.current) return;
     setLoading(false);
     if (result._tag === "Success") {
       setSessions((current) =>
@@ -328,6 +332,7 @@ export function AcpSessionsSection(props: {
   };
 
   const importNativeSession = async (session: AcpRegistrySession) => {
+    const generation = projectGeneration.current;
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       projectId === null ||
@@ -345,6 +350,7 @@ export function AcpSessionsSection(props: {
         updatedAt: session.updatedAt,
       },
     });
+    if (generation !== projectGeneration.current) return;
     setImportingSessionId(null);
     if (result._tag === "Success") {
       setSessions((current) =>
@@ -360,6 +366,7 @@ export function AcpSessionsSection(props: {
   };
 
   const deleteNativeSession = (session: AcpRegistrySession) => {
+    const generation = projectGeneration.current;
     if (projectId === null || deletingSessionId !== null || session.importedThreadId !== null)
       return;
     Dialog.confirm({
@@ -368,12 +375,17 @@ export function AcpSessionsSection(props: {
       confirmText: "Delete",
       destructive: true,
       onConfirm: () => {
-        if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+        if (
+          generation !== projectGeneration.current ||
+          !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+        )
+          return;
         setDeletingSessionId(session.sessionId);
         void deleteSession({
           environmentId,
           input: { instanceId, projectId, sessionId: session.sessionId },
         }).then((result) => {
+          if (generation !== projectGeneration.current) return;
           setDeletingSessionId(null);
           if (result._tag === "Success") {
             setSessions((current) =>
@@ -387,17 +399,17 @@ export function AcpSessionsSection(props: {
     });
   };
 
-  const loadProviders = async () => {
+  const loadProviders = async (resetProviderId?: string) => {
+    const generation = projectGeneration.current;
     if (projectId === null || loadingProviders) return;
     setLoadingProviders(true);
     const result = await listProviders({ environmentId, input: { instanceId, projectId } });
+    if (generation !== projectGeneration.current) return;
     setLoadingProviders(false);
     if (result._tag === "Success") {
       setAgentProviders(result.value.providers);
-      setDrafts(
-        Object.fromEntries(
-          result.value.providers.map((entry) => [entry.providerId, initialProviderDraft(entry)]),
-        ),
+      setDrafts((current) =>
+        reloadedAcpProviderDrafts(result.value.providers, current, resetProviderId),
       );
       return;
     }
@@ -405,13 +417,15 @@ export function AcpSessionsSection(props: {
   };
 
   const saveProvider = async (entry: AcpRegistryConfigurableProvider) => {
+    const generation = projectGeneration.current;
     if (
       !readEnvironmentScope(environmentId, AuthProvidersManageScope) ||
       projectId === null ||
-      savingProviderId !== null
+      savingProviderId !== null ||
+      loadingProviders
     )
       return;
-    const draft = drafts[entry.providerId] ?? initialProviderDraft(entry);
+    const draft = drafts[entry.providerId] ?? initialAcpProviderDraft(entry);
     if (draft.apiType.length === 0 || draft.baseUrl.length === 0) return;
     const parsed = parseProviderHeaders(draft.headers);
     if (!parsed.ok) {
@@ -430,31 +444,39 @@ export function AcpSessionsSection(props: {
         ...(parsed.headers === undefined ? {} : { headers: parsed.headers }),
       },
     });
+    if (generation !== projectGeneration.current) return;
     setSavingProviderId(null);
     if (result._tag === "Success") {
-      await loadProviders();
+      await loadProviders(entry.providerId);
       return;
     }
     reportCommandFailure(result, "Could not configure ACP provider", "The ACP operation failed.");
   };
 
   const disableAgentProvider = (entry: AcpRegistryConfigurableProvider) => {
-    if (projectId === null || savingProviderId !== null || entry.required) return;
+    const generation = projectGeneration.current;
+    if (projectId === null || savingProviderId !== null || loadingProviders || entry.required)
+      return;
     Dialog.confirm({
       title: `Disable ${entry.providerId}?`,
       message: "The agent stops routing requests through this provider.",
       confirmText: "Disable",
       destructive: true,
       onConfirm: () => {
-        if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
+        if (
+          generation !== projectGeneration.current ||
+          !readEnvironmentScope(environmentId, AuthProvidersManageScope)
+        )
+          return;
         setSavingProviderId(entry.providerId);
         void disableProvider({
           environmentId,
           input: { instanceId, projectId, providerId: entry.providerId },
         }).then(async (result) => {
+          if (generation !== projectGeneration.current) return;
           setSavingProviderId(null);
           if (result._tag === "Success") {
-            await loadProviders();
+            await loadProviders(entry.providerId);
             return;
           }
           reportCommandFailure(
@@ -499,7 +521,7 @@ export function AcpSessionsSection(props: {
       projectId={projectId}
       disabled={!canRead || projectOperationPending}
       separated={separated}
-      onSelect={selectProject}
+      onSelect={setProjectId}
     />
   );
 
@@ -588,7 +610,7 @@ export function AcpSessionsSection(props: {
               icon="arrow.clockwise"
               label={agentProviders.length === 0 ? "List providers" : "Refresh providers"}
               loading={loadingProviders}
-              disabled={!canRead || projectId === null}
+              disabled={!canRead || savingProviderId !== null || projectId === null}
               onPress={() => void loadProviders()}
             />
           </View>
@@ -596,8 +618,8 @@ export function AcpSessionsSection(props: {
             <AgentProviderEditor
               key={entry.providerId}
               entry={entry}
-              draft={drafts[entry.providerId] ?? initialProviderDraft(entry)}
-              disabled={props.readOnly || savingProviderId !== null}
+              draft={drafts[entry.providerId] ?? initialAcpProviderDraft(entry)}
+              disabled={props.readOnly || savingProviderId !== null || loadingProviders}
               saving={savingProviderId === entry.providerId}
               onChange={(draft) =>
                 setDrafts((current) => ({ ...current, [entry.providerId]: draft }))
@@ -711,10 +733,10 @@ function SessionRow(props: {
 
 function AgentProviderEditor(props: {
   readonly entry: AcpRegistryConfigurableProvider;
-  readonly draft: ProviderDraft;
+  readonly draft: AcpProviderDraft;
   readonly disabled: boolean;
   readonly saving: boolean;
-  readonly onChange: (draft: ProviderDraft) => void;
+  readonly onChange: (draft: AcpProviderDraft) => void;
   readonly onSave: () => void;
   readonly onDisable: () => void;
 }) {

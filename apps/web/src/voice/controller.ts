@@ -18,7 +18,11 @@ import { environmentShell, liveShellEnvironmentIdsAtom } from "../state/shell";
 import { environmentThreads } from "../state/threads";
 import { serverEnvironment } from "../state/server";
 import { randomUUID } from "../lib/utils";
-import { useRightPanelStore, type RightPanelStoreState } from "../rightPanelStore";
+import {
+  rightPanelHostRef,
+  useRightPanelStore,
+  type RightPanelStoreState,
+} from "../rightPanelStore";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { browserVoicePlatform } from "./browserAudio";
 import { VoiceAudio, type VoiceHandlers } from "./VoiceAudio";
@@ -142,13 +146,14 @@ function closeVoiceSession() {
 /** Shows Voice in the thread navigated to, without touching a panel that already shows it. */
 export function followVoiceInto(ref: ScopedThreadRef) {
   const store = useRightPanelStore.getState();
-  const panel = store.byThreadKey[scopedThreadKey(ref)];
+  const panel = store.byThreadKey[scopedThreadKey(rightPanelHostRef(ref))];
   if (!(panel?.isOpen && panel.activeSurfaceId === "voice")) store.open(ref, "voice");
 }
 /** Voice is a right-panel surface of whichever thread is on screen. */
 export function toggleVoice(ref: ScopedThreadRef) {
   const store = useRightPanelStore.getState();
-  const panel = store.byThreadKey[scopedThreadKey(ref)];
+  // A side chat's panel actions land in its parent's panel, so read that panel too.
+  const panel = store.byThreadKey[scopedThreadKey(rightPanelHostRef(ref))];
   if (panel?.isOpen && panel.activeSurfaceId === "voice") store.closeSurface(ref, "voice");
   else store.open(ref, "voice");
 }

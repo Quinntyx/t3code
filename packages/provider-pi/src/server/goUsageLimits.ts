@@ -1,8 +1,8 @@
 import { ProviderDriverKind, type ServerProviderUsageLimits } from "@t3tools/contracts";
 import { readOpenCodeGoUsage } from "@t3tools/provider-core/server/opencodeGoUsage";
 import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -20,7 +20,7 @@ export const readPiOpenCodeGoUsageLimits = Effect.fn("readPiOpenCodeGoUsageLimit
   }): Effect.fn.Return<
     ServerProviderUsageLimits,
     never,
-    ChildProcessSpawner.ChildProcessSpawner | HttpClient.HttpClient | Crypto.Crypto
+    ChildProcessSpawner.ChildProcessSpawner | HttpClient.HttpClient | Digest.Digest
   > {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const unsupported = makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });

@@ -1,6 +1,8 @@
 import { View } from "react-native";
 
-import { AndroidHeaderIconButton, AndroidScreenHeader } from "./AndroidScreenHeader";
+import { AndroidHeaderIconButton } from "./AndroidScreenHeader.android";
+import { AppBar } from "./AppBar";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { Button } from "./Button";
 import type { SheetCloseButtonProps, SheetHeaderProps } from "./SheetHeader.types";
 
@@ -34,19 +36,28 @@ export function SheetHeader(props: SheetHeaderProps) {
     ) : undefined;
 
   return (
-    <AndroidScreenHeader
-      embedded={props.presentation === "inline"}
-      title={props.title}
-      subtitle={props.subtitle}
-      leading={
-        <SheetCloseButton
-          {...(props.onCancel ? { onCancel: props.onCancel } : { onClose: props.onClose })}
-          accessibilityLabel={props.accessibilityLabel}
-          disabled={props.dismissDisabled}
-        />
-      }
-      trailing={trailing}
-      hideBottomBorder
-    />
+    <>
+      {props.dismissDisabled === undefined ? null : (
+        // A sheet that can't be closed with its button can't be swiped away either.
+        <NativeStackScreenOptions options={{ gestureEnabled: !props.dismissDisabled }} />
+      )}
+      <AppBar
+        embedded
+        sheet={props.presentation === "inline"}
+        title={props.title}
+        subtitle={props.subtitle}
+        actions={props.actions}
+        menus={props.menus}
+        leading={
+          <SheetCloseButton
+            {...(props.onCancel ? { onCancel: props.onCancel } : { onClose: props.onClose })}
+            accessibilityLabel={props.accessibilityLabel}
+            disabled={props.dismissDisabled}
+          />
+        }
+        trailing={trailing}
+        hideBottomBorder
+      />
+    </>
   );
 }

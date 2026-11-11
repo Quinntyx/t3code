@@ -1,4 +1,3 @@
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -6,9 +5,10 @@ import * as ElectronSafeStorage from "../../electron/ElectronSafeStorage.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as IpcChannels from "../channels.ts";
 
-class VoiceSecureStorageUnavailable extends Data.TaggedError("VoiceSecureStorageUnavailable")<{
-  readonly message: string;
-}> {}
+class VoiceSecureStorageUnavailable extends Schema.TaggedError<VoiceSecureStorageUnavailable>()(
+  "VoiceSecureStorageUnavailable",
+  { message: Schema.String },
+) {}
 
 const requireEncryption = Effect.fn("desktop.voice.requireEncryption")(function* () {
   const storage = yield* ElectronSafeStorage.ElectronSafeStorage;

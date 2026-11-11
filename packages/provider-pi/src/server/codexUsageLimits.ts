@@ -4,7 +4,6 @@ import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
@@ -103,7 +102,7 @@ export const readPiCodexUsageLimits = Effect.fn("readPiCodexUsageLimits")(functi
 }): Effect.fn.Return<
   PiCodexUsageLimits,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | HttpClient.HttpClient | Crypto.Crypto
+  ChildProcessSpawner.ChildProcessSpawner | HttpClient.HttpClient
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const unsupported = makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });

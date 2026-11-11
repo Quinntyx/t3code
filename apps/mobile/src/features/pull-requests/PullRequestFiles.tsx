@@ -11,12 +11,12 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { HeaderIconButton } from "../../components/ui/HeaderIconButton";
+import { IconButton } from "../../components/ui/IconButton";
 import { Menu } from "../../components/ui/Menu";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { ScreenHeaderButton } from "../../components/ui/ScreenHeaderButton";
 import { SheetHeader } from "../../components/ui/SheetHeader";
-import { Toolbar } from "../../components/ui/Toolbar";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
 import type { ReviewParsedDiff, ReviewRenderableFile } from "../review/reviewModel";
@@ -171,11 +171,20 @@ function FileFilterMenu({ filter }: { readonly filter: ChangedFiles["filter"] })
       onPressAction={filter.toggle}
     >
       <View pointerEvents="none">
-        <HeaderIconButton
-          icon="line.3.horizontal.decrease"
-          accessibilityLabel="Filter review files"
-          selected={filter.hideTestFiles}
-        />
+        {/* Android draws it as the floating chip its bars use; iOS bars are native, so a plain icon. */}
+        {Platform.OS === "android" ? (
+          <ScreenHeaderButton
+            icon="line.3.horizontal.decrease"
+            accessibilityLabel="Filter review files"
+            selected={filter.hideTestFiles}
+          />
+        ) : (
+          <IconButton
+            icon="line.3.horizontal.decrease"
+            accessibilityLabel="Filter review files"
+            selected={filter.hideTestFiles}
+          />
+        )}
       </View>
     </Menu>
   );
@@ -413,31 +422,28 @@ export function PullRequestFilesSheet({ route }: StaticScreenProps<PullRequestDi
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <SheetHeader
-        presentation={Platform.OS === "android" ? "inline" : "native"}
         title="Changed files"
         subtitle={`#${params.number} · ${params.commit?.slice(0, 7) ?? params.repository}`}
         onClose={() => navigation.goBack()}
-        // iOS gets the native menu below; SheetHeader would render this as a custom bar item.
-        trailing={Platform.OS === "android" ? <FileFilterMenu filter={filter} /> : undefined}
+        menus={[
+          {
+            title: "Filter review files",
+            icon: "line.3.horizontal.decrease",
+            items: [
+              {
+                id: "hide-tests",
+                title: "Hide test files",
+                icon: "line.3.horizontal.decrease",
+                selected: filter.hideTestFiles,
+                onPress: filter.toggle,
+              },
+            ],
+          },
+        ]}
       />
-      <Toolbar placement="right">
-        <Toolbar.Menu
-          title="Review files"
-          accessibilityLabel="Filter review files"
-          icon="line.3.horizontal.decrease"
-        >
-          <Toolbar.MenuAction
-            icon="line.3.horizontal.decrease"
-            isOn={filter.hideTestFiles}
-            onPress={filter.toggle}
-          >
-            <Toolbar.Label>Hide test files</Toolbar.Label>
-          </Toolbar.MenuAction>
-        </Toolbar.Menu>
-      </Toolbar>
       <ScreenContent>
         <AnimatedLegendList
-          renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
+          renderScrollComponent={NativeScrollView}
           className="flex-1"
           data={parsed.kind === "files" ? groupByDirectory(parsed.files, collapsed) : []}
           keyExtractor={(item) => item.key}

@@ -10,7 +10,6 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -41,7 +40,11 @@ import type { ProviderMaintenanceCapabilities } from "@t3tools/provider-core/ser
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
-const UPDATE_TIMEOUT_MS = 5 * 60_000;
+// Native updaters (`claude update`) download a ~300 MB binary without printing
+// progress, and killing one mid-download leaves a truncated binary that the
+// next run treats as installed. Allow a slow connection to finish.
+const UPDATE_TIMEOUT_MINUTES = 30;
+const UPDATE_TIMEOUT_MS = UPDATE_TIMEOUT_MINUTES * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 const decodeClaudePlugins = Schema.decodeOption(
   Schema.fromJsonString(
@@ -86,14 +89,18 @@ export class ProviderMaintenanceRunner extends Context.Service<
   ProviderMaintenanceRunnerShape
 >()("t3/provider/providerMaintenanceRunner") {}
 
-class ProviderMaintenanceCommandError extends Data.TaggedError("ProviderMaintenanceCommandError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
+class ProviderMaintenanceCommandError extends Schema.TaggedError<ProviderMaintenanceCommandError>()(
+  "ProviderMaintenanceCommandError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 interface VerifiedProviderRefresh {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly verifiedProviders: ReadonlyArray<ServerProvider>;
+  readonly advisoryEnriched: boolean;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -110,14 +117,15 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
       function* () {
+        const env = input.env ? { env: input.env, extendEnv: true } : {};
         // Windows batch shims require shell dispatch through resolveSpawnCommand.
-        const resolved = yield* resolveSpawnCommand(input.command, input.args);
+        const resolved = yield* resolveSpawnCommand(input.command, input.args, env);
         const child = yield* input.spawner
           .spawn(
             ChildProcess.make(resolved.command, resolved.args, {
               shell: resolved.shell,
               ...(input.cwd ? { cwd: input.cwd } : {}),
-              ...(input.env ? { env: input.env, extendEnv: true } : {}),
+              ...env,
             }),
           )
           .pipe(
@@ -217,11 +225,14 @@ export function splitOutputLines(
   partialLine: string,
   text: string,
 ): { readonly lines: ReadonlyArray<string>; readonly partialLine: string } {
-  const parts = (partialLine + text).split(/\r\n|\r|\n/);
+  const parts = (partialLine + text).replace(/\x1b\[(?:0*1?G|999D)/g, "\r").split(/\r\n|\r|\n/);
   return { partialLine: (parts.pop() ?? "").slice(-UPDATE_PARTIAL_LINE_MAX_LENGTH), lines: parts };
 }
 
 export function toProgressLine(line: string): string | null {
+  if (/\x1b(?:\[[0-9]*)?$/.test(line)) {
+    return null;
+  }
   const text = NodeUtil.stripVTControlCharacters(line).replace(/\s+/g, " ").trim();
   if (text.length === 0) {
     return null;
@@ -269,7 +280,7 @@ function lastOutputLine(result: ProviderMaintenanceCommandResult): string | null
 
 function failureMessage(result: ProviderMaintenanceCommandResult): string {
   if (result.timedOut) {
-    return "Update timed out.";
+    return `Update timed out after ${UPDATE_TIMEOUT_MINUTES} minutes.`;
   }
   const summary =
     result.exitCode !== null && result.exitCode !== 0
@@ -383,12 +394,14 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       }),
   });
 
-  const verifyRefreshedProvider = (
+  const verifyFromRefresh = (
+    refresh: Effect.Effect<ReadonlyArray<ServerProvider>>,
     provider: ProviderDriverKind,
     maintenanceCapabilities: ProviderMaintenanceCapabilities,
     instanceId: ProviderInstanceId,
+    phase: "pre-update" | "post-update",
   ): Effect.Effect<VerifiedProviderRefresh> =>
-    providerRegistry.refreshAfterUpdate(provider, instanceId).pipe(
+    refresh.pipe(
       Effect.flatMap((providers) => {
         const refreshedProviders = providers.filter(
           (candidate) => candidate.driver === provider && candidate.instanceId === instanceId,
@@ -397,6 +410,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
           return Effect.succeed<VerifiedProviderRefresh>({
             providers,
             verifiedProviders: [],
+            advisoryEnriched: true,
           });
         }
         return Effect.forEach(
@@ -416,15 +430,18 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
           Effect.map((verifiedProviders): VerifiedProviderRefresh => ({
             providers,
             verifiedProviders,
+            advisoryEnriched: true,
           })),
           Effect.catchCause((cause) =>
-            Effect.logWarning("Provider post-update version verification failed", {
+            Effect.logWarning("Provider version verification failed", {
               provider,
+              phase,
               cause: Cause.pretty(cause),
             }).pipe(
               Effect.as<VerifiedProviderRefresh>({
                 providers,
                 verifiedProviders: refreshedProviders,
+                advisoryEnriched: false,
               }),
             ),
           ),
@@ -510,6 +527,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             }
 
             let output: string | null = null;
+            let alreadyCurrent = false;
             if (!extensionsOnly) {
               const manifest = yield* manifestService.current;
               // Check compatibility against what an unpinned command would install now.
@@ -553,27 +571,62 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                   }),
                 );
               }
-              yield* setRunningMessage(`Running ${describeCommand(command)}`);
-              const result = yield* runMaintenanceCommand(command, setRunningMessage);
-              if (result.timedOut || result.exitCode !== 0) {
-                yield* Effect.logWarning("Provider update command failed", {
-                  provider,
-                  command: describeCommand(command),
-                  exitCode: result.exitCode,
-                  timedOut: result.timedOut,
-                  output: commandOutput(result),
-                });
-                return yield* finish(
-                  makeUpdateState({
-                    status: "failed",
-                    startedAt,
-                    finishedAt: yield* nowIso,
-                    message: failureMessage(result),
-                    output: commandOutput(result),
-                  }),
+              if (targetVersion === undefined) {
+                const prior = (yield* providerRegistry.getProviders).find(
+                  (candidate) => candidate.instanceId === instanceId,
                 );
+                const precheck = yield* verifyFromRefresh(
+                  providerRegistry.refreshInstance(instanceId),
+                  provider,
+                  fresh,
+                  instanceId,
+                  "pre-update",
+                );
+                alreadyCurrent =
+                  precheck.advisoryEnriched &&
+                  prior !== undefined &&
+                  precheck.verifiedProviders.length > 0 &&
+                  precheck.verifiedProviders.every(
+                    (verified) =>
+                      verified.checkedAt !== prior.checkedAt &&
+                      verified.installed &&
+                      verified.status !== "error" &&
+                      verified.versionAdvisory?.status === "current",
+                  );
+                if (alreadyCurrent && !fresh.updateExtensions) {
+                  return yield* finish(
+                    makeUpdateState({
+                      status: "succeeded",
+                      startedAt,
+                      finishedAt: yield* nowIso,
+                      message: "Already up to date.",
+                    }),
+                  );
+                }
               }
-              output = commandOutput(result);
+              if (!alreadyCurrent) {
+                yield* setRunningMessage(`Running ${describeCommand(command)}`);
+                const result = yield* runMaintenanceCommand(command, setRunningMessage);
+                if (result.timedOut || result.exitCode !== 0) {
+                  yield* Effect.logWarning("Provider update command failed", {
+                    provider,
+                    command: describeCommand(command),
+                    exitCode: result.exitCode,
+                    timedOut: result.timedOut,
+                    output: commandOutput(result),
+                  });
+                  return yield* finish(
+                    makeUpdateState({
+                      status: "failed",
+                      startedAt,
+                      finishedAt: yield* nowIso,
+                      message: failureMessage(result),
+                      output: commandOutput(result),
+                    }),
+                  );
+                }
+                output = commandOutput(result);
+              }
             }
 
             if (fresh.updateExtensions) {
@@ -599,14 +652,16 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 );
               }
             }
-            if (extensionsOnly) {
+            if (extensionsOnly || alreadyCurrent) {
               yield* providerRegistry.refreshAfterUpdate(provider, instanceId);
               return yield* finish(
                 makeUpdateState({
                   status: "succeeded",
                   startedAt,
                   finishedAt: yield* nowIso,
-                  message: "Provider extensions updated.",
+                  message: alreadyCurrent
+                    ? "Already up to date. Provider extensions updated."
+                    : "Provider extensions updated.",
                   output,
                 }),
               );
@@ -621,10 +676,12 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             yield* invalidateLatestProviderVersion(verified).pipe(
               Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
             );
-            const { verifiedProviders } = yield* verifyRefreshedProvider(
+            const { verifiedProviders } = yield* verifyFromRefresh(
+              providerRegistry.refreshAfterUpdate(provider, instanceId),
               provider,
               verified,
               instanceId,
+              "post-update",
             );
             // Cursor about probes can fail transiently; missing versions alone do not imply failure.
             const couldNotVerify =

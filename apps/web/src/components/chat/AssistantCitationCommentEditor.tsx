@@ -3,14 +3,17 @@ import {
   type AssistantCitation,
   type ServerProviderSkill,
 } from "@t3tools/contracts";
-import { useState, type RefObject } from "react";
+import { use, useEffect, useRef, useState, type RefObject } from "react";
 
 import { collapseExpandedComposerCursor } from "~/composer-logic";
 import { useClientSettings } from "~/hooks/useSettings";
+import { TextFieldSpeechControls, useDraftFieldSpeech } from "~/speech/useTextFieldSpeech";
+
 import {
   ComposerPromptEditorTiptap,
   type ComposerPromptEditorHandle,
 } from "../ComposerPromptEditorTiptap";
+import { ComposerContextActionsContext } from "../composerContextActions";
 import { EMPTY_COMPOSER_CONTEXT_RECORDS } from "../composerContextPresentation";
 import { Button } from "../ui/button";
 
@@ -25,6 +28,7 @@ export function AssistantCitationCommentEditor({
   onSubmitAndSend,
   onCancel,
   onDraftChange,
+  onVoiceSetupOpenChange,
 }: {
   citation: AssistantCitation;
   editorRef: RefObject<ComposerPromptEditorHandle | null>;
@@ -32,34 +36,75 @@ export function AssistantCitationCommentEditor({
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
   onDraftChange?: (comment: string) => void;
+  onVoiceSetupOpenChange?: (open: boolean) => void;
 }) {
   const richTextEnabled = useClientSettings((settings) => settings.composerRichTextEnabled);
   const [comment, setComment] = useState(citation.comment ?? "");
   const [cursor, setCursor] = useState(() =>
     collapseExpandedComposerCursor(comment, comment.length),
   );
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const { environmentId, projectId } = use(ComposerContextActionsContext);
+  const updateComment = (text: string) => {
+    setComment(text);
+    onDraftChange?.(text);
+  };
+  const speech = useDraftFieldSpeech({
+    environmentId: environmentId ?? citation.environmentId,
+    projectId,
+    ownerKey: JSON.stringify([
+      "citation",
+      environmentId,
+      citation.threadId,
+      citation.messageId,
+      citation.start,
+      citation.end,
+    ]),
+    text: comment,
+    targetRef: fieldRef,
+    readDraft: () => {
+      const editor = editorRef.current;
+      const snapshot = editor?.readSnapshot();
+      const text = snapshot?.value ?? comment;
+      const caret = snapshot?.expandedCursor ?? text.length;
+      return { text, selection: editor?.readSelectionRange() ?? { start: caret, end: caret } };
+    },
+    commitDraft: (text, selection) => {
+      const next = collapseExpandedComposerCursor(text, selection.start);
+      updateComment(text);
+      setCursor(next);
+      window.requestAnimationFrame(() => editorRef.current?.focusAt(next));
+    },
+  });
+  const setupOpen = speech.setup.open;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the citation popover open while the voice setup dialog owns focus
+  useEffect(() => {
+    onVoiceSetupOpenChange?.(setupOpen);
+    return () => onVoiceSetupOpenChange?.(false);
+  }, [onVoiceSetupOpenChange, setupOpen]);
   const commentTooLong = comment.length > ASSISTANT_CITATION_MAX_COMMENT_LENGTH;
   const submit = () => {
-    if (!commentTooLong) onSubmit(comment);
+    speech.submitAfterDictation((text) => {
+      if (text.length <= ASSISTANT_CITATION_MAX_COMMENT_LENGTH) onSubmit(text);
+    });
   };
   const submitAndSend = () => {
-    if (commentTooLong) return;
-    if (onSubmitAndSend) {
-      onSubmitAndSend(comment);
-    } else {
-      onSubmit(comment);
-    }
+    speech.submitAfterDictation((text) => {
+      if (text.length <= ASSISTANT_CITATION_MAX_COMMENT_LENGTH) (onSubmitAndSend ?? onSubmit)(text);
+    });
   };
 
   return (
     <div
+      ref={fieldRef}
       data-citation-comment-editor="true"
       onKeyDown={(event) => {
         event.stopPropagation();
         if (event.nativeEvent.isComposing || event.keyCode === 229) return;
         if (event.key === "Escape") {
           event.preventDefault();
-          onCancel();
+          if (speech.state.phase !== "idle") speech.cancel();
+          else onCancel();
         }
       }}
     >
@@ -70,16 +115,15 @@ export function AssistantCitationCommentEditor({
         richTextEnabled={richTextEnabled}
         contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}
         skills={NO_SKILLS}
-        disabled={false}
+        disabled={speech.freezesEditor}
         ariaLabel="Comment on selected text"
         ariaDescription="Enter to save the citation comment; Command/Ctrl+Enter to save and send; Shift+Enter for a new line."
         ariaInvalid={commentTooLong}
         placeholder="Add an optional comment..."
         className="max-h-40"
         onChange={(nextComment, nextCursor) => {
-          setComment(nextComment);
+          updateComment(nextComment);
           setCursor(nextCursor);
-          onDraftChange?.(nextComment);
         }}
         onCommandKeyDown={(key, event) => {
           if (key !== "Enter" || event.shiftKey) return false;
@@ -98,7 +142,16 @@ export function AssistantCitationCommentEditor({
           characters.
         </p>
       ) : null}
-      <div className="mt-2 flex items-center justify-end gap-2">
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <div
+          className={
+            speech.state.phase === "idle"
+              ? "contents"
+              : "flex basis-full flex-wrap gap-2 *:min-w-0 *:grow **:data-[slot=voice-input-pill]:w-full"
+          }
+        >
+          <TextFieldSpeechControls speech={speech} />
+        </div>
         <Button
           variant="outline"
           size="xs"
@@ -109,7 +162,7 @@ export function AssistantCitationCommentEditor({
         </Button>
         <Button
           size="xs"
-          disabled={commentTooLong}
+          disabled={speech.preparing || (commentTooLong && !speech.blocksSubmission)}
           onPointerDown={(event) => event.preventDefault()}
           onClick={submit}
         >
