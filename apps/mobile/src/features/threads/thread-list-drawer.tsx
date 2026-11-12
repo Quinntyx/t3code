@@ -124,6 +124,16 @@ export function useBlockingGestureTags(): ReadonlyArray<number> {
 
 const EMPTY_TAGS: ReadonlyArray<number> = [];
 
+const CoveredByDrawerContext = createContext(false);
+
+/**
+ * True while an open drawer covers the thread. Text there drops its selection then:
+ * the platform draws the selection toolbar and handles above every app view.
+ */
+export function useCoveredByThreadDrawer(): boolean {
+  return useContext(CoveredByDrawerContext);
+}
+
 function useThreadDrawer(side: ThreadDrawerSide) {
   const drawers = useContext(ThreadDrawersContext);
   if (drawers === null) {
@@ -295,7 +305,8 @@ export function ThreadListDrawerGestureWrapper({
   const { layout } = useAdaptiveWorkspaceLayout();
   const { width: viewportWidth } = useWindowDimensions();
   const width = threadListDrawerWidth(layout.listPaneWidth, viewportWidth);
-  const enabled = !layout.usesSplitView && !threads.open && !details.open;
+  const covered = threads.open || details.open;
+  const enabled = !layout.usesSplitView && !covered;
   const left = useDrawerGesture(
     "left",
     threads,
@@ -310,7 +321,9 @@ export function ThreadListDrawerGestureWrapper({
   const gesture = useMemo(() => Gesture.Race(left, right), [left, right]);
   return (
     <GestureDetector gesture={gesture}>
-      <View className="flex-1">{children}</View>
+      <View className="flex-1">
+        <CoveredByDrawerContext value={covered}>{children}</CoveredByDrawerContext>
+      </View>
     </GestureDetector>
   );
 }

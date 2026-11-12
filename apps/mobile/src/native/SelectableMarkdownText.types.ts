@@ -78,6 +78,7 @@ export interface SelectableMarkdownTextProps {
   readonly textStyle: NativeMarkdownTextStyle;
   /** Gesture-handler tags whose handlers yield to over-wide horizontally scrolled blocks. */
   readonly blockingGestureTags?: ReadonlyArray<number>;
+  readonly selectable?: boolean;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly models?: ReadonlyArray<SelectableMarkdownModel>;
   readonly preserveSoftBreaks?: boolean;

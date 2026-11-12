@@ -130,6 +130,7 @@ import {
   useThreadListDrawer,
   useThreadDetailsDrawer,
   useBlockingGestureTags,
+  useCoveredByThreadDrawer,
   threadListDrawerWidth,
   type ThreadListDrawerContextValue,
 } from "./thread-list-drawer";
@@ -150,6 +151,10 @@ function Capture({
     onChange({ left, right, blockingTags });
   }, [left, right, blockingTags, onChange]);
   return null;
+}
+
+function Feed() {
+  return <span data-feed>{useCoveredByThreadDrawer() ? "covered" : "visible"}</span>;
 }
 
 function setup() {
@@ -191,7 +196,7 @@ function setup() {
           )}
         </ThreadListDrawerHost>
         <ThreadListDrawerGestureWrapper detailsEnabled>
-          <span>Feed</span>
+          <Feed />
         </ThreadListDrawerGestureWrapper>
       </ThreadListDrawerProvider>,
     );
@@ -206,6 +211,7 @@ function setup() {
     drawer: () => latest.right,
     drawers: () => latest,
     blockingTags: () => latest.blockingTags,
+    feed: () => container.querySelector("[data-feed]")?.textContent,
     render,
     [Symbol.dispose]: () => {
       act(() => root.unmount());
@@ -215,12 +221,14 @@ function setup() {
 }
 
 describe("thread list drawer", () => {
-  it("mounts each drawer on first opening and switches sides exclusively", () => {
+  it("mounts each drawer on first opening, switches sides exclusively and covers the feed", () => {
     using screen = setup();
     expect(screen.thread()).toBeUndefined();
     expect(screen.drawers().left.mounted).toBe(false);
+    expect(screen.feed()).toBe("visible");
 
     act(() => screen.drawers().left.openDrawer());
+    expect(screen.feed()).toBe("covered");
     expect(screen.drawers().left.mounted).toBe(true);
     expect(screen.drawers().left.open).toBe(true);
     expect(screen.drawers().right.open).toBe(false);
@@ -234,8 +242,10 @@ describe("thread list drawer", () => {
 
     act(() => screen.drawers().left.closeDrawer());
     expect(screen.drawers().right.open).toBe(true);
+    expect(screen.feed()).toBe("covered");
     act(() => screen.drawers().right.closeDrawer());
     expect(screen.drawers().right.open).toBe(false);
+    expect(screen.feed()).toBe("visible");
     expect(screen.thread()).toBeDefined();
   });
 
