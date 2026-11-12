@@ -22,6 +22,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { isZipFile, ZipArchiveView } from "./ZipArchiveView";
 import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentDocumentBody";
 import { ATTACHMENT_VIEWER_PAGE_CLASS_NAME, AttachmentViewerCard } from "./AttachmentViewerCard";
+import { renderedToggleAction } from "./renderedToggleAction";
 
 export type AttachmentFileRouteParams = {
   readonly environmentId?: string;
@@ -108,107 +109,62 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   };
 
   const { content, renderedMode, activeMode, setRendered, share, sharing } = document;
-  const menuActions = [
-    renderedMode
-      ? ({
-          id: "preview",
-          title: renderedMode === "table" ? "Table" : "Preview",
-          icon: renderedMode === "table" ? "tablecells" : "eye",
-          inline: true,
-          onPress: () => setRendered(true),
-        } as const)
-      : null,
-    renderedMode
-      ? ({
-          id: "source",
-          title: "Source",
-          icon: "doc.text",
-          inline: true,
-          onPress: () => setRendered(false),
-        } as const)
-      : null,
-    content && activeMode === "source"
-      ? ({
-          id: "word-wrap",
-          title: appearance.codeWordBreak ? "Disable word wrap" : "Enable word wrap",
-          icon: "text.alignleft",
-          inline: false,
-          onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
-        } as const)
-      : null,
-    content
-      ? ({
-          id: "copy",
-          title: content.truncated ? "Copy preview" : "Copy contents",
-          icon: "doc.on.doc",
-          inline: false,
-          onPress: () => copyTextWithHaptic(content.text),
-        } as const)
-      : null,
-    uri
-      ? ({
-          id: "share",
-          title: sharing ? "Opening share sheet…" : "Save or share",
-          icon: "square.and.arrow.up",
-          inline: false,
-          onPress: () => void share(),
-        } as const)
-      : null,
-    uri
-      ? ({
-          id: "open-viewer",
-          title: "Open in file viewer",
-          icon: "arrow.up.left.and.arrow.down.right",
-          inline: false,
-          onPress: () => {
-            setNativeViewer((current) => (current === null ? null : "open"));
-            setNativeOpen(true);
-          },
-        } as const)
-      : null,
-    draftKey
-      ? ({
-          id: "remove",
-          title: "Remove from draft",
-          icon: "trash",
-          inline: false,
-          destructive: true,
-          onPress: removeFromDraft,
-        } as const)
-      : null,
-  ].filter((action) => action !== null);
-  const selectedAction = activeMode === "source" ? "source" : "preview";
+  const modeToggle = renderedMode
+    ? renderedToggleAction({
+        rendered: activeMode !== "source",
+        table: renderedMode === "table",
+        onToggle: setRendered,
+      })
+    : null;
   const fileMenu: AppBarMenu = {
     title: "File actions",
     icon: "ellipsis",
     items: [
-      ...(renderedMode
-        ? [
-            {
-              id: "modes",
-              inline: true,
-              items: menuActions
-                .filter(({ inline }) => inline)
-                .map((action) => ({
-                  id: action.id,
-                  title: action.title,
-                  icon: action.icon,
-                  selected: action.id === selectedAction,
-                  onPress: action.onPress,
-                })),
+      content && activeMode === "source"
+        ? {
+            id: "word-wrap",
+            title: appearance.codeWordBreak ? "Disable word wrap" : "Enable word wrap",
+            icon: "text.alignleft",
+            onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
+          }
+        : null,
+      content
+        ? {
+            id: "copy",
+            title: content.truncated ? "Copy preview" : "Copy contents",
+            icon: "doc.on.doc",
+            onPress: () => copyTextWithHaptic(content.text),
+          }
+        : null,
+      uri
+        ? {
+            id: "share",
+            title: sharing ? "Opening share sheet…" : "Save or share",
+            icon: "square.and.arrow.up",
+            onPress: () => void share(),
+          }
+        : null,
+      uri
+        ? {
+            id: "open-viewer",
+            title: "Open in file viewer",
+            icon: "arrow.up.left.and.arrow.down.right",
+            onPress: () => {
+              setNativeViewer((current) => (current === null ? null : "open"));
+              setNativeOpen(true);
             },
-          ]
-        : []),
-      ...menuActions
-        .filter(({ inline }) => !inline)
-        .map((action) => ({
-          id: action.id,
-          title: action.title,
-          icon: action.icon,
-          destructive: "destructive" in action,
-          onPress: action.onPress,
-        })),
-    ],
+          }
+        : null,
+      draftKey
+        ? {
+            id: "remove",
+            title: "Remove from draft",
+            icon: "trash",
+            destructive: true,
+            onPress: removeFromDraft,
+          }
+        : null,
+    ].filter((action) => action !== null),
   };
   const subtitle = [
     draftKey ? "Draft" : null,
@@ -248,7 +204,13 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
 
   return (
     <View className={ATTACHMENT_VIEWER_PAGE_CLASS_NAME}>
-      <AppBar title={params.name} subtitle={subtitle} onBack={handleBack} menus={[fileMenu]} />
+      <AppBar
+        title={params.name}
+        subtitle={subtitle}
+        onBack={handleBack}
+        actions={modeToggle ? [modeToggle] : undefined}
+        menus={[fileMenu]}
+      />
       <AttachmentViewerCard>
         <AttachmentDocumentBody
           document={document}

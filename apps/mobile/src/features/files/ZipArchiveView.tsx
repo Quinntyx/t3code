@@ -44,6 +44,7 @@ import { appendComposerDraftAttachments } from "../../state/use-composer-drafts"
 import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentDocumentBody";
 import { ATTACHMENT_VIEWER_PAGE_CLASS_NAME, AttachmentViewerCard } from "./AttachmentViewerCard";
 import { FilePreviewLoading } from "./FilePreviewFeedback";
+import { renderedToggleAction } from "./renderedToggleAction";
 import {
   buildZipTree,
   flattenZipTree,
@@ -721,21 +722,22 @@ function ZipEntryView(props: {
         title={entry.name}
         subtitle={subtitle}
         onBack={props.onBack}
+        actions={
+          renderedMode
+            ? [
+                renderedToggleAction({
+                  rendered,
+                  table: renderedMode === "table",
+                  onToggle: setRendered,
+                }),
+              ]
+            : undefined
+        }
         menus={[
           {
             title: "File actions",
             icon: "ellipsis",
             items: [
-              ...(renderedMode
-                ? [
-                    {
-                      id: "toggle-rendered",
-                      title: rendered ? "Show source" : "Show preview",
-                      icon: rendered ? "doc.text" : "eye",
-                      onPress: () => setRendered((value) => !value),
-                    },
-                  ]
-                : []),
               ...(canAddToChat
                 ? [
                     {
