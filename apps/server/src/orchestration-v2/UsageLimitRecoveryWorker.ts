@@ -414,18 +414,26 @@ const makeSweep = Effect.gen(function* () {
           const report = observeLimitReport(previous, next, at);
           return [report, report.limits] as const;
         });
-        if (observed.length === 0 && spent.length === 0) return;
-        yield* Ref.update(resetObservedAt, (current) => {
-          const updated = new Map(current);
-          for (const instanceId of spent) updated.delete(instanceId);
-          for (const instanceId of observed) updated.set(instanceId, at);
-          return updated;
-        });
-        if (observed.length > 0) yield* requestSweep;
+        if (observed.length > 0 || spent.length > 0) {
+          yield* Ref.update(resetObservedAt, (current) => {
+            const updated = new Map(current);
+            for (const instanceId of spent) updated.delete(instanceId);
+            for (const instanceId of observed) updated.set(instanceId, at);
+            return updated;
+          });
+        }
+        yield* requestSweep;
       }),
     ).pipe(
       Effect.catchCause(
         logUnlessInterrupted("orchestration-v2.limit-recovery.provider-stream-failed"),
+      ),
+    ),
+  );
+  yield* forkParked(
+    Stream.runForEach(usageSources.streamChanges, () => requestSweep).pipe(
+      Effect.catchCause(
+        logUnlessInterrupted("orchestration-v2.limit-recovery.usage-source-stream-failed"),
       ),
     ),
   );

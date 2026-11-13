@@ -1,10 +1,8 @@
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
-import {
-  layer as layerUsageLimitRecovery,
-  limitRecoveryCommand,
-} from "./UsageLimitRecoveryWorker.ts";
+import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -63,6 +61,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
@@ -8748,11 +8747,19 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
             ],
           });
           let sources: ReadonlyArray<UsageLimitSourceSnapshot> = [];
+          const sourceChanges = yield* Queue.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>();
+          const appliedChanges = yield* Queue.unbounded<void>();
           let sweep: Effect.Effect<void> = Effect.void;
           yield* Layer.build(
-            layerUsageLimitRecovery.pipe(
+            UsageLimitRecoveryWorker.layer.pipe(
               Layer.provide(IdAllocator.layer),
               Layer.provide(layerTestProviderInstanceRegistry),
+              Layer.provide(
+                Layer.mock(ProviderRegistry.ProviderRegistry)({
+                  getProviders: Effect.succeed([]),
+                  streamChanges: Stream.never,
+                }),
+              ),
               Layer.provide(
                 ServerSettings.layerTest({
                   autoResumeLimitedThreads: false,
@@ -8762,6 +8769,16 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
               Layer.provide(
                 Layer.mock(UsageLimitSources.UsageLimitSources)({
                   current: Effect.sync(() => sources),
+                  streamChanges: Stream.fromQueue(sourceChanges).pipe(
+                    Stream.flatMap((snapshot) =>
+                      Stream.concat(
+                        Stream.make(snapshot),
+                        Stream.fromEffect(Queue.offer(appliedChanges, undefined)).pipe(
+                          Stream.drain,
+                        ),
+                      ),
+                    ),
+                  ),
                 }),
               ),
               Layer.provide(
@@ -8819,6 +8836,8 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
               ],
             },
           ];
+          yield* Queue.offer(sourceChanges, sources);
+          yield* Queue.take(appliedChanges);
           yield* sweep;
           const reconciled = yield* orchestrator.getThreadProjection(threadId);
           const failure = reconciled.turnItems.find((item) => item.type === "error");
