@@ -67,6 +67,28 @@ describe("OpenCode Go usage", () => {
       assert.strictEqual(limits?.windows[0]?.resetsAt, "2026-10-29T06:19:00.000Z");
       assert.strictEqual(limits?.checkedAt, checkedAt);
       assert.isString(limits?.credentialFingerprint);
+
+      // Each machine can hold its own key for one subscription.
+      const fingerprint = (apiKey: string, body: ReturnType<typeof usageBody>) =>
+        read({ apiKey, client: zenClient(() => ({ status: 200, body })) }).pipe(
+          Effect.map((other) =>
+            other._tag === "limits" ? other.limits.credentialFingerprint : undefined,
+          ),
+        );
+      assert.strictEqual(
+        yield* fingerprint("oc_sk_other_machine", usageBody(9)),
+        limits?.credentialFingerprint,
+      );
+      const otherSubscription = usageBody(7);
+      assert.notStrictEqual(
+        yield* fingerprint("oc_sk_session", {
+          usage: {
+            ...otherSubscription.usage,
+            monthly: { percent: 83, resetsAt: "2026-11-30T08:12:44.000Z" },
+          },
+        }),
+        limits?.credentialFingerprint,
+      );
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 

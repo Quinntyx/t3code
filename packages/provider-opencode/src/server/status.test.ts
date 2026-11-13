@@ -80,7 +80,7 @@ it.effect("reads Go limits with the instance's XDG credentials and preserves res
     NodeAssert.equal(limits.unavailable, undefined);
     NodeAssert.equal(
       limits.credentialFingerprint,
-      "aba48e85c981a8edc1c9fb4575121accc7235fa55d0f8689f66f153de5566a37",
+      "a7141297eed25514ec3058dc9a131bf301f73a7c2ef20aa6568bde1ec398007c",
     );
     NodeAssert.deepEqual(
       limits.windows.map(({ kind, usedPercent, resetsAt: reset }) => ({
@@ -118,11 +118,8 @@ it.effect(
       const insert = database.prepare("INSERT INTO credential VALUES (?, ?, ?, ?, ?, ?)");
       const window = { percent: 1, resetsAt: "2026-09-17T12:00:00.000Z" };
       const consoleKey = { type: "key", key: "console-key" };
-      const fingerprints = new Map([
-        ["console-key", "3e45cfde9158185930d4cc7020a4e390895574fd54bd8f9631d23a336bbf94f0"],
-        ["go-key", "d0e590e93fc9bd9353f2b993c0c287391cae505da2a78cb698b75418d2f5367e"],
-        ["inline-key", "85649de18e63305548b6407e185f708483727ee6189cc4bc9512ddb17e23e776"],
-      ]);
+      // Every key here reads one subscription, so they share its fingerprint.
+      const subscription = "a7141297eed25514ec3058dc9a131bf301f73a7c2ef20aa6568bde1ec398007c";
       for (const {
         consoleRow = consoleKey,
         active = 1,
@@ -222,7 +219,7 @@ it.effect(
         NodeAssert.equal(limits.windows.length, consoleStatus === 500 ? 0 : 3);
         NodeAssert.equal(
           limits.credentialFingerprint,
-          consoleStatus === 500 ? undefined : fingerprints.get(requested.at(-1)!),
+          consoleStatus === 500 ? undefined : subscription,
         );
       }
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
