@@ -1176,6 +1176,7 @@ describe("pools", () => {
           driver: claude,
           displayName: "Go",
           email: undefined,
+          workspaceId: undefined,
           plan: undefined,
           accentColor: undefined,
           environments: [],
@@ -1221,6 +1222,7 @@ describe("pooled account columns", () => {
     driver: ProviderDriverKind.make("claudeAgent"),
     displayName: key,
     email: undefined,
+    workspaceId: undefined,
     plan: undefined,
     accentColor: undefined,
     environments: [],
@@ -1972,6 +1974,37 @@ describe("provider-local usage sources", () => {
     );
     expect(accounts.map((account) => [account.driver, account.sourceLabel])).toEqual([
       ["codex", "ChatGPT"],
+    ]);
+  });
+
+  it("names a source's login by its e-mail rather than the instance that read it", () => {
+    const named = {
+      ...pi,
+      displayName: "Pi Coursework",
+      accentColor: "#f5e6c8",
+      usageSources: [
+        ...pi.usageSources!,
+        {
+          id: "unnamed",
+          label: "Unnamed",
+          driver: ProviderDriverKind.make("codex"),
+          limits: { checkedAt, windows: [{ ...window, usedPercent: 30 }] },
+        },
+      ],
+    };
+    const accounts = collectLimitAccounts(
+      new Map([
+        [
+          EnvironmentId.make("env-a"),
+          { entry: { target: { label: "Laptop" } }, serverConfig: { providers: [named] } },
+        ],
+      ]),
+    );
+    expect(
+      accounts.map(({ displayName, accentColor, email }) => ({ displayName, accentColor, email })),
+    ).toEqual([
+      { displayName: null, accentColor: undefined, email: "pi@example.com" },
+      { displayName: "Pi Coursework", accentColor: "#f5e6c8", email: undefined },
     ]);
   });
 

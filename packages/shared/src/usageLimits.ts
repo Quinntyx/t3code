@@ -395,6 +395,7 @@ export interface LimitAccount {
   readonly driver: ServerProvider["driver"];
   readonly displayName: string | null;
   readonly email: string | undefined;
+  readonly workspaceId: string | undefined;
   readonly plan: string | undefined;
   readonly accentColor: string | undefined;
   readonly environments: ReadonlyArray<{
@@ -467,6 +468,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         displayName?.toLowerCase() === PROVIDER_DISPLAY_NAMES[previous.driver]?.toLowerCase()
           ? null
           : displayName,
+      workspaceId: previous.workspaceId ?? next.workspaceId,
       plan: planSources.get(key)?.plan ?? previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
@@ -503,6 +505,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
           driver: provider.driver,
           displayName: provider.displayName?.trim() || null,
           email: provider.auth.email,
+          workspaceId: provider.auth.workspaceId,
           plan: provider.auth.label,
           accentColor: provider.accentColor,
           environments: [{ environmentId, label }],
@@ -514,16 +517,19 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       // A local source outlives the provider's primary limits, e.g. ChatGPT without an OpenCode Go key.
       for (const source of provider.usageSources ?? []) {
         if (limitsNotice(source.limits) !== null) continue;
+        // The instance only reads this login, so a known e-mail names it better than the reader.
+        const named = !source.email;
         merge(
           resolveKey(usageSourceReport(source)) ??
             `${environmentId}:${provider.instanceId}:${source.id}`,
           {
             key: `${environmentId}:${provider.instanceId}:${source.id}`,
             driver: source.driver,
-            displayName: provider.displayName?.trim() || null,
+            displayName: named ? provider.displayName?.trim() || null : null,
             email: source.email,
+            workspaceId: source.workspaceId,
             plan: provider.auth.label,
-            accentColor: provider.accentColor,
+            accentColor: named ? provider.accentColor : undefined,
             environments: [{ environmentId, label }],
             sourceLabel: source.label,
             redeem: { environmentId, input: { instanceId: provider.instanceId } },
@@ -547,6 +553,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
           driver: account.driver,
           displayName: account.email ? null : hubAccountName(account),
           email: account.email,
+          workspaceId: account.workspaceId,
           plan: account.plan,
           accentColor: undefined,
           environments: [],
@@ -1183,6 +1190,7 @@ export function summarizeProviderLimits(
             driver: provider.driver,
             displayName: provider.displayName?.trim() || null,
             email: provider.auth.email,
+            workspaceId: provider.auth.workspaceId,
             plan: provider.auth.label,
             accentColor: provider.accentColor,
             environments: [],
@@ -1217,6 +1225,7 @@ export function summarizeProviderLimits(
           driver: source.driver,
           displayName: provider.displayName?.trim() || null,
           email: source.email,
+          workspaceId: source.workspaceId,
           plan: provider.auth.label,
           accentColor: provider.accentColor,
           environments: [],
@@ -1245,6 +1254,7 @@ export function summarizeProviderLimits(
         driver: account.driver,
         displayName: null,
         email: account.email,
+        workspaceId: account.workspaceId,
         plan: account.plan,
         accentColor: undefined,
         environments: [],

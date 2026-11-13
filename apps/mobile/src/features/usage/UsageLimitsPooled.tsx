@@ -57,8 +57,15 @@ function accountHue(email: string) {
 }
 
 // Same hashed hue as the web account chip, so an account keeps its color across clients.
-function AccountChip({ email }: { readonly email: string }) {
-  const hue = accountHue(email);
+function AccountChip({
+  email,
+  workspaceId,
+}: {
+  readonly email: string;
+  // One e-mail can hold seats in several workspaces; each seat gets its own color.
+  readonly workspaceId: string | undefined;
+}) {
+  const hue = accountHue(workspaceId ? `${email}\0${workspaceId}` : email);
   return (
     <View
       className="size-5 items-center justify-center rounded-full"
@@ -265,7 +272,9 @@ function PoolWindowCard({
                 className="absolute inset-0 flex-row items-center justify-between gap-2 overflow-hidden rounded-md px-2"
               >
                 <View className="min-w-0 shrink flex-row items-center gap-1.5">
-                  {account.email ? <AccountChip email={account.email} /> : null}
+                  {account.email ? (
+                    <AccountChip email={account.email} workspaceId={account.workspaceId} />
+                  ) : null}
                   {account.email && !(account.displayName && inlineName) ? null : (
                     <Text
                       numberOfLines={1}
