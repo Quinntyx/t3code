@@ -7,6 +7,7 @@ import {
   RunId,
   type ServerProvider,
   type ServerProviderUsageLimits,
+  type ServerProviderUsageWindow,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -180,8 +181,15 @@ const window = (id: string, usedPercent: number, resetsAt = "2026-07-01T00:00:00
   usedPercent,
   resetsAt,
 });
+// A spend budget such as Claude's monthly spend: no reset clock to say when it stops blocking.
+const budget = (id: string, usedPercent: number): ServerProviderUsageWindow => ({
+  id,
+  kind: "monthly",
+  label: id,
+  usedPercent,
+});
 const limits = (
-  windows: ReadonlyArray<ReturnType<typeof window>>,
+  windows: ReadonlyArray<ServerProviderUsageWindow>,
   extra: Partial<ServerProviderUsageLimits> = {},
 ): ServerProviderUsageLimits => ({ checkedAt: "2026-06-30T00:00:00.000Z", windows, ...extra });
 
@@ -254,6 +262,19 @@ it("remembers a spent window a probe stopped reporting", () => {
   // The window comes back reported and unspent, so the allowance really did return.
   const recovered = report(partial.limits, limits([window("primary", 0), window("weekly", 39)]));
   assert.deepEqual(recovered.observed, [instanceId]);
+});
+
+it("does not keep a spent window that has no reset clock", () => {
+  const first = report(new Map(), limits([window("five_hour", 100), budget("monthly_spend", 100)]));
+  assert.deepEqual(first.spent, [instanceId]);
+  // The budget stops being reported and never had a clock, so it cannot hold the instance spent
+  // forever; the session window coming back is the allowance returning.
+  const recovered = report(first.limits, limits([window("five_hour", 0)]));
+  assert.deepEqual(recovered.observed, [instanceId]);
+  assert.deepEqual(
+    recovered.limits.get(instanceId)?.windows.map((entry) => entry.id),
+    ["five_hour"],
+  );
 });
 
 it("ignores the rounding gap between a probe and streamed usage", () => {
