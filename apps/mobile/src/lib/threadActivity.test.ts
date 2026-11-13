@@ -1027,7 +1027,7 @@ describe("buildThreadFeed", () => {
     ).toBe(true);
   });
 
-  it("keeps a settled run's still-running subagents visible while its other work folds", () => {
+  it("keeps a settled run's replies and subagents visible while a child is live", () => {
     const subagent = (
       id: string,
       updatedAt: string,
@@ -1037,7 +1037,7 @@ describe("buildThreadFeed", () => {
       ...base(id, updatedAt, ordinal),
       providerTurnId: ProviderTurnId.make("provider-turn-1"),
       status,
-      completedAt: status === "running" ? null : DateTime.makeUnsafe(updatedAt),
+      completedAt: status === "completed" ? DateTime.makeUnsafe(updatedAt) : null,
       type: "subagent",
       subagentId: NodeId.make(id),
       origin: "app_owned",
@@ -1053,17 +1053,46 @@ describe("buildThreadFeed", () => {
       startedAt: "2026-06-20T00:00:01.000Z",
       completedAt: "2026-06-20T00:00:05.000Z",
     };
-    const present = (children: ReadonlyArray<OrchestrationV2TurnItem>) =>
+    const opening = {
+      ...assistantMessage("2026-06-20T00:00:01.500Z"),
+      id: TurnItemId.make("item-opening"),
+      messageId: MessageId.make("message-opening"),
+      text: "I will delegate the deployment checks.",
+    };
+    const present = (children: ReadonlyArray<OrchestrationV2TurnItem>) => {
+      const rows = [
+        projected(userMessage(), 0),
+        projected(opening, 1),
+        projected(command("2026-06-20T00:00:02.000Z"), 2),
+        ...children.map((child, index) => projected(child, index + 3)),
+        projected(assistantMessage("2026-06-20T00:00:05.000Z"), 6),
+      ];
+      const cache = createThreadFeedCache();
       deriveThreadFeedPresentation(
-        buildThreadFeed([
-          projected(userMessage(), 0),
-          projected(command("2026-06-20T00:00:02.000Z"), 1),
-          ...children.map((child, index) => projected(child, index + 2)),
-          projected(assistantMessage("2026-06-20T00:00:05.000Z"), 5),
-        ]),
+        buildThreadFeed(rows, { cache }),
+        { ...latestRun, status: "running", completedAt: null },
+        new Set(),
+        new Set(),
+        null,
+        false,
+        cache,
+      );
+      const presented = deriveThreadFeedPresentation(
+        buildThreadFeed(rows, { cache }),
         latestRun,
         new Set(),
+        new Set(),
+        null,
+        false,
+        cache,
       );
+      expect(
+        deriveThreadFeedPresentation(buildThreadFeed(rows), latestRun, new Set()).map(
+          (entry) => entry.id,
+        ),
+      ).toEqual(presented.map((entry) => entry.id));
+      return presented;
+    };
     const visibleSubagentIds = (presented: ReadonlyArray<ThreadFeedEntry>) =>
       presented.flatMap((entry) =>
         entry.type === "activity-group"
@@ -1075,14 +1104,15 @@ describe("buildThreadFeed", () => {
           : [],
       );
 
-    const live = present([subagent("item-live", "2026-06-20T00:00:03.000Z", 2, "running")]);
-    expect(live.map((entry) => entry.type)).toEqual([
-      "message",
-      "run-fold",
-      "activity-group",
-      "message",
-    ]);
-    expect(visibleSubagentIds(live)).toEqual(["item-live"]);
+    for (const status of ["pending", "running", "waiting"] as const) {
+      const live = present([subagent("item-live", "2026-06-20T00:00:03.000Z", 3, status)]);
+      expect(live.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual([
+        "message-user",
+        "message-opening",
+        "message-assistant",
+      ]);
+      expect(visibleSubagentIds(live)).toEqual(["item-live"]);
+    }
 
     const mixed = present([
       subagent("item-done", "2026-06-20T00:00:03.000Z", 2, "completed"),
@@ -1092,6 +1122,56 @@ describe("buildThreadFeed", () => {
 
     const finished = present([subagent("item-done", "2026-06-20T00:00:03.000Z", 2, "completed")]);
     expect(finished.map((entry) => entry.type)).toEqual(["message", "run-fold", "message"]);
+
+    const resumedRunId = RunId.make("run-resumed");
+    const resumed = {
+      ...assistantMessage("2026-06-20T00:00:06.000Z"),
+      id: TurnItemId.make("item-resumed"),
+      messageId: MessageId.make("message-resumed"),
+      runId: resumedRunId,
+      text: "I am checking the delegate's findings.",
+    };
+    const resumedRows = [
+      projected(userMessage(), 0),
+      projected(opening, 1),
+      projected(command("2026-06-20T00:00:02.000Z"), 2),
+      projected(subagent("item-done", "2026-06-20T00:00:03.000Z", 3, "completed"), 3),
+      projected(assistantMessage("2026-06-20T00:00:05.000Z"), 4),
+      projected(resumed, 5),
+    ];
+    const resuming = {
+      ...latestRun,
+      runId: resumedRunId,
+      status: "running" as const,
+      completedAt: null,
+    };
+    const resumedFeed = buildThreadFeed(resumedRows);
+    const resumedPresentation = deriveThreadFeedPresentation(resumedFeed, resuming, new Set());
+    expect(
+      resumedPresentation.filter((entry) => entry.type === "message").map((entry) => entry.id),
+    ).toEqual(["message-user", "message-opening", "message-assistant", "message-resumed"]);
+    expect(visibleSubagentIds(resumedPresentation)).toEqual(["item-done"]);
+    for (const inputIntent of ["turn_start", "steer", "promoted_queued_to_steer"] as const) {
+      const followUp = {
+        ...userMessage("2026-06-20T00:00:05.500Z"),
+        id: TurnItemId.make("item-follow-up"),
+        messageId: MessageId.make("message-follow-up"),
+        runId: resumedRunId,
+        inputIntent,
+      };
+      const rows = [...resumedRows.slice(0, -1), projected(followUp, 5), projected(resumed, 6)];
+      const visible = deriveThreadFeedPresentation(buildThreadFeed(rows), resuming, new Set());
+      expect(visible.some((entry) => entry.id === "message-opening")).toBe(
+        inputIntent !== "turn_start",
+      );
+    }
+    expect(
+      deriveThreadFeedPresentation(
+        resumedFeed,
+        { ...latestRun, runId: resumedRunId },
+        new Set(),
+      ).map((entry) => entry.id),
+    ).not.toContain("message-opening");
   });
 
   it("folds each run of a provider-native subagent thread like a normal turn", () => {
@@ -1840,6 +1920,22 @@ describe("streamed feed updates", () => {
     completedAt: null,
   };
   const settled = { ...running, status: "completed" as const, completedAt: at(50) };
+  const delegatedSteerSteps = (
+    ["steer", "promoted_queued_to_steer", "turn_start"] as const
+  ).flatMap((inputIntent) => {
+    const prefix = [
+      user("u1", 1, runs[0]),
+      { ...lateChild, ...item("late-child", 3, runs[0]) },
+      reply("a1", 4, runs[0]),
+      { ...user("steer", 10, runs[1]), inputIntent },
+      reply("progress", 11, runs[1]),
+      reply("a2", 12, runs[1]),
+    ];
+    return ["W", "Working"].map((text) => ({
+      items: [...prefix, reply("a3", 22, runs[2], text, true)],
+      latestRun: running,
+    }));
+  });
   // Each step is what one streamed event leaves behind, including the edits
   // that reach back into earlier runs.
   const steps: ReadonlyArray<{
@@ -1926,6 +2022,7 @@ describe("streamed feed updates", () => {
       ],
       latestRun: running,
     },
+    ...delegatedSteerSteps,
   ];
   // Like the projection reducer, an unchanged item at an unchanged position keeps its row.
   const rowsByItem = new Map<
