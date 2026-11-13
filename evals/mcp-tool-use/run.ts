@@ -51,6 +51,7 @@ import { buildCodexAdditionalContext } from "../../apps/server/src/provider/Code
 import { makeSideChatContext } from "../../apps/server/src/orchestration-v2/ContextHandoffService.ts";
 import { withInlineContext } from "../../apps/server/src/orchestration-v2/ContextHandoffDelivery.ts";
 import { AttachmentToolkit } from "../../apps/server/src/mcp/toolkits/attachment/tools.ts";
+import { ConnectorsToolkit } from "../../apps/server/src/mcp/toolkits/connectors/tools.ts";
 import { DeviceToolkit } from "../../apps/server/src/mcp/toolkits/device/tools.ts";
 import { EnvironmentToolkit } from "../../apps/server/src/mcp/toolkits/environment/tools.ts";
 import { HtmlToolkit } from "../../apps/server/src/mcp/toolkits/html/tools.ts";
@@ -427,6 +428,7 @@ export const normalizeToolInput = (name: string, input: unknown) => {
 const t3SourceTools: ReadonlyArray<Tool.Any> = [
   OrchestratorToolkit,
   ThreadToolkit,
+  ConnectorsToolkit,
   AttachmentToolkit,
   ProjectToolkit,
   EnvironmentToolkit,
@@ -483,10 +485,13 @@ const pastedSecret = (name: string, input: Readonly<Record<string, unknown>>) =>
 const hiddenFromSubagents = enabledWhen(McpInvocationContext.hiddenFromSubagents);
 // The Linked environments beta starts off, and T3 lists its tools only while it is on.
 const hiddenWhileLinksOff = enabledWhen(McpInvocationContext.hiddenWhileLinksOff);
+// Email starts off too; `external_connectors` stays listed so agents can find it.
+const hiddenWhileEmailOff = enabledWhen(McpInvocationContext.hiddenWhileEmailOff);
 const visibleT3Tools = (options: { readonly subagent?: boolean; readonly links?: boolean }) =>
   t3Tools.filter(
     (tool) =>
       (options.links === true || !hiddenWhileLinksOff.has(tool.name)) &&
+      !hiddenWhileEmailOff.has(tool.name) &&
       !(options.subagent === true && hiddenFromSubagents.has(tool.name)),
   );
 

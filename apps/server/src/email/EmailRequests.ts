@@ -7,8 +7,8 @@ import {
   TurnItemId,
   type EmailRequestAnswerInput,
   type OrchestrationV2EmailDraft,
-  type OrchestratorMcpSendEmailInput,
-  type OrchestratorMcpSendEmailResult,
+  type OrchestratorMcpComposeEmailInput,
+  type OrchestratorMcpComposeEmailResult,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -46,8 +46,8 @@ export class EmailRequests extends Context.Service<
       readonly threadId: ThreadId;
       readonly providerInstanceId: ProviderInstanceId;
       readonly requestNamespace: string;
-      readonly request: OrchestratorMcpSendEmailInput;
-    }) => Effect.Effect<OrchestratorMcpSendEmailResult, OrchestratorMcpFailure>;
+      readonly request: OrchestratorMcpComposeEmailInput;
+    }) => Effect.Effect<OrchestratorMcpComposeEmailResult, OrchestratorMcpFailure>;
     readonly answer: (input: EmailRequestAnswerInput) => Effect.Effect<void, EmailRequestError>;
   }
 >()("t3/email/EmailRequests") {}

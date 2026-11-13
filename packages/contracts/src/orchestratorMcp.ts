@@ -829,7 +829,7 @@ export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSe
 
 const OrchestratorMcpEmailAddresses = Schema.Array(TrimmedNonEmptyString);
 
-export const OrchestratorMcpSendEmailInput = Schema.Struct({
+export const OrchestratorMcpComposeEmailInput = Schema.Struct({
   to: OrchestratorMcpEmailAddresses.annotate({
     description: "Addresses, e.g. 'Ada <ada@example.com>'. May be empty for the user to fill in.",
   }),
@@ -847,9 +847,9 @@ export const OrchestratorMcpSendEmailInput = Schema.Struct({
     description: "Retry key for this draft. New key after a timeout or cancel.",
   }),
 });
-export type OrchestratorMcpSendEmailInput = typeof OrchestratorMcpSendEmailInput.Type;
+export type OrchestratorMcpComposeEmailInput = typeof OrchestratorMcpComposeEmailInput.Type;
 
-export const OrchestratorMcpSendEmailResult = Schema.Union([
+export const OrchestratorMcpComposeEmailResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("sent"),
     message: Schema.String,
@@ -869,7 +869,20 @@ export const OrchestratorMcpSendEmailResult = Schema.Union([
     }),
   }),
 ]);
-export type OrchestratorMcpSendEmailResult = typeof OrchestratorMcpSendEmailResult.Type;
+export type OrchestratorMcpComposeEmailResult = typeof OrchestratorMcpComposeEmailResult.Type;
+
+export const OrchestratorMcpExternalConnectorsResult = Schema.Struct({
+  connectors: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      enabled: Schema.Boolean,
+      tool: Schema.String,
+      note: Schema.String,
+    }),
+  ),
+});
+export type OrchestratorMcpExternalConnectorsResult =
+  typeof OrchestratorMcpExternalConnectorsResult.Type;
 
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({
