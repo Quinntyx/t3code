@@ -5,7 +5,10 @@ import type { SelectableMarkdownTextProps } from "./SelectableMarkdownText.types
 import { MobileEnrichedMarkdownText } from "./EnrichedMarkdownText";
 import { themeColorWithAlpha } from "../lib/mobileTheme";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
-import { useBlockingGestureTags } from "../features/threads/thread-list-drawer";
+import {
+  useBlockingGestureTags,
+  useCoveredByThreadDrawer,
+} from "../features/threads/thread-list-drawer";
 
 export type {
   MarkdownFileContextMenu,
@@ -23,6 +26,7 @@ export function SelectableMarkdownText(props: SelectableMarkdownTextProps) {
   // Over-wide tables and code blocks are horizontally scrollable natively; the
   // drawer pans learn those touches through the fork's blockingGestureTags.
   const blockingGestureTags = useBlockingGestureTags();
+  const coveredByDrawer = useCoveredByThreadDrawer();
   const selectionColor = themeColorWithAlpha(theme["--color-focus"], 0.32);
   const selectionHandleColor = theme["--color-focus"];
   const textStyle = useMemo(
@@ -36,6 +40,7 @@ export function SelectableMarkdownText(props: SelectableMarkdownTextProps) {
     <MobileEnrichedMarkdownText
       {...props}
       blockingGestureTags={blockingGestureTags}
+      selectable={(props.selectable ?? true) && !coveredByDrawer}
       textStyle={textStyle}
     />
   );
