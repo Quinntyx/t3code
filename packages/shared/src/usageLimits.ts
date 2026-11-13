@@ -179,12 +179,18 @@ export function usageLimitSourceResetAt(
     : modelId !== undefined && /^(?:gpt-|codex(?:-|$)|o\d(?:-|$))/.test(modelId)
       ? "codex"
       : provider.driver;
-  const accounts = (provider.usageSources ?? []).map((source) => ({
+  const modelProvider = model?.split(/[/:]/)[0];
+  const nativeSources =
+    provider.driver === "pi" && modelProvider !== "openai-codex"
+      ? []
+      : (provider.usageSources ?? []);
+  const accounts = nativeSources.map((source) => ({
     driver: source.driver,
     usageLimits: source.limits,
   }));
   const routesByOrigin = usageRoutesByOrigin(provider);
   for (const source of sources) {
+    if (provider.driver === "pi" && !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "")) continue;
     if (source.error) continue;
     const drivers = hubRouteDrivers(provider, routesByOrigin, source);
     if (drivers !== null && !drivers.has(quotaDriver)) continue;

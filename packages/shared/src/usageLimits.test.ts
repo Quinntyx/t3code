@@ -371,9 +371,14 @@ describe("hub usage limit recovery time", () => {
     );
   });
   it.each([
-    ["openai-codex/gpt-5.4", window.resetsAt],
-    ["anthropic/claude-opus-4-6", null],
-  ] as const)("resolves a provider-local reset for %s", (model, expected) => {
+    ["openai-codex/gpt-5.4", false, window.resetsAt],
+    ["anthropic/claude-opus-4-6", false, null],
+    ["cliproxyapi/gpt-5-codex", false, null],
+    ["openai/gpt-5-codex", false, null],
+    ["openai-codex/gpt-5.4", true, window.resetsAt],
+    ["cliproxyapi/gpt-5-codex", true, "2026-09-03T13:00:00.000Z"],
+    ["anthropic/claude-opus-4-6", true, null],
+  ] as const)("resolves a provider-local reset for %s with hub %s", (model, withHub, expected) => {
     const selected = provider({
       driver: ProviderDriverKind.make("pi"),
       usageLimits: { checkedAt, windows: [], unavailable: { reason: "unsupported" } },
@@ -386,7 +391,22 @@ describe("hub usage limit recovery time", () => {
         },
       ],
     });
-    expect(usageLimitSourceResetAt([], selected, now, model)).toBe(expected);
+    const hubs = withHub
+      ? sources.map((source) => ({
+          ...source,
+          accounts: source.accounts.map((account) => ({
+            ...account,
+            usageLimits: {
+              ...account.usageLimits,
+              windows: account.usageLimits.windows.map((entry) => ({
+                ...entry,
+                resetsAt: "2026-09-03T13:00:00.000Z",
+              })),
+            },
+          })),
+        }))
+      : [];
+    expect(usageLimitSourceResetAt(hubs, selected, now, model)).toBe(expected);
   });
 });
 

@@ -17,6 +17,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -38,6 +39,8 @@ import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -183,7 +186,19 @@ it.effect.each([
           Layer.provide(
             Layer.mergeAll(
               layerAdapters,
-              Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+              IdAllocator.layer,
+              Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+                getInstance: () => Effect.undefined,
+              }),
+              Layer.mock(UsageLimitSources.UsageLimitSources)({
+                current: Effect.succeed([]),
+                streamChanges: Stream.never,
+                refresh: Effect.void,
+              }),
+              Layer.mock(ProviderRegistry.ProviderRegistry)({
+                getProviders: Effect.succeed([]),
+                streamChanges: Stream.never,
+              }),
               Layer.mock(ProjectService.ProjectService)({}),
               Layer.mock(SecretRequests.SecretRequests)({}),
               Layer.mock(RemoteDelegation.RemoteDelegation)({}),
