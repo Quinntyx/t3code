@@ -54,7 +54,8 @@ import { useFileTreeEntries } from "./useFileTreeEntries";
 import { preloadWorkspaceFileContents } from "./preload-workspace-file";
 import { SourceFileSurface } from "./SourceFileSurface";
 import { ThreadFileNavigatorPane } from "./thread-file-navigator-pane";
-import { AppBar } from "../../components/ui/AppBar";
+import { renderedToggleAction } from "./renderedToggleAction";
+import { AppBar, type AppBarAction } from "../../components/ui/AppBar";
 import { useContentTopInset } from "../../components/ui/useBarInset";
 import { WorkspaceFileImagePreview } from "./WorkspaceFileImagePreview";
 import { WorkspaceFilePreviewError } from "./WorkspaceFilePreviewError";
@@ -103,7 +104,7 @@ function FilesBrowserHeader(props: {
 function FileHeader(props: {
   readonly title: string;
   readonly subtitle: string;
-  readonly activeMode: string;
+  readonly modeToggle: AppBarAction | null;
   readonly fileInspectorSupported: boolean;
   readonly onBack: () => void;
   readonly onReturnToThread: () => void;
@@ -111,13 +112,11 @@ function FileHeader(props: {
     readonly id: string;
     readonly title: string;
     readonly icon: string;
-    readonly inline: boolean;
     readonly onPress: () => unknown;
   }>;
 }) {
   const { toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
   const { panes } = useWorkspacePaneState();
-  const modes = props.actions.filter(({ inline }) => inline);
   return (
     <AppBar
       title={props.title}
@@ -133,40 +132,27 @@ function FileHeader(props: {
             }
           : undefined
       }
-      actions={
-        props.fileInspectorSupported
+      actions={[
+        ...(props.modeToggle ? [props.modeToggle] : []),
+        ...(props.fileInspectorSupported
           ? [
               {
                 accessibilityLabel: panes.auxiliaryPaneVisible
                   ? "Hide file navigator"
                   : "Show file navigator",
-                icon: "sidebar.right",
+                icon: "sidebar.right" as const,
                 selected: panes.auxiliaryPaneVisible,
                 onPress: toggleAuxiliaryPane,
               },
             ]
-          : undefined
-      }
+          : []),
+      ]}
       menus={[
         {
           title: "File actions",
           icon: "ellipsis",
           separateBackground: false,
-          items: [
-            ...(modes.length > 0
-              ? [
-                  {
-                    id: "modes",
-                    inline: true,
-                    items: modes.map((action) => ({
-                      ...action,
-                      selected: action.id === props.activeMode,
-                    })),
-                  },
-                ]
-              : []),
-            ...props.actions.filter(({ inline }) => !inline),
-          ],
+          items: props.actions,
         },
       ]}
     />
@@ -806,34 +792,23 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
     </>
   );
 
+  const modeToggle =
+    relativePath !== null && canPreview && !isImageFile && !isVideoFile && !isAudioFile
+      ? renderedToggleAction({
+          rendered: resolvedActiveMode === "preview",
+          table: filePreviewDelimiter({ name: relativePath }) !== null,
+          onToggle: (rendered) =>
+            setModeOverride({ path: relativePath, mode: rendered ? "preview" : "source" }),
+        })
+      : null;
   const fileMenuActions = (() => {
     if (relativePath === null) return [];
-    const canToggleMode = canPreview && !isImageFile && !isVideoFile && !isAudioFile;
     return [
-      canToggleMode
-        ? ({
-            id: "preview",
-            title: filePreviewDelimiter({ name: relativePath }) ? "Table" : "Preview",
-            icon: filePreviewDelimiter({ name: relativePath }) ? "tablecells" : "eye",
-            inline: true,
-            onPress: () => setModeOverride({ path: relativePath, mode: "preview" }),
-          } as const)
-        : null,
-      canToggleMode
-        ? ({
-            id: "source",
-            title: "Source",
-            icon: "doc.text",
-            inline: true,
-            onPress: () => setModeOverride({ path: relativePath, mode: "source" }),
-          } as const)
-        : null,
       resolvedActiveMode === "source"
         ? ({
             id: "word-wrap",
             title: appearance.codeWordBreak ? "Disable word wrap" : "Enable word wrap",
             icon: "text.alignleft",
-            inline: false,
             onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
           } as const)
         : null,
@@ -845,7 +820,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
               title: action.title,
               icon:
                 action.id === "save" ? ("square.and.arrow.up" as const) : ("doc.on.doc" as const),
-              inline: false,
               onPress: action.run,
             }))
         : [
@@ -853,7 +827,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
               id: "copy-path",
               title: "Copy path",
               icon: "doc.on.doc",
-              inline: false,
               onPress: () =>
                 copyTextWithHaptic(
                   formatFilePathForClipboard(
@@ -868,7 +841,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "copy-contents",
             title: fileData.truncated ? "Copy preview" : "Copy contents",
             icon: "doc.on.doc",
-            inline: false,
             onPress: () => copyTextWithHaptic(fileData.contents),
           } as const)
         : null,
@@ -877,7 +849,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "open-pdf",
             title: "Open PDF",
             icon: "arrow.up.left.and.arrow.down.right",
-            inline: false,
             onPress: () =>
               setFullScreenPreview({
                 kind: "pdf",
@@ -901,7 +872,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "open-browser",
             title: Platform.OS === "ios" ? "Open in Safari" : "Open in browser",
             icon: "safari",
-            inline: false,
             onPress: () => tryOpenExternalUrl(assetPreviewUri, "file-preview"),
           } as const)
         : null,
@@ -911,7 +881,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "refresh",
             title: "Refresh",
             icon: "arrow.clockwise",
-            inline: false,
             onPress: async () => {
               if (isVideoFile || isAudioFile) await assetPreview.refresh();
               setPreviewRevision((current) => current + 1);
@@ -1022,7 +991,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       <FileHeader
         title={basename(relativePath)}
         subtitle={headerSubtitle}
-        activeMode={resolvedActiveMode}
+        modeToggle={modeToggle}
         fileInspectorSupported={fileInspector.supported}
         onBack={handleBack}
         onReturnToThread={handleReturnToThread}
