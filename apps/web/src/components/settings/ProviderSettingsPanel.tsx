@@ -985,6 +985,7 @@ export function EnvironmentProviderSettings({
         environmentId={environmentId}
         environmentLabel={environmentLabel}
         sources={settings.usageLimitSources}
+        localUsageLimitsEnabled={settings.localUsageLimitsEnabled}
         readOnly={readOnly}
       />
 

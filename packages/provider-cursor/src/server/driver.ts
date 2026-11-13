@@ -18,7 +18,10 @@ import { makeCursorAdapterV2, type CursorAdapterV2DriverEnv } from "./adapter.ts
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { buildInitialCursorProviderSnapshot, checkCursorProviderStatus } from "./status.ts";
 import * as CursorSdkCatalog from "./CursorSdkCatalog.ts";
-import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+import {
+  makeManagedServerProvider,
+  readsLocalUsageLimits,
+} from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -210,9 +213,11 @@ export const CursorDriver: ProviderDriver<
       auth.withAccess,
     );
 
-    const checkProvider = auth.readApiKey.pipe(
-      Effect.orElseSucceed(() => undefined),
-      Effect.flatMap((apiKey) =>
+    const checkProvider = Effect.all([
+      auth.readApiKey.pipe(Effect.orElseSucceed(() => undefined)),
+      readsLocalUsageLimits(host.settings.get),
+    ]).pipe(
+      Effect.flatMap(([apiKey, readsUsage]) =>
         checkCursorProviderStatus(
           effectiveConfig,
           {
@@ -224,6 +229,7 @@ export const CursorDriver: ProviderDriver<
           Effect.filterOrElse(
             (snapshot) =>
               !(
+                readsUsage &&
                 effectiveConfig.enabled &&
                 snapshot.installed &&
                 snapshot.auth.status === "authenticated"

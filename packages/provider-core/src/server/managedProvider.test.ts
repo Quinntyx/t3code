@@ -631,6 +631,84 @@ describe("makeManagedServerProvider", () => {
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 
+  it.effect("publishes no usage while the environment leaves usage to its hubs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const settingsRef = yield* Ref.make({
+          ...DEFAULT_SERVER_SETTINGS,
+          localUsageLimitsEnabled: false,
+        });
+        const settingsChanges = yield* PubSub.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
+        const setLocalUsage = (localUsageLimitsEnabled: boolean) =>
+          Ref.updateAndGet(settingsRef, (settings) => ({
+            ...settings,
+            localUsageLimitsEnabled,
+          })).pipe(Effect.flatMap((settings) => PubSub.publish(settingsChanges, settings)));
+        const usageLimits = {
+          checkedAt: "2026-04-10T00:00:01.000Z",
+          windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 10 }],
+        } satisfies ServerProvider["usageLimits"];
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed({ ...initialSnapshot, usageLimits }),
+          checkProvider: Effect.succeed({
+            ...refreshedSnapshot,
+            usageLimits,
+            usageSources: [
+              {
+                id: "chatgpt",
+                label: "ChatGPT",
+                driver: ProviderDriverKind.make("codex"),
+                limits: usageLimits,
+              },
+            ],
+          } satisfies ServerProvider),
+          refreshInterval: "1 hour",
+        }).pipe(
+          Effect.provide(
+            layerProviderHost({
+              runBackgroundWork: true,
+              settings: {
+                get: Ref.get(settingsRef),
+                withSnapshot: (use) => Ref.get(settingsRef).pipe(Effect.flatMap(use)),
+                changes: Stream.fromPubSub(settingsChanges),
+                subscribe: PubSub.subscribe(settingsChanges).pipe(
+                  Effect.map(Stream.fromSubscription),
+                ),
+              },
+            }),
+          ),
+        );
+        const nextChange = Effect.fn("nextChange")(function* (trigger: Effect.Effect<void>) {
+          const fiber = yield* Stream.take(provider.streamChanges, 1).pipe(
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+          yield* trigger;
+          const [change] = Array.from(yield* Fiber.join(fiber));
+          return change;
+        });
+        const hasUsage = (snapshot: ServerProvider | undefined) =>
+          snapshot?.usageLimits !== undefined || snapshot?.usageSources !== undefined;
+
+        assert.isFalse(hasUsage(yield* provider.getSnapshot));
+        assert.isFalse(hasUsage(yield* nextChange(Effect.asVoid(provider.refresh))));
+        yield* provider.applyUsageLimits({ checkedAt: "2026-04-10T00:05:00.000Z", windows: [] });
+        assert.isFalse(hasUsage(yield* provider.getSnapshot));
+
+        const enabled = yield* nextChange(setLocalUsage(true));
+        assert.deepStrictEqual(enabled?.usageLimits, usageLimits);
+        assert.strictEqual(enabled?.usageSources?.length, 1);
+
+        assert.isFalse(hasUsage(yield* nextChange(setLocalUsage(false))));
+      }),
+    ),
+  );
+
   it.effect("keeps live usage windows across a failed probe and a stale enrichment", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -24,7 +24,10 @@ import {
   discoverPiCommandsForCwd,
   enrichPiSnapshot,
 } from "./status.ts";
-import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+import {
+  makeManagedServerProvider,
+  readsLocalUsageLimits,
+} from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -154,22 +157,30 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.orElseSucceed(() => undefined),
     );
-    const checkProvider = Effect.all(
-      {
-        provider: checkPiProviderStatus(effectiveConfig, processEnv, cwd, discoverExtensionPath),
-        usageLimits: readPiOpenCodeGoUsageLimits({
-          enabled,
-          settings: effectiveConfig,
-          environment: processEnv,
-        }),
-        codexUsage: readPiCodexUsageLimits({
-          enabled,
-          settings: effectiveConfig,
-          environment: processEnv,
-        }),
-      },
-      { concurrency: "unbounded" },
-    ).pipe(
+    const checkProvider = readsLocalUsageLimits(host.settings.get).pipe(
+      Effect.flatMap((readsUsage) =>
+        Effect.all(
+          {
+            provider: checkPiProviderStatus(
+              effectiveConfig,
+              processEnv,
+              cwd,
+              discoverExtensionPath,
+            ),
+            usageLimits: readPiOpenCodeGoUsageLimits({
+              enabled: enabled && readsUsage,
+              settings: effectiveConfig,
+              environment: processEnv,
+            }),
+            codexUsage: readPiCodexUsageLimits({
+              enabled: enabled && readsUsage,
+              settings: effectiveConfig,
+              environment: processEnv,
+            }),
+          },
+          { concurrency: "unbounded" },
+        ),
+      ),
       Effect.map(({ provider, usageLimits, codexUsage }) => ({
         ...provider,
         usageLimits,

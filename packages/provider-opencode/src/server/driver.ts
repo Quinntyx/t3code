@@ -36,7 +36,10 @@ import {
   openCodeSkillsToServerProviderSkills,
   openCodeCommandsToServerProviderSlashCommands,
 } from "./status.ts";
-import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+import {
+  makeManagedServerProvider,
+  readsLocalUsageLimits,
+} from "@t3tools/provider-core/server/managedProvider";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import {
   makeOpenCodeRuntimeProbe,
@@ -371,11 +374,14 @@ export const OpenCodeDriver: ProviderDriver<
       ),
     );
 
-    const checkUsageLimits = readOpenCodeGoUsageLimits({
-      enabled: effectiveConfig.enabled,
-      serverUrl: effectiveConfig.serverUrl,
-      environment: processEnv,
-    }).pipe(
+    const checkUsageLimits = readsLocalUsageLimits(host.settings.get).pipe(
+      Effect.flatMap((readsUsage) =>
+        readOpenCodeGoUsageLimits({
+          enabled: effectiveConfig.enabled && readsUsage,
+          serverUrl: effectiveConfig.serverUrl,
+          environment: processEnv,
+        }),
+      ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, pathService),
       Effect.provideService(HttpClient.HttpClient, httpClient),

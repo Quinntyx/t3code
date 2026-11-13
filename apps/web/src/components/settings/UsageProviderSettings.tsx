@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, UnifiedSettings } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
@@ -13,6 +14,8 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
+import { serverEnvironment } from "../../state/server";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -21,14 +24,20 @@ export function UsageProviderSettings({
   environmentId,
   environmentLabel,
   sources,
+  localUsageLimitsEnabled,
   readOnly,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly sources: UnifiedSettings["usageLimitSources"];
+  readonly localUsageLimitsEnabled: boolean;
   readonly readOnly: boolean;
 }) {
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const supportsLocalUsageToggle = useAtomValue(
+    serverEnvironment.configValueAtom(environmentId),
+    (config) => config?.environment.capabilities.localUsageLimitsEnabled === true,
+  );
   const [adding, setAdding] = useState(false);
   const entries = Object.entries(sources);
 
@@ -45,6 +54,20 @@ export function UsageProviderSettings({
           ) : null
         }
       >
+        {supportsLocalUsageToggle ? (
+          <SettingsRow
+            title="Provider usage"
+            description="Read limits from the providers on this environment. Turn off to rely on hubs alone."
+            control={
+              <Switch
+                checked={localUsageLimitsEnabled}
+                disabled={readOnly}
+                onCheckedChange={(checked) => updateSettings({ localUsageLimitsEnabled: checked })}
+                aria-label="Read provider usage"
+              />
+            }
+          />
+        ) : null}
         {entries.length === 0 ? (
           <SettingsRow title="No hubs configured." />
         ) : (

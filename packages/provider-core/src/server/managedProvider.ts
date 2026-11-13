@@ -35,6 +35,24 @@ function withUsageLimits(
   return usageLimits ? { ...rest, usageLimits } : rest;
 }
 
+function withoutUsage(snapshot: ServerProvider): ServerProvider {
+  if (!snapshot.usageLimits && !snapshot.usageSources) return snapshot;
+  const { usageLimits: _limits, usageSources: _sources, ...rest } = snapshot;
+  return rest;
+}
+
+const readsLocalUsage = (settings: { readonly localUsageLimitsEnabled?: boolean }) =>
+  settings.localUsageLimitsEnabled !== false;
+
+/** Off when the environment leaves usage to its hubs; drivers skip their usage reads then. */
+export const readsLocalUsageLimits = <E>(
+  settings: Effect.Effect<{ readonly localUsageLimitsEnabled?: boolean }, E>,
+): Effect.Effect<boolean> =>
+  settings.pipe(
+    Effect.map(readsLocalUsage),
+    Effect.orElseSucceed(() => true),
+  );
+
 export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(function* <
   Settings,
 >(input: {
@@ -67,8 +85,14 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     PubSub.unbounded<ServerProvider>(),
     PubSub.shutdown,
   );
+  // Subscribed before the first read so a toggle during startup is not lost.
+  const localUsageChanges = yield* host.settings.subscribe;
+  const localUsageRef = yield* Ref.make(yield* readsLocalUsageLimits(host.settings.get));
   const initialSettings = yield* input.getSettings;
-  const initialSnapshot = yield* input.initialSnapshot(initialSettings);
+  const cachedSnapshot = yield* input.initialSnapshot(initialSettings);
+  const initialSnapshot = (yield* Ref.get(localUsageRef))
+    ? cachedSnapshot
+    : withoutUsage(cachedSnapshot);
   const snapshotStateRef = yield* Ref.make<ProviderSnapshotState>({
     snapshot: initialSnapshot,
     enrichmentGeneration: 0,
@@ -150,7 +174,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       return state.snapshot;
     }
 
-    const probedSnapshot = yield* input.checkProvider;
+    const checkedSnapshot = yield* input.checkProvider;
+    const probedSnapshot = (yield* Ref.get(localUsageRef))
+      ? checkedSnapshot
+      : withoutUsage(checkedSnapshot);
     const { snapshot: nextSnapshot, generation: nextGeneration } = yield* Ref.modify(
       snapshotStateRef,
       (state) => {
@@ -196,6 +223,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   // Providers call this on every token-usage tick, usually without changing the snapshot.
   const applyUsageLimits: ManagedServerProvider["applyUsageLimits"] = Effect.fnUntraced(
     function* (update) {
+      if (!(yield* Ref.get(localUsageRef))) return;
       const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
         const usageLimits = applyUsageLimitsUpdate({
           previous: state.snapshot.usageLimits,
@@ -311,6 +339,35 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           ),
           Effect.orElseSucceed(() => DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL),
         );
+
+  const applyLocalUsageSetting = Effect.fn("ManagedServerProvider.applyLocalUsageSetting")(
+    function* (enabled: boolean) {
+      if ((yield* Ref.getAndSet(localUsageRef, enabled)) === enabled) return;
+      if (enabled) {
+        yield* refreshSemaphore.withPermits(1)(
+          input.getSettings.pipe(
+            Effect.flatMap((settings) => applySnapshotBase(settings, { forceRefresh: true })),
+          ),
+        );
+        return;
+      }
+      const stripped = yield* refreshSemaphore.withPermits(1)(
+        Ref.modify(snapshotStateRef, (state) => {
+          const snapshot = withoutUsage(state.snapshot);
+          return snapshot === state.snapshot
+            ? ([null, state] as const)
+            : ([snapshot, { ...state, snapshot }] as const);
+        }),
+      );
+      if (stripped !== null) yield* PubSub.publish(changesPubSub, stripped);
+    },
+  );
+  yield* localUsageChanges.pipe(
+    Stream.runForEach((settings) =>
+      applyLocalUsageSetting(readsLocalUsage(settings)).pipe(Effect.ignoreCause({ log: true })),
+    ),
+    Effect.forkScoped,
+  );
 
   const refreshIntervalChanges = yield* Queue.sliding<void>(1);
   if (input.refreshInterval === undefined) {

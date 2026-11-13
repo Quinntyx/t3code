@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { MenuAction } from "@react-native-menu/menu";
 import type { StaticScreenProps } from "@react-navigation/native";
 import {
@@ -32,14 +33,17 @@ import { Button } from "../../../components/ui/Button";
 import { ControlPill } from "../../../components/ui/ControlPill";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { ListChoiceRow } from "../../../components/ui/ListChoiceRow";
+import { ListToggleRow } from "../../../components/ui/ListToggleRow";
 import { Menu } from "../../../components/ui/Menu";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
+import { serverEnvironment } from "../../../state/server";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { SettingsSection } from "../components/SettingsSection";
 import { FieldBlock } from "./ProviderFields";
 import {
   useEnvironmentLabel,
   useProviderInstanceActions,
+  usePendingSwitch,
   useSecretSources,
 } from "./useProviderSettings";
 import { sourceIdFromUrl } from "@t3tools/client-runtime/provider-settings/usage-hubs";
@@ -70,6 +74,7 @@ function EnvironmentOptions({ environmentId }: { readonly environmentId: Environ
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        <LocalUsage environmentId={environmentId} actions={actions} />
         <UsageHubs
           environmentId={environmentId}
           environmentLabel={environmentLabel}
@@ -79,6 +84,29 @@ function EnvironmentOptions({ environmentId }: { readonly environmentId: Environ
         <IdleCompaction actions={actions} />
       </ScreenScrollView>
     </SettingsScreen>
+  );
+}
+
+function LocalUsage(props: { readonly environmentId: EnvironmentId; readonly actions: Actions }) {
+  const supported = useAtomValue(
+    serverEnvironment.configValueAtom(props.environmentId),
+    (config) => config?.environment.capabilities.localUsageLimitsEnabled === true,
+  );
+  const { settings, canManage } = props.actions;
+  const toggle = usePendingSwitch(settings.localUsageLimitsEnabled);
+  if (!supported) return null;
+  return (
+    <SettingsSection title="Provider usage">
+      <ListToggleRow
+        label="Read provider usage"
+        description="Read limits from the providers on this environment. Turn off to rely on hubs alone."
+        disabled={!canManage}
+        value={toggle.value}
+        onValueChange={(value) =>
+          toggle.change(value, props.actions.updateSettings({ localUsageLimitsEnabled: value }))
+        }
+      />
+    </SettingsSection>
   );
 }
 

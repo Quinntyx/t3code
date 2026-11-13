@@ -248,6 +248,7 @@ export const make = Effect.gen(function* () {
       threadForceStop: true,
       environmentThemes: true,
       usageLimitSources: true,
+      localUsageLimitsEnabled: true,
       providerWorkspaceSnapshotsOnDemand: true,
       modelCatalogRefresh: true,
       usagePriceOverrides: true,
