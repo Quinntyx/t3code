@@ -289,7 +289,7 @@ export const layer: Layer.Layer<
           "type" in payload &&
           payload.type === "error" &&
           payload.failure.class === "usage_limit" &&
-          payload.failure.resetAt === undefined
+          payload.failure.resetAt == null
         ) {
           const instance = yield* instances.getInstance(input.providerInstanceId);
           const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
@@ -297,9 +297,12 @@ export const layer: Layer.Layer<
           const now = DateTime.toEpochMillis(occurredAt);
           const resetAt =
             usageLimitResetAt(snapshot, now, model) ??
-            (usageSources
-              ? usageLimitSourceResetAt(yield* usageSources.current, input.event.driver, now, model)
-              : null);
+            usageLimitSourceResetAt(
+              usageSources ? yield* usageSources.current : [],
+              snapshot,
+              now,
+              model,
+            );
           if (resetAt !== null) payload = { ...payload, failure: { ...payload.failure, resetAt } };
         }
         return yield* decodeDomainEvent(
@@ -784,11 +787,14 @@ export const layer: Layer.Layer<
                   )
                     return;
                   const instance = yield* instances.getInstance(input.providerInstanceId);
-                  if (!instance?.snapshot.refreshUsage) return;
-                  yield* instance.snapshot.refreshUsage.pipe(
-                    Effect.ignoreCause({ log: true }),
-                    Effect.forkIn(scope, { startImmediately: true }),
-                  );
+                  yield* Effect.forEach(
+                    [
+                      instance?.snapshot.refreshUsage ?? Effect.void,
+                      usageSources?.refresh ?? Effect.void,
+                    ],
+                    (refresh) => refresh.pipe(Effect.ignoreCause({ log: true })),
+                    { concurrency: "unbounded", discard: true },
+                  ).pipe(Effect.forkIn(scope, { startImmediately: true }));
                 }),
               ),
               Effect.flatMap((storedEvents) =>

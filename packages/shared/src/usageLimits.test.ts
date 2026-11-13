@@ -284,9 +284,14 @@ describe("hub usage limit recovery time", () => {
     ["pi", "cliproxy/gpt-5-codex", "2026-09-03T15:00:00.000Z"],
     ["pi", "unknown-alias", null],
   ] as const)("matches %s model %s", (driver, model, expected) => {
-    expect(usageLimitSourceResetAt(sources, ProviderDriverKind.make(driver), now, model)).toBe(
-      expected,
-    );
+    expect(
+      usageLimitSourceResetAt(
+        sources,
+        provider({ driver: ProviderDriverKind.make(driver) }),
+        now,
+        model,
+      ),
+    ).toBe(expected);
   });
   it.each([
     [
@@ -309,11 +314,99 @@ describe("hub usage limit recovery time", () => {
     expect(
       usageLimitSourceResetAt(
         input,
-        ProviderDriverKind.make("claudeAgent"),
+        provider({ driver: ProviderDriverKind.make("claudeAgent") }),
         now,
         "claude-opus-4-6",
       ),
     ).toBeNull();
+  });
+  it.each([
+    [
+      "reachable hub",
+      "https://hub-a.example",
+      "https://hub-a.example",
+      "claudeAgent",
+      "2026-09-03T16:00:00.000Z",
+    ],
+    ["unreachable hub", "https://elsewhere.example", "https://hub-a.example", "claudeAgent", null],
+    ["different quota driver", "https://hub-a.example", "https://hub-a.example", "codex", null],
+    [
+      "loopback alias",
+      "http://127.0.0.1:8317",
+      "http://localhost:8317",
+      "claudeAgent",
+      "2026-09-03T16:00:00.000Z",
+    ],
+    [
+      "legacy hub without an origin",
+      "https://elsewhere.example",
+      undefined,
+      "claudeAgent",
+      "2026-09-03T16:00:00.000Z",
+    ],
+  ] as const)("respects %s source routing", (_name, origin, url, driver, expected) => {
+    const selected = provider({
+      driver: ProviderDriverKind.make("pi"),
+      usageRoutes: [{ driver: ProviderDriverKind.make(driver), origin }],
+    });
+    const input = [
+      { ...sources[0]!, ...(url === undefined ? {} : { url }) },
+      {
+        ...sources[0]!,
+        id: UsageLimitSourceId.make("unrelated-hub"),
+        url: "https://hub-b.example",
+        accounts: [
+          {
+            ...sources[0]!.accounts[2]!,
+            usageLimits: {
+              checkedAt,
+              windows: [{ ...window, usedPercent: 100, resetsAt: "2026-09-03T13:00:00.000Z" }],
+            },
+          },
+        ],
+      },
+    ];
+    expect(usageLimitSourceResetAt(input, selected, now, "cliproxy/claude-opus-4-6")).toBe(
+      expected,
+    );
+  });
+  it.each([
+    ["openai-codex/gpt-5.4", false, window.resetsAt],
+    ["anthropic/claude-opus-4-6", false, null],
+    ["cliproxyapi/gpt-5-codex", false, null],
+    ["openai/gpt-5-codex", false, null],
+    ["openai-codex/gpt-5.4", true, window.resetsAt],
+    ["cliproxyapi/gpt-5-codex", true, "2026-09-03T13:00:00.000Z"],
+    ["anthropic/claude-opus-4-6", true, null],
+  ] as const)("resolves a provider-local reset for %s with hub %s", (model, withHub, expected) => {
+    const selected = provider({
+      driver: ProviderDriverKind.make("pi"),
+      usageLimits: { checkedAt, windows: [], unavailable: { reason: "unsupported" } },
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: ProviderDriverKind.make("codex"),
+          limits: { checkedAt, windows: [{ ...window, usedPercent: 100 }] },
+        },
+      ],
+    });
+    const hubs = withHub
+      ? sources.map((source) => ({
+          ...source,
+          accounts: source.accounts.map((account) => ({
+            ...account,
+            usageLimits: {
+              ...account.usageLimits,
+              windows: account.usageLimits.windows.map((entry) => ({
+                ...entry,
+                resetsAt: "2026-09-03T13:00:00.000Z",
+              })),
+            },
+          })),
+        }))
+      : [];
+    expect(usageLimitSourceResetAt(hubs, selected, now, model)).toBe(expected);
   });
 });
 

@@ -8,19 +8,25 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
+  type UsageLimitSourceSnapshot,
   ThreadId,
 } from "@t3tools/contracts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -35,6 +41,19 @@ const layerProviderRegistry = (
     streamChanges: changes,
   });
 
+const layerResetSources = (
+  changes: Stream.Stream<ReadonlyArray<UsageLimitSourceSnapshot>> = Stream.never,
+) =>
+  Layer.mergeAll(
+    IdAllocator.layer,
+    Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+    Layer.mock(UsageLimitSources.UsageLimitSources)({
+      current: Effect.succeed([]),
+      streamChanges: changes,
+    }),
+    Layer.mock(EventSink.EventSinkV2)({}),
+  );
+
 it.effect("idle sweeps skip SQL until the next wake time or a relevant event", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse("2026-07-01T09:00:00.000Z"));
@@ -45,7 +64,9 @@ it.effect("idle sweeps skip SQL until the next wake time or a relevant event", (
       Layer.provide(
         Layer.mergeAll(
           Scheduler.layer,
+          layerResetSources(),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
             getLimitRecoveryCandidates: () =>
               Clock.currentTimeMillis.pipe(
                 Effect.flatMap((nowMs) => Queue.offer(queries, nowMs - startMs)),
@@ -93,6 +114,57 @@ it.effect("idle sweeps skip SQL until the next wake time or a relevant event", (
   }),
 );
 
+it.effect.each(["provider", "hub"] as const)(
+  "rechecks missing resets after an idle %s usage update",
+  (source) =>
+    Effect.gen(function* () {
+      const queries = yield* Ref.make(0);
+      const sweeps = yield* Queue.unbounded<void>();
+      const changes = yield* Queue.unbounded<void>();
+      const reports = Stream.fromQueue(changes);
+      const providerReports = reports.pipe(
+        Stream.as([
+          {
+            instanceId: ProviderInstanceId.make("limited"),
+            usageLimits: limits([window("weekly", 100)]),
+          },
+        ] as unknown as ReadonlyArray<ServerProvider>),
+      );
+      const layer = UsageLimitRecoveryWorker.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Scheduler.layer,
+            layerProviderRegistry(source === "provider" ? providerReports : Stream.never),
+            layerResetSources(source === "hub" ? reports.pipe(Stream.as([])) : Stream.never),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getUsageLimitFailuresWithoutReset: () =>
+                Ref.update(queries, (count) => count + 1).pipe(Effect.as([])),
+              getLimitRecoveryCandidates: () => Queue.offer(sweeps, undefined).pipe(Effect.as([])),
+              getLimitRecoveryWakeAt: () => Effect.succeed(null),
+            }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({}),
+            Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                autoResumeLimitedThreads: false,
+                snoozeLimitedThreads: false,
+              } as never),
+              streamChanges: Stream.never,
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        yield* Queue.take(sweeps);
+        yield* TestClock.adjust("5 seconds");
+        assert.equal(yield* Ref.get(queries), 1);
+        yield* Queue.offer(changes, undefined);
+        yield* TestClock.adjust("5 seconds");
+        assert.equal(yield* Ref.get(queries), 2);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
 const verifySweep = (event: OrchestrationV2DomainEvent) =>
   Effect.gen(function* () {
     const sweeps = yield* Queue.unbounded<void>();
@@ -102,9 +174,11 @@ const verifySweep = (event: OrchestrationV2DomainEvent) =>
         Layer.mergeAll(
           Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
             getLimitRecoveryCandidates: () => Queue.offer(sweeps, undefined).pipe(Effect.as([])),
             getLimitRecoveryWakeAt: () => Effect.succeed(null),
           }),
+          layerResetSources(),
           Layer.mock(ThreadManagement.ThreadManagementService)({}),
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(events),
@@ -445,6 +519,7 @@ it.effect("resumes a waiting thread as soon as the provider reports the limit ba
         Layer.mergeAll(
           Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
             // The projection only offers waiting threads when the sweep asks for them.
             getLimitRecoveryCandidates: (options) =>
               Effect.succeed(options.resetObserved === true ? [blocking, thread] : []),
@@ -464,6 +539,7 @@ it.effect("resumes a waiting thread as soon as the provider reports the limit ba
             streamChanges: Stream.never,
           }),
           layerProviderRegistry(Stream.fromQueue(providerChanges)),
+          layerResetSources(),
         ),
       ),
     );
