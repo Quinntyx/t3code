@@ -174,7 +174,7 @@ export const hiddenWhileLinksOff = (): boolean => {
   return scope?.linkedEnvironments !== false;
 };
 
-/** `McpSchema.EnabledWhen` for `send_email`, hidden while agent email is off. */
+/** `McpSchema.EnabledWhen` for `compose_email`, hidden while agent email is off. */
 export const hiddenWhileEmailOff = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);

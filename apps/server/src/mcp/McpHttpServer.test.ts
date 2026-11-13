@@ -49,6 +49,9 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as EmailRequests from "../email/EmailRequests.ts";
+import * as ConnectorsHandlers from "./toolkits/connectors/handlers.ts";
+import { ConnectorsToolkit } from "./toolkits/connectors/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
@@ -1195,12 +1198,6 @@ it.effect("hides link and email tools while they are off and refuses another env
           failure: OrchestratorMcpFailure,
           failureMode: "return",
         }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff),
-        Tool.make("mail", {
-          description: "Drafts an email.",
-          success: Schema.Struct({ sent: Schema.Boolean }),
-          failure: OrchestratorMcpFailure,
-          failureMode: "return",
-        }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileEmailOff),
         Tool.make("where", {
           description: "Says where it ran.",
           parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
@@ -1212,16 +1209,19 @@ it.effect("hides link and email tools while they are off and refuses another env
       const settingsContext = yield* Layer.build(ServerSettings.layerTest());
       const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
       const serverLayer = McpHttpServer.layerMcpTransport(
-        McpHttpServer.toolkitRegistration(
-          LinksToolkit,
-          McpToolAccess.toLayer(LinksToolkit, {
-            links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
-            mail: McpToolAccess.reads(() => Effect.succeed({ sent: false })),
-            where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
-          }),
+        Layer.mergeAll(
+          McpHttpServer.toolkitRegistration(
+            LinksToolkit,
+            McpToolAccess.toLayer(LinksToolkit, {
+              links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
+              where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
+            }),
+          ),
+          McpHttpServer.toolkitRegistration(ConnectorsToolkit, ConnectorsHandlers.layer),
         ),
       ).pipe(
         Layer.provide(Layer.succeedContext(settingsContext)),
+        Layer.provide(Layer.mock(EmailRequests.EmailRequests)({})),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
@@ -1266,8 +1266,8 @@ it.effect("hides link and email tools while they are off and refuses another env
             ),
           ),
         );
-      const ranIn = (where: EnvironmentId) =>
-        rpc("tools/call", { name: "where", arguments: { environmentId: where } }).pipe(
+      const call = (name: string, args: object) =>
+        rpc("tools/call", { name, arguments: args }).pipe(
           Effect.map(
             (body) =>
               (
@@ -1281,9 +1281,19 @@ it.effect("hides link and email tools while they are off and refuses another env
               ).result,
           ),
         );
+      const ranIn = (where: EnvironmentId) => call("where", { environmentId: where });
+      const emailConnector = () =>
+        call("external_connectors", {}).pipe(
+          Effect.map(
+            (result) => (result.structuredContent as { connectors: unknown[] }).connectors,
+          ),
+        );
       const elsewhere = EnvironmentId.make("environment-elsewhere");
 
-      expect(yield* listed()).toEqual(["where"]);
+      expect(yield* listed()).toEqual(["where", "external_connectors"]);
+      expect(yield* emailConnector()).toEqual([
+        expect.objectContaining({ name: "email", enabled: false, tool: "compose_email" }),
+      ]);
       expect(yield* ranIn(elsewhere)).toMatchObject({
         isError: true,
         content: [{ text: expect.stringContaining("Linked environments is off on this machine") }],
@@ -1291,7 +1301,7 @@ it.effect("hides link and email tools while they are off and refuses another env
       expect((yield* ranIn(environmentId)).structuredContent).toEqual({ ranIn: "here" });
 
       yield* settings.updateSettings({ linkedEnvironmentsEnabled: true });
-      expect(yield* listed()).toEqual(["links", "where"]);
+      expect(yield* listed()).toEqual(["links", "where", "external_connectors"]);
       // On, the call goes on to the forwarding, which this server lacks.
       expect(yield* ranIn(elsewhere)).toMatchObject({
         isError: true,
@@ -1299,7 +1309,10 @@ it.effect("hides link and email tools while they are off and refuses another env
       });
 
       yield* settings.updateSettings({ emailEnabled: true });
-      expect(yield* listed()).toEqual(["links", "mail", "where"]);
+      expect(yield* listed()).toEqual(["links", "where", "external_connectors", "compose_email"]);
+      expect(yield* emailConnector()).toEqual([
+        expect.objectContaining({ name: "email", enabled: true }),
+      ]);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
