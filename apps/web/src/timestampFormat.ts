@@ -181,6 +181,16 @@ function formatNumericDate(date: Date, sameYear: boolean, timeZone: string | und
   }).format(date);
 }
 
+export function formatUsageChartTimestamp(
+  isoDate: string,
+  timestampFormat: TimestampFormat,
+  spanMs: number,
+): string {
+  if (spanMs < 86_400_000) return formatShortTimestamp(isoDate, timestampFormat);
+  const date = parseTimestampDate(isoDate);
+  return date ? numericDateFormatter.format(date) : "";
+}
+
 export function formatDayAwareTimestamp(
   isoDate: string,
   timestampFormat: TimestampFormat,
