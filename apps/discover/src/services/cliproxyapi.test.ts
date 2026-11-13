@@ -157,3 +157,38 @@ it.effect("treats any HTTP answer as reachable", () =>
       }),
   ),
 );
+
+it.effect("removes the key when the hub commits but the response is lost", () =>
+  withServer(
+    (request, keys) => {
+      if (request.method === "PATCH") {
+        // The hub applied the key, then failed the response.
+        const body = JSON.parse(request.body) as { old: string; new: string };
+        keys.push(body.new);
+        return Response.json({ error: "gateway" }, { status: 502 });
+      }
+      if (request.method === "DELETE") {
+        const value = new URL(
+          `http://hub.example${request.pathname}${request.query}`,
+        ).searchParams.get("value");
+        const index = keys.indexOf(value ?? "");
+        if (index >= 0) keys.splice(index, 1);
+        return Response.json({ status: "ok" });
+      }
+      return keyList(request, keys);
+    },
+    ({ service, calls, keys }) =>
+      Effect.gen(function* () {
+        const result = yield* Effect.exit(
+          service.issueCredential({ id: "member-1", label: "desktop" }, undefined),
+        );
+        assert.strictEqual(result._tag, "Failure");
+        // The minted key must not outlive the failure that prevented recording it.
+        assert.deepEqual(keys, ["existing-key"]);
+        assert.deepEqual(
+          calls.map((call) => call.method),
+          ["PATCH", "DELETE"],
+        );
+      }),
+  ),
+);

@@ -9,8 +9,12 @@ import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId } from "@t3tools/contracts";
 import type { DiscoverHostRegistration } from "@t3tools/contracts/discover";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -372,4 +376,85 @@ it.effect("issues the credential for the transport the member asked for", () =>
       ]),
     ),
   ),
+);
+
+it.effect("refuses to drop a link whose service is no longer configured", () =>
+  Effect.gen(function* () {
+    const path = NodePath.join(
+      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3discover-gone-")),
+      "state.sqlite",
+    );
+    const owner = yield* Effect.gen(function* () {
+      const broker = yield* Broker.Broker;
+      const member = yield* broker.enroll({ code: yield* broker.pair(), label: "owner" });
+      yield* broker.link(member.token, { serviceId: "hub" });
+      return member;
+    }).pipe(
+      Effect.provide(
+        Broker.layer(path, [
+          fakeService({
+            serviceId: "hub",
+            capabilities: ["key-exchange"],
+            minted: [],
+            revoked: [],
+          }),
+        ]),
+      ),
+      Effect.scoped,
+    );
+
+    // The service was removed from services.json: the adapter is gone, but the key is still live.
+    yield* Effect.gen(function* () {
+      const broker = yield* Broker.Broker;
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(broker.unlink(owner.token, "hub"))));
+      assert.isDefined((yield* broker.serviceLink(owner.token, "hub")).credential);
+    }).pipe(Effect.provide(Broker.layer(path)), Effect.scoped);
+
+    // Restoring the service lets the same unlink finish and revoke.
+    const revoked: Array<string> = [];
+    yield* Effect.gen(function* () {
+      const broker = yield* Broker.Broker;
+      yield* broker.unlink(owner.token, "hub");
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(broker.serviceLink(owner.token, "hub"))));
+    }).pipe(
+      Effect.provide(
+        Broker.layer(path, [
+          fakeService({ serviceId: "hub", capabilities: ["key-exchange"], minted: [], revoked }),
+        ]),
+      ),
+      Effect.scoped,
+    );
+    assert.deepEqual(revoked, ["key-owner-0"]);
+  }),
+);
+
+it.effect("probes every service at once so a slow hub cannot stall the directory", () =>
+  Effect.gen(function* () {
+    const started = yield* Ref.make(0);
+    const allStarted = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const slow = (serviceId: string): DiscoverableService => ({
+      ...fakeService({ serviceId, capabilities: [], minted: [], revoked: [] }),
+      health: Effect.gen(function* () {
+        const count = yield* Ref.updateAndGet(started, (value) => value + 1);
+        if (count === 3) yield* Deferred.succeed(allStarted, undefined);
+        yield* Deferred.await(release);
+        return "online" as const;
+      }),
+    });
+    yield* Effect.gen(function* () {
+      const broker = yield* Broker.Broker;
+      const owner = yield* broker.enroll({ code: yield* broker.pair(), label: "owner" });
+      const reading = yield* broker.directory(owner.token).pipe(Effect.forkChild);
+      const reached = yield* Deferred.await(allStarted).pipe(
+        Effect.timeoutOption("1 second"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 second");
+      // Sequential probes would still be blocked on the first service here.
+      assert.isTrue(Option.isSome(yield* Fiber.join(reached)));
+      yield* Deferred.succeed(release, undefined);
+      assert.strictEqual((yield* Fiber.join(reading)).services.length, 3);
+    }).pipe(Effect.provide(Broker.layer(":memory:", [slow("a"), slow("b"), slow("c")])));
+  }),
 );

@@ -182,7 +182,10 @@ function LinkServiceDialog({
   const [linkedWithoutCredential, setLinkedWithoutCredential] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const linked = service.linkedAt !== null || credential !== null || linkedWithoutCredential;
+  // The listing is authoritative: once it reports the link gone (unlinked in another tab), a
+  // credential still in state must not be shown or applied.
+  const linked = service.linkedAt !== null || linkedWithoutCredential;
+  const shownCredential = linked ? credential : null;
   const issuesCredential = service.capabilities.includes("key-exchange");
 
   const load = async () => {
@@ -247,7 +250,7 @@ function LinkServiceDialog({
         <DialogPanel>
           <div className="flex flex-col gap-4">
             {error === null ? null : <p className="text-sm text-destructive">{error}</p>}
-            {credential === null ? (
+            {shownCredential === null ? (
               <div className="flex flex-col gap-2">
                 <p className="text-sm text-muted-foreground">
                   {linked
@@ -279,10 +282,10 @@ function LinkServiceDialog({
                     Credential for this machine
                   </span>
                   <code className="truncate font-mono text-xs text-foreground">
-                    {maskedKey(credential.apiKey)}
+                    {maskedKey(shownCredential.apiKey)}
                   </code>
                   <span className="truncate text-xs text-muted-foreground">
-                    {credential.protocol} · {credential.baseUrl}
+                    {shownCredential.protocol} · {shownCredential.baseUrl}
                   </span>
                 </div>
                 <div className="flex flex-col gap-2">
@@ -302,7 +305,7 @@ function LinkServiceDialog({
                         environmentId={environment.environmentId}
                         environmentLabel={environment.label}
                         service={service}
-                        credential={credential}
+                        credential={shownCredential}
                       />
                     ))
                   )}

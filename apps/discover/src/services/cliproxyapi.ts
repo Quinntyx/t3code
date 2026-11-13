@@ -94,33 +94,12 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
     Effect.orElseSucceed((): DiscoverServiceHealth => "offline"),
   );
 
-  const issueCredential = Effect.fn("DiscoverServices.cliProxy.issue")(function* (
-    member: ServiceMember,
-    endpoint: DiscoverServiceEndpoint | undefined,
-  ) {
-    if (config.managementKey.length === 0) {
-      return yield* serviceFailure(
-        config.serviceId,
-        "Set the CLIProxyAPI management key before linking this service.",
-      );
-    }
-    yield* Effect.annotateCurrentSpan({ "discover.member": member.id });
-    const apiKey = `t3d-${NodeCrypto.randomBytes(24).toString("base64url")}`;
-    yield* appendKey(apiKey);
-    return {
-      protocol: config.protocol,
-      baseUrl: cliProxyBaseUrl(endpoint ?? config.endpoints[0]!, config.basePath),
-      apiKey,
-    } satisfies DiscoverServiceCredential;
-  });
-
-  const revokeCredential = Effect.fn("DiscoverServices.cliProxy.revoke")(
-    function* (_member: ServiceMember, credential: DiscoverServiceCredential) {
-      if (config.managementKey.length === 0) return;
+  const removeKey = Effect.fn("DiscoverServices.cliProxy.remove")(
+    function* (apiKey: string) {
       const response = yield* http.execute(
         authorize(
           HttpClientRequest.delete(
-            `${managementUrl("api-keys")}?value=${encodeURIComponent(credential.apiKey)}`,
+            `${managementUrl("api-keys")}?value=${encodeURIComponent(apiKey)}`,
           ),
         ),
       );
@@ -139,6 +118,36 @@ export const makeCliProxyService = Effect.fn("DiscoverServices.cliProxy")(functi
         : serviceFailure(config.serviceId, "Could not revoke the CLIProxyAPI client key."),
     ),
   );
+
+  const issueCredential = Effect.fn("DiscoverServices.cliProxy.issue")(function* (
+    member: ServiceMember,
+    endpoint: DiscoverServiceEndpoint | undefined,
+  ) {
+    if (config.managementKey.length === 0) {
+      return yield* serviceFailure(
+        config.serviceId,
+        "Set the CLIProxyAPI management key before linking this service.",
+      );
+    }
+    yield* Effect.annotateCurrentSpan({ "discover.member": member.id });
+    const apiKey = `t3d-${NodeCrypto.randomBytes(24).toString("base64url")}`;
+    // The hub can commit the key and still fail the response. Without this the caller sees a
+    // failure, never records the key, and the hub keeps a key nobody can revoke.
+    yield* appendKey(apiKey).pipe(Effect.tapError(() => removeKey(apiKey).pipe(Effect.ignore)));
+    return {
+      protocol: config.protocol,
+      baseUrl: cliProxyBaseUrl(endpoint ?? config.endpoints[0]!, config.basePath),
+      apiKey,
+    } satisfies DiscoverServiceCredential;
+  });
+
+  const revokeCredential = Effect.fn("DiscoverServices.cliProxy.revoke")(function* (
+    _member: ServiceMember,
+    credential: DiscoverServiceCredential,
+  ) {
+    if (config.managementKey.length === 0) return;
+    yield* removeKey(credential.apiKey);
+  });
 
   return {
     serviceId: config.serviceId,

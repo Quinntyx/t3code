@@ -263,12 +263,17 @@ const make = Effect.fn("Discover.make")(function* (
         : yield* sql<ServiceLinkRow>`SELECT * FROM service_links WHERE member_id = ${memberId}`;
     const linkedAt = new Map(links.map((row) => [row.service_id, row.linked_at]));
     const seen = yield* Ref.get(lastOnline);
-    const entries = yield* Effect.forEach(serviceList, (service) =>
-      service.health.pipe(
-        Effect.timeout("5 seconds"),
-        Effect.orElseSucceed((): Discover.DiscoverServiceHealth => "unknown"),
-        Effect.map((health) => ({ service, health })),
-      ),
+    // Concurrent probes keep the directory under the client's timeout even when several hubs are
+    // down; sequential probes would add one timeout per service.
+    const entries = yield* Effect.forEach(
+      serviceList,
+      (service) =>
+        service.health.pipe(
+          Effect.timeout("5 seconds"),
+          Effect.orElseSucceed((): Discover.DiscoverServiceHealth => "unknown"),
+          Effect.map((health) => ({ service, health })),
+        ),
+      { concurrency: "unbounded" },
     );
     const next = new Map(seen);
     for (const { service, health } of entries) {
@@ -371,7 +376,13 @@ const make = Effect.fn("Discover.make")(function* (
       const rows = yield* serviceLinkRow(serviceId, member.id);
       const row = rows[0];
       if (row === undefined) return;
-      if (row.credential !== null && service !== undefined) {
+      if (row.credential !== null) {
+        // Dropping the record for a service that is no longer configured would strand a live key.
+        if (service === undefined)
+          return yield* reject(
+            409,
+            "This service is no longer configured, so its key cannot be revoked. Restore the service, then unlink.",
+          );
         const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
           Effect.mapError((cause) => new DatabaseError({ cause })),
         );
@@ -515,8 +526,14 @@ const make = Effect.fn("Discover.make")(function* (
     const rows =
       yield* sql<ServiceLinkRow>`SELECT * FROM service_links WHERE member_id = ${member.id}`;
     for (const row of rows) {
+      if (row.credential === null) continue;
       const service = byId.get(row.service_id);
-      if (service === undefined || row.credential === null) continue;
+      // Same rule as unlink: an unavailable adapter must not silently drop a live key's record.
+      if (service === undefined)
+        return yield* reject(
+          409,
+          `Service '${row.service_id}' is no longer configured, so its key cannot be revoked. Restore it, then retry.`,
+        );
       const credential = yield* Schema.decodeEffect(jsonCredential)(row.credential).pipe(
         Effect.mapError((cause) => new DatabaseError({ cause })),
       );
