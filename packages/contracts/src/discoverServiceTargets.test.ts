@@ -108,6 +108,21 @@ describe("discoverServiceEnvironmentNames", () => {
       api: "T3_DISCOVER_A_B_C_D_API",
     });
   });
+
+  it("keeps distinct ids from sharing variables", () => {
+    // Two services that collide here would overwrite each other's provider configuration.
+    const names = ["hub", "hub-", "hub-a", "hub--a", "hub-a-"].map(
+      (serviceId) => discoverServiceEnvironmentNames(serviceId).baseUrl,
+    );
+    assert.deepEqual(names, [
+      "T3_DISCOVER_HUB_BASE_URL",
+      "T3_DISCOVER_HUB__BASE_URL",
+      "T3_DISCOVER_HUB_A_BASE_URL",
+      "T3_DISCOVER_HUB__A_BASE_URL",
+      "T3_DISCOVER_HUB_A__BASE_URL",
+    ]);
+    assert.strictEqual(new Set(names).size, names.length);
+  });
 });
 
 describe("mergeProviderInstanceEnvironment", () => {

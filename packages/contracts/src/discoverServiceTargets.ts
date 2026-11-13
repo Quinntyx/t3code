@@ -13,11 +13,12 @@ import {
  */
 const DISCOVER_ENV_PREFIX = "T3_DISCOVER";
 
+/**
+ * Service ids are `[a-z0-9-]`, so mapping each character on its own is injective: `hub-a` and
+ * `hub--a` must not share variables, and a trailing `-` must not collapse into the bare id.
+ */
 const discoverServiceEnvironmentSlug = (serviceId: string): string => {
-  const slug = serviceId
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  const slug = serviceId.toUpperCase().replace(/[^A-Z0-9]/g, "_");
   return slug.length > 0 ? slug : "SERVICE";
 };
 
