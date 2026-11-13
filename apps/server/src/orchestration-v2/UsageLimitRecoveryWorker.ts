@@ -125,12 +125,6 @@ function limitResetObserved(
   )
     return false;
   const before = new Map(previous.windows.map((window) => [window.id, window]));
-  const after = new Map(next.windows.map((window) => [window.id, window]));
-  // A window the probe stopped reporting may still be spent, so it cannot count as freed.
-  for (const window of before.values()) {
-    const reported = after.get(window.id);
-    if (spent(window) && (reported === undefined || spent(reported))) return false;
-  }
   return next.windows.some((window) => {
     const seen = before.get(window.id);
     if (seen === undefined) return false;
@@ -146,7 +140,8 @@ const spentWindow = (limits: ServerProviderUsageLimits) => limits.windows.some(s
 
 /**
  * A probe may report only the windows it read, so a spent window it stopped reporting is kept
- * until its reset clock passes. Otherwise a partial report would look like a freed allowance.
+ * until its reset clock passes. Otherwise a partial report would look like a freed allowance. A
+ * window with no clock is not kept: it could never show that it stopped blocking.
  */
 const mergeLimits = (
   previous: ServerProviderUsageLimits | undefined,
@@ -166,7 +161,8 @@ const mergeLimits = (
     (window) =>
       !reported.has(window.id) &&
       spent(window) &&
-      (window.resetsAt === undefined || Date.parse(window.resetsAt) > nowMs),
+      window.resetsAt !== undefined &&
+      Date.parse(window.resetsAt) > nowMs,
   );
   return carried.length === 0 ? next : { ...next, windows: [...next.windows, ...carried] };
 };
