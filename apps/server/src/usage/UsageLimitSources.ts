@@ -62,18 +62,22 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
     : "Could not read the management key from its secret provider.";
 }
 
+export const readSourceManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
+  secrets: SecretResolver.SecretResolver["Service"],
+  config: UsageLimitSourceConfig,
+) {
+  const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
+  return settingsSecretLiteral(resolved.managementKey);
+});
+
 /** @public */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const settingsService = yield* Settings.ServerSettingsService;
   const secrets = yield* SecretResolver.SecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-  const readManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
-    config: UsageLimitSourceConfig,
-  ) {
-    const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
-    return settingsSecretLiteral(resolved.managementKey);
-  });
+  const readManagementKey = (config: UsageLimitSourceConfig) =>
+    readSourceManagementKey(secrets, config);
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),

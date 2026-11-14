@@ -29,6 +29,12 @@ export interface ProviderCredentials {
   readonly remove: Effect.Effect<void, ProviderCredentialError>;
 }
 
+/** The model ids one usage hub exposes, keyed by the hub URL from settings. */
+export interface HubModelCatalog {
+  readonly url: string;
+  readonly models: ReadonlyArray<string>;
+}
+
 export class ProviderHost extends Context.Service<
   ProviderHost,
   {
@@ -47,6 +53,8 @@ export class ProviderHost extends Context.Service<
     /** Absolute attachment path, or null if the ID does not resolve inside attachmentsDir. */
     readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
     readonly resolveExtractedTextPath?: (path: string) => Effect.Effect<string | undefined>;
+    /** Catalogs of this environment's enabled usage hubs; never fails. */
+    readonly hubModels?: Effect.Effect<ReadonlyArray<HubModelCatalog>>;
     readonly credentials: (
       namespace: string,
       bindingId: string,

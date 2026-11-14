@@ -150,5 +150,74 @@
         }
       ]
     }
+  },
+  "models": {
+    "data": [
+      {
+        "created": 1794629764,
+        "display_name": "deepseek-v4.1-flash:fast",
+        "id": "deepseek-v4.1-flash:fast",
+        "object": "model",
+        "owned_by": "inco",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "explode-mid",
+        "id": "explode-mid",
+        "object": "model",
+        "owned_by": "mistral",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "hot-reloaded-alias",
+        "id": "hot-reloaded-alias",
+        "object": "model",
+        "owned_by": "inco",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "mid-stream-route",
+        "id": "mid-stream-route",
+        "object": "model",
+        "owned_by": "mistral",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "mimo-v2.6-pro",
+        "id": "mimo-v2.6-pro",
+        "object": "model",
+        "owned_by": "opencode-go",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "my-custom-model",
+        "id": "my-custom-model",
+        "object": "model",
+        "owned_by": "opencode-go",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "my-custom-model:fast",
+        "id": "my-custom-model:fast",
+        "object": "model",
+        "owned_by": "inco",
+        "type": "openai-compatibility"
+      },
+      {
+        "created": 1794629764,
+        "display_name": "z-ai/glm-5.3-flash",
+        "id": "z-ai/glm-5.3-flash",
+        "object": "model",
+        "owned_by": "openrouter",
+        "type": "openai-compatibility"
+      }
+    ],
+    "object": "list"
   }
 }

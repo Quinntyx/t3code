@@ -215,8 +215,9 @@ discovery also reports its other upstream providers, such as Mistral, OpenCode G
 with each vendor's own windows. A provider or window the hub cannot measure shows no bar rather
 than 0% or unlimited. Older hubs report only Claude and Codex accounts.
 
-This connection supplies usage information. To send agent requests through the hub as well, use
-discovery instead: a hub the `t3discover` broker advertises appears at the top of **Usage**, and
+A hub with provider discovery also shares its model list with Pi: see
+[Pi models from a hub](providers-pi.md#models-from-a-cliproxyapi-hub). This connection does not
+supply an inference key. To have T3 Code set up the endpoint and key as well, use discovery: a hub the `t3discover` broker advertises appears at the top of **Usage**, and
 linking it mints one key for this machine and can set the endpoint and key on Claude Code, Codex,
 and Pi providers. See [Self-hosted discovery](remote-access.md#discover-and-run-other-services).
 Remove the hub from the same settings section when you no longer need it.

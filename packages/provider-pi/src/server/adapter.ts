@@ -80,6 +80,7 @@ import {
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { withHubModelsEnvironment } from "./discoverExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
 import { piFailureClassification } from "./usageLimits.ts";
 
@@ -578,12 +579,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               }),
           ),
         );
+      const hubModels = yield* host.hubModels ?? Effect.succeed([]);
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment: {
-          ...options.environment,
-          ...notebookEnvironment,
-        },
+        environment: withHubModelsEnvironment(
+          { ...options.environment, ...notebookEnvironment },
+          hubModels,
+        ),
         mcpSession,
         extensionPath,
         discoverExtensionPath,
