@@ -2406,6 +2406,58 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("runs a paired model's exact :fast sibling only while Fast is on", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.queueModels([
+        { provider: "cliproxy", id: "my-custom-model" },
+        { provider: "cliproxy", id: "my-custom-model:fast" },
+        { provider: "inco", id: "glm-5.3-flash" },
+      ]);
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = (model: string, fastMode: boolean | undefined, ordinal: number) =>
+        Effect.gen(function* () {
+          yield* startTurn(
+            runtime,
+            providerThread,
+            "default",
+            [],
+            "Hello",
+            {
+              instanceId: PI_INSTANCE_ID,
+              model,
+              ...(fastMode === undefined ? {} : { options: [{ id: "fastMode", value: fastMode }] }),
+            },
+            ordinal,
+          );
+          yield* fake.takeRequest("prompt");
+          yield* fake.emit({ type: "agent_start" });
+          yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+          yield* fake.emit({ type: "agent_settled" });
+          yield* takeEvent((event) => event.type === "turn.terminal");
+        });
+
+      yield* turn("cliproxy/my-custom-model", true, 1);
+      yield* turn("cliproxy/my-custom-model", false, 2);
+      // A selection saved while the sibling was its own row still runs it.
+      yield* turn("cliproxy/my-custom-model:fast", undefined, 3);
+      // A Fast choice whose sibling left the catalog runs the base instead of a missing model.
+      yield* turn("inco/glm-5.3-flash", true, 4);
+
+      assert.deepEqual(fake.promptModels, [
+        "cliproxy/my-custom-model:fast",
+        "cliproxy/my-custom-model",
+        "cliproxy/my-custom-model:fast",
+        "inco/glm-5.3-flash",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect.each([false, true, "previous"] as const)(
     "resets applied thinking when returning to Pi default (failed first restore: %s)",
     (failFirstRestore) =>

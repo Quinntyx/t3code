@@ -210,7 +210,10 @@ To see pooled accounts, open **Settings → Providers → Usage providers → Ad
 environment that will connect to the hub and enter its URL and management key.
 
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
-account and choose **Use reset** to redeem one. No hub plugin is required.
+account and choose **Use reset** to redeem one. No hub plugin is required. A hub with provider
+discovery also reports its other upstream providers, such as Mistral, OpenCode Go, or OpenRouter,
+with each vendor's own windows. A provider or window the hub cannot measure shows no bar rather
+than 0% or unlimited. Older hubs report only Claude and Codex accounts.
 
 This connection supplies usage information. To send agent requests through the hub as well, use
 discovery instead: a hub the `t3discover` broker advertises appears at the top of **Usage**, and

@@ -388,7 +388,8 @@ function accountKeyResolver(reports: Iterable<AccountReport>) {
   };
 }
 
-const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
+const hubAccountName = (account: { readonly id: string; readonly label?: string | undefined }) =>
+  account.label ?? account.id.replace(/\.json$/i, "");
 
 export interface LimitAccount {
   readonly key: string;

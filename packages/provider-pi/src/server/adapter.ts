@@ -2,7 +2,11 @@ import { PycellsLauncher } from "@t3tools/shared/pycells";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeUtil from "node:util";
 import { AgentScope } from "@t3tools/shared/AgentScope";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  fastVariantDispatchModel,
+  getModelSelectionStringOptionValue,
+  readCustomModelEntries,
+} from "@t3tools/shared/model";
 import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
 import {
@@ -693,6 +697,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       let contextWindow: number | null = null;
       const modelContextWindows = new Map<string, number>();
       let modelsDiscovered = false;
+      // Pi's own inventory plus T3 custom models; null trusts a Fast choice before discovery.
+      let availableModels: Set<string> | null = null;
       // Prompt ACKs lack IDs; retain session send order and ownership so late ACKs cannot affect new turns.
       const pendingPromptResponses: Array<PiPromptSend> = [];
       const pendingCompactResponses: Array<{
@@ -2655,7 +2661,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           );
           const models = recordField(modelsData, "models");
           if (Array.isArray(models)) {
-            for (const model of models) rememberModelContextWindow(model);
+            availableModels = new Set(
+              readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
+            );
+            for (const model of models) {
+              rememberModelContextWindow(model);
+              const provider = recordString(model, "provider");
+              const id = recordString(model, "id");
+              if (provider !== undefined && id !== undefined)
+                availableModels.add(`${provider}/${id}`);
+            }
             modelsDiscovered = true;
           }
         }
@@ -2731,6 +2746,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        // Fast on a paired catalog model runs its exact `:fast` sibling slug.
+        const model = fastVariantDispatchModel(
+          modelSelection,
+          (slug) => availableModels?.has(slug) ?? true,
+        );
         if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
           if (appliedModel !== null && baselineModel !== null) {
             const restoredModel = yield* request({ type: "set_model", ...baselineModel });
@@ -2753,12 +2773,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* request({ type: "set_thinking_level", level: baselineThinking });
             appliedThinking = baselineThinking;
           }
-        } else if (modelSelection.model !== appliedModel) {
-          const parsed = parsePiModelSlug(modelSelection.model);
+        } else if (model !== appliedModel) {
+          const parsed = parsePiModelSlug(model);
           if (parsed === null) {
-            return yield* protocolError(
-              `Pi model '${modelSelection.model}' must use provider/model format`,
-            );
+            return yield* protocolError(`Pi model '${model}' must use provider/model format`);
           }
           const selectedModel = yield* request({
             type: "set_model",
@@ -2768,9 +2786,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           // Pi resets thinking to the target model's configured default on set_model.
           appliedThinking = null;
           contextWindow = rememberModelContextWindow(selectedModel);
-          appliedModel = modelSelection.model;
+          appliedModel = model;
           const updatedAt = yield* DateTime.now;
-          sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
+          sessionEntity = { ...sessionEntity, model, updatedAt };
           yield* emit({
             type: "provider_session.updated",
             driver: PI_PROVIDER,
@@ -2874,7 +2892,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               ? baselineModel === null
                 ? undefined
                 : `${baselineModel.provider}/${baselineModel.modelId}`
-              : selection.model;
+              : fastVariantDispatchModel(selection, (slug) => availableModels?.has(slug) ?? true);
           return slug === undefined ? undefined : modelContextWindows.get(slug);
         },
         ensureThread: (threadInput) =>

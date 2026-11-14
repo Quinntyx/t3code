@@ -40,7 +40,10 @@ thinking picker marks the discovered active model's configured level as its defa
 overriding it. Other models keep their Pi defaults when no level is selected. A model that lists
 `serviceTiers` (for example `[{ "id": "priority", "name": "Fast" }]`) in its Pi definition gets
 a speed picker with Standard plus those tiers. A chosen tier is sent as the request's
-`service_tier`; Standard sends none and leaves the endpoint's default. Threads
+`service_tier`; Standard sends none and leaves the endpoint's default. When one Pi provider
+lists both `my-model` and `my-model:fast`, the picker shows `my-model` once with the Standard /
+Fast speed control: Standard runs `my-model` and Fast runs `my-model:fast`. A `:fast` model
+without a base in the same provider stays a normal model. Threads
 use Pi's native session files for resume, rollback, and forks within the same Pi instance. Forks
 preserve the native conversation through the selected turn in the destination workspace.
 Switching providers uses portable conversation context. Extension

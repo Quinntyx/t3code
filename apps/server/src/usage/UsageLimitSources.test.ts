@@ -218,7 +218,7 @@ it.effect("reads a management key from its secret provider", () => {
         error: "Could not read the management key from its secret provider.",
       },
     ]);
-    expect(authorizations).toEqual(["Bearer resolved-key"]);
+    expect(authorizations).toEqual(["Bearer resolved-key", "Bearer resolved-key"]);
   }).pipe(
     Effect.provide([
       ServerSettings.layerTest({
@@ -255,7 +255,13 @@ it.effect("reads a management key from its secret provider", () => {
         HttpClient.make((request) =>
           Effect.sync(() => {
             authorizations.push(request.headers.authorization);
-            return HttpClientResponse.fromWeb(request, Response.json({ files: [] }));
+            // A hub without v8 discovery answers 404 there and is read through the legacy API.
+            return HttpClientResponse.fromWeb(
+              request,
+              new URL(request.url).pathname.startsWith("/v8/")
+                ? Response.json({}, { status: 404 })
+                : Response.json({ files: [] }),
+            );
           }),
         ),
       ),

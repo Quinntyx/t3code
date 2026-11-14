@@ -9,6 +9,7 @@ A fake CLIProxyAPI hub that serves the Limits evidence scenarios in `scenarios.j
 | C        | six long-email Codex accounts                                  |
 | L        | named accounts (no email, so segments show the auth-file name) |
 | T        | forty accounts, so pooled segments are 4px wide at 390px       |
+| D        | v8 provider discovery: Mistral, OpenCode Go, OpenRouter, Inco  |
 
 Reset times are minute offsets from `n0`.
 

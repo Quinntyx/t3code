@@ -328,6 +328,45 @@ describe("PiProvider", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("offers a hub's :fast sibling as Fast on its base model only within that hub", () =>
+    Effect.gen(function* () {
+      const spawner = yield* piDiscoverySpawner({
+        models: [
+          { provider: "cliproxy", id: "my-custom-model", reasoning: true },
+          { provider: "cliproxy", id: "my-custom-model:fast", reasoning: true },
+          { provider: "cliproxy-b", id: "glm-5.3-flash" },
+          { provider: "inco", id: "glm-5.3-flash:fast" },
+          {
+            provider: "columbia-codex",
+            id: "gpt-6.1-sol",
+            serviceTiers: [{ id: "priority", name: "Fast" }],
+          },
+          { provider: "columbia-codex", id: "gpt-6.1-sol:fast" },
+        ],
+      });
+      const snapshot = yield* checkPiProviderStatus(settings).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.deepEqual(
+        snapshot.models.map((model) => model.slug),
+        [
+          "default",
+          "cliproxy/my-custom-model",
+          "cliproxy-b/glm-5.3-flash",
+          "inco/glm-5.3-flash:fast",
+          "columbia-codex/gpt-6.1-sol",
+          "columbia-codex/gpt-6.1-sol:fast",
+        ],
+      );
+      const paired = snapshot.models.find((model) => model.slug === "cliproxy/my-custom-model");
+      assert.deepEqual(
+        paired?.capabilities?.optionDescriptors?.map((descriptor) => descriptor.id),
+        ["thinking", "fastMode"],
+      );
+      assert.deepEqual(paired?.aliases, ["cliproxy/my-custom-model:fast"]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   // regression: #18498 a malformed model inventory must not restore stale Pi models
   it.effect.each([
     ["missing models", {}],

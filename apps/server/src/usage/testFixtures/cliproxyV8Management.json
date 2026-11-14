@@ -1,0 +1,154 @@
+{
+  "providers": {
+    "providers": [
+      {
+        "id": "inco",
+        "name": "inco",
+        "disabled": false,
+        "model_ids": ["deepseek-v4.1-flash:fast", "my-custom-model:fast"],
+        "usage_supported": false
+      },
+      {
+        "id": "mistral",
+        "name": "mistral",
+        "disabled": false,
+        "model_ids": ["explode-mid", "mid-stream-route"],
+        "usage_supported": true
+      },
+      {
+        "id": "opencode-go",
+        "name": "opencode-go",
+        "disabled": false,
+        "model_ids": ["mimo-v2.6-pro", "my-custom-model"],
+        "usage_supported": true
+      },
+      {
+        "id": "openrouter",
+        "name": "openrouter",
+        "disabled": false,
+        "model_ids": ["mid-stream-route", "my-custom-model", "z-ai/glm-5.3-flash"],
+        "usage_supported": true
+      }
+    ]
+  },
+  "usage": {
+    "mistral": {
+      "provider_id": "mistral",
+      "accounts": [
+        {
+          "id": "a795820cc0757f8a",
+          "status": "ok",
+          "plan": "Pro",
+          "checked_at": "2026-11-14T04:04:28Z",
+          "windows": [
+            {
+              "id": "vibe",
+              "label": "Vibe",
+              "used_percent": 40,
+              "used": 8,
+              "limit": 20,
+              "remaining": 12,
+              "unit": "eur",
+              "resets_at": "2026-12-01T00:00:00Z"
+            },
+            {
+              "id": "api",
+              "label": "API",
+              "used_percent": 25,
+              "used": 3.75,
+              "limit": 15,
+              "remaining": 11.25,
+              "unit": "usd",
+              "resets_at": "2026-12-01T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "opencode-go": {
+      "provider_id": "opencode-go",
+      "accounts": [
+        {
+          "id": "a66e73f8b1866a2b",
+          "status": "ok",
+          "checked_at": "2026-11-14T04:04:28Z",
+          "windows": [
+            {
+              "id": "rolling",
+              "label": "Rolling",
+              "used_percent": 12.5,
+              "resets_at": "2026-11-14T08:00:00Z"
+            },
+            {
+              "id": "weekly",
+              "label": "Weekly",
+              "used_percent": 50,
+              "resets_at": "2026-11-16T00:00:00Z"
+            },
+            {
+              "id": "monthly",
+              "label": "Monthly",
+              "used_percent": 75,
+              "resets_at": "2026-12-01T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "openrouter": {
+      "provider_id": "openrouter",
+      "accounts": [
+        {
+          "id": "2982a7cb4bdfb064",
+          "status": "ok",
+          "checked_at": "2026-11-14T04:04:28Z",
+          "windows": [
+            {
+              "id": "key",
+              "label": "Key spend",
+              "used": 3.5,
+              "unit": "usd"
+            },
+            {
+              "id": "key-daily",
+              "label": "Key spend today",
+              "used": 0.5,
+              "unit": "usd"
+            },
+            {
+              "id": "key-weekly",
+              "label": "Key spend this week",
+              "used": 1.5,
+              "unit": "usd"
+            },
+            {
+              "id": "key-monthly",
+              "label": "Key spend this month",
+              "used": 3.5,
+              "unit": "usd"
+            }
+          ]
+        },
+        {
+          "id": "0e843b7e13496218",
+          "status": "error",
+          "checked_at": "2026-11-14T04:04:28Z",
+          "windows": [],
+          "error": "usage endpoint returned HTTP 401"
+        }
+      ]
+    },
+    "inco": {
+      "provider_id": "inco",
+      "accounts": [
+        {
+          "id": "35f49eec6549d88f",
+          "status": "unsupported",
+          "checked_at": "2026-11-14T04:04:28Z",
+          "windows": [],
+          "error": "usage API not supported for this provider"
+        }
+      ]
+    }
+  }
+}
