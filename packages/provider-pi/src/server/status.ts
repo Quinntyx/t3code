@@ -6,6 +6,7 @@ import {
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type { PiSettings } from "../settings.ts";
+import { pairFastModelVariants } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -91,10 +92,12 @@ function piModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discovered: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(
-    [PI_DEFAULT_MODEL, ...discovered],
-    customModels ?? [],
-    EMPTY_PI_MODEL_CAPABILITIES,
+  return pairFastModelVariants(
+    providerModelsFromSettings(
+      [PI_DEFAULT_MODEL, ...discovered],
+      customModels ?? [],
+      EMPTY_PI_MODEL_CAPABILITIES,
+    ),
   );
 }
 

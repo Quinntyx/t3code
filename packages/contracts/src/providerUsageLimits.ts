@@ -76,8 +76,11 @@ export type ServerProviderUsageSource = typeof ServerProviderUsageSource.Type;
 
 export const UsageLimitSourceAccount = Schema.Struct({
   id: TrimmedNonEmptyString,
+  /** A hub provider's own id when no T3 driver reads it, e.g. `mistral`. */
   driver: ProviderDriverKind,
   email: Schema.optional(TrimmedNonEmptyString),
+  /** Hub display name for an account without an e-mail. */
+  label: Schema.optional(TrimmedNonEmptyString),
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
   usageLimits: ServerProviderUsageLimits,

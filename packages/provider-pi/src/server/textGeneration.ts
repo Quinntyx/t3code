@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { fastVariantDispatchModel } from "@t3tools/shared/model";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -62,13 +63,14 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         env: launch.env,
       }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
-      if (modelSelection.model !== "default") {
+      const model = fastVariantDispatchModel(modelSelection);
+      if (model !== "default") {
         // Reject unusable custom slugs; silently using Pi's default would misreport the requested model.
-        const parsed = parsePiModelSlug(modelSelection.model);
+        const parsed = parsePiModelSlug(model);
         if (parsed === null) {
           return yield* new TextGenerationError({
             operation,
-            detail: `Pi model '${modelSelection.model}' must use provider/model format.`,
+            detail: `Pi model '${model}' must use provider/model format.`,
           });
         }
         yield* connection
@@ -80,7 +82,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
                 ? new TextGenerationError({
                     operation,
                     detail:
-                      `Pi rejected model '${modelSelection.model}': ${error.detail ?? "unknown error"}. ` +
+                      `Pi rejected model '${model}': ${error.detail ?? "unknown error"}. ` +
                       "If the model comes from a Pi extension or package, text generation cannot use it " +
                       "because it runs Pi with --no-extensions. Pick a built-in Pi model or one defined " +
                       "in Pi's models.json.",

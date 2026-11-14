@@ -9,6 +9,13 @@ if (!statePath) throw new Error("usage: node hub.mjs <state.json> [port]");
 const scenarios = JSON.parse(
   NodeFS.readFileSync(new URL("./scenarios.json", import.meta.url), "utf8"),
 );
+// Scenario D is a hub with v8 provider discovery, serving the server's contract fixture.
+const discovery = JSON.parse(
+  NodeFS.readFileSync(
+    new URL("../../../../server/src/usage/testFixtures/cliproxyV8Management.json", import.meta.url),
+    "utf8",
+  ),
+);
 const MINUTE = 60_000;
 
 // A window is [usedPercent, minutesFromN0 | null]; null is unknown reset timing.
@@ -59,6 +66,12 @@ NodeHttp.createServer((request, response) => {
   request.on("data", (chunk) => (raw += chunk));
   request.on("end", () => {
     const { scenario, n0 } = JSON.parse(NodeFS.readFileSync(statePath, "utf8"));
+    const v8 = request.url.match(/\/v8\/management\/providers(?:\/([^/]+)\/usage)?$/);
+    if (v8) {
+      const body = v8[1] ? discovery.usage[v8[1]] : discovery.providers;
+      if (scenario !== "D" || !body) return response.writeHead(404).end();
+      return json(response, body);
+    }
     const accounts = scenarios[scenario];
     if (!accounts) return json(response, { files: [] });
     if (request.url.endsWith("/v0/management/auth-files")) {

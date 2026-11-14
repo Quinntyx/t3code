@@ -6,6 +6,8 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+// Bodies the built CLIProxyAPI served for its own Go fixtures (feat/alias-model-routes).
+import v8Management from "./testFixtures/cliproxyV8Management.json" with { type: "json" };
 
 const config = {
   kind: "cliproxy",
@@ -57,6 +59,14 @@ function fixture(
     upstream?: (request: RequestBody) => { status: number; body: unknown };
     cooldownStatus?: number;
     cooldownStatuses?: Record<string, number>;
+    authFilesStatus?: number;
+    /** Omitted for a hub without v8 discovery, which answers 404. */
+    v8?: {
+      readonly providersStatus?: number;
+      readonly providers: unknown;
+      readonly usage: Record<string, unknown>;
+      readonly usageStatus?: Record<string, number>;
+    };
   } = {},
 ) {
   const requests: Array<{ path: string; body?: RequestBody }> = [];
@@ -69,10 +79,27 @@ function fixture(
           ? decodeRequest(new TextDecoder().decode(request.body.body))
           : undefined;
       requests.push({ path, ...(body ? { body } : {}) });
+      const v8 = path.match(/\/v8\/management\/providers(?:\/([^/]+)\/usage)?$/);
+      if (v8) {
+        const usage = v8[1] === undefined ? undefined : decodeURIComponent(v8[1]);
+        if (!options.v8)
+          return HttpClientResponse.fromWeb(request, Response.json({}, { status: 404 }));
+        return HttpClientResponse.fromWeb(
+          request,
+          usage === undefined
+            ? Response.json(options.v8.providers, { status: options.v8.providersStatus ?? 200 })
+            : Response.json(options.v8.usage[usage] ?? { error: "unknown provider" }, {
+                status: options.v8.usageStatus?.[usage] ?? (usage in options.v8.usage ? 200 : 404),
+              }),
+        );
+      }
       if (path.endsWith("/auth-files"))
         return HttpClientResponse.fromWeb(
           request,
-          Response.json({ files: options.accounts ?? accounts }),
+          Response.json(
+            { files: options.accounts ?? accounts },
+            { status: options.authFilesStatus ?? 200 },
+          ),
         );
       if (path.endsWith("/reset-quota"))
         return HttpClientResponse.fromWeb(
@@ -286,8 +313,11 @@ describe("CLIProxyAPI built-in management API", () => {
       const api = yield* test.api;
       yield* api.readAccounts({ ...config, url });
       expect(test.requests.length).toBeGreaterThan(0);
+      expect(test.requests[0]?.path).toBe("/cliproxy/v8/management/providers");
       expect(
-        test.requests.every((request) => request.path.startsWith("/cliproxy/v0/management/")),
+        test.requests
+          .slice(1)
+          .every((request) => request.path.startsWith("/cliproxy/v0/management/")),
       ).toBe(true);
     }),
   );
@@ -300,7 +330,7 @@ describe("CLIProxyAPI built-in management API", () => {
       expect(test.requests.length).toBeGreaterThan(0);
       expect(
         test.requests.every((request) =>
-          request.path.startsWith("/team-management.html/v0/management/"),
+          /^\/team-management\.html\/v[08]\/management\//.test(request.path),
         ),
       ).toBe(true);
     }),
@@ -510,7 +540,12 @@ describe("CLIProxyAPI built-in management API", () => {
       expect((yield* api.consume(config, "first.json", "credit").pipe(Effect.result))._tag).toBe(
         "Failure",
       );
-      expect(test.requests.every((request) => request.path.endsWith("/auth-files"))).toBe(true);
+      expect(
+        test.requests.every(
+          (request) =>
+            request.path.endsWith("/auth-files") || request.path === "/v8/management/providers",
+        ),
+      ).toBe(true);
     }),
   );
 
@@ -547,6 +582,140 @@ describe("CLIProxyAPI built-in management API", () => {
       const result = yield* api.consume(config, "missing.json", "credit").pipe(Effect.result);
       expect(result._tag).toBe("Failure");
       expect(test.requests).toHaveLength(1);
+    }),
+  );
+});
+
+describe("CLIProxyAPI v8 provider discovery", () => {
+  const codexProvider = {
+    id: "codex",
+    name: "Codex",
+    disabled: false,
+    model_ids: ["gpt-6.1-sol"],
+    usage_supported: true,
+  };
+  const disabledProvider = {
+    id: "bitdeer",
+    name: "bitdeer",
+    disabled: true,
+    model_ids: [],
+    usage_supported: true,
+  };
+  const v8 = {
+    providers: {
+      providers: [...v8Management.providers.providers, codexProvider, disabledProvider],
+    },
+    usage: v8Management.usage,
+  };
+
+  it.effect("reads every enabled hub provider and keeps unknown allowances out of the bars", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1788710400000);
+      const test = fixture({ v8 });
+      const api = yield* test.api;
+      const result = yield* api.readAccounts(config);
+      const byId = new Map(result.map((account) => [account.id, account]));
+
+      expect(
+        test.requests.map((request) => request.path).filter((path) => path.includes("/v8/")),
+      ).toEqual([
+        "/v8/management/providers",
+        "/v8/management/providers/mistral/usage",
+        "/v8/management/providers/opencode-go/usage",
+        "/v8/management/providers/openrouter/usage",
+      ]);
+      expect(byId.get("mistral:a795820cc0757f8a")).toEqual({
+        id: "mistral:a795820cc0757f8a",
+        driver: "mistral",
+        label: "mistral",
+        plan: "Pro",
+        usageLimits: {
+          checkedAt: "2026-11-14T04:04:28.000Z",
+          windows: [
+            {
+              id: "vibe",
+              kind: "other",
+              label: "Vibe",
+              usedPercent: 40,
+              resetsAt: "2026-12-01T00:00:00.000Z",
+            },
+            {
+              id: "api",
+              kind: "other",
+              label: "API",
+              usedPercent: 25,
+              resetsAt: "2026-12-01T00:00:00.000Z",
+            },
+          ],
+        },
+      });
+      expect(
+        byId
+          .get("opencode-go:a66e73f8b1866a2b")
+          ?.usageLimits.windows.map((window) => [window.id, window.kind, window.usedPercent]),
+      ).toEqual([
+        ["rolling", "session", 12.5],
+        ["weekly", "weekly", 50],
+        ["monthly", "monthly", 75],
+      ]);
+      // OpenRouter reports spend with no cap: no bar, never 0% or unlimited.
+      expect(byId.get("openrouter:2982a7cb4bdfb064")?.usageLimits).toMatchObject({
+        windows: [],
+        unavailable: { reason: "unsupported" },
+      });
+      expect(byId.get("openrouter:0e843b7e13496218")?.usageLimits).toMatchObject({
+        windows: [],
+        unavailable: { reason: "probeFailed", message: "usage endpoint returned HTTP 401" },
+      });
+      expect(
+        [...byId.keys()].some((id) => id.startsWith("inco:") || id.startsWith("bitdeer:")),
+      ).toBe(false);
+      // Codex keeps its native reader, so reset credits stay redeemable.
+      expect(byId.get("first.json")).toMatchObject({
+        driver: "codex",
+        email: "first@example.com",
+        usageLimits: { resetCredits: { availableCount: 2, nextCreditId: "first" } },
+      });
+    }),
+  );
+
+  it.effect.each([401, 403, 500])(
+    "reports a HTTP %i provider list instead of falling back to the legacy reader",
+    (status) =>
+      Effect.gen(function* () {
+        const test = fixture({ v8: { ...v8, providersStatus: status } });
+        const api = yield* test.api;
+        const error = yield* Effect.flip(api.readAccounts(config));
+        expect(error.detail).toBe(`The hub answered with HTTP ${status}.`);
+        expect(test.requests.map((request) => request.path)).toEqual(["/v8/management/providers"]);
+      }),
+  );
+
+  it.effect("isolates a provider whose usage read fails without publishing its body", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        v8: {
+          ...v8,
+          usage: { ...v8.usage, mistral: { token: "sk-do-not-publish" } },
+          usageStatus: { mistral: 502 },
+        },
+        authFilesStatus: 500,
+      });
+      const api = yield* test.api;
+      const result = yield* api.readAccounts(config);
+      expect(JSON.stringify(result)).not.toContain("sk-do-not-publish");
+      expect(result.find((account) => account.id === "mistral")?.usageLimits).toMatchObject({
+        windows: [],
+        unavailable: { reason: "probeFailed" },
+      });
+      expect(
+        result.find((account) => account.id === "opencode-go:a66e73f8b1866a2b")?.usageLimits
+          .windows,
+      ).toHaveLength(3);
+      // Without the native account list, Codex still reads through the hub's own adapter.
+      expect(test.requests.map((request) => request.path)).toContain(
+        "/v8/management/providers/codex/usage",
+      );
     }),
   );
 });
