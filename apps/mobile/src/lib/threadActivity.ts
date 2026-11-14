@@ -1114,8 +1114,14 @@ function deriveThreadFeedRunFolds(
   let runlessKey: RunId | null = null;
   let responseKey: RunId | null = null;
   let pendingUserBoundary: string | null = null;
+  const latestResponseRunIds = new Set<RunId>();
+  let latestResponseHasDelegates = false;
   for (const [index, entry] of feed.entries()) {
     if (entry.type === "message" && entry.message.role === "user") {
+      if (!isSteerMessage(entry.message)) {
+        latestResponseRunIds.clear();
+        latestResponseHasDelegates = false;
+      }
       pendingUserBoundary = entry.message.createdAt;
       runlessKey = entry.message.runId == null ? RunId.make(`runless:${entry.id}`) : null;
       responseKey = entry.message.runId ?? runlessKey;
@@ -1142,12 +1148,14 @@ function deriveThreadFeedRunFolds(
       groupsByRunId.set(runId, group);
     }
     group.entries.push(entry);
+    latestResponseRunIds.add(runId);
     if (entry.type === "message") {
       terminalAssistantMessageIdByRun.set(runId, entry.id);
     }
     if (entry.type !== "activity-group") continue;
     for (const activity of entry.activities) {
       const item = activity.projectedItem.item;
+      if (item.type === "subagent") latestResponseHasDelegates = true;
       if (item.type === "run_interrupt_result") interruptedRunIds.add(runId);
       if (
         runId === runlessKey &&
@@ -1165,10 +1173,18 @@ function deriveThreadFeedRunFolds(
   for (const [runId, group] of groupsByRunId) {
     if (
       runId === activeRunId ||
+      (activeRunId !== null && latestResponseHasDelegates && latestResponseRunIds.has(runId)) ||
       (runlessWorkActive && runId === runlessKey) ||
       interruptedRunIds.has(runId) ||
       failedRunIds.has(runId) ||
-      group.entries.some((entry) => entry.type === "message" && entry.message.streaming)
+      group.entries.some(
+        (entry) =>
+          (entry.type === "message" && entry.message.streaming) ||
+          (entry.type === "activity-group" &&
+            entry.activities.some((activity) =>
+              isLiveSubagentTurnItem(activity.projectedItem.item),
+            )),
+      )
     ) {
       continue;
     }
@@ -1188,10 +1204,7 @@ function deriveThreadFeedRunFolds(
                   activity.prominent ||
                   activity.workEntry.questionAnswer !== undefined ||
                   activity.projectedItem.item.type === "notification" ||
-                  activity.projectedItem.item.type === "handoff" ||
-                  // A child still working outlives its settled launching run;
-                  // its group stays visible while any member is live.
-                  isLiveSubagentTurnItem(activity.projectedItem.item),
+                  activity.projectedItem.item.type === "handoff",
               )
             ),
         )
@@ -1316,7 +1329,7 @@ interface ThreadFeedPresentationBuild {
   readonly runlessWorkActive: boolean;
   readonly display: ThreadFeedDisplay;
   readonly rows: ReadonlyArray<ThreadFeedEntry>;
-  /** Feed entry `entry` is a user message whose rows start at `rowsLength`. */
+  /** Feed entry `entry` starts a user response whose rows start at `rowsLength`. */
   readonly restarts: ReadonlyArray<{ readonly entry: number; readonly rowsLength: number }>;
   /** Where each run's entries begin, so a reused prefix never shares a run with the rest. */
   readonly firstEntryByRun: ReadonlyMap<RunId, number>;
@@ -1339,15 +1352,15 @@ function feedEntryRunId(entry: ThreadFeedEntry): RunId | null {
   return entry.type === "message" ? (entry.message.runId ?? null) : entry.runId;
 }
 
-function isUserMessageEntry(entry: ThreadFeedEntry | undefined): boolean {
-  return entry?.type === "message" && entry.message.role === "user";
+function isUserResponseStart(entry: ThreadFeedEntry | undefined): boolean {
+  return (
+    entry?.type === "message" && entry.message.role === "user" && !isSteerMessage(entry.message)
+  );
 }
 
 /**
- * A user message starts every fold and is never hidden or grouped, so the
- * rows before it depend only on the entries before it, their runs, and the
- * shared inputs. Returns the user message entry to restart from, or null to
- * present the whole feed.
+ * Delegate wakes and steers share response-wide folding state, so a reused
+ * prefix must end before the non-steer user message that began the response.
  */
 function presentationRestart(
   previous: ThreadFeedPresentationBuild | null,
@@ -1375,7 +1388,7 @@ function presentationRestart(
   let index = previous.restarts.length - 1;
   while (index >= 0 && previous.restarts[index]!.entry > firstChanged) index -= 1;
   const restart = previous.restarts[index];
-  if (restart === undefined || !isUserMessageEntry(feed[restart.entry])) return null;
+  if (restart === undefined || !isUserResponseStart(feed[restart.entry])) return null;
   for (let entryIndex = restart.entry; entryIndex < feed.length; entryIndex += 1) {
     const runId = feedEntryRunId(feed[entryIndex]!);
     const firstEntry = runId === null ? undefined : previous.firstEntryByRun.get(runId);
@@ -1629,7 +1642,7 @@ export function deriveThreadFeedPresentation(
   for (let sourceIndex = 0; sourceIndex < sourceFeed.length; sourceIndex += 1) {
     const entry = sourceFeed[sourceIndex]!;
     const feedIndex = retainedFeedIndices[sourceIndex]!;
-    if (isUserMessageEntry(entry)) {
+    if (isUserResponseStart(entry)) {
       restarts.push({ entry: feedIndex, rowsLength: result.length });
     }
     const isActiveTailGroup =
