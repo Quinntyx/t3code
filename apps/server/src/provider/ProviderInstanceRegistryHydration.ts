@@ -201,7 +201,7 @@ export const layer: Layer.Layer<
     }).pipe(
       Layer.provide(ProviderOrchestrationAdapterInfrastructure.layer),
       Layer.provide(AcpRegistrySupport.layerFromHost),
-      Layer.provide(ProviderHostLive.layer),
+      Layer.provide(ProviderHostLive.layerWithHubModels),
       Layer.provide(Layer.succeed(HostProcess.Environment, hostEnvironment)),
       Layer.provide(SecretResolver.layer),
     );

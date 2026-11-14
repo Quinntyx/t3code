@@ -33,6 +33,14 @@ Update installer-managed Pi with `pi update`. If another package manager owns th
 update it through that manager instead. For example, a Nix profile installation uses
 `nix profile upgrade pi`.
 
+## Models from a CLIProxyAPI hub
+
+When a [connected hub](usage.md#connect-a-cliproxyapi-hub) supports provider discovery, every Pi
+provider whose `baseUrl` is on the same host and port as the hub's URL also gets every model the hub
+exposes. Keep the provider and its key in Pi's `models.json` with at least one model, which the
+added models copy for reasoning, input types, and limits. A model you list yourself keeps its own
+settings. The list follows the hub within about a minute; an unreachable hub adds nothing.
+
 ## What Carries Over
 
 T3 Code discovers the models reported by Pi and exposes their supported thinking levels. The

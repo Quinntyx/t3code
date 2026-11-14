@@ -66,9 +66,13 @@ NodeHttp.createServer((request, response) => {
   request.on("data", (chunk) => (raw += chunk));
   request.on("end", () => {
     const { scenario, n0 } = JSON.parse(NodeFS.readFileSync(statePath, "utf8"));
-    const v8 = request.url.match(/\/v8\/management\/providers(?:\/([^/]+)\/usage)?$/);
+    const v8 = request.url.match(/\/v8\/management\/(?:models|providers(?:\/([^/]+)\/usage)?)$/);
     if (v8) {
-      const body = v8[1] ? discovery.usage[v8[1]] : discovery.providers;
+      const body = request.url.endsWith("/models")
+        ? discovery.models
+        : v8[1]
+          ? discovery.usage[v8[1]]
+          : discovery.providers;
       if (scenario !== "D" || !body) return response.writeHead(404).end();
       return json(response, body);
     }

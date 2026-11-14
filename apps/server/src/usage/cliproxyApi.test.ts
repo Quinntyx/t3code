@@ -66,6 +66,7 @@ function fixture(
       readonly providers: unknown;
       readonly usage: Record<string, unknown>;
       readonly usageStatus?: Record<string, number>;
+      readonly models?: unknown;
     };
   } = {},
 ) {
@@ -79,6 +80,13 @@ function fixture(
           ? decodeRequest(new TextDecoder().decode(request.body.body))
           : undefined;
       requests.push({ path, ...(body ? { body } : {}) });
+      if (path.endsWith("/v8/management/models"))
+        return HttpClientResponse.fromWeb(
+          request,
+          options.v8?.models === undefined
+            ? Response.json({}, { status: 404 })
+            : Response.json(options.v8.models),
+        );
       const v8 = path.match(/\/v8\/management\/providers(?:\/([^/]+)\/usage)?$/);
       if (v8) {
         const usage = v8[1] === undefined ? undefined : decodeURIComponent(v8[1]);
@@ -676,6 +684,26 @@ describe("CLIProxyAPI v8 provider discovery", () => {
         email: "first@example.com",
         usageLimits: { resetCredits: { availableCount: 2, nextCreditId: "first" } },
       });
+    }),
+  );
+
+  it.effect("reads the hub's exposed model catalog", () =>
+    Effect.gen(function* () {
+      const api = yield* fixture({ v8: { ...v8, models: v8Management.models } }).api;
+      expect(yield* api.readModels(config)).toEqual([
+        "deepseek-v4.1-flash:fast",
+        "explode-mid",
+        "hot-reloaded-alias",
+        "mid-stream-route",
+        "mimo-v2.6-pro",
+        "my-custom-model",
+        "my-custom-model:fast",
+        "z-ai/glm-5.3-flash",
+      ]);
+      const legacy = yield* fixture().api;
+      expect((yield* Effect.flip(legacy.readModels(config))).detail).toBe(
+        "The hub answered with HTTP 404.",
+      );
     }),
   );
 

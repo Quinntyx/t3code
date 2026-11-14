@@ -115,6 +115,8 @@ const HubProviders = Schema.Struct({
   ),
 });
 type HubProvider = (typeof HubProviders.Type)["providers"][number];
+// GET /v8/management/models, the hub's exposed catalog in OpenAI list form.
+const HubModels = Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) });
 const OptionalNumber = Schema.optional(Schema.NullOr(Schema.Number));
 const HubUsageWindow = Schema.Struct({
   id: Schema.String,
@@ -144,6 +146,7 @@ const HubUsage = Schema.Struct({
 const decodeAuthFiles = Schema.decodeUnknownEffect(AuthFiles);
 const decodeHubProviders = Schema.decodeUnknownEffect(HubProviders);
 const decodeHubUsage = Schema.decodeUnknownEffect(HubUsage);
+const decodeHubModels = Schema.decodeUnknownEffect(HubModels);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeApiResponse = Schema.decodeUnknownEffect(ApiResponse);
 const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(CreditList));
@@ -683,5 +686,24 @@ export const makeCliproxyApi = Effect.gen(function* () {
       ),
     );
   });
-  return { readAccounts, consume, clearAccountCooldowns };
+  const readModels = Effect.fn("CliproxyApi.readModels")(function* (
+    hub: CliproxyHub,
+  ): Effect.fn.Return<ReadonlyArray<string>, UsageLimitSourceError> {
+    return yield* managementRequest(hub, "v8/management/models").pipe(
+      Effect.flatMap(decodeHubModels),
+      Effect.map((response) => [...new Set(response.data.map((model) => model.id))]),
+      Effect.mapError((error) =>
+        isUsageLimitSourceError(error)
+          ? error
+          : new UsageLimitSourceError({
+              detail:
+                HttpClientError.isHttpClientError(error) || Cause.isTimeoutError(error)
+                  ? describeManagementFailure(error)
+                  : "The hub returned an unexpected model list.",
+            }),
+      ),
+    );
+  });
+
+  return { readAccounts, readModels, consume, clearAccountCooldowns };
 });
