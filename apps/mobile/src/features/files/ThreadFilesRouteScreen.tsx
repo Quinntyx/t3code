@@ -14,6 +14,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { EnvironmentId, type ProjectReadFileResult, ThreadId } from "@t3tools/contracts";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
+  hostPreviewMimeTypeFromExtension,
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   mediaMimeTypeFromExtension,
@@ -678,19 +679,35 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   const mediaSource: MediaActionsSource | undefined =
     environmentId !== null &&
     relativePath !== null &&
-    assetPreview.resource !== null &&
-    "path" in assetPreview.resource &&
-    typeof assetPreview.resource.path === "string" &&
-    (isImageFile || isVideoFile)
+    targetPath !== null &&
+    cwd !== null &&
+    !metadataPending &&
+    directoryPath === null
       ? {
-          reference: mediaFileReference(assetPreview.resource.path, cwd),
+          reference: mediaFileReference(targetPath, cwd),
           name: basename(relativePath),
           mimeType:
-            mediaMimeTypeFromExtension(relativePath.slice(relativePath.lastIndexOf("."))) ??
-            "application/octet-stream",
+            (isImageFile || isVideoFile
+              ? mediaMimeTypeFromExtension(relativePath.slice(relativePath.lastIndexOf(".")))
+              : hostPreviewMimeTypeFromExtension(
+                  relativePath.slice(relativePath.lastIndexOf(".")),
+                )) ?? "application/octet-stream",
           environmentId,
           ...(threadId === null ? {} : { threadId }),
-          resource: assetPreview.resource,
+          resource:
+            threadId === null
+              ? {
+                  _tag: "draft-workspace-file",
+                  cwd,
+                  path: relativePath,
+                  disposition: "attachment",
+                }
+              : {
+                  _tag: "media-file",
+                  threadId,
+                  path: targetPath,
+                  disposition: "attachment",
+                },
         }
       : undefined;
   const mediaActions = useMediaActions(mediaSource);
@@ -817,9 +834,11 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             .filter(({ id }) => id !== "open-file")
             .map((action) => ({
               id: action.id,
-              title: action.title,
+              title:
+                action.id === "save" && !mediaActions.sharing ? "Download or share" : action.title,
               icon:
-                action.id === "save" ? ("square.and.arrow.up" as const) : ("doc.on.doc" as const),
+                action.id === "save" ? ("arrow.down.to.line" as const) : ("doc.on.doc" as const),
+              disabled: action.disabled,
               onPress: action.run,
             }))
         : [
