@@ -346,6 +346,7 @@ overrides:
   '@types/ws@^8': 8.18.2
   undici@^8: 8.12.4
   ws@^8: 8.22.0
+  unenv: 2.0.0-rc.24
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vite-plus: 1.4.0
   yaml: ^2.9.0

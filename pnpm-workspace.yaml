@@ -205,6 +205,8 @@ overrides:
   "@types/ws@^8": "catalog:"
   "undici@^8": "catalog:"
   "ws@^8": "catalog:"
+  # The Cloudflare preset peers on rc.24; a fresh resolve otherwise selects rc.25.
+  unenv: 2.0.0-rc.24
   vite: "catalog:"
   vite-plus: "catalog:"
   yaml: "catalog:"
