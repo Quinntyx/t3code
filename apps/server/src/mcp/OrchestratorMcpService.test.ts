@@ -433,6 +433,7 @@ describe("OrchestratorMcpService", () => {
       let finished = false;
       let pendingRequest = false;
       let owned = true;
+      let asksAnswer = false;
       const waitTimeouts: Array<number> = [];
       const dispatched: Array<OrchestrationV2ServerCommand> = [];
       const parentProjection = () =>
@@ -457,7 +458,11 @@ describe("OrchestratorMcpService", () => {
       const childRun = () => ({
         id: RunId.make("run:mcp-next-child"),
         ordinal: 1,
-        status: finished ? ("completed" as const) : ("running" as const),
+        status: finished
+          ? ("completed" as const)
+          : asksAnswer
+            ? ("waiting" as const)
+            : ("running" as const),
         ...(owned ? { delegatedTaskId: taskId } : {}),
       });
       const childProjection = () =>
@@ -532,6 +537,11 @@ describe("OrchestratorMcpService", () => {
         assert.isTrue(asking.timedOut);
         assert.notProperty(asking, "next");
         pendingRequest = false;
+        // Its own child asking a question is still its task: no watch on top of the task's wake.
+        asksAnswer = true;
+        const blocked = yield* service.waitForThread(scope, { threadId: childThreadId });
+        assert.notProperty(blocked, "next");
+        asksAnswer = false;
         assert.deepEqual(dispatched, []);
 
         // A thread it does not own: past a minute, a watch wakes the caller instead.
@@ -554,6 +564,15 @@ describe("OrchestratorMcpService", () => {
           runId: RunId.make("run:mcp-next-child"),
           title: "Child task",
         });
+        // A settled-work wait follows more than a watch can, so it still blocks in full.
+        const settledWork = yield* service.waitForThread(scope, {
+          threadId: childThreadId,
+          timeoutMs: 30 * 60_000,
+          untilDelegatedWorkSettled: true,
+        });
+        assert.notProperty(settledWork, "next");
+        assert.equal(waitTimeouts.at(-1), 30 * 60_000);
+        assert.lengthOf(dispatched, 1);
         owned = true;
 
         finished = true;

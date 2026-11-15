@@ -7,6 +7,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,6 +18,7 @@ import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { runOutcome } from "./RestartBackgroundNote.ts";
@@ -46,6 +48,8 @@ const FollowRetrySchedule = Context.Reference<Schedule.Schedule<unknown>>(
 const isFinal = (error: OrchestratorMcpFailure) =>
   error.code === "capability_denied" ||
   error.code === "invalid_request" ||
+  error.code === "runtime_mode_escalation_denied" ||
+  error.code === "interaction_mode_escalation_denied" ||
   error.code === "thread_not_found" ||
   error.code === "run_not_found";
 
@@ -63,6 +67,7 @@ export class ThreadWatchReactor extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
+  const eventSink = yield* EventSink.EventSinkV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const forwarding = yield* PeerForwarding.PeerForwarding;
@@ -93,19 +98,25 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.catchTags({ OrchestratorDispatchError: () => Effect.void }));
   };
 
-  const outcomeHere = Effect.fnUntraced(function* (watch: OrchestrationV2ThreadWatch) {
+  const outcomeHere = Effect.fn("ThreadWatchReactor.outcomeHere")(function* (
+    watch: OrchestrationV2ThreadWatch,
+  ) {
     const target = yield* projections
       .getThreadRecords(watch.threadId, ["runtimeRequests"])
       .pipe(Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.undefined }));
     if (target === undefined || target.thread.deletedAt !== null) {
       return { kind: "gone" } as const;
     }
+    // Only a question asked since the wait began: one the watcher was already woken for
+    // would wake it again each time it waits.
+    const startedAt = Date.parse(watch.startedAt);
     if (
       target.runtimeRequests.some(
         (request) =>
           request.status === "pending" &&
           request.kind !== "auth_refresh" &&
-          request.responseCapability.type === "live",
+          request.responseCapability.type === "live" &&
+          DateTime.toEpochMillis(request.createdAt) >= startedAt,
       )
     ) {
       return { kind: "needs_input" } as const;
@@ -128,27 +139,28 @@ export const make = Effect.gen(function* () {
       : ({ kind: "ended", status: runOutcome(waited.run) } as const);
   });
 
-  const stillWatching = (watcherThreadId: ThreadId, watch: OrchestrationV2ThreadWatch) =>
-    projections
-      .getThread(watcherThreadId)
-      .pipe(
-        Effect.map(
-          (thread) =>
-            thread.deletedAt === null &&
-            (thread.threadWatches ?? []).some(
-              (candidate) =>
-                sameThreadWatchTarget(candidate, watch) && candidate.startedAt === watch.startedAt,
-            ),
-        ),
-      );
+  /** The watcher's provider, while it still has this watch. */
+  const watcherOf = (watcherThreadId: ThreadId, watch: OrchestrationV2ThreadWatch) =>
+    projections.getThread(watcherThreadId).pipe(
+      Effect.map((thread) =>
+        thread.deletedAt === null &&
+        (thread.threadWatches ?? []).some(
+          (candidate) =>
+            sameThreadWatchTarget(candidate, watch) && candidate.startedAt === watch.startedAt,
+        )
+          ? thread
+          : undefined,
+      ),
+      Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.undefined }),
+    );
 
   /** One wait there; true once the watch has ended. */
-  const followOnce = Effect.fnUntraced(function* (
+  const followOnce = Effect.fn("ThreadWatchReactor.followOnce")(function* (
     watcherThreadId: ThreadId,
     watch: OrchestrationV2ThreadWatch & { readonly environmentId: EnvironmentId },
   ) {
-    if (!(yield* stillWatching(watcherThreadId, watch))) return true;
-    const watcher = yield* projections.getThread(watcherThreadId);
+    const watcher = yield* watcherOf(watcherThreadId, watch);
+    if (watcher === undefined) return true;
     const scope = {
       environmentId: hereId,
       requestNamespace: `thread-watch:${watcherThreadId}`,
@@ -167,10 +179,7 @@ export const make = Effect.gen(function* () {
         runId: watch.runId,
         timeoutMs: FOLLOW_WAIT_MS,
       })
-      .pipe(
-        Effect.catchIf(isFinal, () => Effect.undefined),
-        Effect.retry({ schedule: followRetry, while: (error) => !isFinal(error) }),
-      );
+      .pipe(Effect.catchIf(isFinal, () => Effect.undefined));
     if (waited === undefined || waited.status === "idle") {
       yield* end(watcherThreadId, watch, { kind: "gone" });
       return true;
@@ -187,6 +196,8 @@ export const make = Effect.gen(function* () {
       if (environmentId === undefined || following.has(key)) return Effect.void;
       following.add(key);
       return followOnce(watcherThreadId, { ...watch, environmentId }).pipe(
+        // Anything short of final, there or here, is worth another look after a pause.
+        Effect.retry({ schedule: followRetry }),
         Effect.repeat({ while: (done) => !done }),
         Effect.ignoreCause({ log: true }),
         Effect.ensuring(Effect.sync(() => following.delete(key))),
@@ -195,7 +206,7 @@ export const make = Effect.gen(function* () {
       );
     });
 
-  const check = Effect.fnUntraced(function* (
+  const check = Effect.fn("ThreadWatchReactor.check")(function* (
     watcherThreadId: ThreadId,
     watch: OrchestrationV2ThreadWatch,
   ) {
@@ -222,6 +233,8 @@ export const make = Effect.gen(function* () {
       watches,
       (watch) =>
         check(watcherThreadId, watch).pipe(
+          // A wake missed to a passing failure would wait for the next restart.
+          Effect.retry({ schedule: followRetry, times: 5 }),
           Effect.catchCause((cause) =>
             Effect.logWarning("checking a thread watch failed", {
               watcherThreadId,
@@ -294,11 +307,11 @@ export const make = Effect.gen(function* () {
   const start: ThreadWatchReactor["Service"]["start"] = () =>
     forkParked(
       Effect.gen(function* () {
-        // Subscribed before the sweep, so a run that ends between the two is still seen.
-        yield* Stream.runForEach(engine.streamDomainEvents, handle).pipe(
-          Effect.ignoreCause({ log: true }),
-          Effect.forkIn(followers, { startImmediately: true }),
-        );
+        // Events from before the sweep replay after it, so a run that ends during it is seen.
+        const afterSequence = yield* eventSink.latestSequence();
+        yield* Stream.runForEach(engine.streamStoredEventsFrom({ afterSequence }), (stored) =>
+          handle(stored.event),
+        ).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(followers));
         const watchers = yield* projections.getThreadWatchers();
         for (const watcher of watchers) {
           if (!watchesByWatcher.has(watcher.id)) remember(watcher.id, watcher.threadWatches);

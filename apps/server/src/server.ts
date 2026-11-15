@@ -863,7 +863,14 @@ const layerMakeRoutes = Layer.mergeAll(
   // Wakes threads whose watched threads end, here or over a link, including after a restart.
   Layer.effectDiscard(
     ThreadWatchReactor.ThreadWatchReactor.pipe(Effect.flatMap((watches) => watches.start())),
-  ).pipe(Layer.provide(ThreadWatchReactor.layer.pipe(Layer.provide(ProjectionStoreV2.layer)))),
+  ).pipe(
+    Layer.provide(
+      ThreadWatchReactor.layer.pipe(
+        Layer.provide(ProjectionStoreV2.layer),
+        Layer.provide(RuntimeLayer.layerEventSink),
+      ),
+    ),
+  ),
   // Retargets and restacks pull requests stacked on one T3 merged.
   Layer.effectDiscard(
     PullRequestStackService.PullRequestStackService.pipe(

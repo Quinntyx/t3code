@@ -3237,7 +3237,14 @@ const make = Effect.gen(function* () {
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, false);
       // An agent's turn should not sit in a tool call; past a minute it waits as a watch.
-      const watcher = parent !== undefined && parent.thread.id !== input.threadId ? parent : null;
+      // A settled-work wait follows more than the run, which a watch does not.
+      const watcher =
+        parent !== undefined &&
+        parent.thread.id !== input.threadId &&
+        input.untilDelegatedWorkSettled !== true
+          ? parent
+          : null;
+      const waitStartedAt = DateTime.formatIso(yield* DateTime.now);
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
@@ -3252,9 +3259,8 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
       const taskId = result.run?.delegatedTaskId;
-      const ownedTask =
+      const owned =
         result.timedOut &&
-        status !== "waiting" &&
         parent !== undefined &&
         taskId !== undefined &&
         (yield* loadTasks(parent.thread.id, [taskId])).some(
@@ -3266,14 +3272,18 @@ const make = Effect.gen(function* () {
             task.completionDelivery?.state !== "disposed",
         );
       // A child waiting on a question or approval needs an answer, not a wake.
-      const childRequests = ownedTask
-        ? (yield* threadManagement
-            .getThreadRecords(input.threadId, ["runtimeRequests"])
-            .pipe(Effect.mapError(threadManagementFailure))).runtimeRequests
-        : [];
+      const childRequests =
+        owned && status !== "waiting"
+          ? (yield* threadManagement
+              .getThreadRecords(input.threadId, ["runtimeRequests"])
+              .pipe(Effect.mapError(threadManagementFailure))).runtimeRequests
+          : [];
       const wakesCaller =
-        ownedTask && !childRequests.some((request) => request.status === "pending");
-      const watches = result.timedOut && !ownedTask && watcher !== null && result.run !== null;
+        owned &&
+        status !== "waiting" &&
+        !childRequests.some((request) => request.status === "pending");
+      // Its delegated task's completion already wakes the caller.
+      const watches = result.timedOut && !owned && watcher !== null && result.run !== null;
       if (watches) {
         yield* threadManagement
           .dispatch(
@@ -3281,7 +3291,7 @@ const make = Effect.gen(function* () {
               threadId: input.threadId,
               runId: result.run.id,
               title: target.thread.title,
-              startedAt: DateTime.formatIso(yield* DateTime.now),
+              startedAt: waitStartedAt,
             }),
           )
           .pipe(Effect.mapError(threadManagementFailure));

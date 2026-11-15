@@ -3533,9 +3533,82 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         "can no longer be reached",
       );
 
+      // A blocking question asked after the wait began wakes the watcher once; waiting again
+      // does not wake it for the same question.
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("thread-watch-target-follow-up"),
+        threadId: targetId,
+        messageId: MessageId.make("thread-watch-target-follow-up"),
+        text: "Now benchmark it.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* outbox.cancelUnsettled({
+        threadId: targetId,
+        effectTypes: ["provider-turn.start"],
+        reason: "provider execution is outside this thread watch test",
+      });
+      const followUp = (yield* orchestrator.getThreadProjection(targetId)).runs.at(-1)!;
+      assert.notEqual(followUp.id, run.id);
       yield* TestClock.adjust(1);
-      const again = { ...watch, startedAt: DateTime.formatIso(yield* DateTime.now) };
+      const asking = {
+        ...watch,
+        runId: followUp.id,
+        startedAt: DateTime.formatIso(yield* DateTime.now),
+      };
+      yield* orchestrator.dispatch(threadWatchStartCommand(watcherId, asking));
+      yield* TestClock.adjust(1);
+      const askedAt = yield* DateTime.now;
+      const question = {
+        id: EventId.make("thread-watch-target-question"),
+        type: "runtime-request.updated",
+        threadId: targetId,
+        nodeId: followUp.rootNodeId,
+        occurredAt: askedAt,
+        payload: {
+          id: RuntimeRequestId.make("thread-watch-target-question"),
+          nodeId: followUp.rootNodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: {
+            type: "live",
+            providerSessionId: ProviderSessionId.make("thread-watch-target-session"),
+          },
+          createdAt: askedAt,
+          resolvedAt: null,
+        },
+      } as OrchestrationV2DomainEvent;
+      yield* eventSink.write({
+        commandId: CommandId.make("ask:thread-watch-target"),
+        events: [question],
+      });
+      yield* reactor.handle({
+        type: "thread.metadata-updated",
+        threadId: watcherId,
+        payload: (yield* watcher()).thread,
+      } as OrchestrationV2DomainEvent);
+      yield* reactor.handle(question);
+      const asked = yield* watcher();
+      assert.deepEqual(asked.thread.threadWatches, []);
+      assert.include(
+        asked.messages.map((message) => message.text).join("\n"),
+        `Thread "Migrate the cache" you waited on (threadId ${targetId}) stopped to ask for input`,
+      );
+
+      yield* TestClock.adjust(1);
+      const again = { ...asking, startedAt: DateTime.formatIso(yield* DateTime.now) };
       yield* orchestrator.dispatch(threadWatchStartCommand(watcherId, again));
+      yield* reactor.handle({
+        type: "thread.metadata-updated",
+        threadId: watcherId,
+        payload: (yield* watcher()).thread,
+      } as OrchestrationV2DomainEvent);
+      yield* reactor.handle(question);
       assert.deepEqual((yield* watcher()).thread.threadWatches, [again]);
       yield* orchestrator.dispatch({
         type: "thread.stop",

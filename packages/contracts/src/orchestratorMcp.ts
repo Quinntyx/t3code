@@ -204,7 +204,7 @@ const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_T
 
 // Set on an agent's wait that timed out on a thread it does not own: T3 now watches it.
 export const ORCHESTRATOR_MCP_THREAD_WATCH_NEXT =
-  "T3 watches this thread and wakes you when its run ends or it asks for input, so end your turn. Do not wait on it or poll it.";
+  "T3 watches this thread and wakes you when its run ends, so end your turn. Do not wait on it or poll it.";
 
 // Optional: linked environments on older versions omit it.
 const OrchestratorMcpExecutedModel = Schema.NullOr(Schema.String).annotate({

@@ -230,7 +230,10 @@ const make = Effect.gen(function* () {
     input: OrchestratorMcpThreadWaitInput,
   ) {
     const watcherThreadId = scope.thread?.threadId;
-    if (watcherThreadId === undefined) return yield* waitForThread(scope, environmentId, input);
+    if (watcherThreadId === undefined || input.untilDelegatedWorkSettled === true) {
+      return yield* waitForThread(scope, environmentId, input);
+    }
+    const waitStartedAt = DateTime.formatIso(yield* DateTime.now);
     const result = yield* waitForThread(scope, environmentId, {
       ...input,
       timeoutMs: Math.min(
@@ -258,7 +261,7 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           environmentId,
           runId: result.runId,
-          startedAt: DateTime.formatIso(yield* DateTime.now),
+          startedAt: waitStartedAt,
         }),
       )
       .pipe(Effect.mapError(unavailable));
