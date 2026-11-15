@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
+  OrchestrationV2ThreadWatch,
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
   ThreadId,
@@ -69,15 +70,12 @@ export function deriveBlockedOnThreadWait(input: {
     ) {
       continue;
     }
-    if (item.type !== "dynamic_tool") return false;
-    const tool = resolveT3McpToolId(item.toolName);
+    // A thread wait is a short call that becomes a watch, so only a blocking delegate holds here.
     if (
-      tool !== "t3_thread_wait" &&
-      !(
-        tool === "delegate_task" &&
-        Predicate.isObject(item.input) &&
-        Reflect.get(item.input, "mode") === "wait"
-      )
+      item.type !== "dynamic_tool" ||
+      resolveT3McpToolId(item.toolName) !== "delegate_task" ||
+      !Predicate.isObject(item.input) ||
+      Reflect.get(item.input, "mode") !== "wait"
     ) {
       return false;
     }
@@ -248,6 +246,7 @@ export function derivePendingBackgroundWork(input: {
   readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
   readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
   readonly awaitedScheduledTaskIds?: ReadonlyArray<string> | undefined;
+  readonly threadWatches?: ReadonlyArray<OrchestrationV2ThreadWatch> | undefined;
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const hasActiveRun =
     input.hasActiveRun ??
@@ -266,8 +265,13 @@ export function derivePendingBackgroundWork(input: {
     kind: "monitor",
     awaited: true,
   }));
+  const watchTasks = [
+    ...pullRequestWatchTasks(input.pullRequests),
+    ...scheduledTasks,
+    ...(input.threadWatches ?? []).map(threadWatchTask),
+  ];
   if (input.latestRun == null) {
-    return [...pullRequestWatchTasks(input.pullRequests), ...scheduledTasks];
+    return watchTasks;
   }
   if (!isLatestRunSettledForBackgroundWait(input.latestRun)) {
     return [];
@@ -306,8 +310,7 @@ export function derivePendingBackgroundWork(input: {
     byTaskId.set(taskId, pendingTaskFromTurnItem(taskId, item));
   }
 
-  for (const task of [...pullRequestWatchTasks(input.pullRequests), ...scheduledTasks])
-    byTaskId.set(task.taskId, task);
+  for (const task of watchTasks) byTaskId.set(task.taskId, task);
 
   return Array.from(byTaskId.values());
 }
@@ -354,4 +357,18 @@ function pullRequestWatchTasks(
           },
         ],
   );
+}
+
+/** Unique within the watching thread: it watches each thread at most once. */
+const threadWatchTaskId = (watch: Pick<OrchestrationV2ThreadWatch, "environmentId" | "threadId">) =>
+  `thread-watch:${watch.environmentId ?? "here"}/${watch.threadId}`;
+
+function threadWatchTask(watch: OrchestrationV2ThreadWatch): PendingBackgroundWorkTask {
+  return {
+    taskId: threadWatchTaskId(watch),
+    description: watch.title ?? "Another thread",
+    kind: "monitor",
+    awaited: true,
+    ...(watch.environmentId === undefined ? { watchedThreadId: watch.threadId } : {}),
+  };
 }

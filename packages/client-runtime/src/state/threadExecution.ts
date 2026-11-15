@@ -325,6 +325,7 @@ export function deriveThreadStructureRuntime(
       runs: projection.runs,
       pullRequests: projection.thread.pullRequests,
       awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
+      threadWatches: projection.thread.threadWatches,
     }),
   );
   // A pull request watch can hold a thread that never ran.
@@ -593,7 +594,12 @@ export function presentPendingBackgroundWork(
         kind: task.kind,
         label: named ? label : BACKGROUND_WORK_KINDS[task.kind].singular,
         named,
-        childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
+        childThreadId:
+          task.kind === "subagent"
+            ? task.childThreadId
+            : task.kind === "monitor"
+              ? task.watchedThreadId
+              : undefined,
       };
     })
     // `map` returned a new array; Hermes has no `toSorted`.

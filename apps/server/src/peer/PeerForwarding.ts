@@ -1,5 +1,7 @@
 import {
   type EnvironmentId,
+  ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
+  ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
   OrchestratorMcpFailure,
   type OrchestratorMcpEnvironmentLinksResult,
   OrchestratorMcpThreadInterruptInput,
@@ -22,6 +24,7 @@ import { assertNotLinked } from "../mcp/linkOrigin.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { readCaller, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { AGENT_THREAD_WAIT_MS, threadWatchStartCommand } from "../orchestration-v2/threadWatch.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
 
@@ -217,12 +220,64 @@ const make = Effect.gen(function* () {
     Effect.flatMap((enabled) => (enabled ? Effect.void : Effect.fail(linkedEnvironmentsOff))),
   );
 
+  /**
+   * An agent's wait there, at most a minute like one here; then a watch here follows it and
+   * wakes the agent. A task delegated there is followed already, so its wait gets no watch.
+   */
+  const agentWaitForThread = Effect.fn("PeerForwarding.agentWaitForThread")(function* (
+    scope: Scope,
+    environmentId: EnvironmentId,
+    input: OrchestratorMcpThreadWaitInput,
+  ) {
+    const watcherThreadId = scope.thread?.threadId;
+    if (
+      watcherThreadId === undefined ||
+      scope.thread?.subagent === true ||
+      input.untilDelegatedWorkSettled === true
+    ) {
+      return yield* waitForThread(scope, environmentId, input);
+    }
+    const waitStartedAt = DateTime.formatIso(yield* DateTime.now);
+    const result = yield* waitForThread(scope, environmentId, {
+      ...input,
+      timeoutMs: Math.min(
+        AGENT_THREAD_WAIT_MS,
+        Math.max(1, input.timeoutMs ?? AGENT_THREAD_WAIT_MS),
+      ),
+    });
+    if (!result.timedOut || result.runId === null) return result;
+    const delegated = yield* threads
+      .getThreadRecords(watcherThreadId, ["subagents"])
+      .pipe(Effect.mapError(unavailable));
+    if (
+      delegated.subagents.some(
+        (task) =>
+          task.result === null &&
+          task.remoteChild?.environmentId === environmentId &&
+          task.remoteChild.threadId === input.threadId,
+      )
+    ) {
+      return { ...result, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT };
+    }
+    yield* threads
+      .dispatch(
+        threadWatchStartCommand(watcherThreadId, {
+          threadId: input.threadId,
+          environmentId,
+          runId: result.runId,
+          startedAt: waitStartedAt,
+        }),
+      )
+      .pipe(Effect.mapError(unavailable));
+    return { ...result, next: ORCHESTRATOR_MCP_THREAD_WATCH_NEXT };
+  });
+
   const call: PeerForwarding["Service"]["call"] = (scope, tool, environmentId, params) => {
     const forwarded: Effect.Effect<
       Tool.Success<typeof tool>,
       OrchestratorMcpFailure
     > = tool.name === "t3_thread_wait"
-      ? (waitForThread(
+      ? (agentWaitForThread(
           scope,
           environmentId,
           params as OrchestratorMcpThreadWaitInput,

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
@@ -27,7 +33,7 @@ describe("waitingOnAgents", () => {
       true,
       { pendingBackgroundTasks: [{ kind: "monitor" }, { kind: "subagent" }] },
     ],
-    ["a blocking thread wait", true, { blockedOnThreadWait: true }],
+    ["a blocking delegate wait", true, { blockedOnThreadWait: true }],
   ] as const)("with %s, waits on agents: %s", (_case, expected, thread) => {
     expect(waitingOnAgents(thread)).toBe(expected);
   });
@@ -70,6 +76,43 @@ describe("derivePendingBackgroundWork", () => {
         latestRun: { id: "check-2" as never, ordinal: 2, status: "running" },
       }),
     ).toEqual([]);
+  });
+  it("lists thread watches as awaited monitors, openable only when the thread is here", () => {
+    const here = {
+      threadId: ThreadId.make("migration"),
+      runId: RunId.make("run-1"),
+      title: "Migrate the cache",
+      startedAt: "2026-11-13T00:00:00.000Z",
+    };
+    const linked = {
+      threadId: here.threadId,
+      environmentId: EnvironmentId.make("vps"),
+      runId: here.runId,
+      startedAt: here.startedAt,
+    };
+    const tasks = derivePendingBackgroundWork({
+      latestRun: { id: "run-9" as never, ordinal: 9, status: "completed" },
+      providerThreads: [],
+      turnItems: [],
+      threadWatches: [here, linked],
+    });
+    expect(tasks).toEqual([
+      {
+        taskId: "thread-watch:here/migration",
+        description: "Migrate the cache",
+        kind: "monitor",
+        awaited: true,
+        watchedThreadId: "migration",
+      },
+      {
+        taskId: "thread-watch:vps/migration",
+        description: "Another thread",
+        kind: "monitor",
+        awaited: true,
+      },
+    ]);
+    expect(waitingOnAgents({ pendingBackgroundTasks: tasks })).toBe(false);
+    expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
   });
   it("takes each subagent item's instance from its joined owner", () => {
     const owner = ProviderInstanceId.make("claude-owner");

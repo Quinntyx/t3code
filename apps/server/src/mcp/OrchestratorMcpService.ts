@@ -7,6 +7,7 @@ import {
   type ModelPreferences,
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
+  ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
   TurnItemId,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
@@ -135,6 +136,7 @@ import { isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import { AGENT_THREAD_WAIT_MS, threadWatchStartCommand } from "../orchestration-v2/threadWatch.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -3234,13 +3236,24 @@ const make = Effect.gen(function* () {
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, false);
+      // An agent's turn should not sit in a tool call; past a minute it waits as a watch.
+      // A settled-work wait follows more than the run, which a watch does not. A delegated
+      // child that ended its turn to wait would hand its parent an unfinished result.
+      const watcher =
+        parent !== undefined &&
+        parent.thread.id !== input.threadId &&
+        scope.thread?.subagent !== true &&
+        input.untilDelegatedWorkSettled !== true
+          ? parent
+          : null;
+      const waitStartedAt = DateTime.formatIso(yield* DateTime.now);
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
           threadId: input.threadId,
           ...(input.runId === undefined ? {} : { runId: input.runId }),
           timeoutMs: Math.min(
-            MAX_WAIT_TIMEOUT_MS,
+            watcher === null ? MAX_WAIT_TIMEOUT_MS : AGENT_THREAD_WAIT_MS,
             Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
           ),
           ...(input.untilDelegatedWorkSettled === true ? { untilDelegatedWorkSettled: true } : {}),
@@ -3248,9 +3261,8 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
       const taskId = result.run?.delegatedTaskId;
-      const ownedTask =
+      const owned =
         result.timedOut &&
-        status !== "waiting" &&
         parent !== undefined &&
         taskId !== undefined &&
         (yield* loadTasks(parent.thread.id, [taskId])).some(
@@ -3262,19 +3274,37 @@ const make = Effect.gen(function* () {
             task.completionDelivery?.state !== "disposed",
         );
       // A child waiting on a question or approval needs an answer, not a wake.
-      const childRequests = ownedTask
-        ? (yield* threadManagement
-            .getThreadRecords(input.threadId, ["runtimeRequests"])
-            .pipe(Effect.mapError(threadManagementFailure))).runtimeRequests
-        : [];
+      const childRequests =
+        owned && status !== "waiting"
+          ? (yield* threadManagement
+              .getThreadRecords(input.threadId, ["runtimeRequests"])
+              .pipe(Effect.mapError(threadManagementFailure))).runtimeRequests
+          : [];
       const wakesCaller =
-        ownedTask && !childRequests.some((request) => request.status === "pending");
+        owned &&
+        status !== "waiting" &&
+        !childRequests.some((request) => request.status === "pending");
+      // Its delegated task's completion already wakes the caller.
+      const watches = result.timedOut && !owned && watcher !== null && result.run !== null;
+      if (watches) {
+        yield* threadManagement
+          .dispatch(
+            threadWatchStartCommand(watcher.thread.id, {
+              threadId: input.threadId,
+              runId: result.run.id,
+              title: target.thread.title,
+              startedAt: waitStartedAt,
+            }),
+          )
+          .pipe(Effect.mapError(threadManagementFailure));
+      }
       return {
         threadId: input.threadId,
         runId: result.run?.id ?? null,
         status,
         timedOut: result.timedOut,
         ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
+        ...(watches ? { next: ORCHESTRATOR_MCP_THREAD_WATCH_NEXT } : {}),
         ...(result.resultRun === undefined
           ? {}
           : {
