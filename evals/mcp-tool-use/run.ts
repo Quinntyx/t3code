@@ -42,6 +42,7 @@ import * as Contracts from "@t3tools/contracts";
 import {
   EnvironmentId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
+  ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
   PullRequestState,
   ThreadId,
 } from "@t3tools/contracts";
@@ -1315,6 +1316,11 @@ const withProductFields = (name: string, value: unknown, child: boolean): unknow
       const task = linked(value, "childThreadId") as Record<string, unknown>;
       const running = task.status === "running" && task.next === undefined;
       return running ? { ...task, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : task;
+    }
+    case "t3_thread_wait": {
+      // A top-level agent's timed-out wait on a thread becomes a watch; a child keeps blocking.
+      const watched = value.timedOut === true && value.next === undefined && !child;
+      return watched ? { ...value, next: ORCHESTRATOR_MCP_THREAD_WATCH_NEXT } : value;
     }
     case "t3_thread_read":
       return { ...value, thread: linked(value.thread) };

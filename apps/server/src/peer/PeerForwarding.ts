@@ -230,7 +230,11 @@ const make = Effect.gen(function* () {
     input: OrchestratorMcpThreadWaitInput,
   ) {
     const watcherThreadId = scope.thread?.threadId;
-    if (watcherThreadId === undefined || input.untilDelegatedWorkSettled === true) {
+    if (
+      watcherThreadId === undefined ||
+      scope.thread?.subagent === true ||
+      input.untilDelegatedWorkSettled === true
+    ) {
       return yield* waitForThread(scope, environmentId, input);
     }
     const waitStartedAt = DateTime.formatIso(yield* DateTime.now);

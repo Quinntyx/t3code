@@ -466,7 +466,8 @@ watch. A thread here also wakes it when it asks a blocking question raised since
 the wait began, so waiting again after that wake does not repeat it. A thread in
 a linked environment is followed over the link until its run ends. Watches show
 as awaited background work, and Stop ends them. Waits on a task the caller
-delegated, and waits with `untilDelegatedWorkSettled`, get no watch. CLI and
+delegated, waits from a delegated child, and waits with
+`untilDelegatedWorkSettled` get no watch. CLI and
 linked-environment callers have no thread to wake, so they block for the whole
 timeout as before.
 

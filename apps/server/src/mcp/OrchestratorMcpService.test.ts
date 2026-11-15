@@ -573,6 +573,14 @@ describe("OrchestratorMcpService", () => {
         assert.notProperty(settledWork, "next");
         assert.equal(waitTimeouts.at(-1), 30 * 60_000);
         assert.lengthOf(dispatched, 1);
+        // A delegated child that ended its turn to wait would hand its parent an unfinished result.
+        const asChild = yield* service.waitForThread(
+          { ...scope, thread: { ...scope.thread!, subagent: true } },
+          { threadId: childThreadId, timeoutMs: 30 * 60_000 },
+        );
+        assert.notProperty(asChild, "next");
+        assert.equal(waitTimeouts.at(-1), 30 * 60_000);
+        assert.lengthOf(dispatched, 1);
         owned = true;
 
         finished = true;

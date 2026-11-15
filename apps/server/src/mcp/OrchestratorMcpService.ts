@@ -3237,10 +3237,12 @@ const make = Effect.gen(function* () {
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, false);
       // An agent's turn should not sit in a tool call; past a minute it waits as a watch.
-      // A settled-work wait follows more than the run, which a watch does not.
+      // A settled-work wait follows more than the run, which a watch does not. A delegated
+      // child that ended its turn to wait would hand its parent an unfinished result.
       const watcher =
         parent !== undefined &&
         parent.thread.id !== input.threadId &&
+        scope.thread?.subagent !== true &&
         input.untilDelegatedWorkSettled !== true
           ? parent
           : null;
