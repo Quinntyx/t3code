@@ -27,7 +27,7 @@ allowBuilds:
   objc-js: false
   # Its postinstall only warns about dependent version schemes.
   protobufjs: false
-  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.18-ca955971.tgz": true
+  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.18-a9debb73.tgz": true
   sharp: true
   utf-8-validate: false
   workerd: false
