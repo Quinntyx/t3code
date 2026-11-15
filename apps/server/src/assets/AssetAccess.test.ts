@@ -273,6 +273,7 @@ describe("AssetAccess", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-root-" });
       const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-outside-" });
       for (const name of [
+        "notes.txt",
         "data.csv",
         "report.docx",
         "sheet.xlsx",
@@ -282,35 +283,44 @@ describe("AssetAccess", () => {
       ]) {
         for (const directory of [root, outside]) {
           const filePath = path.join(directory, name);
-          yield* fs.writeFileString(filePath, "shared file bytes");
-          const resource = {
-            _tag: "media-file" as const,
-            threadId: ThreadId.make("thread-1"),
-            path: directory === root ? name : filePath,
-            disposition: "attachment" as const,
-          };
-          const result = yield* issueAssetUrl({ resource, workspaceRoot: root });
-          const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-          const separator = suffix.indexOf("/");
-          const token = suffix.slice(0, separator);
-          const asset = yield* resolveAsset(token, suffix.slice(separator + 1));
-          expect(asset).toMatchObject({
-            kind: "file",
-            download: true,
-            fileName: name,
-            mimeType: "application/octet-stream",
-          });
-          if (asset?.kind !== "file") throw new Error("Expected a downloadable file");
-          const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
-          expect(response.headers.get("content-disposition")).toContain("attachment;");
-          expect(response.headers.get("content-type")).toBe("application/octet-stream");
-          expect(yield* Effect.promise(() => response.text())).toBe("shared file bytes");
-          expect(yield* resolveAsset(token, "sibling.docx")).toBeNull();
-          expect(yield* resolveAsset(token, `../${name}`)).toBeNull();
-          expect(yield* resolveAsset(`${token}tampered`, name)).toBeNull();
-          yield* fs.rename(filePath, `${filePath}.original`);
-          yield* fs.writeFileString(filePath, "replacement bytes");
-          expect(yield* resolveAsset(token, name)).toBeNull();
+          for (const resource of [
+            {
+              _tag: "media-file" as const,
+              threadId: ThreadId.make("thread-1"),
+              path: directory === root ? name : filePath,
+              disposition: "attachment" as const,
+            },
+            {
+              _tag: "draft-workspace-file" as const,
+              cwd: root,
+              path: directory === root ? name : filePath,
+              disposition: "attachment" as const,
+            },
+          ]) {
+            yield* fs.writeFileString(filePath, "shared file bytes");
+            const result = yield* issueAssetUrl({ resource, workspaceRoot: root });
+            const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+            const separator = suffix.indexOf("/");
+            const token = suffix.slice(0, separator);
+            const asset = yield* resolveAsset(token, suffix.slice(separator + 1));
+            expect(asset).toMatchObject({
+              kind: "file",
+              download: true,
+              fileName: name,
+              mimeType: "application/octet-stream",
+            });
+            if (asset?.kind !== "file") throw new Error("Expected a downloadable file");
+            const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+            expect(response.headers.get("content-disposition")).toContain("attachment;");
+            expect(response.headers.get("content-type")).toBe("application/octet-stream");
+            expect(yield* Effect.promise(() => response.text())).toBe("shared file bytes");
+            expect(yield* resolveAsset(token, "sibling.docx")).toBeNull();
+            expect(yield* resolveAsset(token, `../${name}`)).toBeNull();
+            expect(yield* resolveAsset(`${token}tampered`, name)).toBeNull();
+            yield* fs.rename(filePath, `${filePath}.${resource._tag}`);
+            yield* fs.writeFileString(filePath, "replacement bytes");
+            expect(yield* resolveAsset(token, name)).toBeNull();
+          }
         }
       }
       const directoryError = yield* issueAssetUrl({
@@ -415,11 +425,20 @@ describe("AssetAccess", () => {
           ["../audio.wav", "AssetWorkspacePathValidationError"],
           ["secret.txt", "AssetPreviewTypeValidationError"],
         ] as const) {
-          const error = yield* issueAssetUrl({
-            resource: { _tag: "draft-workspace-file", cwd: root, path: requestedPath },
-            workspaceRoot: root,
-          }).pipe(Effect.flip);
-          expect(error._tag).toBe(tag);
+          for (const disposition of requestedPath.startsWith("../")
+            ? ([undefined, "attachment"] as const)
+            : [undefined]) {
+            const error = yield* issueAssetUrl({
+              resource: {
+                _tag: "draft-workspace-file",
+                cwd: root,
+                path: requestedPath,
+                ...(disposition === undefined ? {} : { disposition }),
+              },
+              workspaceRoot: root,
+            }).pipe(Effect.flip);
+            expect(error._tag).toBe(tag);
+          }
         }
         for (const name of ["video.mp4", "audio.wav"]) {
           const error = yield* issueAssetUrl({
