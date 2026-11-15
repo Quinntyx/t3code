@@ -471,6 +471,20 @@ const LenientThreadOpens = Schema.NullOr(OrchestrationV2ThreadOpens).pipe(
   Schema.catchDecoding(() => Effect.succeedSome(null)),
 );
 
+/**
+ * A thread this one waits on without owning it. T3 wakes this thread once when the watched run
+ * ends or stops to ask for input, then drops the watch.
+ */
+export const OrchestrationV2ThreadWatch = Schema.Struct({
+  threadId: ThreadId,
+  /** A thread in a linked environment; absent for one here. */
+  environmentId: Schema.optional(EnvironmentId),
+  runId: RunId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  startedAt: IsoDateTime,
+});
+export type OrchestrationV2ThreadWatch = typeof OrchestrationV2ThreadWatch.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -488,6 +502,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   awaitedScheduledTaskIds: Schema.optional(Schema.Array(ScheduledTaskId)),
+  threadWatches: Schema.optional(Schema.Array(OrchestrationV2ThreadWatch)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   /** A goal T3 Code drives itself. Providers with native goals keep theirs on the provider thread. */
   goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)).pipe(
@@ -1112,7 +1127,12 @@ export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
       childThreadId: Schema.optional(ThreadId),
     }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("command") }),
-    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("monitor") }),
+    Schema.Struct({
+      ...PendingBackgroundTaskFields,
+      kind: Schema.Literal("monitor"),
+      /** A thread here that this monitor waits on. */
+      watchedThreadId: Schema.optional(ThreadId),
+    }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("background_task") }),
   ],
   (kind) => Schema.Struct({ ...PendingBackgroundTaskFields, kind }),
@@ -3641,6 +3661,24 @@ const OrchestrationV2InternalCommand = Schema.Union([
     watch: Schema.NullOr(ThreadPullRequestWatch),
     /** With `watch: null`, the state the ended watch keeps instead of its last saved one. */
     endedWatch: Schema.optional(ThreadPullRequestWatch),
+    wake: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        notification: OrchestrationV2Notification,
+      }),
+    ),
+  }),
+  /**
+   * Starts (`watching`) or ends a thread watch. An end applies only to the watch that started at
+   * `watch.startedAt`, so a newer watch on the same thread survives a late end.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.thread-watch.sync"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    watch: OrchestrationV2ThreadWatch,
+    watching: Schema.Boolean,
     wake: Schema.optional(
       Schema.Struct({
         messageId: MessageId,

@@ -25,6 +25,7 @@ import {
 } from "../sourceControl/threadPullRequests.ts";
 import type {
   OrchestrationV2AppThread,
+  OrchestrationV2ThreadWatch,
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
   OrchestrationV2ExecutionNode,
@@ -213,6 +214,10 @@ export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
   "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pullRequests"
 >;
+
+export type ProjectionThreadWatcher = Pick<OrchestrationV2AppThread, "id"> & {
+  readonly threadWatches: ReadonlyArray<OrchestrationV2ThreadWatch>;
+};
 
 export type ProjectionSettlementCandidate = Pick<
   OrchestrationV2ThreadShell,
@@ -598,6 +603,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
+  readonly getThreadWatchers: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadWatcher>,
+    ProjectionStoreV2Error
+  >;
   /** Titles of the given threads that exist, archived ones included. */
   readonly getThreadLinkMetadata: (
     threadIds: ReadonlyArray<ThreadId>,
@@ -1665,6 +1674,7 @@ export function threadShellFromProjection(
     runs,
     pullRequests: projection.thread.pullRequests,
     awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
+    threadWatches: projection.thread.threadWatches,
   });
   return {
     createdBy: projection.thread.createdBy,
@@ -6972,6 +6982,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     hasActiveRun: false,
                     pullRequests: thread.pullRequests,
                     awaitedScheduledTaskIds: thread.awaitedScheduledTaskIds,
+                    threadWatches: thread.threadWatches,
                   }),
                 } satisfies ProjectionSettlementCandidate;
               }),
@@ -7032,6 +7043,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         },
         Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
       );
+
+    const getThreadWatchers: ProjectionStoreV2Shape["getThreadWatchers"] = Effect.fn(
+      "ProjectionStore.getThreadWatchers",
+    )(
+      function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+            AND json_array_length(payload_json, '$.threadWatches') > 0
+          ORDER BY updated_at ASC, thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) =>
+          decodeThreadPayload(row.payload_json).pipe(
+            Effect.map((thread): ProjectionThreadWatcher => ({
+              id: thread.id,
+              threadWatches: thread.threadWatches ?? [],
+            })),
+          ),
+        );
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
 
     const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = (options) =>
       sql<{ readonly thread_id: string; readonly worktree_path: string }>`
@@ -7183,6 +7217,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             hasActiveRun: row.active_run_id !== null,
             pullRequests: thread.pullRequests,
             awaitedScheduledTaskIds: thread.awaitedScheduledTaskIds,
+            threadWatches: thread.threadWatches,
           }),
         ];
         return {
@@ -7894,6 +7929,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
+      getThreadWatchers: readOnReader(getThreadWatchers),
       getThreadTitles: readOnReader(getThreadTitles),
       listPreviousAgents: readOnReader(listPreviousAgents),
       getThreadLinkMetadata: readOnReader(getThreadLinkMetadata),

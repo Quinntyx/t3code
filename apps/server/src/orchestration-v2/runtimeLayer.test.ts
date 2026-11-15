@@ -15,12 +15,15 @@ import {
   CheckpointRef,
   CommandId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
+  OrchestratorMcpFailure,
   MessageId,
   NodeId,
   RuntimeRequestId,
   TurnItemId,
   type ModelSelection,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2RuntimeRequest,
@@ -79,6 +82,10 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionReplay from "./testkit/ProjectionReplay.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
+import * as ThreadWatchReactor from "./ThreadWatchReactor.ts";
+import { threadWatchStartCommand } from "./threadWatch.ts";
+import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { PULL_REQUEST_WATCH_WAKE_LIMIT } from "./pullRequestWatch.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -3337,6 +3344,206 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
       assert.deepEqual(messages, []);
     }),
+  );
+
+  it.effect("wakes a watcher once when the thread it watches ends, and Stop ends a watch", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const projectId = ProjectId.make("thread-watch-project");
+      const watcherId = ThreadId.make("thread-watch-watcher");
+      const targetId = ThreadId.make("thread-watch-target");
+      for (const id of [watcherId, targetId]) {
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: id,
+          projectId,
+          title: id === targetId ? "Migrate the cache" : "Coordinator",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+          createdBy: "user",
+          creationSource: "web",
+        });
+      }
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("thread-watch-target-message"),
+        threadId: targetId,
+        messageId: MessageId.make("thread-watch-target-message"),
+        text: "Migrate the cache.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* outbox.cancelUnsettled({
+        threadId: targetId,
+        effectTypes: ["provider-turn.start"],
+        reason: "provider execution is outside this thread watch test",
+      });
+      const run = (yield* orchestrator.getThreadProjection(targetId)).runs.at(-1)!;
+      const remoteEnded = yield* Deferred.make<void>();
+      const remoteThreadId = ThreadId.make("thread-watch-remote");
+      const forgottenThreadId = ThreadId.make("thread-watch-forgotten-link");
+      const reactor = yield* ThreadWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(PeerForwarding.PeerForwarding)({
+              waitForThread: (_scope, _environmentId, input) =>
+                input.threadId === forgottenThreadId
+                  ? Effect.fail(
+                      new OrchestratorMcpFailure({
+                        code: "invalid_request",
+                        message: "No link to that environment.",
+                      }),
+                    )
+                  : Deferred.await(remoteEnded).pipe(
+                      Effect.as({
+                        threadId: input.threadId,
+                        runId: input.runId ?? null,
+                        status: "failed" as const,
+                        timedOut: false,
+                      }),
+                    ),
+            }),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(EnvironmentId.make("here")),
+            }),
+          ),
+        ),
+      );
+      const watcher = () => orchestrator.getThreadProjection(watcherId);
+      const watch = {
+        threadId: targetId,
+        runId: run.id,
+        title: "Migrate the cache",
+        startedAt: DateTime.formatIso(yield* DateTime.now),
+      };
+      yield* orchestrator.dispatch(threadWatchStartCommand(watcherId, watch));
+      yield* reactor.handle({
+        type: "thread.metadata-updated",
+        threadId: watcherId,
+        payload: (yield* watcher()).thread,
+      } as OrchestrationV2DomainEvent);
+      const shell = yield* orchestrator.getThreadShell(watcherId);
+      assert.deepEqual(shell?.pendingBackgroundTasks, [
+        {
+          taskId: `thread-watch:here/${targetId}`,
+          description: "Migrate the cache",
+          kind: "monitor",
+          awaited: true,
+          watchedThreadId: targetId,
+        },
+      ]);
+      assert.deepEqual((yield* watcher()).messages, []);
+
+      const now = yield* DateTime.now;
+      const completed = { ...run, status: "completed" as const, completedAt: now };
+      yield* eventSink.write({
+        commandId: CommandId.make("complete:thread-watch-target"),
+        events: [
+          {
+            id: EventId.make("complete:thread-watch-target"),
+            type: "run.updated",
+            threadId: targetId,
+            occurredAt: now,
+            payload: completed,
+          },
+        ],
+      });
+      const ended = {
+        id: EventId.make("complete:thread-watch-target:replay"),
+        type: "run.updated",
+        threadId: targetId,
+        occurredAt: now,
+        payload: completed,
+      } as OrchestrationV2DomainEvent;
+      yield* reactor.handle(ended);
+      yield* reactor.handle(ended);
+      const woken = yield* watcher();
+      assert.deepEqual(woken.thread.threadWatches, []);
+      assert.lengthOf(woken.messages, 1);
+      assert.include(woken.messages[0]?.text, `Thread "Migrate the cache" you waited on`);
+      assert.include(woken.messages[0]?.text, "finished");
+      assert.deepEqual((yield* orchestrator.getThreadShell(watcherId))?.pendingBackgroundTasks, []);
+
+      yield* outbox.cancelUnsettled({
+        threadId: watcherId,
+        effectTypes: ["provider-turn.start"],
+        reason: "provider execution is outside this thread watch test",
+      });
+      // A thread in a linked environment is followed over the link.
+      yield* TestClock.adjust(1);
+      const remote = {
+        threadId: remoteThreadId,
+        environmentId: EnvironmentId.make("vps"),
+        runId: RunId.make("run-there"),
+        startedAt: DateTime.formatIso(yield* DateTime.now),
+      };
+      yield* orchestrator.dispatch(threadWatchStartCommand(watcherId, remote));
+      const afterSequence = yield* orchestrator.getThreadEventSequence(watcherId);
+      yield* reactor.handle({
+        type: "thread.metadata-updated",
+        threadId: watcherId,
+        payload: (yield* watcher()).thread,
+      } as OrchestrationV2DomainEvent);
+      assert.deepEqual((yield* watcher()).thread.threadWatches, [remote]);
+      const remoteWake = yield* orchestrator
+        .streamStoredEventsFrom({
+          threadId: watcherId,
+          afterSequence,
+          eventType: "message.updated",
+        })
+        .pipe(Stream.runHead, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(remoteEnded, undefined);
+      yield* Fiber.join(remoteWake);
+      const remoteWoken = yield* watcher();
+      assert.deepEqual(remoteWoken.thread.threadWatches, []);
+      assert.include(
+        remoteWoken.messages.at(-1)?.text,
+        `(threadId ${remoteThreadId}, environmentId vps) failed`,
+      );
+
+      // A forgotten link cannot come back by retrying, so the watch ends at once.
+      const forgotten = { ...remote, threadId: forgottenThreadId };
+      yield* orchestrator.dispatch(threadWatchStartCommand(watcherId, forgotten));
+      const forgottenSequence = yield* orchestrator.getThreadEventSequence(watcherId);
+      const forgottenWake = yield* orchestrator
+        .streamStoredEventsFrom({
+          threadId: watcherId,
+          afterSequence: forgottenSequence,
+          eventType: "message.updated",
+        })
+        .pipe(Stream.runHead, Effect.forkChild({ startImmediately: true }));
+      yield* reactor.handle({
+        type: "thread.metadata-updated",
+        threadId: watcherId,
+        payload: (yield* watcher()).thread,
+      } as OrchestrationV2DomainEvent);
+      yield* Fiber.join(forgottenWake);
+      const unreachable = yield* watcher();
+      assert.deepEqual(unreachable.thread.threadWatches, []);
+      assert.include(
+        unreachable.messages.map((m) => m.text).join("\n"),
+        "can no longer be reached",
+      );
+
+      yield* TestClock.adjust(1);
+      const again = { ...watch, startedAt: DateTime.formatIso(yield* DateTime.now) };
+      yield* orchestrator.dispatch(threadWatchStartCommand(watcherId, again));
+      assert.deepEqual((yield* watcher()).thread.threadWatches, [again]);
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make("thread-watch-stop"),
+        threadId: watcherId,
+      });
+      assert.deepEqual((yield* watcher()).thread.threadWatches, []);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect.each(["manual", "automatic"])("settling ends every pull request watch: %s", (mode) =>

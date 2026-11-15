@@ -4,7 +4,9 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
   type OrchestrationV2Run,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
   type SourceControlCloneRepositoryInput,
   ProjectId,
@@ -259,6 +261,7 @@ const mcpClient = McpSchema.McpServerClient.of({
  */
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
+  const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
   const layerHere = Layer.mergeAll(
     McpHttpServer.layerOrchestratorToolkit,
     McpHttpServer.layerProjectRegistration,
@@ -303,6 +306,15 @@ const makeLaptop = Effect.gen(function* () {
           Effect.succeed({
             thread: liveThreadShell(threadId, { runtimeMode: "full-access" }),
           } as never),
+        getThreadRecords: (threadId) =>
+          Effect.succeed({
+            thread: liveThreadShell(threadId, { runtimeMode: "full-access" }),
+            subagents: [],
+          } as never),
+        dispatch: (command) =>
+          Ref.update(dispatched, (current) => [...current, command]).pipe(
+            Effect.as({ sequence: 0, storedEvents: [] } as never),
+          ),
       }),
     ),
     Layer.provide(
@@ -352,7 +364,7 @@ const makeLaptop = Effect.gen(function* () {
         ),
         Effect.provideService(McpSchema.McpServerClient, mcpClient),
       );
-  return { links: Context.get(linking, PeerLinks.PeerLinks), call };
+  return { links: Context.get(linking, PeerLinks.PeerLinks), call, dispatched };
 });
 
 const failureOf = (result: McpSchema.CallToolResult) => {
@@ -445,20 +457,28 @@ it.effect("keeps a forwarded wait short and its retries scoped to the caller", (
         threadId: boxThread,
         timeoutMs: 600_000,
       });
+      // An agent waits a minute at most, then a watch here follows the thread there.
       expect(waited.structuredContent).toEqual({
         threadId: boxThread,
         runId: boxRun,
-        status: "completed",
-        timedOut: false,
+        status: "running",
+        timedOut: true,
+        next: ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
       });
-      // Three pieces of at most 50 s each, the later ones pinned to the run
-      // the first one found.
+      // Pieces of at most 50 s, the later one pinned to the run the first one found.
       expect(
         (yield* Ref.get(seen)).waits.map(({ timeoutMs, runId }) => [timeoutMs, runId]),
       ).toEqual([
         [PeerForwarding.FORWARDED_WAIT_CHUNK_MS, undefined],
-        [PeerForwarding.FORWARDED_WAIT_CHUNK_MS, boxRun],
-        [PeerForwarding.FORWARDED_WAIT_CHUNK_MS, boxRun],
+        [60_000 - PeerForwarding.FORWARDED_WAIT_CHUNK_MS, boxRun],
+      ]);
+      expect(yield* Ref.get(a.dispatched)).toMatchObject([
+        {
+          type: "thread.thread-watch.sync",
+          threadId: "thread:laptop-full",
+          watching: true,
+          watch: { threadId: boxThread, environmentId: box.environmentId, runId: boxRun },
+        },
       ]);
 
       const send = (caller: string, clientRequestId: string) =>

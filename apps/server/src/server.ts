@@ -8,6 +8,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as ThreadWatchReactor from "./orchestration-v2/ThreadWatchReactor.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
@@ -859,6 +860,10 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Wakes threads whose watched threads end, here or over a link, including after a restart.
+  Layer.effectDiscard(
+    ThreadWatchReactor.ThreadWatchReactor.pipe(Effect.flatMap((watches) => watches.start())),
+  ).pipe(Layer.provide(ThreadWatchReactor.layer.pipe(Layer.provide(ProjectionStoreV2.layer)))),
   // Retargets and restacks pull requests stacked on one T3 merged.
   Layer.effectDiscard(
     PullRequestStackService.PullRequestStackService.pipe(

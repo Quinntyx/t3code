@@ -132,6 +132,7 @@ import {
   isRestartContinuationSource,
   runOutcome,
 } from "./RestartBackgroundNote.ts";
+import { sameThreadWatchTarget } from "./threadWatch.ts";
 import {
   isBufferedProviderNotification,
   isUndeliveredMailboxSteer,
@@ -609,6 +610,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.pull-request-link.sync":
     case "thread.pull-request.watch":
     case "thread.pull-request-watch.sync":
+    case "thread.thread-watch.sync":
     case "thread.pull-request.sync":
     case "thread.title.regeneration.complete":
     case "thread.project.adopt-folder":
@@ -3392,6 +3394,63 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const dispatchThreadWatchSync = Effect.fn("orchestrationV2.dispatch.threadWatchSync")(function* (
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.thread-watch.sync" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    const existing = thread.threadWatches?.find((watch) =>
+      sameThreadWatchTarget(watch, command.watch),
+    );
+    if (
+      thread.deletedAt !== null ||
+      (command.watching
+        ? thread.archivedAt !== null
+        : existing?.startedAt !== command.watch.startedAt)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: command.watching
+          ? `Thread ${command.threadId} is archived and cannot watch threads.`
+          : "The thread watch already ended.",
+      });
+    }
+    yield* dispatchThreadMutation(command, events, effects);
+    // A settled or archived thread was put away; its watch ends without waking it.
+    if (
+      command.wake === undefined ||
+      thread.archivedAt !== null ||
+      thread.settledOverride === "settled" ||
+      thread.settledAt !== null
+    ) {
+      return;
+    }
+    yield* dispatchMessage(
+      {
+        type: "message.dispatch",
+        commandId: command.commandId,
+        threadId: command.threadId,
+        messageId: command.wake.messageId,
+        text: command.wake.text,
+        notification: command.wake.notification,
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      },
+      events,
+      effects,
+    );
+  });
+
   // Deleted after the share change commits: the files of waiting messages it dismissed or dropped.
   const releaseGuestAttachments = (
     command: { readonly commandId: CommandId; readonly threadId: ThreadId },
@@ -3511,6 +3570,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pull-request-link.sync"
           | "thread.pull-request.watch"
           | "thread.pull-request-watch.sync"
+          | "thread.thread-watch.sync"
           | "thread.pull-request.sync"
           | "thread.title.regeneration.complete"
           | "thread.runtime-mode.set"
@@ -3721,7 +3781,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         command.expectedLatestRunId !== undefined &&
-        (thread.goal?.status === "active" || (thread.awaitedScheduledTaskIds?.length ?? 0) > 0)
+        (thread.goal?.status === "active" ||
+          (thread.awaitedScheduledTaskIds?.length ?? 0) > 0 ||
+          (thread.threadWatches?.length ?? 0) > 0)
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -4442,6 +4504,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 }),
             updatedAt: thread.updatedAt,
           };
+        case "thread.thread-watch.sync": {
+          const others = (thread.threadWatches ?? []).filter(
+            (watch) => !sameThreadWatchTarget(watch, command.watch),
+          );
+          return {
+            ...thread,
+            threadWatches: command.watching ? [...others, command.watch] : others,
+          };
+        }
         case "thread.goal.update": {
           const objective = command.goal?.objective ?? thread.goal?.objective;
           const goal =
@@ -4527,6 +4598,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.metadata.update":
         case "thread.goal.update":
         case "thread.title.regeneration.complete":
+        case "thread.thread-watch.sync":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -11753,15 +11825,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     const pullRequests = thread.pullRequests ?? [];
     if (pullRequests.some((link) => link.watch !== undefined)) {
+      thread = {
+        ...thread,
+        pullRequests: pullRequests.map((link) => withPullRequestWatch(link, undefined)),
+      };
       yield* emitEvent({
         type: "thread.pull-request-synced",
         threadId: thread.id,
         providerInstanceId: thread.providerInstanceId,
         occurredAt: input.now,
-        payload: {
-          ...thread,
-          pullRequests: pullRequests.map((link) => withPullRequestWatch(link, undefined)),
-        },
+        payload: thread,
+      });
+    }
+    if ((thread.threadWatches?.length ?? 0) > 0) {
+      thread = { ...thread, threadWatches: [] };
+      yield* emitEvent({
+        type: "thread.metadata-updated",
+        threadId: thread.id,
+        occurredAt: input.now,
+        payload: thread,
       });
     }
     const cohortRunIds = new Set(input.cohortRunIds);
@@ -13965,6 +14047,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           thread.settledOverride !== null ||
           thread.goal?.status === "active" ||
           (thread.awaitedScheduledTaskIds?.length ?? 0) > 0 ||
+          (thread.threadWatches?.length ?? 0) > 0 ||
           DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt)
         ) {
           return yield* new OrchestratorDispatchError({
@@ -14074,6 +14157,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
+        break;
+      case "thread.thread-watch.sync":
+        yield* dispatchThreadWatchSync(command, events, effects);
         break;
       case "thread.guest-share.open":
       case "thread.guest-share.redeem":

@@ -9,6 +9,7 @@ import {
   MessageId,
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
+  ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
   type OrchestratorMcpCapabilitiesResult,
   OrchestratorMcpTarget,
   type OrchestrationV2ThreadShell,
@@ -431,6 +432,9 @@ describe("OrchestratorMcpService", () => {
       const taskId = NodeId.make("node:mcp-next-task");
       let finished = false;
       let pendingRequest = false;
+      let owned = true;
+      const waitTimeouts: Array<number> = [];
+      const dispatched: Array<OrchestrationV2ServerCommand> = [];
       const parentProjection = () =>
         ({
           thread: { id: parentThreadId },
@@ -454,7 +458,7 @@ describe("OrchestratorMcpService", () => {
         id: RunId.make("run:mcp-next-child"),
         ordinal: 1,
         status: finished ? ("completed" as const) : ("running" as const),
-        delegatedTaskId: taskId,
+        ...(owned ? { delegatedTaskId: taskId } : {}),
       });
       const childProjection = () =>
         ({
@@ -477,13 +481,18 @@ describe("OrchestratorMcpService", () => {
             Effect.succeed(threadId === parentThreadId ? parentProjection() : childProjection()),
           getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
           getProjectThreadRecords: () => Effect.succeed(childProjection()),
-          waitForThread: () =>
-            Effect.succeed({
+          waitForThread: (input) => {
+            waitTimeouts.push(input.timeoutMs);
+            return Effect.succeed({
               threadId: childThreadId,
               run: childRun() as unknown as OrchestrationV2ThreadProjection["runs"][number],
               timedOut: !finished,
-            }),
-          dispatch: () => Effect.succeed({} as never),
+            });
+          },
+          dispatch: (command) => {
+            dispatched.push(command);
+            return Effect.succeed({} as never);
+          },
         }),
         ServerSettings.layerTest(),
         Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
@@ -523,6 +532,29 @@ describe("OrchestratorMcpService", () => {
         assert.isTrue(asking.timedOut);
         assert.notProperty(asking, "next");
         pendingRequest = false;
+        assert.deepEqual(dispatched, []);
+
+        // A thread it does not own: past a minute, a watch wakes the caller instead.
+        owned = false;
+        const watched = yield* service.waitForThread(scope, {
+          threadId: childThreadId,
+          timeoutMs: 30 * 60_000,
+        });
+        assert.isTrue(watched.timedOut);
+        assert.equal(watched.next, ORCHESTRATOR_MCP_THREAD_WATCH_NEXT);
+        assert.equal(waitTimeouts.at(-1), 60_000);
+        assert.lengthOf(dispatched, 1);
+        assert.deepInclude(dispatched[0], {
+          type: "thread.thread-watch.sync",
+          threadId: parentThreadId,
+          watching: true,
+        });
+        assert.deepInclude((dispatched[0] as { watch: object }).watch, {
+          threadId: childThreadId,
+          runId: RunId.make("run:mcp-next-child"),
+          title: "Child task",
+        });
+        owned = true;
 
         finished = true;
         const completed = yield* service.taskStatus(scope, taskId);

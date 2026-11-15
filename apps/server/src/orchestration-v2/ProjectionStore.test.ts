@@ -812,7 +812,7 @@ it.effect("SQL queue readiness skips held runs without bypassing active work", (
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("SQL shells flag only an active turn blocked solely on T3 thread waits", () =>
+it.effect("SQL shells flag only an active turn blocked solely on blocking delegate waits", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const threadId = yield* addRolledBackRecoveryCandidate("thread-wait");
@@ -872,10 +872,20 @@ it.effect("SQL shells flag only an active turn blocked solely on T3 thread waits
       id: TurnItemId.make("item:thread-wait:active"),
       runId: run.id,
       type: "dynamic_tool" as const,
-      toolName: "mcp__t3_code__t3_thread_wait",
-      input: { threadId: "child-thread" },
+      toolName: "mcp__t3_code__delegate_task",
+      input: { task: "Review", mode: "wait" },
       status: "running" as const,
     };
+    // A thread wait turns into a watch within a minute, so it is ordinary work.
+    const threadWait = {
+      ...wait,
+      id: TurnItemId.make("item:thread-wait:thread"),
+      toolName: "mcp__t3_code__t3_thread_wait",
+      input: { threadId: "child-thread" },
+    };
+    yield* updateItem(threadWait);
+    yield* assertBlocked(false);
+    yield* updateItem({ ...threadWait, status: "completed", completedAt: at });
 
     yield* updateItem({
       ...wait,
@@ -886,7 +896,7 @@ it.effect("SQL shells flag only an active turn blocked solely on T3 thread waits
     const foreign = {
       ...wait,
       id: TurnItemId.make("item:thread-wait:foreign"),
-      toolName: "weather.t3_thread_wait",
+      toolName: "weather.delegate_task",
     };
     yield* updateItem(foreign);
     yield* assertBlocked(false);

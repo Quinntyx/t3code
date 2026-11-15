@@ -202,6 +202,10 @@ export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
   "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
 const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
 
+// Set on an agent's wait that timed out on a thread it does not own: T3 now watches it.
+export const ORCHESTRATOR_MCP_THREAD_WATCH_NEXT =
+  "T3 watches this thread and wakes you when its run ends or it asks for input, so end your turn. Do not wait on it or poll it.";
+
 // Optional: linked environments on older versions omit it.
 const OrchestratorMcpExecutedModel = Schema.NullOr(Schema.String).annotate({
   description:
@@ -566,7 +570,12 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   runId: Schema.NullOr(RunId),
   status: OrchestratorMcpThreadStatus,
   timedOut: Schema.Boolean,
-  next: Schema.optional(OrchestratorMcpRunningTaskNext),
+  next: Schema.optional(
+    Schema.Union([
+      OrchestratorMcpRunningTaskNext,
+      Schema.Literal(ORCHESTRATOR_MCP_THREAD_WATCH_NEXT),
+    ]),
+  ),
   /** With untilDelegatedWorkSettled, once settled: the run whose reply is the thread's result. */
   resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestrationV2RunStatus })),
 });

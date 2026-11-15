@@ -990,7 +990,8 @@ const make = Effect.gen(function* () {
       ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
     });
     const initial = yield* evaluate(target.runs);
-    if (initial.settled) return settledResult(initial);
+    // No timeout only looks, without subscribing.
+    if (initial.settled || input.timeoutMs <= 0) return settledResult(initial);
 
     // A declined continuation records no event, so its effect settling wakes
     // the wait too.

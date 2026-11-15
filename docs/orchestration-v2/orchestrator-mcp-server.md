@@ -458,6 +458,16 @@ Waits for a selected run to become `completed`, `failed`, `cancelled`,
 time; an idle thread returns immediately. A timeout reports the latest durable
 status and does not cancel work.
 
+A caller with its own thread waits at most a minute, so its turn does not sit in
+a tool call. If the run is still going, the wait records a thread watch on the
+caller and returns `next` telling it to end its turn. `ThreadWatchReactor` wakes
+the caller once when that run ends, stops to ask for input, or the thread is
+deleted, then drops the watch. A thread in a linked environment is followed over
+the link. Watches show as awaited background work, and Stop ends them. Waits on a
+task the caller delegated get no watch, since completion delivery already wakes
+it. CLI and linked-environment callers have no thread to wake, so they block for
+the whole timeout as before.
+
 ### `t3_thread_interrupt`
 
 Interrupts a selected active run through the normal V2 `run.interrupt` command.
