@@ -12,7 +12,6 @@ import {
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
-import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -44,10 +43,9 @@ export const unavailable = () =>
     message: "The operation could not be completed.",
   });
 
-export const dispatchFailure = (
-  error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
-) =>
+export const dispatchFailure = (error: ThreadManagement.ThreadManagementDispatchError) =>
   error._tag === "ThreadManagementProviderInstanceDisabledError" ||
+  error._tag === "ThreadManagementDelegationModelDisabledError" ||
   error._tag === "OrchestratorRuntimeModeAboveCeilingError"
     ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
     : (error._tag === "OrchestratorDispatchError" ||

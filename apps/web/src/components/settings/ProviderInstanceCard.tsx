@@ -1109,6 +1109,20 @@ export function ProviderInstanceCard({
             </div>
           }
         />
+        <SettingsRow
+          title="Block delegation for disabled models"
+          description="Reject delegated tasks using models turned off for this provider. Direct use is unchanged."
+          control={
+            <Switch
+              aria-label="Block delegation for disabled models"
+              checked={instance.blockDelegationForDisabledModels === true}
+              disabled={readOnly}
+              onCheckedChange={(checked) =>
+                onUpdate({ ...instance, blockDelegationForDisabledModels: checked })
+              }
+            />
+          }
+        />
       </SettingsSection>
 
       {setup || environmentFields.length > 0 ? (

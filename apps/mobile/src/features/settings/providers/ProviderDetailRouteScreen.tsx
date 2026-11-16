@@ -158,6 +158,9 @@ function ProviderEditor(props: {
     : disallowedProviderMessage(policy?.organization, definition?.label ?? String(instance.driver));
   const status = describeProviderInstance(instance, provider);
   const enabledSwitch = usePendingSwitch(status.enabled);
+  const delegationBlockSwitch = usePendingSwitch(
+    instance.blockDelegationForDisabledModels === true,
+  );
   const modelPreferences = useModelPreferences(actions.settings).preferences;
   const name = providerInstanceName(instance);
   // Each upsert carries the whole instance, so edits build on the last write until its echo lands.
@@ -303,6 +306,18 @@ function ProviderEditor(props: {
             enabledSwitch.change(
               value,
               update((current) => ({ ...current, enabled: value })),
+            )
+          }
+        />
+        <ListToggleRow
+          label="Block delegation for disabled models"
+          description="Reject delegated tasks using models turned off for this provider. Direct use is unchanged."
+          disabled={readOnly}
+          value={delegationBlockSwitch.value}
+          onValueChange={(value) =>
+            delegationBlockSwitch.change(
+              value,
+              update((current) => ({ ...current, blockDelegationForDisabledModels: value })),
             )
           }
         />

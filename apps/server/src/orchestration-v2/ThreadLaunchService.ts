@@ -173,7 +173,9 @@ export class ThreadLaunchService extends Context.Service<
       input: ThreadLaunchInput,
     ) => Effect.Effect<
       ThreadLaunchResult,
-      ThreadLaunchError | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ThreadLaunchError
+      | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ThreadManagement.ThreadManagementDelegationModelDisabledError
     >;
     /** Check before creation for early errors; launch otherwise accepts and reports base failures inside the thread. */
     readonly checkWorktreeBase: (
@@ -183,8 +185,7 @@ export class ThreadLaunchService extends Context.Service<
       input: ThreadLaunchPreparationInput,
     ) => Effect.Effect<
       Orchestrator.OrchestratorV2DispatchResult,
-      | Orchestrator.OrchestratorV2Error
-      | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      ThreadManagement.ThreadManagementDispatchError
     >;
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
@@ -865,6 +866,9 @@ const make = Effect.gen(function* () {
       }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
+      if (input.delegatedFrom !== undefined) {
+        yield* threads.assertDelegationModelEnabled(input);
+      }
       yield* threads.assertProviderInstanceEnabled({
         projectId: input.projectId,
         commandId: input.commandId,
