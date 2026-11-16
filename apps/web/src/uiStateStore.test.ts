@@ -26,6 +26,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
+    newProjectLayout: "standard",
+    newProjectPublishHost: null,
     ...overrides,
   };
 }
@@ -152,6 +154,8 @@ describe("parsePersistedState", () => {
       sidebarProjectScopeKeys: [],
       hiddenThreadKeys: [],
       pullRequestMergeMethod: "merge",
+      newProjectLayout: "standard",
+      newProjectPublishHost: null,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -172,6 +176,21 @@ describe("parsePersistedState", () => {
     });
 
     expect(parsed.threadChangedFilesExpandedById).toEqual({});
+  });
+
+  it("keeps a remembered new-project layout and publish host only when they parse", () => {
+    expect(
+      parsePersistedState({
+        newProjectLayout: "worktree-container",
+        newProjectPublishHost: "github",
+      }),
+    ).toMatchObject({ newProjectLayout: "worktree-container", newProjectPublishHost: "github" });
+    expect(
+      parsePersistedState({
+        newProjectLayout: "sideways" as unknown as "standard",
+        newProjectPublishHost: "",
+      }),
+    ).toMatchObject({ newProjectLayout: "standard", newProjectPublishHost: null });
   });
 
   it("migrates legacy CWD project preferences into local alias keys", () => {
@@ -266,6 +285,8 @@ describe("uiStateStore persistence", () => {
         },
       },
       pullRequestMergeMethod: "merge",
+      newProjectLayout: "standard",
+      newProjectPublishHost: null,
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,

@@ -17,6 +17,7 @@ import {
   buildAddProjectRemoteSourceReadiness,
   type AddProjectRemoteSource,
   type AddProjectRemoteSourceReadiness,
+  type NewProjectPublishTarget,
 } from "@t3tools/client-runtime/operations/projects";
 import {
   type EnvironmentId,
@@ -835,6 +836,25 @@ export function remoteProjectInputPlaceholder(flow: AddProjectCloneFlow | null):
     return "Enter Git clone URL";
   }
   return `Enter ${addProjectRemoteSourceLabel(flow.source)} repository (${addProjectRemoteSourcePathHint(flow.source)})`;
+}
+
+/** The publish hosts a query names, matched case-insensitively across each host's own words. */
+export function filterNewProjectPublishTargets(
+  targets: ReadonlyArray<NewProjectPublishTarget>,
+  query: string,
+): ReadonlyArray<NewProjectPublishTarget> {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return targets;
+  return targets.filter((target) =>
+    [
+      target.definition.label,
+      target.definition.pickerLabel,
+      ...(target.definition.searchKeywords ?? []),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle),
+  );
 }
 
 export function buildPaletteRemoteSourceReadiness(

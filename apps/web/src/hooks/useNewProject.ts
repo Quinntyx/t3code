@@ -7,7 +7,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectCloneLayout } from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { waitForProject } from "~/state/entities";
@@ -34,6 +34,7 @@ export function useNewProject() {
     readonly environmentId: EnvironmentId;
     readonly workspaceRoot: string;
     readonly target: NewProjectPublishTarget;
+    readonly layout: ProjectCloneLayout;
   }) => {
     const { label } = input.target.definition;
     const result = await publishRepository({
@@ -41,7 +42,7 @@ export function useNewProject() {
       input: {
         cwd: input.workspaceRoot,
         provider: input.target.definition.kind,
-        repository: getNewProjectRepository(input.target, input.workspaceRoot),
+        repository: getNewProjectRepository(input.target, input.workspaceRoot, input.layout),
         visibility: "private",
       },
     });
@@ -70,11 +71,17 @@ export function useNewProject() {
   return async (input: {
     readonly environmentId: EnvironmentId;
     readonly name: string;
+    readonly parentDirectory: string | null;
+    readonly layout: ProjectCloneLayout | null;
     readonly publishTo: NewProjectPublishTarget | null;
   }): Promise<boolean> => {
     const result = await createNew({
       environmentId: input.environmentId,
-      input: { name: input.name },
+      input: {
+        name: input.name,
+        ...(input.parentDirectory === null ? {} : { parentDirectory: input.parentDirectory }),
+        ...(input.layout === null ? {} : { layout: input.layout }),
+      },
     });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
@@ -106,6 +113,7 @@ export function useNewProject() {
         environmentId: input.environmentId,
         workspaceRoot,
         target: input.publishTo,
+        layout: input.layout ?? "standard",
       });
     }
 
@@ -122,7 +130,8 @@ export function useNewProject() {
       return null;
     });
     if (project === null) return true;
-    await handleNewThread(projectRef).catch((error: unknown) => {
+    // A new project's checkout is wherever it was created, so its first thread runs in place.
+    await handleNewThread(projectRef, { envMode: "local" }).catch((error: unknown) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
