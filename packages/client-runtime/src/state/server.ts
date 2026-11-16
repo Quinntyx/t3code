@@ -1391,6 +1391,7 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:thread-usage",
       tag: WS_METHODS.serverGetThreadUsage,
       staleTimeMs: 30_000,
+      refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
     }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry-history",
