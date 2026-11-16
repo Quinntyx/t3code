@@ -107,3 +107,23 @@ it.effect("reads older preferences without hidden keys and sanitizes stored valu
     });
   }),
 );
+
+it.effect("keeps a remembered new project layout and publishing host", () =>
+  Effect.gen(function* () {
+    const oldStore = yield* fixture({ baseFontSize: 18 });
+    expect(yield* oldStore.load).toEqual({ baseFontSize: 18 });
+    const store = yield* fixture({
+      newProjectLayout: "worktree-container",
+      newProjectPublishHost: "github",
+    });
+    expect(yield* store.load).toEqual({
+      newProjectLayout: "worktree-container",
+      newProjectPublishHost: "github",
+    });
+    const invalid = yield* fixture({
+      newProjectLayout: "sideways",
+      newProjectPublishHost: "Not A Kind",
+    });
+    expect(yield* invalid.load).toEqual({});
+  }),
+);

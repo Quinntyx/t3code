@@ -134,6 +134,14 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
   }),
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: () => AsyncResult.success({}),
+  useAtomSet: () => () => {},
+}));
+vi.mock("../../state/preferences", () => ({
+  mobilePreferencesAtom: {},
+  updateMobilePreferencesAtom: {},
+}));
 vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => () => {} }));
 vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => ({ data: null }) }));
 vi.mock("../../state/presentation", () => ({
@@ -168,6 +176,7 @@ vi.mock("../../state/projects", () => ({
 vi.mock("../../state/use-composer-drafts", () => ({
   waitForComposerDraftsLoaded: async () => {},
   createNewTaskDraft: () => "prompt-draft",
+  updateComposerDraftSettings: () => {},
   setComposerDraftText: () => {},
 }));
 

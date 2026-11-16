@@ -10,9 +10,11 @@ import {
   PullRequestInvolvement,
   PullRequestListFilters,
   PullRequestListState,
+  type ProjectCloneLayout,
   type ProviderInstanceId,
   type PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { ToolCallVisibility } from "@t3tools/contracts/settings";
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
@@ -144,6 +146,9 @@ export interface Preferences {
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
+  /** The checkout layout and publishing host a new project last used. */
+  readonly newProjectLayout?: ProjectCloneLayout;
+  readonly newProjectPublishHost?: SourceControlProviderKind;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -186,6 +191,7 @@ export class MobilePreferencesStore extends Context.Service<
 >()("@t3tools/mobile/persistence/mobile-preferences/MobilePreferencesStore") {}
 
 const isToolCallVisibility = Schema.is(ToolCallVisibility);
+const isSourceControlProviderKind = Schema.is(SourceControlProviderKind);
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
@@ -238,6 +244,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
+    newProjectLayout?: ProjectCloneLayout;
+    newProjectPublishHost?: SourceControlProviderKind;
   } = {};
 
   if (Array.isArray(parsed.hiddenNavigationTabs)) {
@@ -437,6 +445,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isWorkspaceSelections(parsed.workspaceSelections)) {
     preferences.workspaceSelections = parsed.workspaceSelections;
+  }
+  if (parsed.newProjectLayout === "standard" || parsed.newProjectLayout === "worktree-container") {
+    preferences.newProjectLayout = parsed.newProjectLayout;
+  }
+  if (isSourceControlProviderKind(parsed.newProjectPublishHost)) {
+    preferences.newProjectPublishHost = parsed.newProjectPublishHost;
   }
   return preferences;
 }
