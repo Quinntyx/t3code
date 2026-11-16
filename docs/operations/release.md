@@ -11,7 +11,7 @@ GitHub releases remain there, but new fork builds are Forgejo artifacts and
 packages, not GitHub releases.
 
 `.forgejo/workflows/ci.yml` runs changed-file checks and builds Linux x64 AppImages
-on the local `ubuntu-latest` runner. Successful pushes to `main` publish the stable
+and Intel macOS DMGs on the local `ubuntu-latest` runner. Successful pushes to `main` publish the stable
 update feed at
 `https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-desktop/stable/`.
 The runner needs an isolated Linux job container with root access for native build
@@ -25,6 +25,15 @@ selected. The existing pacman-owned `/opt` installation cannot replace itself:
 keep it as a fallback, but do not point the updater at package-managed files.
 Subsequent AppImage updates use the normal in-app update controls. Both checks and
 downloads require Tailscale; the HTTPS endpoint is served only on the tailnet.
+
+The macOS build is packaged on Linux, so it is unsigned and has no passkey support.
+Download `t3code-mac-x64` from Forgejo Actions, drag the app into Applications, and
+open it the first time with right-click → Open. Updates then arrive through the same
+in-app controls and feed as the AppImage. Squirrel.Mac refuses unsigned apps, so this
+build unpacks the downloaded zip and replaces its own bundle when it restarts; that
+needs the app in a folder you can write to, which a mounted disk image is not. The
+job downloads Apple's macOS SDK from a third-party mirror pinned by checksum. See
+[macOS DMGs from Linux](./development.md#macos-dmgs-from-linux).
 
 `.forgejo/workflows/mobile.yml` exports Android and iOS updates with Expo's native
 fingerprint and publishes them to tailnet-only Forgejo package feeds on `main`.
@@ -49,7 +58,7 @@ production APKs use the separate `t3code` signing key backed up privately in
 The mobile workflow is called by Fork CI after its quality gate, not independently.
 Publication is serialized, and an obsolete main revision cannot advance a feed.
 The Linux runner can export iOS JavaScript, but an installable iOS binary still
-requires a Mac runner and Apple signing/provisioning. Desktop macOS/Windows builds
+requires a Mac runner and Apple signing/provisioning. Signed macOS builds, Windows builds
 and upstream npm/AUR publishing are not enabled by the fork workflows.
 
 ### Tailnet update endpoint
