@@ -553,6 +553,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
 
   const preferredToolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
+  const foldContextCompactions = useClientSettings((settings) => settings.foldContextCompactions);
   const toolCallVisibility =
     findActive && preferredToolCallVisibility === "zen" ? "hideAll" : preferredToolCallVisibility;
   const revealedMessageId = citationRequest?.citation.messageId ?? null;
@@ -669,6 +670,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     worktreeSetup,
     toolCallVisibility,
     revealedMessageId,
+    foldContextCompactions,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
   const matchedApprovalRequestIds = new Set<string>();

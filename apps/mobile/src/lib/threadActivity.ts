@@ -1090,6 +1090,7 @@ function deriveThreadFeedRunFolds(
   latestRun: ThreadFeedLatestRun | null,
   runlessWorkActive: boolean,
   feedFailedRunIds: ReadonlySet<RunId>,
+  foldContextCompactions: boolean,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
   const interruptedRunIds = new Set<RunId>();
@@ -1196,7 +1197,12 @@ function deriveThreadFeedRunFolds(
             entry.id !== terminalAssistantId &&
             entry.type !== "html-render" &&
             entry.type !== "mcp-app" &&
-            !(entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) &&
+            !(
+              entry.type === "activity-group" &&
+              isContextCompactionActivityGroup(entry) &&
+              (!foldContextCompactions ||
+                entry.activities[0]?.projectedItem.item.status === "failed")
+            ) &&
             !(
               entry.type === "activity-group" &&
               entry.activities.some(
@@ -1378,6 +1384,7 @@ function presentationRestart(
     previous.activeWorkStartedAt !== activeWorkStartedAt ||
     previous.runlessWorkActive !== runlessWorkActive ||
     previous.display.toolCallVisibility !== display.toolCallVisibility ||
+    previous.display.foldContextCompactions !== display.foldContextCompactions ||
     previous.display.revealedMessageId !== display.revealedMessageId ||
     !setsEqual(previous.expandedRunIds, expandedRunIds) ||
     !setsEqual(previous.expandedWorkGroupIds, expandedWorkGroupIds)
@@ -1527,11 +1534,13 @@ function liveAnswerPreview(feed: ReadonlyArray<ThreadFeedEntry>): string | null 
 export interface ThreadFeedDisplay {
   readonly toolCallVisibility: ToolCallVisibility;
   readonly revealedMessageId: MessageId | null;
+  readonly foldContextCompactions: boolean;
 }
 
 const DEFAULT_THREAD_FEED_DISPLAY: ThreadFeedDisplay = {
   toolCallVisibility: "showAll",
   revealedMessageId: null,
+  foldContextCompactions: false,
 };
 
 export function deriveThreadFeedPresentation(
@@ -1632,7 +1641,13 @@ export function deriveThreadFeedPresentation(
   }
   const foldsByAnchorId = zen
     ? new Map<string, ThreadFeedRunFold>()
-    : deriveThreadFeedRunFolds(sourceFeed, latestRun, isWorking && runlessWorkActive, failedRunIds);
+    : deriveThreadFeedRunFolds(
+        sourceFeed,
+        latestRun,
+        isWorking && runlessWorkActive,
+        failedRunIds,
+        display.foldContextCompactions,
+      );
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
     if (!expandedRunIds.has(fold.runId)) {

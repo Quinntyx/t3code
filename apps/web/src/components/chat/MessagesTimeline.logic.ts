@@ -1013,6 +1013,7 @@ function deriveTurnFolds(input: {
   runlessWorkActive: boolean;
   liveSubagentEntryIds: ReadonlySet<string>;
   completeSupersededReplyEntryIds: ReadonlySet<string>;
+  foldContextCompactions: boolean;
 }): ReadonlyMap<string, TurnFold> {
   const interruptedRunIds = new Set<RunId>();
   const promptIndexByRunId = new Map<RunId, number>();
@@ -1131,16 +1132,19 @@ function deriveTurnFolds(input: {
       if (entry.id === group.terminalEntry?.id) {
         continue;
       }
-      const isCompaction = timelineEntryIsCompaction(entry);
+      const keepsCompaction =
+        timelineEntryIsCompaction(entry) &&
+        (!input.foldContextCompactions ||
+          (entry.kind === "work" && entry.entry.structuredPayload?.status === "failed"));
       const isFoldableTrailingActivity =
         entry.kind === "work" &&
         entry.entry.toolLifecycleStatus !== "inProgress" &&
         !workEntryDisplayIndicatesToolFailure(entry.entry);
-      if (!isCompaction && index > terminalEntryIndex && !isFoldableTrailingActivity) {
+      if (!keepsCompaction && index > terminalEntryIndex && !isFoldableTrailingActivity) {
         continue;
       }
       if (
-        isCompaction ||
+        keepsCompaction ||
         timelineEntryIsPersistentResourceCard(entry) ||
         input.liveSubagentEntryIds.has(entry.id) ||
         input.completeSupersededReplyEntryIds.has(entry.id)
@@ -1486,6 +1490,7 @@ function deriveTimelineTurnFolds(
     | "runningRunId"
     | "toolCallVisibility"
     | "revealedMessageId"
+    | "foldContextCompactions"
   >,
 ) {
   if (input.toolCallVisibility === "zen") return new Map<string, TurnFold>();
@@ -1504,6 +1509,7 @@ function deriveTimelineTurnFolds(
     runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
     liveSubagentEntryIds: liveSubagentCardEntryIds(timelineEntries),
     completeSupersededReplyEntryIds: completeSupersededReplyEntryIds(timelineEntries),
+    foldContextCompactions: input.foldContextCompactions === true,
   });
 }
 
@@ -1526,6 +1532,7 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup?: WorktreeSetupSnapshot | null;
   toolCallVisibility?: ToolCallVisibility;
   revealedMessageId?: MessageId | null;
+  foldContextCompactions?: boolean;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input);
   const isPendingApproval = (entry: WorkLogEntry) => {
@@ -1582,6 +1589,7 @@ export function deriveMessagesTimelineRows(input: {
           runlessWorkActive,
           liveSubagentEntryIds,
           completeSupersededReplyEntryIds: completeSupersededReplyIds,
+          foldContextCompactions: input.foldContextCompactions === true,
         });
   const timelineEntryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
   const collapsedEntryIds = new Set<string>();

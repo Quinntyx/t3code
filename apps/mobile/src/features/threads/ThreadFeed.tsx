@@ -318,6 +318,7 @@ function isFreshTimestamp(input: string): boolean {
 
 export interface ThreadFeedProps {
   readonly toolCallVisibility?: ToolCallVisibility;
+  readonly foldContextCompactions?: boolean;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
@@ -2774,7 +2775,11 @@ function useThreadFeedPresentation(
       props.activeWorkStartedAt,
       props.runlessWorkActive ?? false,
       feedCache,
-      { toolCallVisibility: props.toolCallVisibility ?? "showAll", revealedMessageId },
+      {
+        toolCallVisibility: props.toolCallVisibility ?? "showAll",
+        revealedMessageId,
+        foldContextCompactions: props.foldContextCompactions === true,
+      },
     ),
     props.feed,
     props.queuedMessages,

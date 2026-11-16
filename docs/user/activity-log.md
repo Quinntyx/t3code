@@ -29,3 +29,6 @@ and the agent's last reply, which appears when the turn ends. If you steer while
 answering, the answer it finished before reading your steer stays too. On web and desktop, Find
 shows the in-between messages while it is open. Approvals, questions, and errors always show. The
 setting applies to this browser or device only.
+
+**Fold context compactions**, next to it in the same settings, moves **Context compacted**
+dividers into a finished turn's collapsed work. By default they stay visible below the fold.
