@@ -451,11 +451,16 @@ const make = Effect.gen(function* () {
     const container = yield* claimNamedFolder(parent, input.name);
     const workspaceRoot =
       input.layout === "worktree-container" ? path.join(container, "main") : container;
-    if (workspaceRoot !== container) yield* ensureFolder(workspaceRoot);
     const removeFolder = fileSystem.remove(container, { recursive: true }).pipe(Effect.ignore);
     const prepared = yield* Effect.all([
-      scaffoldRepository(workspaceRoot, input.name).pipe(
-        Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
+      (workspaceRoot === container ? Effect.void : ensureFolder(workspaceRoot)).pipe(
+        Effect.andThen(
+          scaffoldRepository(workspaceRoot, input.name).pipe(
+            Effect.mapError(
+              (cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause }),
+            ),
+          ),
+        ),
       ),
       random
         .uuidV4()

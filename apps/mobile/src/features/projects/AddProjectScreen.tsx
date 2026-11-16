@@ -1247,20 +1247,21 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
       { environmentId: environment.environmentId, projectId },
       15_000,
     );
-    submittingRef.current = false;
-    setIsSubmitting(false);
     if (project === null) {
+      submittingRef.current = false;
+      setIsSubmitting(false);
       setName("");
       setError(
         "The project was created but has not reached this device yet. It will appear in the project list once the connection catches up.",
       );
       return;
     }
-    // The first thread works in the new checkout wherever the folder is, so it seeds the
-    // draft's mode instead of relying on the server's new-project folder rule.
+    // Stay submitting until the draft is ready, or a second tap creates a second project.
     const draftId = await newProjectDraft(environment.environmentId, projectId).catch(
       () => undefined,
     );
+    submittingRef.current = false;
+    setIsSubmitting(false);
     openNewTaskDraft(
       {
         environmentId: environment.environmentId,

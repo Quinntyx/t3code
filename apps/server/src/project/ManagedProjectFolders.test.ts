@@ -58,6 +58,7 @@ interface HarnessOptions {
   readonly projects?: (
     real: ProjectService.ProjectService["Service"],
   ) => ProjectService.ProjectService["Service"];
+  readonly fileSystem?: (real: FileSystem.FileSystem) => FileSystem.FileSystem;
 }
 
 const layer = (baseDir: string, options?: HarnessOptions) =>
@@ -68,6 +69,14 @@ const layer = (baseDir: string, options?: HarnessOptions) =>
         : Layer.effect(
             ProjectService.ProjectService,
             ProjectService.ProjectService.pipe(Effect.map(options.projects)),
+          ),
+    ),
+    Layer.provide(
+      options?.fileSystem === undefined
+        ? Layer.empty
+        : Layer.effect(
+            FileSystem.FileSystem,
+            FileSystem.FileSystem.pipe(Effect.map(options.fileSystem)),
           ),
     ),
     Layer.provideMerge(RuntimeLayer.layerProjectService),
@@ -607,6 +616,46 @@ it.effect("removes the whole container when a worktree-container create fails", 
                 cause: "store unavailable",
               }),
             ),
+        }),
+    },
+  ),
+);
+
+it.effect("removes the container when its main checkout folder cannot be created", () =>
+  withScratch(
+    ({ baseDir }) =>
+      Effect.gen(function* () {
+        const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = path.join(baseDir, "full-disk");
+
+        const failure = yield* Effect.flip(
+          folders.createNamedProject({
+            name: "No Room",
+            parentDirectory: parent,
+            layout: "worktree-container",
+          }),
+        );
+
+        assert.equal(failure._tag, "NamedProjectFolderError");
+        assert.deepEqual(yield* fileSystem.readDirectory(parent), []);
+      }),
+    {
+      fileSystem: (real) =>
+        FileSystem.FileSystem.of({
+          ...real,
+          makeDirectory: (target, options) =>
+            /[\\/]main$/.test(target)
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "makeDirectory",
+                    description: "Forced checkout folder failure.",
+                  }),
+                )
+              : real.makeDirectory(target, options),
         }),
     },
   ),

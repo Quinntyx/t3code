@@ -2397,6 +2397,7 @@ function OpenCommandPaletteDialog(props: {
     }
     const resolved = resolveProjectPathForDispatch(trimmedPath, currentProjectCwdForBrowse);
     if (resolved.length === 0) return;
+    browseNavigation.invalidate();
     setNewProjectFlow((flow) =>
       flow === null ? flow : { ...flow, step: "name", parentDirectory: resolved },
     );
@@ -3006,9 +3007,12 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     if (newProjectStep === "location") {
-      // The picked folder is where the project goes, not a project to add.
-      const linuxPath = parseWslUncPath(pickedPath)?.linuxPath ?? pickedPath;
-      confirmNewProjectLocation(linuxPath);
+      // A WSL share is a Linux path only to the WSL backend; Windows takes the share itself.
+      confirmNewProjectLocation(
+        isWindowsPlatform(browseEnvironmentPlatform)
+          ? pickedPath
+          : (parseWslUncPath(pickedPath)?.linuxPath ?? pickedPath),
+      );
       return;
     }
     if (parseWslUncPath(pickedPath)) {
