@@ -89,6 +89,7 @@ const withScratch = <A, E>(
     E,
     | ManagedProjectFolders.ManagedProjectFolders
     | ProjectService.ProjectService
+    | GitVcsDriver.GitVcsDriver
     | NodeServices.NodeServices
     | Scope.Scope
   >,
@@ -465,6 +466,149 @@ it.effect("keeps a folder that another project owns when the create conflicts", 
         ]);
       }),
     ),
+  ),
+);
+
+it.effect(
+  "creates a named project in a parent folder outside the data dir, and suffixes a taken name there",
+  () =>
+    withScratch(({ baseDir }) =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const parent = path.join(baseDir, "elsewhere", "nested");
+
+          const first = yield* folders.createNamedProject({
+            name: "Pinball Stats",
+            parentDirectory: parent,
+          });
+          const second = yield* folders.createNamedProject({
+            name: "pinball stats",
+            parentDirectory: parent,
+          });
+
+          assert.equal(first.workspaceRoot, path.join(parent, "pinball-stats"));
+          assert.equal(second.workspaceRoot, path.join(parent, "pinball-stats-2"));
+          assert.isTrue(yield* fileSystem.exists(path.join(first.workspaceRoot, "README.md")));
+          assert.isFalse(yield* fileSystem.exists(folders.namedProjectsRoot));
+          assert.deepEqual(yield* fileSystem.readDirectory(parent), [
+            "pinball-stats",
+            "pinball-stats-2",
+          ]);
+        }),
+      ),
+    ),
+);
+
+it.effect(
+  "puts the checkout in <folder>/main, and the worktrees beside it, for a worktree container",
+  () =>
+    withScratch(({ baseDir }) =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const path = yield* Path.Path;
+          const parent = path.join(baseDir, "containers");
+
+          const created = yield* folders.createNamedProject({
+            name: "Pinball Stats",
+            parentDirectory: parent,
+            layout: "worktree-container",
+          });
+
+          const container = path.join(parent, "pinball-stats");
+          assert.equal(created.workspaceRoot, path.join(container, "main"));
+          assert.isUndefined(created.commitError);
+          assert.isTrue(
+            (yield* gitOutput(created.workspaceRoot, ["rev-parse", "--verify", "HEAD"])).length > 0,
+          );
+          assert.equal(
+            yield* gitOutput(created.workspaceRoot, ["ls-files", "--", "README.md"]),
+            "README.md",
+          );
+
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          const planned = yield* driver.resolveWorktreePlacement({
+            cwd: created.workspaceRoot,
+            path: null,
+            refName: "HEAD",
+            newRefName: "feature/x",
+          });
+          assert.equal(planned.layout, "worktree-container");
+          assert.equal(path.dirname(planned.path), container);
+          assert.notEqual(planned.path, created.workspaceRoot);
+        }),
+      ),
+    ),
+);
+
+it.effect("rejects a relative location and creates nothing", () =>
+  withScratch(
+    () =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const fileSystem = yield* FileSystem.FileSystem;
+
+          const failure = yield* Effect.flip(
+            folders.createNamedProject({ name: "Relative", parentDirectory: "some/relative" }),
+          );
+
+          assert.equal(failure._tag, "NamedProjectFolderError");
+          assert.equal(
+            failure.message,
+            "Failed to create the project folder: The location must be an absolute folder on this machine.",
+          );
+          assert.isFalse(yield* fileSystem.exists(folders.namedProjectsRoot));
+        }),
+      ),
+    { git: Layer.mock(GitVcsDriver.GitVcsDriver)({}) },
+  ),
+);
+
+it.effect("removes the whole container when a worktree-container create fails", () =>
+  withScratch(
+    ({ baseDir }) =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const parent = path.join(baseDir, "rejected-parent");
+
+          const failure = yield* Effect.flip(
+            folders.createNamedProject({
+              name: "Rejected",
+              parentDirectory: parent,
+              layout: "worktree-container",
+            }),
+          );
+
+          assert.equal(failure._tag, "NamedProjectCreateError");
+          assert.deepEqual(yield* fileSystem.readDirectory(parent), []);
+          assert.isTrue(yield* fileSystem.exists(parent));
+        }),
+      ),
+    {
+      projects: (real) =>
+        ProjectService.ProjectService.of({
+          ...real,
+          create: (input) =>
+            Effect.fail(
+              new ProjectService.ProjectOperationError({
+                operation: "dispatch-project-command",
+                projectId: input.projectId,
+                cause: "store unavailable",
+              }),
+            ),
+        }),
+    },
   ),
 );
 

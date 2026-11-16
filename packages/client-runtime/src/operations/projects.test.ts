@@ -10,6 +10,8 @@ import {
   getCloneDirectoryPath,
   getProjectCloneCheckoutPath,
   getDefaultCloneUrl,
+  getNewProjectDefaultParent,
+  getNewProjectRepository,
   githubIncompleteOwnerRepositoryMessage,
   normalizePastedCloneUrl,
 } from "./projects.ts";
@@ -138,6 +140,39 @@ describe("add project shared logic", () => {
         getCloneDirectoryPath("git@github.com:owner/repo.git", true),
       ),
     ).toBe("C:\\Users\\me\\ghq\\github.com\\owner\\repo");
+  });
+
+  it("prefers the Add project starts in setting for a new project, then the managed root", () => {
+    expect(
+      getNewProjectDefaultParent({
+        addProjectBaseDirectory: "  ~/src  ",
+        newProjectsRoot: "/home/me/.t3/projects",
+      }),
+    ).toBe("~/src");
+    expect(
+      getNewProjectDefaultParent({
+        addProjectBaseDirectory: "   ",
+        newProjectsRoot: "/home/me/.t3/projects",
+      }),
+    ).toBe("/home/me/.t3/projects");
+    expect(
+      getNewProjectDefaultParent({ addProjectBaseDirectory: null, newProjectsRoot: null }),
+    ).toBeNull();
+  });
+
+  it("names a new project's repository after its folder, not its main checkout", () => {
+    const target = { owner: "octocat" };
+    expect(getNewProjectRepository(target, "/src/pinball-stats")).toBe("octocat/pinball-stats");
+    expect(getNewProjectRepository(target, "/src/pinball-stats/", "standard")).toBe(
+      "octocat/pinball-stats",
+    );
+    expect(getNewProjectRepository(target, "/src/pinball-stats/main", "worktree-container")).toBe(
+      "octocat/pinball-stats",
+    );
+    expect(
+      getNewProjectRepository(target, "C:\\src\\pinball-stats\\main", "worktree-container"),
+    ).toBe("octocat/pinball-stats");
+    expect(getNewProjectRepository({ owner: null }, "/src/pinball-stats")).toBe("pinball-stats");
   });
 
   it("keeps a numeric repository name that sits on a path", () => {

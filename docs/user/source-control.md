@@ -147,12 +147,15 @@ from GitHub keep their pull requests on GitHub; open those from the GitHub remot
 
 To start from nothing, choose **New project** in the command palette (`Cmd/Ctrl+K`), or
 **New project** under **Add Project** on any client, and type a name. T3 Code makes a Git
-repository in `~/.t3/projects` (the `projects` folder of your T3 data directory) with a README,
-an icon, and a first commit, then opens a new thread in it. Until the project has a thread, new
-threads work in its folder, even when your default is a new worktree. The folder is named after the project,
-like `pinball-stats` for "Pinball Stats". Turn on **Create private repository on GitHub** to also
-publish it. If Git has no name or email on that machine, the project is created without the
-first commit.
+repository with a README, an icon, and a first commit, then opens a new thread in it. It goes in
+the folder from **Add project starts in** (**Settings → Threads**) when that is set, and in
+`~/.t3/projects` (the `projects` folder of your T3 data directory) otherwise. **Location** picks
+another folder for this project, and you can choose to put the checkout in `<project>/main` so the
+thread worktrees sit beside it. T3 Code remembers the layout and host you used last. Until the
+project has a thread, new threads work in its folder, even when your default is a new worktree. The
+folder is named after the project, like `pinball-stats` for "Pinball Stats". Turn on **Create
+private repository** to publish it to the host you pick. If Git has no name or email on that
+machine, the project is created without the first commit.
 
 Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository. Choose a hosting
 provider or paste a Git URL, then choose where to save it. The project opens right away while the

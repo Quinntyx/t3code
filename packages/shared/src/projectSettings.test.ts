@@ -230,6 +230,12 @@ describe("resolveNewThreadEnvMode", () => {
         newProjectsRoot: "c:/data/projects",
       }),
     ).toBe("local");
+    expect(
+      resolveNewThreadEnvMode({
+        ...newProject,
+        workspaceRoot: "/data/projects/pinball-stats/main",
+      }),
+    ).toBe("local");
   });
 
   it("keeps the configured default once the project has a thread or is not a new project", () => {

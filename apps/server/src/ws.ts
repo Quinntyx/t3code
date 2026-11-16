@@ -2006,6 +2006,7 @@ export const layerWsRpc = (
             onSome: (root) => ({ scratchWorkspaceRoot: root }),
           }),
           newProjectsRoot: managedFolders.namedProjectsRoot,
+          newProjectPlacement: true,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
         };
       });
@@ -2991,7 +2992,13 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.projectsCreateNew]: (input) =>
           managedFolders
-            .createNamedProject(input)
+            .createNamedProject({
+              name: input.name,
+              ...(input.parentDirectory === undefined
+                ? {}
+                : { parentDirectory: input.parentDirectory }),
+              ...(input.layout === undefined ? {} : { layout: input.layout }),
+            })
             .pipe(
               Effect.mapError(
                 (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
