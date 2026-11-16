@@ -561,6 +561,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "fold-context-compactions",
+    title: "Fold context compactions",
+    to: "/settings/chat",
+    searchTerms: ["context compacted divider collapse worked for turn fold tool calls activity"],
+  },
+  {
     id: "guest-links",
     title: "Guest links",
     to: "/settings/labs",

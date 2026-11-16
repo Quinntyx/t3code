@@ -29,6 +29,7 @@ import {
   threadFeedCompactionLabels,
   createThreadFeedCache,
   deriveThreadFeedPresentation,
+  isContextCompactionActivityGroup,
   messageFoldRunId,
   type ThreadFeedCache,
   type ThreadFeedEntry,
@@ -247,6 +248,54 @@ it.each(["/compact", "Continue"])(
     }
   },
 );
+
+it("folds a mid-turn compaction divider with its work only when the setting asks", () => {
+  const feedFor = (status: "completed" | "failed") =>
+    buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command(), 1),
+      projected(
+        {
+          ...base("compaction", "2026-06-20T00:00:02.500Z", 2),
+          type: "compaction",
+          driver: ProviderDriverKind.make("claude"),
+          status,
+          beforeTokenCount: 100_000,
+          afterTokenCount: 20_000,
+        },
+        2,
+      ),
+      projected({ ...command(), id: TurnItemId.make("item-command-after") }, 3),
+      projected(assistantMessage(), 4),
+    ]);
+  for (const [foldContextCompactions, status, shown] of [
+    [false, "completed", true],
+    [true, "completed", false],
+    [true, "failed", true],
+  ] as const) {
+    const rows = deriveThreadFeedPresentation(
+      feedFor(status),
+      {
+        runId,
+        status: "completed",
+        startedAt: "2026-06-20T00:00:01.000Z",
+        completedAt: "2026-06-20T00:00:03.000Z",
+      },
+      new Set(),
+      new Set(),
+      null,
+      false,
+      undefined,
+      { toolCallVisibility: "showAll", revealedMessageId: null, foldContextCompactions },
+    );
+    expect(rows.filter((entry) => entry.type === "run-fold")).toHaveLength(1);
+    expect(
+      rows.some(
+        (entry) => entry.type === "activity-group" && isContextCompactionActivityGroup(entry),
+      ),
+    ).toBe(shown);
+  }
+});
 
 it("binds a persisted resume answer only to the next compaction in its run", () => {
   const requestId = RuntimeRequestId.make("resume-compaction");
@@ -1406,7 +1455,7 @@ describe("buildThreadFeed", () => {
         latestRun ? at(1) : null,
         false,
         undefined,
-        { toolCallVisibility, revealedMessageId: null },
+        { toolCallVisibility, revealedMessageId: null, foldContextCompactions: false },
       ).map((row) =>
         row.type === "activity-group"
           ? row.activities.map((activity) => activity.projectedItem.item.id).join("+")

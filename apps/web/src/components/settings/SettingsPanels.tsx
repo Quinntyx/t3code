@@ -571,6 +571,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.toolCallVisibility !== DEFAULT_UNIFIED_SETTINGS.toolCallVisibility
       ? ["Tool calls in chat"]
       : []),
+    ...(settings.foldContextCompactions !== DEFAULT_UNIFIED_SETTINGS.foldContextCompactions
+      ? ["Fold context compactions"]
+      : []),
     ...(settings.responseStreamingMode !== DEFAULT_UNIFIED_SETTINGS.responseStreamingMode
       ? ["Response streaming"]
       : []),
@@ -696,6 +699,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
+      foldContextCompactions: DEFAULT_UNIFIED_SETTINGS.foldContextCompactions,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       liquidGlassEnabled: DEFAULT_UNIFIED_SETTINGS.liquidGlassEnabled,
@@ -1263,6 +1267,7 @@ export function ChatSettingsPanel() {
 
       <SettingsSection id="activity" title="Activity">
         <ToolCallVisibilityRow />
+        <FoldContextCompactionsRow />
       </SettingsSection>
     </SettingsPageContainer>
   );
@@ -1312,6 +1317,38 @@ function ToolCallVisibilityRow() {
             ))}
           </SelectPopup>
         </Select>
+      }
+    />
+  );
+}
+
+function FoldContextCompactionsRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("fold-context-compactions")}
+      description="Hide “Context compacted” dividers inside a finished turn’s collapsed work instead of showing them below it."
+      resetAction={
+        settings.foldContextCompactions !== DEFAULT_UNIFIED_SETTINGS.foldContextCompactions ? (
+          <SettingResetButton
+            label="fold context compactions"
+            onClick={() =>
+              updateSettings({
+                foldContextCompactions: DEFAULT_UNIFIED_SETTINGS.foldContextCompactions,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.foldContextCompactions}
+          onCheckedChange={(checked) =>
+            updateSettings({ foldContextCompactions: Boolean(checked) })
+          }
+          aria-label="Fold context compactions"
+        />
       }
     />
   );

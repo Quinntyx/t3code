@@ -5,6 +5,7 @@ import { View } from "react-native";
 
 import { AppText as Text } from "../../../../components/ui/AppText";
 import { ListChoiceRow } from "../../../../components/ui/ListChoiceRow";
+import { ListToggleRow } from "../../../../components/ui/ListToggleRow";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../../../state/preferences";
 import { SettingsSection } from "../../components/SettingsSection";
 
@@ -43,6 +44,17 @@ export function ToolCallsAppearanceSection() {
         Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows
         only final answers. Approvals, questions, and errors always show.
       </Text>
+      <SettingsSection>
+        <ListToggleRow
+          label="Fold context compactions"
+          description="Hide “Context compacted” dividers inside a finished turn’s collapsed work instead of showing them below it."
+          value={
+            AsyncResult.isSuccess(preferences) && preferences.value.foldContextCompactions === true
+          }
+          disabled={selected === null}
+          onValueChange={(value) => savePreferences({ foldContextCompactions: value })}
+        />
+      </SettingsSection>
     </View>
   );
 }

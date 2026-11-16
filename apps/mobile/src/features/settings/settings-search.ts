@@ -34,6 +34,8 @@ const SETTINGS_SEARCH_TERMS = {
     "work log",
     "zen",
     "final answers only",
+    "fold context compactions",
+    "context compacted",
     "liquid glass",
     "blur",
     "transparency",

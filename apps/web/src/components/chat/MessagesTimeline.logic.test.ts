@@ -743,6 +743,70 @@ describe("deriveMessagesTimelineRows", () => {
     },
   );
 
+  it("folds a mid-turn compaction divider with its work only when the setting asks", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const [, , , liveUser, liveWork, liveAssistant] = fixture.visibleTurnItems;
+    if (!liveUser || !liveWork || liveAssistant?.item.type !== "assistant_message")
+      throw new Error("Expected live fixture items");
+    const assistantItem = liveAssistant.item;
+    const at = (item: typeof liveWork, position: number) => ({ ...item, position });
+    const timelineEntriesFor = (status: "completed" | "failed") =>
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: [
+          at(liveUser, 0),
+          at(liveWork, 1),
+          at(
+            {
+              ...liveWork,
+              item: {
+                ...assistantItem,
+                id: TurnItemId.make("mid-turn-compaction"),
+                type: "compaction",
+                driver: null,
+                status,
+                beforeTokenCount: 100_000,
+                afterTokenCount: 20_000,
+              },
+            },
+            2,
+          ),
+          at({ ...liveWork, item: { ...liveWork.item, id: TurnItemId.make("after-work") } }, 3),
+          at(
+            {
+              ...liveAssistant,
+              item: { ...assistantItem, text: "Done", streaming: false, status: "completed" },
+            },
+            4,
+          ),
+        ],
+        optimisticMessages: [],
+      });
+    const rowsFor = (foldContextCompactions: boolean, status: "completed" | "failed") =>
+      deriveMessagesTimelineRows({
+        timelineEntries: timelineEntriesFor(status),
+        isWorking: false,
+        latestRun: {
+          runId: fixture.runId,
+          status: "completed",
+          startedAt: fixture.time(5),
+          completedAt: fixture.time(8),
+        },
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        foldContextCompactions,
+      });
+
+    for (const [foldContextCompactions, status, shown] of [
+      [false, "completed", true],
+      [true, "completed", false],
+      [true, "failed", true],
+    ] as const) {
+      const rows = rowsFor(foldContextCompactions, status);
+      expect(rows.filter((row) => row.kind === "turn-fold")).toHaveLength(1);
+      expect(rows.some((row) => row.kind === "context-compaction")).toBe(shown);
+    }
+  });
+
   it("folds an answered compact-on-return question into its compaction row", () => {
     const fixture = makeStreamingTimelineFixture();
     const [history0, history1, history2, liveUser, liveWork, liveAssistant] =
