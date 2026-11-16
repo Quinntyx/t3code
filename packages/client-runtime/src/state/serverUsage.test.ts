@@ -1,6 +1,8 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   UsageDay,
   UsageReadError,
   USAGE_CONTRACT_VERSION,
@@ -8,6 +10,8 @@ import {
   type ServerConfig,
   type ServerConfigStreamEvent,
   ServerSettings,
+  ThreadId,
+  type ThreadUsage,
   type UsageSource,
   type UsageSummary,
   type UsageSummaryInput,
@@ -85,6 +89,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
   let settings = DEFAULT_SERVER_SETTINGS;
   let requests = 0;
+  let threadUsageRequests = 0;
   const inputs: UsageSummaryInput[] = [];
   const client = {
     [WS_METHODS.serverRefreshUsageRates]: () => Effect.succeed(PRICING),
@@ -127,6 +132,36 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
           pricing: PRICING,
           scanDurationMs: 0,
         } satisfies UsageSummary;
+      }),
+    [WS_METHODS.serverGetThreadUsage]: () =>
+      Effect.sync(() => {
+        threadUsageRequests += 1;
+        const price =
+          settings.usagePriceOverrides["custom-model"]?.inputCostPerMillionTokens ?? null;
+        return {
+          startedAt: "2026-09-04T12:00:00Z",
+          bucketMs: 60_000,
+          models: [
+            {
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              driver: ProviderDriverKind.make("codex"),
+              model: "custom-model",
+              group: "main" as const,
+              threads: 1,
+              tokens: {
+                uncachedInputTokens: 1_000_000,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+              },
+              totalTokens: 1_000_000,
+              costUsd: price,
+            },
+          ],
+          series: [],
+          compactedAt: [],
+        } satisfies ThreadUsage;
       }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession = {
@@ -205,6 +240,9 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     inputs: () => inputs,
     updateSettings,
     summary: (input = INPUT) => atoms.usageSummary({ environmentId: TARGET.environmentId, input }),
+    threadUsage: (threadId: ThreadId) =>
+      atoms.threadUsage({ environmentId: TARGET.environmentId, input: { threadId } }),
+    threadUsageRequests: () => threadUsageRequests,
   };
 });
 
@@ -220,6 +258,22 @@ function settledSummary<E>(
     ),
     Stream.runHead,
     Effect.map(Option.getOrThrow),
+  );
+}
+
+function waitForThreadCost<E>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: Atom.Atom<AsyncResult.AsyncResult<ThreadUsage, E>>,
+  cost: number | null,
+) {
+  return AtomRegistry.toStream(registry, atom).pipe(
+    Stream.filter(
+      (result) =>
+        AsyncResult.isSuccess(result) &&
+        !result.waiting &&
+        result.value.models[0]?.costUsd === cost,
+    ),
+    Stream.runHead,
   );
 }
 
@@ -278,6 +332,26 @@ it.effect("restarts a pending usage read after a price change", () =>
       yield* waitForCost(harness.registry, summary, 5);
       yield* Deferred.await(interrupted);
       expect(harness.requests()).toBe(2);
+      unmount();
+    }),
+  ),
+);
+
+it.effect("refetches thread usage after a price change", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const threadUsage = harness.threadUsage(ThreadId.make("usage-thread"));
+      const unmount = harness.registry.mount(threadUsage);
+      yield* waitForThreadCost(harness.registry, threadUsage, null);
+      yield* harness.updateSettings({
+        ...DEFAULT_SERVER_SETTINGS,
+        usagePriceOverrides: {
+          "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+        },
+      });
+      yield* waitForThreadCost(harness.registry, threadUsage, 5);
+      expect(harness.threadUsageRequests()).toBe(2);
       unmount();
     }),
   ),
