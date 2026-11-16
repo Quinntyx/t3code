@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { ProjectCloneLayout } from "./projectClone.ts";
 import {
   CommandId,
   ForwardCompatibleUnion,
@@ -526,6 +527,10 @@ export type ProjectEnsureScratchResult = typeof ProjectEnsureScratchResult.Type;
 
 export const ProjectCreateNewInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  /** Folder the project's folder is created in. Omitted: the server's `newProjectsRoot`. */
+  parentDirectory: Schema.optionalKey(TrimmedNonEmptyString),
+  /** `worktree-container` puts the checkout in `<folder>/main`. Omitted: `standard`. */
+  layout: Schema.optionalKey(ProjectCloneLayout),
 });
 export type ProjectCreateNewInput = typeof ProjectCreateNewInput.Type;
 

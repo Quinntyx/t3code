@@ -184,10 +184,11 @@ export function resolveNewThreadEnvMode(input: {
   const folder = normalizeProjectPathForComparison(input.workspaceRoot);
   const separator = root.includes("\\") ? "\\" : "/";
   const prefix = root.endsWith(separator) ? root : `${root}${separator}`;
+  if (!folder.startsWith(prefix)) return configured;
+  // A new project's checkout is its folder, or `main` inside it.
+  const [name, checkout, ...deeper] = folder.slice(prefix.length).split(separator);
   const isNewProjectFolder =
-    folder.startsWith(prefix) &&
-    folder.length > prefix.length &&
-    !folder.slice(prefix.length).includes(separator);
+    Boolean(name) && deeper.length === 0 && (checkout === undefined || checkout === "main");
   return isNewProjectFolder ? "local" : configured;
 }
 

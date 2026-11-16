@@ -21,6 +21,7 @@ import {
   getCloneDirectoryName,
   getProjectCloneCheckoutPath,
   getDefaultCloneUrl,
+  getNewProjectDefaultParent,
   getNewProjectPathPreview,
   getNewProjectPublishTarget,
   getNewProjectPublishTargets,
@@ -49,7 +50,11 @@ import {
   inferProjectTitleFromPath,
   isWindowsPlatform,
 } from "@t3tools/client-runtime/state/projects";
-import { resolvePastedPath } from "@t3tools/shared/path";
+import {
+  newProjectFolderName,
+  normalizeProjectPathForDispatch,
+  resolvePastedPath,
+} from "@t3tools/shared/path";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
@@ -70,6 +75,7 @@ import {
   type ParamListBase,
 } from "@react-navigation/native";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -80,6 +86,7 @@ import { AsyncResult } from "effect/reactivity";
 import { cn } from "../../lib/cn";
 import { useProjects, useServerConfigs, waitForProject } from "../../state/entities";
 import { filesystemEnvironment } from "../../state/filesystem";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
@@ -107,6 +114,7 @@ import {
 import {
   createNewTaskDraft,
   setComposerDraftText,
+  updateComposerDraftSettings,
   waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
 
@@ -117,6 +125,7 @@ interface EnvironmentOption {
   readonly machine: EnvironmentMachineKind;
   readonly baseDirectory: string | null;
   readonly newProjectsRoot: string | null;
+  readonly newProjectPlacement: boolean;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
   readonly connectionErrorTraceId: string | null;
@@ -302,12 +311,13 @@ function useBrowsePathInput(
   environment: EnvironmentOption | null,
   pinnedDirectoryName = "",
   cloneDirectoryPath = pinnedDirectoryName,
+  seedDirectoryPath: string | null = null,
 ) {
   const environmentId = environment?.environmentId ?? null;
   const environmentBaseDirectory = environment?.baseDirectory ?? null;
   const clonePathCaseSensitive = !isWindowsPlatform(environment?.platform ?? "");
   const seedPath = getCloneDestinationPath(
-    getAddProjectInitialQuery(environmentBaseDirectory),
+    getAddProjectInitialQuery(seedDirectoryPath ?? environmentBaseDirectory),
     cloneDirectoryPath,
   );
   // Each host keeps the path last typed or browsed for it, and shows its own default until then,
@@ -412,6 +422,7 @@ function useEnvironmentOptions(
         machine: resolveEnvironmentMachineKind(config ?? null),
         baseDirectory: config?.settings.addProjectBaseDirectory ?? null,
         newProjectsRoot: config?.newProjectsRoot ?? null,
+        newProjectPlacement: config?.newProjectPlacement === true,
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
@@ -721,6 +732,24 @@ async function draftWithPrompt(
   await waitForComposerDraftsLoaded();
   const draftId = createNewTaskDraft({ environmentId, projectId });
   setComposerDraftText(draftId, prompt);
+  return draftId;
+}
+
+/** A new project's first thread starts in its checkout, wherever the project's folder is. */
+async function newProjectDraft(
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+): Promise<string> {
+  await waitForComposerDraftsLoaded();
+  const draftId = createNewTaskDraft({ environmentId, projectId });
+  updateComposerDraftSettings(draftId, {
+    workspaceSelection: {
+      mode: "local",
+      branch: null,
+      worktreePath: null,
+      followsCurrentCheckout: true,
+    },
+  });
   return draftId;
 }
 
@@ -1059,17 +1088,50 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         }),
   );
   const publishTargets = getNewProjectPublishTargets(discoveryState.data);
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const storedPreferences = AsyncResult.isSuccess(preferencesResult)
+    ? preferencesResult.value
+    : null;
   const [name, setName] = useState("");
   const [publishes, setPublishes] = useState(false);
   const [publishKind, setPublishKind] = useState<SourceControlProviderKind | null>(null);
-  const publishTarget = getNewProjectPublishTarget(publishTargets, publishKind);
+  const publishTarget = getNewProjectPublishTarget(
+    publishTargets,
+    publishKind ?? storedPreferences?.newProjectPublishHost ?? null,
+  );
+  const [layoutChoice, setLayoutChoice] = useState<ProjectCloneLayout | null>(null);
+  const [isLocationExpanded, setIsLocationExpanded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trimmedName = name.trim();
+  // A server that does not advertise placement keeps the managed projects folder and its behavior.
+  const supportsPlacement = environment?.newProjectPlacement === true;
+  const defaultParent =
+    environment === null
+      ? null
+      : supportsPlacement
+        ? getNewProjectDefaultParent({
+            addProjectBaseDirectory: environment.baseDirectory,
+            newProjectsRoot: environment.newProjectsRoot,
+          })
+        : environment.newProjectsRoot;
+  const layout = supportsPlacement
+    ? (layoutChoice ?? storedPreferences?.newProjectLayout ?? "standard")
+    : "standard";
+  const { navigateToBrowsePath, pathInput, setPathInput } = useBrowsePathInput(
+    environment,
+    "",
+    "",
+    defaultParent,
+  );
+  const parent = supportsPlacement
+    ? normalizeProjectPathForDispatch(pathInput) || null
+    : defaultParent;
   const pathPreview =
-    environment?.newProjectsRoot != null
-      ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName)
-      : null;
+    parent === null
+      ? null
+      : getProjectCloneCheckoutPath(getNewProjectPathPreview(parent, trimmedName), layout);
 
   const showMachines =
     environmentOptions.length > 1 || (environment === null && environmentOptions.length > 0);
@@ -1113,12 +1175,28 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   const submit = async () => {
     if (!environment || trimmedName.length === 0 || submittingRef.current) return;
     const originRoute = getActiveRoute(navigation);
-    submittingRef.current = true;
     setError(null);
+    let parentDirectory: string | null = null;
+    if (supportsPlacement) {
+      const resolved = resolveAddProjectPath({
+        rawPath: pathInput,
+        currentProjectCwd: null,
+        platform: environment.platform,
+      });
+      if (!resolved.ok) {
+        setError(resolved.error);
+        return;
+      }
+      parentDirectory = resolved.path;
+    }
+    submittingRef.current = true;
     setIsSubmitting(true);
     const result = await createNew({
       environmentId: environment.environmentId,
-      input: { name: trimmedName },
+      input: {
+        name: trimmedName,
+        ...(parentDirectory === null ? {} : { parentDirectory, layout }),
+      },
     });
     if (AsyncResult.isFailure(result)) {
       submittingRef.current = false;
@@ -1130,13 +1208,22 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     if (commitError !== undefined) {
       Dialog.alert("Created without a first commit", commitError);
     }
+    const rememberedPreferences = {
+      ...(supportsPlacement ? { newProjectLayout: layout } : {}),
+      ...(publishes && publishTarget !== null
+        ? { newProjectPublishHost: publishTarget.definition.kind }
+        : {}),
+    };
+    if (Object.keys(rememberedPreferences).length > 0) {
+      void savePreferences(rememberedPreferences);
+    }
     if (publishes && publishTarget !== null) {
       void publishRepository({
         environmentId: environment.environmentId,
         input: {
           cwd: workspaceRoot,
           provider: publishTarget.definition.kind,
-          repository: getNewProjectRepository(publishTarget, workspaceRoot),
+          repository: getNewProjectRepository(publishTarget, workspaceRoot, layout),
           visibility: "private",
         },
       }).then((publishResult) => {
@@ -1160,20 +1247,27 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
       { environmentId: environment.environmentId, projectId },
       15_000,
     );
-    submittingRef.current = false;
-    setIsSubmitting(false);
     if (project === null) {
+      submittingRef.current = false;
+      setIsSubmitting(false);
       setName("");
       setError(
         "The project was created but has not reached this device yet. It will appear in the project list once the connection catches up.",
       );
       return;
     }
+    // Stay submitting until the draft is ready, or a second tap creates a second project.
+    const draftId = await newProjectDraft(environment.environmentId, projectId).catch(
+      () => undefined,
+    );
+    submittingRef.current = false;
+    setIsSubmitting(false);
     openNewTaskDraft(
       {
         environmentId: environment.environmentId,
         projectId,
         title: trimmedName,
+        ...(draftId === undefined ? {} : { draftId }),
       },
       originRoute,
     );
@@ -1196,20 +1290,95 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           />
           {pathPreview !== null ? (
             <Text className="px-1 text-sm leading-snug text-foreground-muted" numberOfLines={2}>
-              {trimmedName.length > 0
-                ? `Creates ${pathPreview}`
-                : `Goes in ${environment.newProjectsRoot}`}
+              {trimmedName.length > 0 ? `Creates ${pathPreview}` : `Goes in ${parent}`}
               {showMachines ? ` on ${environment.label}` : null}
             </Text>
           ) : null}
           {machineRows}
+          {supportsPlacement ? (
+            <ListSection>
+              <ListRow
+                title="Location"
+                subtitle={parent}
+                icon={
+                  <SymbolView
+                    name="folder"
+                    size={Platform.OS === "android" ? 24 : 17}
+                    tintColorClassName="accent-icon"
+                    type="monochrome"
+                  />
+                }
+                disabled={isSubmitting}
+                isFirst
+                right={
+                  <SymbolView
+                    name={isLocationExpanded ? "chevron.up" : "chevron.down"}
+                    size={Platform.OS === "android" ? 20 : 13}
+                    tintColorClassName="accent-chevron"
+                    type="monochrome"
+                  />
+                }
+                onPress={() => setIsLocationExpanded((current) => !current)}
+              />
+            </ListSection>
+          ) : null}
+          {supportsPlacement && isLocationExpanded && environment ? (
+            <>
+              <ProjectPathInput
+                value={pathInput}
+                onChangeText={setPathInput}
+                onSubmit={() => setIsLocationExpanded(false)}
+              />
+              <FolderBrowser
+                environment={environment}
+                navigateToBrowsePath={navigateToBrowsePath}
+                pathInput={pathInput}
+                setPathInput={setPathInput}
+              />
+            </>
+          ) : null}
+          {supportsPlacement ? (
+            <ListSection>
+              <ListRow
+                title="Create in main; use sibling worktrees"
+                icon={
+                  <SymbolView
+                    name="arrow.triangle.branch"
+                    size={Platform.OS === "android" ? 24 : 17}
+                    tintColorClassName="accent-icon"
+                    type="monochrome"
+                  />
+                }
+                subtitle={
+                  trimmedName.length > 0
+                    ? `Puts the checkout in ${newProjectFolderName(trimmedName)}/main.`
+                    : "Puts the checkout in a main folder inside the project."
+                }
+                disabled={isSubmitting}
+                isFirst
+                right={
+                  <ThemedSwitch
+                    accessibilityLabel="Use project/main layout"
+                    disabled={isSubmitting}
+                    value={layout === "worktree-container"}
+                    onValueChange={(enabled) =>
+                      setLayoutChoice(enabled ? "worktree-container" : "standard")
+                    }
+                  />
+                }
+                onPress={() =>
+                  setLayoutChoice(layout === "standard" ? "worktree-container" : "standard")
+                }
+              />
+            </ListSection>
+          ) : null}
           {publishTarget !== null ? (
             <ListSection>
               <ListRow
                 title={`Create private repository on ${publishTarget.definition.label}`}
                 subtitle={
                   trimmedName.length > 0 && pathPreview !== null
-                    ? getNewProjectRepository(publishTarget, pathPreview)
+                    ? getNewProjectRepository(publishTarget, pathPreview, layout)
                     : publishTarget.owner
                 }
                 icon={

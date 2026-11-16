@@ -257,6 +257,15 @@ export function getNewProjectPathPreview(newProjectsRoot: string, name: string):
   return getCloneDestinationPath(newProjectsRoot, newProjectFolderName(name));
 }
 
+/** The folder a new project goes in by default: the setting, else the server's managed root. */
+export function getNewProjectDefaultParent(input: {
+  readonly addProjectBaseDirectory: string | null | undefined;
+  readonly newProjectsRoot: string | null | undefined;
+}): string | null {
+  const trimmed = input.addProjectBaseDirectory?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : (input.newProjectsRoot ?? null);
+}
+
 export interface NewProjectPublishTarget {
   readonly definition: SourceControlDefinition;
   readonly owner: string | null;
@@ -288,8 +297,13 @@ export function getNewProjectPublishTarget(
 export function getNewProjectRepository(
   target: Pick<NewProjectPublishTarget, "owner">,
   workspaceRoot: string,
+  layout: ProjectCloneLayout = "standard",
 ): string {
-  const folderName = workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  const segments = workspaceRoot.split(/[\\/]/).filter(Boolean);
+  const folderName =
+    (layout === "worktree-container" && segments.at(-1) === "main"
+      ? segments.at(-2)
+      : segments.at(-1)) ?? "";
   return target.owner ? `${target.owner}/${folderName}` : folderName;
 }
 

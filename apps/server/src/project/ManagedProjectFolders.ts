@@ -2,9 +2,12 @@ import {
   CommandId,
   type GitManagerServiceError,
   ProjectId,
+  type ProjectCloneLayout,
   type ThreadId,
   VcsProcessSpawnError,
 } from "@t3tools/contracts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { newProjectFolderName } from "@t3tools/shared/path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -68,7 +71,9 @@ export class NamedProjectFolderError extends Schema.TaggedError<NamedProjectFold
   },
 ) {
   override get message(): string {
-    return "Failed to create the project folder.";
+    return typeof this.cause === "string"
+      ? `Failed to create the project folder: ${this.cause}`
+      : "Failed to create the project folder.";
   }
 }
 
@@ -99,7 +104,11 @@ export class ManagedProjectFolders extends Context.Service<
     }) => Effect.Effect<Option.Option<string>, ScratchFolderError>;
     readonly namedProjectsRoot: string;
     /** Removes failed/cancelled creations' folders only while no project owns them. */
-    readonly createNamedProject: (input: { readonly name: string }) => Effect.Effect<
+    readonly createNamedProject: (input: {
+      readonly name: string;
+      readonly parentDirectory?: string;
+      readonly layout?: ProjectCloneLayout;
+    }) => Effect.Effect<
       {
         readonly projectId: ProjectId;
         readonly workspaceRoot: string;
@@ -344,15 +353,9 @@ const make = Effect.gen(function* () {
   const namedProjectsRoot = path.resolve(config.baseDir, "projects");
 
   const claimNamedFolder = Effect.fn("ManagedProjectFolders.claimNamedFolder")(function* (
+    parent: string,
     name: string,
   ) {
-    yield* fileSystem
-      .makeDirectory(namedProjectsRoot, { recursive: true })
-      .pipe(
-        Effect.mapError(
-          (cause) => new NamedProjectFolderError({ folder: namedProjectsRoot, cause }),
-        ),
-      );
     const folderName = newProjectFolderName(name);
     const claimed = yield* claimFreeFolder(
       (attempt) =>
@@ -360,20 +363,39 @@ const make = Effect.gen(function* () {
           attempt > MAX_NAMED_FOLDER_ATTEMPTS
             ? Option.none()
             : Option.some(
-                path.join(
-                  namedProjectsRoot,
-                  attempt === 1 ? folderName : `${folderName}-${attempt}`,
-                ),
+                path.join(parent, attempt === 1 ? folderName : `${folderName}-${attempt}`),
               ),
         ),
       (folder, cause) => new NamedProjectFolderError({ folder, cause }),
     );
     if (Option.isSome(claimed)) return claimed.value;
     return yield* new NamedProjectFolderError({
-      folder: path.join(namedProjectsRoot, folderName),
+      folder: path.join(parent, folderName),
       cause: `Every folder name for "${folderName}" is taken.`,
     });
   });
+
+  const resolveParentDirectory = Effect.fn("ManagedProjectFolders.resolveParentDirectory")(
+    function* (parentDirectory: string) {
+      const expanded = expandHomePath(parentDirectory.trim(), yield* HostProcess.HomeDirectory);
+      if (!path.isAbsolute(expanded)) {
+        return yield* new NamedProjectFolderError({
+          folder: parentDirectory,
+          cause: "The location must be an absolute folder on this machine.",
+        });
+      }
+      const parent = path.resolve(expanded);
+      yield* fileSystem
+        .makeDirectory(parent, { recursive: true })
+        .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder: parent, cause })));
+      return parent;
+    },
+  );
+
+  const ensureFolder = (folder: string) =>
+    fileSystem
+      .makeDirectory(folder, { recursive: true })
+      .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder, cause })));
 
   const scaffoldRepository = Effect.fn("ManagedProjectFolders.scaffoldRepository")(function* (
     cwd: string,
@@ -422,11 +444,23 @@ const make = Effect.gen(function* () {
   const createNamedProject: ManagedProjectFolders["Service"]["createNamedProject"] = Effect.fn(
     "ManagedProjectFolders.createNamedProject",
   )(function* (input) {
-    const workspaceRoot = yield* claimNamedFolder(input.name);
-    const removeFolder = fileSystem.remove(workspaceRoot, { recursive: true }).pipe(Effect.ignore);
+    const parent =
+      input.parentDirectory === undefined
+        ? yield* ensureFolder(namedProjectsRoot).pipe(Effect.as(namedProjectsRoot))
+        : yield* resolveParentDirectory(input.parentDirectory);
+    const container = yield* claimNamedFolder(parent, input.name);
+    const workspaceRoot =
+      input.layout === "worktree-container" ? path.join(container, "main") : container;
+    const removeFolder = fileSystem.remove(container, { recursive: true }).pipe(Effect.ignore);
     const prepared = yield* Effect.all([
-      scaffoldRepository(workspaceRoot, input.name).pipe(
-        Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
+      (workspaceRoot === container ? Effect.void : ensureFolder(workspaceRoot)).pipe(
+        Effect.andThen(
+          scaffoldRepository(workspaceRoot, input.name).pipe(
+            Effect.mapError(
+              (cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause }),
+            ),
+          ),
+        ),
       ),
       random
         .uuidV4()
