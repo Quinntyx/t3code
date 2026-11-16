@@ -44,6 +44,7 @@ import {
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { createModelHiddenPredicate, readCustomModelEntries } from "@t3tools/shared/model";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -331,6 +332,15 @@ export class ThreadManagementProviderInstanceDisabledError extends Schema.Tagged
   }
 }
 
+export class ThreadManagementDelegationModelDisabledError extends Schema.TaggedError<ThreadManagementDelegationModelDisabledError>()(
+  "ThreadManagementDelegationModelDisabledError",
+  { instanceId: ProviderInstanceId, model: Schema.String },
+) {
+  override get message(): string {
+    return `Delegation to disabled model "${this.model}" is blocked for provider instance "${this.instanceId}". Enable the model or turn off "Block delegation for disabled models" in provider settings.`;
+  }
+}
+
 export class ThreadManagementBackgroundWaitError extends Schema.TaggedError<ThreadManagementBackgroundWaitError>()(
   "ThreadManagementBackgroundWaitError",
   {
@@ -361,10 +371,15 @@ export const ThreadManagementError = Schema.Union([
   ThreadManagementProjectThreadsListError,
   ThreadManagementDurableRunProjectionError,
   ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementDelegationModelDisabledError,
 ]);
 export type ThreadManagementError = typeof ThreadManagementError.Type;
 
 type ThreadManagementFailure = ThreadManagementError | Orchestrator.OrchestratorV2Error;
+export type ThreadManagementDispatchError =
+  | Orchestrator.OrchestratorV2Error
+  | ThreadManagementProviderInstanceDisabledError
+  | ThreadManagementDelegationModelDisabledError;
 
 export interface ThreadManagementServiceShape {
   readonly searchThreadStream: (
@@ -378,10 +393,7 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
-  ) => Effect.Effect<
-    Orchestrator.OrchestratorV2DispatchResult,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-  >;
+  ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, ThreadManagementDispatchError>;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
@@ -446,6 +458,10 @@ export interface ThreadManagementServiceShape {
     readonly commandId: CommandId;
     readonly instanceId: ProviderInstanceId;
   }) => Effect.Effect<void, ThreadManagementProviderInstanceDisabledError>;
+  readonly assertDelegationModelEnabled: (input: {
+    readonly commandId: CommandId;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<void, ThreadManagementDelegationModelDisabledError>;
   readonly isProviderInstanceEnabledForProject: (input: {
     readonly projectId: ProjectId;
     readonly instanceId: ProviderInstanceId;
@@ -468,7 +484,7 @@ export interface ThreadManagementServiceShape {
     readonly byOwnAgent: boolean;
   }) => Effect.Effect<
     { readonly sequence: number } | { readonly settlesWhenTurnEnds: true },
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    ThreadManagementDispatchError
   >;
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
@@ -495,10 +511,7 @@ export interface ThreadManagementServiceShape {
     readonly threadId: ThreadId;
     readonly commandId: CommandId;
     readonly reason?: string | undefined;
-  }) => Effect.Effect<
-    void,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-  >;
+  }) => Effect.Effect<void, ThreadManagementDispatchError>;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
   readonly delegatedTaskResultPending: Orchestrator.OrchestratorV2["Service"]["delegatedTaskResultPending"];
@@ -617,6 +630,25 @@ const make = Effect.gen(function* () {
       Effect.map(Option.isSome),
     );
 
+  const assertDelegationModelEnabled: ThreadManagementServiceShape["assertDelegationModelEnabled"] =
+    Effect.fn("ThreadManagementService.assertDelegationModelEnabled")(function* (input) {
+      if (yield* hasReceipt(input.commandId)) return;
+      const current = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const { instanceId, model } = input.modelSelection;
+      const instance = current.providerInstances[instanceId];
+      if (instance?.blockDelegationForDisabledModels !== true) return;
+      const config = instance.config;
+      const customModels = readCustomModelEntries(
+        config !== null && typeof config === "object" && "customModels" in config
+          ? config.customModels
+          : undefined,
+      );
+      const isHidden = createModelHiddenPredicate(current.providerModelPreferences?.[instanceId]);
+      if (isHidden({ slug: model, isCustom: customModels.some((entry) => entry.slug === model) })) {
+        return yield* new ThreadManagementDelegationModelDisabledError({ instanceId, model });
+      }
+    });
+
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
   )(function* (threadId: ThreadId) {
@@ -710,6 +742,10 @@ const make = Effect.gen(function* () {
 
   const assertDispatchTargetEnabled = (command: OrchestrationV2ServerCommand) => {
     switch (command.type) {
+      case "thread.create":
+        return command.delegatedFrom === undefined
+          ? Effect.void
+          : assertDelegationModelEnabled(command);
       case "thread.machine-import":
         return assertProviderInstanceEnabled({
           projectId: command.projectId,
@@ -727,7 +763,8 @@ const make = Effect.gen(function* () {
           ),
         );
       case "delegated_task.request":
-        return orchestrator.getThreadRecords(command.parentThreadId, []).pipe(
+        return assertDelegationModelEnabled(command).pipe(
+          Effect.andThen(orchestrator.getThreadRecords(command.parentThreadId, [])),
           Effect.flatMap((parent) =>
             assertProviderInstanceEnabled({
               projectId: parent.thread.projectId,
@@ -1474,9 +1511,7 @@ const make = Effect.gen(function* () {
     "ThreadManagementService.stopDelegatedTasks",
   )(function* (input) {
     const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
-    const failures: Array<
-      Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-    > = [];
+    const failures: Array<ThreadManagementDispatchError> = [];
     const stoppedChildThreadIds = new Set<ThreadId>();
     for (const task of subagents) {
       if (task.origin !== "app_owned") continue;
@@ -1620,6 +1655,7 @@ const make = Effect.gen(function* () {
     listProjectThreads,
     sendToThread,
     assertProviderInstanceEnabled,
+    assertDelegationModelEnabled,
     isProviderInstanceEnabledForProject,
     hasReceipt,
     waitForThread,

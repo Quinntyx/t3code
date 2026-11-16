@@ -46,6 +46,14 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Restrict delegated models
+
+In **Settings → Providers**, select a provider and turn on **Block delegation for disabled
+models** to reject delegated tasks that use models turned off in that provider's model list.
+The setting is off by default and applies only to that provider instance on the selected
+environment, including delegation from linked environments. Direct model use and other provider
+instances are unchanged. Turn it off or enable a model again to allow delegation to it.
+
 ## Debug shake on mobile
 
 At the bottom of **Settings → Labs**, under **Developer**, choose the machine and

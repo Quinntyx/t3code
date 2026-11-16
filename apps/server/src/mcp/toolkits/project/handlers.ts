@@ -263,6 +263,12 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 message: error.message,
               });
             }
+            if (error._tag === "ThreadManagementDelegationModelDisabledError") {
+              return new OrchestratorMcpFailure({
+                code: "model_unavailable",
+                message: error.message,
+              });
+            }
             // The administrator's ceiling refuses the mode; say so rather than "unavailable".
             if (error._tag === "ThreadLaunchError" && isAboveCeilingError(error.cause)) {
               return new OrchestratorMcpFailure({

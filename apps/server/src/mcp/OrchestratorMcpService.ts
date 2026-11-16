@@ -263,6 +263,8 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("orchestration_error", error.message);
     case "ThreadManagementProviderInstanceDisabledError":
       return failure("invalid_request", error.message);
+    case "ThreadManagementDelegationModelDisabledError":
+      return failure("model_unavailable", error.message);
   }
 }
 
@@ -2549,7 +2551,7 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.mapError((error) =>
-            error._tag === "ThreadManagementProviderInstanceDisabledError"
+            isThreadManagementError(error)
               ? threadManagementFailure(error)
               : failure(
                   "orchestration_error",

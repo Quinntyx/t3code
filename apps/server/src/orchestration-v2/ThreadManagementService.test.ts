@@ -17,12 +17,14 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -224,6 +226,150 @@ it.effect(
     }).pipe(Effect.provide(layerTest));
   },
 );
+
+it.effect.each([
+  { name: "local delegation", kind: "local", block: true, hidden: true, rejected: true },
+  { name: "linked delegation", kind: "remote", block: true, hidden: true, rejected: true },
+  { name: "an enabled model", kind: "local", block: true, hidden: false, rejected: false },
+  { name: "blocking switched off", kind: "local", block: false, hidden: true, rejected: false },
+  { name: "blocking unset", kind: "local", hidden: true, rejected: false },
+  { name: "another provider instance", kind: "other", block: true, hidden: true, rejected: false },
+  { name: "a direct user launch", kind: "user", block: true, hidden: true, rejected: false },
+  { name: "a normal message", kind: "message", block: true, hidden: true, rejected: false },
+  { name: "an accepted replay", kind: "replay", block: true, hidden: true, rejected: false },
+  {
+    name: "new models disabled",
+    kind: "local",
+    block: true,
+    hidden: false,
+    newModelsEnabled: false,
+    rejected: true,
+  },
+  {
+    name: "an explicitly enabled model",
+    kind: "local",
+    block: true,
+    hidden: false,
+    newModelsEnabled: false,
+    enabledModels: ["test"],
+    rejected: false,
+  },
+  {
+    name: "a custom model",
+    kind: "local",
+    block: true,
+    hidden: false,
+    newModelsEnabled: false,
+    custom: true,
+    rejected: false,
+  },
+] as const)("delegation model policy handles $name", (scenario) => {
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const commandId = CommandId.make(`command:delegation-model-policy:${scenario.name}`);
+  const threadId = ThreadId.make("thread:delegation-model-policy");
+  const projectId = ProjectId.make("project:thread-management:chokepoint");
+  const modelSelection = {
+    instanceId: scenario.kind === "other" ? ProviderInstanceId.make("codex_other") : instanceId,
+    model: "test",
+  };
+  const command: OrchestrationV2Command =
+    scenario.kind === "message"
+      ? {
+          type: "message.dispatch",
+          commandId,
+          threadId,
+          messageId: MessageId.make("message:delegation-model-policy"),
+          text: "Continue",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        }
+      : scenario.kind === "remote" || scenario.kind === "user"
+        ? {
+            type: "thread.create",
+            commandId,
+            threadId,
+            projectId,
+            title: "Delegation model policy",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            ...(scenario.kind === "remote"
+              ? {
+                  delegatedFrom: {
+                    environmentId: EnvironmentId.make("environment:parent"),
+                    threadId: ThreadId.make("thread:parent"),
+                    title: "Parent",
+                  },
+                }
+              : {}),
+            createdBy: "agent",
+            creationSource: "mcp",
+          }
+        : {
+            type: "delegated_task.request",
+            commandId,
+            parentThreadId: threadId,
+            parentRunId: RunId.make("run:delegation-model-policy"),
+            parentNodeId: NodeId.make("node:delegation-model-policy"),
+            task: "Do not start a disabled model",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdBy: "agent",
+            creationSource: "mcp",
+          };
+  const dispatched: Array<string> = [];
+  const layerTest = layerDispatchChokepointTest(
+    ServerSettings.layerTest({
+      providerInstances: {
+        [instanceId]: {
+          driver: "codex",
+          enabled: true,
+          ...("block" in scenario ? { blockDelegationForDisabledModels: scenario.block } : {}),
+          ...("custom" in scenario ? { config: { customModels: ["test"] } } : {}),
+        },
+        [ProviderInstanceId.make("codex_other")]: { driver: "codex", enabled: true },
+      },
+      providerModelPreferences: {
+        [instanceId]: {
+          hiddenModels: scenario.hidden ? ["test"] : [],
+          modelOrder: [],
+          newModelsEnabled: "newModelsEnabled" in scenario ? scenario.newModelsEnabled : true,
+          enabledModels: "enabledModels" in scenario ? scenario.enabledModels : [],
+        },
+      },
+    }),
+  )(dispatched);
+  return Effect.gen(function* () {
+    if (scenario.kind === "replay") {
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      yield* receipts.insertIfAbsent({
+        commandId,
+        threadId,
+        commandType: command.type,
+        acceptedAt: yield* DateTime.now,
+        resultSequence: 1,
+        status: "accepted",
+        error: null,
+      });
+    }
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const result = yield* Effect.exit(threads.dispatch(command));
+    expect(Exit.isFailure(result)).toBe(scenario.rejected);
+    if (Exit.isFailure(result)) {
+      expect(Cause.squash(result.cause)).toMatchObject({
+        _tag: "ThreadManagementDelegationModelDisabledError",
+        instanceId,
+        model: "test",
+      });
+    }
+    expect(dispatched).toEqual(scenario.rejected ? [] : [command.type]);
+  }).pipe(Effect.provide(layerTest));
+});
 
 it.effect("waitForThread follows a restart continuation instead of the cut run", () =>
   Effect.gen(function* () {
