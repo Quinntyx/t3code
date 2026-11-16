@@ -8,11 +8,13 @@ import {
   collectLimitNotices,
   collectLimitPools,
   cursorUsageWindowDetails,
+  describeUsageAmount,
   displayLimitWindows,
   formatResetsIn,
   paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
+  type LimitPool,
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
 import { Fragment, type ReactNode, useId, useState } from "react";
@@ -26,7 +28,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { environmentPresentations } from "../../state/presentation";
-import { ResetCredits } from "./UsageLimitsSection";
+import { AmountLineRow, AmountText, ResetCredits } from "./UsageLimitsSection";
 import { usageProviderKind, useProviderColors } from "./usageProviders";
 
 const DRIVER_LABEL: Partial<Record<string, string>> = {
@@ -214,6 +216,11 @@ function PoolWindowCard({
             </Text>
             <Text className="text-sm text-foreground-muted">left</Text>
           </View>
+          {pool.amount ? (
+            <Text numberOfLines={1} className="text-xs tabular-nums text-foreground-muted">
+              {describeUsageAmount(pool.amount).value} {describeUsageAmount(pool.amount).qualifier}
+            </Text>
+          ) : null}
         </View>
         {pool.pace ? (
           <Text className="text-xs text-foreground-tertiary">{PACE_LABEL[pool.pace]}</Text>
@@ -413,6 +420,46 @@ function PoolWindowCard({
   );
 }
 
+function PoolAmountsCard({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+  const pooled = pool.accounts.length > 1;
+  return (
+    <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
+      {pool.amounts.map((line) => (
+        <View key={line.id} className="gap-1.5">
+          <View className="flex-row items-baseline justify-between gap-3">
+            <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+              {line.label}
+            </Text>
+            {line.total ? (
+              <AmountText
+                amount={line.total}
+                resetsIn={pooled ? null : formatResetsIn(line.columns[0] ?? {}, now)}
+              />
+            ) : null}
+          </View>
+          {pooled ? (
+            <View className="gap-1.5 ps-3">
+              {line.columns.map(({ account, amount, resetsAt }) =>
+                amount ? (
+                  <View key={account.key} className="flex-row items-baseline justify-between gap-3">
+                    <Text
+                      numberOfLines={1}
+                      className="min-w-0 shrink text-xs text-foreground-muted"
+                    >
+                      {accountName(account)}
+                    </Text>
+                    <AmountText amount={amount} resetsIn={formatResetsIn({ resetsAt }, now)} />
+                  </View>
+                ) : null,
+              )}
+            </View>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function UsageLimitsSection({
   now,
   failedLabels,
@@ -474,6 +521,7 @@ export function UsageLimitsSection({
                   />
                 );
               })}
+              {pool.amounts.length > 0 ? <PoolAmountsCard pool={pool} now={now} /> : null}
             </View>
           </Fragment>
         );
@@ -608,12 +656,30 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                   Even pace: {evenPace}% left by now
                 </Text>
               ) : null}
+              {window.amount ? (
+                <Text numberOfLines={1} className="text-sm tabular-nums text-foreground-muted">
+                  {describeUsageAmount(window.amount).value}{" "}
+                  {describeUsageAmount(window.amount).qualifier}
+                </Text>
+              ) : null}
               {reset && reset.restoresPercent > 0 ? (
                 <Text className="text-sm text-foreground-muted">
                   Restores {reset.restoresPercent}% of the pool
                 </Text>
               ) : null}
             </View>
+            {(account.limits.amounts?.length ?? 0) > 0 ? (
+              <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
+                {(account.limits.amounts ?? []).map((line) => (
+                  <AmountLineRow
+                    key={line.id}
+                    label={line.label}
+                    amount={line.amount}
+                    resetsIn={formatResetsIn(line, now)}
+                  />
+                ))}
+              </View>
+            ) : null}
             <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
               <Text className="text-sm font-t3-medium text-foreground">
                 {account.environments.length ? "Signed in" : "Source"}

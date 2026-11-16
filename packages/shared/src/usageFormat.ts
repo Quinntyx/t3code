@@ -16,6 +16,30 @@ const CURRENCY = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const moneyFormatters = new Map<string, Intl.NumberFormat | null>();
+
+/** Major units of any ISO 4217 code; the runtime rejects unknown codes, so fall back to a suffix. */
+export function formatMoney(value: number, currency: string): string {
+  const code = currency.trim();
+  const key = code.toUpperCase();
+  let formatter = moneyFormatters.get(key);
+  if (formatter === undefined) {
+    try {
+      formatter = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: key,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      formatter = null;
+    }
+    if (moneyFormatters.size >= 16) moneyFormatters.clear();
+    moneyFormatters.set(key, formatter);
+  }
+  return formatter === null ? `${value.toFixed(2)} ${key}` : formatter.format(value);
+}
+
 const INTEGER = new Intl.NumberFormat("en-US");
 
 export function formatMalformedUsageWarning(count: number): string {

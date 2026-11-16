@@ -9,6 +9,24 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 
+/** Money in major units of one lowercase ISO 4217 currency, such as `usd` or `eur`. */
+export const ServerProviderUsageAmount = Schema.Struct({
+  currency: TrimmedNonEmptyString,
+  used: Schema.optional(Schema.Number),
+  limit: Schema.optional(Schema.Number),
+  remaining: Schema.optional(Schema.Number),
+});
+export type ServerProviderUsageAmount = typeof ServerProviderUsageAmount.Type;
+
+/** Money the provider reports without an allowance, so it is a line rather than a bar. */
+export const ServerProviderUsageAmountLine = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  amount: ServerProviderUsageAmount,
+  resetsAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderUsageAmountLine = typeof ServerProviderUsageAmountLine.Type;
+
 /** Stable per-provider ids let sparse updates merge with full probes. */
 export const ServerProviderUsageWindow = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -17,6 +35,7 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  amount: Schema.optional(ServerProviderUsageAmount),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
@@ -32,6 +51,7 @@ export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 export const ServerProviderUsageLimits = Schema.Struct({
   checkedAt: IsoDateTime,
   windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+  amounts: Schema.optional(ForwardCompatibleArray(ServerProviderUsageAmountLine)),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   /** The provider whose login these limits read, when it is not the reporting provider. */
   ownerDriver: Schema.optional(ProviderDriverKind),

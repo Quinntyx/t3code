@@ -156,6 +156,11 @@ The same account signed in on more than one environment, reported by a hub as we
 provider that shares its login counts once. Filter with the environment dropdown to see what a
 single machine has.
 
+Some providers report their allowance as money. The amount then appears next to the bar, and the
+account details carry it too. Money that has no allowance behind it, such as prepaid credit or
+spend on an API key, is listed as an amount rather than a bar, so a provider can appear under
+Limits with only amounts.
+
 On the model picker, a hub's accounts appear on a provider card only when that provider, or a Pi
 route on it, uses the hub's endpoint. A provider pointed at a different proxy keeps its own numbers.
 

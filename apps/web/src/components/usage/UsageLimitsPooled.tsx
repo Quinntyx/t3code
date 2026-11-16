@@ -5,6 +5,7 @@ import {
   collectLimitNotices,
   collectLimitPools,
   cursorUsageWindowDetails,
+  describeUsageAmount,
   displayLimitWindows,
   formatResetsIn,
   type LimitAccount,
@@ -167,6 +168,7 @@ function SegmentPopover({
       : account.sourceLabel;
   const credits =
     redeem && account.limits.resetCredits?.availableCount ? account.limits.resetCredits : null;
+  const budget = window.amount ? describeUsageAmount(window.amount) : null;
   return (
     <div className="flex w-72 max-w-[calc(100vw-3rem)] flex-col gap-2.5 text-xs">
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -194,6 +196,11 @@ function SegmentPopover({
       </div>
       <div className="flex flex-col gap-1 border-t border-border/60 pt-2.5">
         <Row label="Left">{remaining}%</Row>
+        {budget ? (
+          <Row label="Budget">
+            {budget.value} {budget.qualifier}
+          </Row>
+        ) : null}
         {window.resetsAt ? (
           <Row label="Resets">
             {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}
@@ -551,6 +558,7 @@ function PoolWindowCard({
   readonly description?: string | undefined;
 }) {
   const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
+  const budget = pool.amount ? describeUsageAmount(pool.amount) : null;
   return (
     <div className="grid items-center gap-x-6 gap-y-3 rounded-lg border border-border/60 p-4 md:grid-cols-[11rem_minmax(0,1fr)]">
       <div className="flex flex-col gap-1">
@@ -564,6 +572,11 @@ function PoolWindowCard({
             {pool.pace ? <PaceIcon pace={pool.pace} /> : null}
           </span>
         </span>
+        {budget ? (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {budget.value} {budget.qualifier}
+          </span>
+        ) : null}
         {nextRefill && pool.columns.length > 1 ? (
           <span className="text-xs font-medium text-foreground tabular-nums">
             ↻ +{nextRefill.restoresPercent}%
@@ -574,6 +587,73 @@ function PoolWindowCard({
       {description ? (
         <p className="text-xs text-muted-foreground md:col-span-2">{description}</p>
       ) : null}
+    </div>
+  );
+}
+
+function PoolAmountsCard({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+  const showAccounts = pool.accounts.length > 1;
+  const columns = { gridTemplateColumns: `repeat(${pool.accounts.length}, minmax(0, 1fr))` };
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-4">
+      {showAccounts ? (
+        <div className="hidden gap-x-6 md:grid md:grid-cols-[11rem_minmax(0,1fr)]">
+          <div className="col-start-2 grid gap-x-1" style={columns}>
+            {pool.accounts.map((account) => (
+              <AccountName
+                key={account.key}
+                account={account}
+                className="min-w-0 truncate text-xs text-muted-foreground"
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {pool.amounts.map((line) => {
+        const total = line.total ? describeUsageAmount(line.total) : null;
+        return (
+          <div
+            key={line.id}
+            className="grid items-center gap-x-6 gap-y-1 md:grid-cols-[11rem_minmax(0,1fr)]"
+          >
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="text-sm text-muted-foreground">{line.label}</span>
+              {showAccounts && total ? (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {total.value} {total.qualifier}
+                </span>
+              ) : null}
+            </div>
+            <div className="grid gap-x-1 gap-y-1" style={columns}>
+              {line.columns.map((column) => {
+                const amount = column.amount ? describeUsageAmount(column.amount) : null;
+                const resetsIn = formatResetsIn(column, now);
+                return (
+                  <div key={column.account.key} className="flex min-w-0 flex-col gap-0.5">
+                    {showAccounts && amount ? (
+                      <AccountName
+                        account={column.account}
+                        className="min-w-0 truncate text-xs text-muted-foreground md:hidden"
+                      />
+                    ) : null}
+                    {amount ? (
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+                        <span className="text-sm font-medium text-foreground tabular-nums">
+                          {amount.value}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {amount.qualifier}
+                          {resetsIn ? ` · ${resetsIn}` : ""}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -607,6 +687,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
           />
         );
       })}
+      {pool.amounts.length > 0 ? <PoolAmountsCard pool={pool} now={now} /> : null}
     </section>
   );
 }

@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
+  describeUsageAmount,
   formatDuration,
   type LimitPace,
   limitsNotice,
@@ -21,6 +22,7 @@ import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { UsageAmountLines } from "../usage/UsageAmountLines";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 
@@ -58,6 +60,7 @@ export function ThreadDetailsUsage({
     providers.find((provider) => provider.instanceId === providerInstanceId)?.usageLimits;
   if (!limits) return null;
   const notice = limitsNotice(limits);
+  const amounts = limits.amounts ?? [];
 
   return (
     <ThreadDetailsSection
@@ -75,7 +78,14 @@ export function ThreadDetailsUsage({
             tooltip={<span className="text-foreground">{notice}</span>}
           />
         ) : (
-          limits.windows.map((window) => <LimitRow key={window.id} window={window} now={now} />)
+          <>
+            {limits.windows.map((window) => (
+              <LimitRow key={window.id} window={window} now={now} />
+            ))}
+            {amounts.length > 0 ? (
+              <UsageAmountLines amounts={amounts} now={now} className="col-span-3 px-2.5" />
+            ) : null}
+          </>
         )}
       </div>
     </ThreadDetailsSection>
@@ -149,6 +159,7 @@ function LimitRow({
   const left = remainingPercent(window);
   const pace = paceOf(window, now);
   const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+  const amount = window.amount ? describeUsageAmount(window.amount) : null;
   return (
     <UsageRow
       label={window.label}
@@ -161,6 +172,11 @@ function LimitRow({
           <span className="text-foreground">
             {window.label}: {left}% left
           </span>
+          {amount ? (
+            <span className="text-muted-foreground">
+              {amount.value} {amount.qualifier}
+            </span>
+          ) : null}
           {window.resetsAt && resetsAt > now ? (
             <span className="text-muted-foreground">
               Resets in {formatDuration(resetsAt - now)} ·{" "}

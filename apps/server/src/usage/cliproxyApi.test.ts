@@ -432,6 +432,8 @@ describe("CLIProxyAPI built-in management API", () => {
           used_credits: 4_631,
           monthly_limit: 50_000,
           utilization: 9,
+          currency: "USD",
+          decimal_places: 2,
         },
       },
     },
@@ -451,6 +453,11 @@ describe("CLIProxyAPI built-in management API", () => {
         ["five_hour", 10],
         ["monthly_spend", expect.closeTo(9.262, 10)],
       ]);
+      expect(result[0]?.usageLimits.windows.at(-1)?.amount).toMatchObject({
+        currency: "usd",
+        used: 46.31,
+        limit: 500,
+      });
     }),
   );
 
@@ -646,12 +653,15 @@ describe("CLIProxyAPI v8 provider discovery", () => {
               label: "Vibe",
               usedPercent: 40,
               resetsAt: "2026-12-01T00:00:00.000Z",
+              amount: { currency: "eur", used: 8, limit: 20, remaining: 12 },
             },
+          ],
+          // A budget the hub reports without an allowance keeps its reset as a money line.
+          amounts: [
             {
               id: "api",
-              kind: "other",
               label: "API",
-              usedPercent: 25,
+              amount: { currency: "usd", used: 3.75, remaining: 11.25 },
               resetsAt: "2026-12-01T00:00:00.000Z",
             },
           ],
@@ -666,10 +676,34 @@ describe("CLIProxyAPI v8 provider discovery", () => {
         ["weekly", "weekly", 50],
         ["monthly", "monthly", 75],
       ]);
-      // OpenRouter reports spend with no cap: no bar, never 0% or unlimited.
-      expect(byId.get("openrouter:2982a7cb4bdfb064")?.usageLimits).toMatchObject({
+      expect(
+        byId
+          .get("opencode-go:a66e73f8b1866a2b")
+          ?.usageLimits.windows.map((window) => window.amount),
+      ).toEqual([undefined, undefined, undefined]);
+      // OpenRouter key spend has no cap, so it is a money line rather than a bar.
+      expect(byId.get("openrouter:2982a7cb4bdfb064")?.usageLimits).toEqual({
+        checkedAt: "2026-11-14T04:04:28.000Z",
         windows: [],
-        unavailable: { reason: "unsupported" },
+        amounts: [
+          { id: "key", label: "Key spend", amount: { currency: "usd", used: 3.5 } },
+          { id: "key-daily", label: "Key spend today", amount: { currency: "usd", used: 0.5 } },
+          {
+            id: "key-weekly",
+            label: "Key spend this week",
+            amount: { currency: "usd", used: 1.5 },
+          },
+          {
+            id: "key-monthly",
+            label: "Key spend this month",
+            amount: { currency: "usd", used: 3.5 },
+          },
+          {
+            id: "credits",
+            label: "Account credits",
+            amount: { currency: "usd", used: 96.5, remaining: 3.5 },
+          },
+        ],
       });
       expect(byId.get("openrouter:0e843b7e13496218")?.usageLimits).toMatchObject({
         windows: [],

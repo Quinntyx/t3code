@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderUsageAmount,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -17,8 +18,10 @@ import {
   collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
+  describeUsageAmount,
   elapsedShare,
   exhaustedUsageWindow,
+  limitsNotice,
   usageLimitResetAt,
   usageLimitSourceResetAt,
   paceOf,
@@ -1230,6 +1233,14 @@ describe("pooled account columns", () => {
     redeem: null,
     limits: { checkedAt: "2026-09-03T11:00:00.000Z", windows },
   });
+  const moneyAccount = (
+    key: string,
+    windows: LimitAccount["limits"]["windows"],
+    amounts: LimitAccount["limits"]["amounts"],
+  ): LimitAccount => ({
+    ...account(key, windows),
+    limits: { ...account(key, windows).limits, amounts },
+  });
   const keys = (pool: ReturnType<typeof collectLimitPools>[number]) =>
     pool.windows.map((row) =>
       row.columns.map((member) => (member.window ? member.account.key : null)),
@@ -1391,6 +1402,216 @@ describe("pooled account columns", () => {
       now,
     );
     expect(keys(pool!)).toEqual([["b", "a"]]);
+  });
+
+  const moneyWindow = (amount: ServerProviderUsageAmount) => ({
+    ...window,
+    amount,
+  });
+
+  it.each([
+    [
+      "same currency sums",
+      [
+        moneyWindow({ currency: "eur", used: 8, limit: 20, remaining: 12 }),
+        moneyWindow({ currency: "eur", used: 2, limit: 20, remaining: 18 }),
+      ],
+      { currency: "eur", used: 10, limit: 40, remaining: 30 },
+    ],
+    [
+      "an overspent account drops the total, since its percentage stops at the allowance",
+      [
+        moneyWindow({ currency: "usd", used: 15, limit: 10, remaining: 0 }),
+        moneyWindow({ currency: "usd", used: 0, limit: 10, remaining: 10 }),
+      ],
+      null,
+    ],
+    [
+      "unequal allowances drop the total, which the averaged percentage would contradict",
+      [
+        moneyWindow({ currency: "usd", used: 10, limit: 10, remaining: 0 }),
+        moneyWindow({ currency: "usd", used: 0, limit: 90, remaining: 90 }),
+      ],
+      null,
+    ],
+    [
+      "mixed currency drops the total",
+      [
+        moneyWindow({ currency: "eur", used: 8, limit: 20, remaining: 12 }),
+        moneyWindow({ currency: "usd", used: 2, limit: 10, remaining: 8 }),
+      ],
+      null,
+    ],
+    [
+      "a member without an amount drops the total",
+      [moneyWindow({ currency: "eur", used: 8, limit: 20, remaining: 12 }), window],
+      null,
+    ],
+    [
+      "a field only some members report is dropped",
+      [
+        moneyWindow({ currency: "eur", used: 8, limit: 20, remaining: 12 }),
+        moneyWindow({ currency: "eur", limit: 20, remaining: 6 }),
+      ],
+      { currency: "eur", limit: 40, remaining: 18 },
+    ],
+  ] as const)("pools window money: %s", (_name, windows, expected) => {
+    const [pool] = collectLimitPools(
+      windows.map((entry, index) => account(`a${index}`, [entry])),
+      now,
+    );
+    expect(pool!.windows[0]!.amount).toEqual(expected);
+  });
+
+  it("lays out one money line per pool account in pool order and totals only the accounts with it", () => {
+    // Account order follows the earliest reset, so the bar-leading account sorts first.
+    const [pool] = collectLimitPools(
+      [
+        moneyAccount(
+          "money-only",
+          [],
+          [
+            {
+              id: "credits",
+              label: "Account credits",
+              amount: { currency: "usd", used: 1, remaining: 3.5 },
+            },
+            { id: "today", label: "Key spend today", amount: { currency: "usd", remaining: 5 } },
+          ],
+        ),
+        moneyAccount(
+          "with-window",
+          [window],
+          [
+            { id: "key", label: "Key spend", amount: { currency: "usd", used: 3.5 } },
+            {
+              id: "credits",
+              label: "Account credits",
+              amount: { currency: "usd", used: 2, remaining: 4.5 },
+              resetsAt: "2026-12-01T00:00:00.000Z",
+            },
+            { id: "today", label: "Key spend today", amount: { currency: "usd", used: 10 } },
+          ],
+        ),
+      ],
+      now,
+    );
+    // A money-only account still produces a pool, one with no bars.
+    expect(pool!.accounts.map((entry) => entry.key)).toEqual(["with-window", "money-only"]);
+    expect(pool!.windows).toHaveLength(1);
+    expect(pool!.amounts).toEqual([
+      {
+        id: "key",
+        label: "Key spend",
+        total: { currency: "usd", used: 3.5 },
+        columns: [
+          { account: pool!.accounts[0], amount: { currency: "usd", used: 3.5 } },
+          { account: pool!.accounts[1], amount: null },
+        ],
+      },
+      {
+        id: "credits",
+        label: "Account credits",
+        total: { currency: "usd", used: 3, remaining: 8 },
+        columns: [
+          {
+            account: pool!.accounts[0],
+            amount: { currency: "usd", used: 2, remaining: 4.5 },
+            resetsAt: "2026-12-01T00:00:00.000Z",
+          },
+          { account: pool!.accounts[1], amount: { currency: "usd", used: 1, remaining: 3.5 } },
+        ],
+      },
+      {
+        // Accounts sharing no field have nothing to total, and an empty amount would read as zero.
+        id: "today",
+        label: "Key spend today",
+        total: null,
+        columns: [
+          { account: pool!.accounts[0], amount: { currency: "usd", used: 10 } },
+          { account: pool!.accounts[1], amount: { currency: "usd", remaining: 5 } },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("usage amounts", () => {
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+  const spendOnly = {
+    checkedAt,
+    windows: [],
+    amounts: [
+      { id: "key", label: "Key spend", amount: { currency: "usd", used: 3.5 } },
+      {
+        id: "credits",
+        label: "Account credits",
+        amount: { currency: "usd", used: 96.5, remaining: 3.5 },
+      },
+    ],
+  };
+
+  it("shows a money-only account that has no bars", () => {
+    expect(limitsNotice(spendOnly)).toBeNull();
+    expect(limitsNotice({ checkedAt, windows: [] })).toBe("No limits reported.");
+    expect(limitsNotice({ checkedAt, windows: [], amounts: [] })).toBe("No limits reported.");
+  });
+
+  it("gives a money-only hub account a provider section", () => {
+    const hub = {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Accounts",
+      checkedAt,
+      accounts: [
+        { id: "openrouter", driver: ProviderDriverKind.make("openrouter"), usageLimits: spendOnly },
+      ],
+    };
+    const accounts = collectLimitAccounts(
+      new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            entry: { target: { label: "Laptop" } },
+            serverConfig: { providers: [], usageLimitSources: [hub] },
+          },
+        ],
+      ]),
+    );
+    expect(accounts.map((account) => account.limits.amounts)).toEqual([spendOnly.amounts]);
+    expect(collectLimitPools(accounts, now)[0]).toMatchObject({
+      driver: "openrouter",
+      windows: [],
+      amounts: [
+        { id: "key", total: { currency: "usd", used: 3.5 } },
+        { id: "credits", total: { currency: "usd", used: 96.5, remaining: 3.5 } },
+      ],
+    });
+  });
+
+  it.each([
+    [
+      { currency: "usd", used: 8, limit: 20 },
+      { value: "$8.00", qualifier: "of $20.00 used" },
+    ],
+    [
+      { currency: "eur", used: 8, limit: 20, remaining: 12 },
+      { value: "€8.00", qualifier: "of €20.00 used" },
+    ],
+    [
+      { currency: "eur", remaining: 12 },
+      { value: "€12.00", qualifier: "left" },
+    ],
+    [
+      { currency: "usd", used: 3.5 },
+      { value: "$3.50", qualifier: "spent" },
+    ],
+    [
+      { currency: "usd", limit: 50 },
+      { value: "$50.00", qualifier: "limit" },
+    ],
+  ] as const)("describes %j as %j", (amount, expected) => {
+    expect(describeUsageAmount(amount)).toEqual(expected);
   });
 });
 

@@ -2,6 +2,7 @@ import {
   ProviderDriverKind,
   UsageLimitSourceError,
   type ProviderConsumeResetCreditResult,
+  type ServerProviderUsageAmountLine,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceAccount,
@@ -71,6 +72,8 @@ const ClaudeUsage = Schema.Struct({
         monthly_limit: Schema.NullOr(Schema.Number),
         used_credits: Schema.NullOr(Schema.Number),
         utilization: Schema.NullOr(Schema.Number),
+        currency: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        decimal_places: Schema.optionalKey(Schema.NullOr(Schema.Number)),
       }),
     ),
   ),
@@ -259,6 +262,25 @@ const hubWindowUsedPercent = (window: typeof HubUsageWindow.Type) => {
   return undefined;
 };
 
+// Units like `tokens` or `requests` measure volume, not money, so only a bare ISO 4217 code counts.
+const hubWindowCurrency = (window: typeof HubUsageWindow.Type) => {
+  const unit = window.unit?.trim().toLowerCase();
+  return unit !== undefined && /^[a-z]{3}$/.test(unit) ? unit : undefined;
+};
+
+const hubUsageAmount = (
+  window: typeof HubUsageWindow.Type,
+  currency: string,
+  fields: ReadonlyArray<"used" | "limit" | "remaining">,
+): NonNullable<ServerProviderUsageWindow["amount"]> => ({
+  currency,
+  ...(fields.includes("used") && finite(window.used) ? { used: window.used } : {}),
+  ...(fields.includes("limit") && finite(window.limit) ? { limit: window.limit } : {}),
+  ...(fields.includes("remaining") && finite(window.remaining)
+    ? { remaining: window.remaining }
+    : {}),
+});
+
 const hubAccountLimits = (
   account: HubUsageAccount,
   checkedAt: string,
@@ -275,29 +297,51 @@ const hubAccountLimits = (
           : "The hub could not read this account's usage."),
     });
   }
-  const windows = (account.windows ?? []).flatMap((window): Array<ServerProviderUsageWindow> => {
-    const usedPercent = hubWindowUsedPercent(window);
+  const windows: ServerProviderUsageWindow[] = [];
+  const amounts: Array<ServerProviderUsageAmountLine> = [];
+  for (const window of account.windows ?? []) {
     const id = window.id.trim();
-    if (usedPercent === undefined || !id) return [];
-    const resetsAt = isoOrUndefined(window.resets_at);
-    return [
-      {
+    if (!id) continue;
+    const label = window.label.trim() || id;
+    const usedPercent = hubWindowUsedPercent(window);
+    if (usedPercent !== undefined) {
+      const resetsAt = isoOrUndefined(window.resets_at);
+      const currency = hubWindowCurrency(window);
+      const amount =
+        currency !== undefined &&
+        (finite(window.used) || finite(window.limit) || finite(window.remaining))
+          ? hubUsageAmount(window, currency, ["used", "limit", "remaining"])
+          : undefined;
+      windows.push({
         id,
         kind: hubWindowKind(id),
-        label: window.label.trim() || id,
+        label,
         usedPercent: Math.min(100, Math.max(0, usedPercent)),
         ...(resetsAt ? { resetsAt } : {}),
         ...(id === "five-hour" ? { windowDurationMins: 300 } : {}),
-      },
-    ];
-  });
-  return windows.length > 0
-    ? { checkedAt, windows }
-    : makeUnavailableUsageLimits({
-        checkedAt,
-        reason: "unsupported",
-        message: "The hub reports no usage allowance for this account.",
+        ...(amount ? { amount } : {}),
       });
+      continue;
+    }
+    const currency = hubWindowCurrency(window);
+    if (currency === undefined) continue;
+    const amount = hubUsageAmount(window, currency, ["used", "remaining"]);
+    if (amount.used === undefined && amount.remaining === undefined) continue;
+    const resetsAt = isoOrUndefined(window.resets_at);
+    amounts.push({ id, label, amount, ...(resetsAt ? { resetsAt } : {}) });
+  }
+  if (windows.length === 0 && amounts.length === 0) {
+    return makeUnavailableUsageLimits({
+      checkedAt,
+      reason: "unsupported",
+      message: "The hub reports no usage allowance for this account.",
+    });
+  }
+  return {
+    checkedAt,
+    windows,
+    ...(amounts.length > 0 ? { amounts } : {}),
+  };
 };
 
 export const makeCliproxyApi = Effect.gen(function* () {

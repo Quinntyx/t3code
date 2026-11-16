@@ -11,6 +11,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
+  describeUsageAmount,
   formatDuration,
   formatResetsIn,
   type LimitPace,
@@ -130,9 +131,10 @@ function WindowBar({
   const resetsAt = window.resetsAt
     ? formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)
     : null;
+  const budget = window.amount ? describeUsageAmount(window.amount) : null;
   const summary = `${window.label}: ${remaining}% left${
     timeLeft === null ? "" : `, ${timeLeft}% of the window left`
-  }${resetsIn ? `, ${resetsIn}` : ""}`;
+  }${resetsIn ? `, ${resetsIn}` : ""}${budget ? `, ${budget.value} ${budget.qualifier}` : ""}`;
 
   return (
     <Tooltip>
@@ -177,6 +179,11 @@ function WindowBar({
             <span className="text-muted-foreground">
               Resets {resetsAt}
               {resetsIn ? ` · ${resetsIn}` : ""}
+            </span>
+          ) : null}
+          {budget ? (
+            <span className="text-muted-foreground tabular-nums">
+              {budget.value} {budget.qualifier}
             </span>
           ) : null}
         </div>

@@ -12,6 +12,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ServerProvider,
   type ServerProviderResetCredits,
+  type ServerProviderUsageAmount,
   type ServerProviderUsageLimits,
   type ServerProviderUsageSource,
   type ServerProviderUsageWindow,
@@ -20,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as DateTime from "effect/DateTime";
+import { formatMoney } from "./usageFormat.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -616,6 +618,8 @@ export interface LimitPoolWindow {
   >;
   readonly remainingPercent: number;
   readonly usedPercent: number;
+  /** Pooled money for this window, or null unless every member reports it in one currency. */
+  readonly amount: ServerProviderUsageAmount | null;
   readonly pace: LimitPace | null;
   readonly resets: ReadonlyArray<{
     readonly member: LimitPoolMember;
@@ -624,10 +628,22 @@ export interface LimitPoolWindow {
   }>;
 }
 
+export interface LimitPoolAmount {
+  readonly id: string;
+  readonly label: string;
+  readonly total: ServerProviderUsageAmount | null;
+  readonly columns: ReadonlyArray<{
+    readonly account: LimitAccount;
+    readonly amount: ServerProviderUsageAmount | null;
+    readonly resetsAt?: string | undefined;
+  }>;
+}
+
 export interface LimitPool {
   readonly driver: ServerProvider["driver"];
   readonly accounts: readonly LimitAccount[];
   readonly windows: readonly LimitPoolWindow[];
+  readonly amounts: readonly LimitPoolAmount[];
 }
 
 export function displayLimitWindows(pool: LimitPool) {
@@ -686,7 +702,12 @@ export function collectLimitPools(
         accountSortName(left).localeCompare(accountSortName(right)) ||
         left.key.localeCompare(right.key),
     );
-    return { driver, accounts: sorted, windows: poolWindows(sorted, now) };
+    return {
+      driver,
+      accounts: sorted,
+      windows: poolWindows(sorted, now),
+      amounts: poolAmounts(sorted),
+    };
   });
 }
 
@@ -795,11 +816,106 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       ),
       usedPercent: Math.round(usedPercent),
       remainingPercent: Math.round(100 - usedPercent),
+      amount: poolWindowAmount(members),
       pace: meanElapsed === null ? null : paceOfShares(timedUsed, meanElapsed),
       resets,
     };
   });
   return pools.sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind]);
+}
+
+// The pool's percentage averages its accounts, each capped at its allowance. Summed money agrees
+// with it only when every account has the same allowance and none has overspent; otherwise each
+// account keeps its own figure.
+function poolWindowAmount(members: readonly LimitPoolMember[]): ServerProviderUsageAmount | null {
+  const amounts = members.flatMap((member) => (member.window.amount ? [member.window.amount] : []));
+  const limit = amounts[0]?.limit;
+  if (amounts.length !== members.length) return null;
+  if (
+    amounts.length > 1 &&
+    (limit === undefined ||
+      amounts.some((amount) => amount.limit !== limit || (amount.used ?? 0) > limit))
+  ) {
+    return null;
+  }
+  return sumUsageAmounts(amounts);
+}
+
+/**
+ * Money is only worth summing across accounts that all report it in one currency; a field is
+ * summed only when every account reports it, so a partial total never reads as complete.
+ */
+function sumUsageAmounts(
+  amounts: readonly ServerProviderUsageAmount[],
+): ServerProviderUsageAmount | null {
+  const first = amounts[0];
+  if (!first) return null;
+  if (amounts.some((amount) => amount.currency !== first.currency)) return null;
+  const field = (key: "used" | "limit" | "remaining") =>
+    amounts.every((amount) => amount[key] !== undefined)
+      ? amounts.reduce((sum, amount) => sum + (amount[key] ?? 0), 0)
+      : undefined;
+  const used = field("used");
+  const limit = field("limit");
+  const remaining = field("remaining");
+  if (used === undefined && limit === undefined && remaining === undefined) return null;
+  return {
+    currency: first.currency,
+    ...(used === undefined ? {} : { used }),
+    ...(limit === undefined ? {} : { limit }),
+    ...(remaining === undefined ? {} : { remaining }),
+  };
+}
+
+function poolAmounts(accounts: readonly LimitAccount[]): readonly LimitPoolAmount[] {
+  type Line = NonNullable<ServerProviderUsageLimits["amounts"]>[number];
+  const lines = new Map<
+    string,
+    { readonly label: string; readonly byAccount: Map<string, Line> }
+  >();
+  for (const account of accounts) {
+    for (const line of account.limits.amounts ?? []) {
+      const entry = lines.get(line.id) ?? { label: line.label, byAccount: new Map() };
+      entry.byAccount.set(account.key, line);
+      lines.set(line.id, entry);
+    }
+  }
+  return [...lines].map(([id, { label, byAccount }]) => {
+    const columns = accounts.map((account) => {
+      const line = byAccount.get(account.key);
+      return {
+        account,
+        amount: line?.amount ?? null,
+        ...(line?.resetsAt ? { resetsAt: line.resetsAt } : {}),
+      };
+    });
+    return {
+      id,
+      label,
+      total: sumUsageAmounts(columns.flatMap((column) => (column.amount ? [column.amount] : []))),
+      columns,
+    };
+  });
+}
+
+/** The words both clients render for one money figure. */
+export function describeUsageAmount(amount: ServerProviderUsageAmount): {
+  readonly value: string;
+  readonly qualifier: string;
+} {
+  if (amount.used !== undefined && amount.limit !== undefined) {
+    return {
+      value: formatMoney(amount.used, amount.currency),
+      qualifier: `of ${formatMoney(amount.limit, amount.currency)} used`,
+    };
+  }
+  if (amount.remaining !== undefined) {
+    return { value: formatMoney(amount.remaining, amount.currency), qualifier: "left" };
+  }
+  if (amount.used !== undefined) {
+    return { value: formatMoney(amount.used, amount.currency), qualifier: "spent" };
+  }
+  return { value: formatMoney(amount.limit ?? 0, amount.currency), qualifier: "limit" };
 }
 
 export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
@@ -809,14 +925,18 @@ export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
   if (limits.unavailable?.reason === "probeFailed") {
     return limits.unavailable.message ?? "Could not read limits.";
   }
-  return limits.windows.length === 0 ? "No limits reported." : null;
+  // Money with no allowance has no bar, but it is still something to show.
+  if (limits.windows.length === 0 && (limits.amounts?.length ?? 0) === 0) {
+    return "No limits reported.";
+  }
+  return null;
 }
 
 export function remainingPercent(window: ServerProviderUsageWindow): number {
   return Math.round(100 - Math.max(0, Math.min(100, window.usedPercent)));
 }
 
-function resetMillis(window: ServerProviderUsageWindow): number | null {
+function resetMillis(window: Pick<ServerProviderUsageWindow, "resetsAt">): number | null {
   if (window.resetsAt === undefined) return null;
   const at = Date.parse(window.resetsAt);
   return Number.isFinite(at) ? at : null;
@@ -863,7 +983,10 @@ export function formatDuration(ms: number): string {
   return `${minutes}m`;
 }
 
-export function formatResetsIn(window: ServerProviderUsageWindow, now: number): string | null {
+export function formatResetsIn(
+  window: Pick<ServerProviderUsageWindow, "resetsAt">,
+  now: number,
+): string | null {
   const resetsAt = resetMillis(window);
   if (resetsAt === null) return null;
   if (resetsAt <= now) return "resets now";
@@ -998,6 +1121,7 @@ export function collectProviderUsageLimits(
       ].flatMap((report) => {
         const key = resolveKey(report);
         const limits = report.usageLimits;
+        // Only a windowed native login keeps its hub duplicate off; the report lists windows.
         return key && limits && limits.windows.length > 0 && !limits.unavailable ? [key] : [];
       });
     }),
@@ -1052,6 +1176,7 @@ export function collectProviderUsageLimits(
     });
   }
   for (const source of selected.usageSources ?? []) {
+    // Quota windows only; a money-only login is not part of the agent-facing limits report.
     if (limitsNotice(source.limits) !== null || source.limits.windows.length === 0) continue;
     accounts.push({
       id: `${selected.instanceId}:${source.id}`,
@@ -1182,7 +1307,13 @@ export function summarizeProviderLimits(
   ]);
   const usable = (limits: ServerProviderUsageLimits | undefined) =>
     limits !== undefined && limitsNotice(limits) === null;
-  const ownLimits = usable(provider.usageLimits) ? provider.usageLimits : undefined;
+  // The picker draws bars only, so it has nothing to show for a windowless money-only login.
+  const ownLimits =
+    provider.usageLimits !== undefined &&
+    usable(provider.usageLimits) &&
+    provider.usageLimits.windows.length > 0
+      ? provider.usageLimits
+      : undefined;
   const own = ownLimits
     ? collectLimitPools(
         [
@@ -1218,6 +1349,7 @@ export function summarizeProviderLimits(
   );
   const routesByOrigin = usageRoutesByOrigin(provider);
   const localSources = (provider.usageSources ?? []).flatMap((source) => {
+    // The picker shows bars, so a windowless money-only login has nothing to draw there.
     if (!usable(source.limits) || source.limits.windows.length === 0) return [];
     const pool = collectLimitPools(
       [
