@@ -25,6 +25,7 @@ import * as Schedule from "effect/Schedule";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { findAercAccount } from "./aercAccounts.ts";
 import * as Mailer from "./Mailer.ts";
+import * as MailInbox from "./MailInbox.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -61,6 +62,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const mailer = yield* Mailer.Mailer;
   const random = yield* SecureRandom.SecureRandom;
+  const inbox = yield* Effect.serviceOption(MailInbox.MailInbox);
   // One send or close per card at a time; the next one rereads the card after it.
   const sending = new Map<string, Deferred.Deferred<void>>();
   const exclusive = Effect.fn("EmailRequests.exclusive")(function* <A, E>(
@@ -113,12 +115,28 @@ const make = Effect.gen(function* () {
         "No mail account can send from this machine. T3 Code sends with the accounts in aerc's accounts.conf.",
       );
     }
-    const account =
-      request.from === undefined ? accounts[0] : findAercAccount(accounts, request.from);
+    const reply =
+      request.replyTo === undefined
+        ? undefined
+        : yield* Option.match(inbox, {
+            onNone: () =>
+              Effect.fail(
+                failure(
+                  "capability_denied",
+                  "Native inbox access is unavailable; do not use direct mail commands.",
+                ),
+              ),
+            onSome: (service) =>
+              service
+                .replyContext(request.replyTo!)
+                .pipe(Effect.mapError((error) => failure("orchestration_error", error.message))),
+          });
+    const sender = request.from ?? reply?.account;
+    const account = sender === undefined ? accounts[0] : findAercAccount(accounts, sender);
     if (account === undefined) {
       return yield* failure(
         "invalid_request",
-        `No account matches from "${request.from}". Accounts: ${accounts
+        `No account matches from "${sender}". Accounts: ${accounts
           .map((candidate) => `${candidate.name} (${candidate.from})`)
           .join(", ")}.`,
       );
@@ -147,13 +165,34 @@ const make = Effect.gen(function* () {
     const turnItemId = TurnItemId.make(
       `turn-item:email-request:${encodeURIComponent(threadId)}:${encodeURIComponent(key)}`,
     );
+    const header = (name: string) =>
+      reply?.headers[name] ??
+      Object.entries(reply?.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
+    const replyAddress = header("reply-to") || header("from");
+    const originalId =
+      header("message-id")?.match(/<[^<>\s]+>/)?.[0] ??
+      (reply !== undefined && /^[^<>\s"]+$/.test(reply.messageId)
+        ? `<${reply.messageId}>`
+        : undefined);
+    const references =
+      originalId === undefined
+        ? undefined
+        : [
+            ...new Set([
+              ...(header("references")?.match(/<[^<>\s]+>/g) ?? []).slice(-20),
+              originalId,
+            ]),
+          ];
     const initial: OrchestrationV2EmailDraft = {
       account: account.name,
-      to: request.to,
+      to: request.to.length === 0 && replyAddress ? [replyAddress] : request.to,
       cc: request.cc ?? [],
       bcc: request.bcc ?? [],
-      subject: request.subject,
+      subject:
+        request.subject ||
+        (reply === undefined ? "" : `Re: ${header("subject") ?? ""}`.replace(/^Re: Re:/i, "Re:")),
       body: request.body,
+      ...(originalId === undefined ? {} : { inReplyTo: originalId, references }),
     };
     const record = (emailStatus: "pending" | "cancelled") =>
       threadManagement
@@ -288,7 +327,17 @@ const make = Effect.gen(function* () {
     if (input.answer.type === "discard") {
       return yield* record("discarded", item.draft);
     }
-    const sent = input.answer.draft;
+    const { account, to, cc, bcc, subject, body } = input.answer.draft;
+    const sent: OrchestrationV2EmailDraft = {
+      account,
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      ...(item.draft.inReplyTo === undefined ? {} : { inReplyTo: item.draft.inReplyTo }),
+      ...(item.draft.references === undefined ? {} : { references: item.draft.references }),
+    };
     if (sent.to.length + sent.cc.length + sent.bcc.length === 0) {
       return yield* new EmailRequestError({ reason: "no_recipients" });
     }

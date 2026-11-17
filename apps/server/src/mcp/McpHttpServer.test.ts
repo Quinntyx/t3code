@@ -50,6 +50,7 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as EmailRequests from "../email/EmailRequests.ts";
+import * as MailInbox from "../email/MailInbox.ts";
 import * as ConnectorsHandlers from "./toolkits/connectors/handlers.ts";
 import { ConnectorsToolkit } from "./toolkits/connectors/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -1191,6 +1192,12 @@ it.effect("hides link and email tools while they are off and refuses another env
         capabilities: new Set(["orchestration"]),
         issuedAt: 1,
       };
+      const externalScope: McpInvocationContext.McpInvocationScope = {
+        ...scope,
+        thread: undefined,
+        requestNamespace: "externalToken",
+        client: { sessionId: "external-session", label: "External client", access: "read-only" },
+      };
       const LinksToolkit = Toolkit.make(
         Tool.make("links", {
           description: "Lists links.",
@@ -1222,10 +1229,29 @@ it.effect("hides link and email tools while they are off and refuses another env
       ).pipe(
         Layer.provide(Layer.succeedContext(settingsContext)),
         Layer.provide(Layer.mock(EmailRequests.EmailRequests)({})),
+        Layer.provide(
+          Layer.mock(MailInbox.MailInbox)({
+            accounts: Effect.succeed({
+              accounts: [{ name: "work" }],
+              taggingEnabled: false,
+              refreshAvailable: false,
+            }),
+          }),
+        ),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             resolve: (presented) => Effect.succeed(presented === token ? scope : undefined),
+          }),
+        ),
+        Layer.provide(
+          Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+            authenticate: (request) =>
+              Effect.succeed(
+                request.headers.authorization === "Bearer externalToken"
+                  ? externalScope
+                  : undefined,
+              ),
           }),
         ),
       );
@@ -1244,12 +1270,15 @@ it.effect("hides link and email tools while they are off and refuses another env
           "application/json",
         ),
       });
+      let callerToken = token;
+      let sessionId = initialize.headers["mcp-session-id"]!;
       const rpc = (method: string, params: object) =>
         httpClient
           .post("/mcp", {
             headers: {
               ...headers,
-              "mcp-session-id": initialize.headers["mcp-session-id"]!,
+              authorization: `Bearer ${callerToken}`,
+              "mcp-session-id": sessionId,
               "mcp-protocol-version": "2025-06-18",
             },
             body: HttpBody.text(
@@ -1313,6 +1342,44 @@ it.effect("hides link and email tools while they are off and refuses another env
       expect(yield* emailConnector()).toEqual([
         expect.objectContaining({ name: "email", enabled: true }),
       ]);
+      expect(yield* rpc("tools/call", { name: "email_accounts", arguments: {} })).toMatchObject({
+        error: expect.any(Object),
+      });
+      yield* settings.updateSettings({ emailInboxEnabled: true });
+      expect(yield* listed()).toEqual([
+        "links",
+        "where",
+        "external_connectors",
+        "compose_email",
+        "email_accounts",
+        "email_search",
+        "email_read",
+        "email_attachment",
+        "email_refresh",
+      ]);
+      expect((yield* call("email_accounts", {})).structuredContent).toMatchObject({
+        accounts: [{ name: "work" }],
+      });
+      yield* settings.updateSettings({ emailTaggingEnabled: true });
+      expect(yield* listed()).toContain("email_tag");
+      yield* settings.updateSettings({ emailInboxEnabled: false });
+      expect(yield* listed()).not.toContain("email_tag");
+      expect(yield* listed()).not.toContain("email_read");
+      yield* settings.updateSettings({ emailInboxEnabled: true, emailTaggingEnabled: true });
+      const external = yield* httpClient.post("/mcp", {
+        headers: { ...headers, authorization: "Bearer externalToken" },
+        body: HttpBody.text(
+          '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"outside","version":"1"}}}',
+          "application/json",
+        ),
+      });
+      callerToken = "externalToken";
+      sessionId = external.headers["mcp-session-id"]!;
+      expect(yield* listed()).not.toContain("email_accounts");
+      expect(yield* listed()).not.toContain("email_read");
+      expect(yield* rpc("tools/call", { name: "email_accounts", arguments: {} })).toMatchObject({
+        error: expect.any(Object),
+      });
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

@@ -196,6 +196,8 @@ const make = Effect.gen(function* () {
           ...(draft.bcc.length > 0 ? { bcc: [...draft.bcc] } : {}),
           subject: draft.subject,
           text: draft.body,
+          ...(draft.inReplyTo === undefined ? {} : { inReplyTo: draft.inReplyTo }),
+          ...(draft.references === undefined ? {} : { references: [...draft.references] }),
         }),
       catch: (cause) =>
         new EmailRequestError({

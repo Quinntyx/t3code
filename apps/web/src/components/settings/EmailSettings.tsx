@@ -14,6 +14,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ScopedSwitch } from "./ScopedSwitch";
+import { EmailInboxSettings } from "./EmailInboxSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { searchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -76,6 +77,8 @@ export function EmailSettingsPanel() {
           />
         ) : null}
       </SettingsSection>
+
+      <EmailInboxSettings />
 
       {enabled ? (
         <SettingsSection

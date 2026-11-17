@@ -291,6 +291,9 @@ export const McpToolUseCase = Schema.Struct({
     harness: Schema.optional(Schema.Literals(["claude", "codex"])),
     /** The Linked environments beta is on, so T3 lists its link tools. */
     linkedEnvironments: Schema.optional(Schema.Boolean),
+    email: Schema.optional(
+      Schema.Struct({ drafts: Schema.Boolean, inbox: Schema.Boolean, tagging: Schema.Boolean }),
+    ),
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
@@ -488,11 +491,20 @@ const hiddenFromSubagents = enabledWhen(McpInvocationContext.hiddenFromSubagents
 const hiddenWhileLinksOff = enabledWhen(McpInvocationContext.hiddenWhileLinksOff);
 // Email starts off too; `external_connectors` stays listed so agents can find it.
 const hiddenWhileEmailOff = enabledWhen(McpInvocationContext.hiddenWhileEmailOff);
-const visibleT3Tools = (options: { readonly subagent?: boolean; readonly links?: boolean }) =>
+const hiddenWhileInboxOff = enabledWhen(McpInvocationContext.hiddenWhileInboxOff);
+const hiddenWhileTaggingOff = enabledWhen(McpInvocationContext.hiddenWhileEmailTaggingOff);
+const visibleT3Tools = (options: {
+  readonly subagent?: boolean;
+  readonly links?: boolean;
+  readonly email?: McpToolUseCase["setup"]["email"];
+}) =>
   t3Tools.filter(
     (tool) =>
       (options.links === true || !hiddenWhileLinksOff.has(tool.name)) &&
-      !hiddenWhileEmailOff.has(tool.name) &&
+      (options.email?.drafts === true || !hiddenWhileEmailOff.has(tool.name)) &&
+      (options.email?.inbox === true || !hiddenWhileInboxOff.has(tool.name)) &&
+      ((options.email?.inbox === true && options.email.tagging) ||
+        !hiddenWhileTaggingOff.has(tool.name)) &&
       !(options.subagent === true && hiddenFromSubagents.has(tool.name)),
   );
 
@@ -600,6 +612,7 @@ export const buildBase = (
     readonly keepUserInstructions: boolean;
     readonly subagent?: boolean;
     readonly links?: boolean;
+    readonly email?: McpToolUseCase["setup"]["email"];
     /** A native subagent starts from its task: T3 appends nothing to its system prompt. */
     readonly nativeSubagent?: boolean;
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
@@ -692,6 +705,7 @@ const buildCodexBase = (
     readonly effort?: string | undefined;
     readonly subagent?: boolean;
     readonly links?: boolean;
+    readonly email?: McpToolUseCase["setup"]["email"];
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
     readonly deviceAccess?: boolean;
   },
@@ -2448,6 +2462,7 @@ const main = Effect.gen(function* () {
     role: McpToolUseCase["setup"]["role"],
     deviceAccess: boolean,
     links: boolean,
+    email?: McpToolUseCase["setup"]["email"],
   ): Effect.Effect<Base, Schema.SchemaError> =>
     codex
       ? decodeCodexCapture(template).pipe(
@@ -2458,6 +2473,7 @@ const main = Effect.gen(function* () {
               effort: flags.effort,
               subagent: role === "delegated-child",
               links,
+              email,
               deviceAccess,
             }),
           ),
@@ -2470,6 +2486,7 @@ const main = Effect.gen(function* () {
               subagent: role === "delegated-child",
               nativeSubagent: role === "native-subagent",
               links,
+              email,
               deviceAccess,
             });
             return role === "native-subagent"
@@ -2481,18 +2498,27 @@ const main = Effect.gen(function* () {
         );
   // Codex has no native subagents; its cases with that role run as top-level threads.
   const baseKey = ({ setup }: McpToolUseCase) =>
-    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.linkedEnvironments === true}`;
+    JSON.stringify([
+      codex && setup.role === "native-subagent" ? "top" : setup.role,
+      setup.world?.deviceAgentAccess !== false,
+      setup.linkedEnvironments === true,
+      setup.email ?? null,
+    ]);
   const base = yield* buildFor("top", true, false);
-  const bases = new Map<string, Base>([["top:true:false", base]]);
+  const bases = new Map<string, Base>();
   for (const testCase of selected) {
     const key = baseKey(testCase);
     if (bases.has(key)) continue;
-    const [role = "top", access, links] = key.split(":") as [
-      McpToolUseCase["setup"]["role"],
-      string,
-      string,
-    ];
-    bases.set(key, yield* buildFor(role, access === "true", links === "true"));
+    const { setup } = testCase;
+    bases.set(
+      key,
+      yield* buildFor(
+        codex && setup.role === "native-subagent" ? "top" : setup.role,
+        setup.world?.deviceAgentAccess !== false,
+        setup.linkedEnvironments === true,
+        setup.email,
+      ),
+    );
   }
   const baseFor = (testCase: McpToolUseCase) => bases.get(baseKey(testCase)) ?? base;
   const effort = flags.effort ?? base.codex?.reasoning.effort ?? "high";

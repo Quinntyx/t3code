@@ -39,6 +39,7 @@ import { PullRequestStackService } from "../pullRequest/PullRequestStackService.
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { SecretRequests } from "../secrets/SecretRequests.ts";
 import { EmailRequests } from "../email/EmailRequests.ts";
+import { MailInbox } from "../email/MailInbox.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { SourceControlRepositoryService } from "../sourceControl/SourceControlRepositoryService.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
@@ -75,6 +76,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(ScheduledTaskService)({}),
   Layer.mock(SecretRequests)({}),
   Layer.mock(EmailRequests)({}),
+  Layer.mock(MailInbox)({}),
   ServerConfig.layerTest(process.cwd(), { prefix: "t3-agent-context-budget-" }),
   Layer.mock(ServerEnvironment)({}),
   Layer.mock(ServerSecretStore)({}),
