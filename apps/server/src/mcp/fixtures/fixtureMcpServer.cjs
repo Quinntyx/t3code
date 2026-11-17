@@ -41,11 +41,30 @@ if (failingTool !== undefined) {
   process.exit(1);
 }
 
+// A test sets these to exercise the protocol around listing: a server request mid-request and pages.
+const pingBeforeList = process.env.FIXTURE_PING_BEFORE_LIST === "1";
+const paginate = process.env.FIXTURE_PAGINATE === "1";
+/** tools/list requests waiting on our own ping, keyed by the id both use, with their cursor. */
+const awaitingPing = new Map();
+
+const answerList = (id, cursor) => {
+  if (!paginate) return reply(id, { tools });
+  return cursor === undefined
+    ? reply(id, { tools: tools.slice(0, 2), nextCursor: "page-2" })
+    : reply(id, { tools: tools.slice(2) });
+};
+
 readline
   .createInterface({ input: process.stdin })
   .on("line", (line) => {
     if (line.trim() === "") return;
     const message = JSON.parse(line);
+    // Our ping is answered with the same id the tools/list request used; only now do we answer it.
+    if (message.method === undefined && awaitingPing.has(message.id)) {
+      const cursor = awaitingPing.get(message.id);
+      awaitingPing.delete(message.id);
+      return answerList(message.id, cursor);
+    }
     if (message.method === "initialize") {
       return reply(message.id, {
         protocolVersion: "2025-06-18",
@@ -54,7 +73,15 @@ readline
       });
     }
     if (message.method === "notifications/initialized") return;
-    if (message.method === "tools/list") return reply(message.id, { tools });
+    if (message.method === "tools/list") {
+      if (pingBeforeList) {
+        awaitingPing.set(message.id, message.params?.cursor);
+        return process.stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: message.id, method: "ping" })}\n`,
+        );
+      }
+      return answerList(message.id, message.params?.cursor);
+    }
     if (message.method === "tools/call") {
       const { name, arguments: args } = message.params;
       if (name === "crash-on-call") {

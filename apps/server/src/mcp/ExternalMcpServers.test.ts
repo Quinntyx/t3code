@@ -53,7 +53,12 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
           runtimeHint: process.execPath,
           transport: { type: "stdio" },
           // Absent, the fixture starts; set, it fails while starting, as a broken server does.
-          environmentVariables: [{ name: "FIXTURE_START_FAILURE" }, { name: "FIXTURE_PID_FILE" }],
+          environmentVariables: [
+            { name: "FIXTURE_START_FAILURE" },
+            { name: "FIXTURE_PID_FILE" },
+            { name: "FIXTURE_PING_BEFORE_LIST" },
+            { name: "FIXTURE_PAGINATE" },
+          ],
         },
       ],
     },
@@ -163,6 +168,25 @@ it.live("launches an enabled server and lists its tools under the configured pre
         content: [{ type: "text", text: "hi" }],
       });
     }),
+  ),
+);
+
+it.live("answers a server's ping instead of taking it for a reply, and follows its pages", () =>
+  runTest(
+    [entry({ config: { FIXTURE_PING_BEFORE_LIST: "1", FIXTURE_PAGINATE: "1" } })],
+    (servers) =>
+      Effect.gen(function* () {
+        // The ping reuses the tools/list id; only the real reply lists, so a misread resolves nothing
+        // and the start fails. The pages come back in the server's order.
+        expect(yield* servers.tools).toEqual([
+          expect.objectContaining({ name: "fixture_echo" }),
+          expect.objectContaining({ name: "fixture_image" }),
+          expect.objectContaining({ name: "fixture_crash-on-call" }),
+        ]);
+        expect((yield* servers.states).servers).toEqual([
+          expect.objectContaining({ status: "running" }),
+        ]);
+      }),
   ),
 );
 
@@ -296,6 +320,31 @@ it.live("reports a rejected document as failed without launching anything", () =
         expect(yield* servers.tools).toEqual([]);
       }),
   ),
+);
+
+/** A child killed by a signal has no exit code, which must still count as having exited. */
+it.live("records a child killed by a signal as failed instead of leaving it running", () =>
+  Effect.gen(function* () {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-signal-"));
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+    );
+    const pidFile = NodePath.join(directory, "fixture.pid");
+    yield* Effect.gen(function* () {
+      const servers = yield* ExternalMcpServers.ExternalMcpServers;
+      yield* startServers(servers);
+      yield* watcher(servers);
+      const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
+      const failed = yield* Effect.forkScoped(watcher(servers));
+      process.kill(pid, "SIGKILL");
+      yield* Fiber.join(failed);
+
+      expect((yield* servers.states).servers).toEqual([
+        expect.objectContaining({ id: "fixture", status: "failed", tools: [] }),
+      ]);
+      expect(yield* servers.tools).toEqual([]);
+    }).pipe(Effect.provide(layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })])));
+  }),
 );
 
 /** The service scope owns every child, so teardown reaches one that is still running. */

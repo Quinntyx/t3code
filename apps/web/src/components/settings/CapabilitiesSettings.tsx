@@ -2,7 +2,6 @@ import {
   AuthSettingsWriteScope,
   mcpServerIdFromName,
   type RegisteredMcpServerEntry,
-  type RegisteredMcpServerState,
   type RegisteredMcpServersState,
 } from "@t3tools/contracts";
 import { parseMcpRegistration, type ParsedMcpRegistration } from "@t3tools/shared/mcpRegistration";
@@ -12,31 +11,18 @@ import { useState } from "react";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { defaultToolName, validateEntry } from "./CapabilitiesSettings.logic";
+import { McpServerStatusBadge } from "./McpServerStatusBadge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { searchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
-
-const statusBadge = (status: RegisteredMcpServerState["status"]) => {
-  switch (status) {
-    case "running":
-      return <Badge variant="success">Running</Badge>;
-    case "starting":
-      return <Badge variant="info">Starting</Badge>;
-    case "failed":
-      return <Badge variant="error">Failed</Badge>;
-    case "stopped":
-      return <Badge variant="outline">Stopped</Badge>;
-  }
-};
 
 export function CapabilitiesSettingsPanel() {
   const settings = useScopedSettings();
@@ -126,7 +112,7 @@ export function CapabilitiesSettingsPanel() {
                           : ""
                       }`
                 }
-                status={statusBadge(runtime?.status ?? "stopped")}
+                status={<McpServerStatusBadge status={runtime?.status ?? "stopped"} />}
                 control={
                   <EnableSwitch
                     checked={entry.enabled}
