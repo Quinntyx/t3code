@@ -1,4 +1,5 @@
 import { EasDeviceHostConfigs, SimlockDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
+import { EmailInboxAccountConfig } from "./emailInbox.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
@@ -1558,6 +1559,15 @@ export const ServerSettings = Schema.Struct({
   emailEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** aerc accounts.conf that agent email sends with. Empty: aerc's default location. */
   emailAccountsFile: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  emailInboxEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  emailTaggingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  emailNotmuchConfigFile: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  emailInboxAccounts: Schema.Array(EmailInboxAccountConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  emailRefreshCommand: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   /** Clones default to `<addProjectBaseDirectory>/<host>/<owner>/<repo>`, like ghq. */
   ghqCloneLayout: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   textGenerationModelSelection: ModelSelection.pipe(
@@ -1969,6 +1979,11 @@ export const ServerSettingsPatch = Schema.Struct({
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   emailEnabled: Schema.optionalKey(Schema.Boolean),
   emailAccountsFile: Schema.optionalKey(TrimmedString),
+  emailInboxEnabled: Schema.optionalKey(Schema.Boolean),
+  emailTaggingEnabled: Schema.optionalKey(Schema.Boolean),
+  emailNotmuchConfigFile: Schema.optionalKey(TrimmedString),
+  emailInboxAccounts: Schema.optionalKey(Schema.Array(EmailInboxAccountConfig)),
+  emailRefreshCommand: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   ghqCloneLayout: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   threadTitleInstructions: Schema.optionalKey(TrimmedString),

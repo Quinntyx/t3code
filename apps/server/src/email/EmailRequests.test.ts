@@ -19,6 +19,7 @@ import { emailRecordReplaces } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as EmailRequests from "./EmailRequests.ts";
 import * as Mailer from "./Mailer.ts";
+import * as MailInbox from "./MailInbox.ts";
 
 const threadId = ThreadId.make("thread-email");
 const turnItemId = TurnItemId.make("turn-item:email-request:1");
@@ -57,8 +58,25 @@ const withService = <A, E>(
     let emailStatus: OrchestrationV2EmailRequestStatus = "pending";
     let cardId: string = turnItemId;
     let cardDraft = drafted;
+    let recorded = false;
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
+      Layer.mock(MailInbox.MailInbox)({
+        replyContext: () =>
+          Effect.succeed({
+            account: "gmail",
+            messageId: "original@example.invalid",
+            timestamp: 1,
+            tags: ["unread"],
+            headersTruncated: false,
+            headers: {
+              From: "Ada <ada@example.invalid>",
+              "reply-to": "reply@example.invalid",
+              references: "<earlier@example.invalid>",
+              "message-id": "<original@example.invalid>",
+            },
+          }),
+      }),
       Layer.succeed(
         Mailer.Mailer,
         Mailer.Mailer.of({
@@ -114,7 +132,8 @@ const withService = <A, E>(
             dispatched.push(command);
             if (command.type !== "email_request.record") return {} as never;
             cardId = command.turnItemId;
-            if (emailRecordReplaces(emailStatus, command.emailStatus)) {
+            if (!recorded || emailRecordReplaces(emailStatus, command.emailStatus)) {
+              recorded = true;
               emailStatus = command.emailStatus;
               cardDraft = command.draft;
             }
@@ -258,6 +277,54 @@ const draftInput = {
   requestNamespace: "test",
   request: { to: ["prof@school.edu"], subject: "Office hours", body: "Hi", timeoutMs: 1_000 },
 };
+
+it.effect(
+  "a native inbox reply waits for review and preserves server-derived threading after user edits",
+  () =>
+    withService(({ service, sent, dispatched }) =>
+      Effect.gen(function* () {
+        const waiting = yield* Effect.forkChild(
+          service.draft({
+            ...draftInput,
+            request: {
+              ...draftInput.request,
+              to: [],
+              replyTo: { account: "gmail", messageId: "original@example.invalid" },
+            },
+          }),
+        );
+        yield* TestClock.adjust("600 millis");
+        const pending = dispatched[0] as Extract<
+          OrchestrationV2ServerCommand,
+          { type: "email_request.record" }
+        >;
+        assert.equal(pending.draft.account, "gmail");
+        assert.deepEqual(pending.draft.to, ["reply@example.invalid"]);
+        assert.equal(pending.draft.inReplyTo, "<original@example.invalid>");
+        assert.deepEqual(sent, []);
+        yield* service.answer({
+          threadId,
+          turnItemId: pending.turnItemId,
+          answer: {
+            type: "send",
+            draft: {
+              ...drafted,
+              account: "gmail",
+              to: ["reply@example.invalid"],
+              subject: "User edited subject",
+            },
+          },
+        });
+        yield* TestClock.adjust("1 second");
+        assert.equal((yield* Fiber.join(waiting)).status, "sent");
+        assert.equal(sent[0]?.inReplyTo, "<original@example.invalid>");
+        assert.deepEqual(sent[0]?.references, [
+          "<earlier@example.invalid>",
+          "<original@example.invalid>",
+        ]);
+      }),
+    ),
+);
 
 it.effect("a draft nobody answers closes and reports that it timed out", () =>
   withService(({ service, dispatched }) =>

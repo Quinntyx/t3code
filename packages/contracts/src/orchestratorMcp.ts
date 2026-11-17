@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { AuthMcpClientAccess } from "./auth.ts";
+import { EmailMessageRef } from "./emailInbox.ts";
 import {
   ContextTransferId,
   EnvironmentId,
@@ -839,6 +840,10 @@ export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSe
 const OrchestratorMcpEmailAddresses = Schema.Array(TrimmedNonEmptyString);
 
 export const OrchestratorMcpComposeEmailInput = Schema.Struct({
+  replyTo: Schema.optional(EmailMessageRef).annotate({
+    description:
+      "Original message from the native inbox. Derives the sender account and threading headers; empty to uses Reply-To/From. The user still reviews and sends the draft.",
+  }),
   to: OrchestratorMcpEmailAddresses.annotate({
     description: "Addresses, e.g. 'Ada <ada@example.com>'. May be empty for the user to fill in.",
   }),
@@ -886,6 +891,7 @@ export const OrchestratorMcpExternalConnectorsResult = Schema.Struct({
       name: Schema.String,
       enabled: Schema.Boolean,
       tool: Schema.String,
+      tools: Schema.optional(Schema.Array(Schema.String)),
       note: Schema.String,
     }),
   ),

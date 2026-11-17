@@ -1672,6 +1672,8 @@ export const OrchestrationV2EmailDraft = Schema.Struct({
   bcc: Schema.Array(TrimmedNonEmptyString),
   subject: Schema.String,
   body: Schema.String,
+  inReplyTo: Schema.optional(Schema.String),
+  references: Schema.optional(Schema.Array(Schema.String)),
 });
 export type OrchestrationV2EmailDraft = typeof OrchestrationV2EmailDraft.Type;
 

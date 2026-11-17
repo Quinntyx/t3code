@@ -205,8 +205,15 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     Effect.map((settings) => ({
       linkedEnvironments: settings.linkedEnvironmentsEnabled,
       email: settings.emailEnabled,
+      emailInbox: settings.emailInboxEnabled,
+      emailTagging: settings.emailTaggingEnabled,
     })),
-    Effect.orElseSucceed(() => ({ linkedEnvironments: false, email: false })),
+    Effect.orElseSucceed(() => ({
+      linkedEnvironments: false,
+      email: false,
+      emailInbox: false,
+      emailTagging: false,
+    })),
   );
   const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
     request: HttpServerRequest.HttpServerRequest,
@@ -238,9 +245,9 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     const asked = withModeLimit(invocation, request);
     if (asked === undefined) return invalidModeLimit;
     const limited = McpInvocationContext.withRuntimeModeCeiling(asked, runtimeModeCeiling);
-    const { linkedEnvironments, email } = yield* enabledFeatures;
+    const { linkedEnvironments, email, emailInbox, emailTagging } = yield* enabledFeatures;
     if (limited.client?.linked === true && !linkedEnvironments) return linkedEnvironmentsOff;
-    return { ...limited, linkedEnvironments, email };
+    return { ...limited, linkedEnvironments, email, emailInbox, emailTagging };
   });
   // Untraced: a span here would wrap the tool call; the HTTP server span already covers it.
   return Effect.fnUntraced(function* (httpEffect) {

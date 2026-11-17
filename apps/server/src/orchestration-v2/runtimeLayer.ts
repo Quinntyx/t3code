@@ -60,6 +60,7 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as EmailRequests from "../email/EmailRequests.ts";
 import * as Mailer from "../email/Mailer.ts";
+import * as MailInbox from "../email/MailInbox.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -286,6 +287,7 @@ const layerSecretRequestsProvided = SecretRequests.layer.pipe(
 );
 const layerEmailRequestsProvided = EmailRequests.layer.pipe(
   Layer.provideMerge(Mailer.layer),
+  Layer.provideMerge(MailInbox.layer),
   Layer.provide(layerThreadManagementProvided),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
