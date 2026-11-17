@@ -36,7 +36,12 @@ const mcpbManifest = {
   server: {
     mcp_config: {
       command: "node",
-      args: ["${__dirname}/dist/index.js", "--data", "${user_config.data_dir}"],
+      args: [
+        "${__dirname}/dist/index.js",
+        "--data",
+        "${user_config.data_dir}",
+        "${user_config.labels}",
+      ],
       env: { ACME_TOKEN: "${user_config.token}", ACME_HOME: "${HOME}" },
     },
   },
@@ -50,6 +55,8 @@ const mcpbManifest = {
     token: { type: "string", title: "API token", sensitive: true, required: true },
     retries: { type: "number", title: "Retries", default: 3, min: 0, max: 10 },
     verbose: { type: "boolean", title: "Verbose logging" },
+    labels: { type: "string", title: "Labels", multiple: true },
+    quota: { type: "number", title: "Quota", sensitive: true },
   },
 };
 
@@ -125,6 +132,100 @@ describe("parseMcpRegistration", () => {
           required: false,
           secret: false,
         },
+        {
+          key: "labels",
+          label: "Labels",
+          type: "string",
+          required: false,
+          secret: false,
+          multiple: true,
+        },
+        // A sensitive number is stored as a secret string, since only strings become secrets.
+        {
+          key: "quota",
+          label: "Quota",
+          type: "string",
+          required: false,
+          secret: true,
+        },
+      ],
+    },
+    {
+      label: "a server.json argument with declared variables",
+      source: serverJson([
+        {
+          ...npmPackage,
+          packageArguments: [
+            {
+              type: "positional",
+              value: "{NOTES_TOKEN}",
+              variables: {
+                NOTES_TOKEN: {
+                  description: "Argument token.",
+                  isRequired: true,
+                  isSecret: true,
+                  format: "filepath",
+                  default: "~/.notes-token",
+                },
+              },
+            },
+            {
+              type: "named",
+              name: "--region",
+              value: "{NOTES_REGION}",
+              variables: {
+                NOTES_REGION: { choices: ["us", "eu"], default: "us" },
+              },
+            },
+          ],
+        },
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "TEAM_NOTES_TOKEN",
+          label: "TEAM_NOTES_TOKEN",
+          type: "string",
+          required: true,
+          secret: true,
+          description: "Workspace API token.",
+        },
+        {
+          key: "TEAM_NOTES_REGION",
+          label: "TEAM_NOTES_REGION",
+          type: "choice",
+          required: false,
+          secret: false,
+          default: "us",
+          choices: ["us", "eu"],
+        },
+        {
+          key: "TEAM_NOTES_HOME",
+          label: "TEAM_NOTES_HOME",
+          type: "path",
+          required: false,
+          secret: false,
+        },
+        {
+          key: "NOTES_TOKEN",
+          label: "NOTES TOKEN",
+          type: "path",
+          required: true,
+          secret: true,
+          description: "Argument token.",
+          default: "~/.notes-token",
+        },
+        {
+          key: "NOTES_REGION",
+          label: "NOTES REGION",
+          type: "choice",
+          required: false,
+          secret: false,
+          description: "Value for --region (package argument 2).",
+          default: "us",
+          choices: ["us", "eu"],
+        },
       ],
     },
   ])("reads $label", ({ source, expectedKind, expectedName, expectedFields }) => {
@@ -194,6 +295,13 @@ describe("resolveMcpLaunch", () => {
         },
       },
     });
+
+    // An unset optional value leaves no flag behind: the whole named argument goes.
+    const unset = resolveMcpLaunch({
+      source: { kind: "server.json", document: serverJson([npmPackage]) },
+      config: { TEAM_NOTES_TOKEN: "s3cret" },
+    });
+    expect(unset.ok && unset.launch.args).toEqual(["-y", "@acme/team-notes-mcp@1.4.2"]);
   });
 
   it("launches pypi and oci packages with their own runners", () => {
@@ -228,13 +336,45 @@ describe("resolveMcpLaunch", () => {
       args: ["run", "-i", "--rm", "-e", "TEAM_NOTES_TOKEN", "ghcr.io/acme/notes:1"],
       env: { TEAM_NOTES_TOKEN: "s3cret" },
     });
+
+    // A runtime argument configures the runner, so it comes before the image, not after it.
+    const withRuntime = resolveMcpLaunch({
+      source: {
+        kind: "server.json",
+        document: serverJson([
+          {
+            registryType: "oci",
+            identifier: "ghcr.io/acme/notes:1",
+            transport: { type: "stdio" },
+            runtimeArguments: [
+              { type: "named", name: "--network", value: "host" },
+              { type: "positional", value: "{EXTRA_FLAG}" },
+            ],
+            packageArguments: [{ type: "named", name: "--verbose", value: "1" }],
+          },
+        ]),
+      },
+      config: { EXTRA_FLAG: "detach" },
+    });
+    expect(withRuntime.ok && withRuntime.launch.args).toEqual([
+      "run",
+      "-i",
+      "--rm",
+      "--network",
+      "host",
+      "detach",
+      "ghcr.io/acme/notes:1",
+      "--verbose",
+      "1",
+    ]);
   });
 
   it("launches an MCPB manifest from its bundle directory", () => {
     const resolved = resolveMcpLaunch(
       {
         source: { kind: "mcpb", manifest: mcpbManifest, bundleDir: "/opt/acme-notes" },
-        config: { data_dir: "/home/user/acme", token: "t0ken" },
+        // A label with a space stays one argument; the array's element is the unit, not a word.
+        config: { data_dir: "/home/user/acme", token: "t0ken", labels: ["a", "b c"] },
       },
       { home: "/home/user" },
     );
@@ -242,7 +382,7 @@ describe("resolveMcpLaunch", () => {
       ok: true,
       launch: {
         command: "node",
-        args: ["/opt/acme-notes/dist/index.js", "--data", "/home/user/acme"],
+        args: ["/opt/acme-notes/dist/index.js", "--data", "/home/user/acme", "a", "b c"],
         env: { ACME_TOKEN: "t0ken", ACME_HOME: "/home/user" },
       },
     });

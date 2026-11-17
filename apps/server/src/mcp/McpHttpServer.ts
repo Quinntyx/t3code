@@ -1057,7 +1057,17 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
     const threads = yield* ThreadManagementService.ThreadManagementService;
     // What the enabled check reads. Each registration closes over its own tool name.
     const enabled = new Set<string>();
-    const registered = new Set<string>();
+    // A proxy name can change hands (a reused toolName), so what it was registered from is kept.
+    const registered = new Map<string, { readonly serverId: string; readonly key: string }>();
+
+    // What the registration advertises: a tool whose owner or schema changed must be re-added.
+    const advertisedKey = (tool: ExternalMcpServers.ExternalMcpTool) =>
+      JSON.stringify([
+        tool.descriptor.description,
+        tool.descriptor.title,
+        tool.descriptor.inputSchema,
+        tool.descriptor.annotations,
+      ]);
 
     // A registration is announced to agents, so it carries the tool's own schema and hints.
     const add = (tool: ExternalMcpServers.ExternalMcpTool) =>
@@ -1124,21 +1134,31 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
       const tools = yield* externalServers.tools;
       enabled.clear();
       for (const tool of tools) enabled.add(tool.name);
-      // A registration replaces one already using its name, so a registered name belongs to its first tool.
-      const taken = new Set(server.tools.map(({ tool }) => tool.name));
+      // A name belongs to the first tool that claims it, so a reused name has one owner.
+      const claimed = new Map<string, ExternalMcpServers.ExternalMcpTool>();
       for (const tool of tools) {
-        if (registered.has(tool.name)) continue;
-        if (taken.has(tool.name)) {
-          yield* Effect.logWarning("skipped a registered MCP tool with a taken name", {
-            server: tool.serverName,
-            tool: tool.name,
-          });
-          yield* externalServers.skipTool(tool, `as ${tool.name}, which another tool uses`);
+        if (!claimed.has(tool.name)) claimed.set(tool.name, tool);
+      }
+      // A registration replaces one already using its name, so a name a native tool owns is skipped.
+      const taken = new Set(server.tools.map(({ tool }) => tool.name));
+      for (const [name, tool] of claimed) {
+        const key = advertisedKey(tool);
+        const current = registered.get(name);
+        // Re-added when the owner or what it advertises changed; `addTool` replaces by name.
+        if (current !== undefined && current.serverId === tool.serverId && current.key === key) {
           continue;
         }
-        registered.add(tool.name);
+        if (current === undefined && taken.has(name)) {
+          yield* Effect.logWarning("skipped a registered MCP tool with a taken name", {
+            server: tool.serverName,
+            tool: name,
+          });
+          yield* externalServers.skipTool(tool, `as ${name}, which another tool uses`);
+          continue;
+        }
+        registered.set(name, { serverId: tool.serverId, key });
         yield* add(tool);
-        taken.add(tool.name);
+        taken.add(name);
       }
     });
 

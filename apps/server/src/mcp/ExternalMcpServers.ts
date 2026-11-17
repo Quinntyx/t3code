@@ -149,6 +149,7 @@ const proxiedToolName = (prefix: string, toolName: string) =>
 
 interface JsonRpcReply {
   readonly id?: number | undefined;
+  readonly method?: string | undefined;
   readonly result?: unknown;
   readonly error?:
     | { readonly code?: number | undefined; readonly message?: string | undefined }
@@ -241,16 +242,25 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   const decodeTool = (raw: unknown) =>
     McpSchema.Tool.make(raw as ConstructorParameters<typeof McpSchema.Tool>[0]);
 
-  // Newline-delimited replies on stdout.
+  // Newline-delimited messages on stdout. A server can use our id for its own request, so only
+  // a message without a method is a reply to ours; requests and notifications are answered here.
   yield* child.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
     Stream.runForEach((line) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         const message = decodeJsonLine(line);
-        if (!isJsonRpcReply(message) || typeof message.id !== "number") return;
+        if (!isJsonRpcReply(message) || typeof message.id !== "number") return Effect.void;
+        if (message.method !== undefined) {
+          // `ping` is the one request a server sends us; anything else is ignored unanswered.
+          return message.method === "ping"
+            ? write({ jsonrpc: "2.0", id: message.id, result: {} })
+            : Effect.void;
+        }
         const reply = replies.get(message.id);
-        if (reply !== undefined) Deferred.doneUnsafe(reply, Exit.succeed(message));
+        if (reply === undefined) return Effect.void;
+        Deferred.doneUnsafe(reply, Exit.succeed(message));
+        return Effect.void;
       }),
     ),
     Effect.forkScoped,
@@ -263,15 +273,19 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     Effect.forkScoped,
   );
 
-  // The exit code is the crash signal; requests still waiting fail with the stderr tail.
-  yield* child.exitCode.pipe(
-    Effect.flatMap((code) =>
-      Ref.get(stderrTail).pipe(
-        Effect.flatMap((tail) =>
-          Deferred.succeed(exited, `${launch.command} exited (${code}). ${tail}`.trim()),
-        ),
+  // Any exit is the crash signal; a signal termination fails `exitCode`, so both count. Requests
+  // still waiting fail with the stderr tail.
+  const recordExit = (detail: string) =>
+    Ref.get(stderrTail).pipe(
+      Effect.flatMap((tail) =>
+        Deferred.succeed(exited, `${launch.command} ${detail}. ${tail}`.trim()),
       ),
-    ),
+    );
+  yield* child.exitCode.pipe(
+    Effect.matchCauseEffect({
+      onSuccess: (code) => recordExit(`exited (${code})`),
+      onFailure: (cause) => recordExit(`stopped (${causeText(cause)})`),
+    }),
     Effect.forkScoped,
   );
 
@@ -311,27 +325,47 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   );
   yield* write({ jsonrpc: "2.0", method: "notifications/initialized" });
 
-  const listTools = request("tools/list", {}).pipe(
-    Effect.timeoutOrElse({
-      duration: START_TIMEOUT,
-      orElse: () =>
-        new ExternalMcpServerError({
-          message: `${launch.command} did not list its tools in time.`,
-        }),
-    }),
-    Effect.flatMap((reply) =>
-      settled(reply, (result) => {
-        const raw = (result as { readonly tools?: unknown } | undefined)?.tools;
-        if (!Array.isArray(raw)) throw new Error("missing tools");
-        return raw.map(decodeTool);
+  /** One `tools/list` page: its tools and the cursor for the next one, if the server has more. */
+  const listToolsPage = (cursor: string | undefined) =>
+    request("tools/list", cursor === undefined ? {} : { cursor }).pipe(
+      Effect.timeoutOrElse({
+        duration: START_TIMEOUT,
+        orElse: () =>
+          new ExternalMcpServerError({
+            message: `${launch.command} did not list its tools in time.`,
+          }),
       }),
-    ),
-    Effect.mapError((cause) =>
-      isExternalMcpServerError(cause)
-        ? cause
-        : new ExternalMcpServerError({ message: causeText(cause) }),
-    ),
-  );
+      Effect.flatMap((reply) =>
+        settled(reply, (result) => {
+          const page = result as
+            | { readonly tools?: unknown; readonly nextCursor?: unknown }
+            | undefined;
+          const raw = page?.tools;
+          if (!Array.isArray(raw)) throw new Error("missing tools");
+          return {
+            tools: raw.map(decodeTool),
+            ...(typeof page?.nextCursor === "string" ? { nextCursor: page.nextCursor } : {}),
+          };
+        }),
+      ),
+      Effect.mapError((cause) =>
+        isExternalMcpServerError(cause)
+          ? cause
+          : new ExternalMcpServerError({ message: causeText(cause) }),
+      ),
+    );
+
+  // A paginated server lists a page at a time; the pages are appended in the order it gives them.
+  const listTools = Effect.gen(function* () {
+    const collected: Array<McpSchema.Tool> = [];
+    let cursor: string | undefined;
+    do {
+      const page = yield* listToolsPage(cursor);
+      collected.push(...page.tools);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return collected;
+  });
 
   const callTool = (toolName: string, args: Readonly<Record<string, unknown>>) =>
     request("tools/call", { name: toolName, arguments: args }).pipe(

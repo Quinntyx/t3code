@@ -6,7 +6,7 @@ import {
   type McpConfigValue,
 } from "@t3tools/shared/mcpRegistration";
 import { useParams } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -15,7 +15,9 @@ import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
+import { McpServerStatusBadge } from "./McpServerStatusBadge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -93,7 +95,11 @@ export function McpServerSettingsPanel() {
           settingKeys={["registeredMcpServers"]}
           title="Enabled"
           description="While on, T3 Code runs this server and its tools are available to agents."
-          status={statusBadge(runtime?.status ?? (entry.enabled ? "starting" : "stopped"))}
+          status={
+            <McpServerStatusBadge
+              status={runtime?.status ?? (entry.enabled ? "starting" : "stopped")}
+            />
+          }
           control={
             <Switch
               checked={entry.enabled}
@@ -109,6 +115,8 @@ export function McpServerSettingsPanel() {
           description={`Agents call this server's tools as ${entry.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
           control={
             <ToolNameInput
+              // A route change to another server must not keep this one's draft.
+              key={entry.id}
               value={entry.toolName}
               others={settings.registeredMcpServers.filter(
                 (candidate) => candidate.id !== entry.id,
@@ -188,19 +196,6 @@ const configuredSecret = (entry: RegisteredMcpServerEntry, key: string) => {
   return typeof value === "string" && value.length > 0;
 };
 
-function statusBadge(status: "running" | "starting" | "failed" | "stopped") {
-  switch (status) {
-    case "running":
-      return <Badge variant="success">Running</Badge>;
-    case "starting":
-      return <Badge variant="info">Starting</Badge>;
-    case "failed":
-      return <Badge variant="error">Failed</Badge>;
-    case "stopped":
-      return <Badge variant="outline">Stopped</Badge>;
-  }
-}
-
 function ToolNameInput({
   value,
   others,
@@ -246,6 +241,30 @@ function ToolNameInput({
   );
 }
 
+/** A list field edits as plain lines and commits on blur, so each keystroke is not a write. */
+function MultiValueTextarea({
+  value,
+  onCommit,
+  ...rest
+}: Omit<ComponentProps<typeof Textarea>, "value" | "defaultValue" | "onChange"> & {
+  readonly value: string;
+  readonly onCommit: (next: string) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <Textarea
+      {...rest}
+      value={draft ?? value}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={(event) => {
+        const next = event.currentTarget.value;
+        setDraft(null);
+        if (next !== value) onCommit(next);
+      }}
+    />
+  );
+}
+
 function FieldControl({
   field,
   entry,
@@ -263,6 +282,27 @@ function FieldControl({
         checked={value === true}
         onCheckedChange={(next) => onChange(Boolean(next))}
         aria-label={field.label}
+      />
+    );
+  }
+  if (field.multiple === true) {
+    // One value per line, stored as the string array the launch expands into separate arguments.
+    return (
+      <MultiValueTextarea
+        size="sm"
+        rows={3}
+        spellCheck={false}
+        className="w-full max-w-72"
+        aria-label={field.label}
+        placeholder={field.required ? "Required" : "One value per line"}
+        value={Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : ""}
+        onCommit={(next) => {
+          const values = next
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+          onChange(values.length === 0 ? undefined : values);
+        }}
       />
     );
   }
