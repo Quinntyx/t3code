@@ -10,6 +10,7 @@ import {
   markdownForNativeParsing,
   markdownWithInlineFileLinks,
   markdownWithTableBreaks,
+  singleLineMath,
 } from "../lib/markdownDocument";
 import { isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -184,8 +185,7 @@ function codeBlockElement(
   if (block.language === "math" && mathRenderingEnabled) {
     return (
       <EnrichedMarkdownText
-        // A blank line would end the paragraph, and so the math, early.
-        markdown={`$$\n${block.code.replace(/\n\s*\n/g, "\n").trim()}\n$$`}
+        markdown={`$$${singleLineMath(block.code)}$$`}
         markdownStyle={markdownStyle}
         md4cFlags={{ latexMath: true }}
         containerStyle={{ flexShrink: 1, minWidth: 0 }}
