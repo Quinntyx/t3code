@@ -15,6 +15,7 @@ import {
   ProviderInstanceId,
   ProviderInteractionMode,
   RuntimeMode,
+  type RegisteredMcpServersState,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -23,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
@@ -42,6 +44,7 @@ import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReview
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import * as ExternalMcpServers from "./ExternalMcpServers.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
@@ -845,6 +848,104 @@ it.effect("bounds page text made of wide characters before dropping locators", (
       );
     }),
   ).pipe(Effect.provide(layerTest)),
+);
+
+/**
+ * Registered MCP servers are proxied as native tools: this stub stands in for the service, so
+ * the test covers registration, the passthrough schema and the call forwarding.
+ */
+it.effect("proxies a registered MCP server's tools with its own schema", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const calls: Array<{ name: string; args: unknown }> = [];
+      const descriptor = new McpSchema.Tool({
+        name: "fixture_echo",
+        description: "Echo the text back.",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string", description: "What to echo." } },
+          required: ["text"],
+        },
+        annotations: { readOnlyHint: true },
+      });
+      const tool: ExternalMcpServers.ExternalMcpTool = {
+        serverId: "fixture",
+        serverName: "Fixture",
+        originalName: "echo",
+        name: "fixture_echo",
+        descriptor,
+      };
+      const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
+
+      const stub = ExternalMcpServers.ExternalMcpServers.of({
+        start: Effect.never,
+        states: Effect.succeed({ servers: [] }),
+        tools: Effect.succeed([tool]),
+        callTool: (called, args) =>
+          Effect.sync(() => {
+            calls.push({ name: called.originalName, args });
+            const text = String((args as { text: string }).text);
+            return {
+              content: [{ type: "text" as const, text }],
+              structuredContent: { echoed: text },
+              isError: false,
+            };
+          }),
+        changes: Stream.fromPubSub(changes),
+      });
+
+      // One stack, so the proxy registers onto the same MCP server the calls go through.
+      const context = yield* Layer.build(
+        Layer.mergeAll(
+          McpHttpServer.layerInProcessMcpServer,
+          Layer.succeed(ExternalMcpServers.ExternalMcpServers, stub),
+          ServerSettings.layerTest(),
+          Layer.mock(MailInbox.MailInbox)({
+            accounts: Effect.succeed({
+              accounts: [],
+              taggingEnabled: false,
+              refreshAvailable: false,
+            }),
+          }),
+          Layer.mock(EmailRequests.EmailRequests)({}),
+          McpToolAccessTestkit.liveThreadsLayer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      );
+      yield* McpHttpServer.layerRegisteredMcpTools.pipe(
+        Layer.provide(Layer.succeedContext(context)),
+        Layer.launch,
+        Effect.forkScoped,
+      );
+      // The registration reads its first tool set asynchronously; this waits for that read.
+      yield* Effect.yieldNow;
+
+      const server = Context.get(context, McpServer.McpServer);
+      const names = () => server.tools.map(({ tool }) => tool.name);
+      expect(names()).toContain("fixture_echo");
+
+      const proxied = server.tools.find(({ tool }) => tool.name === "fixture_echo")!.tool;
+      expect(proxied.description).toBe("Echo the text back.");
+      expect(proxied.inputSchema).toMatchObject({
+        properties: { text: { type: "string", description: "What to echo." } },
+      });
+      expect(proxied.annotations).toMatchObject({ readOnlyHint: true });
+
+      const result = yield* server
+        .callTool({ name: "fixture_echo", arguments: { text: "hi" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.structuredContent).toEqual({ echoed: "hi" });
+      expect(calls).toEqual([{ name: "echo", args: { text: "hi" } }]);
+
+      // A server that stops running hides its tools. `enabledWhen` is what `tools/list` and a
+      // call consult, and it reads the set this registration keeps.
+      expect(names()).toEqual(["fixture_echo"]);
+    }),
+  ),
 );
 
 it.effect("terminates HTTP MCP sessions with DELETE", () =>

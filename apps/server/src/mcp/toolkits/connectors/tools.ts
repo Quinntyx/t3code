@@ -24,7 +24,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 // Listed even while a connector is off, so an agent learns it exists and how the user turns it on.
 const ExternalConnectorsTool = Tool.make("external_connectors", {
   description:
-    "List external connectors and their enabled native tools. For any email request, including inbox search, reading, tagging or replies, check here first. If unavailable, report Settings → Email; never fall back to shell mail commands or aerc skills.",
+    "List external connectors, including MCP servers registered in Settings → Capabilities, and their enabled native tools. For any email request, including inbox search, reading, tagging or replies, check here first. If unavailable, report Settings → Email; never fall back to shell mail commands or aerc skills.",
   success: OrchestratorMcpExternalConnectorsResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

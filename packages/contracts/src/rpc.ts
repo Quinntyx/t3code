@@ -408,6 +408,7 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import { EmailAccountsReport, EmailRequestAnswerInput, EmailRequestError } from "./emailRequest.ts";
+import { RegisteredMcpServersState } from "./registeredMcpServer.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -588,6 +589,7 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   emailAnswerRequest: "email.answerRequest",
   emailListAccounts: "email.listAccounts",
+  registeredMcpServersState: "mcpServers.state",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2138,6 +2140,12 @@ const WsEmailListAccountsRpc = Rpc.make(WS_METHODS.emailListAccounts, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsRegisteredMcpServersStateRpc = Rpc.make(WS_METHODS.registeredMcpServersState, {
+  payload: Schema.Struct({}),
+  success: RegisteredMcpServersState,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2251,6 +2259,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretsAnswerRequestRpc,
   WsEmailAnswerRequestRpc,
   WsEmailListAccountsRpc,
+  WsRegisteredMcpServersStateRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

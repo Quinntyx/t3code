@@ -45,6 +45,7 @@ import { Route as ChatSettingsDiagnosticsRouteImport } from './routes/_chat.sett
 import { Route as ChatSettingsDevicesRouteImport } from './routes/_chat.settings.devices'
 import { Route as ChatSettingsConnectionsRouteImport } from './routes/_chat.settings.connections'
 import { Route as ChatSettingsChatRouteImport } from './routes/_chat.settings.chat'
+import { Route as ChatSettingsCapabilitiesRouteImport } from './routes/_chat.settings.capabilities'
 import { Route as ChatSettingsBrowserRouteImport } from './routes/_chat.settings.browser'
 import { Route as ChatSettingsBetaRouteImport } from './routes/_chat.settings.beta'
 import { Route as ChatSettingsArchivedRouteImport } from './routes/_chat.settings.archived'
@@ -53,6 +54,7 @@ import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.
 import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.about'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as ChatSettingsMcpServerIdRouteImport } from './routes/_chat.settings.mcp.$serverId'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -238,6 +240,12 @@ const ChatSettingsChatRoute = ChatSettingsChatRouteImport.update({
   path: '/chat',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsCapabilitiesRoute =
+  ChatSettingsCapabilitiesRouteImport.update({
+    id: '/capabilities',
+    path: '/capabilities',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsBrowserRoute = ChatSettingsBrowserRouteImport.update({
   id: '/browser',
   path: '/browser',
@@ -279,6 +287,11 @@ const ChatEnvironmentIdThreadIdRoute =
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
   } as any)
+const ChatSettingsMcpServerIdRoute = ChatSettingsMcpServerIdRouteImport.update({
+  id: '/mcp/$serverId',
+  path: '/mcp/$serverId',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
@@ -301,6 +314,7 @@ export interface FileRoutesByFullPath {
   '/settings/archived': typeof ChatSettingsArchivedRoute
   '/settings/beta': typeof ChatSettingsBetaRoute
   '/settings/browser': typeof ChatSettingsBrowserRoute
+  '/settings/capabilities': typeof ChatSettingsCapabilitiesRoute
   '/settings/chat': typeof ChatSettingsChatRoute
   '/settings/connections': typeof ChatSettingsConnectionsRoute
   '/settings/devices': typeof ChatSettingsDevicesRoute
@@ -324,6 +338,7 @@ export interface FileRoutesByFullPath {
   '/settings/voice': typeof ChatSettingsVoiceRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/settings/mcp/$serverId': typeof ChatSettingsMcpServerIdRoute
 }
 export interface FileRoutesByTo {
   '/approve-agent': typeof ApproveAgentRoute
@@ -346,6 +361,7 @@ export interface FileRoutesByTo {
   '/settings/archived': typeof ChatSettingsArchivedRoute
   '/settings/beta': typeof ChatSettingsBetaRoute
   '/settings/browser': typeof ChatSettingsBrowserRoute
+  '/settings/capabilities': typeof ChatSettingsCapabilitiesRoute
   '/settings/chat': typeof ChatSettingsChatRoute
   '/settings/connections': typeof ChatSettingsConnectionsRoute
   '/settings/devices': typeof ChatSettingsDevicesRoute
@@ -369,6 +385,7 @@ export interface FileRoutesByTo {
   '/settings/voice': typeof ChatSettingsVoiceRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/settings/mcp/$serverId': typeof ChatSettingsMcpServerIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -393,6 +410,7 @@ export interface FileRoutesById {
   '/_chat/settings/archived': typeof ChatSettingsArchivedRoute
   '/_chat/settings/beta': typeof ChatSettingsBetaRoute
   '/_chat/settings/browser': typeof ChatSettingsBrowserRoute
+  '/_chat/settings/capabilities': typeof ChatSettingsCapabilitiesRoute
   '/_chat/settings/chat': typeof ChatSettingsChatRoute
   '/_chat/settings/connections': typeof ChatSettingsConnectionsRoute
   '/_chat/settings/devices': typeof ChatSettingsDevicesRoute
@@ -416,6 +434,7 @@ export interface FileRoutesById {
   '/_chat/settings/voice': typeof ChatSettingsVoiceRoute
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/_chat/settings/mcp/$serverId': typeof ChatSettingsMcpServerIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -440,6 +459,7 @@ export interface FileRouteTypes {
     | '/settings/archived'
     | '/settings/beta'
     | '/settings/browser'
+    | '/settings/capabilities'
     | '/settings/chat'
     | '/settings/connections'
     | '/settings/devices'
@@ -463,6 +483,7 @@ export interface FileRouteTypes {
     | '/settings/voice'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/settings/mcp/$serverId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/approve-agent'
@@ -485,6 +506,7 @@ export interface FileRouteTypes {
     | '/settings/archived'
     | '/settings/beta'
     | '/settings/browser'
+    | '/settings/capabilities'
     | '/settings/chat'
     | '/settings/connections'
     | '/settings/devices'
@@ -508,6 +530,7 @@ export interface FileRouteTypes {
     | '/settings/voice'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/settings/mcp/$serverId'
   id:
     | '__root__'
     | '/_chat'
@@ -531,6 +554,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/archived'
     | '/_chat/settings/beta'
     | '/_chat/settings/browser'
+    | '/_chat/settings/capabilities'
     | '/_chat/settings/chat'
     | '/_chat/settings/connections'
     | '/_chat/settings/devices'
@@ -554,6 +578,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/voice'
     | '/_chat/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/_chat/settings/mcp/$serverId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -822,6 +847,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsChatRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/capabilities': {
+      id: '/_chat/settings/capabilities'
+      path: '/capabilities'
+      fullPath: '/settings/capabilities'
+      preLoaderRoute: typeof ChatSettingsCapabilitiesRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/browser': {
       id: '/_chat/settings/browser'
       path: '/browser'
@@ -878,6 +910,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/settings/mcp/$serverId': {
+      id: '/_chat/settings/mcp/$serverId'
+      path: '/mcp/$serverId'
+      fullPath: '/settings/mcp/$serverId'
+      preLoaderRoute: typeof ChatSettingsMcpServerIdRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
   }
 }
 
@@ -888,6 +927,7 @@ interface ChatSettingsRouteChildren {
   ChatSettingsArchivedRoute: typeof ChatSettingsArchivedRoute
   ChatSettingsBetaRoute: typeof ChatSettingsBetaRoute
   ChatSettingsBrowserRoute: typeof ChatSettingsBrowserRoute
+  ChatSettingsCapabilitiesRoute: typeof ChatSettingsCapabilitiesRoute
   ChatSettingsChatRoute: typeof ChatSettingsChatRoute
   ChatSettingsConnectionsRoute: typeof ChatSettingsConnectionsRoute
   ChatSettingsDevicesRoute: typeof ChatSettingsDevicesRoute
@@ -910,6 +950,7 @@ interface ChatSettingsRouteChildren {
   ChatSettingsThreadsRoute: typeof ChatSettingsThreadsRoute
   ChatSettingsVoiceRoute: typeof ChatSettingsVoiceRoute
   ChatSettingsWorktreesRoute: typeof ChatSettingsWorktreesRoute
+  ChatSettingsMcpServerIdRoute: typeof ChatSettingsMcpServerIdRoute
 }
 
 const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
@@ -919,6 +960,7 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsArchivedRoute: ChatSettingsArchivedRoute,
   ChatSettingsBetaRoute: ChatSettingsBetaRoute,
   ChatSettingsBrowserRoute: ChatSettingsBrowserRoute,
+  ChatSettingsCapabilitiesRoute: ChatSettingsCapabilitiesRoute,
   ChatSettingsChatRoute: ChatSettingsChatRoute,
   ChatSettingsConnectionsRoute: ChatSettingsConnectionsRoute,
   ChatSettingsDevicesRoute: ChatSettingsDevicesRoute,
@@ -941,6 +983,7 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsThreadsRoute: ChatSettingsThreadsRoute,
   ChatSettingsVoiceRoute: ChatSettingsVoiceRoute,
   ChatSettingsWorktreesRoute: ChatSettingsWorktreesRoute,
+  ChatSettingsMcpServerIdRoute: ChatSettingsMcpServerIdRoute,
 }
 
 const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
