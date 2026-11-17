@@ -27,8 +27,10 @@ Subsequent AppImage updates use the normal in-app update controls. Both checks a
 downloads require Tailscale; the HTTPS endpoint is served only on the tailnet.
 
 The macOS build is packaged on Linux, so it is unsigned and has no passkey support.
-Download `t3code-mac-x64` from Forgejo Actions, drag the app into Applications, and
-open it the first time with right-click → Open. Updates then arrive through the same
+Download `t3code-mac-x64` from Forgejo Actions and drag the app into Applications.
+macOS blocks its first launch: choose **Open Anyway** in System Settings → Privacy &
+Security, or run `xattr -dr com.apple.quarantine "/Applications/T3 Code (Beta).app"`
+before opening it. Updates then arrive through the same
 in-app controls and feed as the AppImage. Squirrel.Mac refuses unsigned apps, so this
 build unpacks the downloaded zip and replaces its own bundle when it restarts; that
 needs the app in a folder you can write to, which a mounted disk image is not. The

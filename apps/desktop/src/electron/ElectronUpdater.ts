@@ -14,7 +14,7 @@ let selectedUpdater: AutoUpdater | undefined;
 // Chosen on first use: constructing an updater reads Electron app state.
 const updater = (): AutoUpdater =>
   (selectedUpdater ??= MacUnsignedUpdater.isUnsignedMacBuild()
-    ? MacUnsignedUpdater.make()
+    ? new MacUnsignedUpdater.MacUnsignedUpdater()
     : defaultUpdater);
 
 export type ElectronUpdaterFeedUrl = Parameters<AutoUpdater["setFeedURL"]>[0];

@@ -426,6 +426,7 @@ export class MacDesktopBuildPrerequisitesMissingError extends Schema.TaggedError
 
 const MAC_CROSS_BUILD_PREREQUISITES = [
   { id: "rust", description: "Rust/Cargo and the requested Rust target" },
+  { id: "cc", description: "a C compiler (cc), which links Rust build scripts for this host" },
   {
     id: "sdk",
     description: "a macOS SDK directory named by SDKROOT, to link the resource monitor",
@@ -452,7 +453,9 @@ class MacCrossBuildPrerequisitesMissingError extends Schema.TaggedError<MacCross
       "Prerequisites for packaging the macOS app on this host are missing:",
       details,
       "",
-      `Add the Rust target with \`rustup target add ${this.rustTarget}\`.`,
+      ...(this.missing.includes("rust")
+        ? [`Add the Rust target with \`rustup target add ${this.rustTarget}\`.`]
+        : []),
       "See docs/operations/development.md#macos-dmgs-from-linux.",
     ].join("\n");
   }
@@ -2038,12 +2041,12 @@ const preflightMacCrossBuild = Effect.fn("preflightMacCrossBuild")(function* (
   arch: typeof BuildArch.Type,
   target: string,
 ) {
-  // A universal app needs lipo, which only macOS ships.
-  if (arch === "universal") {
+  // Nothing here signs the app. Apple silicon refuses to run unsigned code; Intel Macs do not.
+  if (arch !== "x64") {
     return yield* new UnsupportedDesktopBuildArchitectureError({
       platform: "mac",
       arch,
-      supportedArchitectures: ["arm64", "x64"],
+      supportedArchitectures: ["x64"],
     });
   }
   const fs = yield* FileSystem.FileSystem;
@@ -2060,6 +2063,9 @@ const preflightMacCrossBuild = Effect.fn("preflightMacCrossBuild")(function* (
             desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo"),
             rustTargetIsInstalled(rustTarget),
           ]).pipe(Effect.map(([cargo, installed]) => cargo && installed)),
+      cc: reuseResourceMonitor
+        ? Effect.succeed(true)
+        : desktopBuildProbeSucceeds(ChildProcess.make("cc", ["--version"]), "cc"),
       sdk: reuseResourceMonitor
         ? Effect.succeed(true)
         : sdkRoot === ""
@@ -2632,13 +2638,21 @@ const stageMacIconsOffMac = Effect.fn("build-desktop-artifact.stageMacIconsOffMa
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  yield* stageLinuxIconSize(sourcePng, iconPngPath, 512, verbose);
-  const pngBySize = new Map<number, Uint8Array>();
-  for (const size of new Set(ICNS_PNG_SLOTS.map(([, size]) => size))) {
-    const resized = path.join(tmpRoot, `${size}.png`);
-    yield* stageLinuxIconSize(sourcePng, resized, size, verbose);
-    pngBySize.set(size, yield* fs.readFile(resized));
-  }
+  const sizes = [...new Set(ICNS_PNG_SLOTS.map(([, size]) => size))];
+  const pngBySize = new Map(
+    yield* Effect.forEach(
+      sizes,
+      (size) => {
+        const resized = path.join(tmpRoot, `${size}.png`);
+        return stageLinuxIconSize(sourcePng, resized, size, verbose).pipe(
+          Effect.andThen(fs.readFile(resized)),
+          Effect.map((png) => [size, png] as const),
+        );
+      },
+      { concurrency: "unbounded" },
+    ),
+  );
+  yield* fs.writeFile(iconPngPath, pngBySize.get(512)!);
   yield* fs.writeFile(
     iconIcnsPath,
     encodeIcns(ICNS_PNG_SLOTS.map(([type, size]) => ({ type, png: pngBySize.get(size)! }))),
