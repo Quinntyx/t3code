@@ -67,6 +67,10 @@ interface ServerRuntimeState {
   readonly status: RegisteredMcpServerState["status"];
   readonly stderrTail?: string | undefined;
   readonly running?: RunningServer | undefined;
+  /** What last failed, so an edited entry starts again and an unchanged one does not. */
+  readonly failedEntry?: RegisteredMcpServerEntry | undefined;
+  /** Proxy names the MCP server could not register because another tool already had them. */
+  readonly skippedTools?: ReadonlyArray<string> | undefined;
 }
 
 /**
@@ -85,6 +89,11 @@ export class ExternalMcpServers extends Context.Service<
       tool: ExternalMcpTool,
       args: Readonly<Record<string, unknown>>,
     ) => Effect.Effect<ExternalMcpToolResult, ExternalMcpServerError>;
+    /**
+     * Records why the proxy could not register one of a running server's tools, which shows in
+     * that server's status note so its user can name the clash.
+     */
+    readonly skipTool: (tool: ExternalMcpTool, reason: string) => Effect.Effect<void>;
     /** Emits the current state after each change, including a crash. */
     readonly changes: Stream.Stream<RegisteredMcpServersState>;
   }
@@ -124,8 +133,15 @@ const launchOf = (entry: RegisteredMcpServerEntry, home: string) => {
 };
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+/** Decodes the child's wire form, so base64 image and audio data comes back as bytes. */
+const decodeCallToolResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
 /** Settings round-trip through JSON, so a comparison on that form never sees a stale key order. */
 const sameJson = (left: unknown, right: unknown) => encodeJson(left) === encodeJson(right);
+/** What a server launches with: an edit to any of it is a reason to try a failed server again. */
+const sameEntry = (left: RegisteredMcpServerEntry, right: RegisteredMcpServerEntry) =>
+  left.toolName === right.toolName &&
+  sameJson(left.config, right.config) &&
+  sameJson(left.source, right.source);
 
 /** T3 and a server both accept letters, digits, `_` and `-`; anything else in a tool name becomes `_`. */
 const proxiedToolName = (prefix: string, toolName: string) =>
@@ -326,9 +342,9 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
             message: `${launch.command} did not finish the call in time.`,
           }),
       }),
-      Effect.flatMap((reply) =>
-        settled(reply, (result) => McpSchema.CallToolResult.make(result as never)),
-      ),
+      // Schema decoding converts wire base64 images, audio and blobs; `make` expects them already
+      // decoded, so it rejects the child's raw content.
+      Effect.flatMap((reply) => settled(reply, decodeCallToolResult)),
       Effect.mapError((cause) =>
         isExternalMcpServerError(cause)
           ? cause
@@ -344,6 +360,8 @@ const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   // A Reference: reading it falls back to its default, so nothing has to provide it.
   const home = (yield* HostProcess.HomeDirectory) || HostProcess.HomeDirectory.defaultValue();
+  // Every child scope hangs off this one, so service teardown stops children that never stopped.
+  const serviceScope = yield* Effect.scope;
 
   const runtimeStates = yield* Ref.make<ReadonlyMap<string, ServerRuntimeState>>(new Map());
   const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
@@ -359,6 +377,7 @@ const make = Effect.gen(function* () {
     const servers = (configured?.registeredMcpServers ?? []).map((entry) => {
       const state = runtime.get(entry.id);
       const stderrTail = state?.stderrTail;
+      const skippedTools = state?.skippedTools;
       return {
         id: entry.id,
         name: entry.name,
@@ -367,6 +386,7 @@ const make = Effect.gen(function* () {
         status: state?.status ?? "stopped",
         ...(stderrTail === undefined || stderrTail === "" ? {} : { stderrTail }),
         tools: state?.running?.tools.map((tool) => tool.name) ?? [],
+        ...(skippedTools === undefined ? {} : { skippedTools }),
       } satisfies RegisteredMcpServerState;
     });
     return { servers } satisfies RegisteredMcpServersState;
@@ -386,26 +406,44 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  const skipTool = Effect.fn("ExternalMcpServers.skipTool")(function* (
+    tool: ExternalMcpTool,
+    reason: string,
+  ) {
+    const state = (yield* Ref.get(runtimeStates)).get(tool.serverId);
+    if (state?.running === undefined) return;
+    const skipped = state.skippedTools ?? [];
+    if (skipped.includes(reason)) return;
+    yield* setState(tool.serverId, {
+      ...state,
+      skippedTools: [...skipped, reason],
+    });
+    yield* announce;
+  });
+
   const start = Effect.fn("ExternalMcpServers.start")(function* (entry: RegisteredMcpServerEntry) {
     yield* setState(entry.id, { status: "starting" });
     const launch = launchOf(entry, home);
     if (!launch.ok) return yield* new ExternalMcpServerError({ message: launch.message });
 
-    const scope = yield* Scope.make("sequential");
+    const scope = yield* Scope.fork(serviceScope, "sequential");
+    // The child's scope closes on every way out before the child is recorded as running.
     const connection = yield* connect(spawner, launch.launch).pipe(
       Effect.provideService(Scope.Scope, scope),
       Effect.onError(() => Scope.close(scope, Exit.void)),
     );
-    const tools = (yield* connection.listTools).map((descriptor) => ({
-      serverId: entry.id,
-      serverName: entry.name,
-      originalName: descriptor.name,
-      name: proxiedToolName(entry.toolName, descriptor.name),
-      descriptor,
-    }));
+    const tools = yield* connection.listTools.pipe(
+      Effect.onError(() => Scope.close(scope, Exit.void)),
+    );
     const running: RunningServer = {
       entry,
-      tools,
+      tools: tools.map((descriptor) => ({
+        serverId: entry.id,
+        serverName: entry.name,
+        originalName: descriptor.name,
+        name: proxiedToolName(entry.toolName, descriptor.name),
+        descriptor,
+      })),
       call: connection.callTool,
       scope,
     };
@@ -413,7 +451,7 @@ const make = Effect.gen(function* () {
     yield* announce;
     yield* Effect.logInfo("started registered MCP server", {
       server: entry.name,
-      tools: tools.length,
+      tools: running.tools.length,
     });
 
     // A child that exits on its own is a failure until a toggle or settings change restarts it.
@@ -423,7 +461,14 @@ const make = Effect.gen(function* () {
         Ref.get(runtimeStates).pipe(
           Effect.flatMap((states) =>
             states.get(entry.id)?.running?.scope === scope
-              ? setState(entry.id, { status: "failed", stderrTail: stderrTailOf(message) }).pipe(
+              ? Scope.close(scope, Exit.void).pipe(
+                  Effect.andThen(
+                    setState(entry.id, {
+                      status: "failed",
+                      stderrTail: stderrTailOf(message),
+                      failedEntry: entry,
+                    }),
+                  ),
                   Effect.andThen(
                     Effect.logWarning("registered MCP server stopped unexpectedly", {
                       server: entry.name,
@@ -483,13 +528,17 @@ const make = Effect.gen(function* () {
         }
         continue;
       }
-      // A failed server waits for a toggle or settings change; it never retries on its own.
-      if (state?.status === "failed") continue;
+      // A failed server retries only once its entry changes; unchanged, it never retries itself.
+      if (state?.status === "failed") {
+        if (state.failedEntry === undefined || sameEntry(state.failedEntry, entry)) continue;
+      }
       yield* start(entry).pipe(
         Effect.catchCause((cause) =>
-          setState(entry.id, { status: "failed", stderrTail: causeText(cause) }).pipe(
-            Effect.andThen(announce),
-          ),
+          setState(entry.id, {
+            status: "failed",
+            stderrTail: causeText(cause),
+            failedEntry: entry,
+          }).pipe(Effect.andThen(announce)),
         ),
       );
       changed = true;
@@ -538,6 +587,7 @@ const make = Effect.gen(function* () {
         isError: result.isError === true,
       } satisfies ExternalMcpToolResult;
     }),
+    skipTool,
     changes: Stream.fromPubSub(changes),
   });
 });

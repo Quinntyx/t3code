@@ -158,6 +158,8 @@ const SUPPORTED_REGISTRY_TYPES = new Set(["npm", "pypi", "oci"]);
 interface ParsedServerJsonPackage {
   readonly command: string;
   readonly baseArgs: ReadonlyArray<string>;
+  /** Docker passes env values through by name, so it needs `-e` for each configured one. */
+  readonly container: boolean;
   readonly runtimeArguments: ReadonlyArray<NormalizedArgument>;
   readonly packageArguments: ReadonlyArray<NormalizedArgument>;
   readonly environmentVariables: ReadonlyArray<McpConfigField>;
@@ -204,6 +206,7 @@ const readServerJsonPackage = (
     value: {
       command,
       baseArgs,
+      container: registryType === "oci",
       runtimeArguments: readArguments(entry.runtimeArguments),
       packageArguments: readArguments(entry.packageArguments),
       environmentVariables: readEnvironmentVariables(entry.environmentVariables),
@@ -428,8 +431,18 @@ export function resolveMcpLaunch(
     const value = readServerJsonPackage(candidate);
     if (!value.ok) continue;
     const substituteValue = (template: string) => substitute(template, values);
+    const env = Object.fromEntries(
+      value.value.environmentVariables.flatMap((field) => {
+        const resolvedValue = values.get(field.key);
+        return resolvedValue === undefined ? [] : [[field.key, resolvedValue] as const];
+      }),
+    );
+    // Docker takes a variable's value from its own client env, so each configured one needs `-e`.
+    // They go before the image, which is the last of the base args.
     const args = [
-      ...value.value.baseArgs,
+      ...value.value.baseArgs.slice(0, -1),
+      ...(value.value.container ? Object.keys(env).flatMap((name) => ["-e", name]) : []),
+      ...value.value.baseArgs.slice(-1),
       ...value.value.runtimeArguments.flatMap((argument) =>
         argument.type === "named"
           ? [argument.name!, substituteValue(argument.value)]
@@ -441,29 +454,11 @@ export function resolveMcpLaunch(
           : [substituteValue(argument.value)],
       ),
     ].filter((argument) => argument !== "");
-    const env = Object.fromEntries(
-      value.value.environmentVariables.flatMap((field) => {
-        const resolvedValue = values.get(field.key);
-        return resolvedValue === undefined ? [] : [[field.key, resolvedValue] as const];
-      }),
-    );
     return { ok: true, launch: { command: value.value.command, args, env } };
   }
   return failure("server.json has no usable stdio package.");
 }
 
-/** `name` as a stable id: lowercase letters, digits and dashes. */
-export function mcpServerIdFromName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/gu, "-")
-    .replaceAll(/^-+|-+$/gu, "")
-    .slice(0, 64);
-  return slug === "" ? "mcp-server" : slug;
-}
-
 const MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
-
 export const isValidMcpToolName = (value: string) =>
   MCP_TOOL_NAME_PATTERN.test(value) && value.length <= 40;

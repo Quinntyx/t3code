@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
@@ -31,7 +32,7 @@ export function McpServerSettingsPanel() {
   const { serverId } = useParams({ from: "/_chat/settings/mcp/$serverId" });
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const { environment } = useSettingsScope();
+  const { environment, scope } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const { data } = useEnvironmentQuery(
     environmentId === null
@@ -41,6 +42,19 @@ export function McpServerSettingsPanel() {
   const runtime = data?.servers.find((server) => server.id === serverId);
   const entry = settings.registeredMcpServers.find((server) => server.id === serverId);
   const [notFound] = useState(() => entry === undefined);
+
+  // The server runs on the machine that registered it, so these settings are that machine's.
+  if (scope.kind !== "environment" || environment === null) {
+    return (
+      <SettingsPageContainer>
+        <SettingsSection id="mcp-server-scope" title="MCP server">
+          <SettingsScopeNotice target="environment" inline>
+            Choose the environment this server runs on to change its settings.
+          </SettingsScopeNotice>
+        </SettingsSection>
+      </SettingsPageContainer>
+    );
+  }
 
   if (entry === undefined) {
     return (
@@ -121,6 +135,12 @@ export function McpServerSettingsPanel() {
                 ? "No tools are available while the server is not running."
                 : runtime.tools.join(", ")
             }
+          />
+        )}
+        {runtime?.skippedTools === undefined || runtime.skippedTools.length === 0 ? null : (
+          <SettingsRow
+            title="Not exposed"
+            description={`${runtime.skippedTools.join(", ")}: another tool already answers to the name. Change this server's Tool name.`}
           />
         )}
       </SettingsSection>

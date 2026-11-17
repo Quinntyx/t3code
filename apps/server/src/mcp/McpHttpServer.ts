@@ -1049,71 +1049,105 @@ const withToolAnalytics =
 
 /** Each registered MCP server's tools as native T3 tools, with its schema and annotations. */
 const registeredMcpToolRegistration = Layer.effectDiscard(
-  Effect.scoped(
-    Effect.gen(function* () {
-      // Required, not looked up optionally: a build-time miss would silently register nothing.
-      const externalServers = yield* ExternalMcpServers.ExternalMcpServers;
-      const server = yield* McpServer.McpServer;
-      // What the enabled check reads. Each registration closes over its own tool name.
-      const enabled = new Set<string>();
-      const registered = new Set<string>();
+  Effect.gen(function* () {
+    // Required, not looked up optionally: a build-time miss would silently register nothing.
+    const externalServers = yield* ExternalMcpServers.ExternalMcpServers;
+    const server = yield* McpServer.McpServer;
+    // The access check reads the calling thread, which the request does not carry.
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    // What the enabled check reads. Each registration closes over its own tool name.
+    const enabled = new Set<string>();
+    const registered = new Set<string>();
 
-      // A registration is announced to agents, so it carries the tool's own schema and hints.
-      const add = (tool: ExternalMcpServers.ExternalMcpTool) =>
-        server.addTool({
-          tool: new McpSchema.Tool({
-            name: tool.name,
-            description: tool.descriptor.description,
-            inputSchema: tool.descriptor.inputSchema,
-            ...(tool.descriptor.title === undefined ? {} : { title: tool.descriptor.title }),
-            ...(tool.descriptor.annotations === undefined
-              ? {}
-              : { annotations: tool.descriptor.annotations }),
-          }),
-          annotations: Context.make(McpSchema.EnabledWhen, () => enabled.has(tool.name)),
-          handle: (payload) =>
-            externalServers
-              .callTool(tool, (payload ?? {}) as Readonly<Record<string, unknown>>)
-              .pipe(
-                Effect.map(
-                  (result) =>
-                    new McpSchema.CallToolResult({
-                      isError: result.isError,
-                      ...(result.structuredContent === undefined
-                        ? {}
-                        : { structuredContent: result.structuredContent }),
-                      content: [...result.content],
-                    }),
+    // A registration is announced to agents, so it carries the tool's own schema and hints.
+    const add = (tool: ExternalMcpServers.ExternalMcpTool) =>
+      server.addTool({
+        tool: new McpSchema.Tool({
+          name: tool.name,
+          description: tool.descriptor.description,
+          inputSchema: tool.descriptor.inputSchema,
+          ...(tool.descriptor.title === undefined ? {} : { title: tool.descriptor.title }),
+          ...(tool.descriptor.annotations === undefined
+            ? {}
+            : { annotations: tool.descriptor.annotations }),
+        }),
+        annotations: Context.make(McpSchema.EnabledWhen, () => enabled.has(tool.name)),
+        handle: (payload) =>
+          Effect.withFiber((fiber) => {
+            const invocation = Context.getUnsafe(
+              fiber.context,
+              McpInvocationContext.McpInvocationContext,
+            );
+            // A proxied tool changes whatever its own annotations say; only a read-only hint reads.
+            return McpToolAccess.proxiedCaller(
+              tool.descriptor.annotations?.readOnlyHint !== true,
+            ).pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+              Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+              Effect.andThen(
+                externalServers.callTool(
+                  tool,
+                  (payload ?? {}) as Readonly<Record<string, unknown>>,
                 ),
-                Effect.catch((error) =>
+              ),
+              Effect.map(
+                (result) =>
+                  new McpSchema.CallToolResult({
+                    isError: result.isError,
+                    ...(result.structuredContent === undefined
+                      ? {}
+                      : { structuredContent: result.structuredContent }),
+                    content: [...result.content],
+                  }),
+              ),
+              Effect.catchTags({
+                OrchestratorMcpFailure: (error) =>
                   Effect.succeed(
                     new McpSchema.CallToolResult({
                       isError: true,
                       content: [{ type: "text", text: error.message }],
                     }),
                   ),
-                ),
-              ),
-        });
-
-      const refresh = Effect.gen(function* () {
-        const tools = yield* externalServers.tools;
-        enabled.clear();
-        for (const tool of tools) enabled.add(tool.name);
-        for (const tool of tools) {
-          if (registered.has(tool.name)) continue;
-          registered.add(tool.name);
-          yield* add(tool);
-        }
+                ExternalMcpServerError: (error) =>
+                  Effect.succeed(
+                    new McpSchema.CallToolResult({
+                      isError: true,
+                      content: [{ type: "text", text: error.message }],
+                    }),
+                  ),
+              }),
+            );
+          }),
       });
 
-      yield* refresh;
-      yield* externalServers.changes.pipe(
-        Stream.runForEach(() => refresh),
-        Effect.forkScoped,
-      );
-    }),
-  ),
+    const refresh = Effect.gen(function* () {
+      const tools = yield* externalServers.tools;
+      enabled.clear();
+      for (const tool of tools) enabled.add(tool.name);
+      // A registration replaces one already using its name, so a registered name belongs to its first tool.
+      const taken = new Set(server.tools.map(({ tool }) => tool.name));
+      for (const tool of tools) {
+        if (registered.has(tool.name)) continue;
+        if (taken.has(tool.name)) {
+          yield* Effect.logWarning("skipped a registered MCP tool with a taken name", {
+            server: tool.serverName,
+            tool: tool.name,
+          });
+          yield* externalServers.skipTool(tool, `as ${tool.name}, which another tool uses`);
+          continue;
+        }
+        registered.add(tool.name);
+        yield* add(tool);
+        taken.add(tool.name);
+      }
+    });
+
+    yield* refresh;
+    yield* externalServers.changes.pipe(
+      Stream.runForEach(() => refresh),
+      Effect.forkScoped,
+    );
+  }),
 );
 
 /** Each tool call gets a span named for its tool; arguments stay out, as they carry prompts and IDs. */

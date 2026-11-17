@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  isValidMcpToolName,
-  mcpServerIdFromName,
-  parseMcpRegistration,
-  resolveMcpLaunch,
-} from "./mcpRegistration.ts";
+import { isValidMcpToolName, parseMcpRegistration, resolveMcpLaunch } from "./mcpRegistration.ts";
 
 const serverJson = (packages: ReadonlyArray<unknown>, extra: Record<string, unknown> = {}) => ({
   schemaVersion: "2025-09-29",
@@ -229,7 +224,9 @@ describe("resolveMcpLaunch", () => {
     });
     expect(oci.ok && oci.launch).toMatchObject({
       command: "docker",
-      args: ["run", "-i", "--rm", "ghcr.io/acme/notes:1"],
+      // Docker reads the values from its client's env, so each one is passed through by name.
+      args: ["run", "-i", "--rm", "-e", "TEAM_NOTES_TOKEN", "ghcr.io/acme/notes:1"],
+      env: { TEAM_NOTES_TOKEN: "s3cret" },
     });
   });
 
@@ -260,14 +257,6 @@ describe("resolveMcpLaunch", () => {
       ok: false,
       message: "Set TEAM_NOTES_TOKEN before this MCP server can start.",
     });
-  });
-});
-
-describe("mcpServerIdFromName", () => {
-  it("slugs a name into a stable id", () => {
-    expect(mcpServerIdFromName("Acme Notes!")).toBe("acme-notes");
-    expect(mcpServerIdFromName("io.acme/team-notes")).toBe("io-acme-team-notes");
-    expect(mcpServerIdFromName("   ")).toBe("mcp-server");
   });
 });
 

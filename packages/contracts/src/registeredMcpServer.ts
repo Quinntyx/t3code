@@ -57,6 +57,8 @@ export const RegisteredMcpServerState = Schema.Struct({
   stderrTail: Schema.optionalKey(Schema.String),
   /** The server's own tool names, in its order. */
   tools: Schema.Array(Schema.String),
+  /** Tools T3 could not expose because another tool already answers to their name. */
+  skippedTools: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type RegisteredMcpServerState = typeof RegisteredMcpServerState.Type;
 
