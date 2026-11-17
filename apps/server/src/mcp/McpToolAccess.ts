@@ -138,6 +138,12 @@ export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A,
   );
 
 /**
+ * The policy a toolkit tool declares, for one T3 registers outside a toolkit, such as a proxied
+ * MCP server tool. A read is open like `reads`; anything else acts like `actsAsCaller`.
+ */
+export const proxiedCaller = (writes: boolean) => (writes ? writingCaller : Effect.void);
+
+/**
  * Changes something that belongs to no thread, such as a pending upload or a
  * scheduled task. Work a linked environment started may not: none of it
  * carries the link's origin, so none of it is that link's.

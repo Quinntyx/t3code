@@ -5,11 +5,7 @@ import {
   type RegisteredMcpServerState,
   type RegisteredMcpServersState,
 } from "@t3tools/contracts";
-import {
-  isValidMcpToolName,
-  parseMcpRegistration,
-  type ParsedMcpRegistration,
-} from "@t3tools/shared/mcpRegistration";
+import { parseMcpRegistration, type ParsedMcpRegistration } from "@t3tools/shared/mcpRegistration";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 
@@ -22,16 +18,12 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
+import { defaultToolName, validateEntry } from "./CapabilitiesSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { searchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
-
-/** The tool prefix a new server gets: its name, slugged, or the server's own when that is usable. */
-const defaultToolName = (name: string) => {
-  const slug = mcpServerIdFromName(name).replaceAll("-", "_");
-  return isValidMcpToolName(slug) ? slug : "mcp";
-};
 
 const statusBadge = (status: RegisteredMcpServerState["status"]) => {
   switch (status) {
@@ -46,27 +38,10 @@ const statusBadge = (status: RegisteredMcpServerState["status"]) => {
   }
 };
 
-/** Everything wrong with a candidate entry, so the form can refuse to save it. */
-const validateEntry = (
-  candidate: RegisteredMcpServerEntry,
-  others: ReadonlyArray<RegisteredMcpServerEntry>,
-): string | null => {
-  if (!isValidMcpToolName(candidate.toolName)) {
-    return "The tool name must start with a lowercase letter and use only a-z, 0-9, _ and -.";
-  }
-  if (others.some((entry) => entry.toolName === candidate.toolName)) {
-    return "Another registered server already uses that tool name.";
-  }
-  if (others.some((entry) => entry.name === candidate.name)) {
-    return "A server with that name is already registered.";
-  }
-  return null;
-};
-
 export function CapabilitiesSettingsPanel() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const { environment } = useSettingsScope();
+  const { environment, scope } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const canRead = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const { data } = useEnvironmentQuery(
@@ -80,6 +55,19 @@ export function CapabilitiesSettingsPanel() {
   const entries = settings.registeredMcpServers;
   const save = (next: ReadonlyArray<RegisteredMcpServerEntry>) =>
     updateSettings({ registeredMcpServers: [...next] });
+
+  // A server runs on the machine that registered it, so its list is that machine's alone.
+  if (scope.kind !== "environment" || environment === null) {
+    return (
+      <SettingsPageContainer>
+        <SettingsSection id="capabilities" title="MCP servers">
+          <SettingsScopeNotice target="environment" inline>
+            Choose one environment to manage the MCP servers it runs.
+          </SettingsScopeNotice>
+        </SettingsSection>
+      </SettingsPageContainer>
+    );
+  }
 
   return (
     <SettingsPageContainer>
@@ -132,6 +120,10 @@ export function CapabilitiesSettingsPanel() {
                     ? runtime.stderrTail
                     : `${entry.toolName}_ prefix · ${
                         runtime?.tools.length ? `${runtime.tools.length} tools` : "no tools"
+                      }${
+                        runtime?.skippedTools?.length
+                          ? ` · ${runtime.skippedTools.length} name clash`
+                          : ""
                       }`
                 }
                 status={statusBadge(runtime?.status ?? "stopped")}

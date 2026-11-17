@@ -1147,6 +1147,14 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:usage-model-filter:${environmentId}`),
     ),
   );
+  // Registered MCP servers are machine-local, and their runtime state follows their entries: a
+  // register, toggle, removal or config change is what the settings pages save.
+  const registeredMcpServersAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(settingsValueAtom(environmentId))?.registeredMcpServers ?? []).pipe(
+      Atom.withEquality((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+      Atom.withLabel(`environment-data:server:registered-mcp-servers:${environmentId}`),
+    ),
+  );
   const providersValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.providers ?? null).pipe(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
@@ -1319,6 +1327,7 @@ export function createServerEnvironmentAtoms<R, E>(
     registeredMcpServersState: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:mcp-servers:state",
       tag: WS_METHODS.registeredMcpServersState,
+      refreshTrigger: ({ environmentId }) => registeredMcpServersAtom(environmentId),
     }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",

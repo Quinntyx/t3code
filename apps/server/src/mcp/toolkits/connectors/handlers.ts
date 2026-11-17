@@ -17,9 +17,13 @@ const EMAIL_OFF =
   "Email drafts are off. Turn them on in Settings → Email. Do not fall back to direct mail commands.";
 const CAPABILITIES = "Settings → Capabilities";
 const mcpServerNote = (server: RegisteredMcpServerState) => {
+  const skipped =
+    server.skippedTools === undefined || server.skippedTools.length === 0
+      ? ""
+      : ` Its ${server.skippedTools.join(", ")} cannot be exposed.`;
   switch (server.status) {
     case "running":
-      return `Registered MCP server ${server.name}; call its tools directly.`;
+      return `Registered MCP server ${server.name}; call its tools directly.${skipped}`;
     case "failed":
       return `${server.name} failed to start. Its user can see the error and restart it in ${CAPABILITIES}.`;
     case "starting":

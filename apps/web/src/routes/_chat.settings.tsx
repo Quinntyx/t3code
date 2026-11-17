@@ -143,6 +143,19 @@ function SettingsContentLayout() {
   );
 }
 
+/**
+ * Pages whose settings belong to one machine: providers and secrets, plus registered MCP servers,
+ * which T3 launches on the environment that owns them, so a save must never reach every one.
+ */
+const SINGLE_ENVIRONMENT_PATHS: ReadonlyArray<string> = [
+  "/settings/providers",
+  "/settings/secrets",
+  "/settings/capabilities",
+];
+
+const isSingleEnvironmentPath = (pathname: string) =>
+  SINGLE_ENVIRONMENT_PATHS.includes(pathname) || pathname.startsWith("/settings/mcp/");
+
 function SettingsRouteLayout() {
   const rawSearch = Route.useSearch();
   const navigate = Route.useNavigate();
@@ -150,7 +163,7 @@ function SettingsRouteLayout() {
   return (
     <SettingsScopeProvider
       search={rawSearch}
-      singleEnvironment={pathname === "/settings/providers" || pathname === "/settings/secrets"}
+      singleEnvironment={isSingleEnvironmentPath(pathname)}
       onChange={(next) => {
         // Send every axis so retain middleware recognizes "all" as an explicit target.
         void navigate({
