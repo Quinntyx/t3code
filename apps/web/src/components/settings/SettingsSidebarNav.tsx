@@ -30,6 +30,7 @@ import {
   Settings2Icon,
   ShieldCheckIcon,
   MailIcon,
+  PlugIcon,
   SmartphoneIcon,
   WrenchIcon,
   XIcon,
@@ -37,6 +38,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import {
@@ -48,6 +50,7 @@ import {
   SidebarMenuItem,
   SidebarInput,
 } from "../ui/sidebar";
+import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -99,6 +102,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/threads": MessagesSquareIcon,
   "/settings/browser": GlobeIcon,
+  "/settings/capabilities": PlugIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/email": MailIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
@@ -129,12 +133,19 @@ function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   return <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />;
 }
 
+/** Capabilities ride along in their own group: one General page, Email, then each server. */
+const CAPABILITIES_HEADING = "Capabilities";
+
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navArea = workspaceAreaProps("settings-nav", 0, "Settings sections");
+  // Absent without a scope provider, as in the composition test; the nav then lists none.
+  const registeredMcpServers =
+    useOptionalSettingsScope()?.target?.settings.registeredMcpServers ?? [];
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
   const activePath = SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname;
-  const navPaths = SETTINGS_NAV_GROUPS.flatMap((group) => group.paths);
+  const mcpServerPaths = registeredMcpServers.map((server) => `/settings/mcp/${server.id}`);
+  const navPaths = [...SETTINGS_NAV_GROUPS.flatMap((group) => group.paths), ...mcpServerPaths];
   const sectionNavigation = useSettingsSectionNavigation(
     navPaths.find((to) => activePath === to || activePath.startsWith(`${to}/`)) ??
       navPaths[0] ??
@@ -427,6 +438,50 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                             </SidebarMenuItem>
                           );
                         })}
+                        {group.heading === CAPABILITIES_HEADING
+                          ? registeredMcpServers.map((server) => {
+                              const to = `/settings/mcp/${server.id}`;
+                              const isActive = activePath === to;
+                              return (
+                                <SidebarMenuItem key={to} role="presentation">
+                                  <SidebarMenuButton
+                                    data-settings-section={to}
+                                    role="treeitem"
+                                    tabIndex={sectionNavigation.tabIndexFor(to)}
+                                    aria-selected={isActive}
+                                    aria-current={isActive ? "page" : undefined}
+                                    isActive={isActive}
+                                    onClick={() =>
+                                      void navigate({
+                                        to: "/settings/mcp/$serverId",
+                                        params: { serverId: server.id },
+                                        hash: "",
+                                        replace: true,
+                                        hashScrollIntoView: false,
+                                      })
+                                    }
+                                  >
+                                    <PlugIcon />
+                                    <span
+                                      className={cn(
+                                        "min-w-0 flex-1 truncate",
+                                        !compactSearchOpen && "max-md:sr-only",
+                                      )}
+                                    >
+                                      {server.name}
+                                    </span>
+                                    <Badge
+                                      variant="outline"
+                                      size="sm"
+                                      className={cn(!compactSearchOpen && "max-md:hidden")}
+                                    >
+                                      MCP
+                                    </Badge>
+                                  </SidebarMenuButton>
+                                </SidebarMenuItem>
+                              );
+                            })
+                          : null}
                       </SidebarMenu>
                     </div>
                   ))}

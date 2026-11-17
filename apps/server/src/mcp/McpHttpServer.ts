@@ -41,6 +41,7 @@ import {
   toolOutcome,
 } from "../telemetry/ProviderDimensions.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import * as ExternalMcpServers from "./ExternalMcpServers.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -1046,6 +1047,75 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Each registered MCP server's tools as native T3 tools, with its schema and annotations. */
+const registeredMcpToolRegistration = Layer.effectDiscard(
+  Effect.scoped(
+    Effect.gen(function* () {
+      // Required, not looked up optionally: a build-time miss would silently register nothing.
+      const externalServers = yield* ExternalMcpServers.ExternalMcpServers;
+      const server = yield* McpServer.McpServer;
+      // What the enabled check reads. Each registration closes over its own tool name.
+      const enabled = new Set<string>();
+      const registered = new Set<string>();
+
+      // A registration is announced to agents, so it carries the tool's own schema and hints.
+      const add = (tool: ExternalMcpServers.ExternalMcpTool) =>
+        server.addTool({
+          tool: new McpSchema.Tool({
+            name: tool.name,
+            description: tool.descriptor.description,
+            inputSchema: tool.descriptor.inputSchema,
+            ...(tool.descriptor.title === undefined ? {} : { title: tool.descriptor.title }),
+            ...(tool.descriptor.annotations === undefined
+              ? {}
+              : { annotations: tool.descriptor.annotations }),
+          }),
+          annotations: Context.make(McpSchema.EnabledWhen, () => enabled.has(tool.name)),
+          handle: (payload) =>
+            externalServers
+              .callTool(tool, (payload ?? {}) as Readonly<Record<string, unknown>>)
+              .pipe(
+                Effect.map(
+                  (result) =>
+                    new McpSchema.CallToolResult({
+                      isError: result.isError,
+                      ...(result.structuredContent === undefined
+                        ? {}
+                        : { structuredContent: result.structuredContent }),
+                      content: [...result.content],
+                    }),
+                ),
+                Effect.catch((error) =>
+                  Effect.succeed(
+                    new McpSchema.CallToolResult({
+                      isError: true,
+                      content: [{ type: "text", text: error.message }],
+                    }),
+                  ),
+                ),
+              ),
+        });
+
+      const refresh = Effect.gen(function* () {
+        const tools = yield* externalServers.tools;
+        enabled.clear();
+        for (const tool of tools) enabled.add(tool.name);
+        for (const tool of tools) {
+          if (registered.has(tool.name)) continue;
+          registered.add(tool.name);
+          yield* add(tool);
+        }
+      });
+
+      yield* refresh;
+      yield* externalServers.changes.pipe(
+        Stream.runForEach(() => refresh),
+        Effect.forkScoped,
+      );
+    }),
+  ),
+);
+
 /** Each tool call gets a span named for its tool; arguments stay out, as they carry prompts and IDs. */
 const withToolSpans = Effect.fn("McpHttpServer.withToolSpans")(function* <A, E, R>(
   registration: Effect.Effect<A, E, R>,
@@ -1179,6 +1249,9 @@ export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandl
 
 const layerConnectorsToolkit = toolkitRegistration(ConnectorsToolkit, ConnectorsHandlers.layer);
 
+/** Exposed for tests that drive the registered MCP proxy without the whole tool set. */
+export const layerRegisteredMcpTools = registeredMcpToolRegistration;
+
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,
   WorktreeHandlers.layer,
@@ -1264,6 +1337,7 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
+  registeredMcpToolRegistration,
 );
 
 export const layer = layerMcpTransport(layerTools);

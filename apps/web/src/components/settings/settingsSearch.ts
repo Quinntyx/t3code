@@ -30,6 +30,7 @@ export type SettingsPath =
   | "/settings/browser"
   | "/settings/devices"
   | "/settings/email"
+  | "/settings/capabilities"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
@@ -106,6 +107,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
   "/settings/email": "Email",
+  "/settings/capabilities": "Capabilities",
   "/settings/scheduled-tasks": "Scheduled tasks",
   "/settings/source-control": "Source control",
   "/settings/worktrees": "Worktrees",
@@ -146,7 +148,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/scheduled-tasks",
     ],
   },
-  { heading: "Capabilities", paths: ["/settings/email"] },
+  {
+    heading: "Capabilities",
+    paths: ["/settings/capabilities", "/settings/email"],
+  },
   {
     heading: "Code",
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
@@ -1118,6 +1123,27 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["device pixel ratio dpr resolution sharp hidpi retina 1x 2x"],
   },
   {
+    id: "mcp-servers",
+    title: "MCP servers",
+    to: "/settings/capabilities",
+    scope: "environment",
+    searchTerms: ["capabilities connectors tools register stdio server.json mcpb local"],
+  },
+  {
+    id: "registered-servers",
+    title: "Registered MCP servers",
+    to: "/settings/capabilities",
+    scope: "environment",
+    searchTerms: ["mcp servers registered enabled running stopped failed remove"],
+  },
+  {
+    id: "register-mcp-server",
+    title: "Register an MCP server",
+    to: "/settings/capabilities",
+    scope: "environment",
+    searchTerms: ["mcp add register server.json mcpb manifest paste"],
+  },
+  {
     id: "email-enabled",
     title: "Agents can draft emails",
     to: "/settings/email",
@@ -1537,6 +1563,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/browser": null,
   "/settings/devices": null,
   "/settings/email": "environment",
+  "/settings/capabilities": "environment",
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",

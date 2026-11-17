@@ -1316,6 +1316,10 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.emailListAccounts,
       refreshTrigger: ({ environmentId }) => emailAccountsFileAtom(environmentId),
     }),
+    registeredMcpServersState: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:mcp-servers:state",
+      tag: WS_METHODS.registeredMcpServersState,
+    }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",
       tag: WS_METHODS.serverGetNpmRelease,

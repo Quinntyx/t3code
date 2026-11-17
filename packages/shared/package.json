@@ -155,6 +155,10 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./mcpRegistration": {
+      "types": "./src/mcpRegistration.ts",
+      "import": "./src/mcpRegistration.ts"
+    },
     "./backgroundActivitySettings": {
       "types": "./src/backgroundActivitySettings.ts",
       "import": "./src/backgroundActivitySettings.ts"
