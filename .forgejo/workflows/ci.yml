@@ -91,6 +91,72 @@ jobs:
           fi
           node .forgejo/scripts/publish.cjs update-feed t3code-desktop stable
 
+  desktop-mac:
+    needs: changed
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - uses: ./.forgejo/actions/setup
+      - name: Install cross-build prerequisites in the job container
+        env:
+          # The resource monitor links against Apple frameworks, which only an SDK provides.
+          MACOS_SDK_URL: https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz
+          MACOS_SDK_SHA256: cd4f08a75577145b8f05245a2975f7c81401d75e9535dcffbb879ee1deefcbf4
+          GO_VERSION: go1.27.1
+          GO_SHA256: 63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+        run: |
+          set -eu
+          apt-get update
+          # The DMG background names Helvetica; Liberation Sans is its metric-compatible stand-in.
+          # The shared desktop bundle build also compiles the Linux browser helper against libsecret.
+          apt-get install -y --no-install-recommends imagemagick librsvg2-bin fonts-liberation pkg-config libsecret-1-dev curl xz-utils
+          export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target x86_64-apple-darwin
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          curl -fsSL "$MACOS_SDK_URL" -o "$RUNNER_TEMP/macos-sdk.tar.xz"
+          printf '%s  %s\n' "$MACOS_SDK_SHA256" "$RUNNER_TEMP/macos-sdk.tar.xz" | sha256sum --check --status
+          mkdir "$RUNNER_TEMP/macos-sdk"
+          tar -C "$RUNNER_TEMP/macos-sdk" -xJf "$RUNNER_TEMP/macos-sdk.tar.xz"
+          echo "SDKROOT=$RUNNER_TEMP/macos-sdk/MacOSX11.3.sdk" >> "$GITHUB_ENV"
+          curl -fsSL "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz" -o "$RUNNER_TEMP/go.tar.gz"
+          printf '%s  %s\n' "$GO_SHA256" "$RUNNER_TEMP/go.tar.gz" | sha256sum --check --status
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/go.tar.gz"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+      - name: Build an updateable DMG
+        env:
+          T3CODE_DESKTOP_UPDATE_URL: https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-desktop/stable/
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          version="$(date -u +%Y).$(date -u +%-m).${{ github.run_number }}"
+          pnpm exec vp run dist:desktop:artifact --platform mac --target dmg --arch x64 --build-version "$version" --output-dir release --verbose
+          mkdir -p update-feed
+          cp release/*.zip release/latest-mac.yml update-feed/
+          for file in release/*.blockmap; do
+            if [ -f "$file" ]; then cp "$file" update-feed/; fi
+          done
+      - uses: https://data.forgejo.org/actions/upload-artifact@v3
+        with:
+          name: t3code-mac-x64
+          path: release/*.dmg
+          if-no-files-found: error
+      - name: Advance the tailnet update feed
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          git fetch origin main --depth=1
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo 'A newer main revision exists; leaving the live feed unchanged.'
+            exit 0
+          fi
+          node .forgejo/scripts/publish.cjs update-feed t3code-desktop stable
+
   mobile:
     needs: changed
     uses: ./.forgejo/workflows/mobile.yml
