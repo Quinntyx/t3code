@@ -80,8 +80,10 @@ export function createVoiceSession(options: {
   let openRevision = 0;
   let monitorId: string | null = null;
   let unsubscribe: (() => void) | null = null;
-  /** The streaming message this turn's fragments extend; null starts a new message. */
-  let streaming: { readonly id: string; readonly role: "user" | "voice" } | null = null;
+  /** Each role's streaming message; null starts a new one for that role. */
+  let streaming: Record<"user" | "voice", string | null> = { user: null, voice: null };
+  /** Drops the model's spoken and written reply to the internal setup turn, if it is that turn. */
+  let suppressSetupReply = false;
   const update = (patch: Partial<VoiceSessionState>) => {
     state = { ...state, ...patch };
     for (const listener of listeners) listener();
@@ -94,15 +96,17 @@ export function createVoiceSession(options: {
   };
   /**
    * Live transcription streams a turn as many small fragments. They concatenate verbatim (Gemini
-   * supplies their own leading spaces) into one message, so a reply reads as a paragraph.
+   * supplies their own leading spaces) into one message, so a reply reads as a paragraph. Input and
+   * output transcription are independent streams: one reply's fragments stay together even while
+   * the user's speech for the next turn lands between them.
    */
   const stream = (role: "user" | "voice", text: string) => {
     if (!text) return;
-    if (streaming?.role === role) {
-      const id = streaming.id;
+    const current = streaming[role];
+    if (current !== null) {
       update({
         messages: state.messages.map((message) =>
-          message.id === id ? { ...message, text: message.text + text } : message,
+          message.id === current ? { ...message, text: message.text + text } : message,
         ),
       });
       return;
@@ -111,14 +115,16 @@ export function createVoiceSession(options: {
     const opening = text.trimStart();
     if (!opening) return;
     const message = { id: String(++nextMessageId), role, text: opening };
-    streaming = { id: message.id, role };
+    streaming = { ...streaming, [role]: message.id };
     update({ messages: [...state.messages, message].slice(-200) });
   };
-  /** Ends the current streaming message so the next fragment starts a new one. */
-  const endStream = () => {
-    streaming = null;
+  /** Ends a role's streaming message so its next fragment starts a new one. */
+  const endStream = (role?: "user" | "voice") => {
+    streaming = role === undefined ? { user: null, voice: null } : { ...streaming, [role]: null };
   };
-  const requestMonitor = () =>
+  const requestMonitor = () => {
+    // The model answers this internal request out loud; hide that turn's reply.
+    suppressSetupReply = true;
     connection?.sendClientContent({
       turns: [
         {
@@ -132,6 +138,7 @@ export function createVoiceSession(options: {
       ],
       turnComplete: true,
     });
+  };
   const flush = () => {
     if (!state.open || !connection || !monitorId) return;
     const notifications = options.feed.unseen();
@@ -164,18 +171,35 @@ export function createVoiceSession(options: {
   const receive = (message: LiveServerMessage, generation: number) => {
     if (generation !== epoch) return;
     const content = message.serverContent;
+    const userSpoke = Boolean(content?.inputTranscription?.text);
+    // The user talking over the internal setup reply means they want an answer, not silence.
+    if (userSpoke) suppressSetupReply = false;
     if (content?.interrupted) {
       endStream();
       options.onInterrupt?.();
     }
-    if (content?.inputTranscription?.text) stream("user", content.inputTranscription.text);
-    if (content?.outputTranscription?.text) stream("voice", content.outputTranscription.text);
-    for (const part of content?.modelTurn?.parts ?? []) {
-      if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/"))
-        options.onAudio?.(part.inlineData.data);
-      if (part.text && !content?.outputTranscription) append("voice", part.text);
+    if (content?.inputTranscription) {
+      stream("user", content.inputTranscription.text ?? "");
+      if (content.inputTranscription.finished) endStream("user");
     }
-    if (content?.turnComplete || content?.generationComplete) endStream();
+    if (content?.outputTranscription) {
+      if (suppressSetupReply)
+        // Still finish the turn, just never show or speak it.
+        endStream("voice");
+      else stream("voice", content.outputTranscription.text ?? "");
+      if (content.outputTranscription.finished) endStream("voice");
+    }
+    for (const part of content?.modelTurn?.parts ?? []) {
+      const audio = part.inlineData?.data;
+      if (audio && part.inlineData?.mimeType?.startsWith("audio/") && !suppressSetupReply)
+        options.onAudio?.(audio);
+      if (part.text && !content?.outputTranscription && !suppressSetupReply)
+        append("voice", part.text);
+    }
+    if (content?.turnComplete || content?.generationComplete) {
+      endStream();
+      suppressSetupReply = false;
+    }
     if (monitorId && message.toolCallCancellation?.ids?.includes(monitorId)) {
       monitorId = null;
       requestMonitor();
@@ -246,6 +270,7 @@ export function createVoiceSession(options: {
     connecting = null;
     monitorId = null;
     endStream();
+    suppressSetupReply = false;
     options.onInterrupt?.();
     update({
       status: state.status === "disabled" ? "disabled" : "idle",
@@ -366,7 +391,6 @@ export function createVoiceSession(options: {
       unsubscribe?.();
       unsubscribe = null;
       disconnect();
-      streaming = null;
       update({ open: false });
     },
     connect,
@@ -377,6 +401,8 @@ export function createVoiceSession(options: {
       if (!connection) return;
       // Typed text is its own message; it never joins a streamed transcript.
       endStream();
+      // A typed message can follow the setup request before its reply arrives: show that answer.
+      suppressSetupReply = false;
       append("user", text.trim());
       connection.sendClientContent({
         turns: [{ role: "user", parts: [{ text: text.trim() }] }],
