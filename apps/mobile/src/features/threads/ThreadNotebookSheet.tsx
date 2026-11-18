@@ -11,7 +11,8 @@ import type {
 import { AsyncResult } from "effect/reactivity";
 import { Image } from "expo-image";
 import { useState, useSyncExternalStore } from "react";
-import { AppState, Platform, Pressable, ScrollView, View } from "react-native";
+import { AppState, Platform, Pressable, ScrollView as NativeScrollView, View } from "react-native";
+import { ScrollView as GestureScrollView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -84,9 +85,11 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
       ...current,
       collapsed: { ...current.collapsed, [key]: !current.collapsed?.[key] },
     }));
+  // Android's form sheet can take vertical drags away from the core ScrollView.
+  const ScrollView = Platform.OS === "android" ? GestureScrollView : NativeScrollView;
   return (
     <ScrollView
-      className="flex-1"
+      style={{ flex: 1 }}
       nestedScrollEnabled
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ padding: 12, paddingBottom: Math.max(insets.bottom, 16), gap: 12 }}
