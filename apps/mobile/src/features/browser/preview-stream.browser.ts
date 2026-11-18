@@ -33,7 +33,7 @@ const MULTI_CLICK_MS = 500;
 const MULTI_CLICK_SLOP_PX = 4;
 const WHEEL_LINE_PX = 16;
 const MAX_PIXEL_RATIO = 2;
-// Reuse nearby probe answers: slow replies arrive too late after touch-end to raise the iOS keyboard.
+// iOS needs a touch gesture to show the keyboard when the first probe reply arrives too late.
 const PROBE_REUSE_PX = 24;
 const PROBE_REUSE_MS = 10_000;
 // A sentinel makes backspace fire input; Gboard keydown supplies only keyCode 229.
@@ -188,12 +188,14 @@ export function start(configuration: PreviewStreamConfiguration) {
           if (control?.controller !== "you") return;
           const current = probe;
           if (!current || current.x !== result.x || current.y !== result.y) return;
-          probeCache = {
-            clientX: current.clientX,
-            clientY: current.clientY,
-            editable: result.editable,
-            time: performance.now(),
-          };
+          if (configuration.reuseNearbyTouchProbe) {
+            probeCache = {
+              clientX: current.clientX,
+              clientY: current.clientY,
+              editable: result.editable,
+              time: performance.now(),
+            };
+          }
           if (current.end === "touching") {
             current.editable = result.editable;
             return;
