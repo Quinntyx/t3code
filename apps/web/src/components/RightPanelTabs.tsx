@@ -859,11 +859,13 @@ function SortableTabList(props: {
   children: ReactNode;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const surfaceIds = props.surfaces.map((surface) => surface.id);
-  const { onMove, surfaces } = props;
+  const { onMove } = props;
+  // Voice is pinned by the app, not ordered by this thread, so it takes no drag slot.
+  const sortable = props.surfaces.filter((surface) => surface.kind !== "voice");
+  const surfaceIds = sortable.map((surface) => surface.id);
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const toIndex = surfaces.findIndex((surface) => surface.id === over.id);
+    const toIndex = sortable.findIndex((surface) => surface.id === over.id);
     if (toIndex >= 0) onMove?.(String(active.id), toIndex);
   };
   return (
@@ -1251,17 +1253,19 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {
         id: "close-others",
         label: "Close others",
-        disabled: props.surfaces.length <= 1,
+        disabled: props.surfaces.filter((entry) => entry.kind !== "voice").length <= 1,
       },
       {
         id: "close-to-right",
         label: "Close to the right",
-        disabled: surfaceIndex >= props.surfaces.length - 1,
+        disabled:
+          props.surfaces.slice(surfaceIndex + 1).filter((entry) => entry.kind !== "voice")
+            .length === 0,
       },
       {
         id: "close-all",
         label: "Close all",
-        disabled: props.surfaces.length === 0,
+        disabled: props.surfaces.filter((entry) => entry.kind !== "voice").length === 0,
       },
     );
 

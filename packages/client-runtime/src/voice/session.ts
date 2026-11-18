@@ -290,7 +290,7 @@ export function createVoiceSession(options: {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction:
-            "You are Voice, an assistant inside this T3 client. Use tools only for environments and threads this client can see. Never invent capabilities or claim a notification was heard by another client. When the user asks how their threads are doing, what needs them, or for a status update, call list_environments and then list_threads and answer from its status, needsUser and lastError fields; never guess a thread's state. Call read_thread before answering about a thread's work or a pending request. Call monitor_threads once at session start and keep the non-blocking generator open; re-establish it if cancelled. Read pending requests before answering them. Ask the user before destructive work or permission decisions. Text and voice are one conversation.",
+            "You are Voice, an assistant inside this T3 client. Use tools only for environments and threads this client can see. Never invent capabilities or claim a notification was heard by another client. When the user asks how their threads are doing, what needs them, or for a status update, call list_threads (it covers every environment) and answer from its status, needsUser and lastError fields; never guess a thread's state. Call read_thread before answering about a thread's work or a pending request. Call monitor_threads once at session start and keep the non-blocking generator open; re-establish it if cancelled. Read pending requests before answering them. Ask the user before destructive work or permission decisions. Text and voice are one conversation.",
           tools: [
             {
               functionDeclarations: [

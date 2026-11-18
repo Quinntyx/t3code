@@ -73,9 +73,9 @@ const definitions = [
   ],
   [
     "list_threads",
-    "List visible threads with their project and latest run status. Use this to answer how threads are doing or what needs the user.",
+    "List visible threads across every environment, or one environment, with project, latest run status and whether each needs the user. Use this to answer how threads are doing.",
     { environmentId: string, query: string },
-    ["environmentId"],
+    [],
   ],
   [
     "search_threads",
@@ -174,6 +174,24 @@ export function createVoiceTools(options: {
     async execute(name, args) {
       const environments = options.environments();
       if (name === "list_environments") return environments.map(({ id, label }) => ({ id, label }));
+      if (name === "list_threads") {
+        // "How are my threads doing" spans environments, and the model may not have listed
+        // them first, so an absent environmentId means all of them.
+        const requested =
+          typeof args.environmentId === "string"
+            ? environments.filter((entry) => entry.id === args.environmentId)
+            : environments;
+        if (!requested.length) throw new Error("Environment is not visible in this client.");
+        const query = typeof args.query === "string" ? args.query.toLowerCase() : null;
+        return requested
+          .flatMap((entry) =>
+            entry.threads
+              .filter((thread) => !thread.archivedAt || (query !== null && query.length > 0))
+              .filter((thread) => query === null || thread.title.toLowerCase().includes(query))
+              .map((thread) => statusRow(entry, thread)),
+          )
+          .slice(0, 100);
+      }
       if (name === "search_threads") {
         const query = text(args, "query").toLowerCase();
         return environments
@@ -189,21 +207,6 @@ export function createVoiceTools(options: {
       const environmentId = EnvironmentId.make(environment.id);
       if (name === "list_projects") return environment.projects;
       if (name === "list_providers") return environment.providers;
-      if (name === "list_threads")
-        return environment.threads
-          .filter(
-            (thread) =>
-              thread.archivedAt === null ||
-              thread.archivedAt === undefined ||
-              (typeof args.query === "string" && args.query.length > 0),
-          )
-          .filter(
-            (thread) =>
-              typeof args.query !== "string" ||
-              thread.title.toLowerCase().includes(args.query.toLowerCase()),
-          )
-          .slice(0, 100)
-          .map((thread) => statusRow(environment, thread));
       let command: Record<string, unknown>;
       let threadId: string;
       if (name === "create_thread") {
