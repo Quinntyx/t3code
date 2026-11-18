@@ -1,4 +1,5 @@
 /* oxlint-disable react/no-array-index-key -- Snapshot outputs have no IDs; ordinals identify them within a cell. */
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type {
@@ -7,16 +8,20 @@ import type {
   PycellsNotebookKernel,
   ThreadId,
 } from "@t3tools/contracts";
+import { AsyncResult } from "effect/reactivity";
 import { Image } from "expo-image";
 import { useState, useSyncExternalStore } from "react";
 import { AppState, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
+import type { NotebookView } from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
@@ -34,13 +39,15 @@ export function ThreadNotebookSheet({ route }: StaticScreenProps<NotebookTarget>
   const focused = useIsFocused();
   const active = useSyncExternalStore(subscribeAppState, appActive, () => false);
   return (
-    <View className="flex-1 bg-sheet">
+    <View collapsable={false} className="flex-1 bg-sheet">
       <SheetHeader title="Notebook" onClose={() => navigation.goBack()} />
-      <NotebookContent
-        key={scopedThreadKey(route.params)}
-        target={route.params}
-        visible={focused && active}
-      />
+      <ScreenContent>
+        <NotebookContent
+          key={scopedThreadKey(route.params)}
+          target={route.params}
+          visible={focused && active}
+        />
+      </ScreenContent>
     </View>
   );
 }
@@ -55,15 +62,33 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
         })
       : null,
   );
-  const [kernelId, setKernelId] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const threadKey = scopedThreadKey(target);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const view = AsyncResult.isSuccess(preferences)
+    ? preferences.value.notebookViews?.[threadKey]
+    : undefined;
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const updateView = (update: (current: NotebookView) => NotebookView) =>
+    savePreferences({
+      transform: (current) => ({
+        notebookViews: {
+          ...current.notebookViews,
+          [threadKey]: update(current.notebookViews?.[threadKey] ?? {}),
+        },
+      }),
+    });
   const kernels = query.data?.kernels ?? [];
-  const kernel = kernels.find((entry) => entry.id === kernelId) ?? kernels[0];
-  const toggle = (key: string) => setCollapsed((current) => ({ ...current, [key]: !current[key] }));
+  const kernel = kernels.find((entry) => entry.id === view?.selectedKernelId) ?? kernels[0];
+  const toggle = (key: string) =>
+    updateView((current) => ({
+      ...current,
+      collapsed: { ...current.collapsed, [key]: !current.collapsed?.[key] },
+    }));
   return (
     <ScrollView
       className="flex-1"
       nestedScrollEnabled
+      contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ padding: 12, paddingBottom: Math.max(insets.bottom, 16), gap: 12 }}
     >
       {query.error ? (
@@ -89,7 +114,7 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
               accessibilityRole="button"
               accessibilityLabel={`Kernel ${entry.name}`}
               accessibilityState={{ selected: entry.id === kernel?.id }}
-              onPress={() => setKernelId(entry.id)}
+              onPress={() => updateView((current) => ({ ...current, selectedKernelId: entry.id }))}
               className={
                 entry.id === kernel?.id
                   ? "min-h-11 justify-center rounded-xl bg-subtle-strong px-3"
@@ -121,7 +146,7 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
                 key={JSON.stringify([kernel.id, cell.id])}
                 cell={cell}
                 kernel={kernel}
-                collapsed={collapsed}
+                collapsed={view?.collapsed}
                 toggle={toggle}
               />
             ))
@@ -148,7 +173,7 @@ function NotebookCell({
 }: {
   cell: PycellsNotebookCell;
   kernel: PycellsNotebookKernel;
-  collapsed: Record<string, boolean>;
+  collapsed: NotebookView["collapsed"];
   toggle: (key: string) => void;
 }) {
   const { nativeTextStyle } = useMarkdownPreviewStyles();
@@ -157,7 +182,7 @@ function NotebookCell({
     fontFamily: appearance.codeFontFamily ?? (Platform.OS === "ios" ? "Menlo" : "monospace"),
   };
   const key = (part: string) => JSON.stringify([kernel.id, cell.id, part]);
-  const isCollapsed = (part: string) => collapsed[key(part)] ?? false;
+  const isCollapsed = (part: string) => collapsed?.[key(part)] ?? false;
   const count = cell.executionCount ?? " ";
   return (
     <View className="overflow-hidden rounded-xl border border-border">
@@ -194,23 +219,23 @@ function NotebookCell({
               {cell.cellType === "code" ? `In [${count}]:` : "Source"}
             </Text>
           </Pressable>
-          {!isCollapsed("source") ? (
-            <View className="px-3 pb-3">
-              {cell.cellType === "markdown" ? (
-                <SelectableMarkdownText
-                  markdown={cell.source}
-                  textStyle={nativeTextStyle}
-                  onLinkPress={(href) => void tryOpenExternalUrl(href, "markdown-link")}
-                />
-              ) : (
-                <View className="rounded-lg bg-md-code-bg p-3">
-                  <Text selectable style={codeStyle} className="text-xs text-md-code-text">
-                    {cell.source || " "}
-                  </Text>
-                </View>
-              )}
-            </View>
-          ) : null}
+          <View className="px-3 pb-3">
+            {isCollapsed("source") ? (
+              <Text className="text-xs text-foreground-muted">Source collapsed</Text>
+            ) : cell.cellType === "markdown" ? (
+              <SelectableMarkdownText
+                markdown={cell.source}
+                textStyle={nativeTextStyle}
+                onLinkPress={(href) => void tryOpenExternalUrl(href, "markdown-link")}
+              />
+            ) : (
+              <View className="rounded-lg bg-md-code-bg p-3">
+                <Text selectable style={codeStyle} className="text-xs text-md-code-text">
+                  {cell.source || " "}
+                </Text>
+              </View>
+            )}
+          </View>
           {cell.outputs.length > 0 ? (
             <View className="border-t border-border">
               <Pressable
@@ -230,7 +255,11 @@ function NotebookCell({
                   className="text-xs text-foreground-muted"
                 >{`Out[${count}]:`}</Text>
               </Pressable>
-              {!isCollapsed("outputs") ? (
+              {isCollapsed("outputs") ? (
+                <Text className="px-3 pb-3 text-xs text-foreground-muted">
+                  {cell.outputs.length} outputs collapsed
+                </Text>
+              ) : (
                 <View className="gap-3 px-3 pb-3">
                   {cell.outputs.map((output, index) =>
                     output.kind === "image" ? (
@@ -255,7 +284,7 @@ function NotebookCell({
                     ),
                   )}
                 </View>
-              ) : null}
+              )}
             </View>
           ) : null}
         </>

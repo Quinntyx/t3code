@@ -19,14 +19,13 @@ import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import { useAtomValue } from "@effect/atom-react";
 import { useMemo, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { FLOATING_TABS } from "../layout/workspace/floating-workspace-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
-import { SymbolView } from "../../components/ui/AppSymbol";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
@@ -91,7 +90,6 @@ interface ThreadNavigationSidebarProps {
   readonly onOpenEnvironmentSettings: () => void;
   /** Set by the compact drawer, whose brand returns to the home thread list. */
   readonly onOpenHome?: () => void;
-  readonly onOpenThreadNotebook: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onOpenPendingTask: (pendingTask: PendingNewTask) => void;
@@ -574,17 +572,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
-  const notebookRow = selectedThread ? (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Open thread notebook"
-      className="min-h-11 flex-row items-center gap-3 border-t border-border px-5 py-3"
-      onPress={() => props.onOpenThreadNotebook(selectedThread)}
-    >
-      <SymbolView name="doc.text" size={18} tintColorClassName="accent-drawer-foreground-muted" />
-      <Text className="text-sm text-drawer-foreground">Notebook</Text>
-    </Pressable>
-  ) : null;
   const listEmpty = (
     <Text
       className={
@@ -646,7 +633,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           </SwipeableScrollGateProvider>
           <ThreadUndoNotice visible={props.visible} />
         </View>
-        {notebookRow}
       </>
     );
   }
@@ -700,7 +686,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           </SwipeableScrollGateProvider>
         )}
       </View>
-      {notebookRow}
       {header}
       <ThreadUndoNotice visible={props.visible} />
     </View>
