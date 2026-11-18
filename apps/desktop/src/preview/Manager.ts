@@ -461,10 +461,7 @@ const POPUP_WINDOW_OPTIONS = {
   },
 } satisfies Electron.BrowserWindowConstructorOptions;
 
-/**
- * OAuth needs a surviving popup opener. `blob:`, app links (behind the session's `openExternal`
- * prompt) and form POSTs stay in place.
- */
+/** OAuth needs a surviving popup opener. `blob:` and app links stay in place. */
 export const previewWindowOpenAction = (details: {
   readonly url: string;
   readonly disposition: Electron.HandlerDetails["disposition"];
@@ -474,9 +471,9 @@ export const previewWindowOpenAction = (details: {
   // MSAL redirects on a denied blank popup; navigating the tab would destroy that fallback.
   if (protocol === undefined || IN_PLACE_DENIED_PROTOCOLS.has(protocol)) return "deny";
   if (!POPUP_PROTOCOLS.has(protocol)) return "navigate";
-  if (details.disposition === "new-window") return "popup";
-  return !details.postBody &&
-    (details.disposition === "foreground-tab" || details.disposition === "background-tab")
+  // Reopening just the URL would turn Chromium's form POST into a GET.
+  if (details.postBody || details.disposition === "new-window") return "popup";
+  return details.disposition === "foreground-tab" || details.disposition === "background-tab"
     ? "new-tab"
     : "navigate";
 };
