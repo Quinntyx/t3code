@@ -1130,10 +1130,18 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
           }),
       });
 
+    // The names the last refresh advertised as enabled; a change is what agents cannot see.
+    let advertisedEnabled: ReadonlySet<string> | undefined;
+    const sameNames = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
+      left.size === right.size && [...left].every((name) => right.has(name));
+
     const refresh = Effect.gen(function* () {
       const tools = yield* externalServers.tools;
+      const nextEnabled = new Set(tools.map((tool) => tool.name));
+      const changed = advertisedEnabled !== undefined && !sameNames(advertisedEnabled, nextEnabled);
+      advertisedEnabled = nextEnabled;
       enabled.clear();
-      for (const tool of tools) enabled.add(tool.name);
+      for (const name of nextEnabled) enabled.add(name);
       // A name belongs to the first tool that claims it, so a reused name has one owner.
       const claimed = new Map<string, ExternalMcpServers.ExternalMcpTool>();
       for (const tool of tools) {
@@ -1160,6 +1168,9 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
         yield* add(tool);
         taken.add(name);
       }
+      // Enabling or disabling changes `tools/list` without adding a tool, which is what announces
+      // one; a harness caching the list would otherwise keep the tools as they were.
+      if (changed) yield* server.notifications["notifications/tools/list_changed"]({});
     });
 
     yield* refresh;

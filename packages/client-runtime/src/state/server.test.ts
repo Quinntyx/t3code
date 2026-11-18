@@ -6,6 +6,7 @@ import {
   type ProviderInstallState,
   type ProviderSetupInput,
   ServerObservability,
+  type ServerSettings,
   EnvironmentThemeId,
   UsageLimitSourceId,
   type ServerConfig,
@@ -1393,6 +1394,93 @@ describe("provider setup commands", () => {
         value: { driver: "antigravity" },
       });
       expect(yield* Queue.takeAll(requested)).toEqual(["antigravity"]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("registered MCP server state", () => {
+  it.effect("refetches after a save whose entries are unchanged, as replacing a secret is", () =>
+    Effect.gen(function* () {
+      const settings = {
+        registeredMcpServers: [
+          {
+            id: "notes",
+            name: "Notes",
+            toolName: "notes",
+            enabled: true,
+            source: { kind: "server.json" as const, document: {} },
+            config: { TOKEN: "••••••" },
+          },
+        ],
+      } as unknown as ServerSettings;
+      const reads = yield* Queue.unbounded<void>();
+      const client = {
+        [WS_METHODS.subscribeServerConfig]: () => Stream.never,
+        [WS_METHODS.registeredMcpServersState]: () =>
+          Queue.offer(reads, undefined).pipe(Effect.as({ servers: [] })),
+        [WS_METHODS.serverUpdateSettings]: () => Effect.succeed(settings),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected",
+        }),
+        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+      const runtime = Atom.runtime(
+        Layer.mergeAll(
+          Layer.succeed(
+            EnvironmentRegistry.EnvironmentRegistry,
+            EnvironmentRegistry.EnvironmentRegistry.of({
+              run: (_id, effect) =>
+                Effect.provideService(
+                  effect,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+              followStream: (_id, stream) =>
+                Stream.provideService(
+                  stream,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+            } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+          ),
+          Layer.succeed(RpcPermissionGuard, { authorize: () => Effect.void }),
+          Layer.succeed(Persistence.EnvironmentCacheStore, {
+            loadServerConfig: () => Effect.succeedNone,
+          } as unknown as Persistence.EnvironmentCacheStore["Service"]),
+        ),
+      );
+      const atoms = createServerEnvironmentAtoms(runtime, {
+        initialConfigValueAtom: () => Atom.make(CONFIG),
+      });
+      const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (value) =>
+        Effect.sync(() => value.dispose()),
+      );
+      const state = atoms.registeredMcpServersState({
+        environmentId: TARGET.environmentId,
+        input: {},
+      });
+      const unmount = registry.mount(state);
+      // The first read is the query's own; the save's refetch is what follows it.
+      yield* Queue.take(reads);
+
+      const saved = yield* Effect.promise(() =>
+        atoms.updateSettings.run(registry, {
+          environmentId: TARGET.environmentId,
+          input: { patch: { registeredMcpServers: settings.registeredMcpServers } },
+        }),
+      );
+      expect(saved._tag).toBe("Success");
+      // The saved entries are the same redacted ones, so only the save itself can ask for this.
+      yield* Queue.take(reads);
+      unmount();
     }).pipe(Effect.scoped),
   );
 });

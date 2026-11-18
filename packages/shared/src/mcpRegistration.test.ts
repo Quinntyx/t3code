@@ -27,7 +27,6 @@ const npmPackage = {
   ],
   packageArguments: [{ type: "named", name: "--cache", value: "{TEAM_NOTES_HOME}" }],
 };
-
 const mcpbManifest = {
   manifest_version: "0.2",
   name: "acme-notes",
@@ -147,6 +146,101 @@ describe("parseMcpRegistration", () => {
           type: "string",
           required: false,
           secret: true,
+        },
+      ],
+    },
+    {
+      label: "a server.json environment variable with a value or a value template",
+      source: serverJson([
+        {
+          ...npmPackage,
+          packageArguments: [],
+          environmentVariables: [
+            // A fixed value needs nothing from the user, so it declares no field here.
+            { name: "TEAM_NOTES_REGION", value: "eu" },
+            {
+              name: "TEAM_NOTES_HOME",
+              value: "{NOTES_DIR}",
+              variables: { NOTES_DIR: { description: "Where notes live.", format: "filepath" } },
+            },
+          ],
+        },
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "NOTES_DIR",
+          label: "NOTES DIR",
+          type: "path",
+          required: false,
+          secret: false,
+          description: "Where notes live.",
+        },
+      ],
+    },
+    {
+      label: "a server.json argument with no value",
+      source: serverJson([
+        {
+          ...npmPackage,
+          packageArguments: [
+            // A valueless named argument is a bare flag, not a setting.
+            { type: "named", name: "--stdio" },
+            // One that declares a value asks for it, and is emitted from what the user sets.
+            {
+              type: "named",
+              name: "--token",
+              valueHint: "token",
+              isRequired: true,
+              isSecret: true,
+            },
+            { type: "positional", valueHint: "workspace", description: "Workspace slug." },
+          ],
+        },
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "TEAM_NOTES_TOKEN",
+          label: "TEAM_NOTES_TOKEN",
+          type: "string",
+          required: true,
+          secret: true,
+          description: "Workspace API token.",
+        },
+        {
+          key: "TEAM_NOTES_REGION",
+          label: "TEAM_NOTES_REGION",
+          type: "choice",
+          required: false,
+          secret: false,
+          default: "us",
+          choices: ["us", "eu"],
+        },
+        {
+          key: "TEAM_NOTES_HOME",
+          label: "TEAM_NOTES_HOME",
+          type: "path",
+          required: false,
+          secret: false,
+        },
+        {
+          key: "token",
+          label: "Token",
+          type: "string",
+          required: true,
+          secret: true,
+          description: "Value for --token (package argument 2).",
+        },
+        {
+          key: "argument_3",
+          label: "Workspace",
+          type: "string",
+          required: false,
+          secret: false,
+          description: "Workspace slug.",
         },
       ],
     },
@@ -302,6 +396,71 @@ describe("resolveMcpLaunch", () => {
       config: { TEAM_NOTES_TOKEN: "s3cret" },
     });
     expect(unset.ok && unset.launch.args).toEqual(["-y", "@acme/team-notes-mcp@1.4.2"]);
+  });
+
+  it("launches a variable's literal value and a supplied argument", () => {
+    const document = serverJson([
+      {
+        ...npmPackage,
+        environmentVariables: [
+          { name: "TEAM_NOTES_REGION", value: "eu" },
+          {
+            name: "TEAM_NOTES_HOME",
+            value: "{NOTES_DIR}",
+            variables: { NOTES_DIR: { format: "filepath" } },
+          },
+          { name: "TEAM_NOTES_TOKEN", isRequired: true, isSecret: true },
+        ],
+        packageArguments: [
+          { type: "named", name: "--stdio" },
+          { type: "named", name: "--token", isRequired: true },
+          { type: "positional", description: "Workspace slug." },
+        ],
+      },
+    ]);
+
+    const supplied = resolveMcpLaunch({
+      source: { kind: "server.json", document },
+      config: {
+        NOTES_DIR: "/home/user/notes",
+        TEAM_NOTES_TOKEN: "s3cret",
+        token: "t0ken",
+        argument_3: "acme",
+      },
+    });
+    expect(supplied.ok && supplied.launch).toEqual({
+      command: "npx",
+      args: ["-y", "@acme/team-notes-mcp@1.4.2", "--stdio", "--token", "t0ken", "acme"],
+      // The fixed and templated values come through without a field; the token is configured.
+      env: {
+        TEAM_NOTES_REGION: "eu",
+        TEAM_NOTES_HOME: "/home/user/notes",
+        TEAM_NOTES_TOKEN: "s3cret",
+      },
+    });
+
+    // An unsupplied argument that is required stops the launch; an optional one is omitted.
+    const missing = resolveMcpLaunch({
+      source: { kind: "server.json", document },
+      config: { NOTES_DIR: "/home/user/notes", TEAM_NOTES_TOKEN: "s3cret" },
+    });
+    expect(missing).toEqual({ ok: false, message: "Set Token before this MCP server can start." });
+
+    const withoutOptional = resolveMcpLaunch({
+      source: { kind: "server.json", document },
+      config: {
+        NOTES_DIR: "/home/user/notes",
+        TEAM_NOTES_TOKEN: "s3cret",
+        token: "t0ken",
+      },
+    });
+    expect(withoutOptional.ok && withoutOptional.launch.args).toEqual([
+      "-y",
+      "@acme/team-notes-mcp@1.4.2",
+      "--stdio",
+      "--token",
+      "t0ken",
+    ]);
   });
 
   it("launches pypi and oci packages with their own runners", () => {

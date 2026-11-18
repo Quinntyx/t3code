@@ -7,16 +7,20 @@ import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  type RegisteredMcpServersState,
   type ServerSettings as ServerSettingsType,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as ExternalMcpServers from "./ExternalMcpServers.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -112,12 +116,32 @@ const layerTestSettings = (initial: ReadonlyArray<Entry>) =>
 // the layer is declared as what the tests actually consume.
 const layerTest = (
   initial: ReadonlyArray<Entry>,
+  options: {
+    /** Wraps every spawned child, so a test can hold one where it needs it. */
+    readonly wrapHandle?:
+      | ((handle: ChildProcessSpawner.ChildProcessHandle) => ChildProcessSpawner.ChildProcessHandle)
+      | undefined;
+  } = {},
 ): Layer.Layer<ExternalMcpServers.ExternalMcpServers | ServerSettings.ServerSettingsService> => {
   // One settings instance, so a test's write is the change the reconciler sees.
   const settings = layerTestSettings(initial);
-  return Layer.merge(ExternalMcpServers.layer.pipe(Layer.provide(settings)), settings).pipe(
-    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-  ) as unknown as Layer.Layer<
+  const layerSpawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner> =
+    options.wrapHandle === undefined
+      ? NodeServices.layer
+      : Layer.effect(
+          ChildProcessSpawner.ChildProcessSpawner,
+          Effect.gen(function* () {
+            const platform = yield* ChildProcessSpawner.ChildProcessSpawner;
+            return ChildProcessSpawner.ChildProcessSpawner.of({
+              ...platform,
+              spawn: (command) => platform.spawn(command).pipe(Effect.map(options.wrapHandle!)),
+            });
+          }),
+        ).pipe(Layer.provide(NodeServices.layer));
+  return Layer.merge(
+    ExternalMcpServers.layer.pipe(Layer.provide(Layer.merge(settings, layerSpawner))),
+    settings,
+  ).pipe(Layer.provideMerge(Layer.merge(layerSpawner, NodeCrypto.layer))) as unknown as Layer.Layer<
     ExternalMcpServers.ExternalMcpServers | ServerSettings.ServerSettingsService
   >;
 };
@@ -347,32 +371,104 @@ it.live("records a child killed by a signal as failed instead of leaving it runn
   }),
 );
 
-/** The service scope owns every child, so teardown reaches one that is still running. */
-it.live("stops its child when the service scope closes", () =>
+/**
+ * A crashing child's cleanup yields, and a settings change during it starts a replacement. The
+ * failed write must not land on the replacement: it would report the running server failed and
+ * withdraw its tools.
+ */
+it.live("leaves a replacement's state alone when the crashed child's cleanup outlasts it", () =>
   Effect.gen(function* () {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-teardown-"));
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-race-"));
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
     );
     const pidFile = NodePath.join(directory, "fixture.pid");
-    const serviceScope = yield* Scope.make("sequential");
-    // The layer is built in its own scope, which is the service's: closing that is teardown.
-    const context = yield* Layer.build(
-      layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })]),
-    ).pipe(Scope.provide(serviceScope));
+    // The crashing child's stop waits here, so a settings change arrives mid-cleanup.
+    const holdStop = yield* Deferred.make<void>();
+    const stopHeld = yield* Deferred.make<void>();
+    let firstChild = true;
     yield* Effect.gen(function* () {
       const servers = yield* ExternalMcpServers.ExternalMcpServers;
+      const settings = yield* ServerSettings.ServerSettingsService;
       yield* startServers(servers);
       yield* watcher(servers);
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ status: "running" }),
-      ]);
-    }).pipe(Effect.provide(context));
+      const crash = (yield* servers.tools).find((tool) => tool.originalName === "crash-on-call")!;
 
-    const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
-    expect(isRunning(pid)).toBe(true);
-    // Closing waits for the child's own stop finalizer, so it has exited when this returns.
-    yield* Scope.close(serviceScope, Exit.void);
-    expect(isRunning(pid)).toBe(false);
+      // Read from the announcement stream rather than `states`, which reconciles again and would
+      // hide a stale write behind a fresh snapshot.
+      const announced = yield* Queue.unbounded<RegisteredMcpServersState>();
+      yield* servers.changes.pipe(
+        Stream.tap((state) => Queue.offer(announced, state)),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+
+      // The fixture exits when asked to, and the crash handler's cleanup waits on the held stop.
+      yield* servers.callTool(crash, {}).pipe(Effect.ignore);
+      yield* Deferred.await(stopHeld);
+
+      // A settings change arrives while that cleanup waits. Its reconcile may not replace the
+      // child behind the crash handler's back, so the crash's own state is what lands first.
+      yield* settings.updateSettings({
+        registeredMcpServers: [entry({ config: { RETRY: "1" } })],
+      });
+      yield* Deferred.succeed(holdStop, undefined);
+
+      // Two announcements arrive: the reconciler's snapshot of the replacement, and the crash's.
+      // A `failed` snapshot here means the crash's write landed on the child that replaced it.
+      const first = yield* Queue.take(announced);
+      const last = yield* Queue.take(announced);
+      expect([first, last].map((state) => state.servers[0]?.status)).not.toContain("failed");
+      expect(last.servers).toEqual([expect.objectContaining({ id: "fixture", status: "running" })]);
+      expect(last.servers[0]?.tools).toHaveLength(3);
+    }).pipe(
+      Effect.provide(
+        layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })], {
+          wrapHandle: (handle) => {
+            if (!firstChild) return handle;
+            firstChild = false;
+            return {
+              ...handle,
+              kill: (options) =>
+                Deferred.succeed(stopHeld, undefined).pipe(
+                  Effect.andThen(Deferred.await(holdStop)),
+                  Effect.andThen(handle.kill(options)),
+                ),
+            };
+          },
+        }),
+      ),
+    );
   }),
+);
+
+/** The service scope owns every child, so teardown reaches one that is still running. */ it.live(
+  "stops its child when the service scope closes",
+  () =>
+    Effect.gen(function* () {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-teardown-"));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+      );
+      const pidFile = NodePath.join(directory, "fixture.pid");
+      const serviceScope = yield* Scope.make("sequential");
+      // The layer is built in its own scope, which is the service's: closing that is teardown.
+      const context = yield* Layer.build(
+        layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })]),
+      ).pipe(Scope.provide(serviceScope));
+      yield* Effect.gen(function* () {
+        const servers = yield* ExternalMcpServers.ExternalMcpServers;
+        yield* startServers(servers);
+        yield* watcher(servers);
+        expect((yield* servers.states).servers).toEqual([
+          expect.objectContaining({ status: "running" }),
+        ]);
+      }).pipe(Effect.provide(context));
+
+      const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
+      expect(isRunning(pid)).toBe(true);
+      // Closing waits for the child's own stop finalizer, so it has exited when this returns.
+      yield* Scope.close(serviceScope, Exit.void);
+      expect(isRunning(pid)).toBe(false);
+    }),
 );
