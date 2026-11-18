@@ -74,32 +74,64 @@ const labelOf = (key: string) =>
 interface NormalizedArgument {
   readonly type: "positional" | "named";
   readonly name?: string | undefined;
-  readonly value: string;
+  /** A fixed value, or a template over the entry's `variables`; absent leaves it to the user. */
+  readonly value?: string | undefined;
   /** What server.json declares about the placeholders in `value`, keyed by config key. */
   readonly variables: Readonly<Record<string, unknown>>;
+  /** Set when the entry declares a value the user supplies instead of carrying one itself. */
+  readonly suppliedKey?: string | undefined;
+  /** That entry, which declares the field the same way a variable does. */
+  readonly supplied?: Readonly<Record<string, unknown>> | undefined;
 }
-
-const readArgument = (raw: unknown): NormalizedArgument | undefined => {
-  const entry = asRecord(raw);
-  if (entry === undefined) return undefined;
-  const value = asString(entry.value);
-  if (value === undefined) return undefined;
-  const variables = asRecord(entry.variables) ?? {};
-  if (entry.type === "named") {
-    const name = asString(entry.name);
-    return name === undefined ? undefined : { type: "named", name, value, variables };
-  }
-  return { type: "positional", value, variables };
-};
-
-const readArguments = (raw: unknown): ReadonlyArray<NormalizedArgument> =>
-  asArray(raw).flatMap((entry) => {
-    const argument = readArgument(entry);
-    return argument === undefined ? [] : [argument];
-  });
 
 // Value placeholders in either format name a config field; a missing one is substituted empty.
 const PLACEHOLDER = /\{([A-Za-z0-9_.-]+)\}/gu;
+
+const placeholderKeys = (template: string) => [
+  ...new Set([...template.matchAll(PLACEHOLDER)].map((match) => match[1]!)),
+];
+
+/** A named flag's `--token` becomes the config key `token`; a positional gets its position. */
+const argumentKey = (name: string | undefined, index: number) => {
+  const key =
+    name === undefined ? "" : name.replaceAll(/^-+/gu, "").replaceAll(/[^A-Za-z0-9_-]+/gu, "_");
+  return key === "" ? `argument_${index + 1}` : key;
+};
+
+/** These declarations mean the entry asks the user for a value rather than carrying one. */
+const declaresSuppliedValue = (entry: Readonly<Record<string, unknown>>) =>
+  asString(entry.valueHint) !== undefined ||
+  asBoolean(entry.isRequired) !== undefined ||
+  asString(entry.description) !== undefined;
+
+const readArgument = (raw: unknown, index: number): NormalizedArgument | undefined => {
+  const entry = asRecord(raw);
+  if (entry === undefined) return undefined;
+  const named = entry.type === "named";
+  const name = named ? asString(entry.name) : undefined;
+  if (named && name === undefined) return undefined;
+  const base = { type: named ? ("named" as const) : ("positional" as const), name };
+  const value = asString(entry.value);
+  if (value !== undefined) {
+    return { ...base, value, variables: asRecord(entry.variables) ?? {} };
+  }
+  // Without a value a named argument is a bare flag; a positional one adds nothing.
+  if (!declaresSuppliedValue(entry)) {
+    return named ? { ...base, variables: {} } : undefined;
+  }
+  return {
+    ...base,
+    variables: {},
+    suppliedKey: argumentKey(name, index),
+    supplied: entry,
+  };
+};
+
+const readArguments = (raw: unknown): ReadonlyArray<NormalizedArgument> =>
+  asArray(raw).flatMap((entry, index) => {
+    const argument = readArgument(entry, index);
+    return argument === undefined ? [] : [argument];
+  });
 
 const substitute = (template: string, values: ReadonlyMap<string, string>) =>
   template.replaceAll(PLACEHOLDER, (_match, key: string) => values.get(key) ?? "");
@@ -136,28 +168,66 @@ const readVariableField = (
   };
 };
 
-const readEnvironmentVariables = (raw: unknown): ReadonlyArray<McpConfigField> =>
-  asArray(raw).flatMap((entry) => {
-    const variable = asRecord(entry);
-    const name = variable === undefined ? undefined : asString(variable.name);
-    if (variable === undefined || name === undefined || name.trim() === "") return [];
-    return [readVariableField(name, variable, { label: name })];
+interface NormalizedEnvironmentVariable {
+  readonly name: string;
+  /** A fixed value or a template over `variables`; absent leaves the value to the user. */
+  readonly value?: string | undefined;
+  readonly variables: Readonly<Record<string, unknown>>;
+  /** The entry itself, which declares a value the user supplies the same way a variable does. */
+  readonly entry: Readonly<Record<string, unknown>>;
+}
+
+const readEnvironmentVariables = (raw: unknown): ReadonlyArray<NormalizedEnvironmentVariable> =>
+  asArray(raw).flatMap((raw) => {
+    const entry = asRecord(raw);
+    const name = entry === undefined ? undefined : asString(entry.name);
+    if (entry === undefined || name === undefined || name.trim() === "") return [];
+    const value = asString(entry.value);
+    return [
+      {
+        name,
+        ...(value === undefined ? {} : { value }),
+        variables: asRecord(entry.variables) ?? {},
+        entry,
+      },
+    ];
   });
+
+/** A fixed value needs no field; a template asks for each variable it names. */
+const environmentVariableFields = (
+  variables: ReadonlyArray<NormalizedEnvironmentVariable>,
+): ReadonlyArray<McpConfigField> =>
+  variables.flatMap((variable) =>
+    variable.value === undefined
+      ? [readVariableField(variable.name, variable.entry, { label: variable.name })]
+      : placeholderKeys(variable.value).map((key) =>
+          readVariableField(key, asRecord(variable.variables[key]), { label: labelOf(key) }),
+        ),
+  );
 
 const readArgumentFields = (
   argumentsList: ReadonlyArray<NormalizedArgument>,
   prefix: string,
 ): ReadonlyArray<McpConfigField> =>
   argumentsList.flatMap((argument, index) => {
-    const keys = [...argument.value.matchAll(PLACEHOLDER)].map((match) => match[1]!);
-    const description =
+    const described =
       argument.type === "named"
         ? `Value for ${argument.name ?? ""} (${prefix} ${index + 1}).`
         : `Positional value ${index + 1}.`;
-    return [...new Set(keys)].map((key) =>
+    if (argument.suppliedKey !== undefined) {
+      const supplied = argument.supplied ?? {};
+      return [
+        readVariableField(argument.suppliedKey, supplied, {
+          label: labelOf(asString(supplied.valueHint) ?? argument.suppliedKey),
+          // The entry's own description wins over the positional or flag it belongs to.
+          description: described,
+        }),
+      ];
+    }
+    return placeholderKeys(argument.value ?? "").map((key) =>
       readVariableField(key, asRecord(argument.variables[key]), {
         label: labelOf(key),
-        description,
+        description: described,
       }),
     );
   });
@@ -171,7 +241,7 @@ interface ParsedServerJsonPackage {
   readonly container: boolean;
   readonly runtimeArguments: ReadonlyArray<NormalizedArgument>;
   readonly packageArguments: ReadonlyArray<NormalizedArgument>;
-  readonly environmentVariables: ReadonlyArray<McpConfigField>;
+  readonly environmentVariables: ReadonlyArray<NormalizedEnvironmentVariable>;
 }
 
 const readServerJsonPackage = (
@@ -246,7 +316,7 @@ const parseServerJson = (document: Readonly<Record<string, unknown>>): McpRegist
     }
     const { value } = parsed;
     const fields = [
-      ...value.environmentVariables,
+      ...environmentVariableFields(value.environmentVariables),
       ...readArgumentFields(value.runtimeArguments, "runtime argument"),
       ...readArgumentFields(value.packageArguments, "package argument"),
     ].filter(
@@ -411,14 +481,24 @@ const substituteMcpb = (
 /** An argv element that is only a multi-value placeholder becomes one argument per value. */
 const MCPB_ARGUMENT_PLACEHOLDER = /^\$\{user_config\.([A-Za-z0-9_.-]+)\}$/u;
 
-/** The arguments one declared argument contributes; an absent value leaves no dangling flag. */
+/**
+ * The arguments one declared argument contributes. A fixed value always comes through, a
+ * template whose placeholders are all unset leaves no dangling flag, and a bare flag still goes.
+ */
 const argumentArgs = (
   argument: NormalizedArgument,
-  substituteValue: (template: string) => string,
+  values: ReadonlyMap<string, string>,
 ): ReadonlyArray<string> => {
-  const value = substituteValue(argument.value);
+  const flag = argument.type === "named" ? [argument.name!] : [];
+  if (argument.suppliedKey !== undefined) {
+    const supplied = values.get(argument.suppliedKey);
+    if (supplied === undefined || supplied === "") return [];
+    return [...flag, supplied];
+  }
+  if (argument.value === undefined) return flag;
+  const value = substitute(argument.value, values);
   if (value === "") return [];
-  return argument.type === "named" ? [argument.name!, value] : [value];
+  return [...flag, value];
 };
 
 /** The process to launch for a registered server, with the user's values substituted in. */
@@ -475,11 +555,14 @@ export function resolveMcpLaunch(
   for (const candidate of packages) {
     const value = readServerJsonPackage(candidate);
     if (!value.ok) continue;
-    const substituteValue = (template: string) => substitute(template, values);
+    // A fixed value needs no field, so it comes from the document; a template from its variables.
     const env = Object.fromEntries(
-      value.value.environmentVariables.flatMap((field) => {
-        const resolvedValue = values.get(field.key);
-        return resolvedValue === undefined ? [] : [[field.key, resolvedValue] as const];
+      value.value.environmentVariables.flatMap((variable) => {
+        if (variable.value === undefined) {
+          const configured = values.get(variable.name);
+          return configured === undefined ? [] : [[variable.name, configured] as const];
+        }
+        return [[variable.name, substitute(variable.value, values)] as const];
       }),
     );
     // Docker takes a variable's value from its own client env, so each configured one needs `-e`.
@@ -488,13 +571,9 @@ export function resolveMcpLaunch(
       ...value.value.baseArgs.slice(0, -1),
       ...(value.value.container ? Object.keys(env).flatMap((name) => ["-e", name]) : []),
       // Runtime arguments configure the runner, so they precede the package identifier or image.
-      ...value.value.runtimeArguments.flatMap((argument) =>
-        argumentArgs(argument, substituteValue),
-      ),
+      ...value.value.runtimeArguments.flatMap((argument) => argumentArgs(argument, values)),
       ...value.value.baseArgs.slice(-1),
-      ...value.value.packageArguments.flatMap((argument) =>
-        argumentArgs(argument, substituteValue),
-      ),
+      ...value.value.packageArguments.flatMap((argument) => argumentArgs(argument, values)),
     ].filter((argument) => argument !== "");
     return { ok: true, launch: { command: value.value.command, args, env } };
   }

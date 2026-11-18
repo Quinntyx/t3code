@@ -938,19 +938,28 @@ const startRegisteredMcpProxy = <Services>(context: Context.Context<Services>, c
     const registered = yield* Deferred.make<void>();
     const notifyRegistered = () =>
       server.tools.length >= count ? Deferred.succeed(registered, undefined) : Effect.void;
+    // Every `list_changed` the proxy sends, so a test can assert it announced a change.
+    const listChanges = yield* Queue.unbounded<void>();
     // The proxy's own registration is what this test drives; the stub only observes it.
     const notifying = McpServer.McpServer.of({
       ...server,
       addTool: (options) =>
         // oxlint-disable-next-line t3code/no-raw-mcp-registration -- forwards to the server's own addTool
         server.addTool(options).pipe(Effect.andThen(() => notifyRegistered())),
+      notifications: {
+        ...server.notifications,
+        "notifications/tools/list_changed": (payload) =>
+          Queue.offer(listChanges, undefined).pipe(
+            Effect.andThen(server.notifications["notifications/tools/list_changed"](payload)),
+          ),
+      },
     });
     yield* McpHttpServer.layerRegisteredMcpTools.pipe(
       Layer.provide(Layer.succeedContext(Context.add(context, McpServer.McpServer, notifying))),
       Layer.launch,
       Effect.forkScoped,
     );
-    return { server, registered };
+    return { server, registered, listChanges };
   });
 
 /** A server enabled after startup reaches the proxy: its change watcher lives as long as the layer. */
@@ -979,7 +988,7 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
       );
 
       // Nothing is running yet, so the proxy registers no tool.
-      const { server } = yield* startRegisteredMcpProxy(context, 2);
+      const { server, listChanges } = yield* startRegisteredMcpProxy(context, 2);
       yield* awaitReads(1);
       expect(server.tools).toEqual([]);
 
@@ -988,6 +997,12 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
       yield* publishChange();
       yield* awaitReads(1);
       expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_echo", "fixture_set"]);
+      // A second change is a barrier: its read happens after the first refresh finished, so the
+      // notification the first one sent is already waiting, and none waits for the second.
+      yield* publishChange();
+      yield* awaitReads(1);
+      // The enabled set changed, so a harness caching the list is told to fetch it again.
+      expect(yield* Queue.takeAll(listChanges)).toHaveLength(1);
 
       // Disabling it hides both again, without unregistering them. The second change is taken
       // after the first refresh finished, so the enabled check already reflects the empty set.
@@ -996,6 +1011,8 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
       yield* awaitReads(1);
       yield* publishChange();
       yield* awaitReads(1);
+      // One notification for the disable; the refresh that changed nothing sent none.
+      expect(yield* Queue.takeAll(listChanges)).toHaveLength(1);
       const enabledWhen = Context.getOrUndefined(
         server.tools[0]!.annotations,
         McpSchema.EnabledWhen,

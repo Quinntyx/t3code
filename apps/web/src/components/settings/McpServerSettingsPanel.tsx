@@ -11,6 +11,7 @@ import { useState, type ComponentProps } from "react";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -348,7 +349,7 @@ function FieldControl({
     );
   }
   if (field.secret) {
-    // A saved secret is shown only as "saved"; typing replaces it.
+    // A saved secret is shown only as "saved"; typing replaces it, and clearing removes it.
     return (
       <div className="flex w-full max-w-72 items-center gap-2">
         <DraftInput
@@ -365,6 +366,17 @@ function FieldControl({
             onChange(next);
           }}
         />
+        {configuredSecret(entry, field.key) ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Clear ${field.label}`}
+            // An empty secret is what the settings write removes; no separate call is needed.
+            onClick={() => onChange("")}
+          >
+            Clear
+          </Button>
+        ) : null}
       </div>
     );
   }

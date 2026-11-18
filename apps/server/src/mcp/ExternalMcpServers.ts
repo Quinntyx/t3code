@@ -489,28 +489,32 @@ const make = Effect.gen(function* () {
     });
 
     // A child that exits on its own is a failure until a toggle or settings change restarts it.
-    // Detached so it outlives the start scope, which closes when the server is stopped.
+    // Detached so it outlives the start scope, which closes when the server is stopped. Cleanup
+    // yields, so a settings change can start a replacement meanwhile; the write re-checks that this
+    // child still owns the entry, or it would report the replacement failed and withdraw its tools.
     yield* connection.exited.pipe(
       Effect.flatMap((message) =>
-        Ref.get(runtimeStates).pipe(
-          Effect.flatMap((states) =>
-            states.get(entry.id)?.running?.scope === scope
-              ? Scope.close(scope, Exit.void).pipe(
-                  Effect.andThen(
-                    setState(entry.id, {
+        Scope.close(scope, Exit.void).pipe(
+          Effect.andThen(
+            Ref.modify(runtimeStates, (states) =>
+              states.get(entry.id)?.running?.scope === scope
+                ? [
+                    true,
+                    new Map(states).set(entry.id, {
                       status: "failed",
                       stderrTail: stderrTailOf(message),
                       failedEntry: entry,
-                    }),
-                  ),
-                  Effect.andThen(
-                    Effect.logWarning("registered MCP server stopped unexpectedly", {
-                      server: entry.name,
-                      detail: stderrTailOf(message),
-                    }),
-                  ),
-                  Effect.andThen(announce),
-                )
+                    } satisfies ServerRuntimeState),
+                  ]
+                : [false, states],
+            ),
+          ),
+          Effect.flatMap((recorded) =>
+            recorded
+              ? Effect.logWarning("registered MCP server stopped unexpectedly", {
+                  server: entry.name,
+                  detail: stderrTailOf(message),
+                }).pipe(Effect.andThen(announce))
               : Effect.void,
           ),
         ),
