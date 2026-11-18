@@ -110,7 +110,8 @@ jobs:
           set -eu
           apt-get update
           # The DMG background names Helvetica; Liberation Sans is its metric-compatible stand-in.
-          apt-get install -y --no-install-recommends imagemagick librsvg2-bin fonts-liberation curl xz-utils
+          # The shared desktop bundle build also compiles the Linux browser helper against libsecret.
+          apt-get install -y --no-install-recommends imagemagick librsvg2-bin fonts-liberation pkg-config libsecret-1-dev curl xz-utils
           export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target x86_64-apple-darwin
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
