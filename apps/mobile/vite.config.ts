@@ -48,6 +48,7 @@ const reactTests = [
   "src/features/home/thread-swipe-actions.test.tsx",
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/layout/workspace/useSearchScrollRestoration.test.tsx",
+  "src/features/browser/preview-stream.browser.test.ts",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/keyboard/keyboardControllerState.test.tsx",
 ];
