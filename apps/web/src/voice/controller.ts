@@ -9,6 +9,7 @@ import { createVoiceTools, type VoiceEnvironmentView } from "@t3tools/client-run
 import { createEnvironmentRpcCommand } from "@t3tools/client-runtime/state/runtime";
 import { ORCHESTRATION_V2_WS_METHODS, ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentCatalog } from "../connection/catalog";
@@ -55,15 +56,15 @@ const viewsAtom = Atom.make((get): ReadonlyArray<VoiceEnvironmentView> => {
           status: thread.status,
           projectId: thread.projectId,
           activeRunId: thread.activeRunId,
-          archivedAt: thread.archivedAt === null ? null : String(thread.archivedAt),
+          archivedAt: thread.archivedAt === null ? null : DateTime.formatIso(thread.archivedAt),
           latestRunStartedAt:
             thread.latestRunStartedAt === undefined || thread.latestRunStartedAt === null
               ? null
-              : String(thread.latestRunStartedAt),
+              : DateTime.formatIso(thread.latestRunStartedAt),
           latestRunCompletedAt:
             thread.latestRunCompletedAt === undefined || thread.latestRunCompletedAt === null
               ? null
-              : String(thread.latestRunCompletedAt),
+              : DateTime.formatIso(thread.latestRunCompletedAt),
           // What the shell already carries for every listed thread decides whether it needs the user.
           pendingRequest: thread.pendingRuntimeRequest,
           lastError: thread.lastError ?? null,

@@ -53,6 +53,14 @@ type Dispatch = AtomCommand<
     input?: unknown,
   ) => Atom.Atom<boolean>;
 };
+
+const LISTED_THREAD_LIMIT = 100;
+const ACTIVE_THREAD_STATUSES = new Set(["queued", "preparing", "starting", "running", "waiting"]);
+
+/** Threads needing the user first, then work in flight, then everything else. */
+function attentionRank(row: VoiceThreadStatus): number {
+  return row.needsUser ? 0 : ACTIVE_THREAD_STATUSES.has(row.status) ? 1 : 2;
+}
 const decodeCommand = Schema.decodeUnknownSync(OrchestrationV2Command);
 const string = { type: "string" };
 const object = { type: "object" };
@@ -73,7 +81,7 @@ const definitions = [
   ],
   [
     "list_threads",
-    "List visible threads across every environment, or one environment, with project, latest run status and whether each needs the user. Use this to answer how threads are doing.",
+    "List visible threads across every environment, or one environment, with project, latest run status and whether each needs the user. Returns total, needsUser and byStatus counts across every matching thread plus thread rows (threads needing the user and running ones first); truncated is true when rows omit threads, so use the counts for an all-threads answer.",
     { environmentId: string, query: string },
     [],
   ],
@@ -161,10 +169,12 @@ export function createVoiceTools(options: {
       threadId: thread.id,
       title: thread.title,
       status: thread.status,
+      // Same rule as the shell's pending request flags: any open question or approval needs the
+      // user, blocking or not. A credential refresh is the provider's business, not theirs.
       needsUser:
         thread.pendingRequest !== null &&
         thread.pendingRequest !== undefined &&
-        thread.pendingRequest.blocking !== false,
+        thread.pendingRequest.kind !== "auth_refresh",
       lastError: thread.lastError ?? null,
       lastActiveAt: latestRunAt,
     };
@@ -183,14 +193,26 @@ export function createVoiceTools(options: {
             : environments;
         if (!requested.length) throw new Error("Environment is not visible in this client.");
         const query = typeof args.query === "string" ? args.query.toLowerCase() : null;
-        return requested
+        const rows = requested
           .flatMap((entry) =>
             entry.threads
               .filter((thread) => !thread.archivedAt || (query !== null && query.length > 0))
               .filter((thread) => query === null || thread.title.toLowerCase().includes(query))
               .map((thread) => statusRow(entry, thread)),
           )
-          .slice(0, 100);
+          // What the user came for first: threads that need them, then work in flight.
+          .sort((left, right) => attentionRank(left) - attentionRank(right));
+        const byStatus: Record<string, number> = {};
+        for (const row of rows) byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
+        const threads = rows.slice(0, LISTED_THREAD_LIMIT);
+        // The counts cover every match, so a partial row list never reads as the whole picture.
+        return {
+          total: rows.length,
+          truncated: rows.length > threads.length,
+          needsUser: rows.filter((row) => row.needsUser).length,
+          byStatus,
+          threads,
+        };
       }
       if (name === "search_threads") {
         const query = text(args, "query").toLowerCase();
