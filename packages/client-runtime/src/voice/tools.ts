@@ -13,9 +13,34 @@ export interface VoiceEnvironmentView {
   readonly threads: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
+    /** The thread's latest run status, or "idle". */
     readonly status: string;
+    readonly projectId?: string;
     readonly activeRunId?: string | null;
+    readonly archivedAt?: string | null;
+    readonly latestRunStartedAt?: string | null;
+    readonly latestRunCompletedAt?: string | null;
+    readonly pendingRequest?: {
+      readonly id: string;
+      readonly kind: string;
+      readonly blocking?: boolean | undefined;
+    } | null;
+    readonly lastError?: string | null;
   }>;
+}
+
+/** One row per thread for "how are my threads doing" answers. */
+interface VoiceThreadStatus {
+  readonly environmentId: string;
+  readonly environment: string;
+  readonly projectId: string | null;
+  readonly project: string | null;
+  readonly threadId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly needsUser: boolean;
+  readonly lastError: string | null;
+  readonly lastActiveAt: string | null;
 }
 
 type Dispatch = AtomCommand<
@@ -48,7 +73,7 @@ const definitions = [
   ],
   [
     "list_threads",
-    "List visible threads, optionally filtering their titles.",
+    "List visible threads with their project and latest run status. Use this to answer how threads are doing or what needs the user.",
     { environmentId: string, query: string },
     ["environmentId"],
   ],
@@ -122,6 +147,28 @@ export function createVoiceTools(options: {
       throw new Error(`Invalid ${key}`);
     return value.trim();
   };
+  const statusRow = (
+    environment: VoiceEnvironmentView,
+    thread: VoiceEnvironmentView["threads"][number],
+  ): VoiceThreadStatus => {
+    const latestRunAt = thread.latestRunCompletedAt ?? thread.latestRunStartedAt ?? null;
+    return {
+      environmentId: environment.id,
+      environment: environment.label,
+      projectId: thread.projectId ?? null,
+      project:
+        environment.projects.find((project) => project.id === thread.projectId)?.title ?? null,
+      threadId: thread.id,
+      title: thread.title,
+      status: thread.status,
+      needsUser:
+        thread.pendingRequest !== null &&
+        thread.pendingRequest !== undefined &&
+        thread.pendingRequest.blocking !== false,
+      lastError: thread.lastError ?? null,
+      lastActiveAt: latestRunAt,
+    };
+  };
   return {
     declarations,
     async execute(name, args) {
@@ -146,10 +193,17 @@ export function createVoiceTools(options: {
         return environment.threads
           .filter(
             (thread) =>
+              thread.archivedAt === null ||
+              thread.archivedAt === undefined ||
+              (typeof args.query === "string" && args.query.length > 0),
+          )
+          .filter(
+            (thread) =>
               typeof args.query !== "string" ||
               thread.title.toLowerCase().includes(args.query.toLowerCase()),
           )
-          .slice(0, 100);
+          .slice(0, 100)
+          .map((thread) => statusRow(environment, thread));
       let command: Record<string, unknown>;
       let threadId: string;
       if (name === "create_thread") {

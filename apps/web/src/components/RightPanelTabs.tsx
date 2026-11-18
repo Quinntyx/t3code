@@ -930,6 +930,8 @@ function RightPanelTab(
     id: surface.id,
     disabled: props.dragDisabled,
   });
+  // Voice belongs to the app, not this thread, so it never joins the drag order.
+  const dragListeners = surface.kind === "voice" ? {} : listeners;
   const sideChatShell = useQuietThreadShell(
     surface.kind === "side-chat" && props.environmentId !== null
       ? scopeThreadRef(props.environmentId, surface.threadId)
@@ -1035,7 +1037,7 @@ function RightPanelTab(
       onMouseUp={preventTabMiddleButtonDefault}
       onAuxClick={(event) => onAuxClick(event, surface)}
       onContextMenu={(event) => onContextMenu(event, surface)}
-      {...listeners}
+      {...dragListeners}
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
@@ -1408,7 +1410,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <RightPanelTab
                     key={surface.id}
                     surface={surface}
-                    dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
+                    dragDisabled={
+                      !props.onMoveSurface ||
+                      renamingDevice === surface.id ||
+                      surface.kind === "voice"
+                    }
                     active={surface.id === props.activeSurfaceId}
                     pending={props.pendingSurfaceIds.has(surface.id)}
                     title={surfaceTitle(surface, props.previewSessions, props.terminalLabelsById)}

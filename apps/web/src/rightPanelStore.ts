@@ -23,8 +23,11 @@ const RIGHT_PANEL_KINDS = [
   "pull-requests",
   "notebook",
   "side-chat",
-  "voice",
 ] as const;
+/**
+ * Per-thread panel surfaces. Voice is not one: it is a single app-wide surface pinned into every
+ * thread's panel while it is open, so it never lives in `byThreadKey`.
+ */
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type PullRequestDetailTab = "summary" | "guide" | "timeline" | "code";
@@ -36,7 +39,7 @@ export interface DeviceTabTarget {
   name: string;
 }
 
-export type RightPanelSurface =
+export type ThreadRightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
   | { id: "device" | `device:${string}`; kind: "device"; target?: DeviceTabTarget; title?: string }
@@ -79,11 +82,18 @@ export type RightPanelSurface =
     }
   | { id: "pull-requests"; kind: "pull-requests" }
   | { id: "notebook"; kind: "notebook" }
-  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId }
-  | { id: "voice"; kind: "voice" };
+  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
+
+/**
+ * The one app-wide Voice surface. It is pinned into whichever panel is on screen rather than
+ * stored per thread, so it survives navigation and closes only when the user closes it.
+ */
+type VoiceSurface = { readonly id: "voice"; readonly kind: "voice" };
+const VOICE_SURFACE: VoiceSurface = { id: "voice", kind: "voice" };
+export type RightPanelSurface = ThreadRightPanelSurface | VoiceSurface;
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
   EnvironmentId.make("pull-requests-panel"),
@@ -95,7 +105,7 @@ const isPullRequestsPanelKey = (threadKey: string) => threadKey.endsWith(":pull-
 export interface ThreadRightPanelState {
   isOpen: boolean;
   activeSurfaceId: string | null;
-  surfaces: RightPanelSurface[];
+  surfaces: ThreadRightPanelSurface[];
   dismissedDeviceSurfaceIds?: string[];
   maximized?: true;
   proactiveDiffTurnId?: RunId;
@@ -108,6 +118,11 @@ export interface ThreadPanelVisibility {
 
 export interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
+  /** App-wide Voice: open it and every thread's panel shows the Voice tab. */
+  voiceOpen: boolean;
+  voiceActive: boolean;
+  setVoiceOpen: (open: boolean) => void;
+  setVoiceActive: (active: boolean) => void;
   pendingMaximizeThreadKey: string | null;
   requestMaximize: (ref: ScopedThreadRef) => void;
   consumeMaximizeRequest: (ref: ScopedThreadRef) => boolean;
@@ -213,7 +228,7 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 
 const singletonSurface = (
   kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "side-chat">,
-): RightPanelSurface => {
+): ThreadRightPanelSurface => {
   switch (kind) {
     case "notebook":
       return { id: "notebook", kind };
@@ -223,14 +238,12 @@ const singletonSurface = (
       return { id: "files", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
-    case "voice":
-      return { id: "voice", kind };
     case "device":
       return { id: "device", kind };
   }
 };
 
-const browserSurface = (tabId: string | null): RightPanelSurface =>
+const browserSurface = (tabId: string | null): ThreadRightPanelSurface =>
   tabId
     ? { id: `browser:${tabId}`, kind: "preview", resourceId: tabId }
     : { id: "browser:new", kind: "preview", resourceId: null };
@@ -239,7 +252,7 @@ const fileSurface = (
   relativePath: string,
   revealLine: number | null,
   revealRequestId: number,
-): RightPanelSurface => ({
+): ThreadRightPanelSurface => ({
   id: `file:${relativePath}`,
   kind: "file",
   relativePath,
@@ -247,7 +260,7 @@ const fileSurface = (
   revealRequestId,
 });
 
-const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface => ({
+const attachmentSurface = (attachment: ChatFileAttachment): ThreadRightPanelSurface => ({
   id: `attachment:${attachment.id}`,
   kind: "file",
   relativePath: attachment.name,
@@ -256,7 +269,7 @@ const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface =>
   attachment,
 });
 
-const terminalSurface = (terminalId: string): RightPanelSurface => ({
+const terminalSurface = (terminalId: string): ThreadRightPanelSurface => ({
   id: `terminal:${terminalId}`,
   kind: "terminal",
   resourceId: terminalId,
@@ -303,7 +316,7 @@ export function pullRequestSurface(target: {
 
 const upsertSurface = (
   current: ThreadRightPanelState,
-  surface: RightPanelSurface,
+  surface: ThreadRightPanelSurface,
   activate = true,
 ): ThreadRightPanelState => ({
   ...current,
@@ -447,6 +460,8 @@ const userActionOnThread = (
       ],
     };
   }),
+  // Any user action on a thread's panel means the user wants that panel, not the pinned Voice tab.
+  ...(state.voiceActive ? { voiceActive: false } : {}),
   userActionRevisionByThreadKey: {
     ...state.userActionRevisionByThreadKey,
     [threadKey]: (state.userActionRevisionByThreadKey[threadKey] ?? 0) + 1,
@@ -495,9 +510,10 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
-                ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
+                ? validThreadState.surfaces.flatMap<ThreadRightPanelSurface>((surface) => {
                     const kind = (surface as { kind?: string }).kind;
-                    if (kind === "plan" || kind === "agents") return [];
+                    // Voice is app-wide state now, not a thread's surface.
+                    if (kind === "plan" || kind === "agents" || kind === "voice") return [];
                     if (
                       (surface.kind === "file" || surface.kind === "files") &&
                       "folderTrail" in surface &&
@@ -633,6 +649,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
   persist(
     (set, get) => ({
       byThreadKey: {},
+      voiceOpen: false,
+      voiceActive: false,
+      setVoiceOpen: (open) => {
+        if (get().voiceOpen === open) return;
+        set({ voiceOpen: open, voiceActive: open });
+      },
+      setVoiceActive: (active) => {
+        if (!get().voiceOpen || get().voiceActive === active) return;
+        set({ voiceActive: active });
+      },
       pendingMaximizeThreadKey: null,
       requestMaximize: (ref) => set({ pendingMaximizeThreadKey: scopedThreadKey(ref) }),
       consumeMaximizeRequest: (ref) => {
@@ -711,7 +737,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const id =
               `device:${encodeURIComponent(target.hostId)}:${encodeURIComponent(target.deviceId)}` as const;
             if (automatic && current.dismissedDeviceSurfaceIds?.includes(id)) return current;
-            const surface: RightPanelSurface = { id, kind: "device", target };
+            const surface: ThreadRightPanelSurface = { id, kind: "device", target };
             const existing = current.surfaces.find((entry) => entry.id === id);
             const surfaces = existing
               ? current.surfaces.filter((entry) => entry.id !== "device")
@@ -804,7 +830,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             );
             const surfaceId = `file:${relativePath}` as const;
             const existing = withoutStandaloneExplorer.find(
-              (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
+              (surface): surface is Extract<ThreadRightPanelSurface, { kind: "file" }> =>
                 surface.id === surfaceId && surface.kind === "file",
             );
             const surface = fileSurface(
@@ -830,7 +856,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
             if (index < 0) return current;
             const trail = folderTrail === relativePath ? {} : { folderTrail };
-            const target: RightPanelSurface =
+            const target: ThreadRightPanelSurface =
               relativePath === ""
                 ? { ...singletonSurface("files"), ...trail }
                 : { ...fileSurface(relativePath, null, 1), ...trail };
@@ -1246,6 +1272,49 @@ export function selectActiveRightPanel(
   const state = selectThreadRightPanelState(byThreadKey, ref);
   if (!state.isOpen) return null;
   return state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null;
+}
+
+export interface VoicePanelState {
+  readonly open: boolean;
+  readonly active: boolean;
+}
+
+/** What a thread's panel shows once the app-wide Voice surface is pinned into it. */
+export interface RightPanelView {
+  readonly isOpen: boolean;
+  readonly activeSurfaceId: string | null;
+  readonly surfaces: ReadonlyArray<RightPanelSurface>;
+}
+
+export function threadRightPanelView(
+  state: ThreadRightPanelState,
+  voice: VoicePanelState,
+): RightPanelView {
+  if (!voice.open) {
+    return {
+      isOpen: state.isOpen,
+      activeSurfaceId: state.activeSurfaceId,
+      surfaces: state.surfaces,
+    };
+  }
+  // A thread with nothing selected (or with its tab just closed) shows Voice rather than the picker.
+  const threadActive = state.isOpen
+    ? state.surfaces.find((surface) => surface.id === state.activeSurfaceId)
+    : undefined;
+  return {
+    isOpen: true,
+    activeSurfaceId: voice.active || !threadActive ? VOICE_SURFACE.id : state.activeSurfaceId,
+    // Pinned first so the tab keeps one place across every thread.
+    surfaces: [VOICE_SURFACE, ...state.surfaces],
+  };
+}
+
+export function selectThreadRightPanelView(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+  voice: VoicePanelState,
+): RightPanelView {
+  return threadRightPanelView(selectThreadRightPanelState(byThreadKey, ref), voice);
 }
 
 export function selectActiveRightPanelSurface(

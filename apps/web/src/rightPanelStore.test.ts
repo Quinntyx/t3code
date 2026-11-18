@@ -13,6 +13,7 @@ import {
   selectActiveRightPanelSurface,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
+  selectThreadRightPanelView,
   useRightPanelStore,
 } from "./rightPanelStore";
 
@@ -23,6 +24,8 @@ beforeEach(() => {
   useClosedViewStore.setState({ entries: [] });
   useRightPanelStore.setState({
     byThreadKey: {},
+    voiceOpen: false,
+    voiceActive: false,
     threadPanelVisibilityByThreadKey: {},
     userActionRevisionByThreadKey: {},
     closeRevisionByThreadKey: {},
@@ -38,6 +41,75 @@ async function reloadRightPanelStore() {
   await useRightPanelStore.persist.rehydrate();
   expect(useRightPanelStore.persist.hasHydrated()).toBe(true);
 }
+
+describe("global Voice surface", () => {
+  it("pins Voice into every thread's panel and keeps its conversation across navigation", () => {
+    const store = useRightPanelStore.getState();
+    store.setVoiceOpen(true);
+    // A thread that never opened its panel still shows Voice once it is open.
+    const first = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+      open: true,
+      active: true,
+    });
+    expect(first.isOpen).toBe(true);
+    expect(first.activeSurfaceId).toBe("voice");
+    expect(first.surfaces).toEqual([{ id: "voice", kind: "voice" }]);
+    const second = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refB, {
+      open: true,
+      active: true,
+    });
+    expect(second.activeSurfaceId).toBe("voice");
+  });
+
+  it("shows the thread's own surface when another tab is selected, and Voice again when it is", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.setVoiceOpen(true);
+    store.setVoiceActive(false);
+    const view = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+      open: true,
+      active: false,
+    });
+    expect(view.activeSurfaceId).toBe("diff");
+    expect(view.surfaces.map((surface) => surface.id)).toEqual(["voice", "diff"]);
+    store.setVoiceActive(true);
+    expect(
+      selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+        open: true,
+        active: true,
+      }).activeSurfaceId,
+    ).toBe("voice");
+  });
+
+  it("closes for every thread at once and leaves the thread's own surfaces alone", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.setVoiceOpen(true);
+    store.setVoiceOpen(false);
+    const view = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+      open: false,
+      active: false,
+    });
+    expect(view).toEqual({
+      isOpen: true,
+      activeSurfaceId: "diff",
+      surfaces: [{ id: "diff", kind: "diff" }],
+    });
+  });
+
+  it("drops the old per-thread Voice surface during migration", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "voice",
+          surfaces: [{ id: "voice", kind: "voice" }],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([]);
+  });
+});
 
 describe("rightPanelStore", () => {
   it("opens a hosted side chat's panel actions in its parent's panel until unhosted", () => {

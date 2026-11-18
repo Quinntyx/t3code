@@ -45,7 +45,6 @@ import { openMachineHandoff, useMachineHandoffRequest } from "./machineHandoffRe
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
-import { followVoiceInto } from "../voice/controller";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -121,15 +120,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
-import {
-  type SetStateAction,
-  use,
-  useEffect,
-  useEffectEvent,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { useAmbientShimmerProminence } from "~/ambient-shimmer/prominence";
 import { WorkspaceMutationIdContext } from "./chat/ChatMarkdownMedia";
@@ -173,9 +164,9 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { PopoverCreateHandle } from "./ui/popover";
 import {
   selectActiveRightPanel,
-  selectActiveRightPanelSurface,
   selectThreadPanelOpen,
   selectThreadRightPanelState,
+  threadRightPanelView,
   useRightPanelStore,
 } from "../rightPanelStore";
 import { isPreviewSupportedInRuntime, useThreadPreviewState } from "../previewStateStore";
@@ -1044,10 +1035,13 @@ export default function ChatView(props: ChatViewProps) {
   if (anchorRunSettled) {
     setTimelineAnchor({ threadKey: activeThreadKey, messageId: null });
   }
-  const activeRightPanelKind = useRightPanelStore((state) =>
+  // Primitives, not a fresh object: the store compares selector results by identity.
+  const voiceOpen = useRightPanelStore((state) => state.voiceOpen);
+  const voiceActive = useRightPanelStore((state) => state.voiceActive);
+  const threadRightPanelKind = useRightPanelStore((state) =>
     selectActiveRightPanel(state.byThreadKey, activeThreadRef),
   );
-  const diffOpen = activeRightPanelKind === "diff";
+  const diffOpen = threadRightPanelKind === "diff";
   const explicitDiffOpenRef = useRef<ScopedThreadRef | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resets the diff panel store to branch scope when the diff opens without an explicit request
   useLayoutEffect(() => {
@@ -1066,9 +1060,16 @@ export default function ChatView(props: ChatViewProps) {
     selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
   const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
-  const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
-  );
+  // Voice is app-wide and pinned into whichever panel is on screen.
+  const rightPanelView = threadRightPanelView(rightPanelState, {
+    open: voiceOpen,
+    active: voiceActive,
+  });
+  const activeRightPanelSurface = rightPanelView.isOpen
+    ? (rightPanelView.surfaces.find((surface) => surface.id === rightPanelView.activeSurfaceId) ??
+      null)
+    : null;
+  const activeRightPanelKind = activeRightPanelSurface?.kind ?? threadRightPanelKind;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const resolvePreviewRuntimeTabId = activeThreadRef
@@ -1084,25 +1085,12 @@ export default function ChatView(props: ChatViewProps) {
   );
   const canReuseTerminal = activeThreadKnownSessionsRaw !== null;
   const previewPanelOpen = activeRightPanelKind === "preview" && browserAvailable;
-  const rightPanelOpen = rightPanelState.isOpen;
-  const voiceVisible = rightPanelOpen && activeRightPanelSurface?.kind === "voice";
-  const voiceWasVisibleRef = useRef(false);
-  const followVoice = useEffectEvent(() => {
-    if (activeThreadRef && voiceWasVisibleRef.current) followVoiceInto(activeThreadRef);
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Voice is client-wide; it follows navigation into the next thread when it was on screen.
-  useEffect(() => {
-    if (activeThreadKey) followVoice();
-  }, [activeThreadKey]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records whether Voice was on screen, read by the navigation effect above.
-  useEffect(() => {
-    voiceWasVisibleRef.current = voiceVisible;
-  }, [voiceVisible]);
+  const rightPanelOpen = rightPanelView.isOpen;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const rightPanelPresenceValue = {
     activeSurface: activeRightPanelSurface,
-    surfaces: rightPanelState.surfaces,
+    surfaces: rightPanelView.surfaces,
   };
   const rightPanelPresence = usePanelPresence(
     rightPanelOpen && activeThreadRef !== null,

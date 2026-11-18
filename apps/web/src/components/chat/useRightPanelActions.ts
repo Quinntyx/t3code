@@ -36,10 +36,11 @@ import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
 import {
+  activateVoice,
   connectVoiceMicrophone,
   disconnectVoice,
   muteVoice,
-  toggleVoice,
+  setVoiceOpen,
 } from "../../voice/controller";
 interface RightPanelActionsInput {
   readonly activeThreadRef: ScopedThreadRef | null;
@@ -159,7 +160,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const addPullRequestsSurfaceStable = useStableCallback(addPullRequestsSurface);
   const addVoiceSurfaceStable = useStableCallback(() => {
-    if (activeThreadRef) useRightPanelStore.getState().open(activeThreadRef, "voice");
+    if (activeThreadRef) activateVoice();
   });
   const addDeviceSurface = () => {
     if (!activeThreadRef) return;
@@ -176,6 +177,11 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const openFileSurfaceStable = useStableCallback(openFileSurface);
   const closePreviewPanel = () => {
+    if (useRightPanelStore.getState().voiceOpen) {
+      // Voice is app-wide and keeps every panel open while it is; closing the panel ends it.
+      setVoiceOpen(false);
+      return;
+    }
     if (activeThreadRef) {
       if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
         usePreviewMiniPlayerStore
@@ -210,6 +216,12 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const togglePreviewPanelStable = useStableCallback(togglePreviewPanel);
   const activateRightPanelSurface = (surface: RightPanelSurface) => {
     if (!activeThreadRef) return;
+    if (surface.kind === "voice") {
+      activateVoice();
+      return;
+    }
+    // Voice is app-wide: picking another tab shows this thread's surface without closing it.
+    useRightPanelStore.getState().setVoiceActive(false);
     explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
       surfaceKind: surface.kind,
       diffOpen,
@@ -349,7 +361,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     "diff.toggle": () => onToggleDiff(),
     "voice.toggle": ({ event }) => {
       if (!activeThreadRef) return false;
-      if (!event.repeat) toggleVoice(activeThreadRef);
+      if (!event.repeat) setVoiceOpen(!useRightPanelStore.getState().voiceOpen);
     },
     "voice.connect": ({ event }) => {
       if (!event.repeat) void connectVoiceMicrophone().catch(() => {});

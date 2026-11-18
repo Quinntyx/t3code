@@ -136,6 +136,11 @@ export function useRightPanelSurfaceClose(input: {
 
   const closeSurface = useStableCallback((surface: RightPanelSurface) => {
     if (!threadRef) return;
+    if (surface.kind === "voice") {
+      // Voice is app-wide, so its tab closes the one surface rather than this thread's panel.
+      useRightPanelStore.getState().setVoiceOpen(false);
+      return;
+    }
     if (surface.kind === "preview") {
       closeSurfaces([surface]);
       return;
@@ -156,13 +161,15 @@ export function useRightPanelSurfaceClose(input: {
       },
     );
   });
+  // Bulk closes only ever touch this thread's surfaces; the app-wide Voice tab has its own close.
   const closeOtherSurfaces = useStableCallback((surface: RightPanelSurface) =>
     closeSurfaces(surfaces.filter((entry) => entry.id !== surface.id)),
   );
   const closeSurfacesToRight = useStableCallback((surface: RightPanelSurface) => {
     const surfaceIndex = surfaces.findIndex((entry) => entry.id === surface.id);
     if (surfaceIndex < 0) return;
-    closeSurfaces(surfaces.slice(surfaceIndex + 1));
+    const toRight = new Set(surfaces.slice(surfaceIndex + 1));
+    closeSurfaces(surfaces.filter((entry) => toRight.has(entry)));
   });
   const closeAllSurfaces = useStableCallback(() => closeSurfaces(surfaces));
 

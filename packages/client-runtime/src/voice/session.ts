@@ -80,6 +80,8 @@ export function createVoiceSession(options: {
   let openRevision = 0;
   let monitorId: string | null = null;
   let unsubscribe: (() => void) | null = null;
+  /** The streaming message this turn's fragments extend; null starts a new message. */
+  let streaming: { readonly id: string; readonly role: "user" | "voice" } | null = null;
   const update = (patch: Partial<VoiceSessionState>) => {
     state = { ...state, ...patch };
     for (const listener of listeners) listener();
@@ -89,6 +91,32 @@ export function createVoiceSession(options: {
       update({
         messages: [...state.messages, { id: String(++nextMessageId), role, text }].slice(-200),
       });
+  };
+  /**
+   * Live transcription streams a turn as many small fragments. They concatenate verbatim (Gemini
+   * supplies their own leading spaces) into one message, so a reply reads as a paragraph.
+   */
+  const stream = (role: "user" | "voice", text: string) => {
+    if (!text) return;
+    if (streaming?.role === role) {
+      const id = streaming.id;
+      update({
+        messages: state.messages.map((message) =>
+          message.id === id ? { ...message, text: message.text + text } : message,
+        ),
+      });
+      return;
+    }
+    // A turn's first fragment can still carry the separating space from the previous fragment.
+    const opening = text.trimStart();
+    if (!opening) return;
+    const message = { id: String(++nextMessageId), role, text: opening };
+    streaming = { id: message.id, role };
+    update({ messages: [...state.messages, message].slice(-200) });
+  };
+  /** Ends the current streaming message so the next fragment starts a new one. */
+  const endStream = () => {
+    streaming = null;
   };
   const requestMonitor = () =>
     connection?.sendClientContent({
@@ -135,15 +163,19 @@ export function createVoiceSession(options: {
   };
   const receive = (message: LiveServerMessage, generation: number) => {
     if (generation !== epoch) return;
-    if (message.serverContent?.interrupted) options.onInterrupt?.();
     const content = message.serverContent;
-    if (content?.inputTranscription?.text) append("user", content.inputTranscription.text);
-    if (content?.outputTranscription?.text) append("voice", content.outputTranscription.text);
+    if (content?.interrupted) {
+      endStream();
+      options.onInterrupt?.();
+    }
+    if (content?.inputTranscription?.text) stream("user", content.inputTranscription.text);
+    if (content?.outputTranscription?.text) stream("voice", content.outputTranscription.text);
     for (const part of content?.modelTurn?.parts ?? []) {
       if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/"))
         options.onAudio?.(part.inlineData.data);
       if (part.text && !content?.outputTranscription) append("voice", part.text);
     }
+    if (content?.turnComplete || content?.generationComplete) endStream();
     if (monitorId && message.toolCallCancellation?.ids?.includes(monitorId)) {
       monitorId = null;
       requestMonitor();
@@ -213,6 +245,7 @@ export function createVoiceSession(options: {
     connection = null;
     connecting = null;
     monitorId = null;
+    endStream();
     options.onInterrupt?.();
     update({
       status: state.status === "disabled" ? "disabled" : "idle",
@@ -257,7 +290,7 @@ export function createVoiceSession(options: {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction:
-            "You are Voice, an assistant inside this T3 client. Use tools only for environments and threads this client can see. Never invent capabilities or claim a notification was heard by another client. Call monitor_threads once at session start and keep the non-blocking generator open; re-establish it if cancelled. Read pending requests before answering them. Ask the user before destructive work or permission decisions. Text and voice are one conversation.",
+            "You are Voice, an assistant inside this T3 client. Use tools only for environments and threads this client can see. Never invent capabilities or claim a notification was heard by another client. When the user asks how their threads are doing, what needs them, or for a status update, call list_environments and then list_threads and answer from its status, needsUser and lastError fields; never guess a thread's state. Call read_thread before answering about a thread's work or a pending request. Call monitor_threads once at session start and keep the non-blocking generator open; re-establish it if cancelled. Read pending requests before answering them. Ask the user before destructive work or permission decisions. Text and voice are one conversation.",
           tools: [
             {
               functionDeclarations: [
@@ -333,6 +366,7 @@ export function createVoiceSession(options: {
       unsubscribe?.();
       unsubscribe = null;
       disconnect();
+      streaming = null;
       update({ open: false });
     },
     connect,
@@ -341,6 +375,8 @@ export function createVoiceSession(options: {
       if (!text.trim()) return;
       await connect();
       if (!connection) return;
+      // Typed text is its own message; it never joins a streamed transcript.
+      endStream();
       append("user", text.trim());
       connection.sendClientContent({
         turns: [{ role: "user", parts: [{ text: text.trim() }] }],

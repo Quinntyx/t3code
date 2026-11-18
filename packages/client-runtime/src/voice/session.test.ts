@@ -80,6 +80,56 @@ const notice = (id: string, urgency: "interrupt" | "when_idle" | "silent" = "whe
 });
 
 describe("client Voice", () => {
+  it("merges streamed transcription fragments into one readable message per turn", async () => {
+    const state = setup();
+    await state.session.open();
+    // Measured Live output fragments carry their own leading spaces and arrive a few words at a
+    // time; one message per fragment renders as a column of two-word paragraphs.
+    for (const text of ["Event sourcing", " lets", " you replay", " events."])
+      state.receive({ serverContent: { outputTranscription: { text } } });
+    expect(state.session.getSnapshot().messages).toMatchObject([
+      { role: "voice", text: "Event sourcing lets you replay events." },
+    ]);
+    state.receive({ serverContent: { outputTranscription: { text: " Then inspect them." } } });
+    expect(state.session.getSnapshot().messages).toHaveLength(1);
+    expect(state.session.getSnapshot().messages[0]?.text).toBe(
+      "Event sourcing lets you replay events. Then inspect them.",
+    );
+    state.receive({ serverContent: { turnComplete: true } });
+    state.receive({ serverContent: { outputTranscription: { text: "A new turn." } } });
+    expect(state.session.getSnapshot().messages).toMatchObject([
+      { role: "voice", text: "Event sourcing lets you replay events. Then inspect them." },
+      { role: "voice", text: "A new turn." },
+    ]);
+    state.session.close();
+  });
+
+  it("keeps user speech, voice turns and typed text as separate messages", async () => {
+    const state = setup();
+    await state.session.open();
+    await state.session.sendText("how are my threads doing");
+    state.receive({ serverContent: { inputTranscription: { text: " and then" } } });
+    state.receive({ serverContent: { inputTranscription: { text: " the diff" } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Two" } } });
+    state.receive({ serverContent: { outputTranscription: { text: " running." } } });
+    state.receive({ serverContent: { inputTranscription: { text: "Thanks" } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Anytime." } } });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "how are my threads doing"],
+      ["user", "and then the diff"],
+      ["voice", "Two running."],
+      ["user", "Thanks"],
+      ["voice", "Anytime."],
+    ]);
+    state.receive({ serverContent: { interrupted: true } });
+    state.receive({ serverContent: { outputTranscription: { text: "Cut off." } } });
+    expect(state.session.getSnapshot().messages.at(-1)).toMatchObject({
+      role: "voice",
+      text: "Cut off.",
+    });
+    state.session.close();
+  });
+
   it("records bounded tool progress and the created thread target without retaining tool results", async () => {
     const state = setup("fake-key", true, false, {
       threadId: "created",
