@@ -63,7 +63,7 @@ import {
 
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import { bulkCloseAvailability, type RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { readLocalApi } from "~/localApi";
@@ -1227,8 +1227,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     const api = readLocalApi();
     if (!api) return;
 
-    const surfaceIndex = props.surfaces.findIndex((entry) => entry.id === surface.id);
-    if (surfaceIndex < 0) return;
+    if (!props.surfaces.some((entry) => entry.id === surface.id)) return;
+    // Enablement comes from the same targets the closes use, on the tabs actually displayed.
+    const bulk = bulkCloseAvailability(props.surfaces, surface.id);
 
     const items: ContextMenuItem<TabContextMenuAction>[] = [];
     if (surface.kind === "device" && props.onRenameDevice)
@@ -1253,19 +1254,17 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {
         id: "close-others",
         label: "Close others",
-        disabled: props.surfaces.filter((entry) => entry.kind !== "voice").length <= 1,
+        disabled: !bulk.others,
       },
       {
         id: "close-to-right",
         label: "Close to the right",
-        disabled:
-          props.surfaces.slice(surfaceIndex + 1).filter((entry) => entry.kind !== "voice")
-            .length === 0,
+        disabled: !bulk.right,
       },
       {
         id: "close-all",
         label: "Close all",
-        disabled: props.surfaces.filter((entry) => entry.kind !== "voice").length === 0,
+        disabled: !bulk.all,
       },
     );
 

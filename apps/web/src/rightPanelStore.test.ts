@@ -1,10 +1,12 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { type EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { useClosedViewStore } from "./closedViewStore";
 import { reopenClosedView } from "./reopenClosedView";
 import {
+  bulkCloseAvailability,
+  bulkCloseTargets,
   hostRightPanel,
   migratePersistedRightPanelState,
   pullRequestSurface,
@@ -108,6 +110,87 @@ describe("global Voice surface", () => {
       },
     });
     expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([]);
+  });
+
+  it("composes the toggle against what the panel shows, not the tab saved behind Voice", () => {
+    const store = useRightPanelStore.getState();
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.open(refA, "diff");
+    store.setVoiceOpen(true);
+    // Diff is saved and active but Voice is what is on screen, so a Diff toggle shows Diff.
+    store.toggle(refA, "diff");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+    expect(
+      selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+        open: true,
+        active: false,
+      }).activeSurfaceId,
+    ).toBe("diff");
+    // Now Diff really is on screen, so the next toggle closes the panel.
+    store.toggle(refA, "diff");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+    ).toBe(false);
+  });
+
+  it("leaves Voice on for tab closes and background threads' changes", () => {
+    const store = useRightPanelStore.getState();
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.open(refA, "diff");
+    store.open(refA, "files");
+    store.setVoiceOpen(true);
+    store.closeSurface(refA, "files");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+    // A thread that is not on screen never moves the visible panel off Voice.
+    store.open(refB, "diff");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+    // The thread on screen picking its own surface does.
+    store.activateSurface(refA, "diff");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+  });
+
+  it("reveals a thread's surface over Voice only for the thread on screen", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-a");
+    store.openBrowser(refB, "tab-b");
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.setVoiceOpen(true);
+    const revision = store.getUserActionRevision(refB);
+    store.revealSurface(refB, "browser:tab-b");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+    // An agent reveal is not a user choice, so it never suppresses proactive panels.
+    expect(store.getUserActionRevision(refB)).toBe(revision);
+    store.revealSurface(refA, "browser:tab-a");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+  });
+
+  it("resolves bulk closes against the displayed tabs with Voice pinned first", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.openFile(refA, "src/app.ts");
+    const displayed = [
+      { id: "voice", kind: "voice" } as const,
+      ...selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ];
+    // On the pinned Voice tab, "close to the right" closes the thread tabs after it.
+    expect(bulkCloseAvailability(displayed, "voice").right).toBe(true);
+    expect(bulkCloseTargets(displayed, "voice", "right").map((surface) => surface.id)).toEqual([
+      "diff",
+      "file:src/app.ts",
+    ]);
+    // "Close others" from Voice closes the thread tabs too, even when there is only one.
+    const voiceAndDiff = displayed.slice(0, 2);
+    expect(bulkCloseAvailability(voiceAndDiff, "voice").others).toBe(true);
+    expect(bulkCloseTargets(voiceAndDiff, "voice", "others").map((surface) => surface.id)).toEqual([
+      "diff",
+    ]);
+    // From Diff, the only other tab is Voice, which a bulk close may not touch.
+    expect(bulkCloseAvailability(voiceAndDiff, "diff").others).toBe(false);
+    expect(bulkCloseAvailability(voiceAndDiff, "diff").all).toBe(true);
+    // Voice is never a bulk-close target.
+    expect(bulkCloseTargets(displayed, "diff", "all").map((surface) => surface.kind)).not.toContain(
+      "voice",
+    );
   });
 });
 

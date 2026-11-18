@@ -177,11 +177,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const openFileSurfaceStable = useStableCallback(openFileSurface);
   const closePreviewPanel = () => {
-    if (useRightPanelStore.getState().voiceOpen) {
-      // Voice is app-wide and keeps every panel open while it is; closing the panel ends it.
-      setVoiceOpen(false);
-      return;
-    }
+    // Voice is app-wide and keeps every panel open while it is; closing the panel ends it and
+    // still runs the normal close, so the surface underneath does not stay on screen.
+    if (useRightPanelStore.getState().voiceOpen) setVoiceOpen(false);
     if (activeThreadRef) {
       if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
         usePreviewMiniPlayerStore

@@ -14,6 +14,7 @@ import { focusPanelTerminalAfterClose } from "../lib/terminalFocus";
 import { readLocalApi } from "../localApi";
 import { setActivePreviewTab, useThreadPreviewState } from "../previewStateStore";
 import {
+  bulkCloseTargets,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
   useRightPanelStore,
@@ -36,8 +37,10 @@ import { useStableCallback } from "./useStableCallback";
 export function useRightPanelSurfaceClose(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly terminalLabelsById: ReadonlyMap<string, string>;
+  /** The tabs the panel displays, Voice included; bulk closes order and filter against these. */
+  readonly displayedSurfaces: ReadonlyArray<RightPanelSurface>;
 }) {
-  const { threadRef, terminalLabelsById } = input;
+  const { threadRef, terminalLabelsById, displayedSurfaces } = input;
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const deleteThread = useAtomCommand(threadEnvironment.delete, "side chat delete");
   const canOperatePreview = useEnvironmentScope(
@@ -47,9 +50,6 @@ export function useRightPanelSurfaceClose(input: {
   const previewState = useThreadPreviewState(threadRef);
   const terminalActions = useThreadTerminalActions(threadRef);
   const storeCloseTerminal = useTerminalUiStateStore((state) => state.closeTerminal);
-  const surfaces = useRightPanelStore(
-    (state) => selectThreadRightPanelState(state.byThreadKey, threadRef).surfaces,
-  );
 
   const releaseSurfaceResources = (ref: ScopedThreadRef, surface: RightPanelSurface) => {
     // Without preview access, server state remains until an authorized close or restart.
@@ -161,17 +161,17 @@ export function useRightPanelSurfaceClose(input: {
       },
     );
   });
-  // Bulk closes only ever touch this thread's surfaces; the app-wide Voice tab has its own close.
+  // Bulk closes resolve against the displayed ordering, Voice pinned first, and only ever close
+  // this thread's surfaces: the app-wide Voice tab has its own close.
   const closeOtherSurfaces = useStableCallback((surface: RightPanelSurface) =>
-    closeSurfaces(surfaces.filter((entry) => entry.id !== surface.id)),
+    closeSurfaces(bulkCloseTargets(displayedSurfaces, surface.id, "others")),
   );
-  const closeSurfacesToRight = useStableCallback((surface: RightPanelSurface) => {
-    const surfaceIndex = surfaces.findIndex((entry) => entry.id === surface.id);
-    if (surfaceIndex < 0) return;
-    const toRight = new Set(surfaces.slice(surfaceIndex + 1));
-    closeSurfaces(surfaces.filter((entry) => toRight.has(entry)));
-  });
-  const closeAllSurfaces = useStableCallback(() => closeSurfaces(surfaces));
+  const closeSurfacesToRight = useStableCallback((surface: RightPanelSurface) =>
+    closeSurfaces(bulkCloseTargets(displayedSurfaces, surface.id, "right")),
+  );
+  const closeAllSurfaces = useStableCallback(() =>
+    closeSurfaces(bulkCloseTargets(displayedSurfaces, "", "all")),
+  );
 
   return { closeSurface, closeOtherSurfaces, closeSurfacesToRight, closeAllSurfaces };
 }

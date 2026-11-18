@@ -1038,10 +1038,21 @@ export default function ChatView(props: ChatViewProps) {
   // Primitives, not a fresh object: the store compares selector results by identity.
   const voiceOpen = useRightPanelStore((state) => state.voiceOpen);
   const voiceActive = useRightPanelStore((state) => state.voiceActive);
-  const threadRightPanelKind = useRightPanelStore((state) =>
-    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
+  const rightPanelState = useRightPanelStore((state) =>
+    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
-  const diffOpen = threadRightPanelKind === "diff";
+  const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
+  // Voice is app-wide and pinned into whichever panel is on screen.
+  const rightPanelView = threadRightPanelView(rightPanelState, {
+    open: voiceOpen,
+    active: voiceActive,
+  });
+  const activeRightPanelSurface = rightPanelView.isOpen
+    ? (rightPanelView.surfaces.find((surface) => surface.id === rightPanelView.activeSurfaceId) ??
+      null)
+    : null;
+  // What the panel shows, not what the thread saved: Diff saved behind Voice is still closed.
+  const diffOpen = activeRightPanelSurface?.kind === "diff";
   const explicitDiffOpenRef = useRef<ScopedThreadRef | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resets the diff panel store to branch scope when the diff opens without an explicit request
   useLayoutEffect(() => {
@@ -1056,19 +1067,15 @@ export default function ChatView(props: ChatViewProps) {
       useDiffPanelStore.getState().selectGitScope(activeThreadRef, "branch");
     }
   }, [activeThreadRef, diffOpen]);
-  const rightPanelState = useRightPanelStore((state) =>
-    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
+  // Only the thread the main panel shows takes the panel off Voice when its own surface is
+  // selected; an embedded side chat's actions land in its parent's panel instead.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes the on-screen thread so the panel store can scope Voice changes to it
+  useLayoutEffect(() => {
+    if (!embedded) useRightPanelStore.getState().setVisibleThread(activeThreadKey);
+  }, [activeThreadKey, embedded]);
+  const threadRightPanelKind = useRightPanelStore((state) =>
+    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
   );
-  const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
-  // Voice is app-wide and pinned into whichever panel is on screen.
-  const rightPanelView = threadRightPanelView(rightPanelState, {
-    open: voiceOpen,
-    active: voiceActive,
-  });
-  const activeRightPanelSurface = rightPanelView.isOpen
-    ? (rightPanelView.surfaces.find((surface) => surface.id === rightPanelView.activeSurfaceId) ??
-      null)
-    : null;
   const activeRightPanelKind = activeRightPanelSurface?.kind ?? threadRightPanelKind;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
@@ -2052,6 +2059,7 @@ export default function ChatView(props: ChatViewProps) {
   } = useRightPanelSurfaceClose({
     threadRef: activeThreadRef,
     terminalLabelsById: activeTerminalLabelsById,
+    displayedSurfaces: rightPanelView.surfaces,
   });
   const closeRightPanelSurfaceStable = closeRightPanelSurface;
   const persistThreadSettingsForNextTurn = async (input: {
