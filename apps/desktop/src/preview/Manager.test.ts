@@ -94,14 +94,16 @@ describe("previewWindowOpenAction", () => {
     }
   });
 
-  it("keeps a form POST with a body on the in-place path", () => {
-    const postBody = { data: [], contentType: "application/x-www-form-urlencoded" };
-    expect(
-      PreviewManager.previewWindowOpenAction({
-        ...details({ disposition: "foreground-tab" }),
-        postBody,
-      }),
-    ).toBe("navigate");
+  it("keeps the original form POST when opening a new tab", () => {
+    const postBody = {
+      data: [{ type: "rawData" as const, bytes: Buffer.from("login_hint=example") }],
+      contentType: "application/x-www-form-urlencoded",
+    };
+    for (const disposition of ["foreground-tab", "background-tab"] as const) {
+      expect(
+        PreviewManager.previewWindowOpenAction({ ...details({ disposition }), postBody }),
+      ).toBe("popup");
+    }
   });
 
   it("does not hand a window to schemes that cannot be hardened", () => {
