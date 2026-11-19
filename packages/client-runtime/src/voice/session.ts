@@ -84,6 +84,8 @@ export function createVoiceSession(options: {
   let streaming: Record<"user" | "voice", string | null> = { user: null, voice: null };
   /** Drops the model's spoken and written reply to the internal setup turn, if it is that turn. */
   let suppressSetupReply = false;
+  /** Typed messages held back while the setup reply is hidden. */
+  let heldInput: string[] = [];
   const update = (patch: Partial<VoiceSessionState>) => {
     state = { ...state, ...patch };
     for (const listener of listeners) listener();
@@ -139,6 +141,17 @@ export function createVoiceSession(options: {
       turnComplete: true,
     });
   };
+  /** Sends what the user typed while the setup turn was still arriving. */
+  const sendHeldInput = () => {
+    if (!heldInput.length || !connection) return;
+    const held = heldInput;
+    heldInput = [];
+    for (const text of held)
+      connection.sendClientContent({
+        turns: [{ role: "user", parts: [{ text }] }],
+        turnComplete: true,
+      });
+  };
   const flush = () => {
     if (!state.open || !connection || !monitorId) return;
     const notifications = options.feed.unseen();
@@ -171,11 +184,10 @@ export function createVoiceSession(options: {
   const receive = (message: LiveServerMessage, generation: number) => {
     if (generation !== epoch) return;
     const content = message.serverContent;
-    const userSpoke = Boolean(content?.inputTranscription?.text);
-    // The user talking over the internal setup reply means they want an answer, not silence.
-    if (userSpoke) suppressSetupReply = false;
     if (content?.interrupted) {
       endStream();
+      suppressSetupReply = false;
+      sendHeldInput();
       options.onInterrupt?.();
     }
     if (content?.inputTranscription) {
@@ -183,6 +195,8 @@ export function createVoiceSession(options: {
       if (content.inputTranscription.finished) endStream("user");
     }
     if (content?.outputTranscription) {
+      // A new reply starting after user speech closes that utterance: Gemini can omit `finished`.
+      if (streaming.user !== null && streaming.voice === null) endStream("user");
       if (suppressSetupReply)
         // Still finish the turn, just never show or speak it.
         endStream("voice");
@@ -197,8 +211,10 @@ export function createVoiceSession(options: {
         append("voice", part.text);
     }
     if (content?.turnComplete || content?.generationComplete) {
-      endStream();
+      // The model's end of turn says nothing about the independent input transcription.
+      endStream("voice");
       suppressSetupReply = false;
+      sendHeldInput();
     }
     if (monitorId && message.toolCallCancellation?.ids?.includes(monitorId)) {
       monitorId = null;
@@ -271,6 +287,7 @@ export function createVoiceSession(options: {
     monitorId = null;
     endStream();
     suppressSetupReply = false;
+    heldInput = [];
     options.onInterrupt?.();
     update({
       status: state.status === "disabled" ? "disabled" : "idle",
@@ -401,13 +418,16 @@ export function createVoiceSession(options: {
       if (!connection) return;
       // Typed text is its own message; it never joins a streamed transcript.
       endStream();
-      // A typed message can follow the setup request before its reply arrives: show that answer.
-      suppressSetupReply = false;
-      append("user", text.trim());
-      connection.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: text.trim() }] }],
-        turnComplete: true,
-      });
+      const typed = text.trim();
+      append("user", typed);
+      // The setup turn's reply must stay hidden to its own end, so typing shows at once but waits
+      // to reach Gemini until then; otherwise the reply would answer this text and leak.
+      if (suppressSetupReply) heldInput.push(typed);
+      else
+        connection.sendClientContent({
+          turns: [{ role: "user", parts: [{ text: typed }] }],
+          turnComplete: true,
+        });
     },
     sendAudio(data: string) {
       connection?.sendRealtimeInput({ audio: { data, mimeType: "audio/pcm;rate=16000" } });
