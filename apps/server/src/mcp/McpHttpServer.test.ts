@@ -18,6 +18,7 @@ import {
   type RegisteredMcpServersState,
   ThreadId,
 } from "@t3tools/contracts";
+import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1150,41 +1151,55 @@ it.effect("skips a proxied tool whose name a native tool already uses", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const skipped: Array<{ tool: string; reason: string }> = [];
-      const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
-      const nativeCollision = new McpSchema.Tool({
-        name: "fixture_echo",
-        description: "A native tool that already has this name.",
-        inputSchema: { type: "object", properties: {} },
-      });
+      const changeQueue = yield* Queue.unbounded<RegisteredMcpServersState>();
+      const activeTools = yield* Ref.make<ReadonlyArray<ExternalMcpServers.ExternalMcpTool>>([]);
+      // Every refresh reads the server's tools, so a read marks one refresh reaching that point.
+      const reads = yield* Queue.unbounded<void>();
+      const readTools = Ref.get(activeTools).pipe(Effect.tap(() => Queue.offer(reads, undefined)));
+      const awaitReads = (count: number) =>
+        Effect.forEach(Array.from({ length: count }), () => Queue.take(reads), { discard: true });
+      const publishChange = () => Queue.offer(changeQueue, { servers: [] }).pipe(Effect.asVoid);
       const context = yield* Layer.build(
         layerRegisteredMcpTest({
           external: layerExternalMcpStub({
-            tools: Effect.succeed(fixtureTools),
-            changes: Stream.fromPubSub(changes),
+            tools: readTools,
+            changes: Stream.fromQueue(changeQueue),
             skipped: (tool, reason) => skipped.push({ tool: tool.name, reason }),
           }),
         }),
       );
-      // A toolkit's tool is already on the server when the proxy registers, as in a real build.
-      const server = Context.get(context, McpServer.McpServer);
-      // oxlint-disable-next-line t3code/no-raw-mcp-registration -- stands in for a toolkit this test does not build
-      yield* server.addTool({
-        tool: nativeCollision,
-        annotations: Context.empty(),
-        handle: () => Effect.die("unused"),
+      // A native tool's name is reserved even before its toolkit builds, which may be after this.
+      const collision = (description: string): ExternalMcpServers.ExternalMcpTool => ({
+        serverId: "fixture",
+        serverName: "Fixture",
+        originalName: "render",
+        name: HTML_RENDER_TOOL_NAME,
+        descriptor: new McpSchema.Tool({
+          name: HTML_RENDER_TOOL_NAME,
+          description,
+          inputSchema: { type: "object", properties: {} },
+        }),
       });
 
-      // The native tool is already one, so one more registration completes the milestone.
-      const { registered } = yield* startRegisteredMcpProxy(context, 2);
-      yield* Deferred.await(registered);
-
-      expect(
-        server.tools.filter(({ tool }) => tool.name === "fixture_echo").map(({ tool }) => tool),
-      ).toEqual([nativeCollision]);
-      expect(server.tools.map(({ tool }) => tool.name)).toContain("fixture_set");
+      // The proxy claims the name first: nothing of the native build is on the server yet.
+      yield* Ref.set(activeTools, [collision("First claim."), fixtureTools[1]!]);
+      const { server } = yield* startRegisteredMcpProxy(context, 1);
+      yield* awaitReads(1);
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_set"]);
       expect(skipped).toEqual([
-        { tool: "fixture_echo", reason: expect.stringContaining("another tool uses") },
+        { tool: HTML_RENDER_TOOL_NAME, reason: expect.stringContaining("another tool uses") },
       ]);
+
+      // A descriptor change is no reason to give the proxy the name either.
+      yield* Ref.set(activeTools, [collision("A changed descriptor."), fixtureTools[1]!]);
+      yield* publishChange();
+      yield* awaitReads(1);
+      // The barrier change is read after the first refresh finished, so its claim was decided.
+      yield* publishChange();
+      yield* awaitReads(1);
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_set"]);
+      expect(skipped.length).toBeGreaterThanOrEqual(2);
+      expect(skipped.every(({ tool }) => tool === HTML_RENDER_TOOL_NAME)).toBe(true);
     }),
   ),
 );

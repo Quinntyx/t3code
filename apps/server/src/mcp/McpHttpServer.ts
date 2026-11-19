@@ -1047,6 +1047,30 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/**
+ * Every name the toolkits `layerTools` merges register, read without building them: a proxy and a
+ * toolkit build concurrently, so a name that is already registered says nothing about the build.
+ */
+const nativeToolNames: ReadonlySet<string> = new Set(
+  [
+    HtmlRenderToolkit,
+    HtmlPreviewToolkit,
+    PreviewStandardToolkit,
+    PreviewSnapshotToolkit,
+    OrchestratorToolkit,
+    ThreadToolkit,
+    ConnectorsToolkit,
+    AttachmentToolkit,
+    ProjectToolkit,
+    EnvironmentToolkit,
+    PreviewControlsToolkit,
+    WorktreeToolkit,
+    PullRequestsToolkit,
+    DeviceStandardToolkit,
+    DeviceScreenshotToolkit,
+  ].flatMap((toolkit) => Object.keys(toolkit.tools)),
+);
+
 /** Each registered MCP server's tools as native T3 tools, with its schema and annotations. */
 const registeredMcpToolRegistration = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -1147,16 +1171,9 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
       for (const tool of tools) {
         if (!claimed.has(tool.name)) claimed.set(tool.name, tool);
       }
-      // A registration replaces one already using its name, so a name a native tool owns is skipped.
-      const taken = new Set(server.tools.map(({ tool }) => tool.name));
       for (const [name, tool] of claimed) {
-        const key = advertisedKey(tool);
-        const current = registered.get(name);
-        // Re-added when the owner or what it advertises changed; `addTool` replaces by name.
-        if (current !== undefined && current.serverId === tool.serverId && current.key === key) {
-          continue;
-        }
-        if (current === undefined && taken.has(name)) {
+        // Native names are reserved whatever built first, and a descriptor change cannot take one.
+        if (nativeToolNames.has(name)) {
           yield* Effect.logWarning("skipped a registered MCP tool with a taken name", {
             server: tool.serverName,
             tool: name,
@@ -1164,9 +1181,14 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
           yield* externalServers.skipTool(tool, `as ${name}, which another tool uses`);
           continue;
         }
+        const key = advertisedKey(tool);
+        const current = registered.get(name);
+        // Re-added when the owner or what it advertises changed; `addTool` replaces by name.
+        if (current !== undefined && current.serverId === tool.serverId && current.key === key) {
+          continue;
+        }
         registered.set(name, { serverId: tool.serverId, key });
         yield* add(tool);
-        taken.add(name);
       }
       // Enabling or disabling changes `tools/list` without adding a tool, which is what announces
       // one; a harness caching the list would otherwise keep the tools as they were.

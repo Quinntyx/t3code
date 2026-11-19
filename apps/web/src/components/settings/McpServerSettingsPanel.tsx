@@ -27,6 +27,13 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 const valueOf = (config: Readonly<Record<string, McpConfigValue>>, field: McpConfigField) =>
   config[field.key] ?? field.default;
 
+/** This entry's edited fields, kept until the server-backed entry for another id replaces it. */
+interface McpEntryDraft {
+  readonly id: string;
+  readonly toolName: string;
+  readonly config: Readonly<Record<string, McpConfigValue>>;
+}
+
 /**
  * A server's own settings form, generated from what its document declares. Values live in the
  * entry's `config`, so a save is one settings write.
@@ -45,6 +52,9 @@ export function McpServerSettingsPanel() {
   const runtime = data?.servers.find((server) => server.id === serverId);
   const entry = settings.registeredMcpServers.find((server) => server.id === serverId);
   const [notFound] = useState(() => entry === undefined);
+  // A save is built from the last server-backed settings, so edits made before it round-trips
+  // would revert each other. The draft holds this entry's fields and every save starts from it.
+  const [draft, setDraft] = useState<McpEntryDraft | null>(null);
 
   // The server runs on the machine that registered it, so these settings are that machine's.
   if (scope.kind !== "environment" || environment === null) {
@@ -76,12 +86,37 @@ export function McpServerSettingsPanel() {
     );
   }
 
-  const save = (next: RegisteredMcpServerEntry) =>
+  // A draft belongs to one entry, so another server's page starts from that entry's own settings.
+  if (draft !== null && draft.id !== entry.id) setDraft(null);
+  const current: McpEntryDraft = draft ?? {
+    id: entry.id,
+    toolName: entry.toolName,
+    config: entry.config,
+  };
+  const shownEntry = { ...entry, toolName: current.toolName, config: current.config };
+  const save = (edit: {
+    readonly toolName?: string;
+    readonly config?: Readonly<Record<string, McpConfigValue>>;
+    readonly enabled?: boolean;
+  }) => {
+    setDraft({
+      id: entry.id,
+      toolName: edit.toolName ?? current.toolName,
+      config: edit.config ?? current.config,
+    });
     updateSettings({
       registeredMcpServers: settings.registeredMcpServers.map((candidate) =>
-        candidate.id === next.id ? next : candidate,
+        candidate.id === entry.id
+          ? {
+              ...candidate,
+              toolName: edit.toolName ?? current.toolName,
+              config: edit.config ?? current.config,
+              ...(edit.enabled === undefined ? {} : { enabled: edit.enabled }),
+            }
+          : candidate,
       ),
     });
+  };
 
   const parsed = parseMcpRegistration(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
@@ -104,7 +139,7 @@ export function McpServerSettingsPanel() {
           control={
             <Switch
               checked={entry.enabled}
-              onCheckedChange={(next) => save({ ...entry, enabled: Boolean(next) })}
+              onCheckedChange={(next) => save({ enabled: Boolean(next) })}
               aria-label="Run this MCP server"
             />
           }
@@ -113,16 +148,16 @@ export function McpServerSettingsPanel() {
           serverScoped
           settingKeys={["registeredMcpServers"]}
           title="Tool name"
-          description={`Agents call this server's tools as ${entry.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
+          description={`Agents call this server's tools as ${current.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
           control={
             <ToolNameInput
               // A route change to another server must not keep this one's draft.
               key={entry.id}
-              value={entry.toolName}
+              value={current.toolName}
               others={settings.registeredMcpServers.filter(
                 (candidate) => candidate.id !== entry.id,
               )}
-              onCommit={(toolName) => save({ ...entry, toolName })}
+              onCommit={(toolName) => save({ toolName })}
             />
           }
         />
@@ -162,23 +197,22 @@ export function McpServerSettingsPanel() {
               title={field.label}
               description={field.description ?? field.key}
               status={
-                field.secret && configuredSecret(entry, field.key) ? (
+                field.secret && configuredSecret(shownEntry, field.key) ? (
                   <Badge variant="outline">Saved</Badge>
                 ) : undefined
               }
               control={
                 <FieldControl
                   field={field}
-                  entry={entry}
+                  entry={shownEntry}
                   onChange={(value) =>
                     save({
-                      ...entry,
                       config:
                         value === undefined
                           ? Object.fromEntries(
-                              Object.entries(entry.config).filter(([key]) => key !== field.key),
+                              Object.entries(current.config).filter(([key]) => key !== field.key),
                             )
-                          : { ...entry.config, [field.key]: value },
+                          : { ...current.config, [field.key]: value },
                     })
                   }
                 />
@@ -331,7 +365,7 @@ function FieldControl({
   }
   if (field.type === "number") {
     return (
-      <Input
+      <DraftInput
         size="sm"
         type="number"
         className="w-28"
@@ -339,11 +373,9 @@ function FieldControl({
         min={field.min}
         max={field.max}
         value={typeof value === "number" ? String(value) : ""}
-        onChange={(event) => {
-          const next = Number(event.currentTarget.value);
-          onChange(
-            event.currentTarget.value.trim() === "" || Number.isNaN(next) ? undefined : next,
-          );
+        onCommit={(next) => {
+          const parsed = Number(next);
+          onChange(next.trim() === "" || Number.isNaN(parsed) ? undefined : parsed);
         }}
       />
     );

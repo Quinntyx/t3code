@@ -1490,6 +1490,30 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
               maxConcurrentSessions: 2,
             },
           ],
+          // A declared secret is one whatever the form sent: a number reaches the store as text.
+          registeredMcpServers: [
+            {
+              id: "notes",
+              name: "Notes",
+              toolName: "notes",
+              enabled: true,
+              source: {
+                kind: "server.json",
+                document: {
+                  name: "acme/notes",
+                  packages: [
+                    {
+                      registryType: "npm",
+                      identifier: "@acme/notes-mcp",
+                      transport: { type: "stdio" },
+                      environmentVariables: [{ name: "NOTES_TOKEN", isSecret: true }],
+                    },
+                  ],
+                },
+              },
+              config: { NOTES_TOKEN: 123456 },
+            },
+          ],
         });
         const values = [
           "config-secret",
@@ -1499,6 +1523,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           "gitcafe-secret",
           "quota-secret",
           "expo-secret",
+          "123456",
         ];
         const client = ServerSettingsModule.redactServerSettingsForClient(saved, {
           secretReferences: true,
@@ -1516,6 +1541,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           sourceControlHosts: client.sourceControlHosts,
           usageLimitSources: client.usageLimitSources,
           easDeviceHosts: client.easDeviceHosts,
+          registeredMcpServers: client.registeredMcpServers,
         });
         for (const value of values) assert.include(JSON.stringify(echoed), value);
         const renamed = yield* service.updateProviderInstance({
@@ -1567,6 +1593,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           }),
           sourceControlHostSecretName({ kind: "gitcafe", field: "token", serverHost: null }),
           "usage-limit-source-aHVi",
+          "registered-mcp-bm90ZXM-Tk9URVNfVE9LRU4",
         ];
         for (const name of secretNames) {
           assert.isTrue(Option.isSome(yield* store.get(name)), name);
@@ -1599,6 +1626,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
             gitcafe: { token: "" },
           },
           usageLimitSources: { [UsageLimitSourceId.make("hub")]: null },
+          registeredMcpServers: [],
         });
         for (const name of secretNames) {
           assert.isTrue(Option.isNone(yield* store.get(name)));
