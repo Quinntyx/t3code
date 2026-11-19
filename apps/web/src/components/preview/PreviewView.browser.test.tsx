@@ -387,6 +387,35 @@ describe("PreviewView", () => {
     await expect.element(refresh).not.toHaveAttribute("aria-description");
   });
 
+  it("gates hard reload in the preview menu on stream control and sends it over the stream", async () => {
+    setup();
+    await using _screen = await renderServerPreview();
+    const menuTrigger = page.getByRole("button", { name: "Preview menu" });
+
+    await setStreamControl("unclaimed");
+    await userEvent.click(menuTrigger);
+    const hardReload = page.getByRole("menuitem", { name: "Hard reload" });
+    await expect.element(hardReload).toHaveAttribute("aria-disabled", "true");
+    await userEvent.keyboard("{Escape}");
+
+    await setStreamControl("you");
+    await userEvent.click(menuTrigger);
+    await expect.element(hardReload).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(hardReload);
+    expect(mocks.streamSend).toHaveBeenCalledWith({ type: "reload", ignoreCache: true });
+  });
+
+  it("disables hard reload in the preview menu on an idle server tab even with control", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Idle" };
+    await using _screen = await renderServerPreview();
+    await setStreamControl("you");
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    await expect
+      .element(page.getByRole("menuitem", { name: "Hard reload" }))
+      .toHaveAttribute("aria-disabled", "true");
+  });
+
   it.each(["mailto:alice@example.com", "http://"])(
     "reports rejected address %s without navigating or recording it",
     async (address) => {

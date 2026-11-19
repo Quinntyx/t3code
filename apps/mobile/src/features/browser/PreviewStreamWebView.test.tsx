@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { act, type ReactNode } from "react";
+import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -17,6 +17,7 @@ type TextProps = {
 const mocks = vi.hoisted(() => ({
   onMessage: null as ((event: { nativeEvent: { data: string } }) => void) | null,
   injected: [] as string[],
+  webViewMounts: 0,
   accessState: {
     access: {
       httpBase: "https://environment.test/api/preview",
@@ -61,6 +62,9 @@ vi.mock("react-native-webview", () => ({
     readonly ref?: { current: { injectJavaScript: (script: string) => void } | null };
     readonly onMessage?: (event: { nativeEvent: { data: string } }) => void;
   }) => {
+    useEffect(() => {
+      mocks.webViewMounts += 1;
+    }, []);
     mocks.onMessage = onMessage ?? null;
     if (ref) {
       ref.current = {
@@ -130,6 +134,7 @@ function mountView(
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mocks.onMessage = null;
   mocks.injected.length = 0;
+  mocks.webViewMounts = 0;
   mocks.accessState = {
     access:
       props.access !== undefined
@@ -147,23 +152,29 @@ function mountView(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  const renderElement = () => (
+    <PreviewStreamWebView
+      environmentId={"env-1" as EnvironmentId}
+      threadId="thread-1"
+      tabId="tab-1"
+      interactive={!props.compact}
+      background="#000"
+      environmentLabel="build-box"
+      compact={props.compact}
+      onStreamingChange={props.onStreamingChange}
+      onErrorChange={props.onErrorChange}
+    />
+  );
   act(() => {
-    root.render(
-      <PreviewStreamWebView
-        environmentId={"env-1" as EnvironmentId}
-        threadId="thread-1"
-        tabId="tab-1"
-        interactive={!props.compact}
-        background="#000"
-        environmentLabel="build-box"
-        compact={props.compact}
-        onStreamingChange={props.onStreamingChange}
-        onErrorChange={props.onErrorChange}
-      />,
-    );
+    root.render(renderElement());
   });
   return {
     container,
+    rerender() {
+      act(() => {
+        root.render(renderElement());
+      });
+    },
     cleanup() {
       act(() => root.unmount());
       container.remove();
@@ -288,6 +299,70 @@ it("reports terminal access errors without spinning in compact mode", () => {
     expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
     expect(container.textContent).toContain("Unavailable");
     expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
+it("refreshes stream access in place after mid-session unauthorized refusal without remounting", () => {
+  const { container, rerender, cleanup } = mountView();
+  try {
+    expect(mocks.webViewMounts).toBe(1);
+    const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
+
+    act(() => {
+      emit({ type: "status", status: "connecting" });
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+
+    act(() => {
+      emit({ type: "status", status: "connecting" });
+      emit({ type: "unauthorized" });
+    });
+    expect(mocks.accessState.retryAfter).toHaveBeenCalledWith(0);
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
+
+    mocks.accessState = {
+      ...mocks.accessState,
+      access: {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "fresh-ticket" },
+      },
+    };
+    rerender();
+
+    expect(mocks.webViewMounts).toBe(1);
+    expect(
+      mocks.injected.some(
+        (script) =>
+          script.includes("window.T3PreviewStream?.updateAccess(") &&
+          script.includes('"fresh-ticket"'),
+      ),
+    ).toBe(true);
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
+    expect(container.textContent).not.toContain("Connecting to remote browser");
+
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 2,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
   } finally {
     cleanup();
   }

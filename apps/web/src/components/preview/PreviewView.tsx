@@ -463,7 +463,14 @@ export function PreviewView({
   };
   const moreMenuActions: PreviewMoreMenuActions | null = serverOwnsRendering
     ? {
-        hardReload: () => void adjustServerTab({ hardReload: true }),
+        hardReload: () => {
+          if (isServerTab) {
+            if (refreshDisabled || serverInputDisabled) return;
+            serverSurfaceRef.current?.reload({ ignoreCache: true });
+            return;
+          }
+          void adjustServerTab({ hardReload: true });
+        },
         setColorScheme: (colorScheme) => void adjustServerTab({ colorScheme }),
         zoomIn: handleZoomIn,
         zoomOut: handleZoomOut,
@@ -970,6 +977,7 @@ export function PreviewView({
                 runtimeTabId !== null &&
                 (serverOwnsRendering || (desktopOverlay?.hasWebContents ?? false))
               }
+              hardReloadDisabled={isServerTab ? refreshDisabled || serverInputDisabled : false}
               actions={moreMenuActions}
               {...(moveTarget
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }

@@ -45,6 +45,7 @@ const AGENT_CURSOR_SVG =
 interface Viewer {
   readonly stop: () => void;
   readonly command: (input: PreviewStreamInput) => void;
+  readonly updateAccess: (access: PreviewStreamConfiguration["access"]) => void;
   readonly togglePictureInPicture: () => void;
 }
 
@@ -59,6 +60,10 @@ export function command(input: PreviewStreamInput) {
   activeViewer?.command(input);
 }
 
+export function updateAccess(access: PreviewStreamConfiguration["access"]) {
+  activeViewer?.updateAccess(access);
+}
+
 export function pictureInPicture() {
   activeViewer?.togglePictureInPicture();
 }
@@ -70,6 +75,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     window.ReactNativeWebView.postMessage(JSON.stringify(message));
   };
   const { interactive } = configuration;
+  let access = configuration.access;
   document.body.style.background = configuration.background;
   const container = document.createElement("div");
   const canvas = document.createElement("canvas");
@@ -170,7 +176,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     if (!cap || stopped) return;
     const next = createPreviewStreamClient(
       {
-        access: configuration.access,
+        access,
         threadId: configuration.threadId,
         tabId: configuration.tabId,
         maxWidth: cap.width,
@@ -717,6 +723,11 @@ export function start(configuration: PreviewStreamConfiguration) {
     command: (message) => {
       if (message.type === "text" && !streaming) return;
       send(message);
+    },
+    updateAccess: (nextAccess) => {
+      access = nextAccess;
+      if (stopped) return;
+      connect();
     },
     togglePictureInPicture,
   };

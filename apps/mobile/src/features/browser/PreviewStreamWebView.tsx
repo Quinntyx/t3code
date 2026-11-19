@@ -220,15 +220,16 @@ function AuthorizedPreviewStream({
   ...props
 }: NativeStreamConfiguration & NativeStreamBridge) {
   const [attempt, setAttempt] = useState(0);
-  const [previousAccess, setPreviousAccess] = useState(props.access);
-  // Wait for refreshed access, including cookie credentials with unchanged JSON.
-  if (props.access !== previousAccess) {
-    setPreviousAccess(props.access);
-    setAttempt((current) => current + 1);
-  }
   const processRetried = useRef(false);
   const unauthorized = useRef(0);
-  const configuration = JSON.stringify({
+  const documentKey = JSON.stringify({
+    threadId: props.threadId,
+    tabId: props.tabId,
+    interactive: props.interactive,
+    background: props.background,
+    reuseNearbyTouchProbe: Platform.OS === "ios",
+  });
+  const initialConfiguration = JSON.stringify({
     access: props.access,
     threadId: props.threadId,
     tabId: props.tabId,
@@ -238,10 +239,11 @@ function AuthorizedPreviewStream({
   } satisfies PreviewStreamConfiguration);
   return (
     <PreviewStreamDocumentView
-      key={`${attempt}:${configuration}`}
+      key={`${attempt}:${documentKey}`}
       {...props}
       ref={ref}
-      configuration={configuration}
+      access={props.access}
+      initialConfiguration={initialConfiguration}
       onUnauthorized={() => {
         const refusals = ++unauthorized.current;
         if (refusals >= MAX_REFUSALS) return false;
@@ -251,6 +253,7 @@ function AuthorizedPreviewStream({
       onRetry={() => {
         processRetried.current = false;
         unauthorized.current = 0;
+        setAttempt((current) => current + 1);
         props.onUnauthorized();
       }}
       onStreaming={() => {
@@ -269,7 +272,8 @@ function AuthorizedPreviewStream({
 
 function PreviewStreamDocumentView({
   ref,
-  configuration,
+  access,
+  initialConfiguration,
   background,
   compact,
   pdfUri,
@@ -285,7 +289,8 @@ function PreviewStreamDocumentView({
   onStreaming,
   onRecoverProcess,
 }: Omit<NativeStreamBridge, "onUnauthorized" | "onRefused"> & {
-  readonly configuration: string;
+  readonly access: PreviewStreamConfiguration["access"];
+  readonly initialConfiguration: string;
   readonly background: string;
   readonly onUnauthorized: () => boolean;
   readonly onRetry: () => void;
@@ -295,9 +300,11 @@ function PreviewStreamDocumentView({
   const webView = useRef<WebView<object>>(null);
   const active = useRef(false);
   const failed = useRef(false);
+  const bootstrapped = useRef(false);
+  const appliedAccess = useRef(access);
   const bootstrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error">("connecting");
-  // Survives mid-session reconnects because only a target or attempt change remounts this view.
+  // Survives mid-session reconnects and access refreshes because only a target or attempt change remounts this view.
   const [hasStreamed, setHasStreamed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
@@ -374,10 +381,20 @@ function PreviewStreamDocumentView({
       streamEnded();
     };
   }, []);
-  const source = {
-    html: previewStreamDocument(configuration, previewStreamScript),
+  // Push refreshed credentials into the live WebView so mid-session reconnects keep the painted frame.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- forwards refreshed stream access into the imperative WebView bridge without remounting the canvas
+  useLayoutEffect(() => {
+    if (!active.current || failed.current || !bootstrapped.current) return;
+    if (appliedAccess.current === access) return;
+    appliedAccess.current = access;
+    webView.current?.injectJavaScript(
+      `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
+    );
+  }, [access]);
+  const [source] = useState(() => ({
+    html: previewStreamDocument(initialConfiguration, previewStreamScript),
     baseUrl: Platform.OS === "android" ? "https://localhost/" : "file:///",
-  };
+  }));
   useImperativeHandle(ref, () => ({
     command,
     paste,
@@ -448,6 +465,21 @@ function PreviewStreamDocumentView({
             if (!active.current || failed.current) return;
             const message = previewStreamMessage(event.nativeEvent.data);
             if (message === null) return;
+            const wasBootstrapped = bootstrapped.current;
+            bootstrapped.current = true;
+            clearBootstrapTimer();
+            if (
+              !wasBootstrapped &&
+              appliedAccess.current !== access &&
+              message.type !== "gone" &&
+              message.type !== "hostSetup" &&
+              !(message.type === "status" && message.status === "error")
+            ) {
+              appliedAccess.current = access;
+              webView.current?.injectJavaScript(
+                `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
+              );
+            }
             switch (message.type) {
               case "control": {
                 setControl(message);
@@ -486,8 +518,7 @@ function PreviewStreamDocumentView({
               case "pictureInPicture":
                 onPictureInPicture?.(message, message.detail);
                 return;
-              case "status":
-                clearBootstrapTimer();
+              case "status": {
                 if (message.status === "error") {
                   fail(message.detail ?? "Browser stream failed.");
                   return;
@@ -502,6 +533,7 @@ function PreviewStreamDocumentView({
                 }
                 onStreamingChange?.(message.status === "streaming");
                 if (message.status === "streaming") onStreaming();
+              }
             }
           }}
         />

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 
-import { command, start, stop } from "./preview-stream.browser";
+import { command, start, stop, updateAccess } from "./preview-stream.browser";
 
 const JPEG_FRAME = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
 
@@ -8,8 +8,10 @@ class TestSocket extends EventTarget {
   static OPEN = 1;
   readyState = TestSocket.OPEN;
   sent: Array<unknown> = [];
-  constructor(sockets: TestSocket[]) {
+  readonly url: string;
+  constructor(sockets: TestSocket[], url: string) {
     super();
+    this.url = url;
     sockets.push(this);
   }
   send(data: string) {
@@ -39,8 +41,8 @@ function mountMobileStream(reuseNearbyTouchProbe = false) {
   const sockets: TestSocket[] = [];
   const posted: Array<Record<string, unknown>> = [];
   class BoundSocket extends TestSocket {
-    constructor() {
-      super(sockets);
+    constructor(url: string) {
+      super(sockets, url);
     }
   }
   vi.useFakeTimers();
@@ -359,6 +361,66 @@ it("reports connecting on disconnect when control arrived before the first frame
 
     socket.disconnect();
     expect(harness.posted).toContainEqual({ type: "status", status: "connecting" });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("reconnects with refreshed access via updateAccess while keeping input gated until a replacement frame paints", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    harness.posted.length = 0;
+    updateAccess({
+      httpBase: "https://environment.test/api/preview",
+      wsBase: "wss://environment.test/api/preview",
+      credentials: false,
+      query: { wsTicket: "fresh-ticket" },
+    });
+
+    expect(harness.posted).toContainEqual({ type: "status", status: "connecting" });
+    const second = harness.sockets[1]!;
+    expect(second.url).toContain("wsTicket=fresh-ticket");
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    second.sent.length = 0;
+    expect(input.disabled).toBe(true);
+    tapCanvas(canvas, 40);
+    command({ type: "text", text: "blocked" });
+    expect(
+      second.sent.filter((entry) => {
+        const type = (entry as { type?: string }).type;
+        return type === "mouse" || type === "text";
+      }),
+    ).toEqual([]);
+
+    second.receiveFrame();
+    await flushMicrotasks();
+    expect(harness.posted).toContainEqual({ type: "status", status: "streaming" });
+    expect(input.disabled).toBe(false);
+    command({ type: "text", text: "allowed" });
+    expect(second.sent).toContainEqual({ type: "text", text: "allowed" });
   } finally {
     harness.cleanup();
   }

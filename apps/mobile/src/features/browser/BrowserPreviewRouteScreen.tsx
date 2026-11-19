@@ -245,6 +245,11 @@ function BrowserAddressBar({
           environmentId={environmentId}
           tab={tab}
           streaming={streaming}
+          onHardReload={
+            canControl && tab.navStatus._tag !== "Idle"
+              ? () => onCommand({ type: "reload", ignoreCache: true })
+              : undefined
+          }
           onPaste={streaming && canControl ? onPaste : undefined}
         />
       </View>

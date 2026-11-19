@@ -42,12 +42,14 @@ export function BrowserTabMenu({
   environmentId,
   tab,
   streaming,
+  onHardReload,
   onPaste,
 }: {
   readonly environmentId: EnvironmentId;
   readonly tab: PreviewSessionSnapshot;
   readonly streaming: boolean;
-  readonly onPaste?: () => void;
+  readonly onHardReload?: (() => void) | undefined;
+  readonly onPaste?: (() => void) | undefined;
 }) {
   const adjust = useAtomCommand(previewEnvironment.adjust, "browser tab change");
   const resize = useAtomCommand(previewEnvironment.resize, "browser viewport change");
@@ -76,7 +78,12 @@ export function BrowserTabMenu({
   };
   const actions: MenuAction[] = [
     ...(onPaste ? [{ id: "paste", title: "Paste", image: "doc.on.clipboard" }] : []),
-    { id: "hard-reload", title: "Hard reload", image: "arrow.clockwise.circle" },
+    {
+      id: "hard-reload",
+      title: "Hard reload",
+      image: "arrow.clockwise.circle",
+      attributes: { disabled: !onHardReload },
+    },
     {
       id: "appearance",
       title: "Appearance",
@@ -132,7 +139,7 @@ export function BrowserTabMenu({
       return;
     }
     if (id === "paste") return onPaste?.();
-    if (id === "hard-reload") return void run({ hardReload: true });
+    if (id === "hard-reload") return onHardReload?.();
     if (id === "zoom:in") return void run({ zoomFactor: zoomTo(1) });
     if (id === "zoom:out") return void run({ zoomFactor: zoomTo(-1) });
     if (id === "zoom:reset") return void run({ zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR });
@@ -156,9 +163,8 @@ export function BrowserTabMenu({
 
   return (
     <Menu
-      // Remount when streaming changes, so an open menu never keeps offering
-      // the other state's actions.
-      key={streaming ? "streaming" : "idle"}
+      // Remount when stream or control actions change so an open menu never keeps stale items.
+      key={`${streaming ? "streaming" : "idle"}:${onHardReload ? "reload" : "no-reload"}:${onPaste ? "paste" : "no-paste"}`}
       accessible
       accessibilityLabel="Browser tab options"
       accessibilityRole="button"
