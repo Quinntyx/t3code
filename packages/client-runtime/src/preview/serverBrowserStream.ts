@@ -28,18 +28,62 @@ export interface PreviewStreamControl {
   };
 }
 
-export const previewStreamControlLabel = (control: PreviewStreamControl | null): string =>
-  !control
-    ? "Connecting..."
-    : !control.canOperate
-      ? "Read-only"
-      : control.controller === "you"
-        ? "You have control"
-        : control.controller === "agent"
-          ? "Agent has control"
-          : control.controller === "another-viewer"
-            ? "Another viewer has control"
-            : "Watching";
+export type PreviewStreamPhase = "connecting" | "awaiting-frame" | "live" | "reconnecting";
+
+export const previewStreamPhase = (
+  control: PreviewStreamControl | null,
+  hasFrame: boolean,
+): PreviewStreamPhase =>
+  hasFrame
+    ? control !== null
+      ? "live"
+      : "reconnecting"
+    : control !== null
+      ? "awaiting-frame"
+      : "connecting";
+
+export const previewStreamStatusLabel = (
+  phase: PreviewStreamPhase,
+  control: PreviewStreamControl | null,
+): string => {
+  switch (phase) {
+    case "connecting":
+      return "Connecting to remote stream…";
+    case "awaiting-frame":
+      return "Waiting for video frame…";
+    case "reconnecting":
+      return "Reconnecting stream…";
+    case "live":
+      return !control
+        ? "Connecting to remote stream…"
+        : !control.canOperate
+          ? "Read-only"
+          : control.controller === "you"
+            ? "You have control"
+            : control.controller === "agent"
+              ? "Agent has control"
+              : control.controller === "another-viewer"
+                ? "Another viewer has control"
+                : "Watching";
+  }
+};
+
+export const previewStreamOverlayDetail = (
+  phase: PreviewStreamPhase,
+  environmentLabel?: string,
+): string => {
+  switch (phase) {
+    case "awaiting-frame":
+      return "Waiting for first frame…";
+    case "reconnecting":
+      return "Reconnecting to remote browser…";
+    case "connecting":
+    case "live": {
+      const label = environmentLabel?.trim();
+      return label ? `Starting video stream from ${label}…` : "Starting video stream…";
+    }
+  }
+};
 
 const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["dialog"] =>
   value === null ||

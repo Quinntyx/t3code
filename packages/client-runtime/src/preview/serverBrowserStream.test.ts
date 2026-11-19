@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createPreviewStreamClient, type PreviewStreamControl } from "./serverBrowserStream.ts";
+import {
+  createPreviewStreamClient,
+  previewStreamOverlayDetail,
+  previewStreamPhase,
+  previewStreamStatusLabel,
+  type PreviewStreamControl,
+} from "./serverBrowserStream.ts";
 
 class FakeSocket extends EventTarget {
   static readonly OPEN = 1;
@@ -189,5 +195,40 @@ describe("preview stream agent pointer", () => {
       y: 50,
       sequence: 2,
     });
+  });
+});
+
+describe("preview stream phase", () => {
+  const owned: PreviewStreamControl = {
+    canOperate: true,
+    controller: "you",
+    generation: 1,
+    dialog: null,
+  };
+
+  it("distinguishes initial connect, awaiting first frame, live, and mid-session reconnect", () => {
+    expect(previewStreamPhase(null, false)).toBe("connecting");
+    expect(previewStreamPhase(owned, false)).toBe("awaiting-frame");
+    expect(previewStreamPhase(owned, true)).toBe("live");
+    expect(previewStreamPhase(null, true)).toBe("reconnecting");
+  });
+
+  it("never reports ownership before a frame is painted and names the host when connecting", () => {
+    expect(previewStreamStatusLabel("connecting", null)).toBe("Connecting to remote stream…");
+    expect(previewStreamStatusLabel("awaiting-frame", owned)).toBe("Waiting for video frame…");
+    expect(previewStreamStatusLabel("live", owned)).toBe("You have control");
+    expect(previewStreamStatusLabel("live", { ...owned, canOperate: false })).toBe("Read-only");
+    expect(previewStreamStatusLabel("reconnecting", null)).toBe("Reconnecting stream…");
+
+    expect(previewStreamOverlayDetail("connecting", "work-vps")).toBe(
+      "Starting video stream from work-vps…",
+    );
+    expect(previewStreamOverlayDetail("connecting", "  ")).toBe("Starting video stream…");
+    expect(previewStreamOverlayDetail("awaiting-frame", "work-vps")).toBe(
+      "Waiting for first frame…",
+    );
+    expect(previewStreamOverlayDetail("reconnecting", "work-vps")).toBe(
+      "Reconnecting to remote browser…",
+    );
   });
 });

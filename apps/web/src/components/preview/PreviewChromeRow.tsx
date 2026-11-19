@@ -26,6 +26,7 @@ interface Props {
   canGoBack: boolean;
   canGoForward: boolean;
   refreshDisabled: boolean;
+  refreshDisabledReason?: string | undefined;
   inputDisabled?: boolean | undefined;
   /** Owned by the caller so its shortcut handler can focus the address bar directly. */
   urlInputRef: RefObject<HTMLInputElement | null>;
@@ -56,6 +57,7 @@ export function PreviewChromeRow({
   canGoBack,
   canGoForward,
   refreshDisabled,
+  refreshDisabledReason,
   inputDisabled,
   urlInputRef: inputRef,
   onBack,
@@ -130,21 +132,25 @@ export function PreviewChromeRow({
             <TooltipPopup>Forward</TooltipPopup>
           </Tooltip>
           <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={refreshDisabled ? NOOP : onRefresh}
-                  disabled={refreshDisabled}
-                  aria-label={loading ? "Stop" : "Refresh"}
-                  type="button"
-                />
-              }
-            >
-              <RefreshIcon refreshing={loading} />
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={refreshDisabled ? NOOP : onRefresh}
+                disabled={refreshDisabled}
+                aria-label="Refresh"
+                type="button"
+              >
+                <RefreshIcon refreshing={loading} />
+              </Button>
             </TooltipTrigger>
-            <TooltipPopup>{loading ? "Loading…" : "Refresh"}</TooltipPopup>
+            <TooltipPopup>
+              {loading
+                ? "Loading…"
+                : refreshDisabled && refreshDisabledReason
+                  ? refreshDisabledReason
+                  : "Refresh"}
+            </TooltipPopup>
           </Tooltip>
         </div>
 

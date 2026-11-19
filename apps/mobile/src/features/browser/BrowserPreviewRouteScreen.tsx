@@ -13,6 +13,7 @@ import { ControlPill } from "../../components/ui/ControlPill";
 import { useAppForeground } from "../../lib/appState";
 
 import { useThreadServerBrowserTabs } from "../../state/preview";
+import { useEnvironmentPresentation } from "../../state/presentation";
 import { usePreparedConnection } from "../../state/session";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { BrowserTabMenu } from "./BrowserTabMenu";
@@ -67,6 +68,7 @@ function BrowserPreviewScreen({
   const [canControl, setCanControl] = useState(false);
   const streamRef = useRef<PreviewStreamRef>(null);
   const { tabs, loaded } = useThreadServerBrowserTabs({ environmentId, threadId, enabled: true });
+  const environment = useEnvironmentPresentation(environmentId);
   const tab = tabs.find((entry) => entry.tabId === selectedTabId) ?? latestBrowserTab(tabs);
   const pdfUri =
     tab?.navStatus._tag === "Success" ? previewPdfAssetUrl(tab.navStatus.url, httpBaseUrl) : null;
@@ -151,6 +153,7 @@ function BrowserPreviewScreen({
               threadId={threadId}
               tabId={tab.tabId}
               pdfUri={pdfUri}
+              environmentLabel={environment.presentation?.entry.target.label}
               ref={streamRef}
               interactive
               background={themeVariables["--color-sheet-solid"]}
@@ -189,6 +192,7 @@ function BrowserAddressBar({
   readonly onPaste: () => void;
 }) {
   const url = browserTabUrl(tab);
+  const loading = tab.navStatus._tag === "Loading";
   const [draft, setDraft] = useState<string | null>(null);
   const submit = () => {
     const value = draft ?? url;
@@ -200,48 +204,51 @@ function BrowserAddressBar({
     }
   };
   return (
-    <View className="flex-row items-center gap-1 px-2 pb-2">
-      <ControlPill
-        icon="chevron.left"
-        accessibilityLabel="Back"
-        disabled={!ready || !tab.canGoBack}
-        onPress={() => onCommand({ type: "history", delta: -1 })}
-      />
-      <ControlPill
-        icon="chevron.right"
-        accessibilityLabel="Forward"
-        disabled={!ready || !tab.canGoForward}
-        onPress={() => onCommand({ type: "history", delta: 1 })}
-      />
-      <TextInput
-        accessibilityLabel="Address"
-        editable={ready}
-        value={draft ?? url}
-        onChangeText={setDraft}
-        onBlur={() => setDraft(null)}
-        onSubmitEditing={submit}
-        placeholder="Enter a URL"
-        placeholderTextColorClassName="accent-placeholder"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        returnKeyType="go"
-        selectTextOnFocus
-        lineBreakModeIOS="tail"
-        className="h-10 min-w-0 flex-1 rounded-full border border-input-border bg-input px-4 font-sans text-sm text-foreground"
-      />
-      <ControlPill
-        icon="arrow.clockwise"
-        accessibilityLabel="Reload page"
-        disabled={!ready}
-        onPress={() => onCommand({ type: "reload" })}
-      />
-      <BrowserTabMenu
-        environmentId={environmentId}
-        tab={tab}
-        streaming={streaming}
-        onPaste={ready ? onPaste : undefined}
-      />
+    <View>
+      <View className="flex-row items-center gap-1 px-2 pb-2">
+        <ControlPill
+          icon="chevron.left"
+          accessibilityLabel="Back"
+          disabled={!ready || !tab.canGoBack}
+          onPress={() => onCommand({ type: "history", delta: -1 })}
+        />
+        <ControlPill
+          icon="chevron.right"
+          accessibilityLabel="Forward"
+          disabled={!ready || !tab.canGoForward}
+          onPress={() => onCommand({ type: "history", delta: 1 })}
+        />
+        <TextInput
+          accessibilityLabel="Address"
+          editable={ready}
+          value={draft ?? url}
+          onChangeText={setDraft}
+          onBlur={() => setDraft(null)}
+          onSubmitEditing={submit}
+          placeholder="Enter a URL"
+          placeholderTextColorClassName="accent-placeholder"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          returnKeyType="go"
+          selectTextOnFocus
+          lineBreakModeIOS="tail"
+          className="h-10 min-w-0 flex-1 rounded-full border border-input-border bg-input px-4 font-sans text-sm text-foreground"
+        />
+        <ControlPill
+          icon="arrow.clockwise"
+          accessibilityLabel="Reload page"
+          disabled={!ready}
+          onPress={() => onCommand({ type: "reload" })}
+        />
+        <BrowserTabMenu
+          environmentId={environmentId}
+          tab={tab}
+          streaming={streaming}
+          onPaste={ready ? onPaste : undefined}
+        />
+      </View>
+      {loading ? <View className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" /> : null}
     </View>
   );
 }

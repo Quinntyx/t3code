@@ -3,8 +3,10 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
 import previewStreamScript from "@t3tools/mobile-preview-stream";
 import {
-  previewStreamControlLabel,
   previewStreamHostSetupMessage,
+  previewStreamOverlayDetail,
+  previewStreamPhase,
+  previewStreamStatusLabel,
   type PreviewStreamControl,
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
@@ -28,6 +30,7 @@ import { PdfPreview } from "../../components/PdfPreview";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { beginForegroundHandoff } from "../../lib/foreground-handoff";
 import { usePreviewStreamAccess } from "../../state/preview";
+import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
 import { previewPromptText } from "./previewPromptText";
 
 import {
@@ -60,6 +63,7 @@ type NativeStreamBridge = {
   readonly onStreamingChange?: (streaming: boolean) => void;
   readonly compact?: boolean;
   readonly pdfUri?: string | null;
+  readonly environmentLabel?: string | undefined;
 };
 
 async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean) {
@@ -148,7 +152,7 @@ export function PreviewStreamWebView(
               error ? "text-center text-sm text-foreground-muted" : "text-sm text-foreground-muted"
             }
           >
-            {error || "Connecting to browser..."}
+            {error || "Connecting to remote browser…"}
           </AppText>
           {error && (
             <View className="items-center">
@@ -219,6 +223,7 @@ function PreviewStreamDocumentView({
   background,
   compact,
   pdfUri,
+  environmentLabel,
   onUnauthorized,
   onGone,
   onViewport,
@@ -241,10 +246,16 @@ function PreviewStreamDocumentView({
   const failed = useRef(false);
   const bootstrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error">("connecting");
+  // Survives mid-session reconnects because only a target or attempt change remounts this view.
+  const [hasStreamed, setHasStreamed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
+  const phase =
+    hasStreamed && status !== "streaming"
+      ? "reconnecting"
+      : previewStreamPhase(control, hasStreamed);
   const dialogRef = useRef<PreviewStreamControl["dialog"]>(null);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
@@ -327,11 +338,18 @@ function PreviewStreamDocumentView({
   return (
     <View className="flex-1" style={{ backgroundColor: background }}>
       {!compact ? (
-        <View className="flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2">
-          <AppText className="text-xs text-foreground-muted">
-            {previewStreamControlLabel(control)}
-          </AppText>
-          {control?.canOperate ? (
+        <View className="min-h-16 flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2">
+          <View className="flex-1 flex-row items-center gap-2">
+            <ConnectionStatusDot
+              state={phase === "live" ? "connected" : "connecting"}
+              pulse={phase !== "live"}
+              size={7}
+            />
+            <AppText numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
+              {previewStreamStatusLabel(phase, control)}
+            </AppText>
+          </View>
+          {phase === "live" && control?.canOperate ? (
             <Button
               label={control.controller === "you" ? "Release control" : "Take control"}
               tone="secondary"
@@ -414,6 +432,7 @@ function PreviewStreamDocumentView({
                   return;
                 }
                 setStatus(message.status);
+                if (message.status === "streaming") setHasStreamed(true);
                 if (message.status === "connecting") {
                   // Dialogs may have closed and reopened while this viewer was disconnected.
                   dialogRef.current = null;
@@ -428,6 +447,37 @@ function PreviewStreamDocumentView({
         {pdfUri ? (
           <View className="absolute inset-0">
             <PdfPreview key={pdfUri} uri={pdfUri} />
+          </View>
+        ) : null}
+        {status === "connecting" && !hasStreamed && !pdfUri ? (
+          <View
+            className="absolute inset-0 items-center justify-center gap-2 px-6"
+            style={{ backgroundColor: background }}
+          >
+            <AppActivityIndicator colorClassName="accent-icon" />
+            {compact ? null : (
+              <>
+                <AppText
+                  accessibilityLiveRegion="polite"
+                  className="text-center text-sm text-foreground-muted"
+                >
+                  Connecting to remote browser
+                </AppText>
+                <AppText className="text-center text-xs text-foreground-muted">
+                  {previewStreamOverlayDetail(phase, environmentLabel)}
+                </AppText>
+              </>
+            )}
+          </View>
+        ) : null}
+        {status === "connecting" && hasStreamed && !compact && !pdfUri ? (
+          <View pointerEvents="none" className="absolute inset-x-0 bottom-3 items-center px-3">
+            <View className="flex-row items-center gap-2 rounded-full border border-secondary-border bg-secondary px-3 py-1.5">
+              <ConnectionStatusDot state="connecting" pulse size={7} />
+              <AppText className="text-xs text-secondary-foreground">
+                {previewStreamOverlayDetail(phase, environmentLabel)}
+              </AppText>
+            </View>
           </View>
         ) : null}
       </View>
@@ -485,21 +535,20 @@ function PreviewStreamDocumentView({
           )}
         </View>
       ) : null}
-      {status !== "streaming" ? (
+      {status === "error" ? (
         <View
           className="absolute inset-0 items-center justify-center gap-4 px-6"
           style={{ backgroundColor: background }}
         >
-          {status === "connecting" ? <AppActivityIndicator colorClassName="accent-icon" /> : null}
           {compact ? null : (
             <AppText
               accessibilityLiveRegion="polite"
               className="text-center text-sm text-foreground-muted"
             >
-              {status === "error" ? error : "Connecting to browser..."}
+              {error}
             </AppText>
           )}
-          {status === "error" && hostSetup && !compact ? (
+          {hostSetup && !compact ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Copy ${hostSetup.command}`}
@@ -514,7 +563,7 @@ function PreviewStreamDocumentView({
               <AppText className="text-xs text-foreground-muted">Copy</AppText>
             </Pressable>
           ) : null}
-          {status === "error" && !gone && !compact ? (
+          {!gone && !compact ? (
             <View className="items-center">
               <Button
                 label={hostSetup ? "Try again" : "Reconnect"}

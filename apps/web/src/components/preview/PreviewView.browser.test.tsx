@@ -15,6 +15,10 @@ import "~/index.css";
 import { act, render } from "../../../test/render";
 
 import type { PreviewableServer } from "./useDiscoveredLocalServers";
+import type {
+  PreviewStreamControl,
+  PreviewStreamEvents,
+} from "@t3tools/client-runtime/preview/server-browser-stream";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
@@ -32,6 +36,10 @@ const mocks = vi.hoisted(() => ({
   showEmptyState: false,
   loading: false,
   nativeServerTab: false,
+  serverTab: false,
+  navStatus: null as unknown,
+  streamAccess: { url: "ws://preview.test", token: "test" },
+  streamHandlers: null as PreviewStreamEvents | null,
   serverEpoch: null as string | null,
   servers: [] as PreviewableServer[],
   recordingTabIds: new Set<string>(),
@@ -116,8 +124,8 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
           "tab-1": {
             threadId: "thread-1",
             tabId: "tab-1",
-            runtime: mocks.nativeServerTab ? "server" : "desktop",
-            navStatus: { _tag: "Success", url: "http://example.com/", title: "Example" },
+            runtime: mocks.serverTab || mocks.nativeServerTab ? "server" : "desktop",
+            navStatus: mocks.navStatus,
             canGoBack: false,
             canGoForward: false,
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -148,6 +156,20 @@ vi.mock(import("./usePreviewSession"), async (original) => ({
 vi.mock(import("~/browser/previewRuntime"), async (original) => ({
   ...(await original()),
   useRendersServerTabNatively: () => mocks.nativeServerTab,
+}));
+
+vi.mock(import("~/state/previewStream"), async (original) => ({
+  ...(await original()),
+  usePreviewStreamAccess: () => mocks.streamAccess as never,
+}));
+
+vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (original) => ({
+  ...(await original()),
+  createPreviewStreamClient: (_target: unknown, handlers: PreviewStreamEvents) => {
+    mocks.streamHandlers = handlers;
+    return { send: () => false, requestKeyFrame: () => undefined, stop: () => undefined };
+  },
+  createPreviewFramePainter: () => ({ paint: () => undefined, stop: () => undefined }),
 }));
 
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
@@ -203,6 +225,9 @@ function setup() {
   mocks.showEmptyState = false;
   mocks.loading = false;
   mocks.nativeServerTab = false;
+  mocks.serverTab = false;
+  mocks.navStatus = { _tag: "Success", url: "http://example.com/", title: "Example" };
+  mocks.streamHandlers = null;
   mocks.serverEpoch = null;
   mocks.servers = [];
   mocks.recordingTabIds = new Set();
@@ -215,7 +240,74 @@ function setup() {
   useBrowserPointerStore.setState({ byTabId: {} });
 }
 
+async function renderServerPreview() {
+  mocks.serverTab = true;
+  const container = document.createElement("div");
+  container.style.cssText = "width: 800px; height: 600px; display: flex;";
+  const screen = await render(view(), { container });
+  await vi.waitFor(() => expect(mocks.streamHandlers).not.toBeNull());
+  return screen;
+}
+
+function loadingProgress(screen: { readonly container: HTMLElement }): HTMLElement {
+  return screen.container.querySelector(".preview-loading-progress")!;
+}
+
+async function setStreamControl(
+  controller: PreviewStreamControl["controller"],
+  canOperate = true,
+): Promise<void> {
+  await act(() =>
+    mocks.streamHandlers?.onControl?.({ canOperate, controller, generation: 1, dialog: null }),
+  );
+}
+
+function tooltipText(): string | null | undefined {
+  return document.querySelector('[data-slot="tooltip-popup"]')?.textContent;
+}
+
 describe("PreviewView", () => {
+  it("does not spin or progress the chrome while a remote stream connects", async () => {
+    setup();
+    await using screen = await renderServerPreview();
+    await expect.element(page.getByText("Connecting to remote browser")).toBeVisible();
+    expect(loadingProgress(screen).getAttribute("data-loading")).toBe("false");
+  });
+
+  it("shows the page's own loading state independently of the stream", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Loading", url: "http://example.com/", title: "Example" };
+    await using screen = await renderServerPreview();
+    await vi.waitFor(() =>
+      expect(loadingProgress(screen).getAttribute("data-loading")).toBe("true"),
+    );
+    // Clicking reloads while loading, so the control never renames itself Stop.
+    await expect.element(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+    expect(document.querySelector('button[aria-label="Stop"]')).toBeNull();
+  });
+
+  it("says why refresh is unavailable while this viewer cannot drive the stream", async () => {
+    setup();
+    await using _screen = await renderServerPreview();
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).toBeDisabled();
+
+    const trigger = refresh.element().parentElement!;
+    await userEvent.hover(trigger);
+    await vi.waitFor(() => expect(tooltipText()).toBe("Waiting for remote browser"));
+
+    await setStreamControl("unclaimed", false);
+    await expect.element(refresh).toBeDisabled();
+    await vi.waitFor(() => expect(tooltipText()).toBe("Read-only preview"));
+    await setStreamControl("another-viewer");
+    await vi.waitFor(() => expect(tooltipText()).toBe("Another viewer has control"));
+    await setStreamControl("unclaimed");
+    await vi.waitFor(() => expect(tooltipText()).toBe("Take control to refresh"));
+    await setStreamControl("you");
+    await expect.element(refresh).toBeEnabled();
+    await vi.waitFor(() => expect(tooltipText()).toBe("Refresh"));
+  });
+
   it.each(["mailto:alice@example.com", "http://"])(
     "reports rejected address %s without navigating or recording it",
     async (address) => {

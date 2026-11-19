@@ -1,8 +1,10 @@
 import {
   createPreviewFramePainter,
   createPreviewStreamClient,
-  previewStreamControlLabel,
   previewStreamModifiers,
+  previewStreamOverlayDetail,
+  previewStreamPhase,
+  previewStreamStatusLabel,
   type PreviewStreamClient,
   type PreviewStreamControl,
   type PreviewStreamDownload,
@@ -32,6 +34,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Monitor } from "lucide-react";
 
 import { AgentCursorMark } from "~/components/preview/AgentBrowserCursor";
 import { CommandBlock } from "~/components/CommandBlock";
@@ -146,7 +149,7 @@ export function ServerBrowserSurface(props: {
   readonly visible: boolean;
   readonly followSize?: boolean;
   readonly controlPosition?: "top" | "bottom";
-  readonly onFirstFrame?: () => void;
+  readonly environmentLabel?: string | undefined;
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
   readonly onPopup?: (tabId: string) => void;
@@ -161,7 +164,7 @@ export function ServerBrowserSurface(props: {
     visible,
     followSize = true,
     controlPosition = "top",
-    onFirstFrame,
+    environmentLabel,
     onViewport,
     onControl,
     onPopup,
@@ -176,6 +179,8 @@ export function ServerBrowserSurface(props: {
   const viewportRef = useRef<PreviewStreamViewport | null>(null);
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
   const hasFrameRef = useRef(false);
+  const frameTargetRef = useRef<string | null>(null);
+  const [frameTargetKey, setFrameTargetKey] = useState<string | null>(null);
   const controlRef = useRef<PreviewStreamControl | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
   const [promptText, setPromptText] = useState("");
@@ -213,7 +218,6 @@ export function ServerBrowserSurface(props: {
   const touchRef = useRef<TouchGesture | null>(null);
   const probeRef = useRef<TouchProbe | null>(null);
   const lastProbeRef = useRef<{ x: number; y: number; editable: boolean; at: number } | null>(null);
-  const firstFrame = useEffectEvent(() => onFirstFrame?.());
   const viewportChanged = useEffectEvent((viewport: PreviewStreamViewport) =>
     onViewport?.(viewport),
   );
@@ -367,13 +371,20 @@ export function ServerBrowserSurface(props: {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
+    const targetKey = `${environmentId}:${threadId}:${tabId}`;
+    if (frameTargetRef.current !== targetKey) {
+      frameTargetRef.current = targetKey;
+      hasFrameRef.current = false;
+      setFrameTargetKey(null);
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    }
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const painter = createPreviewFramePainter(
       canvas,
       () => {
         if (hasFrameRef.current) return;
         hasFrameRef.current = true;
-        firstFrame();
+        setFrameTargetKey(targetKey);
       },
       () => client.requestKeyFrame(),
     );
@@ -744,6 +755,12 @@ export function ServerBrowserSurface(props: {
     resetInput(textarea);
   };
 
+  const targetKey = `${environmentId}:${threadId}:${tabId}`;
+  const hasFrame = frameTargetKey === targetKey;
+  const phase = previewStreamPhase(control, hasFrame);
+  const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
+  const overlaySuppressed = pdfUrl !== null || hostSetup !== null || accessDenied;
+
   return (
     <div
       className={cn("relative flex flex-col overflow-hidden", className)}
@@ -752,14 +769,24 @@ export function ServerBrowserSurface(props: {
     >
       <div
         className={cn(
-          "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
+          "visible relative z-20 flex h-8 shrink-0 items-center justify-between gap-2 border-border/60 bg-muted/30 px-2.5",
           controlPosition === "bottom" ? "order-last border-t" : "border-b",
         )}
       >
-        <span role="status" className="text-xs text-muted-foreground">
-          {previewStreamControlLabel(control)}
-        </span>
-        {control?.canOperate ? (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            aria-hidden
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              phase === "live" ? "bg-success" : "bg-warning",
+              phase !== "live" && visible && "motion-safe:animate-status-pulse",
+            )}
+          />
+          <span role="status" className="truncate text-xs text-muted-foreground">
+            {previewStreamStatusLabel(phase, control)}
+          </span>
+        </div>
+        {phase === "live" && control?.canOperate ? (
           <Button
             variant="outline"
             size="xs"
@@ -770,6 +797,10 @@ export function ServerBrowserSurface(props: {
           >
             {control.controller === "you" ? "Release control" : "Take control"}
           </Button>
+        ) : phase !== "live" && trimmedEnvironmentLabel ? (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+            {trimmedEnvironmentLabel}
+          </span>
         ) : null}
       </div>
       <div className="relative min-h-0 flex-1">
@@ -791,6 +822,38 @@ export function ServerBrowserSurface(props: {
           onMouseDown={(event) => event.preventDefault()}
           onContextMenu={(event) => event.preventDefault()}
         />
+        {!overlaySuppressed && (phase === "connecting" || phase === "awaiting-frame") ? (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/35 p-4 text-center">
+            <div className="relative flex size-10 items-center justify-center rounded-full bg-background/80">
+              <Monitor aria-hidden className="size-5 text-muted-foreground" />
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-warning",
+                  visible && "motion-safe:animate-status-pulse",
+                )}
+              />
+            </div>
+            <p className="text-sm font-medium">Connecting to remote browser</p>
+            <p className="text-xs text-muted-foreground">
+              {previewStreamOverlayDetail(phase, trimmedEnvironmentLabel)}
+            </p>
+          </div>
+        ) : null}
+        {!overlaySuppressed && phase === "reconnecting" ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-2 transition-opacity delay-300 duration-150 motion-reduce:transition-none starting:opacity-0">
+            <span className="flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
+              <span
+                aria-hidden
+                className={cn(
+                  "size-2 shrink-0 rounded-full bg-warning",
+                  visible && "motion-safe:animate-status-pulse",
+                )}
+              />
+              {previewStreamOverlayDetail(phase, trimmedEnvironmentLabel)}
+            </span>
+          </div>
+        ) : null}
         {!pdfUrl && agentCursor && control?.controller !== "you" ? (
           <AgentCursorMark
             {...agentCursor}

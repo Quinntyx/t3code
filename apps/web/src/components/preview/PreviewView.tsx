@@ -2,7 +2,10 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopPreviewAnnotationVoiceConfig } from "@t3tools/contracts";
-import { previewStreamDownloadUrl } from "@t3tools/client-runtime/preview/server-browser-stream";
+import {
+  type PreviewStreamControl,
+  previewStreamDownloadUrl,
+} from "@t3tools/client-runtime/preview/server-browser-stream";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -175,7 +178,8 @@ export function PreviewView({
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
   const open = useAtomCommand(previewEnvironment.open);
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
-  const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "the environment";
+  const environmentLabel = useEnvironment(threadRef.environmentId)?.label;
+  const environmentName = environmentLabel ?? "the environment";
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const serverBrowser = useEnvironmentSupportsServerBrowser(threadRef.environmentId);
   const adjust = useAtomCommand(previewEnvironment.adjust, "preview appearance or zoom");
@@ -210,9 +214,25 @@ export function PreviewView({
       setServerToolbarWidth(Math.max(1, Math.round(entry?.contentRect.width ?? 0))),
     );
   }, [serverToolbarShown]);
-  const [serverControlledTabId, setServerControlledTabId] = useState<string | null>(null);
-  const serverInputDisabled = isServerTab && serverControlledTabId !== runtimeTabId;
-  const [serverFrameTabId, setServerFrameTabId] = useState<string | null>(null);
+  const [serverControlledTab, setServerControlledTab] = useState<{
+    readonly tabId: string;
+    readonly control: PreviewStreamControl | null;
+  } | null>(null);
+  // A cleanup from the previous tab reports null after the next tab already reported control.
+  const serverControl =
+    serverControlledTab?.tabId === runtimeTabId ? serverControlledTab.control : null;
+  const serverInputDisabled = isServerTab && serverControl?.controller !== "you";
+  const refreshDisabledReason = !isServerTab
+    ? undefined
+    : serverControl === null
+      ? "Waiting for remote browser"
+      : !serverControl.canOperate
+        ? "Read-only preview"
+        : serverControl.controller === "another-viewer"
+          ? "Another viewer has control"
+          : serverControl.controller !== "you"
+            ? "Take control to refresh"
+            : undefined;
   // A desktop page that mounted before its tab went headless leaves its stale state here.
   const desktopOverlay =
     tabId && !isServerTab ? (previewState.desktopByTabId[tabId] ?? null) : null;
@@ -225,8 +245,6 @@ export function PreviewView({
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
   const showEmptyState = shouldShowPreviewEmptyState(snapshot);
-  const serverStreamPending =
-    isServerTab && !showEmptyState && !isUnreachable && serverFrameTabId !== runtimeTabId;
   const controller = desktopOverlay?.controller ?? "none";
   const viewport = snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT;
   const browserDefaults = useBrowserDefaults();
@@ -397,7 +415,7 @@ export function PreviewView({
     snapshot,
   );
   const moveLabel =
-    moveTarget === "server" ? `Open in ${environmentLabel}'s browser` : "Open on this computer";
+    moveTarget === "server" ? `Open in ${environmentName}'s browser` : "Open on this computer";
   const handleMoveTab = async () => {
     if (!moveTarget || !tabId || !snapshot) return;
     const result = await openPreviewSession({
@@ -906,10 +924,11 @@ export function PreviewView({
       ) : null}
       <PreviewChromeRow
         url={url}
-        loading={loading || serverStreamPending}
+        loading={loading}
         canGoBack={canGoBack && !serverInputDisabled}
         canGoForward={canGoForward && !serverInputDisabled}
         refreshDisabled={refreshDisabled || serverInputDisabled}
+        refreshDisabledReason={refreshDisabledReason}
         inputDisabled={serverInputDisabled}
         urlInputRef={urlInputRef}
         onBack={handleBack}
@@ -1006,10 +1025,8 @@ export function PreviewView({
                     : null
                 }
                 visible={visible}
-                onFirstFrame={() => setServerFrameTabId(runtimeTabId)}
-                onControl={(control) =>
-                  setServerControlledTabId(control?.controller === "you" ? runtimeTabId : null)
-                }
+                environmentLabel={environmentLabel}
+                onControl={(control) => setServerControlledTab({ tabId: runtimeTabId, control })}
                 onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "panel")}
                 // Stays connected under the empty state so a URL picked there reaches the page.
                 className={cn(

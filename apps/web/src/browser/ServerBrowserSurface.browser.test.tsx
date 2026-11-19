@@ -72,6 +72,106 @@ async function renderSurface(controller: PreviewStreamControl["controller"]) {
 
 const keys = () => mocks.sent.filter((input) => input.type === "key");
 
+async function renderStream(tabId = "tab-copy") {
+  const container = document.createElement("div");
+  container.style.cssText = "width: 400px; height: 300px; display: flex;";
+  const surface = (nextTabId: string) => (
+    <ServerBrowserSurface
+      environmentId={EnvironmentId.make("environment-copy")}
+      threadId="thread-copy"
+      tabId={nextTabId}
+      visible
+      followSize={false}
+      environmentLabel="build-box"
+      className="flex-1"
+    />
+  );
+  await using stack = new AsyncDisposableStack();
+  const screen = stack.use(await render(surface(tabId), { container }));
+  await vi.waitFor(() => expect(mocks.createClient).toHaveBeenCalled());
+  stack.move();
+  const handlers = () => mocks.createClient.mock.calls.at(-1)![1];
+  return {
+    screen,
+    container,
+    handlers,
+    rerender: async (nextTabId: string) => {
+      await screen.rerender(surface(nextTabId));
+      await vi.waitFor(() =>
+        expect(mocks.createClient.mock.calls.at(-1)![0]).toMatchObject({ tabId: nextTabId }),
+      );
+    },
+  };
+}
+
+describe("ServerBrowserSurface stream phases", () => {
+  it("moves from connecting to live, then a reconnect pill over the last frame", async () => {
+    setup();
+    const { screen, container, handlers } = await renderStream();
+    await using _screen = screen;
+    const canvas = container.querySelector("canvas")!;
+
+    await expect.element(screen.getByText("Connecting to remote stream…")).toBeVisible();
+    await expect.element(screen.getByText("Connecting to remote browser")).toBeVisible();
+    await expect.element(screen.getByText("build-box")).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Take control" }))
+      .not.toBeInTheDocument();
+
+    await act(() =>
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      }),
+    );
+    await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
+    await expect.element(screen.getByText("Waiting for first frame…")).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Take control" }))
+      .not.toBeInTheDocument();
+
+    await act(() => mocks.painted?.());
+    await expect.element(screen.getByText("Watching")).toBeVisible();
+    await expect.element(screen.getByText("Connecting to remote browser")).not.toBeInTheDocument();
+    await expect.element(screen.getByRole("button", { name: "Take control" })).toBeVisible();
+
+    await act(() => handlers().onConnectedChange?.(false));
+    await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
+    await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
+    expect(container.querySelector("canvas")).toBe(canvas);
+    await expect
+      .element(screen.getByRole("button", { name: "Take control" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("starts over at connecting when the tab changes", async () => {
+    setup();
+    const { screen, handlers, rerender } = await renderStream("tab-one");
+    await using _screen = screen;
+
+    await act(() => {
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+      });
+      mocks.painted?.();
+    });
+    await expect.element(screen.getByText("You have control")).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
+
+    await rerender("tab-two");
+    await expect.element(screen.getByText("Connecting to remote stream…")).toBeVisible();
+    await expect.element(screen.getByText("Connecting to remote browser")).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Release control" }))
+      .not.toBeInTheDocument();
+  });
+});
+
 describe("ServerBrowserSurface clipboard commands", () => {
   it("sends a native Copy or Cut menu command to the page once", async () => {
     setup();
