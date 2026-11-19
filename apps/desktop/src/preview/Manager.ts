@@ -34,6 +34,7 @@ import {
   type Session,
   clipboard,
   nativeImage,
+  session as electronSession,
   shell,
   webContents,
 } from "electron";
@@ -88,6 +89,7 @@ import {
 } from "./GuestProtocol.ts";
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
 import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./FaviconCapture.ts";
+import { formReplayLoadOptions, makeFormReplays, type FormReplay } from "./FormReplay.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS, type RecordingInputOptions } from "./RecordingInput.ts";
 
 export type PreviewNavStatus =
@@ -462,21 +464,19 @@ const POPUP_WINDOW_OPTIONS = {
 } satisfies Electron.BrowserWindowConstructorOptions;
 
 /**
- * OAuth needs a surviving popup opener. `blob:`, app links (behind the session's `openExternal`
- * prompt) and form POSTs stay in place.
+ * OAuth needs a surviving popup opener. `blob:` and app links (behind the session's
+ * `openExternal` prompt) stay in place.
  */
 export const previewWindowOpenAction = (details: {
   readonly url: string;
   readonly disposition: Electron.HandlerDetails["disposition"];
-  readonly postBody?: Electron.PostBody;
 }): "popup" | "new-tab" | "navigate" | "deny" => {
   const protocol = URL.parse(details.url)?.protocol;
   // MSAL redirects on a denied blank popup; navigating the tab would destroy that fallback.
   if (protocol === undefined || IN_PLACE_DENIED_PROTOCOLS.has(protocol)) return "deny";
   if (!POPUP_PROTOCOLS.has(protocol)) return "navigate";
   if (details.disposition === "new-window") return "popup";
-  return !details.postBody &&
-    (details.disposition === "foreground-tab" || details.disposition === "background-tab")
+  return details.disposition === "foreground-tab" || details.disposition === "background-tab"
     ? "new-tab"
     : "navigate";
 };
@@ -546,6 +546,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const passkeys = yield* PreviewPasskeys.PreviewPasskeys;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
+  const runSync = Effect.runSyncWith(context);
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
 
   let forwardedShortcuts: ReadonlyArray<PreviewForwardedShortcut> = [];
@@ -584,6 +585,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     { readonly semaphore: Semaphore.Semaphore; users: number }
   >();
   const tabLifecycleGenerations = new Map<string, number>();
+  const formReplays = makeFormReplays();
+  const guestFormReplays = new Map<number, FormReplay>();
 
   const attempt = <A>(errorContext: PreviewOperationContext, evaluate: () => A) =>
     Effect.try({
@@ -1561,6 +1564,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           }
           if (action === "deny") return { action: "deny" };
           if (action === "new-tab") {
+            if (details.postBody) {
+              formReplays.offer(
+                {
+                  url: details.url,
+                  session: wc.session,
+                  postBody: details.postBody,
+                  referrer: details.referrer,
+                },
+                runSync(currentMillis),
+              );
+            }
             runFork(
               emitOpenLink({
                 tabId,
@@ -1908,6 +1922,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const prepareWebview = Effect.fn("PreviewManager.prepareWebview")(function* (
     wc: Electron.WebContents,
   ) {
+    const replay = guestFormReplays.get(wc.id);
+    if (replay) {
+      guestFormReplays.delete(wc.id);
+      runFork(
+        attemptPromise({ operation: "replayFormPost", webContentsId: wc.id }, () =>
+          wc.loadURL(replay.url, formReplayLoadOptions(replay)),
+        ).pipe(Effect.ignore),
+      );
+    }
     yield* rendererHistory.register(wc, { surface: "preview" });
     const webContentsId = wc.id;
     wc.once("destroyed", () => {
@@ -1923,6 +1946,23 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       ),
     );
   });
+
+  // Called from will-attach-webview so the new tab POSTs instead of loading its src as a GET.
+  const claimFormReplay = (params: Record<string, string>): void => {
+    if (!params.src || !params.partition) return;
+    const replay = formReplays.claim(
+      params.src,
+      electronSession.fromPartition(params.partition),
+      runSync(currentMillis),
+    );
+    if (!replay) return;
+    delete params.src;
+    // Electron creates the guest synchronously after will-attach-webview returns.
+    app.once("web-contents-created", (_event, guest) => {
+      guestFormReplays.set(guest.id, replay);
+      guest.once("destroyed", () => guestFormReplays.delete(guest.id));
+    });
+  };
 
   const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
     const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
@@ -3390,6 +3430,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     pickElement,
     updateAnnotationVoice,
     prepareWebview,
+    claimFormReplay,
     reapplyZoom,
     refresh,
     registerWebview,
@@ -3586,6 +3627,7 @@ export class PreviewManager extends Context.Service<
       webContentsId: number,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly prepareWebview: (webContents: Electron.WebContents) => Effect.Effect<void>;
+    readonly claimFormReplay: (params: Record<string, string>) => void;
     readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goBack: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goForward: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3751,6 +3793,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     closeTab: operations.closeTab,
     registerWebview: operations.registerWebview,
     prepareWebview: operations.prepareWebview,
+    claimFormReplay: operations.claimFormReplay,
     navigate: operations.navigate,
     goBack: operations.goBack,
     goForward: operations.goForward,

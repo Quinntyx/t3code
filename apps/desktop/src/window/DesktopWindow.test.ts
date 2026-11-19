@@ -357,6 +357,7 @@ function layerTest(input: {
           setMainWindow: input.setPreviewMainWindow ?? (() => Effect.void),
           prepareWebview: () => Effect.void,
           isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
+          claimFormReplay: () => {},
           getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
           reapplyZoom: () =>
             Effect.sync(() => {
@@ -466,6 +467,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
             getBrowserSession: () => Effect.succeed({} as Electron.Session),
             setMainWindow: () => Effect.void,
             isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
+            claimFormReplay: () => {},
             getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
           }),
         ),

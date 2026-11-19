@@ -94,16 +94,6 @@ describe("previewWindowOpenAction", () => {
     }
   });
 
-  it("keeps a form POST with a body on the in-place path", () => {
-    const postBody = { data: [], contentType: "application/x-www-form-urlencoded" };
-    expect(
-      PreviewManager.previewWindowOpenAction({
-        ...details({ disposition: "foreground-tab" }),
-        postBody,
-      }),
-    ).toBe("navigate");
-  });
-
   it("does not hand a window to schemes that cannot be hardened", () => {
     for (const url of [
       "vscode://vscode-remote/ssh-remote+box/tmp",
