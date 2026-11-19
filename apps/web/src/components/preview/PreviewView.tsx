@@ -232,12 +232,11 @@ export function PreviewView({
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
   const serverInputDisabled = isServerTab && serverControl?.controller !== "you";
-  const refreshDisabledReason = !isServerTab
-    ? undefined
-    : serverControl === null
-      ? "Waiting for remote browser"
-      : refreshDisabled
-        ? undefined
+  const refreshDisabledReason =
+    !isServerTab || refreshDisabled
+      ? undefined
+      : serverControl === null
+        ? "Waiting for remote browser"
         : !serverControl.canOperate
           ? "Read-only preview"
           : serverControl.controller === "another-viewer"

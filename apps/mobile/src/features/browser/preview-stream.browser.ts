@@ -396,12 +396,13 @@ export function start(configuration: PreviewStreamConfiguration) {
       send(mouseInput(event, point, "down", button));
       return;
     }
-    touch = { start: event, last: event, panning: false };
     const point = pagePoint(event.clientX, event.clientY, false);
     if (!point) {
+      touch = null;
       probe = null;
       return;
     }
+    touch = { start: event, last: event, panning: false };
     const cached = probeCache;
     const reuse =
       cached !== null &&
@@ -524,7 +525,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   const preventDefault = (event: Event) => event.preventDefault();
 
   const onKey = (action: "down" | "up", event: KeyboardEvent) => {
-    if (control?.controller !== "you") return;
+    if (!streaming || control?.controller !== "you") return;
     if (
       event.isComposing ||
       event.keyCode === 229 ||
@@ -570,6 +571,10 @@ export function start(configuration: PreviewStreamConfiguration) {
     }
   };
   const onInput = (event: Event) => {
+    if (!streaming || control?.controller !== "you") {
+      resetInput();
+      return;
+    }
     if (event instanceof InputEvent && event.isComposing) return;
     const inputType = event instanceof InputEvent ? event.inputType : "";
     if (keySent) keySent = false;
@@ -583,6 +588,10 @@ export function start(configuration: PreviewStreamConfiguration) {
     resetInput();
   };
   const onCompositionEnd = (event: CompositionEvent) => {
+    if (!streaming || control?.controller !== "you") {
+      resetInput();
+      return;
+    }
     const text = event.data.startsWith(SENTINEL) ? event.data.slice(SENTINEL.length) : event.data;
     if (text) send({ type: "text", text });
     resetInput();

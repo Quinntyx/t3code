@@ -354,7 +354,7 @@ function PreviewStreamDocumentView({
               {previewStreamStatusLabel(phase, control)}
             </AppText>
           </View>
-          {phase === "live" && control?.canOperate ? (
+          {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
             <Button
               label={control.controller === "you" ? "Release control" : "Take control"}
               tone="secondary"
@@ -472,17 +472,29 @@ function PreviewStreamDocumentView({
             )}
           </View>
         ) : null}
-        {status !== "error" && phase === "reconnecting" && !compact && !pdfUri ? (
+        {status !== "error" && phase === "reconnecting" && !pdfUri ? (
           <View
             pointerEvents="none"
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
-            className="absolute inset-x-0 bottom-3 items-center px-3"
+            className={
+              compact
+                ? "absolute bottom-1.5 left-1.5"
+                : "absolute inset-x-0 bottom-3 items-center px-3"
+            }
           >
-            <View className="flex-row items-center gap-2 rounded-full border border-secondary-border bg-secondary px-3 py-1.5">
-              <ConnectionStatusDot state="connecting" pulse size={7} />
-              <AppText className="text-xs text-secondary-foreground">
-                {previewStreamOverlayDetail(phase, environmentLabel)}
+            <View
+              className={
+                compact
+                  ? "flex-row items-center gap-1.5 rounded-full bg-black/65 px-2 py-1"
+                  : "flex-row items-center gap-2 rounded-full border border-secondary-border bg-secondary px-3 py-1.5"
+              }
+            >
+              <ConnectionStatusDot state="connecting" pulse size={compact ? 6 : 7} />
+              <AppText
+                className={compact ? "text-2xs text-white" : "text-xs text-secondary-foreground"}
+              >
+                {compact ? "Reconnecting…" : previewStreamOverlayDetail(phase, environmentLabel)}
               </AppText>
             </View>
           </View>

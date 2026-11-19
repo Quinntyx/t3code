@@ -374,12 +374,15 @@ describe("PreviewView", () => {
     await expect.element(refresh).not.toHaveAttribute("aria-disabled");
   });
 
-  it("does not show a take-control refresh tooltip on an idle server tab", async () => {
+  it("does not show a waiting or take-control refresh tooltip on an idle server tab", async () => {
     setup();
     mocks.navStatus = { _tag: "Idle" };
     await using _screen = await renderServerPreview();
-    await setStreamControl("unclaimed");
     const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).toBeDisabled();
+    await expect.element(refresh).not.toHaveAttribute("aria-description");
+
+    await setStreamControl("unclaimed");
     await expect.element(refresh).toBeDisabled();
     await expect.element(refresh).not.toHaveAttribute("aria-description");
   });

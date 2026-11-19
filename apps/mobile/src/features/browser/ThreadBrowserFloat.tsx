@@ -63,6 +63,7 @@ export function ThreadBrowserFloat(props: {
   if (!tab || !focused) return null;
   return (
     <FloatingBrowserPlayer
+      key={tab.tabId}
       environmentId={props.environmentId}
       threadId={props.threadId}
       tab={tab}
@@ -87,10 +88,24 @@ function FloatingBrowserPlayer(props: {
   const prepared = usePreparedConnection(props.environmentId);
   const httpBaseUrl = Option.isSome(prepared) ? prepared.value.httpBaseUrl : null;
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
+  const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">(
+    "connecting",
+  );
+  const pdfUri =
+    props.tab.navStatus._tag === "Success"
+      ? previewPdfAssetUrl(props.tab.navStatus.url, httpBaseUrl)
+      : null;
   const aspect = Math.min(Math.max(viewport ? viewport.width / viewport.height : 16 / 10, 0.5), 2);
   const width = aspect >= 1 ? PLAYER_LONG_SIDE : Math.round(PLAYER_LONG_SIDE * aspect);
   const height = Math.round(width / aspect);
   const background = themeVariables["--color-sheet-solid"];
+  const title = browserTabTitle(props.tab);
+  const accessibilityLabel =
+    pdfUri !== null || streamState === "live"
+      ? `Open browser, ${title}`
+      : streamState === "reconnecting"
+        ? `Open browser, ${title}, reconnecting`
+        : `Open browser, ${title}, connecting`;
   return (
     <Animated.View
       entering={PLAYER_ENTERING}
@@ -100,7 +115,8 @@ function FloatingBrowserPlayer(props: {
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Open browser, ${browserTabTitle(props.tab)}`}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{ busy: pdfUri === null && streamState !== "live" }}
         accessibilityHint="Opens the browser tab full screen"
         onPress={props.onOpen}
         className="flex-1"
@@ -110,15 +126,20 @@ function FloatingBrowserPlayer(props: {
             environmentId={props.environmentId}
             threadId={props.threadId}
             tabId={props.tab.tabId}
-            pdfUri={
-              props.tab.navStatus._tag === "Success"
-                ? previewPdfAssetUrl(props.tab.navStatus.url, httpBaseUrl)
-                : null
-            }
+            pdfUri={pdfUri}
             interactive={false}
             background={background}
             compact
             paused={!props.live}
+            onStreamingChange={(streaming) =>
+              setStreamState((current) =>
+                streaming
+                  ? "live"
+                  : current === "live" || current === "reconnecting"
+                    ? "reconnecting"
+                    : "connecting",
+              )
+            }
             onViewport={setViewport}
             onGone={props.onClose}
           />

@@ -296,6 +296,70 @@ describe("ServerBrowserSurface stream phases", () => {
       .element(screen.getByRole("button", { name: "Release control" }))
       .not.toBeInTheDocument();
   });
+
+  it("allows taking control during awaiting-frame when a blocking dialog is open", async () => {
+    setup();
+    const { screen, handlers } = await renderStream();
+    await using _screen = screen;
+
+    await act(() =>
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: { type: "alert", message: "Blocking alert", defaultValue: "" },
+      }),
+    );
+    await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
+    await expect.element(screen.getByText("Blocking alert")).toBeVisible();
+    const takeControl = screen.getByRole("button", { name: "Take control" });
+    await expect.element(takeControl).toBeVisible();
+    await userEvent.click(takeControl);
+    expect(mocks.sent).toContainEqual({ type: "takeControl" });
+  });
+
+  it("ignores a touch gesture started before the first frame paints", async () => {
+    setup();
+    const { screen, container, handlers } = await renderStream();
+    await using _screen = screen;
+    const canvas = container.querySelector("canvas")!;
+    canvas.width = 400;
+    canvas.height = 300;
+    await act(() => {
+      handlers().onViewport?.({ width: 400, height: 300 });
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+      });
+    });
+
+    const { left, top } = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: left + 20,
+        clientY: top + 20,
+        bubbles: true,
+      }),
+    );
+    await act(() => mocks.painted?.());
+    mocks.sent.length = 0;
+    canvas.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: left + 20,
+        clientY: top + 20,
+        bubbles: true,
+      }),
+    );
+    expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
+  });
 });
 
 describe("ServerBrowserSurface clipboard commands", () => {

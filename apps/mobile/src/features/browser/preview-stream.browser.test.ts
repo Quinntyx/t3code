@@ -279,6 +279,67 @@ it("ignores an in-flight JPEG decode from a dropped socket on reconnect", async 
   }
 });
 
+it("ignores touch starts and keyboard or IME input before the first frame paints", async () => {
+  const harness = mountMobileStream();
+  try {
+    const socket = harness.sockets[0]!;
+    socket.open();
+    socket.receive({ type: "viewport", width: 300, height: 150 });
+    socket.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    socket.sent.length = 0;
+
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    expect(input.disabled).toBe(true);
+
+    // Synthetic key, input, and composition events while not streaming must send nothing.
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    input.value = "\u200bhello";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new CompositionEvent("compositionend", { data: "hi", bubbles: true }));
+    expect(
+      socket.sent.filter((entry) => {
+        const type = (entry as { type?: string }).type;
+        return type === "key" || type === "text";
+      }),
+    ).toEqual([]);
+
+    // A touch pointerdown before the frame paints must not turn into a tap after the frame arrives.
+    canvas.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 40,
+        clientY: 40,
+      }),
+    );
+    socket.receiveFrame();
+    await flushMicrotasks();
+    socket.sent.length = 0;
+    canvas.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 40,
+        clientY: 40,
+      }),
+    );
+    expect(socket.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
 it("reports connecting on disconnect when control arrived before the first frame", () => {
   const harness = mountMobileStream();
   try {

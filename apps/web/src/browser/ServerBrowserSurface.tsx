@@ -374,15 +374,17 @@ export function ServerBrowserSurface(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the preview stream client and paints its frames onto the canvas while visible
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
     const targetKey = `${environmentId}:${threadId}:${tabId}`;
-    hasFrameRef.current = false;
-    setCurrentFramePainted(false);
     if (frameTargetRef.current !== targetKey) {
       frameTargetRef.current = targetKey;
+      hasFrameRef.current = false;
+      setCurrentFramePainted(false);
       setRetainedFrameTargetKey(null);
-      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     }
+    if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
+    hasFrameRef.current = false;
+    setCurrentFramePainted(false);
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const painter = createPreviewFramePainter(
       canvas,
@@ -537,7 +539,7 @@ export function ServerBrowserSurface(props: {
     if (event.pointerType === "touch" && !cancelled) {
       const point = pagePoint(clientX, clientY, type === "pointermove");
       if (type === "pointerdown") {
-        if (!event.isPrimary) return;
+        if (!event.isPrimary || !point) return;
         touchRef.current = {
           pointerId,
           startX: clientX,
@@ -548,20 +550,17 @@ export function ServerBrowserSurface(props: {
         };
         const last = lastProbeRef.current;
         const reusable =
-          point &&
           last &&
           performance.now() - last.at < PROBE_REUSE_MS &&
           Math.hypot(point.x - last.x, point.y - last.y) < PROBE_REUSE_PX;
-        probeRef.current = point
-          ? {
-              x: point.x,
-              y: point.y,
-              editable: reusable ? last.editable : null,
-              answered: false,
-              tapped: false,
-            }
-          : null;
-        if (point) send({ type: "probe", x: point.x, y: point.y });
+        probeRef.current = {
+          x: point.x,
+          y: point.y,
+          editable: reusable ? last.editable : null,
+          answered: false,
+          tapped: false,
+        };
+        send({ type: "probe", x: point.x, y: point.y });
         return;
       }
       if (!touch || touch.pointerId !== pointerId) return;
@@ -803,7 +802,7 @@ export function ServerBrowserSurface(props: {
             {previewStreamStatusLabel(phase, control)}
           </span>
         </div>
-        {phase === "live" && control?.canOperate ? (
+        {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
           <Button
             variant="outline"
             size="xs"
