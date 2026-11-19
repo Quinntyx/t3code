@@ -868,7 +868,9 @@ const make = Effect.gen(function* () {
     if (desktop) opened.push(desktop.close);
     if (snapshot.desktopPopupId !== undefined && !desktop) {
       await runPromise(
-        manager.close({ threadId: snapshot.threadId, tabId: snapshot.tabId }).pipe(Effect.ignore),
+        manager
+          .close({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId })
+          .pipe(Effect.ignore),
       );
       throw new Error("The desktop popup closed before its tab attached.");
     }
