@@ -818,6 +818,9 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             setModeOverride({ path: relativePath, mode: rendered ? "preview" : "source" }),
         })
       : null;
+  const hasDeviceSave = mediaActions.actions.some(
+    ({ id }) => id === "download" || id === "save-image",
+  );
   const fileMenuActions = (() => {
     if (relativePath === null) return [];
     return [
@@ -832,15 +835,23 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       ...(mediaSource
         ? mediaActions.actions
             .filter(({ id }) => id !== "open-file")
-            .map((action) => ({
-              id: action.id,
-              title:
-                action.id === "save" && !mediaActions.sharing ? "Download or share" : action.title,
-              icon:
-                action.id === "save" ? ("arrow.down.to.line" as const) : ("doc.on.doc" as const),
-              disabled: action.disabled,
-              onPress: action.run,
-            }))
+            .map((action) => {
+              const saves = action.id === "download" || action.id === "save-image";
+              // Without an on-device save, the share sheet is also the download (iOS Save to Files).
+              const sheetSaves = action.id === "save" && !hasDeviceSave;
+              return {
+                id: action.id,
+                title: sheetSaves && !mediaActions.sharing ? "Download or share" : action.title,
+                icon:
+                  saves || sheetSaves
+                    ? ("tray.and.arrow.down" as const)
+                    : action.id === "save"
+                      ? ("square.and.arrow.up" as const)
+                      : ("doc.on.doc" as const),
+                disabled: action.disabled,
+                onPress: action.run,
+              };
+            })
         : [
             {
               id: "copy-path",

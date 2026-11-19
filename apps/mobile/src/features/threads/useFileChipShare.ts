@@ -4,7 +4,10 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { useEffect, useRef } from "react";
 
-import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+} from "../../lib/attachmentDownload";
 import { assetEnvironment } from "../../state/assets";
 import { usePreparedConnection } from "../../state/session";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
@@ -25,7 +28,7 @@ export function useFileChipShare(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight file share download when the component unmounts
   useEffect(() => () => requestRef.current?.abort(), []);
 
-  return (target: FileChipTarget) => {
+  return (target: FileChipTarget, kind: "share" | "download") => {
     const source = fileChipShareSource(target, threadId);
     if (!source || requestRef.current) return;
     const request = new AbortController();
@@ -37,17 +40,21 @@ export function useFileChipShare(
       const url =
         result._tag === "Success" ? resolveAssetUrl(httpBaseUrl, result.value.relativeUrl) : null;
       if (url === null) throw new Error("The file could not be loaded. Reconnect and try again.");
-      await downloadAndShareAttachment({
-        url,
-        attachment: source,
-        signal: request.signal,
-        sourceIdentifier,
-      });
+      if (kind === "download") {
+        await downloadAttachmentToDevice({ uri: url, attachment: source, signal: request.signal });
+      } else {
+        await downloadAndShareAttachment({
+          url,
+          attachment: source,
+          signal: request.signal,
+          sourceIdentifier,
+        });
+      }
     })()
       .catch((error: unknown) => {
         if (!request.signal.aborted) {
           Dialog.alert(
-            "Could not share file",
+            kind === "download" ? "Could not download file" : "Could not share file",
             error instanceof Error ? error.message : "Try again.",
           );
         }

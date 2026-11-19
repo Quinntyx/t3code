@@ -14,6 +14,7 @@ import { useAttachmentDocument } from "../../lib/attachmentDocument";
 import { nativeViewerErrorMessage } from "../../lib/attachmentDownload";
 import { isFileBackedComposerAttachment } from "../../lib/composerImages";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { removeComposerDraftAttachment, useComposerDraft } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { useRefreshAssetUrl } from "../../state/assets";
@@ -109,6 +110,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   };
 
   const { content, renderedMode, activeMode, setRendered, share, sharing } = document;
+  const canDownload = uri !== null && canSaveFileToDownloads();
   const modeToggle = renderedMode
     ? renderedToggleAction({
         rendered: activeMode !== "source",
@@ -136,10 +138,18 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
             onPress: () => copyTextWithHaptic(content.text),
           }
         : null,
+      canDownload
+        ? {
+            id: "download",
+            title: document.downloading ? "Downloading…" : "Download",
+            icon: "tray.and.arrow.down",
+            onPress: () => void document.download(),
+          }
+        : null,
       uri
         ? {
             id: "share",
-            title: sharing ? "Opening share sheet…" : "Save or share",
+            title: sharing ? "Opening share sheet…" : canDownload ? "Share" : "Save or share",
             icon: "square.and.arrow.up",
             onPress: () => void share(),
           }

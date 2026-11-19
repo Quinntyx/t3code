@@ -287,6 +287,7 @@ import { waitForThreadShell } from "./threadForkNavigation";
 import { UNSENT_MESSAGE_ANNOUNCEMENT, unsentMessageBubbleClassName } from "./unsentMessageStyle";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { useFileChipShare } from "./useFileChipShare";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import {
@@ -3234,7 +3235,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         };
       }
       const target = resolveFileChipTarget(href, props.workspaceRoot);
-      return target ? fileChipMenu(target) : undefined;
+      return target ? fileChipMenu(target, canSaveFileToDownloads()) : undefined;
     },
     onFileContextMenuAction: (href, actionId) => {
       const skill = enrichedSkillReference(href, props.skills);
@@ -3266,7 +3267,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           if (target.fullPath) handOffToNewThread(target.fullPath);
           return;
         case "save":
-          shareFileChip(target);
+          shareFileChip(target, "share");
+          return;
+        case "download":
+          shareFileChip(target, "download");
           return;
       }
     },

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   shareFromSource: vi.fn(),
   available: vi.fn(),
   open: vi.fn(),
+  saveToDownloads: vi.fn(),
   uuid: vi.fn(),
 }));
 
@@ -69,11 +70,13 @@ vi.mock("expo-sharing", () => ({
 }));
 
 vi.mock("./uuid", () => ({ uuidv4: mocks.uuid }));
+vi.mock("./saveToDevice", () => ({ saveFileToDownloads: mocks.saveToDownloads }));
 vi.mock("./shareFileFromSource", () => ({ shareFileFromSource: mocks.shareFromSource }));
 
 import {
   downloadAndShareAttachment,
   downloadAttachmentForPreview,
+  downloadAttachmentToDevice,
   shareLocalAttachment,
 } from "./attachmentDownload";
 import { isForegroundHandoffActive } from "./foreground-handoff";
@@ -96,6 +99,8 @@ beforeEach(() => {
   mocks.shareFromSource.mockReset();
   mocks.available.mockReset();
   mocks.uuid.mockReset();
+  mocks.saveToDownloads.mockReset();
+  mocks.saveToDownloads.mockResolvedValue(undefined);
   mocks.download.mockImplementation(async (_url: string, file: { uri: string }) => file);
   mocks.copy.mockResolvedValue(undefined);
   mocks.share.mockResolvedValue(undefined);
@@ -341,6 +346,53 @@ describe("attachment preview files", () => {
     copied.resolve();
     await task;
     expect(mocks.share).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("downloadAttachmentToDevice", () => {
+  it("saves a downloaded copy under a safe name, then removes the cached file", async () => {
+    await downloadAttachmentToDevice({
+      uri: input.url,
+      attachment: { ...input.attachment, name: "../../report.pdf" },
+      signal: new AbortController().signal,
+    });
+    const cached = mocks.download.mock.calls[0]![1] as { uri: string };
+    expect(mocks.saveToDownloads).toHaveBeenCalledWith(cached.uri, "report.pdf");
+    expect(mocks.share).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a local original in place without downloading or deleting it", async () => {
+    const uri = "content://media/draft/report.pdf";
+    await downloadAttachmentToDevice({
+      uri,
+      attachment: input.attachment,
+      signal: new AbortController().signal,
+    });
+    expect(mocks.saveToDownloads).toHaveBeenCalledWith(uri, "report.pdf");
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.deleted).not.toHaveBeenCalled();
+  });
+
+  it("does not save a download canceled while it was in flight", async () => {
+    const started = Promise.withResolvers<void>();
+    const download = Promise.withResolvers<{ uri: string }>();
+    mocks.download.mockImplementation(() => {
+      started.resolve();
+      return download.promise;
+    });
+    const controller = new AbortController();
+    const task = downloadAttachmentToDevice({
+      uri: input.url,
+      attachment: input.attachment,
+      signal: controller.signal,
+    });
+    await started.promise;
+    controller.abort();
+    download.resolve({ uri: "file:///cache/report.pdf" });
+    await task;
+    expect(mocks.saveToDownloads).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
   });
 });

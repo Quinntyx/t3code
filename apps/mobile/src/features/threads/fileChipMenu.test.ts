@@ -69,10 +69,16 @@ describe("file chip downloads", () => {
     ["/tmp/data.db", "/tmp/data.db", "application/vnd.sqlite3"],
   ])("offers a host download for %s", (href, path, mimeType) => {
     const target = resolveFileChipTarget(href, "/repo")!;
-    expect(fileChipMenu(target).actions).toContainEqual({
+    expect(fileChipMenu(target, false).actions).toContainEqual({
       id: "save",
       title: "Save or share",
     });
+    expect(fileChipMenu(target, true).actions).toEqual(
+      expect.arrayContaining([
+        { id: "download", title: "Download" },
+        { id: "save", title: "Share" },
+      ]),
+    );
     expect(fileChipShareSource(target, threadId)).toEqual({
       name: path.split("/").at(-1),
       mimeType,
@@ -84,7 +90,9 @@ describe("file chip downloads", () => {
     for (const href of ["src/app.ts", "/tmp/archive.7z", "/tmp/clip.mp4.txt"]) {
       const target = resolveFileChipTarget(href, "/repo")!;
       expect(fileChipShareSource(target, threadId)).toBeNull();
-      expect(fileChipMenu(target).actions.some(({ id }) => id === "save")).toBe(false);
+      expect(
+        fileChipMenu(target, true).actions.some(({ id }) => id === "save" || id === "download"),
+      ).toBe(false);
     }
   });
 });

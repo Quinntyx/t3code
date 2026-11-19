@@ -25,7 +25,11 @@ import * as Clipboard from "expo-clipboard";
 
 import { AppText } from "../../components/ui/AppText";
 import { PdfPreview } from "../../components/PdfPreview";
-import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+} from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { beginForegroundHandoff } from "../../lib/foreground-handoff";
 import { usePreviewStreamAccess } from "../../state/preview";
 import { previewPromptText } from "./previewPromptText";
@@ -90,21 +94,31 @@ async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean)
 }
 
 function offerDownload(download: PreviewStreamDownload) {
+  const input = {
+    attachment: { name: download.fileName, mimeType: "application/octet-stream" },
+    signal: new AbortController().signal,
+  };
+  const save = (task: Promise<unknown>) =>
+    void task.catch((cause: unknown) =>
+      Dialog.alert(
+        "Could not save the download",
+        cause instanceof Error ? cause.message : undefined,
+      ),
+    );
+  const canDownload = canSaveFileToDownloads();
   Dialog.alert(`Downloaded ${download.fileName}`, undefined, [
     { text: "Not now", style: "cancel" },
+    ...(canDownload
+      ? [
+          {
+            text: "Save to Downloads",
+            onPress: () => save(downloadAttachmentToDevice({ ...input, uri: download.url })),
+          },
+        ]
+      : []),
     {
-      text: "Save or share",
-      onPress: () =>
-        void downloadAndShareAttachment({
-          url: download.url,
-          attachment: { name: download.fileName, mimeType: "application/octet-stream" },
-          signal: new AbortController().signal,
-        }).catch((cause: unknown) =>
-          Dialog.alert(
-            "Could not save the download",
-            cause instanceof Error ? cause.message : undefined,
-          ),
-        ),
+      text: canDownload ? "Share" : "Save or share",
+      onPress: () => save(downloadAndShareAttachment({ ...input, url: download.url })),
     },
   ]);
 }

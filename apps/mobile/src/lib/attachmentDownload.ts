@@ -246,6 +246,27 @@ export async function downloadAndShareAttachment(input: {
   }
 }
 
+/** Saves a copy in Android's Downloads folder (Android 10+). */
+export async function downloadAttachmentToDevice(input: {
+  readonly uri: string;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  const { saveFileToDownloads } = await import("./saveToDevice");
+  const name = downloadFileName(input.attachment.name);
+  if (/^(file|content):/i.test(input.uri)) {
+    if (!input.signal.aborted) await saveFileToDownloads(input.uri, name);
+    return;
+  }
+  const file = await downloadAttachmentForPreview({ ...input, url: input.uri });
+  if (file === null) return;
+  try {
+    if (!input.signal.aborted) await saveFileToDownloads(file.uri, name);
+  } finally {
+    file.dispose();
+  }
+}
+
 export async function shareLocalAttachment(input: {
   readonly uri: string;
   readonly attachment: AttachmentFileMetadata;
