@@ -101,7 +101,7 @@ function FloatingBrowserPlayer(props: {
   const height = Math.round(width / aspect);
   const background = themeVariables["--color-sheet-solid"];
   const title = browserTabTitle(props.tab);
-  const effectiveState = pdfUri !== null ? "live" : streamError ? "error" : streamState;
+  const effectiveState = streamError ? "error" : pdfUri !== null ? "live" : streamState;
   const accessibilityLabel =
     effectiveState === "live"
       ? `Open browser, ${title}`

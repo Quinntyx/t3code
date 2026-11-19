@@ -715,6 +715,7 @@ export function start(configuration: PreviewStreamConfiguration) {
       if (video) video.srcObject = null;
     },
     command: (message) => {
+      if (message.type === "text" && !streaming) return;
       send(message);
     },
     togglePictureInPicture,

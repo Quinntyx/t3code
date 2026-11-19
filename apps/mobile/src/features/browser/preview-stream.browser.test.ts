@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 
-import { start, stop } from "./preview-stream.browser";
+import { command, start, stop } from "./preview-stream.browser";
 
 const JPEG_FRAME = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
 
@@ -298,17 +298,20 @@ it("ignores touch starts and keyboard or IME input before the first frame paints
     const input = document.querySelector("textarea")!;
     expect(input.disabled).toBe(true);
 
-    // Synthetic key, input, and composition events while not streaming must send nothing.
+    // Synthetic key, input, composition, and async paste commands while not streaming must send no text/keys.
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     input.value = "\u200bhello";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new CompositionEvent("compositionend", { data: "hi", bubbles: true }));
+    command({ type: "text", text: "pasted" });
+    command({ type: "reload" });
     expect(
       socket.sent.filter((entry) => {
         const type = (entry as { type?: string }).type;
         return type === "key" || type === "text";
       }),
     ).toEqual([]);
+    expect(socket.sent).toContainEqual({ type: "reload" });
 
     // A touch pointerdown before the frame paints must not turn into a tap after the frame arrives.
     canvas.dispatchEvent(
