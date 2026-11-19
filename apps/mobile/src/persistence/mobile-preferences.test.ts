@@ -108,6 +108,28 @@ it.effect("reads older preferences without hidden keys and sanitizes stored valu
   }),
 );
 
+it.effect("remembers notebook views independently for the same thread ID on different hosts", () =>
+  Effect.gen(function* () {
+    const first = "machine-1:thread";
+    const second = "machine-2:thread";
+    const firstView = {
+      selectedKernelId: "python",
+      collapsed: { '["python","cell","source"]': true },
+    };
+    const secondView = { selectedKernelId: "analysis" };
+    const makeStore = fixture({ baseFontSize: 18 });
+    const store = yield* makeStore;
+    yield* store.savePatch({ notebookViews: { [first]: firstView } });
+    yield* store.update((current) => ({
+      notebookViews: { ...current.notebookViews, [second]: secondView },
+    }));
+    expect(yield* (yield* makeStore).load).toEqual({
+      baseFontSize: 18,
+      notebookViews: { [first]: firstView, [second]: secondView },
+    });
+  }),
+);
+
 it.effect("keeps a remembered new project layout and publishing host", () =>
   Effect.gen(function* () {
     const oldStore = yield* fixture({ baseFontSize: 18 });

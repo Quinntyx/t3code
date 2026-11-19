@@ -78,12 +78,6 @@ export function WorkspaceThreadSidebar(props: {
       onOpenSettings={leave(() => openWorkspaceTab("settings"))}
       onOpenEnvironmentSettings={() => openSettings(navigation, "SettingsEnvironments")}
       onOpenHome={drawer ? leave(openHome) : undefined}
-      onOpenThreadNotebook={leave((thread: EnvironmentThreadShell) =>
-        navigation.navigate("ThreadNotebook", {
-          environmentId: thread.environmentId,
-          threadId: thread.id,
-        }),
-      )}
       onNewThreadInProject={(project: EnvironmentProject) =>
         selectThreadRoute({
           draft: {

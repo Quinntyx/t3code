@@ -154,6 +154,24 @@ function ThreadDetailsBody(props: BodyProps) {
           ) : undefined
         }
       >
+        {hasThread ? (
+          <ListSection>
+            <ListRow
+              icon="doc.text"
+              label="Notebook"
+              description="Read-only cells and outputs"
+              onPress={() =>
+                navigate(() =>
+                  navigation.navigate("ThreadNotebook", {
+                    environmentId: EnvironmentId.make(String(controls.environmentId)),
+                    threadId: ThreadId.make(String(controls.threadId)),
+                  }),
+                )
+              }
+            />
+          </ListSection>
+        ) : null}
+
         <WorkspaceSummary {...props} git={git} hasThread={hasThread} />
 
         {hasThread && git.linkedPrLines.length > 0 ? (
@@ -170,23 +188,6 @@ function ThreadDetailsBody(props: BodyProps) {
             ))}
           </ListSection>
         ) : null}
-
-        <ListSection title="Notebook">
-          <ListRow
-            icon="doc.text"
-            label="Notebook"
-            description="Read-only cells and outputs"
-            disabled={!hasThread}
-            onPress={() =>
-              navigate(() =>
-                navigation.navigate("ThreadNotebook", {
-                  environmentId: EnvironmentId.make(String(controls.environmentId)),
-                  threadId: ThreadId.make(String(controls.threadId)),
-                }),
-              )
-            }
-          />
-        </ListSection>
 
         <ManageSection {...props} git={git} hasThread={hasThread} navigate={navigate} />
 

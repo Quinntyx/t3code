@@ -82,6 +82,13 @@ const WorkspaceSelections = Schema.Struct({
 });
 export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 
+const NotebookView = Schema.Struct({
+  selectedKernelId: Schema.optional(Schema.String),
+  collapsed: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+});
+export type NotebookView = typeof NotebookView.Type;
+const isNotebookViews = Schema.is(Schema.Record(Schema.String, NotebookView));
+
 const isThreadListFilters = Schema.is(ThreadListFilters);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
@@ -146,6 +153,7 @@ export interface Preferences {
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
+  readonly notebookViews?: Readonly<Record<string, NotebookView>>;
   /** The checkout layout and publishing host a new project last used. */
   readonly newProjectLayout?: ProjectCloneLayout;
   readonly newProjectPublishHost?: SourceControlProviderKind;
@@ -244,6 +252,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
+    notebookViews?: Readonly<Record<string, NotebookView>>;
     newProjectLayout?: ProjectCloneLayout;
     newProjectPublishHost?: SourceControlProviderKind;
   } = {};
@@ -445,6 +454,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isWorkspaceSelections(parsed.workspaceSelections)) {
     preferences.workspaceSelections = parsed.workspaceSelections;
+  }
+  if (isNotebookViews(parsed.notebookViews)) {
+    preferences.notebookViews = parsed.notebookViews;
   }
   if (parsed.newProjectLayout === "standard" || parsed.newProjectLayout === "worktree-container") {
     preferences.newProjectLayout = parsed.newProjectLayout;

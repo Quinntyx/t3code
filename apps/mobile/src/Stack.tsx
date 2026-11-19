@@ -706,7 +706,8 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     ThreadNotebook: createNativeStackScreen({
       screen: ThreadNotebookSheet,
-      options: sheetRoute({ detent: 0.65, androidMaxDetent: 0.95 }),
+      // Android lays out the scroller at the largest detent, clipping its end at smaller ones.
+      options: sheetRoute({ detent: Platform.OS === "android" ? "full" : 0.65 }),
     }),
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,
