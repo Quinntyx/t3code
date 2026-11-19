@@ -31,10 +31,12 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import * as Dialog from "../../components/ui/Dialog";
 import { FilePreviewModal } from "../../components/ui/FilePreviewModal";
 import {
+  downloadAttachmentToDevice,
   nativeViewerErrorMessage,
   shareGeneratedAttachment,
   writeGeneratedAttachmentFile,
 } from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { attachmentDocumentPresentation } from "../../lib/attachmentDocumentPresentation";
 import {
   createComposerFileAttachment,
@@ -296,6 +298,7 @@ function ZipArchiveHeader(props: {
   readonly name: string;
   readonly subtitle: string;
   readonly onSave: () => void;
+  readonly onDownload: (() => void) | null;
   readonly onRemove: (() => void) | null;
 }) {
   const navigation = useNavigation();
@@ -307,7 +310,20 @@ function ZipArchiveHeader(props: {
         if (navigation.canGoBack()) navigation.goBack();
       }}
       actions={[
-        { accessibilityLabel: "Save ZIP", icon: "square.and.arrow.up", onPress: props.onSave },
+        ...(props.onDownload
+          ? [
+              {
+                accessibilityLabel: "Download ZIP",
+                icon: "tray.and.arrow.down" as const,
+                onPress: props.onDownload,
+              },
+            ]
+          : []),
+        {
+          accessibilityLabel: props.onDownload ? "Share ZIP" : "Save ZIP",
+          icon: "square.and.arrow.up",
+          onPress: props.onSave,
+        },
         ...(props.onRemove
           ? [
               {
@@ -482,6 +498,7 @@ export function ZipArchiveView(props: {
   readonly draftKey: string | null;
   readonly maxAttachmentBytes: number | undefined;
   readonly onSave: () => void;
+  readonly onDownload: (() => void) | null;
   readonly onRemove: (() => void) | null;
 }) {
   const { state, retry, cancel } = useZipArchive(props);
@@ -505,6 +522,7 @@ export function ZipArchiveView(props: {
               : props.subtitle
           }
           onSave={props.onSave}
+          onDownload={props.onDownload}
           onRemove={props.onRemove}
         />
       )}
@@ -621,7 +639,7 @@ function ZipEntryView(props: {
   const [revision, setRevision] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(true);
   const [viewerError, setViewerError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"save" | "attach" | null>(null);
+  const [busy, setBusy] = useState<"save" | "download" | "attach" | null>(null);
   const action = useRef<AbortController | null>(null);
   const pendingViewerError = useRef<string | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancel a pending save or attach when the entry closes.
@@ -662,7 +680,10 @@ function ZipEntryView(props: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reread the entry.
   }, [entry, isText, mimeType, tooBig, revision]);
 
-  const run = (kind: "save" | "attach", task: (signal: AbortSignal) => Promise<unknown>) => {
+  const run = (
+    kind: "save" | "download" | "attach",
+    task: (signal: AbortSignal) => Promise<unknown>,
+  ) => {
     if (busy) return;
     setBusy(kind);
     const controller = new AbortController();
@@ -678,7 +699,7 @@ function ZipEntryView(props: {
         if (controller.signal.aborted) return;
         setBusy(null);
         Dialog.alert(
-          kind === "save" ? "Could not save file" : "Could not add file to chat",
+          kind === "attach" ? "Could not add file to chat" : "Could not save file",
           errorMessage(cause, "Please try again."),
         );
       },
@@ -692,6 +713,17 @@ function ZipEntryView(props: {
         signal,
       }),
     );
+  const canDownload = canSaveFileToDownloads();
+  const download = () =>
+    run("download", async (signal) => {
+      const attachment = { name: entry.name, mimeType };
+      const file = await writeGeneratedAttachmentFile({ bytes: entry.bytes, attachment });
+      try {
+        await downloadAttachmentToDevice({ uri: file.uri, attachment, signal });
+      } finally {
+        file.dispose();
+      }
+    });
   const canAddToChat = draftKey !== null && maxAttachmentBytes !== undefined;
   const addToChat = () => {
     if (draftKey === null || maxAttachmentBytes === undefined) return;
@@ -749,9 +781,20 @@ function ZipEntryView(props: {
                     },
                   ]
                 : []),
+              ...(canDownload
+                ? [
+                    {
+                      id: "download",
+                      title: busy === "download" ? "Downloading…" : "Download",
+                      icon: "tray.and.arrow.down",
+                      disabled: busy !== null,
+                      onPress: download,
+                    },
+                  ]
+                : []),
               {
                 id: "save",
-                title: "Save file",
+                title: canDownload ? "Share" : "Save file",
                 icon: "square.and.arrow.up",
                 disabled: busy !== null,
                 onPress: save,

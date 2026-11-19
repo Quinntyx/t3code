@@ -207,6 +207,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
             : undefined
         }
         onSave={() => void share()}
+        onDownload={canDownload ? () => void document.download() : null}
         onRemove={draftKey ? removeFromDraft : null}
       />
     );
