@@ -3113,7 +3113,7 @@ describe("PiAdapterV2", () => {
   it.effect("observes official subagent results without inventing child threads", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const { runtime, takeEvent, events } = yield* openRuntime(fake);
       const providerThread = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
@@ -3134,12 +3134,62 @@ describe("PiAdapterV2", () => {
               {
                 agent: "scout",
                 task: "map the repo",
+                exitCode: null,
+                stderr: "",
+                messages: [],
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+              },
+            ],
+          },
+        },
+      });
+      yield* takeEvent(
+        (event) => event.type === "subagent.updated" && event.subagent.status === "running",
+      );
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.turnTokenUsage?.subagentUsage !== undefined,
+        ),
+        "a child that has not answered measures nothing",
+      );
+      yield* fake.emit({
+        type: "tool_execution_update",
+        toolCallId: "call_sub",
+        toolName: "subagent",
+        partialResult: {
+          content: [{ type: "text", text: "(running...)" }],
+          details: {
+            mode: "single",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo",
                 exitCode: 0,
                 stderr: "",
                 sessionFile: "/ignored/custom-extension-session.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "scanning files" }] },
                 ],
+                model: "opencode-go/test-model",
+                usage: {
+                  input: 10,
+                  output: 5,
+                  cacheRead: 100,
+                  cacheWrite: 20,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 1,
+                },
               },
             ],
           },
@@ -3155,6 +3205,24 @@ describe("PiAdapterV2", () => {
           running.subagent.progress === "scanning files" &&
           running.subagent.childThreadId === null,
       );
+      const runningUsage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.turnTokenUsage?.subagentUsage?.[0]?.outputTokens === 5,
+      );
+      assert.isTrue(runningUsage.type === "provider_turn.updated");
+      if (runningUsage.type !== "provider_turn.updated") return;
+      assert.isUndefined(runningUsage.providerTurn.tokenUsage);
+      assert.equal(runningUsage.providerTurn.turnTokenUsage?.usageStatus, "partial");
+      assert.deepEqual(runningUsage.providerTurn.turnTokenUsage?.subagentUsage, [
+        {
+          model: "opencode-go/test-model",
+          inputTokens: 130,
+          cachedInputTokens: 100,
+          cacheCreationTokens: 20,
+          outputTokens: 5,
+        },
+      ]);
 
       yield* fake.emit({
         type: "tool_execution_end",
@@ -3175,6 +3243,16 @@ describe("PiAdapterV2", () => {
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "repo has one file" }] },
                 ],
+                model: "opencode-go/test-model",
+                usage: {
+                  input: 20,
+                  output: 9,
+                  cacheRead: 150,
+                  cacheWrite: 30,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 2,
+                },
               },
             ],
           },
@@ -3198,6 +3276,35 @@ describe("PiAdapterV2", () => {
         subagentItem.type === "turn_item.updated" &&
           subagentItem.turnItem.type === "subagent" &&
           subagentItem.turnItem.childThreadId === null,
+      );
+      const completedUsage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.turnTokenUsage?.subagentUsage?.[0]?.outputTokens === 9,
+      );
+      assert.isTrue(completedUsage.type === "provider_turn.updated");
+      if (completedUsage.type !== "provider_turn.updated") return;
+      const childTotal = {
+        model: "opencode-go/test-model",
+        inputTokens: 200,
+        cachedInputTokens: 150,
+        cacheCreationTokens: 30,
+        outputTokens: 9,
+      };
+      // Cumulative per child, not a sum of both snapshots.
+      assert.deepEqual(completedUsage.providerTurn.turnTokenUsage?.subagentUsage, [childTotal]);
+
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const settled = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      );
+      assert.deepEqual(
+        settled.type === "provider_turn.updated"
+          ? settled.providerTurn.turnTokenUsage?.subagentUsage
+          : undefined,
+        [childTotal],
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );

@@ -59,13 +59,15 @@ update model pricing.
 
 ## See one thread's consumption
 
-On web and desktop, **Consumption** in the thread details card charts the tokens a thread used
-over time, with its estimated API-equivalent cost. **Main agent** is the thread's own turns;
+On web and desktop, **Consumption** in the thread details card charts the tokens a thread used over
+time, with its estimated API-equivalent cost. **Main agent** is the thread's own turns;
 **Delegates** are the subagent threads it started and any those started, including Claude's native
-subagents and workflows. A group that ran more than one model reads **Mixed**; select it for the
-per-model breakdown. A dotted line marks each time the thread's context was compacted. Turns
-from providers that do not report per-turn usage show nothing here, and other providers' native
-subagents may count toward the main agent or not appear at all.
+subagents and workflows and Pi's subagent tool. A group that ran more than one model reads
+**Mixed**; select it for the per-model breakdown. A dotted line marks each time the thread's context
+was compacted. Figures update while the thread works; a cost ending in **+** is a floor, usually
+replaced by the exact figure when the turn finishes. Turns from providers that do not report
+per-turn usage show nothing here, and other providers' native subagents may count toward the main
+agent or not appear at all.
 
 Choose whether the card shows it under **Consumption** in Settings → Appearance → Thread details,
 or by right-clicking the card. The sidebar hover on a thread shows how long it worked and its

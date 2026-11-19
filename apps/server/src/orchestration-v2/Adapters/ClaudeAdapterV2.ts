@@ -31,8 +31,9 @@ import {
   claudeLedgerDelta,
   claudeModelLedger,
   claudeReportedContextWindows,
+  liveClaudeTurnTokenUsage,
   normalizeClaudeTurnTokenUsage,
-  recordClaudeMainMessageUsage,
+  recordClaudeMessageUsage,
   type ClaudeModelLedger,
   type ClaudeTurnLedger,
 } from "../../provider/ClaudeTurnTokenUsage.ts";
@@ -4413,6 +4414,8 @@ interface ActiveClaudeTurnContext {
   readonly rootModels: Set<string>;
   // Root messages' usage by id and the main agent's latest model split its usage by model.
   readonly mainMessages: Map<string, TurnModelTokenUsage>;
+  // Subagent messages' usage by id, which the final ledger reports at turn end.
+  readonly subagentMessages: Map<string, TurnModelTokenUsage>;
   mainUsageModel: string;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
@@ -5479,6 +5482,33 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
+        const runningProviderTurn = (
+          context: ActiveClaudeTurnContext,
+        ): OrchestrationV2ProviderTurn => ({
+          id: context.providerTurnId,
+          providerThreadId: context.input.providerThread.id,
+          nodeId: context.input.rootNodeId,
+          runAttemptId: context.input.attemptId,
+          nativeTurnRef: {
+            driver: CLAUDE_PROVIDER,
+            nativeId: context.nativeTurnId,
+            strength: "strong",
+          },
+          ordinal: context.providerTurnOrdinal,
+          status: "running",
+          startedAt: context.startedAt,
+          completedAt: null,
+          ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
+        });
+
+        const liveTurnTokenUsage = (context: ActiveClaudeTurnContext) =>
+          liveClaudeTurnTokenUsage({
+            mainMessages: context.mainMessages,
+            subagentMessages: context.subagentMessages,
+            hasSubagents:
+              context.subagentsByTaskId.size > 0 || context.subagentsByToolUseId.size > 0,
+          });
+
         // Usage without input is a placeholder, not a context measurement.
         const emitContextUsage = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
@@ -5509,26 +5539,32 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (claudeMessageInputTokens(usage) <= 0) return;
             context.compactionTokens = undefined;
           }
+          const liveUsage = liveTurnTokenUsage(context);
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver: CLAUDE_PROVIDER,
             threadId: context.input.threadId,
             providerTurn: {
-              id: context.providerTurnId,
-              providerThreadId: context.input.providerThread.id,
-              nodeId: context.input.rootNodeId,
-              runAttemptId: context.input.attemptId,
-              nativeTurnRef: {
-                driver: CLAUDE_PROVIDER,
-                nativeId: context.nativeTurnId,
-                strength: "strong",
-              },
-              ordinal: context.providerTurnOrdinal,
-              status: "running",
-              startedAt: context.startedAt,
-              completedAt: null,
+              ...runningProviderTurn(context),
               tokenUsage,
-              ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
+              ...(liveUsage === undefined ? {} : { turnTokenUsage: liveUsage }),
+            },
+          });
+        });
+
+        // Runs per subagent frame, so it opts out of span-per-call tracing.
+        const emitLiveTurnUsage = Effect.fnUntraced(function* (context: ActiveClaudeTurnContext) {
+          // Background subagents keep sending frames to a settled turn; its final usage stands.
+          if ((yield* Ref.get(activeTurn))?.providerTurnId !== context.providerTurnId) return;
+          const liveUsage = liveTurnTokenUsage(context);
+          if (liveUsage === undefined) return;
+          yield* emitProviderEvent({
+            type: "provider_turn.updated",
+            driver: CLAUDE_PROVIDER,
+            threadId: context.input.threadId,
+            providerTurn: {
+              ...runningProviderTurn(context),
+              turnTokenUsage: liveUsage,
             },
           });
         });
@@ -9171,7 +9207,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 usage === undefined ? null : { messageId: event.message.id, usage };
               if (usage !== undefined) {
                 context.mainUsageModel = event.message.model;
-                recordClaudeMainMessageUsage(
+                recordClaudeMessageUsage(
                   context.mainMessages,
                   event.message.id,
                   event.message.model,
@@ -9184,7 +9220,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const stream = context.streamUsage;
               if (stream?.usage && usage !== undefined) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
-                recordClaudeMainMessageUsage(
+                recordClaudeMessageUsage(
                   context.mainMessages,
                   stream.messageId,
                   context.mainUsageModel,
@@ -9548,7 +9584,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
-              recordClaudeMainMessageUsage(
+              const usageChanged = recordClaudeMessageUsage(
                 context.mainMessages,
                 message.message.id,
                 message.message.model,
@@ -9568,6 +9604,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   output_tokens: Math.max(snapshotUsage.output_tokens, stream.usage.output_tokens),
                 };
                 yield* emitContextUsage(context, stream.usage);
+              } else if (usageChanged) {
+                yield* emitLiveTurnUsage(context);
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
@@ -9581,6 +9619,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               snapshotModel.length === 0 || snapshotModel === "<synthetic>"
                 ? undefined
                 : canonicalClaudeSubagentModel(modelCatalog, snapshotModel);
+            if (
+              parentToolUseId !== null &&
+              model !== undefined &&
+              message.message.usage !== undefined &&
+              recordClaudeMessageUsage(
+                context.subagentMessages,
+                message.message.id,
+                model,
+                message.message.usage,
+              )
+            ) {
+              yield* emitLiveTurnUsage(context);
+            }
             if (parentToolUseId !== null && model !== undefined) {
               const subagent = yield* resolveSubagentByToolUseId(context, parentToolUseId);
               if (subagent === undefined) {
@@ -11450,6 +11501,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               steeredLedgerUsage: { growth: new Map(), complete: true },
               rootModels: new Set(),
               mainMessages: new Map(),
+              subagentMessages: new Map(),
               mainUsageModel: turnInput.modelSelection.model,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),

@@ -166,14 +166,17 @@ export function addClaudeLedgerUsage(
   return { growth: total, complete: turn.complete };
 }
 
-/** Stream deltas and snapshots repeat a root message's usage; keep each counter's largest report. */
-export function recordClaudeMainMessageUsage(
+/**
+ * Stream deltas and snapshots repeat a message's usage; keep each counter's largest report.
+ * Returns whether the stored entry changed, so a caller can emit only on new usage.
+ */
+export function recordClaudeMessageUsage(
   messages: Map<string, TurnModelTokenUsage>,
   messageId: string,
   model: string,
   usage: unknown,
-): void {
-  if (model === "<synthetic>") return;
+): boolean {
+  if (model === "<synthetic>") return false;
   const current = normalizeClaudeMainAgentTokenUsage(
     { subtype: "success", usage },
     false,
@@ -186,7 +189,65 @@ export function recordClaudeMainMessageUsage(
   }
   const withReasoning =
     current.reasoningTokens !== undefined || previous?.reasoningTokens !== undefined;
-  messages.set(messageId, turnModelUsage(model, counts, withReasoning));
+  const grew = TOKEN_FIELDS.some((field) => counts[field] > (previous?.[field] ?? 0));
+  if (grew || previous !== undefined) {
+    messages.set(messageId, turnModelUsage(model, counts, withReasoning));
+  }
+  return grew;
+}
+
+function totalsByModel(messages: ReadonlyMap<string, TurnModelTokenUsage>) {
+  const countsByModel = new Map<string, TokenCounts>();
+  const withReasoning = new Set<string>();
+  for (const usage of messages.values()) {
+    const counts = countsByModel.get(usage.model) ?? tokenCounts({});
+    for (const field of TOKEN_FIELDS) counts[field] += usage[field] ?? 0;
+    if (usage.reasoningTokens !== undefined) withReasoning.add(usage.model);
+    countsByModel.set(usage.model, counts);
+  }
+  return { countsByModel, withReasoning };
+}
+
+/**
+ * Usage measured so far this turn, from the main agent's and its subagents' messages. The terminal
+ * update replaces it with the authoritative result plus the process ledger.
+ */
+export function liveClaudeTurnTokenUsage(input: {
+  readonly mainMessages: ReadonlyMap<string, TurnModelTokenUsage>;
+  readonly subagentMessages: ReadonlyMap<string, TurnModelTokenUsage>;
+  readonly hasSubagents: boolean;
+}): TurnTokenUsage | undefined {
+  const main = totalsByModel(input.mainMessages);
+  const subagents = totalsByModel(input.subagentMessages);
+  if (main.countsByModel.size === 0 && subagents.countsByModel.size === 0) return undefined;
+  const mainTotals = [...main.countsByModel.values()].reduce((total, counts) => {
+    for (const field of TOKEN_FIELDS) total[field] += counts[field];
+    return total;
+  }, tokenCounts({}));
+  const mainAgentUsage = [...main.countsByModel].map(([model, counts]) =>
+    turnModelUsage(model, counts, main.withReasoning.has(model)),
+  );
+  const subagentUsage = [...subagents.countsByModel].map(([model, counts]) =>
+    turnModelUsage(model, counts, subagents.withReasoning.has(model)),
+  );
+  return {
+    usageScope: "main_agent",
+    usageStatus: "partial",
+    hasSubagents: input.hasSubagents,
+    ...(main.countsByModel.size === 0
+      ? {}
+      : {
+          inputTokens: mainTotals.inputTokens,
+          cachedInputTokens: mainTotals.cachedInputTokens,
+          cacheCreationTokens: mainTotals.cacheCreationTokens,
+          outputTokens: mainTotals.outputTokens,
+          ...(main.withReasoning.size === 0 ? {} : { reasoningTokens: mainTotals.reasoningTokens }),
+        }),
+    ...(main.countsByModel.size === 0 ? {} : { models: [...main.countsByModel.keys()] }),
+    ...(mainAgentUsage.length > 1 ? { mainAgentUsage } : {}),
+    // Subagent frames repeat message_start output, so their output stays a floor until the ledger.
+    ...(subagentUsage.length === 0 ? {} : { subagentUsage, otherUsageStatus: "partial" as const }),
+  };
 }
 
 export interface ClaudeTurnObservations {
