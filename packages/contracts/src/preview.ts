@@ -217,6 +217,8 @@ export const PreviewSessionSnapshot = Schema.Struct({
   runtime: Schema.optional(PreviewRuntime),
   /** The server runs this tab in headless Chromium, so the desktop streams it like other clients. */
   headless: Schema.optional(Schema.Boolean),
+  /** Identifies an Electron-created page that must be adopted instead of creating a webview. */
+  desktopPopupId: Schema.optional(Schema.String),
   automationOwner: Schema.optional(Schema.String),
   reveal: Schema.optional(Schema.Boolean),
   revealRequest: Schema.optional(Schema.Struct({ id: Schema.String, force: Schema.Boolean })),
@@ -227,6 +229,7 @@ export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;
 export const PreviewOpenInput = Schema.Struct({
   threadId: ThreadId,
   url: Schema.optional(Url),
+  desktopPopupId: Schema.optional(Schema.String),
   viewport: Schema.optional(PreviewViewportSetting),
   profileId: Schema.optional(BrowserProfileId),
   runtime: Schema.optional(PreviewRuntime),

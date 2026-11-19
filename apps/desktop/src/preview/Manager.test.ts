@@ -94,15 +94,15 @@ describe("previewWindowOpenAction", () => {
     }
   });
 
-  it("keeps the original form POST when opening a new tab", () => {
+  it("opens form POSTs in a managed tab rather than an OS window", () => {
     const postBody = {
       data: [{ type: "rawData" as const, bytes: Buffer.from("login_hint=example") }],
       contentType: "application/x-www-form-urlencoded",
     };
-    for (const disposition of ["foreground-tab", "background-tab"] as const) {
+    for (const disposition of ["foreground-tab", "background-tab", "new-window"] as const) {
       expect(
         PreviewManager.previewWindowOpenAction({ ...details({ disposition }), postBody }),
-      ).toBe("popup");
+      ).toBe("form-tab");
     }
   });
 

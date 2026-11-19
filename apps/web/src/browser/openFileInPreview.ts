@@ -62,6 +62,7 @@ export async function openUrlInPreview<E>(input: {
   readonly openPreview: OpenPreviewMutation<E>;
   readonly profileId?: PreviewOpenInput["profileId"];
   readonly background?: boolean;
+  readonly desktopPopupId?: string;
 }): Promise<AtomCommandResult<void, E | BrowserSettingsReadError>> {
   // Read before any await: a side chat pane that unmounts meanwhile drops its host mapping.
   const threadRef = rightPanelHostRef(input.threadRef);
@@ -82,7 +83,9 @@ export async function openUrlInPreview<E>(input: {
     environmentId: threadRef.environmentId,
     input: {
       threadId: threadRef.threadId,
-      url: input.url,
+      ...(input.desktopPopupId === undefined
+        ? { url: input.url }
+        : { desktopPopupId: input.desktopPopupId }),
       viewport: defaults.viewport,
       profileId: input.profileId ?? defaults.profileId,
       ...(runtime === undefined ? {} : { runtime }),

@@ -30,6 +30,7 @@ import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import {
   BrowserWindow,
   ClipboardItem,
+  WebContentsView,
   app,
   type Session,
   clipboard,
@@ -466,13 +467,13 @@ export const previewWindowOpenAction = (details: {
   readonly url: string;
   readonly disposition: Electron.HandlerDetails["disposition"];
   readonly postBody?: Electron.PostBody;
-}): "popup" | "new-tab" | "navigate" | "deny" => {
+}): "popup" | "form-tab" | "new-tab" | "navigate" | "deny" => {
   const protocol = URL.parse(details.url)?.protocol;
   // MSAL redirects on a denied blank popup; navigating the tab would destroy that fallback.
   if (protocol === undefined || IN_PLACE_DENIED_PROTOCOLS.has(protocol)) return "deny";
   if (!POPUP_PROTOCOLS.has(protocol)) return "navigate";
-  // Reopening just the URL would turn Chromium's form POST into a GET.
-  if (details.postBody || details.disposition === "new-window") return "popup";
+  if (details.postBody) return "form-tab";
+  if (details.disposition === "new-window") return "popup";
   return details.disposition === "foreground-tab" || details.disposition === "background-tab"
     ? "new-tab"
     : "navigate";
@@ -543,6 +544,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const passkeys = yield* PreviewPasskeys.PreviewPasskeys;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
+  const newPopupId = () => Effect.runSyncWith(context)(random.uuidV4());
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
 
   let forwardedShortcuts: ReadonlyArray<PreviewForwardedShortcut> = [];
@@ -575,6 +577,39 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const displayMediaHandlerSessions = new WeakSet<Session>();
   let frameCaptureWindowOpen = true;
   let currentMainWindow: BrowserWindow | undefined;
+  const pendingPopups = new Map<
+    string,
+    {
+      window: BrowserWindow;
+      threadId: string;
+      view: Electron.WebContentsView;
+      expiry: Fiber.Fiber<void>;
+    }
+  >();
+  const adoptedPopups = new Map<
+    string,
+    { id: string; window: BrowserWindow; view: Electron.WebContentsView }
+  >();
+
+  const disposePopup = ({
+    window,
+    view,
+  }: {
+    window: BrowserWindow;
+    view: Electron.WebContentsView;
+  }) => {
+    if (!window.isDestroyed()) window.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close({ waitForBeforeUnload: false });
+  };
+
+  const forgetPopup = (id: string) => {
+    const popup = pendingPopups.get(id);
+    if (popup) {
+      pendingPopups.delete(id);
+      runFork(Fiber.interrupt(popup.expiry));
+    }
+    return popup;
+  };
   let mainWindowCleanupFiber: Fiber.Fiber<void, never> | undefined;
   const tabLifecycleLocks = new Map<
     string,
@@ -1188,6 +1223,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const attachListeners = Effect.fn("PreviewManager.attachListeners")(function* (
     tabId: string,
     wc: Electron.WebContents,
+    serverTab: DesktopPreviewTabDefaults["serverTab"],
   ) {
     const scope = yield* Scope.fork(parentScope, "sequential");
     const attachmentId = Symbol();
@@ -1553,7 +1589,52 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         detachPasskeys = passkeys.attachGuest(wc);
         wc.setWindowOpenHandler((details) => {
           const action = previewWindowOpenAction(details);
-          if (action === "popup") {
+          const window = currentMainWindow;
+          if (action === "form-tab" && serverTab && window && !window.isDestroyed()) {
+            return {
+              action: "allow",
+              outlivesOpener: true,
+              overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS,
+              createWindow: (options) => {
+                // Electron passes the pending navigation's WebContents in these options.
+                const { webContents: child } =
+                  options as Electron.WebContentsViewConstructorOptions;
+                if (!child) throw new Error("Electron did not create the popup page.");
+                const id = newPopupId();
+                const view = new WebContentsView({ webContents: child });
+                child.setWindowOpenHandler(() => ({ action: "deny" }));
+                // The stream needs a composited view; keep it behind the application renderer.
+                window.contentView.addChildView(view, 0);
+                view.setBounds({ x: 0, y: 0, width: 1280, height: 800 });
+                const expiry = runFork(
+                  Effect.sleep("30 seconds").pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        const expired = pendingPopups.get(id);
+                        pendingPopups.delete(id);
+                        if (expired) disposePopup(expired);
+                      }),
+                    ),
+                  ),
+                );
+                pendingPopups.set(id, { window, threadId: serverTab.threadId, view, expiry });
+                child.once("destroyed", () => {
+                  forgetPopup(id);
+                  if (!window.isDestroyed()) window.contentView.removeChildView(view);
+                });
+                runFork(
+                  emitOpenLink({
+                    tabId,
+                    url: details.url,
+                    background: details.disposition === "background-tab",
+                    desktopPopupId: id,
+                  }),
+                );
+                return child;
+              },
+            };
+          }
+          if (action === "popup" || action === "form-tab") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }
           if (action === "deny") return { action: "deny" };
@@ -1604,11 +1685,27 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         currentMainWindow = window;
         frameCaptureWindowOpen = true;
         window.once("closed", () => {
-          if (currentMainWindow !== window) return;
+          for (const [id, popup] of pendingPopups) {
+            if (popup.window === window) {
+              forgetPopup(id);
+              disposePopup(popup);
+            }
+          }
+          const closePopups = Effect.forEach(
+            Array.from(adoptedPopups).flatMap(([tabId, popup]) =>
+              popup.window === window ? [tabId] : [],
+            ),
+            closeTab,
+            { discard: true },
+          );
+          if (currentMainWindow !== window) {
+            runFork(closePopups);
+            return;
+          }
           currentMainWindow = undefined;
           frameCaptureWindowOpen = false;
           mainWindowCleanupFiber = runFork(
-            Effect.all([closeAllPictureInPicture(), stopAllRecordings()], {
+            Effect.all([closeAllPictureInPicture(), stopAllRecordings(), closePopups], {
               concurrency: "unbounded",
               discard: true,
             }).pipe(Effect.ignore),
@@ -1669,7 +1766,44 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     tabId: string,
     defaults?: DesktopPreviewTabDefaults,
   ) {
-    return yield* withTabLifecycleLock(tabId, createTabUnlocked(tabId, defaults));
+    return yield* withTabLifecycleLock(
+      tabId,
+      Effect.gen(function* () {
+        const popupId = defaults?.desktopPopupId;
+        if (popupId === undefined) return yield* createTabUnlocked(tabId, defaults);
+        const existing = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+        const adopted = adoptedPopups.get(tabId);
+        if (
+          existing &&
+          adopted?.id === popupId &&
+          adopted.window === currentMainWindow &&
+          !adopted.view.webContents.isDestroyed()
+        ) {
+          return existing;
+        }
+        const popup = pendingPopups.get(popupId);
+        if (
+          existing ||
+          !popup ||
+          popup.threadId !== defaults?.serverTab?.threadId ||
+          currentMainWindow !== popup.window ||
+          popup.view.webContents.isDestroyed()
+        ) {
+          return yield* new PreviewTabNotFoundError({ tabId });
+        }
+        forgetPopup(popupId);
+        adoptedPopups.set(tabId, { id: popupId, window: popup.window, view: popup.view });
+        return yield* Effect.gen(function* () {
+          const state = yield* createTabUnlocked(tabId, defaults);
+          yield* registerWebviewUnlocked(
+            tabId,
+            popup.view.webContents.id,
+            tabLifecycleGenerations.get(tabId),
+          );
+          return state;
+        }).pipe(Effect.onError(() => closeTabUnlocked(tabId).pipe(Effect.ignore)));
+      }),
+    );
   });
 
   const closeTabUnlocked = Effect.fn("PreviewManager.closeTabUnlocked")(function* (tabId: string) {
@@ -1699,6 +1833,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     if (Option.isNone(tab)) return;
     const closedTab = tab.value;
+    const popup = adoptedPopups.get(tabId);
+    adoptedPopups.delete(tabId);
+    if (popup) disposePopup(popup);
     if (closedTab.serverTab) browserHost.setShown(closedTab.serverTab, undefined);
     if (closedTab.webContentsId != null) {
       yield* Effect.all(
@@ -1761,11 +1898,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     }
     const wc = webContents.fromId(webContentsId);
     const mainWindow = yield* Ref.get(mainWindowRef);
+    const popup = adoptedPopups.get(tabId);
     if (
       !wc ||
       wc.isDestroyed() ||
-      wc.getType() !== "webview" ||
-      (Option.isSome(mainWindow) && wc.hostWebContents !== mainWindow.value.webContents)
+      (popup
+        ? popup.view.webContents !== wc
+        : wc.getType() !== "webview" ||
+          (Option.isSome(mainWindow) && wc.hostWebContents !== mainWindow.value.webContents))
     ) {
       return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId });
     }
@@ -1814,7 +1954,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* attempt({ operation: "registerWebview.restoreAudioMuted", tabId, webContentsId }, () =>
       wc.setAudioMuted(currentTab.audioMuted),
     );
-    yield* attachListeners(tabId, wc);
+    yield* attachListeners(tabId, wc, currentTab.serverTab);
     const readAudible = attempt(
       { operation: "registerWebview.readAudible", tabId, webContentsId },
       () => wc.isCurrentlyAudible(),
@@ -3359,6 +3499,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const destroy = Effect.fn("PreviewManager.destroy")(function* () {
     const tabs = yield* SynchronizedRef.get(tabsRef);
     yield* Effect.forEach(tabs.keys(), closeTab, { discard: true });
+    for (const id of pendingPopups.keys()) {
+      const popup = forgetPopup(id);
+      if (popup) disposePopup(popup);
+    }
     yield* Effect.all(
       [
         Ref.set(listenersRef, new Set()),

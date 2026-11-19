@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { type ComponentProps, useState } from "react";
+import { type ComponentProps, useEffect, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
@@ -28,6 +28,7 @@ import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
+import { acquireDesktopTab } from "./desktopTabLifetime";
 import { openUrlInPreview } from "./openFileInPreview";
 import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
@@ -44,7 +45,10 @@ function hostedBrowserSessions(
           .filter(
             (snapshot) =>
               snapshot.runtime !== "server" ||
-              rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, snapshot),
+              rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, snapshot) ||
+              (snapshot.desktopPopupId !== undefined &&
+                !snapshot.headless &&
+                threadRef.environmentId === primaryEnvironmentId),
           )
           .map((snapshot) => ({
             threadRef,
@@ -94,7 +98,12 @@ function startAnnotationThemeSync(preview: DesktopPreviewBridge): () => void {
   };
 }
 
-function openLinkInPreview({ tabId, url, background }: DesktopPreviewOpenLinkEvent): void {
+function openLinkInPreview({
+  tabId,
+  url,
+  background,
+  desktopPopupId,
+}: DesktopPreviewOpenLinkEvent): void {
   const source = hostedBrowserSessions(
     readActivePreviewSessions(),
     appAtomRegistry.get(primaryEnvironmentIdAtom),
@@ -106,6 +115,7 @@ function openLinkInPreview({ tabId, url, background }: DesktopPreviewOpenLinkEve
     openPreview: (input) => runAtomCommand(appAtomRegistry, previewEnvironment.open, input),
     profileId: source.snapshot.profileId,
     background,
+    ...(desktopPopupId === undefined ? {} : { desktopPopupId }),
   });
 }
 
@@ -135,6 +145,17 @@ export function ElectronBrowserHost() {
   return (
     <div className="contents" data-electron-browser-host>
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
+        if (snapshot.desktopPopupId !== undefined) {
+          return (
+            <HostedBrowserPopup
+              key={runtimeTabId}
+              threadRef={threadRef}
+              tabId={snapshot.tabId}
+              runtimeTabId={runtimeTabId}
+              popupId={snapshot.desktopPopupId}
+            />
+          );
+        }
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
           <AuthorizedBrowserWebview
@@ -161,6 +182,28 @@ export function ElectronBrowserHost() {
       })}
     </div>
   );
+}
+
+function HostedBrowserPopup({
+  threadRef,
+  tabId,
+  runtimeTabId,
+  popupId,
+}: {
+  threadRef: Parameters<typeof previewRuntimeTabId>[0];
+  tabId: string;
+  runtimeTabId: string;
+  popupId: string;
+}) {
+  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthPreviewOperateScope);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the Electron popup attached only while its managed tab is open
+  useEffect(() => {
+    if (!canOperate) return;
+    const lease = acquireDesktopTab(runtimeTabId, { threadId: threadRef.threadId, tabId }, popupId);
+    void lease.ready.catch(() => undefined);
+    return lease.release;
+  }, [canOperate, popupId, runtimeTabId, tabId, threadRef.threadId]);
+  return null;
 }
 
 function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {

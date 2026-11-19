@@ -44,6 +44,7 @@ export interface AcquiredDesktopTab {
 export function acquireDesktopTab(
   tabId: string,
   serverTab?: { readonly threadId: string; readonly tabId: string },
+  desktopPopupId?: string,
 ): AcquiredDesktopTab {
   const current =
     leases.get(tabId) ??
@@ -55,6 +56,7 @@ export function acquireDesktopTab(
         previewBridge?.createTab(tabId, {
           ...browserDefaultTabState(await resolveBrowserDefaults()),
           ...(serverTab === undefined ? {} : { serverTab }),
+          ...(desktopPopupId === undefined ? {} : { desktopPopupId }),
         }),
       ),
     } satisfies DesktopTabLease);

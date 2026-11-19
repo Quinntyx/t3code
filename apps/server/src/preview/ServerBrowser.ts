@@ -340,6 +340,8 @@ interface ServerTab {
   setting: PreviewViewportSetting;
   colorScheme: PreviewAppearancePreference;
   zoomFactor: number;
+  /** Whether the app supplies the viewport through an embedded webview. */
+  readonly desktopSizesViewport: boolean;
   /** Last usable CSS size measured on the desktop. */
   desktopViewport: { readonly width: number; readonly height: number } | null;
   desktopViewportRead: Promise<ServerTab["desktopViewport"]>;
@@ -715,7 +717,9 @@ const make = Effect.gen(function* () {
 
   const layoutSize = async (tab: ServerTab) => {
     // A dialog blocks page script; its close measures again.
-    if (tab.desktop) return tab.dialog ? tab.desktopViewport : measureDesktopViewport(tab);
+    if (tab.desktopSizesViewport) {
+      return tab.dialog ? tab.desktopViewport : measureDesktopViewport(tab);
+    }
     const size = tab.page.viewportSize();
     if (!size) return size;
     return {
@@ -725,7 +729,7 @@ const make = Effect.gen(function* () {
   };
 
   const applyZoom = async (tab: ServerTab) => {
-    if (tab.desktop) return;
+    if (tab.desktopSizesViewport) return;
     const size = tab.page.viewportSize();
     if (!size) return;
     if (tab.zoomFactor === 1) {
@@ -750,7 +754,7 @@ const make = Effect.gen(function* () {
   const applySetting = async (tab: ServerTab, setting: PreviewViewportSetting) => {
     tab.setting = setting;
 
-    if (tab.desktop) return;
+    if (tab.desktopSizesViewport) return;
     const size =
       fixedViewportSize(setting) ??
       [...tab.viewers]
@@ -770,7 +774,7 @@ const make = Effect.gen(function* () {
       await tab.page.emulateMedia({ colorScheme: colorScheme === "system" ? null : colorScheme });
     }
     const zoomFactor = snapshot.zoomFactor ?? 1;
-    if (zoomFactor !== tab.zoomFactor && !tab.desktop) {
+    if (zoomFactor !== tab.zoomFactor && !tab.desktopSizesViewport) {
       tab.zoomFactor = zoomFactor;
       await applyZoom(tab);
       await broadcastViewport(tab);
@@ -862,6 +866,12 @@ const make = Effect.gen(function* () {
         ? await connectDesktop(snapshot)
         : null;
     if (desktop) opened.push(desktop.close);
+    if (snapshot.desktopPopupId !== undefined && !desktop) {
+      await runPromise(
+        manager.close({ threadId: snapshot.threadId, tabId: snapshot.tabId }).pipe(Effect.ignore),
+      );
+      throw new Error("The desktop popup closed before its tab attached.");
+    }
     // Otherwise a desktop that attaches late shows its own page, and the agent drives another.
     if (!desktop && desktopChannel.available) {
       await runPromise(
@@ -929,6 +939,7 @@ const make = Effect.gen(function* () {
       setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
       colorScheme: "system",
       zoomFactor: 1,
+      desktopSizesViewport: desktop !== null && snapshot.desktopPopupId === undefined,
       desktopViewport: null,
       desktopViewportRead: Promise.resolve(null),
       desktopViewportNext: null,
@@ -942,11 +953,11 @@ const make = Effect.gen(function* () {
       captureLock: Promise.resolve(),
       capturing: 0,
     };
-    if (!desktop) {
+    if (!tab.desktopSizesViewport) {
       await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
     }
     await applyRendering(tab, snapshot);
-    if (desktop) {
+    if (tab.desktopSizesViewport) {
       // The desktop resizes and zooms its webview itself; viewers map input with the new size.
       const remeasure = () => {
         if (tab.viewers.size > 0) return broadcastViewport(tab).catch(constVoid);
@@ -2542,10 +2553,11 @@ const make = Effect.gen(function* () {
         const height = Math.min(Math.round(num(message.height)), 2160);
         if (width < 100 || height < 100) return;
         viewer.requestedSize = { width, height, order: ++viewerResizeOrder };
-        if (tab.setting._tag !== "fill" || tab.desktop) return;
+        if (tab.setting._tag !== "fill" || tab.desktopSizesViewport) return;
         const current = tab.page.viewportSize();
         if (current?.width === width && current.height === height) return;
         await tab.page.setViewportSize({ width, height });
+        await applyZoom(tab);
         await broadcastViewport(tab);
         return;
       }
@@ -2932,7 +2944,8 @@ const make = Effect.gen(function* () {
     Stream.runForEach((key) =>
       Effect.sync(() => {
         const tab = tabs.get(tabKey(key.threadId, key.tabId));
-        if (tab?.desktop) dropTab(tab, false);
+        // A form popup cannot be recreated from its URL once its view is gone.
+        if (tab?.desktop) dropTab(tab, !tab.desktopSizesViewport);
       }),
     ),
     Effect.forkScoped,
