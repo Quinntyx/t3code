@@ -61,10 +61,79 @@ type NativeStreamBridge = {
   readonly onPictureInPicture?: (state: PreviewPictureInPictureState, detail?: string) => void;
   /** True while frames show, so commands reach the page. */
   readonly onStreamingChange?: (streaming: boolean) => void;
+  readonly onErrorChange?: (failed: boolean) => void;
   readonly compact?: boolean;
   readonly pdfUri?: string | null;
   readonly environmentLabel?: string | undefined;
 };
+
+function CompactErrorBadge() {
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className="flex-row items-center gap-1.5 rounded-full bg-black/65 px-2.5 py-1"
+    >
+      <ConnectionStatusDot state="error" pulse={false} size={6} />
+      <AppText className="text-2xs text-white">Unavailable</AppText>
+    </View>
+  );
+}
+
+function PreviewStreamFallback({
+  compact,
+  error,
+  paused,
+  onRetry,
+  onErrorChange,
+}: {
+  readonly compact?: boolean | undefined;
+  readonly error: string | null;
+  readonly paused?: boolean | undefined;
+  readonly onRetry: () => void;
+  readonly onErrorChange?: ((failed: boolean) => void) | undefined;
+}) {
+  const hasError = !paused && error !== null;
+  const reportError = useEffectEvent((failed: boolean) => onErrorChange?.(failed));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports terminal access failure to compact parent containers while the stream WebView is unmounted
+  useLayoutEffect(() => {
+    reportError(hasError);
+  }, [hasError]);
+  return (
+    <View
+      className={
+        compact
+          ? "flex-1 items-center justify-center"
+          : "flex-1 items-center justify-center gap-4 px-6"
+      }
+    >
+      {compact ? (
+        hasError ? (
+          <CompactErrorBadge />
+        ) : paused ? null : (
+          <AppActivityIndicator colorClassName="accent-icon" />
+        )
+      ) : (
+        <>
+          {!error ? <AppActivityIndicator colorClassName="accent-icon" /> : null}
+          <AppText
+            selectable={!!error}
+            className={
+              error ? "text-center text-sm text-foreground-muted" : "text-sm text-foreground-muted"
+            }
+          >
+            {error || "Connecting to remote browser…"}
+          </AppText>
+          {error && (
+            <View className="items-center">
+              <Button label="Retry" tone="secondary" onPress={onRetry} />
+            </View>
+          )}
+        </>
+      )}
+    </View>
+  );
+}
 
 async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean) {
   const body = new FormData();
@@ -136,32 +205,13 @@ export function PreviewStreamWebView(
     );
   }
   return (
-    <View
-      className={
-        props.compact
-          ? "flex-1 items-center justify-center"
-          : "flex-1 items-center justify-center gap-4 px-6"
-      }
-    >
-      {props.compact || !error ? <AppActivityIndicator colorClassName="accent-icon" /> : null}
-      {!props.compact && (
-        <>
-          <AppText
-            selectable={!!error}
-            className={
-              error ? "text-center text-sm text-foreground-muted" : "text-sm text-foreground-muted"
-            }
-          >
-            {error || "Connecting to remote browser…"}
-          </AppText>
-          {error && (
-            <View className="items-center">
-              <Button label="Retry" tone="secondary" onPress={refresh} />
-            </View>
-          )}
-        </>
-      )}
-    </View>
+    <PreviewStreamFallback
+      compact={props.compact}
+      error={error}
+      paused={props.paused}
+      onRetry={refresh}
+      onErrorChange={props.onErrorChange}
+    />
   );
 }
 
@@ -230,6 +280,7 @@ function PreviewStreamDocumentView({
   onControl,
   onPictureInPicture,
   onStreamingChange,
+  onErrorChange,
   onRetry,
   onStreaming,
   onRecoverProcess,
@@ -291,6 +342,7 @@ function PreviewStreamDocumentView({
     clearBootstrapTimer();
     webView.current?.injectJavaScript("window.T3PreviewStream?.stop(); true;");
     onStreamingChange?.(false);
+    onErrorChange?.(true);
     setControl(null);
     setFileChooser(null);
     onControl?.(null);
@@ -300,6 +352,9 @@ function PreviewStreamDocumentView({
   const bootstrapTimedOut = useEffectEvent(() =>
     fail("Browser viewer could not start. Reconnect to try again."),
   );
+  const streamStarted = useEffectEvent(() => {
+    onErrorChange?.(false);
+  });
   const streamEnded = useEffectEvent(() => {
     onStreamingChange?.(false);
     onControl?.(null);
@@ -308,6 +363,7 @@ function PreviewStreamDocumentView({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the bootstrap timeout and stops the WebView stream when this view unmounts
   useLayoutEffect(() => {
     active.current = true;
+    streamStarted();
     const view = webView.current;
     bootstrapTimer.current = setTimeout(bootstrapTimedOut, 15_000);
     return () => {
@@ -559,7 +615,9 @@ function PreviewStreamDocumentView({
           className="absolute inset-0 items-center justify-center gap-4 px-6"
           style={{ backgroundColor: background }}
         >
-          {compact ? null : (
+          {compact ? (
+            <CompactErrorBadge />
+          ) : (
             <AppText
               accessibilityLiveRegion="polite"
               className="text-center text-sm text-foreground-muted"

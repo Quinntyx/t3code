@@ -142,7 +142,7 @@ function BrowserPreviewScreen({
             environmentId={environmentId}
             tab={tab}
             streaming={streaming}
-            ready={streaming && canControl}
+            canControl={canControl}
             onCommand={(input) => streamRef.current?.command(input)}
             onPaste={() => streamRef.current?.paste()}
           />
@@ -179,14 +179,14 @@ function BrowserPreviewScreen({
 function BrowserAddressBar({
   environmentId,
   tab,
-  ready,
+  canControl,
   streaming,
   onCommand,
   onPaste,
 }: {
   readonly environmentId: EnvironmentId;
   readonly tab: PreviewSessionSnapshot;
-  readonly ready: boolean;
+  readonly canControl: boolean;
   readonly streaming: boolean;
   readonly onCommand: PreviewStreamRef["command"];
   readonly onPaste: () => void;
@@ -209,18 +209,18 @@ function BrowserAddressBar({
         <ControlPill
           icon="chevron.left"
           accessibilityLabel="Back"
-          disabled={!ready || !tab.canGoBack}
+          disabled={!canControl || !tab.canGoBack}
           onPress={() => onCommand({ type: "history", delta: -1 })}
         />
         <ControlPill
           icon="chevron.right"
           accessibilityLabel="Forward"
-          disabled={!ready || !tab.canGoForward}
+          disabled={!canControl || !tab.canGoForward}
           onPress={() => onCommand({ type: "history", delta: 1 })}
         />
         <TextInput
           accessibilityLabel="Address"
-          editable={ready}
+          editable={canControl}
           value={draft ?? url}
           onChangeText={setDraft}
           onBlur={() => setDraft(null)}
@@ -238,14 +238,14 @@ function BrowserAddressBar({
         <ControlPill
           icon="arrow.clockwise"
           accessibilityLabel="Reload page"
-          disabled={!ready}
+          disabled={!canControl || tab.navStatus._tag === "Idle"}
           onPress={() => onCommand({ type: "reload" })}
         />
         <BrowserTabMenu
           environmentId={environmentId}
           tab={tab}
           streaming={streaming}
-          onPaste={ready ? onPaste : undefined}
+          onPaste={streaming && canControl ? onPaste : undefined}
         />
       </View>
       {loading ? (

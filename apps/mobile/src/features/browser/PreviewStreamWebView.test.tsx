@@ -17,6 +17,22 @@ type TextProps = {
 const mocks = vi.hoisted(() => ({
   onMessage: null as ((event: { nativeEvent: { data: string } }) => void) | null,
   injected: [] as string[],
+  accessState: {
+    access: {
+      httpBase: "https://environment.test/api/preview",
+      wsBase: "wss://environment.test/api/preview",
+      credentials: false,
+      query: {},
+    } as {
+      httpBase: string;
+      wsBase: string;
+      credentials: boolean;
+      query: Record<string, string>;
+    } | null,
+    error: null as string | null,
+    refresh: vi.fn(),
+    retryAfter: vi.fn(),
+  },
 }));
 
 vi.mock("react-native", () => ({
@@ -93,17 +109,7 @@ vi.mock("../connection/ConnectionStatusDot", () => ({
   ConnectionStatusDot: ({ state }: { readonly state: string }) => <span data-dot={state} />,
 }));
 vi.mock("../../state/preview", () => ({
-  usePreviewStreamAccess: () => ({
-    access: {
-      httpBase: "https://environment.test/api/preview",
-      wsBase: "wss://environment.test/api/preview",
-      credentials: false,
-      query: {},
-    },
-    error: null,
-    refresh: vi.fn(),
-    retryAfter: vi.fn(),
-  }),
+  usePreviewStreamAccess: () => mocks.accessState,
 }));
 
 import { PreviewStreamWebView } from "./PreviewStreamWebView";
@@ -116,11 +122,28 @@ function mountView(
   props: {
     readonly compact?: boolean;
     readonly onStreamingChange?: (streaming: boolean) => void;
+    readonly onErrorChange?: (failed: boolean) => void;
+    readonly access?: typeof mocks.accessState.access;
+    readonly accessError?: string | null;
   } = {},
 ) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mocks.onMessage = null;
   mocks.injected.length = 0;
+  mocks.accessState = {
+    access:
+      props.access !== undefined
+        ? props.access
+        : {
+            httpBase: "https://environment.test/api/preview",
+            wsBase: "wss://environment.test/api/preview",
+            credentials: false,
+            query: {},
+          },
+    error: props.accessError ?? null,
+    refresh: vi.fn(),
+    retryAfter: vi.fn(),
+  };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -135,6 +158,7 @@ function mountView(
         environmentLabel="build-box"
         compact={props.compact}
         onStreamingChange={props.onStreamingChange}
+        onErrorChange={props.onErrorChange}
       />,
     );
   });
@@ -209,13 +233,16 @@ it("keeps Take control available during awaiting-frame when a blocking dialog is
   }
 });
 
-it("shows a compact reconnect badge and updates onStreamingChange in floating preview mode", () => {
-  const changes: boolean[] = [];
+it("shows compact reconnect and terminal error badges while reporting error state to floating previews", () => {
+  const streamingChanges: boolean[] = [];
+  const errorChanges: boolean[] = [];
   const { container, cleanup } = mountView({
     compact: true,
-    onStreamingChange: (streaming) => changes.push(streaming),
+    onStreamingChange: (streaming) => streamingChanges.push(streaming),
+    onErrorChange: (failed) => errorChanges.push(failed),
   });
   try {
+    expect(errorChanges).toEqual([false]);
     expect(container.querySelector('[data-testid="spinner"]')).not.toBeNull();
 
     act(() => {
@@ -228,14 +255,39 @@ it("shows a compact reconnect badge and updates onStreamingChange in floating pr
       });
       emit({ type: "status", status: "streaming" });
     });
-    expect(changes).toEqual([true]);
+    expect(streamingChanges).toEqual([true]);
     expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
     expect(container.textContent).not.toContain("Reconnecting…");
 
     act(() => emit({ type: "status", status: "connecting" }));
-    expect(changes).toEqual([true, false]);
+    expect(streamingChanges).toEqual([true, false]);
     expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
     expect(container.textContent).toContain("Reconnecting…");
+
+    act(() => emit({ type: "status", status: "error", detail: "Stream failed." }));
+    expect(errorChanges).toEqual([false, true]);
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+    expect(container.textContent).not.toContain("Reconnecting…");
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
+it("reports terminal access errors without spinning in compact mode", () => {
+  const errorChanges: boolean[] = [];
+  const { container, cleanup } = mountView({
+    compact: true,
+    access: null,
+    accessError: "Could not authorize browser stream.",
+    onErrorChange: (failed) => errorChanges.push(failed),
+  });
+  try {
+    expect(errorChanges).toEqual([true]);
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
   } finally {
     cleanup();
   }

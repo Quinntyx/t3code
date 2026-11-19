@@ -796,11 +796,7 @@ export function ServerBrowserSurface(props: {
             aria-hidden
             className={cn(
               "size-2 shrink-0 rounded-full",
-              phase === "live" ? "bg-success" : "bg-warning",
-              phase !== "live" &&
-                visible &&
-                !errorOverlayVisible &&
-                "motion-safe:animate-status-pulse",
+              phase === "live" ? "bg-success" : "bg-warning ring-2 ring-warning/30",
             )}
           />
           <span role="status" className="truncate text-xs text-muted-foreground">
@@ -849,10 +845,7 @@ export function ServerBrowserSurface(props: {
               <Monitor aria-hidden className="size-5 text-muted-foreground" />
               <span
                 aria-hidden
-                className={cn(
-                  "absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-warning",
-                  visible && "motion-safe:animate-status-pulse",
-                )}
+                className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-warning ring-2 ring-warning/30"
               />
             </div>
             <p className="text-sm font-medium">Connecting to remote browser</p>
@@ -866,10 +859,7 @@ export function ServerBrowserSurface(props: {
             <span className="flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
               <span
                 aria-hidden
-                className={cn(
-                  "size-2 shrink-0 rounded-full bg-warning",
-                  visible && "motion-safe:animate-status-pulse",
-                )}
+                className="size-2 shrink-0 rounded-full bg-warning ring-2 ring-warning/30"
               />
               {previewStreamOverlayDetail(phase, trimmedEnvironmentLabel)}
             </span>

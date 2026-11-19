@@ -91,6 +91,7 @@ function FloatingBrowserPlayer(props: {
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">(
     "connecting",
   );
+  const [streamError, setStreamError] = useState(false);
   const pdfUri =
     props.tab.navStatus._tag === "Success"
       ? previewPdfAssetUrl(props.tab.navStatus.url, httpBaseUrl)
@@ -100,12 +101,15 @@ function FloatingBrowserPlayer(props: {
   const height = Math.round(width / aspect);
   const background = themeVariables["--color-sheet-solid"];
   const title = browserTabTitle(props.tab);
+  const effectiveState = pdfUri !== null ? "live" : streamError ? "error" : streamState;
   const accessibilityLabel =
-    pdfUri !== null || streamState === "live"
+    effectiveState === "live"
       ? `Open browser, ${title}`
-      : streamState === "reconnecting"
-        ? `Open browser, ${title}, reconnecting`
-        : `Open browser, ${title}, connecting`;
+      : effectiveState === "error"
+        ? `Open browser, ${title}, unavailable`
+        : effectiveState === "reconnecting"
+          ? `Open browser, ${title}, reconnecting`
+          : `Open browser, ${title}, connecting`;
   return (
     <Animated.View
       entering={PLAYER_ENTERING}
@@ -116,7 +120,9 @@ function FloatingBrowserPlayer(props: {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
-        accessibilityState={{ busy: pdfUri === null && streamState !== "live" }}
+        accessibilityState={{
+          busy: effectiveState === "connecting" || effectiveState === "reconnecting",
+        }}
         accessibilityHint="Opens the browser tab full screen"
         onPress={props.onOpen}
         className="flex-1"
@@ -140,6 +146,7 @@ function FloatingBrowserPlayer(props: {
                     : "connecting",
               )
             }
+            onErrorChange={setStreamError}
             onViewport={setViewport}
             onGone={props.onClose}
           />
