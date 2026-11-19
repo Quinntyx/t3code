@@ -1,3 +1,4 @@
+import { encodePreviewStreamVideoFrame } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -286,6 +287,100 @@ describe("preview frame painter", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(freshBitmap.close).toHaveBeenCalledOnce();
+    expect(drawImage).toHaveBeenCalledOnce();
+    expect(onPainted).toHaveBeenCalledOnce();
+
+    painter.stop();
+  });
+
+  it("ignores late VideoDecoder output and error callbacks from a pre-reset generation", () => {
+    const decoders: Array<{
+      readonly init: {
+        readonly output: (frame: {
+          readonly timestamp: number;
+          readonly displayWidth: number;
+          readonly displayHeight: number;
+          readonly close: () => void;
+        }) => void;
+        readonly error: () => void;
+      };
+      state: "unconfigured" | "configured" | "closed";
+      readonly close: ReturnType<typeof vi.fn>;
+      readonly configure: ReturnType<typeof vi.fn>;
+      readonly decode: ReturnType<typeof vi.fn>;
+    }> = [];
+    class FakeVideoDecoder {
+      readonly init: {
+        readonly output: (frame: {
+          readonly timestamp: number;
+          readonly displayWidth: number;
+          readonly displayHeight: number;
+          readonly close: () => void;
+        }) => void;
+        readonly error: () => void;
+      };
+      state: "unconfigured" | "configured" | "closed" = "unconfigured";
+      readonly close = vi.fn(() => {
+        this.state = "closed";
+      });
+      readonly configure = vi.fn(() => {
+        this.state = "configured";
+      });
+      readonly decode = vi.fn();
+      constructor(init: FakeVideoDecoder["init"]) {
+        this.init = init;
+        decoders.push(this);
+      }
+    }
+    class FakeEncodedVideoChunk {
+      readonly init: Record<string, unknown>;
+      constructor(init: Record<string, unknown>) {
+        this.init = init;
+      }
+    }
+    vi.stubGlobal("VideoDecoder", FakeVideoDecoder);
+    vi.stubGlobal("EncodedVideoChunk", FakeEncodedVideoChunk);
+
+    const drawImage = vi.fn();
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage }),
+    } as unknown as HTMLCanvasElement;
+    const onPainted = vi.fn();
+    const onKeyFrameNeeded = vi.fn();
+    const painter = createPreviewFramePainter(canvas, onPainted, onKeyFrameNeeded);
+    const keyFrame = encodePreviewStreamVideoFrame({
+      type: "key",
+      codec: "vp8",
+      width: 320,
+      height: 240,
+      data: new Uint8Array([1, 2, 3]),
+    }).buffer as ArrayBuffer;
+
+    painter.paint(keyFrame);
+    expect(decoders).toHaveLength(1);
+    const staleDecoder = decoders[0]!;
+    painter.reset();
+    expect(staleDecoder.close).toHaveBeenCalledOnce();
+
+    // Start decoding a fresh key frame on the new connection, then fire stale output & error.
+    painter.paint(keyFrame);
+    expect(decoders).toHaveLength(2);
+    const freshDecoder = decoders[1]!;
+
+    const staleFrame = { timestamp: 0, displayWidth: 320, displayHeight: 240, close: vi.fn() };
+    staleDecoder.init.output(staleFrame);
+    staleDecoder.init.error();
+    expect(staleFrame.close).toHaveBeenCalledOnce();
+    expect(drawImage).not.toHaveBeenCalled();
+    expect(onPainted).not.toHaveBeenCalled();
+    expect(onKeyFrameNeeded).not.toHaveBeenCalled();
+    expect(freshDecoder.close).not.toHaveBeenCalled();
+
+    const freshFrame = { timestamp: 1, displayWidth: 320, displayHeight: 240, close: vi.fn() };
+    freshDecoder.init.output(freshFrame);
+    expect(freshFrame.close).toHaveBeenCalledOnce();
     expect(drawImage).toHaveBeenCalledOnce();
     expect(onPainted).toHaveBeenCalledOnce();
 

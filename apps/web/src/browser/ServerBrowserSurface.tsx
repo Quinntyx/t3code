@@ -775,6 +775,7 @@ export function ServerBrowserSurface(props: {
   const hasCurrentFrame = hasRetainedFrame && currentFramePainted;
   const phase = previewStreamPhase(control, hasCurrentFrame, hasRetainedFrame);
   const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
+  const errorOverlayVisible = visible && (hostSetup !== null || accessDenied);
   const overlaySuppressed = pdfUrl !== null || hostSetup !== null || accessDenied;
 
   return (
@@ -784,6 +785,7 @@ export function ServerBrowserSurface(props: {
       onMouseUp={handleMouseUp}
     >
       <div
+        aria-hidden={errorOverlayVisible || undefined}
         className={cn(
           "visible relative z-20 flex h-8 shrink-0 items-center justify-between gap-2 border-border/60 bg-background px-2.5",
           controlPosition === "bottom" ? "order-last border-t" : "border-b",
@@ -795,7 +797,10 @@ export function ServerBrowserSurface(props: {
             className={cn(
               "size-2 shrink-0 rounded-full",
               phase === "live" ? "bg-success" : "bg-warning",
-              phase !== "live" && visible && "motion-safe:animate-status-pulse",
+              phase !== "live" &&
+                visible &&
+                !errorOverlayVisible &&
+                "motion-safe:animate-status-pulse",
             )}
           />
           <span role="status" className="truncate text-xs text-muted-foreground">

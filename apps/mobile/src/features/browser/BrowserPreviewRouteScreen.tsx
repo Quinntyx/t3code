@@ -248,7 +248,14 @@ function BrowserAddressBar({
           onPaste={ready ? onPaste : undefined}
         />
       </View>
-      {loading ? <View className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" /> : null}
+      {loading ? (
+        <View
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          className="absolute inset-x-0 bottom-0 h-0.5 bg-primary"
+        />
+      ) : null}
     </View>
   );
 }
