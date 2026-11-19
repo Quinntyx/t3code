@@ -162,11 +162,11 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
       if ("attachment" in source) {
         const preview = await loadLocalAttachmentPreview(source.attachment, signal);
         if (!preview) return;
-        try {
-          await downloadAttachmentToDevice({ uri: preview.uri, attachment, signal });
-        } finally {
-          preview.dispose();
-        }
+        const saved = await settlePromise(() =>
+          downloadAttachmentToDevice({ uri: preview.uri, attachment, signal }),
+        );
+        preview.dispose();
+        if (AsyncResult.isFailure(saved)) throw squashAtomCommandFailure(saved);
         return;
       }
       const uri = await hostUri(source, signal);

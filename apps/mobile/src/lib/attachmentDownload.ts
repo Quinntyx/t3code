@@ -306,6 +306,19 @@ export async function writeGeneratedAttachmentFile(input: {
   }
 }
 
+export async function downloadGeneratedAttachment(input: {
+  readonly bytes: Uint8Array;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  const file = await writeGeneratedAttachmentFile(input);
+  try {
+    await downloadAttachmentToDevice({ ...input, uri: file.uri });
+  } finally {
+    file.dispose();
+  }
+}
+
 export async function shareGeneratedAttachment(input: {
   readonly bytes: Uint8Array;
   readonly attachment: AttachmentFileMetadata;

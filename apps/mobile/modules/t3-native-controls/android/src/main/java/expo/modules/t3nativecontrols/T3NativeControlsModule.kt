@@ -190,7 +190,7 @@ class T3NativeControlsModule : Module() {
 }
 
 // Android 10+ lets apps add their own media and downloads without a storage permission.
-// MediaStore picks a unique display name when the folder already has one.
+// Returns the saved name: MediaStore renames a file whose name the folder already has.
 @RequiresApi(Build.VERSION_CODES.Q)
 private fun saveToMediaStore(
   context: Context,
@@ -199,7 +199,7 @@ private fun saveToMediaStore(
   source: Uri,
   mimeType: String,
   name: String
-) {
+): String {
   val resolver = context.contentResolver
   val values = ContentValues().apply {
     put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -208,17 +208,21 @@ private fun saveToMediaStore(
     put(MediaStore.MediaColumns.IS_PENDING, 1)
   }
   val target = resolver.insert(collection, values) ?: error("Could not create $name.")
-  runCatching {
+  return runCatching {
     val input = resolver.openInputStream(source) ?: error("The file is no longer available.")
     input.use { from ->
       val output = resolver.openOutputStream(target) ?: error("Could not write $name.")
       output.use { from.copyTo(it) }
     }
-    resolver.update(
+    val published = resolver.update(
       target,
       ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
       null,
       null
     )
+    check(published == 1) { "Could not finish saving $name." }
+    resolver.query(target, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
+      ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+      ?: name
   }.onFailure { resolver.delete(target, null, null) }.getOrThrow()
 }

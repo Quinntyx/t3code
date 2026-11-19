@@ -102,6 +102,8 @@ function OpenVideoPreviewModal(props: {
   const { playback } = props;
   const insets = useSafeAreaInsets();
   const mediaActions = useMediaActions(playback.actionsSource, props.onRequestClose);
+  const download = mediaActions.actions.find(({ id }) => id === "download");
+  const busy = mediaActions.sharing || mediaActions.downloading;
 
   return (
     <Modal
@@ -134,7 +136,7 @@ function OpenVideoPreviewModal(props: {
             name={props.name}
             thumbnailKey={props.thumbnailKey}
             unavailable={playback.unavailable}
-            paused={mediaActions.sharing}
+            paused={busy}
             expanded
             autoPlay
           />
@@ -146,13 +148,19 @@ function OpenVideoPreviewModal(props: {
         ) : null}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Save or share video"
-          disabled={playback.uri === null || mediaActions.sharing}
-          onPress={mediaActions.share}
+          accessibilityLabel={download ? "Download video" : "Save or share video"}
+          disabled={playback.uri === null || busy || download?.disabled === true}
+          onPress={download ? download.run : mediaActions.share}
           className="mx-4 my-3 min-h-12 items-center justify-center rounded-xl bg-white/15 px-4"
         >
           <AppText className="font-t3-medium text-base text-white">
-            {mediaActions.sharing ? "Opening share sheet..." : "Save or share video"}
+            {mediaActions.downloading
+              ? "Downloading..."
+              : mediaActions.sharing
+                ? "Opening share sheet..."
+                : download
+                  ? "Download video"
+                  : "Save or share video"}
           </AppText>
         </Pressable>
       </View>

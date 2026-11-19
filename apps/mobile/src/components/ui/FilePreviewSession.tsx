@@ -6,9 +6,11 @@ import { useContext, useEffect, useEffectEvent, useState, type ComponentType } f
 import { loadLocalAttachmentPreview } from "../../lib/localAttachmentPreview";
 import {
   downloadAndShareAttachment,
+  downloadAttachmentToDevice,
   nativeViewerErrorMessage,
   shareLocalAttachment,
 } from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { usePreviewPresentation } from "../../lib/previewPresentation";
 import { refreshAssetUrl } from "../../state/assets";
 import { filePreviewGallery, filePreviewKey, filePreviewName } from "../../lib/filePreviewGallery";
@@ -169,20 +171,32 @@ function ResolvedFilePreview(
   if (!uri) return null;
   const onOpenError = (error: unknown) => {
     if (props.onOpenError) return props.onOpenError(error);
+    const input = {
+      attachment: {
+        name: selected.name,
+        mimeType: selected.mimeType ?? "application/octet-stream",
+      },
+      signal: new AbortController().signal,
+    };
+    const canDownload = canSaveFileToDownloads();
     Dialog.alert("Could not open preview", nativeViewerErrorMessage(error), [
       { text: "Cancel", style: "cancel" },
+      ...(selected.kind === "document" && canDownload
+        ? [
+            {
+              text: "Download",
+              onPress: () =>
+                void downloadAttachmentToDevice({ ...input, uri }).catch(() =>
+                  Dialog.alert("Could not download file", "Please try again."),
+                ),
+            },
+          ]
+        : []),
       ...(selected.kind === "document"
         ? [
             {
-              text: "Save or share",
+              text: canDownload ? "Share" : "Save or share",
               onPress: () => {
-                const input = {
-                  attachment: {
-                    name: selected.name,
-                    mimeType: selected.mimeType ?? "application/octet-stream",
-                  },
-                  signal: new AbortController().signal,
-                };
                 const sharing = /^(file|content):/.test(uri)
                   ? shareLocalAttachment({ ...input, uri })
                   : downloadAndShareAttachment({ ...input, url: uri });

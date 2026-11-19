@@ -31,7 +31,7 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import * as Dialog from "../../components/ui/Dialog";
 import { FilePreviewModal } from "../../components/ui/FilePreviewModal";
 import {
-  downloadAttachmentToDevice,
+  downloadGeneratedAttachment,
   nativeViewerErrorMessage,
   shareGeneratedAttachment,
   writeGeneratedAttachmentFile,
@@ -715,15 +715,13 @@ function ZipEntryView(props: {
     );
   const canDownload = canSaveFileToDownloads();
   const download = () =>
-    run("download", async (signal) => {
-      const attachment = { name: entry.name, mimeType };
-      const file = await writeGeneratedAttachmentFile({ bytes: entry.bytes, attachment });
-      try {
-        await downloadAttachmentToDevice({ uri: file.uri, attachment, signal });
-      } finally {
-        file.dispose();
-      }
-    });
+    run("download", (signal) =>
+      downloadGeneratedAttachment({
+        bytes: entry.bytes,
+        attachment: { name: entry.name, mimeType },
+        signal,
+      }),
+    );
   const canAddToChat = draftKey !== null && maxAttachmentBytes !== undefined;
   const addToChat = () => {
     if (draftKey === null || maxAttachmentBytes === undefined) return;
