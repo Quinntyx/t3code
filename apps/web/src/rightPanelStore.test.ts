@@ -285,6 +285,27 @@ describe("rightPanelStore", () => {
     ]);
   });
 
+  it("keeps an automatic device open out of the user-action revision", () => {
+    const store = useRightPanelStore.getState();
+    const target = {
+      hostId: "nucbox",
+      deviceId: "emulator-5580",
+      name: "Pixel",
+      platform: "android",
+    } as const;
+    store.open(refA, "files");
+    const revision = store.getUserActionRevision(refA);
+    // An agent mirroring its device onto the panel is not the user's choice, so a pending
+    // proactive offer for the thread survives it.
+    store.openDevice(refA, target, true);
+    expect(store.getUserActionRevision(refA)).toBe(revision);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).activeSurfaceId,
+    ).toBe("device:nucbox:emulator-5580");
+    store.openDevice(refA, target);
+    expect(store.getUserActionRevision(refA)).toBe(revision + 1);
+  });
+
   it("keeps a dismissed device hidden after another file opens", () => {
     const store = useRightPanelStore.getState();
     const device = {

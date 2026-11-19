@@ -804,7 +804,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       openDevice: (ref, target, automatic = false) =>
         set((state) =>
-          userAction(
+          (automatic ? automaticUpdate : userAction)(
             state,
             scopedThreadKey(ref),
             (current) => {
@@ -828,7 +828,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               );
             },
             false,
-            !automatic,
+            true,
           ),
         ),
       openSideChat: (ref, threadId) =>
