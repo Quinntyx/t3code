@@ -1,8 +1,4 @@
-import {
-  parseMcpRegistration,
-  resolveMcpLaunch,
-  type McpConfigValue,
-} from "@t3tools/shared/mcpRegistration";
+import { resolveMcpLaunch, type McpConfigValue } from "@t3tools/shared/mcpRegistration";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   type RegisteredMcpServerEntry,
@@ -121,16 +117,11 @@ const causeText = (cause: Cause.Cause<unknown>): string => {
       : stderrTailOf(Cause.pretty(cause));
 };
 
-const launchOf = (entry: RegisteredMcpServerEntry, home: string) => {
-  const parsed = parseMcpRegistration(
-    entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
-  );
-  if (!parsed.ok) return parsed;
-  return resolveMcpLaunch(
+const launchOf = (entry: RegisteredMcpServerEntry, home: string) =>
+  resolveMcpLaunch(
     { source: entry.source, config: entry.config as Readonly<Record<string, McpConfigValue>> },
     { home },
   );
-};
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 /** Decodes the child's wire form, so base64 image and audio data comes back as bytes. */

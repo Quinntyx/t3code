@@ -250,19 +250,24 @@ function mapSecretFieldGroups(
   );
 
   // A secret field is one the pasted document declares, so the keys come from it, not a schema.
-  const registeredMcpServers = settings.registeredMcpServers.map(
-    (server) =>
-      ({
-        ...server,
-        config: mapFields(
-          server.config,
-          registeredMcpSecretFields(server).filter(
-            (field) => typeof server.config[field] === "string",
-          ),
-          (field) => `registered-mcp-${encode(server.id)}-${encode(field)}`,
-        ),
-      }) as RegisteredMcpServerEntry,
-  );
+  const registeredMcpServers = settings.registeredMcpServers.map((server) => {
+    const fields = registeredMcpSecretFields(server);
+    // A number, boolean or array the form accepted is still that field's secret, so it enters the
+    // store as the text it would launch with.
+    const config = { ...server.config };
+    for (const field of fields) {
+      const value = config[field];
+      if (value !== undefined && typeof value !== "string") config[field] = String(value);
+    }
+    return {
+      ...server,
+      config: mapFields(
+        config,
+        fields,
+        (field) => `registered-mcp-${encode(server.id)}-${encode(field)}`,
+      ),
+    } as RegisteredMcpServerEntry;
+  });
 
   return {
     ...settings,
