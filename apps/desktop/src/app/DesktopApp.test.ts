@@ -234,6 +234,7 @@ it.effect.each([false, true])(
               isBrowserPartition: () => {
                 throw new Error("unexpected browser partition lookup");
               },
+              claimFormReplay: () => {},
             }),
             FileSystem.layerNoop({}),
             Layer.mock(NetService.NetService, {}),

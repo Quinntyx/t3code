@@ -595,6 +595,7 @@ export const make = Effect.gen(function* () {
           PASSKEY_BRIDGE_ARGUMENT,
         ];
       }
+      previewManager.claimFormReplay(params);
     });
 
     const contextMenuContents = new WeakSet<Electron.WebContents>();

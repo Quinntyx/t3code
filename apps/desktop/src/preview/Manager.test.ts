@@ -94,18 +94,6 @@ describe("previewWindowOpenAction", () => {
     }
   });
 
-  it("keeps the original form POST when opening a new tab", () => {
-    const postBody = {
-      data: [{ type: "rawData" as const, bytes: Buffer.from("login_hint=example") }],
-      contentType: "application/x-www-form-urlencoded",
-    };
-    for (const disposition of ["foreground-tab", "background-tab"] as const) {
-      expect(
-        PreviewManager.previewWindowOpenAction({ ...details({ disposition }), postBody }),
-      ).toBe("popup");
-    }
-  });
-
   it("does not hand a window to schemes that cannot be hardened", () => {
     for (const url of [
       "vscode://vscode-remote/ssh-remote+box/tmp",
