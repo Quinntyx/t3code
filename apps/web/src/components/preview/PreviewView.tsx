@@ -1026,7 +1026,13 @@ export function PreviewView({
                 }
                 visible={visible}
                 environmentLabel={environmentLabel}
-                onControl={(control) => setServerControlledTab({ tabId: runtimeTabId, control })}
+                onControl={(control) =>
+                  setServerControlledTab((current) =>
+                    control === null && current !== null && current.tabId !== runtimeTabId
+                      ? current
+                      : { tabId: runtimeTabId, control },
+                  )
+                }
                 onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "panel")}
                 // Stays connected under the empty state so a URL picked there reaches the page.
                 className={cn(

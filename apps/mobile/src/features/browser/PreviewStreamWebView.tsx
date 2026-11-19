@@ -252,10 +252,7 @@ function PreviewStreamDocumentView({
   const [gone, setGone] = useState(false);
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
-  const phase =
-    hasStreamed && status !== "streaming"
-      ? "reconnecting"
-      : previewStreamPhase(control, hasStreamed);
+  const phase = previewStreamPhase(control, status === "streaming", hasStreamed);
   const dialogRef = useRef<PreviewStreamControl["dialog"]>(null);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);

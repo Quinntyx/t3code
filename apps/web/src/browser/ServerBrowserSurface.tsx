@@ -180,9 +180,13 @@ export function ServerBrowserSurface(props: {
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
   const hasFrameRef = useRef(false);
   const frameTargetRef = useRef<string | null>(null);
-  const [frameTargetKey, setFrameTargetKey] = useState<string | null>(null);
+  const [retainedFrameTargetKey, setRetainedFrameTargetKey] = useState<string | null>(null);
+  const [currentFramePainted, setCurrentFramePainted] = useState(false);
   const controlRef = useRef<PreviewStreamControl | null>(null);
-  const [control, setControl] = useState<PreviewStreamControl | null>(null);
+  const [controlState, setControlState] = useState<{
+    readonly targetKey: string;
+    readonly control: PreviewStreamControl | null;
+  } | null>(null);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
@@ -372,10 +376,11 @@ export function ServerBrowserSurface(props: {
     const canvas = canvasRef.current;
     if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
     const targetKey = `${environmentId}:${threadId}:${tabId}`;
+    hasFrameRef.current = false;
+    setCurrentFramePainted(false);
     if (frameTargetRef.current !== targetKey) {
       frameTargetRef.current = targetKey;
-      hasFrameRef.current = false;
-      setFrameTargetKey(null);
+      setRetainedFrameTargetKey(null);
       canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     }
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -384,7 +389,8 @@ export function ServerBrowserSurface(props: {
       () => {
         if (hasFrameRef.current) return;
         hasFrameRef.current = true;
-        setFrameTargetKey(targetKey);
+        setCurrentFramePainted(true);
+        setRetainedFrameTargetKey(targetKey);
       },
       () => client.requestKeyFrame(),
     );
@@ -422,7 +428,7 @@ export function ServerBrowserSurface(props: {
         onControl: (next) => {
           const previous = controlRef.current;
           controlRef.current = next;
-          setControl(next);
+          setControlState({ targetKey, control: next });
           controlChanged(next);
           if (
             next.dialog?.message !== previous?.dialog?.message ||
@@ -438,9 +444,11 @@ export function ServerBrowserSurface(props: {
         },
         onConnectedChange: (connected) => {
           if (connected) return;
+          hasFrameRef.current = false;
+          setCurrentFramePainted(false);
           setFileChooser(null);
           controlRef.current = null;
-          setControl(null);
+          setControlState(null);
           controlChanged(null);
           clearInput();
         },
@@ -465,8 +473,10 @@ export function ServerBrowserSurface(props: {
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
+      hasFrameRef.current = false;
+      setCurrentFramePainted(false);
       controlRef.current = null;
-      setControl(null);
+      setControlState(null);
       controlChanged(null);
       clearInput();
     };
@@ -756,8 +766,10 @@ export function ServerBrowserSurface(props: {
   };
 
   const targetKey = `${environmentId}:${threadId}:${tabId}`;
-  const hasFrame = frameTargetKey === targetKey;
-  const phase = previewStreamPhase(control, hasFrame);
+  const control = controlState?.targetKey === targetKey ? controlState.control : null;
+  const hasRetainedFrame = retainedFrameTargetKey === targetKey;
+  const hasCurrentFrame = hasRetainedFrame && currentFramePainted;
+  const phase = previewStreamPhase(control, hasCurrentFrame, hasRetainedFrame);
   const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
   const overlaySuppressed = pdfUrl !== null || hostSetup !== null || accessDenied;
 
@@ -869,7 +881,7 @@ export function ServerBrowserSurface(props: {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          disabled={pdfUrl !== null || control?.controller !== "you"}
+          disabled={pdfUrl !== null || control?.controller !== "you" || phase === "reconnecting"}
           defaultValue={INPUT_SENTINEL}
           onFocus={(event) => resetInput(event.currentTarget)}
           className="sr-only top-0 left-0 text-base"

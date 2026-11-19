@@ -105,7 +105,7 @@ async function renderStream(tabId = "tab-copy") {
 }
 
 describe("ServerBrowserSurface stream phases", () => {
-  it("moves from connecting to live, then a reconnect pill over the last frame", async () => {
+  it("moves from connecting to live, stays reconnecting until fresh video paints, then recovers", async () => {
     setup();
     const { screen, container, handlers } = await renderStream();
     await using _screen = screen;
@@ -118,14 +118,15 @@ describe("ServerBrowserSurface stream phases", () => {
       .element(screen.getByRole("button", { name: "Take control" }))
       .not.toBeInTheDocument();
 
-    await act(() =>
+    await act(() => {
+      handlers().onViewport?.({ width: 400, height: 300 });
       handlers().onControl?.({
         canOperate: true,
         controller: "unclaimed",
         generation: 1,
         dialog: null,
-      }),
-    );
+      });
+    });
     await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
     await expect.element(screen.getByText("Waiting for first frame…")).toBeVisible();
     await expect
@@ -144,6 +145,31 @@ describe("ServerBrowserSurface stream phases", () => {
     await expect
       .element(screen.getByRole("button", { name: "Take control" }))
       .not.toBeInTheDocument();
+
+    // Control returning before a replacement frame paints keeps reconnecting active and gates input.
+    await act(() =>
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 2,
+        dialog: null,
+      }),
+    );
+    await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
+    await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Release control" }))
+      .not.toBeInTheDocument();
+    mocks.sent.length = 0;
+    await userEvent.click(canvas);
+    expect(mocks.sent.filter((input) => input.type === "mouse")).toEqual([]);
+
+    await act(() => mocks.painted?.());
+    await expect.element(screen.getByText("You have control")).toBeVisible();
+    await expect
+      .element(screen.getByText("Reconnecting to remote browser…"))
+      .not.toBeInTheDocument();
+    await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
   });
 
   it("starts over at connecting when the tab changes", async () => {

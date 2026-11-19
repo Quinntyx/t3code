@@ -138,7 +138,10 @@ export function start(configuration: PreviewStreamConfiguration) {
   const painter = createPreviewFramePainter(
     canvas,
     () => {
-      if (!streaming && !stopped) reportStatus("streaming");
+      if (!streaming && !stopped) {
+        reportStatus("streaming");
+        if (control?.controller === "you") input.disabled = !interactive;
+      }
       sendPictureInPictureFrame();
     },
     () => client?.requestKeyFrame(),
@@ -214,16 +217,17 @@ export function start(configuration: PreviewStreamConfiguration) {
           if (nextControl.controller === "you") agentCursor.style.opacity = "0";
           if (nextControl.controller !== "you") clearInput();
           else {
-            input.disabled = !interactive;
+            input.disabled = !(interactive && streaming);
             if (interactive && size && previous?.controller !== "you")
               next.send({ type: "resize", ...size });
           }
         },
         onConnectedChange: (connected) => {
           if (!connected) {
+            const hadControl = control !== null;
             control = null;
             clearInput();
-            if (streaming) reportStatus("connecting");
+            if (streaming || hadControl) reportStatus("connecting");
             return;
           }
         },
@@ -294,7 +298,13 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const pagePoint = (clientX: number, clientY: number, clamp: boolean) => {
-    if (!viewport || canvas.width === 0 || canvas.height === 0 || control?.controller !== "you")
+    if (
+      !streaming ||
+      !viewport ||
+      canvas.width === 0 ||
+      canvas.height === 0 ||
+      control?.controller !== "you"
+    )
       return null;
     const rect = canvas.getBoundingClientRect();
     const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);

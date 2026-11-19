@@ -32,15 +32,18 @@ export type PreviewStreamPhase = "connecting" | "awaiting-frame" | "live" | "rec
 
 export const previewStreamPhase = (
   control: PreviewStreamControl | null,
-  hasFrame: boolean,
+  hasCurrentFrame: boolean,
+  hasRetainedFrame = hasCurrentFrame,
 ): PreviewStreamPhase =>
-  hasFrame
+  hasCurrentFrame
     ? control !== null
       ? "live"
       : "reconnecting"
-    : control !== null
-      ? "awaiting-frame"
-      : "connecting";
+    : hasRetainedFrame
+      ? "reconnecting"
+      : control !== null
+        ? "awaiting-frame"
+        : "connecting";
 
 export const previewStreamStatusLabel = (
   phase: PreviewStreamPhase,

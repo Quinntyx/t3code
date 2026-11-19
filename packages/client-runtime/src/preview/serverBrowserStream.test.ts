@@ -210,6 +210,8 @@ describe("preview stream phase", () => {
     expect(previewStreamPhase(null, false)).toBe("connecting");
     expect(previewStreamPhase(owned, false)).toBe("awaiting-frame");
     expect(previewStreamPhase(owned, true)).toBe("live");
+    expect(previewStreamPhase(null, false, true)).toBe("reconnecting");
+    expect(previewStreamPhase(owned, false, true)).toBe("reconnecting");
     expect(previewStreamPhase(null, true)).toBe("reconnecting");
   });
 

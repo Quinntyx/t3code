@@ -132,23 +132,29 @@ export function PreviewChromeRow({
             <TooltipPopup>Forward</TooltipPopup>
           </Tooltip>
           <Tooltip>
-            <TooltipTrigger render={<span className="inline-flex" />}>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={refreshDisabled ? NOOP : onRefresh}
-                disabled={refreshDisabled}
-                aria-label="Refresh"
-                type="button"
-              >
-                <RefreshIcon refreshing={loading} />
-              </Button>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={refreshDisabled ? NOOP : onRefresh}
+                  disabled={refreshDisabled && !refreshDisabledReason}
+                  aria-disabled={refreshDisabled || undefined}
+                  aria-description={
+                    refreshDisabled && refreshDisabledReason ? refreshDisabledReason : undefined
+                  }
+                  aria-label="Refresh"
+                  type="button"
+                />
+              }
+            >
+              <RefreshIcon refreshing={loading} />
             </TooltipTrigger>
             <TooltipPopup>
-              {loading
-                ? "Loading…"
-                : refreshDisabled && refreshDisabledReason
-                  ? refreshDisabledReason
+              {refreshDisabled && refreshDisabledReason
+                ? refreshDisabledReason
+                : loading
+                  ? "Loading…"
                   : "Refresh"}
             </TooltipPopup>
           </Tooltip>
