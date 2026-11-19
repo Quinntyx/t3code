@@ -324,8 +324,12 @@ export function PreviewView({
   };
 
   const handleRefresh = () => {
-    if (isServerTab) serverSurfaceRef.current?.reload();
-    else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
+    if (isServerTab) {
+      if (refreshDisabled || serverInputDisabled) return;
+      serverSurfaceRef.current?.reload();
+      return;
+    }
+    if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   };
 
   const adjustServerTab = async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {

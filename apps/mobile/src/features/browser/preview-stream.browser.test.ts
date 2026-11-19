@@ -14,10 +14,13 @@ class TestSocket extends EventTarget {
     this.url = url;
     sockets.push(this);
   }
+  closed = false;
   send(data: string) {
     this.sent.push(JSON.parse(data));
   }
-  close() {}
+  close() {
+    this.closed = true;
+  }
   open() {
     this.dispatchEvent(new Event("open"));
   }
@@ -421,6 +424,58 @@ it("reconnects with refreshed access via updateAccess while keeping input gated 
     expect(input.disabled).toBe(false);
     command({ type: "text", text: "allowed" });
     expect(second.sent).toContainEqual({ type: "text", text: "allowed" });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("suspends transport and input on updateAccess(null) and resumes on fresh access", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    harness.posted.length = 0;
+    updateAccess(null);
+
+    expect(first.closed).toBe(true);
+    expect(harness.sockets).toHaveLength(1);
+    expect(harness.posted).toContainEqual({ type: "status", status: "connecting" });
+    const input = document.querySelector("textarea")!;
+    expect(input.disabled).toBe(true);
+
+    updateAccess({
+      httpBase: "https://environment.test/api/preview",
+      wsBase: "wss://environment.test/api/preview",
+      credentials: false,
+      query: { wsTicket: "resumed-ticket" },
+    });
+    expect(harness.sockets).toHaveLength(2);
+    const second = harness.sockets[1]!;
+    expect(second.url).toContain("wsTicket=resumed-ticket");
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    expect(input.disabled).toBe(true);
+
+    second.receiveFrame();
+    await flushMicrotasks();
+    expect(input.disabled).toBe(false);
   } finally {
     harness.cleanup();
   }

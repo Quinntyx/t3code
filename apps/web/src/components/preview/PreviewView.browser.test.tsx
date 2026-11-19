@@ -393,12 +393,16 @@ describe("PreviewView", () => {
     const menuTrigger = page.getByRole("button", { name: "Preview menu" });
 
     await setStreamControl("unclaimed");
+    mocks.streamSend.mockClear();
+    await act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.streamSend).not.toHaveBeenCalled();
     await userEvent.click(menuTrigger);
     const hardReload = page.getByRole("menuitem", { name: "Hard reload" });
     await expect.element(hardReload).toHaveAttribute("aria-disabled", "true");
     await userEvent.keyboard("{Escape}");
 
     await setStreamControl("you");
+    mocks.streamSend.mockClear();
     await userEvent.click(menuTrigger);
     await expect.element(hardReload).not.toHaveAttribute("aria-disabled");
     await userEvent.click(hardReload);
@@ -410,6 +414,9 @@ describe("PreviewView", () => {
     mocks.navStatus = { _tag: "Idle" };
     await using _screen = await renderServerPreview();
     await setStreamControl("you");
+    mocks.streamSend.mockClear();
+    await act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.streamSend).not.toHaveBeenCalled();
     await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
     await expect
       .element(page.getByRole("menuitem", { name: "Hard reload" }))

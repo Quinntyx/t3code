@@ -14,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 import type { EnvironmentId, PreviewStreamHostSetup } from "@t3tools/contracts";
 import {
+  useEffect,
   useEffectEvent,
   useImperativeHandle,
   useLayoutEffect,
@@ -21,7 +22,7 @@ import {
   useState,
   type Ref,
 } from "react";
-import { Platform, Pressable, TextInput, View } from "react-native";
+import { AccessibilityInfo, Platform, Pressable, TextInput, View } from "react-native";
 import { WebView } from "react-native-webview";
 import * as Clipboard from "expo-clipboard";
 
@@ -94,11 +95,22 @@ function PreviewStreamFallback({
   readonly onErrorChange?: ((failed: boolean) => void) | undefined;
 }) {
   const hasError = !paused && error !== null;
+  const lastAnnouncedError = useRef<string | null>(null);
   const reportError = useEffectEvent((failed: boolean) => onErrorChange?.(failed));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports terminal access failure to compact parent containers while the stream WebView is unmounted
   useLayoutEffect(() => {
     reportError(hasError);
   }, [hasError]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- announces fallback access errors to VoiceOver on iOS where accessibilityLiveRegion is unsupported
+  useEffect(() => {
+    if (compact || !hasError || error === null) {
+      lastAnnouncedError.current = null;
+      return;
+    }
+    if (Platform.OS !== "ios" || lastAnnouncedError.current === error) return;
+    lastAnnouncedError.current = error;
+    AccessibilityInfo.announceForAccessibility(error);
+  }, [compact, error, hasError]);
   return (
     <View
       className={
@@ -117,6 +129,7 @@ function PreviewStreamFallback({
         <>
           {!error ? <AppActivityIndicator colorClassName="accent-icon" /> : null}
           <AppText
+            accessibilityLiveRegion={error ? "polite" : "none"}
             selectable={!!error}
             className={
               error ? "text-center text-sm text-foreground-muted" : "text-sm text-foreground-muted"
@@ -194,11 +207,37 @@ export function PreviewStreamWebView(
     },
 ) {
   const { access, error, refresh, retryAfter } = usePreviewStreamAccess(props.environmentId);
-  if (access && !props.paused) {
+  const targetKey = JSON.stringify({
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+    tabId: props.tabId,
+    interactive: props.interactive,
+    background: props.background,
+    reuseNearbyTouchProbe: Platform.OS === "ios",
+  });
+  const [seeded, setSeeded] = useState<{
+    readonly key: string;
+    readonly access: PreviewStreamConfiguration["access"];
+  } | null>(() => (access && !props.paused ? { key: targetKey, access } : null));
+  const activeSeed = props.paused
+    ? null
+    : seeded?.key === targetKey
+      ? seeded
+      : access
+        ? { key: targetKey, access }
+        : null;
+  // Keep the active WebView mounted across mid-session access outages for the same target so the painted frame survives recovery.
+  if ((seeded?.key ?? null) !== (activeSeed?.key ?? null)) {
+    setSeeded(activeSeed);
+  }
+  if (activeSeed) {
     return (
       <AuthorizedPreviewStream
+        key={targetKey}
         {...props}
+        initialAccess={activeSeed.access}
         access={access}
+        accessError={error}
         onUnauthorized={refresh}
         onRefused={retryAfter}
       />
@@ -217,20 +256,22 @@ export function PreviewStreamWebView(
 
 function AuthorizedPreviewStream({
   ref,
+  initialAccess,
+  access,
+  accessError,
   ...props
-}: NativeStreamConfiguration & NativeStreamBridge) {
+}: Omit<NativeStreamConfiguration, "access"> &
+  NativeStreamBridge & {
+    readonly initialAccess: PreviewStreamConfiguration["access"];
+    readonly access: PreviewStreamConfiguration["access"] | null;
+    readonly accessError: string | null;
+  }) {
   const [attempt, setAttempt] = useState(0);
   const processRetried = useRef(false);
   const unauthorized = useRef(0);
-  const documentKey = JSON.stringify({
-    threadId: props.threadId,
-    tabId: props.tabId,
-    interactive: props.interactive,
-    background: props.background,
-    reuseNearbyTouchProbe: Platform.OS === "ios",
-  });
+  const bootAccess = access ?? initialAccess;
   const initialConfiguration = JSON.stringify({
-    access: props.access,
+    access: bootAccess,
     threadId: props.threadId,
     tabId: props.tabId,
     interactive: props.interactive,
@@ -239,16 +280,22 @@ function AuthorizedPreviewStream({
   } satisfies PreviewStreamConfiguration);
   return (
     <PreviewStreamDocumentView
-      key={`${attempt}:${documentKey}`}
+      key={attempt}
       {...props}
       ref={ref}
-      access={props.access}
+      bootAccess={bootAccess}
+      access={access}
+      accessError={accessError}
       initialConfiguration={initialConfiguration}
       onUnauthorized={() => {
         const refusals = ++unauthorized.current;
         if (refusals >= MAX_REFUSALS) return false;
         props.onRefused(refusals === 1 ? 0 : 1_000 * 2 ** (refusals - 1));
         return true;
+      }}
+      onRefreshAccess={() => {
+        unauthorized.current = 0;
+        props.onUnauthorized();
       }}
       onRetry={() => {
         processRetried.current = false;
@@ -272,13 +319,16 @@ function AuthorizedPreviewStream({
 
 function PreviewStreamDocumentView({
   ref,
+  bootAccess,
   access,
+  accessError,
   initialConfiguration,
   background,
   compact,
   pdfUri,
   environmentLabel,
   onUnauthorized,
+  onRefreshAccess,
   onGone,
   onViewport,
   onControl,
@@ -289,10 +339,13 @@ function PreviewStreamDocumentView({
   onStreaming,
   onRecoverProcess,
 }: Omit<NativeStreamBridge, "onUnauthorized" | "onRefused"> & {
-  readonly access: PreviewStreamConfiguration["access"];
+  readonly bootAccess: PreviewStreamConfiguration["access"];
+  readonly access: PreviewStreamConfiguration["access"] | null;
+  readonly accessError: string | null;
   readonly initialConfiguration: string;
   readonly background: string;
   readonly onUnauthorized: () => boolean;
+  readonly onRefreshAccess: () => void;
   readonly onRetry: () => void;
   readonly onStreaming: () => void;
   readonly onRecoverProcess: () => boolean;
@@ -301,19 +354,33 @@ function PreviewStreamDocumentView({
   const active = useRef(false);
   const failed = useRef(false);
   const bootstrapped = useRef(false);
-  const appliedAccess = useRef(access);
+  const appliedAccess = useRef<PreviewStreamConfiguration["access"] | null>(bootAccess);
   const bootstrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error">("connecting");
-  // Survives mid-session reconnects and access refreshes because only a target or attempt change remounts this view.
+  // Survives mid-session reconnects and access outages because only a target or attempt change remounts this view.
   const [hasStreamed, setHasStreamed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
+  const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
+  const [previousAccess, setPreviousAccess] = useState(access);
+  if (previousAccess !== access) {
+    setPreviousAccess(access);
+    if (access === null) {
+      setControl(null);
+      setFileChooser(null);
+      setStatus((current) => (current === "error" ? current : "connecting"));
+    }
+  }
+  const displayError = status === "error" ? error : access === null ? accessError : null;
+  const hasError = displayError !== null;
   const phase = previewStreamPhase(control, status === "streaming", hasStreamed);
+  const statusLabel = previewStreamStatusLabel(phase, control);
+  const announcement = compact ? null : hasError ? displayError : statusLabel;
+  const lastAnnouncement = useRef<string | null>(announcement);
   const dialogRef = useRef<PreviewStreamControl["dialog"]>(null);
   const [promptText, setPromptText] = useState("");
-  const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const answerFileChooser = (pick: boolean) => {
     const chooser = fileChooser;
     if (!chooser) return;
@@ -349,7 +416,6 @@ function PreviewStreamDocumentView({
     clearBootstrapTimer();
     webView.current?.injectJavaScript("window.T3PreviewStream?.stop(); true;");
     onStreamingChange?.(false);
-    onErrorChange?.(true);
     setControl(null);
     setFileChooser(null);
     onControl?.(null);
@@ -359,8 +425,8 @@ function PreviewStreamDocumentView({
   const bootstrapTimedOut = useEffectEvent(() =>
     fail("Browser viewer could not start. Reconnect to try again."),
   );
-  const streamStarted = useEffectEvent(() => {
-    onErrorChange?.(false);
+  const reportError = useEffectEvent((failedState: boolean) => {
+    onErrorChange?.(failedState);
   });
   const streamEnded = useEffectEvent(() => {
     onStreamingChange?.(false);
@@ -370,7 +436,6 @@ function PreviewStreamDocumentView({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the bootstrap timeout and stops the WebView stream when this view unmounts
   useLayoutEffect(() => {
     active.current = true;
-    streamStarted();
     const view = webView.current;
     bootstrapTimer.current = setTimeout(bootstrapTimedOut, 15_000);
     return () => {
@@ -381,16 +446,31 @@ function PreviewStreamDocumentView({
       streamEnded();
     };
   }, []);
-  // Push refreshed credentials into the live WebView so mid-session reconnects keep the painted frame.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- forwards refreshed stream access into the imperative WebView bridge without remounting the canvas
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports terminal stream or access failure to compact parent containers
   useLayoutEffect(() => {
-    if (!active.current || failed.current || !bootstrapped.current) return;
-    if (appliedAccess.current === access) return;
+    reportError(hasError);
+  }, [hasError]);
+  // Push refreshed credentials (or null to suspend) into the live WebView so mid-session outages keep the painted frame.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- forwards stream access updates into the imperative WebView bridge without remounting the canvas
+  useLayoutEffect(() => {
+    if (!active.current || failed.current) return;
+    if (access === null) {
+      dialogRef.current = null;
+      streamEnded();
+    }
+    if (!bootstrapped.current || appliedAccess.current === access) return;
     appliedAccess.current = access;
     webView.current?.injectJavaScript(
       `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
     );
   }, [access]);
+  // Announce distinct status transitions to VoiceOver on iOS, where accessibilityLiveRegion is unsupported.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- announces stream phase and error changes to VoiceOver on iOS
+  useEffect(() => {
+    if (announcement === null || announcement === lastAnnouncement.current) return;
+    lastAnnouncement.current = announcement;
+    if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility(announcement);
+  }, [announcement]);
   const [source] = useState(() => ({
     html: previewStreamDocument(initialConfiguration, previewStreamScript),
     baseUrl: Platform.OS === "android" ? "https://localhost/" : "file:///",
@@ -409,22 +489,22 @@ function PreviewStreamDocumentView({
     <View className="flex-1" style={{ backgroundColor: background }}>
       {!compact ? (
         <View
-          accessibilityElementsHidden={status === "error"}
-          importantForAccessibility={status === "error" ? "no-hide-descendants" : "auto"}
+          accessibilityElementsHidden={hasError}
+          importantForAccessibility={hasError ? "no-hide-descendants" : "auto"}
           className="min-h-16 flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2"
         >
           <View className="flex-1 flex-row items-center gap-2">
             <ConnectionStatusDot
               state={phase === "live" ? "connected" : "connecting"}
-              pulse={phase !== "live"}
+              pulse={!hasError && phase !== "live"}
               size={7}
             />
             <AppText
-              accessibilityLiveRegion={status === "error" ? "none" : "polite"}
+              accessibilityLiveRegion={hasError ? "none" : "polite"}
               numberOfLines={1}
               className="flex-1 text-xs text-foreground-muted"
             >
-              {previewStreamStatusLabel(phase, control)}
+              {statusLabel}
             </AppText>
           </View>
           {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
@@ -479,6 +559,13 @@ function PreviewStreamDocumentView({
               webView.current?.injectJavaScript(
                 `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
               );
+            }
+            if (
+              access === null &&
+              (message.type === "control" ||
+                (message.type === "status" && message.status === "streaming"))
+            ) {
+              return;
             }
             switch (message.type) {
               case "control": {
@@ -542,7 +629,7 @@ function PreviewStreamDocumentView({
             <PdfPreview key={pdfUri} uri={pdfUri} />
           </View>
         ) : null}
-        {status !== "error" && (phase === "connecting" || phase === "awaiting-frame") && !pdfUri ? (
+        {!hasError && (phase === "connecting" || phase === "awaiting-frame") && !pdfUri ? (
           <View
             className="absolute inset-0 items-center justify-center gap-2 px-6"
             style={{ backgroundColor: background }}
@@ -560,7 +647,7 @@ function PreviewStreamDocumentView({
             )}
           </View>
         ) : null}
-        {status !== "error" && phase === "reconnecting" && !pdfUri ? (
+        {!hasError && phase === "reconnecting" && !pdfUri ? (
           <View
             pointerEvents="none"
             accessibilityElementsHidden
@@ -642,7 +729,7 @@ function PreviewStreamDocumentView({
           )}
         </View>
       ) : null}
-      {status === "error" ? (
+      {hasError ? (
         <View
           className="absolute inset-0 items-center justify-center gap-4 px-6"
           style={{ backgroundColor: background }}
@@ -652,12 +739,13 @@ function PreviewStreamDocumentView({
           ) : (
             <AppText
               accessibilityLiveRegion="polite"
+              selectable={status !== "error"}
               className="text-center text-sm text-foreground-muted"
             >
-              {error}
+              {displayError}
             </AppText>
           )}
-          {hostSetup && !compact ? (
+          {status === "error" && hostSetup && !compact ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Copy ${hostSetup.command}`}
@@ -675,9 +763,9 @@ function PreviewStreamDocumentView({
           {!gone && !compact ? (
             <View className="items-center">
               <Button
-                label={hostSetup ? "Try again" : "Reconnect"}
+                label={status === "error" ? (hostSetup ? "Try again" : "Reconnect") : "Retry"}
                 tone="secondary"
-                onPress={onRetry}
+                onPress={status === "error" ? onRetry : onRefreshAccess}
               />
             </View>
           ) : null}

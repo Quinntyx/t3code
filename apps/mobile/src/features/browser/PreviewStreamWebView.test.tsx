@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   onMessage: null as ((event: { nativeEvent: { data: string } }) => void) | null,
   injected: [] as string[],
   webViewMounts: 0,
+  announce: vi.fn(),
   accessState: {
     access: {
       httpBase: "https://environment.test/api/preview",
@@ -37,6 +38,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("react-native", () => ({
+  AccessibilityInfo: { announceForAccessibility: mocks.announce },
   Platform: { OS: "ios" },
   View: ({ children, accessibilityElementsHidden, importantForAccessibility }: ViewProps) => (
     <div
@@ -135,6 +137,7 @@ function mountView(
   mocks.onMessage = null;
   mocks.injected.length = 0;
   mocks.webViewMounts = 0;
+  mocks.announce.mockReset();
   mocks.accessState = {
     access:
       props.access !== undefined
@@ -189,6 +192,7 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Connecting to remote stream…"]);
     expect(container.textContent).toContain("Starting video stream from build-box…");
+    expect(mocks.announce).not.toHaveBeenCalled();
 
     act(() =>
       emit({
@@ -216,6 +220,12 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     act(() => emit({ type: "status", status: "error", detail: "Stream failed." }));
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Stream failed."]);
     expect(container.textContent).not.toContain("Reconnecting to remote browser…");
+    expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
+      "Waiting for video frame…",
+      "Watching",
+      "Reconnecting stream…",
+      "Stream failed.",
+    ]);
   } finally {
     cleanup();
   }
@@ -281,6 +291,7 @@ it("shows compact reconnect and terminal error badges while reporting error stat
     expect(container.textContent).not.toContain("Reconnecting…");
     expect(container.textContent).toContain("Unavailable");
     expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
+    expect(mocks.announce).not.toHaveBeenCalled();
   } finally {
     cleanup();
   }
@@ -299,6 +310,32 @@ it("reports terminal access errors without spinning in compact mode", () => {
     expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
     expect(container.textContent).toContain("Unavailable");
     expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
+    expect(mocks.announce).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+  }
+});
+
+it("announces initial fallback access errors via live region and VoiceOver", () => {
+  const { container, rerender, cleanup } = mountView({
+    access: null,
+    accessError: null,
+  });
+  try {
+    expect(container.querySelector('[data-live-region="polite"]')).toBeNull();
+    expect(mocks.announce).not.toHaveBeenCalled();
+
+    mocks.accessState = {
+      ...mocks.accessState,
+      error: "Could not authorize browser stream.",
+    };
+    rerender();
+
+    expect(container.querySelector('[data-live-region="polite"]')?.textContent).toBe(
+      "Could not authorize browser stream.",
+    );
+    expect(mocks.announce).toHaveBeenCalledTimes(1);
+    expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
   } finally {
     cleanup();
   }
@@ -363,6 +400,97 @@ it("refreshes stream access in place after mid-session unauthorized refusal with
       emit({ type: "status", status: "streaming" });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+  } finally {
+    cleanup();
+  }
+});
+
+it("keeps the WebView mounted across a mid-session access failure and recovers in place", () => {
+  const streamingChanges: boolean[] = [];
+  const errorChanges: boolean[] = [];
+  const { container, rerender, cleanup } = mountView({
+    onStreamingChange: (streaming) => streamingChanges.push(streaming),
+    onErrorChange: (failed) => errorChanges.push(failed),
+  });
+  try {
+    expect(mocks.webViewMounts).toBe(1);
+    const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
+
+    act(() => {
+      emit({ type: "status", status: "connecting" });
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+    mocks.injected.length = 0;
+    mocks.announce.mockClear();
+
+    // Mid-session access failure suspends transport without unmounting the WebView.
+    mocks.accessState = {
+      ...mocks.accessState,
+      access: null,
+      error: "Could not authorize browser stream.",
+    };
+    rerender();
+
+    expect(mocks.webViewMounts).toBe(1);
+    expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null); true;");
+    expect(streamingChanges.at(-1)).toBe(false);
+    expect(errorChanges).toEqual([false, true]);
+    expect(liveRegions().map((el) => el.textContent)).toEqual([
+      "Could not authorize browser stream.",
+    ]);
+    expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+
+    const retryButton = container.querySelector("button");
+    expect(retryButton?.textContent).toBe("Retry");
+    act(() => retryButton?.click());
+    expect(mocks.accessState.refresh).toHaveBeenCalledOnce();
+
+    // Access recovery resumes in place with the retained frame and reconnecting state.
+    mocks.accessState = {
+      ...mocks.accessState,
+      access: {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "recovered-ticket" },
+      },
+      error: null,
+    };
+    rerender();
+
+    expect(mocks.webViewMounts).toBe(1);
+    expect(errorChanges).toEqual([false, true, false]);
+    expect(
+      mocks.injected.some(
+        (script) =>
+          script.includes("window.T3PreviewStream?.updateAccess(") &&
+          script.includes('"recovered-ticket"'),
+      ),
+    ).toBe(true);
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
+    expect(container.textContent).not.toContain("Connecting to remote browser");
+    expect(mocks.announce).toHaveBeenCalledWith("Reconnecting stream…");
+
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 2,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+    expect(mocks.announce).toHaveBeenLastCalledWith("Watching");
   } finally {
     cleanup();
   }
