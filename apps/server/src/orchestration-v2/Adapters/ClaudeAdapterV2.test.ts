@@ -8228,7 +8228,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const frames = [
         usageStreamFrame({
           type: "message_start",
-          message: { id: "msg_native", usage: startUsage },
+          message: { id: "msg_native", model: "claude-sonnet-4-6", usage: startUsage },
         }),
         usageSnapshotFrame("msg_native", "00000000-0000-4000-8000-000000000680", startUsage),
         usageStreamFrame({
@@ -8274,6 +8274,24 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ),
         [117_000, 117_000, 117_000, 117_000],
       );
+      const liveUsage = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" &&
+        event.providerTurn.status === "running" &&
+        event.providerTurn.turnTokenUsage !== undefined
+          ? [event.providerTurn.turnTokenUsage]
+          : [],
+      );
+      assert.deepEqual(liveUsage[0], {
+        usageScope: "main_agent",
+        usageStatus: "partial",
+        hasSubagents: false,
+        inputTokens: 1_210,
+        cachedInputTokens: 1_000,
+        cacheCreationTokens: 200,
+        outputTokens: 1,
+        models: ["claude-sonnet-4-6"],
+      });
+      assert.equal(liveUsage.at(-1)?.outputTokens, 50);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -13430,6 +13448,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly messageId?: string;
     readonly text?: string;
     readonly bashToolUseId?: string;
+    readonly usage?: unknown;
   }): ReadonlyArray<SDKMessage> =>
     [
       ...(input.text === undefined ? [] : [{ type: "text", text: input.text }]),
@@ -13452,6 +13471,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "message",
           role: "assistant",
           content: [block],
+          ...(input.usage === undefined ? {} : { usage: input.usage }),
         },
         parent_tool_use_id: input.parentToolUseId,
         uuid: index === 0 ? input.uuid : `${input.uuid}:${index}`,
@@ -14025,6 +14045,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           yield* Queue.offer(harness.sdkMessages, frame);
         }
         yield* harness.awaitTerminal(1);
+        const settledEventCount = harness.events.length;
 
         for (const frame of [
           makeSubagentToolResultFrame({
@@ -14037,6 +14058,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             uuid: "00000000-0000-4000-8000-000000000955",
             text: "Still auditing.",
             bashToolUseId: IDLE_BASH,
+            usage: { input_tokens: 30, output_tokens: 7 },
           }),
           claudeSdkFrame({
             type: "system",
@@ -14059,6 +14081,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               event.type === "subagent.updated" &&
               event.subagent.progress === "Reading the last commits",
           ),
+        );
+        assert.isFalse(
+          harness.events
+            .slice(settledEventCount)
+            .some(
+              (event) =>
+                event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+            ),
+          "a settled turn's usage is final",
         );
         const routing = subagentRouting(harness.events, [STRADDLING_BASH, IDLE_BASH]);
         assert.deepEqual(routing.assistantTexts(routing.childThreadId), ["Still auditing."]);
@@ -15274,6 +15305,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             parentToolUseId: TOOL_USE_ID,
             uuid: "00000000-0000-4000-8000-000000000324",
             text: "Still working.",
+            usage: {
+              input_tokens: 30,
+              cache_read_input_tokens: 5,
+              cache_creation_input_tokens: 2,
+              output_tokens: 7,
+            },
           }),
           claudeSdkFrame({
             type: "system",
@@ -15316,6 +15353,22 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           FINAL_REPORT,
         ]);
         assert.deepEqual(routing.assistantTexts(harness.threadId), ["The auditor finished."]);
+        const liveUsage = harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "running" &&
+          event.providerTurn.turnTokenUsage !== undefined
+            ? [event.providerTurn.turnTokenUsage]
+            : [],
+        );
+        assert.deepEqual(liveUsage.at(-1)?.subagentUsage, [
+          {
+            model: "claude-sonnet-4-6",
+            inputTokens: 37,
+            cachedInputTokens: 5,
+            cacheCreationTokens: 2,
+            outputTokens: 7,
+          },
+        ]);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

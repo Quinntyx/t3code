@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { TurnModelTokenUsage } from "@t3tools/contracts";
 import {
   addClaudeLedgerUsage,
   claudeLedgerDelta,
   claudeModelLedger,
+  liveClaudeTurnTokenUsage,
   normalizeClaudeTurnTokenUsage,
-  recordClaudeMainMessageUsage,
+  recordClaudeMessageUsage,
 } from "./ClaudeTurnTokenUsage.ts";
 import {
   accumulateCodexTurnTokenUsage,
@@ -186,23 +188,23 @@ describe("billable native turn usage", () => {
       ["sonnet-response", main("claude-sonnet-4-6", 0, 0)],
       ["opus-response", main("claude-opus-5-5", 0, 0)],
     ]);
-    recordClaudeMainMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
+    recordClaudeMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
       input_tokens: 100,
       output_tokens: 1,
     });
-    recordClaudeMainMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
+    recordClaudeMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
       input_tokens: 100,
       output_tokens: 20,
     });
-    recordClaudeMainMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
+    recordClaudeMessageUsage(mainMessages, "sonnet-response", "claude-sonnet-4-6", {
       input_tokens: 0,
       output_tokens: 20,
     });
-    recordClaudeMainMessageUsage(mainMessages, "opus-response", "claude-opus-5-5", {
+    recordClaudeMessageUsage(mainMessages, "opus-response", "claude-opus-5-5", {
       input_tokens: 20,
       output_tokens: 4,
     });
-    recordClaudeMainMessageUsage(mainMessages, "notice", "<synthetic>", {
+    recordClaudeMessageUsage(mainMessages, "notice", "<synthetic>", {
       input_tokens: 500,
       output_tokens: 100,
     });
@@ -368,6 +370,74 @@ describe("billable native turn usage", () => {
       ).toMatchObject({ usageStatus: "partial", inputTokens: 145, outputTokens: 23 });
     },
   );
+
+  it("totals Claude's live main agent and subagent usage by model", () => {
+    const mainMessages = new Map<string, TurnModelTokenUsage>();
+    const subagentMessages = new Map<string, TurnModelTokenUsage>();
+    const mainUsage = {
+      input_tokens: 100,
+      cache_read_input_tokens: 40,
+      cache_creation_input_tokens: 10,
+      output_tokens: 5,
+    };
+    expect(recordClaudeMessageUsage(mainMessages, "first", "claude-sonnet-4-6", mainUsage)).toBe(
+      true,
+    );
+    expect(recordClaudeMessageUsage(mainMessages, "first", "claude-sonnet-4-6", mainUsage)).toBe(
+      false,
+    );
+    expect(
+      recordClaudeMessageUsage(mainMessages, "second", "claude-sonnet-4-6", {
+        input_tokens: 20,
+        output_tokens: 3,
+      }),
+    ).toBe(true);
+    expect(
+      recordClaudeMessageUsage(subagentMessages, "child", "claude-haiku-4-5-20251001", {
+        input_tokens: 30,
+        cache_read_input_tokens: 5,
+        cache_creation_input_tokens: 2,
+        output_tokens: 7,
+      }),
+    ).toBe(true);
+    expect(recordClaudeMessageUsage(mainMessages, "notice", "<synthetic>", mainUsage)).toBe(false);
+    expect(
+      recordClaudeMessageUsage(subagentMessages, "empty", "claude-haiku-4-5", {
+        input_tokens: 0,
+        output_tokens: 0,
+      }),
+    ).toBe(false);
+
+    expect(
+      liveClaudeTurnTokenUsage({ mainMessages, subagentMessages, hasSubagents: true }),
+    ).toEqual({
+      usageScope: "main_agent",
+      usageStatus: "partial",
+      hasSubagents: true,
+      inputTokens: 170,
+      cachedInputTokens: 40,
+      cacheCreationTokens: 10,
+      outputTokens: 8,
+      models: ["claude-sonnet-4-6"],
+      subagentUsage: [
+        {
+          model: "claude-haiku-4-5-20251001",
+          inputTokens: 37,
+          cachedInputTokens: 5,
+          cacheCreationTokens: 2,
+          outputTokens: 7,
+        },
+      ],
+      otherUsageStatus: "partial",
+    });
+    expect(
+      liveClaudeTurnTokenUsage({
+        mainMessages: new Map(),
+        subagentMessages: new Map(),
+        hasSubagents: false,
+      }),
+    ).toBeUndefined();
+  });
 
   it("measures Claude ledger growth only from a known, nondecreasing baseline", () => {
     const ledger = (output: number) =>
