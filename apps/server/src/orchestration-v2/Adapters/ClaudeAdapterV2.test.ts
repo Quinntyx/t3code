@@ -7036,6 +7036,16 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         }),
       });
       assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
+      const interruptedTurn = harness.events.findLast(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "interrupted",
+      );
+      assert.deepInclude(
+        interruptedTurn?.type === "provider_turn.updated"
+          ? interruptedTurn.providerTurn.turnTokenUsage
+          : undefined,
+        { usageStatus: "partial", inputTokens: 1, outputTokens: 1 },
+      );
       const afterInterrupt = harness.events.findLast(
         (event) => event.type === "provider_thread.updated",
       )?.providerThread;

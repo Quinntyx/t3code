@@ -8201,6 +8201,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   failure: null,
                   threadDisposition,
                 };
+          const measuredTurnTokenUsage = normalizeClaudeTurnTokenUsage(
+            input.result,
+            input.context.subagentsByTaskId.size > 0 || input.context.subagentsByToolUseId.size > 0,
+            input.status,
+            input.context.steeredSegmentUsage,
+            {
+              rootModels: input.context.rootModels,
+              // Without a final result the turn's last segment is unmeasured.
+              ledger: addClaudeLedgerUsage(
+                input.context.steeredLedgerUsage,
+                input.result === undefined ? undefined : resultLedgerUsage.get(input.result),
+              ),
+              mainMessages: input.context.mainMessages,
+              mainModel: input.context.mainUsageModel,
+            },
+          );
+          // A turn that measured nothing at settlement, such as an interrupt, keeps its live usage.
+          const finalTurnTokenUsage =
+            measuredTurnTokenUsage.usageStatus === "unavailable"
+              ? (liveTurnTokenUsage(input.context) ?? measuredTurnTokenUsage)
+              : measuredTurnTokenUsage;
           yield* Effect.all(
             [
               emitProviderEvent({
@@ -8212,25 +8233,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     status: input.status,
                     completedAt: input.completedAt,
                   }),
-                  turnTokenUsage: normalizeClaudeTurnTokenUsage(
-                    input.result,
-                    input.context.subagentsByTaskId.size > 0 ||
-                      input.context.subagentsByToolUseId.size > 0,
-                    input.status,
-                    input.context.steeredSegmentUsage,
-                    {
-                      rootModels: input.context.rootModels,
-                      // Without a final result the turn's last segment is unmeasured.
-                      ledger: addClaudeLedgerUsage(
-                        input.context.steeredLedgerUsage,
-                        input.result === undefined
-                          ? undefined
-                          : resultLedgerUsage.get(input.result),
-                      ),
-                      mainMessages: input.context.mainMessages,
-                      mainModel: input.context.mainUsageModel,
-                    },
-                  ),
+                  turnTokenUsage: finalTurnTokenUsage,
                 },
               }),
               // Emit the roster before root settlement so writeFinalRunEvents preserves it.
