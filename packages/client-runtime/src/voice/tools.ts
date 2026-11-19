@@ -10,6 +10,8 @@ export interface VoiceEnvironmentView {
   readonly label: string;
   readonly projects: ReadonlyArray<{ readonly id: string; readonly title?: string }>;
   readonly providers: ReadonlyArray<unknown>;
+  /** Settled threads the shell left out of `threads`; they cannot be listed. */
+  readonly olderSettledOmitted?: number;
   readonly threads: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
@@ -81,7 +83,7 @@ const definitions = [
   ],
   [
     "list_threads",
-    "List visible threads across every environment, or one environment, with project, latest run status and whether each needs the user. Returns total, needsUser and byStatus counts across every matching thread plus thread rows (threads needing the user and running ones first); truncated is true when rows omit threads, so use the counts for an all-threads answer.",
+    "List visible threads across every environment, or one environment, with project, latest run status and whether each needs the user. Returns total, needsUser and byStatus counts across every matching thread plus thread rows (threads needing the user and running ones first); truncated is true when rows omit threads, so use the counts for an all-threads answer. olderSettledOmitted counts settled threads the client does not hold: when it is above zero, say you also have that many older settled threads instead of calling total the exact count.",
     { environmentId: string, query: string },
     [],
   ],
@@ -205,12 +207,18 @@ export function createVoiceTools(options: {
         const byStatus: Record<string, number> = {};
         for (const row of rows) byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
         const threads = rows.slice(0, LISTED_THREAD_LIMIT);
-        // The counts cover every match, so a partial row list never reads as the whole picture.
+        // A snapshot can leave older settled threads out entirely; they are not in `rows`, so say
+        // so rather than let `total` read as every thread the user has.
+        const olderSettledOmitted = requested.reduce(
+          (sum, entry) => sum + (entry.olderSettledOmitted ?? 0),
+          0,
+        );
         return {
           total: rows.length,
           truncated: rows.length > threads.length,
           needsUser: rows.filter((row) => row.needsUser).length,
           byStatus,
+          olderSettledOmitted,
           threads,
         };
       }

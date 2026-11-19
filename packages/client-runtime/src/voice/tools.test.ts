@@ -26,6 +26,7 @@ type ThreadListing = {
   truncated: boolean;
   needsUser: number;
   byStatus: Record<string, number>;
+  olderSettledOmitted: number;
   threads: ReadonlyArray<Record<string, unknown>>;
 };
 
@@ -154,6 +155,20 @@ describe("client Voice tools", () => {
     expect(listing.threads.slice(0, 5).every((row) => row.needsUser === true)).toBe(true);
     expect(listing.threads.slice(5, 67).every((row) => row.status === "running")).toBe(true);
     expect(listing.threads.slice(67).every((row) => row.status === "completed")).toBe(true);
+  });
+
+  it("reports settled threads the shell left out instead of an exact total", async () => {
+    const partial: VoiceEnvironmentView = { ...environment, olderSettledOmitted: 7 };
+    const other: VoiceEnvironmentView = {
+      id: "env-b",
+      label: "Desktop",
+      projects: [],
+      providers: [],
+      olderSettledOmitted: 2,
+      threads: [],
+    };
+    const listing = (await toolsFor([partial, other]).execute("list_threads", {})) as ThreadListing;
+    expect(listing).toMatchObject({ total: 3, olderSettledOmitted: 9 });
   });
 
   it("keeps archived threads out of the working set unless the user searches for them", async () => {

@@ -7,6 +7,7 @@ import {
 import { awaitAtomValue } from "@t3tools/client-runtime/voice/awaitAtom";
 import { createVoiceTools, type VoiceEnvironmentView } from "@t3tools/client-runtime/voice/tools";
 import { createEnvironmentRpcCommand } from "@t3tools/client-runtime/state/runtime";
+import { unloadedOlderSettledCount } from "@t3tools/client-runtime/state/threads";
 import { ORCHESTRATION_V2_WS_METHODS, ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import * as DateTime from "effect/DateTime";
@@ -15,7 +16,7 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentShell, liveShellEnvironmentIdsAtom } from "../state/shell";
-import { environmentThreads } from "../state/threads";
+import { environmentThreads, olderSettledThreads } from "../state/threads";
 import { serverEnvironment } from "../state/server";
 import { randomUUID } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -50,6 +51,11 @@ const viewsAtom = Atom.make((get): ReadonlyArray<VoiceEnvironmentView> => {
         id: environmentId,
         label: catalog.entries.get(environmentId)?.target.label ?? environmentId,
         projects: snapshot.projects,
+        olderSettledOmitted: unloadedOlderSettledCount({
+          olderSettled: () => get(olderSettledThreads.olderSettledAtom(environmentId)),
+          scopes: [{ environmentId, projectIds: null }],
+          threads: snapshot.threads.map((thread) => ({ environmentId, source: thread })),
+        }),
         threads: snapshot.threads.map((thread) => ({
           id: thread.id,
           title: thread.title,
