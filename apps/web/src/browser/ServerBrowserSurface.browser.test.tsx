@@ -14,16 +14,23 @@ const mocks = vi.hoisted(() => ({
   sent: [] as PreviewStreamInput[],
   access: { url: "ws://preview.test", token: "test" },
   painted: null as (() => void) | null,
+  useRealPainter: false,
 }));
 
-vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (original) => ({
-  ...(await original()),
-  createPreviewStreamClient: mocks.createClient as never,
-  createPreviewFramePainter: (_canvas, onPainted) => {
-    mocks.painted = onPainted ?? null;
-    return { paint: () => undefined, stop: () => undefined };
-  },
-}));
+vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    createPreviewStreamClient: mocks.createClient as never,
+    createPreviewFramePainter: (canvas, onPainted, onKeyFrameNeeded) => {
+      if (mocks.useRealPainter) {
+        return actual.createPreviewFramePainter(canvas, onPainted, onKeyFrameNeeded);
+      }
+      mocks.painted = onPainted ?? null;
+      return { paint: () => undefined, reset: () => undefined, stop: () => undefined };
+    },
+  };
+});
 
 vi.mock(import("~/state/previewStream"), async (original) => ({
   ...(await original()),
@@ -32,11 +39,15 @@ vi.mock(import("~/state/previewStream"), async (original) => ({
 
 import { ServerBrowserSurface } from "./ServerBrowserSurface";
 
+const JPEG_FRAME = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
+
 function setup() {
   mocks.sent.length = 0;
   mocks.painted = null;
+  mocks.useRealPainter = false;
   mocks.createClient.mockReset().mockImplementation(() => ({
     send: (input: PreviewStreamInput) => mocks.sent.push(input),
+    requestKeyFrame: () => undefined,
     stop: () => undefined,
   }));
 }
@@ -60,9 +71,10 @@ async function renderSurface(controller: PreviewStreamControl["controller"]) {
   );
   await vi.waitFor(() => expect(mocks.createClient).toHaveBeenCalled());
   const handlers = mocks.createClient.mock.calls.at(-1)![1];
-  await act(() =>
-    handlers.onControl?.({ canOperate: true, controller, generation: 1, dialog: null }),
-  );
+  await act(() => {
+    handlers.onControl?.({ canOperate: true, controller, generation: 1, dialog: null });
+    mocks.painted?.();
+  });
   mocks.sent.length = 0;
   const input = container.querySelector("textarea")!;
   const canvas = container.querySelector("canvas")!;
@@ -105,45 +117,54 @@ async function renderStream(tabId = "tab-copy") {
 }
 
 describe("ServerBrowserSurface stream phases", () => {
-  it("moves from connecting to live, stays reconnecting until fresh video paints, then recovers", async () => {
+  it("moves from connecting to live, gates input until video paints, and recovers cleanly on reconnect", async () => {
     setup();
     const { screen, container, handlers } = await renderStream();
     await using _screen = screen;
     const canvas = container.querySelector("canvas")!;
+    const input = container.querySelector("textarea")!;
 
     await expect.element(screen.getByText("Connecting to remote stream…")).toBeVisible();
     await expect.element(screen.getByText("Connecting to remote browser")).toBeVisible();
     await expect.element(screen.getByText("build-box")).toBeVisible();
+    expect(input.disabled).toBe(true);
     await expect
       .element(screen.getByRole("button", { name: "Take control" }))
       .not.toBeInTheDocument();
 
+    // Control ownership before the first frame paints stays awaiting-frame and keeps keyboard input disabled.
     await act(() => {
       handlers().onViewport?.({ width: 400, height: 300 });
       handlers().onControl?.({
         canOperate: true,
-        controller: "unclaimed",
+        controller: "you",
         generation: 1,
         dialog: null,
       });
     });
     await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
     await expect.element(screen.getByText("Waiting for first frame…")).toBeVisible();
+    expect(input.disabled).toBe(true);
     await expect
-      .element(screen.getByRole("button", { name: "Take control" }))
+      .element(screen.getByRole("button", { name: "Release control" }))
       .not.toBeInTheDocument();
+    mocks.sent.length = 0;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(keys()).toEqual([]);
 
     await act(() => mocks.painted?.());
-    await expect.element(screen.getByText("Watching")).toBeVisible();
+    await expect.element(screen.getByText("You have control")).toBeVisible();
     await expect.element(screen.getByText("Connecting to remote browser")).not.toBeInTheDocument();
-    await expect.element(screen.getByRole("button", { name: "Take control" })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
+    expect(input.disabled).toBe(false);
 
     await act(() => handlers().onConnectedChange?.(false));
     await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
     await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
     expect(container.querySelector("canvas")).toBe(canvas);
+    expect(input.disabled).toBe(true);
     await expect
-      .element(screen.getByRole("button", { name: "Take control" }))
+      .element(screen.getByRole("button", { name: "Release control" }))
       .not.toBeInTheDocument();
 
     // Control returning before a replacement frame paints keeps reconnecting active and gates input.
@@ -157,12 +178,13 @@ describe("ServerBrowserSurface stream phases", () => {
     );
     await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
     await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
+    expect(input.disabled).toBe(true);
     await expect
       .element(screen.getByRole("button", { name: "Release control" }))
       .not.toBeInTheDocument();
     mocks.sent.length = 0;
     await userEvent.click(canvas);
-    expect(mocks.sent.filter((input) => input.type === "mouse")).toEqual([]);
+    expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
 
     await act(() => mocks.painted?.());
     await expect.element(screen.getByText("You have control")).toBeVisible();
@@ -170,6 +192,84 @@ describe("ServerBrowserSurface stream phases", () => {
       .element(screen.getByText("Reconnecting to remote browser…"))
       .not.toBeInTheDocument();
     await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
+    expect(input.disabled).toBe(false);
+  });
+
+  it("ignores an in-flight frame decode from a dropped connection after reconnect", async () => {
+    setup();
+    mocks.useRealPainter = true;
+    const decodes: Array<(bitmap: ImageBitmap) => void> = [];
+    const createBitmapSpy = vi.spyOn(window, "createImageBitmap").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          decodes.push(resolve);
+        }),
+    );
+    const drawImageSpy = vi
+      .spyOn(CanvasRenderingContext2D.prototype, "drawImage")
+      .mockImplementation(() => undefined);
+    try {
+      const { screen, container, handlers } = await renderStream();
+      await using _screen = screen;
+      const input = container.querySelector("textarea")!;
+      const fakeBitmap = () =>
+        ({ width: 400, height: 300, close: vi.fn() }) as unknown as ImageBitmap;
+
+      // Paint first frame so the surface is live.
+      await act(async () => {
+        handlers().onViewport?.({ width: 400, height: 300 });
+        handlers().onControl?.({
+          canOperate: true,
+          controller: "you",
+          generation: 1,
+          dialog: null,
+        });
+        handlers().onFrame?.(JPEG_FRAME);
+        decodes.shift()!(fakeBitmap());
+        await Promise.resolve();
+      });
+      await expect.element(screen.getByText("You have control")).toBeVisible();
+      expect(input.disabled).toBe(false);
+
+      // Queue a frame decode on the first connection, then drop the socket before it resolves.
+      await act(() => {
+        handlers().onFrame?.(JPEG_FRAME);
+        handlers().onConnectedChange?.(false);
+      });
+      expect(decodes).toHaveLength(1);
+      await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
+
+      // Replacement socket grants control before sending video, then the stale decode finishes.
+      const staleBitmap = fakeBitmap();
+      await act(async () => {
+        handlers().onControl?.({
+          canOperate: true,
+          controller: "you",
+          generation: 2,
+          dialog: null,
+        });
+        decodes.shift()!(staleBitmap);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(staleBitmap.close).toHaveBeenCalledOnce();
+      await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
+      await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
+      expect(input.disabled).toBe(true);
+
+      // A fresh frame on the replacement connection restores live state.
+      await act(async () => {
+        handlers().onFrame?.(JPEG_FRAME);
+        decodes.shift()!(fakeBitmap());
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await expect.element(screen.getByText("You have control")).toBeVisible();
+      expect(input.disabled).toBe(false);
+    } finally {
+      createBitmapSpy.mockRestore();
+      drawImageSpy.mockRestore();
+    }
   });
 
   it("starts over at connecting when the tab changes", async () => {

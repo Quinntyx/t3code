@@ -205,6 +205,80 @@ it("gates touch input during mid-session reconnect until a replacement frame pai
   }
 });
 
+it("ignores an in-flight JPEG decode from a dropped socket on reconnect", async () => {
+  const harness = mountMobileStream();
+  try {
+    const decodes: Array<(bitmap: { width: number; height: number; close(): void }) => void> = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      () =>
+        new Promise((resolve) => {
+          decodes.push(resolve);
+        }),
+    );
+    const makeBitmap = () => ({ width: 300, height: 150, close: vi.fn() });
+
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    decodes.shift()!(makeBitmap());
+    await flushMicrotasks();
+
+    // Start decoding a second frame on the first socket, then drop the socket before it resolves.
+    first.receiveFrame();
+    expect(decodes).toHaveLength(1);
+    first.disconnect();
+    vi.runOnlyPendingTimers();
+
+    const second = harness.sockets[1]!;
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    harness.posted.length = 0;
+    second.sent.length = 0;
+
+    // Resolving the stale decode must not post streaming or unlock input.
+    const staleBitmap = makeBitmap();
+    decodes.shift()!(staleBitmap);
+    await flushMicrotasks();
+    expect(staleBitmap.close).toHaveBeenCalledOnce();
+    expect(harness.posted).not.toContainEqual({ type: "status", status: "streaming" });
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    expect(input.disabled).toBe(true);
+    tapCanvas(canvas, 40);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+
+    // Only a replacement frame from the new socket restores streaming and input.
+    second.receiveFrame();
+    decodes.shift()!(makeBitmap());
+    await flushMicrotasks();
+    expect(harness.posted).toContainEqual({ type: "status", status: "streaming" });
+    expect(input.disabled).toBe(false);
+    tapCanvas(canvas, 40);
+    expect(
+      second.sent.filter((entry) => (entry as { type?: string }).type === "mouse").length,
+    ).toBeGreaterThan(0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 it("reports connecting on disconnect when control arrived before the first frame", () => {
   const harness = mountMobileStream();
   try {

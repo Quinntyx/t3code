@@ -185,7 +185,11 @@ vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (
       stop: () => undefined,
     };
   },
-  createPreviewFramePainter: () => ({ paint: () => undefined, stop: () => undefined }),
+  createPreviewFramePainter: () => ({
+    paint: () => undefined,
+    reset: () => undefined,
+    stop: () => undefined,
+  }),
 }));
 
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
@@ -368,6 +372,16 @@ describe("PreviewView", () => {
     // Simulate a late disconnect/cleanup from tab-1 arriving after tab-2 already reported control.
     await act(() => tabOneHandlers.onConnectedChange?.(false));
     await expect.element(refresh).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("does not show a take-control refresh tooltip on an idle server tab", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Idle" };
+    await using _screen = await renderServerPreview();
+    await setStreamControl("unclaimed");
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).toBeDisabled();
+    await expect.element(refresh).not.toHaveAttribute("aria-description");
   });
 
   it.each(["mailto:alice@example.com", "http://"])(

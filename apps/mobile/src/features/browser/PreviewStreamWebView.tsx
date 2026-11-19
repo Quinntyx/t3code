@@ -335,14 +335,22 @@ function PreviewStreamDocumentView({
   return (
     <View className="flex-1" style={{ backgroundColor: background }}>
       {!compact ? (
-        <View className="min-h-16 flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2">
+        <View
+          accessibilityElementsHidden={status === "error"}
+          importantForAccessibility={status === "error" ? "no-hide-descendants" : "auto"}
+          className="min-h-16 flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2"
+        >
           <View className="flex-1 flex-row items-center gap-2">
             <ConnectionStatusDot
               state={phase === "live" ? "connected" : "connecting"}
               pulse={phase !== "live"}
               size={7}
             />
-            <AppText numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
+            <AppText
+              accessibilityLiveRegion={status === "error" ? "none" : "polite"}
+              numberOfLines={1}
+              className="flex-1 text-xs text-foreground-muted"
+            >
               {previewStreamStatusLabel(phase, control)}
             </AppText>
           </View>
@@ -446,7 +454,7 @@ function PreviewStreamDocumentView({
             <PdfPreview key={pdfUri} uri={pdfUri} />
           </View>
         ) : null}
-        {status === "connecting" && !hasStreamed && !pdfUri ? (
+        {status !== "error" && (phase === "connecting" || phase === "awaiting-frame") && !pdfUri ? (
           <View
             className="absolute inset-0 items-center justify-center gap-2 px-6"
             style={{ backgroundColor: background }}
@@ -454,10 +462,7 @@ function PreviewStreamDocumentView({
             <AppActivityIndicator colorClassName="accent-icon" />
             {compact ? null : (
               <>
-                <AppText
-                  accessibilityLiveRegion="polite"
-                  className="text-center text-sm text-foreground-muted"
-                >
+                <AppText className="text-center text-sm text-foreground-muted">
                   Connecting to remote browser
                 </AppText>
                 <AppText className="text-center text-xs text-foreground-muted">
@@ -467,8 +472,13 @@ function PreviewStreamDocumentView({
             )}
           </View>
         ) : null}
-        {status === "connecting" && hasStreamed && !compact && !pdfUri ? (
-          <View pointerEvents="none" className="absolute inset-x-0 bottom-3 items-center px-3">
+        {status !== "error" && phase === "reconnecting" && !compact && !pdfUri ? (
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            className="absolute inset-x-0 bottom-3 items-center px-3"
+          >
             <View className="flex-row items-center gap-2 rounded-full border border-secondary-border bg-secondary px-3 py-1.5">
               <ConnectionStatusDot state="connecting" pulse size={7} />
               <AppText className="text-xs text-secondary-foreground">

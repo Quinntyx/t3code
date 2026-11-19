@@ -221,18 +221,6 @@ export function PreviewView({
   // A cleanup from the previous tab reports null after the next tab already reported control.
   const serverControl =
     serverControlledTab?.tabId === runtimeTabId ? serverControlledTab.control : null;
-  const serverInputDisabled = isServerTab && serverControl?.controller !== "you";
-  const refreshDisabledReason = !isServerTab
-    ? undefined
-    : serverControl === null
-      ? "Waiting for remote browser"
-      : !serverControl.canOperate
-        ? "Read-only preview"
-        : serverControl.controller === "another-viewer"
-          ? "Another viewer has control"
-          : serverControl.controller !== "you"
-            ? "Take control to refresh"
-            : undefined;
   // A desktop page that mounted before its tab went headless leaves its stale state here.
   const desktopOverlay =
     tabId && !isServerTab ? (previewState.desktopByTabId[tabId] ?? null) : null;
@@ -243,6 +231,20 @@ export function PreviewView({
   const canGoBack = desktopOverlay?.canGoBack ?? snapshot?.canGoBack ?? false;
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
+  const serverInputDisabled = isServerTab && serverControl?.controller !== "you";
+  const refreshDisabledReason = !isServerTab
+    ? undefined
+    : serverControl === null
+      ? "Waiting for remote browser"
+      : refreshDisabled
+        ? undefined
+        : !serverControl.canOperate
+          ? "Read-only preview"
+          : serverControl.controller === "another-viewer"
+            ? "Another viewer has control"
+            : serverControl.controller !== "you"
+              ? "Take control to refresh"
+              : undefined;
   const isUnreachable = navStatus._tag === "LoadFailed";
   const showEmptyState = shouldShowPreviewEmptyState(snapshot);
   const controller = desktopOverlay?.controller ?? "none";

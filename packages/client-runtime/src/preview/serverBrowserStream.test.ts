@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamOverlayDetail,
   previewStreamPhase,
@@ -232,5 +233,62 @@ describe("preview stream phase", () => {
     expect(previewStreamOverlayDetail("reconnecting", "work-vps")).toBe(
       "Reconnecting to remote browser…",
     );
+  });
+});
+
+describe("preview frame painter", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("drops in-flight and queued JPEG decodes on reset without clobbering the next connection", async () => {
+    const decodes: Array<(bitmap: { width: number; height: number; close(): void }) => void> = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      () =>
+        new Promise((resolve) => {
+          decodes.push(resolve);
+        }),
+    );
+    const drawImage = vi.fn();
+    const clearRect = vi.fn();
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage, clearRect }),
+    } as unknown as HTMLCanvasElement;
+    const onPainted = vi.fn();
+    const painter = createPreviewFramePainter(canvas, onPainted);
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
+    const makeBitmap = () => ({ width: 320, height: 240, close: vi.fn() });
+
+    // Start decoding frame 1 and queue frame 2, then reset as on socket disconnect.
+    painter.paint(jpeg);
+    painter.paint(jpeg);
+    expect(decodes).toHaveLength(1);
+    painter.reset();
+    expect(clearRect).not.toHaveBeenCalled();
+
+    // Start decoding a replacement frame before the stale decode resolves.
+    painter.paint(jpeg);
+    expect(decodes).toHaveLength(2);
+
+    const staleBitmap = makeBitmap();
+    decodes.shift()!(staleBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(staleBitmap.close).toHaveBeenCalledOnce();
+    expect(drawImage).not.toHaveBeenCalled();
+    expect(onPainted).not.toHaveBeenCalled();
+    // Stale finally must not dequeue frame 2 or clear decoding state for the replacement frame.
+    expect(decodes).toHaveLength(1);
+
+    const freshBitmap = makeBitmap();
+    decodes.shift()!(freshBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(freshBitmap.close).toHaveBeenCalledOnce();
+    expect(drawImage).toHaveBeenCalledOnce();
+    expect(onPainted).toHaveBeenCalledOnce();
+
+    painter.stop();
   });
 });

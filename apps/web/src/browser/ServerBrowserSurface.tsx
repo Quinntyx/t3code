@@ -444,6 +444,7 @@ export function ServerBrowserSurface(props: {
         },
         onConnectedChange: (connected) => {
           if (connected) return;
+          painter.reset();
           hasFrameRef.current = false;
           setCurrentFramePainted(false);
           setFileChooser(null);
@@ -690,12 +691,12 @@ export function ServerBrowserSurface(props: {
   const handleClipboard = (key: typeof COPY | typeof CUT, event: ClipboardEvent) => {
     // Keep the sentinel off the clipboard.
     event.preventDefault();
-    if (controlRef.current?.controller !== "you") return;
+    if (!hasFrameRef.current || controlRef.current?.controller !== "you") return;
     sendKeyPress(key, CTRL);
   };
 
   const handleKey = (action: "down" | "up", event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (controlRef.current?.controller !== "you") return;
+    if (!hasFrameRef.current || controlRef.current?.controller !== "you") return;
     keySentRef.current = false;
     if (
       event.nativeEvent.isComposing ||
@@ -751,9 +752,13 @@ export function ServerBrowserSurface(props: {
   };
 
   const handleInput = (event: FormEvent<HTMLTextAreaElement>) => {
+    const textarea = event.currentTarget;
+    if (!hasFrameRef.current || controlRef.current?.controller !== "you") {
+      resetInput(textarea);
+      return;
+    }
     const native = event.nativeEvent;
     if (native instanceof InputEvent && native.isComposing) return;
-    const textarea = event.currentTarget;
     const inputType = native instanceof InputEvent ? native.inputType : "";
     if (keySentRef.current) keySentRef.current = false;
     else if (inputType === "deleteContentBackward") sendKeyPress(BACKSPACE);
@@ -781,7 +786,7 @@ export function ServerBrowserSurface(props: {
     >
       <div
         className={cn(
-          "visible relative z-20 flex h-8 shrink-0 items-center justify-between gap-2 border-border/60 bg-muted/30 px-2.5",
+          "visible relative z-20 flex h-8 shrink-0 items-center justify-between gap-2 border-border/60 bg-background px-2.5",
           controlPosition === "bottom" ? "order-last border-t" : "border-b",
         )}
       >
@@ -881,7 +886,7 @@ export function ServerBrowserSurface(props: {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          disabled={pdfUrl !== null || control?.controller !== "you" || phase === "reconnecting"}
+          disabled={pdfUrl !== null || phase !== "live" || control?.controller !== "you"}
           defaultValue={INPUT_SENTINEL}
           onFocus={(event) => resetInput(event.currentTarget)}
           className="sr-only top-0 left-0 text-base"
@@ -889,6 +894,10 @@ export function ServerBrowserSurface(props: {
           onKeyUp={(event) => handleKey("up", event)}
           onInput={handleInput}
           onCompositionEnd={(event) => {
+            if (!hasFrameRef.current || controlRef.current?.controller !== "you") {
+              resetInput(event.currentTarget);
+              return;
+            }
             const text = event.data.replace(/^\u200b/, "");
             if (text) send({ type: "text", text });
             resetInput(event.currentTarget);
@@ -897,6 +906,7 @@ export function ServerBrowserSurface(props: {
           onCut={(event) => handleClipboard(CUT, event)}
           onPaste={(event) => {
             event.preventDefault();
+            if (!hasFrameRef.current || controlRef.current?.controller !== "you") return;
             const text = event.clipboardData.getData("text/plain");
             if (text) send({ type: "text", text });
           }}

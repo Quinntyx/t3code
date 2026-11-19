@@ -163,6 +163,7 @@ export function start(configuration: PreviewStreamConfiguration) {
 
   const connect = () => {
     if (client) reportStatus("connecting");
+    painter.reset();
     client?.stop();
     control = null;
     clearInput();
@@ -225,6 +226,7 @@ export function start(configuration: PreviewStreamConfiguration) {
         onConnectedChange: (connected) => {
           if (!connected) {
             const hadControl = control !== null;
+            painter.reset();
             control = null;
             clearInput();
             if (streaming || hadControl) reportStatus("connecting");
