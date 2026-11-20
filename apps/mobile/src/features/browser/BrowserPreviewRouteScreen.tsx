@@ -237,7 +237,8 @@ function BrowserAddressBar({
         />
         <ControlPill
           icon="arrow.clockwise"
-          accessibilityLabel="Reload page"
+          accessibilityLabel={loading ? "Reloading page" : "Reload page"}
+          busy={loading}
           disabled={!canControl || tab.navStatus._tag === "Idle"}
           onPress={() => onCommand({ type: "reload" })}
         />

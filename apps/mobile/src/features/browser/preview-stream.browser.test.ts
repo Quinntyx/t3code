@@ -260,7 +260,9 @@ it("ignores an in-flight JPEG decode from a dropped socket on reconnect", async 
     decodes.shift()!(staleBitmap);
     await flushMicrotasks();
     expect(staleBitmap.close).toHaveBeenCalledOnce();
-    expect(harness.posted).not.toContainEqual({ type: "status", status: "streaming" });
+    expect(harness.posted).not.toContainEqual(
+      expect.objectContaining({ type: "status", status: "streaming" }),
+    );
     const canvas = document.querySelector("canvas")!;
     const input = document.querySelector("textarea")!;
     expect(input.disabled).toBe(true);
@@ -273,7 +275,11 @@ it("ignores an in-flight JPEG decode from a dropped socket on reconnect", async 
     second.receiveFrame();
     decodes.shift()!(makeBitmap());
     await flushMicrotasks();
-    expect(harness.posted).toContainEqual({ type: "status", status: "streaming" });
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "streaming",
+      accessGeneration: 0,
+    });
     expect(input.disabled).toBe(false);
     tapCanvas(canvas, 40);
     expect(
@@ -363,7 +369,11 @@ it("reports connecting on disconnect when control arrived before the first frame
     harness.posted.length = 0;
 
     socket.disconnect();
-    expect(harness.posted).toContainEqual({ type: "status", status: "connecting" });
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "connecting",
+      accessGeneration: 0,
+    });
   } finally {
     harness.cleanup();
   }
@@ -386,14 +396,21 @@ it("reconnects with refreshed access via updateAccess while keeping input gated 
     await flushMicrotasks();
 
     harness.posted.length = 0;
-    updateAccess({
-      httpBase: "https://environment.test/api/preview",
-      wsBase: "wss://environment.test/api/preview",
-      credentials: false,
-      query: { wsTicket: "fresh-ticket" },
-    });
+    updateAccess(
+      {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "fresh-ticket" },
+      },
+      1,
+    );
 
-    expect(harness.posted).toContainEqual({ type: "status", status: "connecting" });
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "connecting",
+      accessGeneration: 1,
+    });
     const second = harness.sockets[1]!;
     expect(second.url).toContain("wsTicket=fresh-ticket");
     second.open();
@@ -420,7 +437,11 @@ it("reconnects with refreshed access via updateAccess while keeping input gated 
 
     second.receiveFrame();
     await flushMicrotasks();
-    expect(harness.posted).toContainEqual({ type: "status", status: "streaming" });
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "streaming",
+      accessGeneration: 1,
+    });
     expect(input.disabled).toBe(false);
     command({ type: "text", text: "allowed" });
     expect(second.sent).toContainEqual({ type: "text", text: "allowed" });
@@ -446,20 +467,27 @@ it("suspends transport and input on updateAccess(null) and resumes on fresh acce
     await flushMicrotasks();
 
     harness.posted.length = 0;
-    updateAccess(null);
+    updateAccess(null, 1);
 
     expect(first.closed).toBe(true);
     expect(harness.sockets).toHaveLength(1);
-    expect(harness.posted).toContainEqual({ type: "status", status: "connecting" });
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "connecting",
+      accessGeneration: 1,
+    });
     const input = document.querySelector("textarea")!;
     expect(input.disabled).toBe(true);
 
-    updateAccess({
-      httpBase: "https://environment.test/api/preview",
-      wsBase: "wss://environment.test/api/preview",
-      credentials: false,
-      query: { wsTicket: "resumed-ticket" },
-    });
+    updateAccess(
+      {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "resumed-ticket" },
+      },
+      2,
+    );
     expect(harness.sockets).toHaveLength(2);
     const second = harness.sockets[1]!;
     expect(second.url).toContain("wsTicket=resumed-ticket");
@@ -475,6 +503,11 @@ it("suspends transport and input on updateAccess(null) and resumes on fresh acce
 
     second.receiveFrame();
     await flushMicrotasks();
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "streaming",
+      accessGeneration: 2,
+    });
     expect(input.disabled).toBe(false);
   } finally {
     harness.cleanup();

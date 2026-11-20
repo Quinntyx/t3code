@@ -84,12 +84,14 @@ function CompactErrorBadge() {
 function PreviewStreamFallback({
   compact,
   error,
+  retrying,
   paused,
   onRetry,
   onErrorChange,
 }: {
   readonly compact?: boolean | undefined;
   readonly error: string | null;
+  readonly retrying?: boolean | undefined;
   readonly paused?: boolean | undefined;
   readonly onRetry: () => void;
   readonly onErrorChange?: ((failed: boolean) => void) | undefined;
@@ -139,7 +141,7 @@ function PreviewStreamFallback({
           </AppText>
           {error && (
             <View className="items-center">
-              <Button label="Retry" tone="secondary" onPress={onRetry} />
+              <Button label="Retry" tone="secondary" loading={retrying} onPress={onRetry} />
             </View>
           )}
         </>
@@ -206,7 +208,9 @@ export function PreviewStreamWebView(
       readonly paused?: boolean;
     },
 ) {
-  const { access, error, refresh, retryAfter } = usePreviewStreamAccess(props.environmentId);
+  const { access, error, isPending, refresh, retryAfter } = usePreviewStreamAccess(
+    props.environmentId,
+  );
   const targetKey = JSON.stringify({
     environmentId: props.environmentId,
     threadId: props.threadId,
@@ -238,6 +242,7 @@ export function PreviewStreamWebView(
         initialAccess={activeSeed.access}
         access={access}
         accessError={error}
+        accessPending={isPending}
         onUnauthorized={refresh}
         onRefused={retryAfter}
       />
@@ -247,6 +252,7 @@ export function PreviewStreamWebView(
     <PreviewStreamFallback
       compact={props.compact}
       error={error}
+      retrying={isPending}
       paused={props.paused}
       onRetry={refresh}
       onErrorChange={props.onErrorChange}
@@ -259,12 +265,14 @@ function AuthorizedPreviewStream({
   initialAccess,
   access,
   accessError,
+  accessPending,
   ...props
 }: Omit<NativeStreamConfiguration, "access"> &
   NativeStreamBridge & {
     readonly initialAccess: PreviewStreamConfiguration["access"];
     readonly access: PreviewStreamConfiguration["access"] | null;
     readonly accessError: string | null;
+    readonly accessPending: boolean;
   }) {
   const [attempt, setAttempt] = useState(0);
   const processRetried = useRef(false);
@@ -272,6 +280,7 @@ function AuthorizedPreviewStream({
   const bootAccess = access ?? initialAccess;
   const initialConfiguration = JSON.stringify({
     access: bootAccess,
+    accessGeneration: 0,
     threadId: props.threadId,
     tabId: props.tabId,
     interactive: props.interactive,
@@ -286,6 +295,7 @@ function AuthorizedPreviewStream({
       bootAccess={bootAccess}
       access={access}
       accessError={accessError}
+      accessPending={accessPending}
       initialConfiguration={initialConfiguration}
       onUnauthorized={() => {
         const refusals = ++unauthorized.current;
@@ -322,6 +332,7 @@ function PreviewStreamDocumentView({
   bootAccess,
   access,
   accessError,
+  accessPending,
   initialConfiguration,
   background,
   compact,
@@ -342,6 +353,7 @@ function PreviewStreamDocumentView({
   readonly bootAccess: PreviewStreamConfiguration["access"];
   readonly access: PreviewStreamConfiguration["access"] | null;
   readonly accessError: string | null;
+  readonly accessPending: boolean;
   readonly initialConfiguration: string;
   readonly background: string;
   readonly onUnauthorized: () => boolean;
@@ -355,6 +367,7 @@ function PreviewStreamDocumentView({
   const failed = useRef(false);
   const bootstrapped = useRef(false);
   const appliedAccess = useRef<PreviewStreamConfiguration["access"] | null>(bootAccess);
+  const accessGeneration = useRef(0);
   const bootstrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error">("connecting");
   // Survives mid-session reconnects and access outages because only a target or attempt change remounts this view.
@@ -373,11 +386,9 @@ function PreviewStreamDocumentView({
     if (refusedAccess !== null && access !== refusedAccess) {
       setRefusedAccess(null);
     }
-    if (access === null) {
-      setControl(null);
-      setFileChooser(null);
-      setStatus((current) => (current === "error" ? current : "connecting"));
-    }
+    setControl(null);
+    setFileChooser(null);
+    setStatus((current) => (current === "error" ? current : "connecting"));
   }
   const authRefused = refusedAccess !== null;
   const displayError =
@@ -469,14 +480,15 @@ function PreviewStreamDocumentView({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- forwards stream access updates into the imperative WebView bridge without remounting the canvas
   useLayoutEffect(() => {
     if (!active.current || failed.current) return;
-    if (access === null) {
+    if (appliedAccess.current !== access) {
       dialogRef.current = null;
       streamEnded();
     }
     if (authRefused || !bootstrapped.current || appliedAccess.current === access) return;
     appliedAccess.current = access;
+    const nextGeneration = ++accessGeneration.current;
     webView.current?.injectJavaScript(
-      `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
+      `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}, ${nextGeneration}); true;`,
     );
   }, [access, authRefused]);
   // Announce distinct status transitions to VoiceOver on iOS, where accessibilityLiveRegion is unsupported.
@@ -579,9 +591,16 @@ function PreviewStreamDocumentView({
               !(message.type === "status" && message.status === "error")
             ) {
               appliedAccess.current = access;
+              const nextGeneration = ++accessGeneration.current;
               webView.current?.injectJavaScript(
-                `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
+                `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}, ${nextGeneration}); true;`,
               );
+            }
+            const connectionScoped =
+              message.type !== "pictureInPicture" &&
+              !(message.type === "status" && message.status === "error");
+            if (connectionScoped && (message.accessGeneration ?? 0) !== accessGeneration.current) {
+              return;
             }
             if (
               (access === null || authRefused) &&
@@ -609,8 +628,9 @@ function PreviewStreamDocumentView({
                   setStatus((current) => (current === "error" ? current : "connecting"));
                   setRefusedAccess(access);
                   appliedAccess.current = null;
+                  const nextGeneration = ++accessGeneration.current;
                   webView.current?.injectJavaScript(
-                    "window.T3PreviewStream?.updateAccess(null); true;",
+                    `window.T3PreviewStream?.updateAccess(null, ${nextGeneration}); true;`,
                   );
                   streamEnded();
                 }
@@ -730,6 +750,7 @@ function PreviewStreamDocumentView({
               <Button
                 label={authRefused ? "Reconnect" : "Retry"}
                 tone="secondary"
+                loading={accessPending}
                 onPress={onRefreshAccess}
               />
             </View>
@@ -835,6 +856,7 @@ function PreviewStreamDocumentView({
                       : "Retry"
                 }
                 tone="secondary"
+                loading={status !== "error" && accessPending}
                 onPress={status === "error" ? onRetry : onRefreshAccess}
               />
             </View>

@@ -1,14 +1,19 @@
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 
 import { describePreviewError } from "./errorCodeMessages";
+
+const NOOP = () => undefined;
 
 interface Props {
   url: string;
   code: number;
   description: string;
   onReload: () => void;
+  reloadDisabled?: boolean;
+  reloadDisabledReason?: string | undefined;
   move?: { readonly label: string; readonly onMove: () => void };
 }
 
@@ -51,7 +56,15 @@ export function PreviewFileNotShown({
   );
 }
 
-export function PreviewUnreachable({ url, code, description, onReload, move }: Props) {
+export function PreviewUnreachable({
+  url,
+  code,
+  description,
+  onReload,
+  reloadDisabled = false,
+  reloadDisabledReason,
+  move,
+}: Props) {
   const [showDetails, setShowDetails] = useState(false);
   const host = safeHost(url) ?? url;
   const friendly = describePreviewError(description);
@@ -101,9 +114,28 @@ export function PreviewUnreachable({ url, code, description, onReload, move }: P
               {move.label}
             </Button>
           ) : null}
-          <Button type="button" size="sm" onClick={onReload}>
-            Reload
-          </Button>
+          {reloadDisabled && reloadDisabledReason ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={NOOP}
+                    aria-disabled
+                    aria-description={reloadDisabledReason}
+                  />
+                }
+              >
+                Reload
+              </TooltipTrigger>
+              <TooltipPopup>{reloadDisabledReason}</TooltipPopup>
+            </Tooltip>
+          ) : (
+            <Button type="button" size="sm" disabled={reloadDisabled} onClick={onReload}>
+              Reload
+            </Button>
+          )}
         </div>
       </div>
     </div>

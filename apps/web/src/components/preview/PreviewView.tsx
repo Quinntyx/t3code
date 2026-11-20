@@ -1111,6 +1111,8 @@ export function PreviewView({
               code={navStatus.code}
               description={navStatus.description}
               onReload={handleRefresh}
+              reloadDisabled={refreshDisabled || serverInputDisabled}
+              reloadDisabledReason={refreshDisabledReason}
               {...(moveTarget === "server"
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }
                 : {})}

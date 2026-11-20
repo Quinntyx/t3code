@@ -1014,7 +1014,7 @@ export function ServerBrowserSurface(props: {
         ) : null}
       </div>
       {visible && hostSetup ? (
-        <div className="visible absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background p-4 text-center">
+        <div className="visible absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background p-4 text-center">
           <p role="alert" className="max-w-sm text-sm text-muted-foreground">
             {previewStreamHostSetupMessage(hostSetup)}
           </p>
@@ -1028,7 +1028,7 @@ export function ServerBrowserSurface(props: {
         // The page can be invisible beneath an empty or unreachable state; reconnect must remain reachable.
         <div
           data-error-layout="overlay"
-          className="visible absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center"
+          className="visible absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center"
         >
           <p role="alert" className="text-xs text-muted-foreground">
             Browser connection was refused.

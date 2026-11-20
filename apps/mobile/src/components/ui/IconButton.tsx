@@ -20,7 +20,11 @@ export function IconButton(props: IconButtonProps) {
       disabled={props.disabled}
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(props.disabled), selected: props.selected }}
+      accessibilityState={{
+        disabled: Boolean(props.disabled),
+        selected: props.selected,
+        ...(props.busy !== undefined ? { busy: props.busy } : {}),
+      }}
       className={cn(
         "size-12 items-center justify-center",
         props.disabled && variant !== "standard"

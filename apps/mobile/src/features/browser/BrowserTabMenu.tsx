@@ -76,14 +76,15 @@ export function BrowserTabMenu({
     image: "xmark",
     attributes: { destructive: true, disabled: !canClose },
   };
+  const hardReloadAction: MenuAction = {
+    id: "hard-reload",
+    title: "Hard reload",
+    image: "arrow.clockwise.circle",
+    attributes: { disabled: !onHardReload },
+  };
   const actions: MenuAction[] = [
     ...(onPaste ? [{ id: "paste", title: "Paste", image: "doc.on.clipboard" }] : []),
-    {
-      id: "hard-reload",
-      title: "Hard reload",
-      image: "arrow.clockwise.circle",
-      attributes: { disabled: !onHardReload },
-    },
+    hardReloadAction,
     {
       id: "appearance",
       title: "Appearance",
@@ -161,6 +162,8 @@ export function BrowserTabMenu({
     }
   };
 
+  const idleActions = onHardReload ? [hardReloadAction, closeAction] : [closeAction];
+
   return (
     <Menu
       // Remount when stream or control actions change so an open menu never keeps stale items.
@@ -168,7 +171,7 @@ export function BrowserTabMenu({
       accessible
       accessibilityLabel="Browser tab options"
       accessibilityRole="button"
-      actions={streaming ? actions : [closeAction]}
+      actions={streaming ? actions : idleActions}
       onPressAction={({ nativeEvent }) => onAction(nativeEvent.event)}
     >
       <ControlPill icon="ellipsis" accessibilityLabel="Browser tab options" />

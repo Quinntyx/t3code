@@ -423,6 +423,35 @@ describe("PreviewView", () => {
       .toHaveAttribute("aria-disabled", "true");
   });
 
+  it("disables and explains the unreachable page Reload button when the viewer cannot drive the stream", async () => {
+    setup();
+    mocks.navStatus = {
+      _tag: "LoadFailed",
+      url: "http://localhost:3000/",
+      title: "",
+      code: -102,
+      description: "ERR_CONNECTION_REFUSED",
+    };
+    await using _screen = await renderServerPreview();
+    const reload = page.getByRole("button", { name: "Reload" });
+    await expect.element(reload).toHaveAttribute("aria-disabled", "true");
+    await expect.element(reload).toHaveAttribute("aria-description", "Waiting for remote browser");
+    await userEvent.click(reload, { force: true });
+    expect(mocks.streamSend).not.toHaveBeenCalled();
+
+    await setStreamControl("another-viewer");
+    await expect.element(reload).toHaveAttribute("aria-disabled", "true");
+    await expect.element(reload).toHaveAttribute("aria-description", "Another viewer has control");
+    await userEvent.unhover(reload);
+    await userEvent.hover(reload);
+    await vi.waitFor(() => expect(tooltipText()).toBe("Another viewer has control"));
+
+    await setStreamControl("you");
+    await expect.element(reload).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(reload);
+    expect(mocks.streamSend).toHaveBeenCalledWith({ type: "reload" });
+  });
+
   it.each(["mailto:alice@example.com", "http://"])(
     "reports rejected address %s without navigating or recording it",
     async (address) => {

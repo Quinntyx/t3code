@@ -15,6 +15,8 @@ type TextProps = {
   readonly accessibilityLiveRegion?: string;
 };
 
+const IS_ANDROID = process.env.T3_MOBILE_TEST_PLATFORM === "android";
+
 const mocks = vi.hoisted(() => ({
   onMessage: null as ((event: { nativeEvent: { data: string } }) => void) | null,
   injected: [] as string[],
@@ -33,6 +35,7 @@ const mocks = vi.hoisted(() => ({
       query: Record<string, string>;
     } | null,
     error: null as string | null,
+    isPending: false,
     refresh: vi.fn(),
     retryAfter: vi.fn(),
   },
@@ -40,7 +43,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: mocks.announce },
-  Platform: { OS: "ios" },
+  Platform: { OS: process.env.T3_MOBILE_TEST_PLATFORM === "android" ? "android" : "ios" },
   View: ({
     children,
     testID,
@@ -100,13 +103,20 @@ vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
     disabled,
+    loading,
     onPress,
   }: {
     readonly label: string;
     readonly disabled?: boolean;
+    readonly loading?: boolean;
     readonly onPress?: () => void;
   }) => (
-    <button type="button" disabled={disabled} onClick={onPress}>
+    <button
+      type="button"
+      disabled={Boolean(disabled || loading)}
+      data-loading={loading ? "true" : undefined}
+      onClick={onPress}
+    >
       {label}
     </button>
   ),
@@ -156,6 +166,7 @@ function mountView(
             query: {},
           },
     error: props.accessError ?? null,
+    isPending: false,
     refresh: vi.fn(),
     retryAfter: vi.fn(),
   };
@@ -229,12 +240,16 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     act(() => emit({ type: "status", status: "error", detail: "Stream failed." }));
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Stream failed."]);
     expect(container.textContent).not.toContain("Reconnecting to remote browser…");
-    expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
-      "Waiting for video frame…",
-      "Watching",
-      "Reconnecting stream…",
-      "Stream failed.",
-    ]);
+    if (IS_ANDROID) {
+      expect(mocks.announce).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
+        "Waiting for video frame…",
+        "Watching",
+        "Reconnecting stream…",
+        "Stream failed.",
+      ]);
+    }
   } finally {
     cleanup();
   }
@@ -343,39 +358,46 @@ it("announces initial fallback access errors via live region and VoiceOver", () 
     expect(container.querySelector('[data-live-region="polite"]')?.textContent).toBe(
       "Could not authorize browser stream.",
     );
-    expect(mocks.announce).toHaveBeenCalledTimes(1);
-    expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+    if (IS_ANDROID) {
+      expect(mocks.announce).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announce).toHaveBeenCalledTimes(1);
+      expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+    }
   } finally {
     cleanup();
   }
 });
 
-it("refreshes stream access in place after mid-session unauthorized refusal without remounting", () => {
-  const { container, rerender, cleanup } = mountView();
+it("refreshes stream access in place after mid-session unauthorized refusal and ignores stale messages from the replaced generation", () => {
+  const streamingChanges: boolean[] = [];
+  const { container, rerender, cleanup } = mountView({
+    onStreamingChange: (streaming) => streamingChanges.push(streaming),
+  });
   try {
     expect(mocks.webViewMounts).toBe(1);
     const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
 
     act(() => {
-      emit({ type: "status", status: "connecting" });
+      emit({ type: "status", status: "connecting", accessGeneration: 0 });
       emit({
         type: "control",
         canOperate: true,
         controller: "unclaimed",
         generation: 1,
         dialog: null,
+        accessGeneration: 0,
       });
-      emit({ type: "status", status: "streaming" });
+      emit({ type: "status", status: "streaming", accessGeneration: 0 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
 
     act(() => {
-      emit({ type: "status", status: "connecting" });
-      emit({ type: "unauthorized" });
+      emit({ type: "unauthorized", accessGeneration: 0 });
     });
     expect(mocks.accessState.retryAfter).toHaveBeenCalledWith(0);
-    expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
 
+    // Selecting replacement access clears live control/streaming immediately and advances generation.
     mocks.accessState = {
       ...mocks.accessState,
       access: {
@@ -388,16 +410,40 @@ it("refreshes stream access in place after mid-session unauthorized refusal with
     rerender();
 
     expect(mocks.webViewMounts).toBe(1);
+    expect(streamingChanges.at(-1)).toBe(false);
+    expect(container.querySelector("button")).toBeNull();
     expect(
       mocks.injected.some(
         (script) =>
           script.includes("window.T3PreviewStream?.updateAccess(") &&
-          script.includes('"fresh-ticket"'),
+          script.includes('"fresh-ticket"') &&
+          script.includes(", 1)"),
       ),
     ).toBe(true);
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
     expect(container.textContent).not.toContain("Connecting to remote browser");
 
+    // Queued messages from the replaced generation (0) must not restore controls, mark streaming, or count refusals.
+    mocks.accessState.retryAfter.mockClear();
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+        accessGeneration: 0,
+      });
+      emit({ type: "status", status: "streaming", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+    });
+    expect(mocks.accessState.retryAfter).not.toHaveBeenCalled();
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).toBeNull();
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
+
+    // Messages tagged with the new generation (1) restore controls and streaming.
     act(() => {
       emit({
         type: "control",
@@ -405,10 +451,12 @@ it("refreshes stream access in place after mid-session unauthorized refusal with
         controller: "unclaimed",
         generation: 2,
         dialog: null,
+        accessGeneration: 1,
       });
-      emit({ type: "status", status: "streaming" });
+      emit({ type: "status", status: "streaming", accessGeneration: 1 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+    expect(container.querySelector("button")?.textContent).toBe("Take control");
   } finally {
     cleanup();
   }
@@ -426,15 +474,16 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
 
     act(() => {
-      emit({ type: "status", status: "connecting" });
+      emit({ type: "status", status: "connecting", accessGeneration: 0 });
       emit({
         type: "control",
         canOperate: true,
         controller: "unclaimed",
         generation: 1,
         dialog: null,
+        accessGeneration: 0,
       });
-      emit({ type: "status", status: "streaming" });
+      emit({ type: "status", status: "streaming", accessGeneration: 0 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
     mocks.injected.length = 0;
@@ -449,7 +498,7 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     rerender();
 
     expect(mocks.webViewMounts).toBe(1);
-    expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null); true;");
+    expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null, 1); true;");
     expect(streamingChanges.at(-1)).toBe(false);
     expect(errorChanges).toEqual([false, true]);
     expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
@@ -457,13 +506,17 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     expect(liveRegions().map((el) => el.textContent)).toEqual([
       "Could not authorize browser stream.",
     ]);
-    expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+    if (IS_ANDROID) {
+      expect(mocks.announce).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+    }
 
     // Stale in-flight unauthorized or fileChooser messages while access is null must not fail or trigger retries.
     act(() => {
-      emit({ type: "unauthorized" });
-      emit({ type: "unauthorized" });
-      emit({ type: "unauthorized" });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 1 });
+      emit({ type: "unauthorized", accessGeneration: 1 });
       emit({
         type: "fileChooser",
         chooser: {
@@ -472,6 +525,7 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
           uploadUrl: "https://example.test",
           credentials: false,
         },
+        accessGeneration: 1,
       });
     });
     expect(mocks.accessState.retryAfter).not.toHaveBeenCalled();
@@ -502,12 +556,17 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
       mocks.injected.some(
         (script) =>
           script.includes("window.T3PreviewStream?.updateAccess(") &&
-          script.includes('"recovered-ticket"'),
+          script.includes('"recovered-ticket"') &&
+          script.includes(", 2)"),
       ),
     ).toBe(true);
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
     expect(container.textContent).not.toContain("Connecting to remote browser");
-    expect(mocks.announce).toHaveBeenCalledWith("Reconnecting stream…");
+    if (IS_ANDROID) {
+      expect(mocks.announce).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announce).toHaveBeenCalledWith("Reconnecting stream…");
+    }
 
     act(() => {
       emit({
@@ -516,11 +575,16 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
         controller: "unclaimed",
         generation: 2,
         dialog: null,
+        accessGeneration: 2,
       });
-      emit({ type: "status", status: "streaming" });
+      emit({ type: "status", status: "streaming", accessGeneration: 2 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
-    expect(mocks.announce).toHaveBeenLastCalledWith("Watching");
+    if (IS_ANDROID) {
+      expect(mocks.announce).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announce).toHaveBeenLastCalledWith("Watching");
+    }
   } finally {
     cleanup();
   }
@@ -533,27 +597,28 @@ it("retries exhausted mid-session authorization in place over a banner without r
     const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
 
     act(() => {
-      emit({ type: "status", status: "connecting" });
+      emit({ type: "status", status: "connecting", accessGeneration: 0 });
       emit({
         type: "control",
         canOperate: true,
         controller: "unclaimed",
         generation: 1,
         dialog: null,
+        accessGeneration: 0,
       });
-      emit({ type: "status", status: "streaming" });
+      emit({ type: "status", status: "streaming", accessGeneration: 0 });
     });
     mocks.injected.length = 0;
 
     act(() => {
-      emit({ type: "status", status: "connecting" });
-      emit({ type: "unauthorized" });
-      emit({ type: "unauthorized" });
-      emit({ type: "unauthorized" });
+      emit({ type: "status", status: "connecting", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
     });
 
     expect(mocks.webViewMounts).toBe(1);
-    expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null); true;");
+    expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null, 1); true;");
     expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="stream-error-overlay"]')).toBeNull();
     expect(liveRegions().map((el) => el.textContent)).toEqual([
@@ -566,6 +631,12 @@ it("retries exhausted mid-session authorization in place over a banner without r
     expect(mocks.accessState.refresh).toHaveBeenCalledOnce();
     expect(mocks.webViewMounts).toBe(1);
 
+    // While the refresh is in flight, the banner button reflects pending loading state.
+    mocks.accessState = { ...mocks.accessState, isPending: true };
+    rerender();
+    expect(container.querySelector("button")?.disabled).toBe(true);
+    expect(container.querySelector("button")?.getAttribute("data-loading")).toBe("true");
+
     mocks.accessState = {
       ...mocks.accessState,
       access: {
@@ -575,6 +646,7 @@ it("retries exhausted mid-session authorization in place over a banner without r
         query: { wsTicket: "reconnected-ticket" },
       },
       error: null,
+      isPending: false,
     };
     rerender();
 
@@ -583,7 +655,8 @@ it("retries exhausted mid-session authorization in place over a banner without r
       mocks.injected.some(
         (script) =>
           script.includes("window.T3PreviewStream?.updateAccess(") &&
-          script.includes('"reconnected-ticket"'),
+          script.includes('"reconnected-ticket"') &&
+          script.includes(", 2)"),
       ),
     ).toBe(true);
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
@@ -596,8 +669,9 @@ it("retries exhausted mid-session authorization in place over a banner without r
         controller: "unclaimed",
         generation: 2,
         dialog: null,
+        accessGeneration: 2,
       });
-      emit({ type: "status", status: "streaming" });
+      emit({ type: "status", status: "streaming", accessGeneration: 2 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
   } finally {

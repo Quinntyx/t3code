@@ -8,6 +8,7 @@ import type {
 
 export interface PreviewStreamConfiguration {
   readonly access: DeviceHubAccess;
+  readonly accessGeneration?: number;
   readonly threadId: string;
   readonly tabId: string;
   readonly interactive: boolean;
@@ -15,7 +16,7 @@ export interface PreviewStreamConfiguration {
   readonly reuseNearbyTouchProbe: boolean;
 }
 
-export type PreviewStreamMessage =
+export type PreviewStreamMessage = (
   | ({ readonly type: "control" } & PreviewStreamControl)
   | {
       readonly type: "status";
@@ -34,7 +35,8 @@ export type PreviewStreamMessage =
       readonly supported: boolean;
       readonly active: boolean;
       readonly detail?: string;
-    };
+    }
+) & { readonly accessGeneration?: number };
 
 export function previewStreamDocument(configuration: string, script: string) {
   const safeConfiguration = configuration.replace(/</g, "\\u003c");

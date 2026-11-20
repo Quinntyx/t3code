@@ -45,7 +45,10 @@ const AGENT_CURSOR_SVG =
 interface Viewer {
   readonly stop: () => void;
   readonly command: (input: PreviewStreamInput) => void;
-  readonly updateAccess: (access: PreviewStreamConfiguration["access"] | null) => void;
+  readonly updateAccess: (
+    access: PreviewStreamConfiguration["access"] | null,
+    generation?: number,
+  ) => void;
   readonly togglePictureInPicture: () => void;
 }
 
@@ -60,8 +63,11 @@ export function command(input: PreviewStreamInput) {
   activeViewer?.command(input);
 }
 
-export function updateAccess(access: PreviewStreamConfiguration["access"] | null) {
-  activeViewer?.updateAccess(access);
+export function updateAccess(
+  access: PreviewStreamConfiguration["access"] | null,
+  generation?: number,
+) {
+  activeViewer?.updateAccess(access, generation);
 }
 
 export function pictureInPicture() {
@@ -70,9 +76,10 @@ export function pictureInPicture() {
 
 export function start(configuration: PreviewStreamConfiguration) {
   stop();
+  let accessGeneration = configuration.accessGeneration ?? 0;
   const post = (message: PreviewStreamMessage) => {
     // oxlint-disable-next-line unicorn/require-post-message-target-origin -- The native WebView bridge takes one string.
-    window.ReactNativeWebView.postMessage(JSON.stringify(message));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ ...message, accessGeneration }));
   };
   const { interactive } = configuration;
   let access: PreviewStreamConfiguration["access"] | null = configuration.access;
@@ -725,8 +732,9 @@ export function start(configuration: PreviewStreamConfiguration) {
       if (message.type === "text" && !streaming) return;
       send(message);
     },
-    updateAccess: (nextAccess) => {
+    updateAccess: (nextAccess, nextGeneration) => {
       access = nextAccess;
+      if (nextGeneration !== undefined) accessGeneration = nextGeneration;
       if (stopped) return;
       connect();
     },
