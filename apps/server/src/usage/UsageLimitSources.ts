@@ -1,6 +1,7 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   UsageLimitSourceError,
+  type UsageLimitSourceAccount,
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditOutcome,
   type ProviderConsumeResetCreditResult,
@@ -11,9 +12,11 @@ import {
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
+import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -62,6 +65,105 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
     : "Could not read the management key from its secret provider.";
 }
 
+function differs(a: string | undefined, b: string | undefined): boolean {
+  return a !== undefined && b !== undefined && a !== b;
+}
+
+function sameAccountIdentity(
+  previous: UsageLimitSourceAccount,
+  next: UsageLimitSourceAccount,
+): boolean {
+  return (
+    !differs(next.email?.toLowerCase(), previous.email?.toLowerCase()) &&
+    (next.workspaceId === undefined || next.workspaceId === previous.workspaceId)
+  );
+}
+
+function mergeAccount(
+  previous: UsageLimitSourceAccount | undefined,
+  next: UsageLimitSourceAccount,
+): UsageLimitSourceAccount {
+  if (!previous || !sameAccountIdentity(previous, next)) {
+    return next;
+  }
+  const usageLimits =
+    resolveUsageLimitsAfterProbe({
+      published: previous.usageLimits,
+      probed: next.usageLimits,
+    }) ?? next.usageLimits;
+  if (usageLimits !== previous.usageLimits) {
+    return usageLimits === next.usageLimits ? next : { ...next, usageLimits };
+  }
+  return {
+    ...next,
+    ...(next.email === undefined && previous.email !== undefined ? { email: previous.email } : {}),
+    ...(next.email === undefined && next.label === undefined && previous.label !== undefined
+      ? { label: previous.label }
+      : {}),
+    ...(next.plan === undefined && previous.plan !== undefined ? { plan: previous.plan } : {}),
+    ...(next.workspaceId === undefined && previous.workspaceId !== undefined
+      ? { workspaceId: previous.workspaceId }
+      : {}),
+    usageLimits,
+  };
+}
+
+function mergeSourceSnapshots(
+  previous: ReadonlyArray<UsageLimitSourceSnapshot>,
+  next: ReadonlyArray<UsageLimitSourceSnapshot>,
+): ReadonlyArray<UsageLimitSourceSnapshot> {
+  if (previous.length === 0) return next;
+  const previousById = new Map(previous.map((source) => [source.id, source] as const));
+  return next.map((source) => {
+    const prior = previousById.get(source.id);
+    if (
+      !prior ||
+      prior === source ||
+      prior.url !== source.url ||
+      source.error !== undefined ||
+      prior.accounts.length === 0 ||
+      source.accounts.length === 0
+    ) {
+      return source;
+    }
+    const priorAccounts = new Map(
+      prior.accounts.map((account) => [`${account.driver}:${account.id}`, account] as const),
+    );
+    let changed = false;
+    const accounts = source.accounts.map((account) => {
+      const merged = mergeAccount(priorAccounts.get(`${account.driver}:${account.id}`), account);
+      if (merged !== account) changed = true;
+      return merged;
+    });
+    return changed ? { ...source, accounts } : source;
+  });
+}
+
+function clearCachedResetCredits(
+  snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
+  sourceId: UsageLimitSourceId,
+  accountId: string,
+): ReadonlyArray<UsageLimitSourceSnapshot> {
+  return snapshots.map((source) =>
+    source.id !== sourceId
+      ? source
+      : {
+          ...source,
+          accounts: source.accounts.map((account) => {
+            if (
+              account.driver !== "codex" ||
+              account.id !== accountId ||
+              account.usageLimits.resetCredits === undefined
+            ) {
+              return account;
+            }
+            const { resetCredits: _, ...usageLimits } = account.usageLimits;
+            return { ...account, usageLimits };
+          }),
+        },
+  );
+}
+
 export const readSourceManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
   secrets: SecretResolver.SecretResolver["Service"],
   config: UsageLimitSourceConfig,
@@ -76,6 +178,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* Settings.ServerSettingsService;
   const secrets = yield* SecretResolver.SecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+  const serviceScope = yield* Effect.scope;
   const readManagementKey = (config: UsageLimitSourceConfig) =>
     readSourceManagementKey(secrets, config);
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
@@ -113,15 +216,17 @@ export const make = Effect.gen(function* () {
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
     next: ReadonlyArray<UsageLimitSourceSnapshot>,
   ) {
-    const changed = yield* Ref.modify(stateRef, (previous) =>
-      Equal.equals(previous, next) ? [false, previous] : [true, next],
-    );
-    if (changed) yield* PubSub.publish(changes, next);
+    const published = yield* Ref.modify(stateRef, (previous) => {
+      const merged = mergeSourceSnapshots(previous, next);
+      return Equal.equals(previous, merged) ? [null, previous] : [merged, merged];
+    });
+    if (published !== null) yield* PubSub.publish(changes, published);
   });
 
   // Serialize refreshes so slow old-settings reads cannot resurrect removed sources after newer refreshes.
   const refreshLock = yield* Semaphore.make(1);
-  const refresh = Effect.gen(function* () {
+  let queuedRefresh: Deferred.Deferred<void> | null = null;
+  const runRefresh = Effect.gen(function* () {
     const settings = yield* settingsService.getSettings.pipe(
       Effect.orElseSucceed((): ServerSettings | null => null),
     );
@@ -134,7 +239,30 @@ export const make = Effect.gen(function* () {
       { concurrency: 4 },
     );
     yield* publish(snapshots);
-  }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
+  }).pipe(Effect.ignoreCause({ log: true }));
+
+  // Coalesce concurrent callers into at most one queued follow-up on the service scope.
+  const refresh: Effect.Effect<void> = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      let pending = queuedRefresh;
+      if (pending === null) {
+        const candidate = Deferred.makeUnsafe<void>();
+        queuedRefresh = candidate;
+        pending = candidate;
+        const release = () => {
+          if (queuedRefresh === candidate) queuedRefresh = null;
+        };
+        const fiber = yield* refreshLock
+          .withPermits(1)(Effect.sync(release).pipe(Effect.andThen(runRefresh)))
+          .pipe(Effect.forkIn(serviceScope, { startImmediately: true }));
+        fiber.addObserver(() => {
+          release();
+          Deferred.doneUnsafe(candidate, Effect.void);
+        });
+      }
+      yield* restore(Deferred.await(pending));
+    }),
+  );
 
   // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
   const consumeResetCredit = Effect.fn("UsageLimitSources.consumeResetCredit")(function* (
@@ -158,6 +286,11 @@ export const make = Effect.gen(function* () {
       input.accountId,
       input.creditId,
     );
+    if (result.outcome !== "nothingToReset") {
+      yield* Ref.update(stateRef, (previous) =>
+        clearCachedResetCredits(previous, input.sourceId, input.accountId),
+      );
+    }
     const snapshot = yield* readSource(input.sourceId, config);
     const previous = yield* Ref.get(stateRef);
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
