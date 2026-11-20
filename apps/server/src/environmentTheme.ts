@@ -9,12 +9,14 @@ import {
   type ServerSettingsError,
   EnvironmentThemeFile,
   EnvironmentThemeId,
-  environmentThemeFileHasColors,
+  environmentThemeKind,
   THEME_CSS_MAX_LENGTH,
+  validateEnvironmentThemeFile,
 } from "@t3tools/contracts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { themeCssLoadsRemoteFiles } from "@t3tools/shared/themeCss";
 import {
+  BUILT_IN_STYLE_IDS,
   MOBILE_DEFAULT_THEME_ID,
   MOBILE_THEME_IDS,
   UNPUBLISHABLE_THEME_IDS,
@@ -104,15 +106,24 @@ export class EnvironmentThemeNotSelectedError extends Schema.TaggedError<Environ
   }
 }
 
+export interface EnvironmentThemeApplyInput {
+  readonly themeId?: string | undefined;
+  readonly styleId?: string | null | undefined;
+  readonly theme?: EnvironmentThemeFile | undefined;
+  readonly appearance?: Exclude<DefaultAppearancePreference, ""> | undefined;
+}
+
 export class EnvironmentThemeService extends Context.Service<
   EnvironmentThemeService,
   {
     readonly current: Effect.Effect<ReadonlyArray<EnvironmentTheme>>;
 
-    /** The default theme id and the published themes, plus the one named `themeId`. */
+    /** The default theme, appearance, style, and published themes, plus the one named `themeId`. */
     readonly read: (themeId?: string) => Effect.Effect<
       {
         readonly current: string;
+        readonly currentAppearance: DefaultAppearancePreference;
+        readonly currentStyle: string;
         /** Where theme files and their background images live. */
         readonly themesDir: string;
         readonly themes: ReadonlyArray<EnvironmentTheme>;
@@ -122,18 +133,12 @@ export class EnvironmentThemeService extends Context.Service<
     >;
 
     /**
-     * Makes `themeId` the environment theme and `appearance` its mode, so connected clients
-     * switch to them. With `theme`, first publishes that file under the id, replacing one already
-     * there.
+     * Makes `themeId` the environment palette, `styleId` its overlay style (`null` clears), and
+     * `appearance` its mode, so connected clients switch to them. With `theme`, first publishes
+     * that file under the matching id, replacing one already there.
      */
     readonly apply: (
-      input:
-        | {
-            readonly themeId: string;
-            readonly theme?: EnvironmentThemeFile | undefined;
-            readonly appearance?: Exclude<DefaultAppearancePreference, ""> | undefined;
-          }
-        | { readonly appearance: Exclude<DefaultAppearancePreference, ""> },
+      input: EnvironmentThemeApplyInput,
     ) => Effect.Effect<void, EnvironmentThemeRefusedError | EnvironmentThemeNotSelectedError>;
 
     /** Subscribes before reading to retain changes during connection. */
@@ -262,8 +267,12 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
       continue;
     }
     const file = decoded.value;
-    if (!environmentThemeFileHasColors(file)) {
-      yield* Effect.logWarning("ignoring environment theme without colors", { path: filePath });
+    const problem = validateEnvironmentThemeFile(file);
+    if (problem !== null) {
+      yield* Effect.logWarning("ignoring invalid environment theme", {
+        path: filePath,
+        problem,
+      });
       continue;
     }
 
@@ -276,8 +285,16 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
       break;
     }
 
-    const background = findThemeBackground(themesDir, id, entryNames);
-    themes.push({ id, ...file, ...(background ? { background: background.revision } : {}) });
+    if (environmentThemeKind(file) === "style") {
+      themes.push({ id, ...file } as EnvironmentTheme);
+    } else {
+      const background = findThemeBackground(themesDir, id, entryNames);
+      themes.push({
+        id,
+        ...file,
+        ...(background ? { background: background.revision } : {}),
+      } as EnvironmentTheme);
+    }
   }
   return themes;
 });
@@ -359,11 +376,9 @@ const make = Effect.gen(function* () {
     if (UNPUBLISHABLE_THEME_IDS.has(themeId)) {
       return yield* new EnvironmentThemeRefusedError({ themeId, problem: INVALID_ID });
     }
-    if (!environmentThemeFileHasColors(file)) {
-      return yield* new EnvironmentThemeRefusedError({
-        themeId,
-        problem: "has no colors. Give canvas and accent, or at least one color role.",
-      });
+    const problem = validateEnvironmentThemeFile(file);
+    if (problem !== null) {
+      return yield* new EnvironmentThemeRefusedError({ themeId, problem });
     }
     if (file.css !== undefined && themeCssLoadsRemoteFiles(file.css)) {
       return yield* new EnvironmentThemeRefusedError({
@@ -428,45 +443,146 @@ const make = Effect.gen(function* () {
   const apply: EnvironmentThemeService["Service"]["apply"] = Effect.fn(
     "EnvironmentThemeService.apply",
   )(function* (input) {
-    const themeId = "themeId" in input ? input.themeId : undefined;
-    const theme = "theme" in input ? input.theme : undefined;
-    const { appearance } = input;
-    if (themeId !== undefined && !isEnvironmentThemeId(themeId)) {
-      return yield* new EnvironmentThemeRefusedError({ themeId, problem: INVALID_ID });
+    const { theme, appearance } = input;
+    let paletteId = input.themeId;
+    let styleId = input.styleId;
+
+    if (paletteId !== undefined && !isEnvironmentThemeId(paletteId)) {
+      return yield* new EnvironmentThemeRefusedError({ themeId: paletteId, problem: INVALID_ID });
     }
-    // Timestamps make clients apply a set again when its value did not change. Theme and
-    // appearance have one each, so setting one does not undo a later local choice of the other.
-    // The stock theme is an empty default with a set time, which clients adopt as stock.
-    const defaultTheme = themeId === MOBILE_DEFAULT_THEME_ID ? "" : themeId;
+    if (typeof styleId === "string" && !isEnvironmentThemeId(styleId)) {
+      return yield* new EnvironmentThemeRefusedError({ themeId: styleId, problem: INVALID_ID });
+    }
+
+    // Route v2 `kind: "style"` payloads exclusively to the style slot so they never clobber palettes.
+    let publishTargetId: string | undefined;
+    if (theme !== undefined) {
+      const kind = environmentThemeKind(theme);
+      if (kind === "style") {
+        if (styleId === null) {
+          return yield* new EnvironmentThemeRefusedError({
+            themeId: paletteId ?? "",
+            problem: "cannot publish a style while clearing styleId.",
+          });
+        }
+        if (paletteId !== undefined && styleId !== undefined && paletteId !== styleId) {
+          return yield* new EnvironmentThemeRefusedError({
+            themeId: styleId,
+            problem: "contradicts themeId for a style theme. Pass only styleId.",
+          });
+        }
+        publishTargetId = styleId ?? paletteId;
+        if (publishTargetId === undefined) {
+          return yield* new EnvironmentThemeRefusedError({
+            themeId: "",
+            problem: "needs a styleId or themeId to publish.",
+          });
+        }
+        styleId = publishTargetId;
+        paletteId = undefined;
+      } else {
+        if (paletteId === undefined) {
+          return yield* new EnvironmentThemeRefusedError({
+            themeId: "",
+            problem: "needs a themeId to publish a palette.",
+          });
+        }
+        publishTargetId = paletteId;
+      }
+    }
+
+    if (paletteId === undefined && styleId === undefined && appearance === undefined) {
+      return yield* new EnvironmentThemeRefusedError({
+        themeId: "",
+        problem: "needs a themeId, styleId, or appearance.",
+      });
+    }
+
+    // Timestamps make clients apply a set again when its value did not change. Palette, style,
+    // and appearance each have one, so setting one does not undo a later local choice of another.
+    // The stock theme or cleared style is an empty default with a set time.
+    const defaultTheme =
+      paletteId === undefined ? undefined : paletteId === MOBILE_DEFAULT_THEME_ID ? "" : paletteId;
+    const defaultStyle = styleId === undefined ? undefined : styleId === null ? "" : styleId;
+    const selectSubjectId = paletteId ?? (typeof styleId === "string" ? styleId : undefined);
     const select = Effect.gen(function* () {
       const setAt = DateTime.formatIso(yield* DateTime.now);
       yield* settings
         .updateSettings({
           ...(defaultTheme === undefined ? {} : { defaultTheme, defaultThemeSetAt: setAt }),
+          ...(defaultStyle === undefined ? {} : { defaultStyle, defaultStyleSetAt: setAt }),
           ...(appearance === undefined
             ? {}
             : { defaultAppearance: appearance, defaultAppearanceSetAt: setAt }),
         })
-        .pipe(Effect.mapError((cause) => new EnvironmentThemeNotSelectedError({ themeId, cause })));
+        .pipe(
+          Effect.mapError(
+            (cause) => new EnvironmentThemeNotSelectedError({ themeId: selectSubjectId, cause }),
+          ),
+        );
     });
+
     // One at a time, so a selection never sees a file that a failed publish then takes back.
     // If the theme cannot be selected, the file it replaced comes back.
     yield* publishSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        if (themeId === undefined) return yield* select;
-        if (theme === undefined) {
-          const known = [...MOBILE_THEME_IDS, ...(yield* refresh).themes.map(({ id }) => id)];
-          if (!known.includes(themeId)) {
-            return yield* new EnvironmentThemeRefusedError({
-              themeId,
-              problem: "is not a built-in or published theme.",
-              known,
-            });
-          }
-          return yield* select;
+        let revert: Effect.Effect<void> | undefined;
+        if (theme !== undefined && publishTargetId !== undefined) {
+          revert = yield* publish(publishTargetId, theme);
         }
-        const revert = yield* publish(themeId, theme);
-        yield* select.pipe(Effect.tapError(() => revert));
+
+        const published = (yield* refresh).themes;
+        const validateSelection = Effect.gen(function* () {
+          if (paletteId !== undefined && paletteId !== publishTargetId) {
+            const knownPalettes = [
+              ...MOBILE_THEME_IDS,
+              ...published
+                .filter((candidate) => environmentThemeKind(candidate) === "palette")
+                .map(({ id }) => id),
+            ];
+            if (!knownPalettes.includes(paletteId)) {
+              const isStyle = published.some(
+                (candidate) =>
+                  candidate.id === paletteId && environmentThemeKind(candidate) === "style",
+              );
+              return yield* new EnvironmentThemeRefusedError({
+                themeId: paletteId,
+                problem: isStyle
+                  ? "is a style, not a palette. Pass it as styleId instead."
+                  : "is not a built-in or published theme.",
+                known: knownPalettes,
+              });
+            }
+          }
+          if (typeof styleId === "string" && styleId !== publishTargetId) {
+            const knownStyles = [
+              ...BUILT_IN_STYLE_IDS,
+              ...published
+                .filter((candidate) => environmentThemeKind(candidate) === "style")
+                .map(({ id }) => id),
+            ];
+            if (!knownStyles.includes(styleId)) {
+              const isPalette =
+                (MOBILE_THEME_IDS as ReadonlyArray<string>).includes(styleId) ||
+                published.some(
+                  (candidate) =>
+                    candidate.id === styleId && environmentThemeKind(candidate) === "palette",
+                );
+              return yield* new EnvironmentThemeRefusedError({
+                themeId: styleId,
+                problem: isPalette
+                  ? "is a palette, not a style. Pass it as themeId instead."
+                  : "is not a built-in or published style.",
+                known: knownStyles,
+              });
+            }
+          }
+        });
+
+        yield* validateSelection.pipe(
+          Effect.andThen(select),
+          Effect.tapError(() => (revert ? revert : Effect.void)),
+        );
       }),
     );
   });
@@ -475,9 +591,16 @@ const make = Effect.gen(function* () {
     "EnvironmentThemeService.read",
   )(function* (themeId) {
     const { themes } = yield* refresh;
-    const { defaultTheme } = yield* settings.getSettings;
+    const { defaultTheme, defaultAppearance, defaultStyle } = yield* settings.getSettings;
     const themesDir = environmentThemesDir;
-    if (themeId === undefined) return { current: defaultTheme, themesDir, themes };
+    const base = {
+      current: defaultTheme,
+      currentAppearance: defaultAppearance,
+      currentStyle: defaultStyle,
+      themesDir,
+      themes,
+    };
+    if (themeId === undefined) return base;
     const theme = themes.find((candidate) => candidate.id === themeId);
     if (theme === undefined) {
       return yield* new EnvironmentThemeRefusedError({
@@ -486,7 +609,7 @@ const make = Effect.gen(function* () {
         known: themes.map(({ id }) => id),
       });
     }
-    return { current: defaultTheme, themesDir, themes, theme };
+    return { ...base, theme };
   });
 
   return {

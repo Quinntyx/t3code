@@ -1516,6 +1516,11 @@ export const ServerSettings = Schema.Struct({
   defaultAppearanceSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
   ),
+  defaultStyle: DefaultThemePreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** Distinguishes repeated sets or clears of the same style so clients apply each one. */
+  defaultStyleSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
   environmentIcon: ForwardCompatibleNullable(EnvironmentMachineKind).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1936,6 +1941,8 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThemeSetAt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
   defaultAppearance: Schema.optionalKey(DefaultAppearancePreference),
   defaultAppearanceSetAt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
+  defaultStyle: Schema.optionalKey(DefaultThemePreference),
+  defaultStyleSetAt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
   environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
@@ -1998,7 +2005,14 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 /** The theme service sets theme defaults after it validates them, so clients cannot. */
 export const ClientServerSettingsPatch = ServerSettingsPatch.mapFields(
-  Struct.omit(["defaultTheme", "defaultThemeSetAt", "defaultAppearance", "defaultAppearanceSetAt"]),
+  Struct.omit([
+    "defaultTheme",
+    "defaultThemeSetAt",
+    "defaultAppearance",
+    "defaultAppearanceSetAt",
+    "defaultStyle",
+    "defaultStyleSetAt",
+  ]),
 );
 
 export function requiredScopesForServerSettingsPatch(

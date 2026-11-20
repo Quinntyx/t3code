@@ -76,6 +76,28 @@ it.effect("applies the theme through the service and reports a refusal as an inv
         published: true,
       });
       expect(yield* call({ themeId: "grove" })).toEqual({ themeId: "grove", published: false });
+      expect(yield* call({ styleId: "liquid-glass" })).toEqual({
+        styleId: "liquid-glass",
+        published: false,
+      });
+      expect(yield* call({ styleId: null })).toEqual({
+        styleId: null,
+        published: false,
+      });
+      expect(
+        yield* call({
+          styleId: "frosted",
+          theme: {
+            version: 2,
+            kind: "style",
+            name: "Frosted",
+            effects: { floatingPanels: { enabled: true } },
+          },
+        }),
+      ).toEqual({
+        styleId: "frosted",
+        published: true,
+      });
       expect(yield* call({ appearance: "dark" })).toEqual({
         appearance: "dark",
         published: false,

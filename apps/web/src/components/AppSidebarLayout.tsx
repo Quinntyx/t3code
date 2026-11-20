@@ -34,12 +34,16 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useThemeEffects } from "../hooks/useTheme";
 import {
   PanelAnimationSuppressionProvider,
   usePanelAnimationSettings,
   usePanelNavigationSuppression,
 } from "../panelAnimations";
+import { AmbientShimmer } from "./AmbientShimmer";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
+import { FloatingControlBubble } from "./FloatingControlBubble";
 import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
 import ThreadSidebar from "./Sidebar";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
@@ -319,11 +323,13 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
   const router = useRouter();
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, isMobile } = useSidebar();
   const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const floatingPanels = useThemeEffects().floatingPanels.enabled;
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
+  const floatingBubble = floatingPanels && !isMobile && showSidebar;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
     context: { usagePageOpen },
   });
@@ -383,35 +389,50 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
       node === null ? undefined : registerAppShellCommands(router, node),
   );
 
+  const trigger = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <SidebarTrigger
+            variant={
+              isSidebarVisible && stageBackdropVariant && !floatingPanels
+                ? "media-navigation"
+                : "ghost"
+            }
+            className={cn(
+              "pointer-events-auto",
+              isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
+            )}
+            aria-label={gt("Toggle main sidebar")}
+          />
+        }
+      />
+      <TooltipPopup side={floatingBubble ? "right" : "bottom"}>
+        {shortcutLabel
+          ? gt("Toggle main sidebar ({shortcut})", { shortcut: shortcutLabel })
+          : gt("Toggle main sidebar")}
+      </TooltipPopup>
+    </Tooltip>
+  );
+
   return (
     <div
       ref={appShellCommandsRef}
       className={cn(
-        "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
+        floatingBubble
+          ? "fixed bottom-0 left-(--floating-sidebar-bubble-left) z-50 mb-(--floating-panel-gap) [[data-panel-animations=true]_&]:transition-[left] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out"
+          : "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
         mobileSidebarSheetMounted && "hidden",
       )}
       data-sidebar-control=""
+      data-floating-dock-bubble={floatingBubble ? "" : undefined}
     >
       {showSidebar ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <SidebarTrigger
-                variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
-                className={cn(
-                  "pointer-events-auto",
-                  isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
-                )}
-                aria-label={gt("Toggle main sidebar")}
-              />
-            }
-          />
-          <TooltipPopup side="bottom">
-            {shortcutLabel
-              ? gt("Toggle main sidebar ({shortcut})", { shortcut: shortcutLabel })
-              : gt("Toggle main sidebar")}
-          </TooltipPopup>
-        </Tooltip>
+        floatingBubble ? (
+          <FloatingControlBubble>{trigger}</FloatingControlBubble>
+        ) : (
+          trigger
+        )
       ) : null}
     </div>
   );
@@ -436,6 +457,8 @@ export function AppSidebarLayout({
   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
+  const floatingPanels = useThemeEffects().floatingPanels.enabled;
+  const sidebarSheetViewport = useMediaQuery("max-md");
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // A clamped drag may not change width, so viewport changes need a separate subscription.
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
@@ -463,6 +486,12 @@ export function AppSidebarLayout({
     "--sidebar-width": `${clampThreadSidebarWidth(sidebarWidth, sidebarMinimumWidth, sidebarMaximumWidth)}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...windowControlsInsetStyle,
+    ...(floatingPanels && !sidebarSheetViewport
+      ? {
+          "--workspace-titlebar-content-left":
+            "max(var(--workspace-gutter-start), var(--workspace-controls-left))",
+        }
+      : {}),
   } as CSSProperties;
 
   return (
@@ -473,11 +502,13 @@ export function AppSidebarLayout({
         storageKey="chat_thread_sidebar_open"
         style={sidebarProviderStyle}
       >
+        <AmbientShimmer />
         {showSidebar ? (
           <>
             <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
             <Sidebar
               side="left"
+              variant={floatingPanels ? "floating" : "sidebar"}
               collapsible="offcanvas"
               data-app-sidebar=""
               {...sidebarArea}

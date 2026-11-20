@@ -1,4 +1,7 @@
+import type { ThemeEffects, ThemeSettingsSchema } from "@t3tools/contracts";
+
 export const BUILT_IN_THEME_IDS = ["t3-chat", "grove", "ocean", "ember", "iris"] as const;
+export const BUILT_IN_STYLE_IDS = ["liquid-glass"] as const;
 
 export const MOBILE_DEFAULT_THEME_ID = "t3-code";
 
@@ -10,6 +13,7 @@ export const RESERVED_THEME_IDS: ReadonlySet<string> = new Set([
   "light",
   "dark",
   ...BUILT_IN_THEME_IDS,
+  ...BUILT_IN_STYLE_IDS,
   "t3-chat-dark",
   "t3-grove",
   "t3-ocean",
@@ -24,6 +28,7 @@ export const UNPUBLISHABLE_THEME_IDS: ReadonlySet<string> = new Set([
 ]);
 
 export type BuiltInThemeId = (typeof BUILT_IN_THEME_IDS)[number];
+export type BuiltInStyleId = (typeof BUILT_IN_STYLE_IDS)[number];
 export type MobileThemeId = (typeof MOBILE_THEME_IDS)[number];
 export type ThemeAppearance = "light" | "dark";
 
@@ -105,6 +110,10 @@ export type ThemeDefinition = Readonly<{
   managed?: boolean;
   /** Custom styles for web and desktop. */
   css?: string;
+  /** Declarative user-adjustable settings exposed in Appearance settings. */
+  settings?: ThemeSettingsSchema;
+  /** Declarative visual effects attached to this palette. */
+  effects?: ThemeEffects;
 }>;
 
 export const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {

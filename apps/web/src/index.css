@@ -6,6 +6,9 @@
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));
+/* Active theme effects, written onto the root by the theme effect controller. */
+@custom-variant ambient-shimmer (&:is([data-ambient-shimmer] *));
+@custom-variant floating-panels (&:is([data-floating-panels] *));
 
 /* Secondary hovering pointers reveal sidebar actions on touch-primary devices. */
 @custom-variant any-hover {
@@ -18,6 +21,16 @@
 
 /* On mobile, morph the expanded hero composer into the compact docked
    composer while it moves; the rest of the app remains visually stationary. */
+/* Named only during the transition: a view-transition-name makes a backdrop root, which would
+   keep the composer's glass from frosting anything outside it. */
+html[data-mobile-composer-route-transition="true"] [data-mobile-composer-transition="composer"] {
+  view-transition-name: t3-mobile-composer;
+}
+
+html[data-mobile-composer-route-transition="true"] [data-mobile-composer-transition="headline"] {
+  view-transition-name: t3-mobile-draft-headline;
+}
+
 html[data-mobile-composer-route-transition="true"]::view-transition-old(root),
 html[data-mobile-composer-route-transition="true"]::view-transition-new(root) {
   animation: none;
@@ -118,7 +131,22 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --z-sheet: 46;
   --glass-blur: 12px;
   --glass-opacity: 80%;
+  --glass-alpha: 0.8;
   --glass-saturation: 1.14;
+  /* Shared drop shadow for floating glass surfaces; dark mode deepens it against a dark canvas. */
+  --app-float-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 32px -8px rgb(0 0 0 / 12%);
+  /* A shaped composer casts one shadow from its whole body, so its colour lives here. */
+  --composer-glass-shadow-color: rgb(0 0 0 / 12%);
+  --floating-panel-gap: 0.5rem;
+  --floating-panel-radius: var(--radius-glass);
+  --floating-details-clearance: calc(
+    var(--thread-details-panel-width) + var(--floating-panel-gap) * 2
+  );
+  --floating-bubble-size: 2.25rem;
+  --floating-bubble-clearance: calc(var(--floating-bubble-size) + var(--floating-panel-gap) * 2);
+  --floating-bubble-inset-start: 0px;
+  --floating-bubble-inset-end: 0px;
+  --sidebar-row-radius: var(--radius-lg);
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
@@ -149,7 +177,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --app-scrollbar-thumb-hover: rgb(255 255 255 / 45%);
     --glass-blur: 16px;
     --glass-saturation: 1.08;
+    --app-float-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 10px 36px -10px rgb(0 0 0 / 50%);
+    --composer-glass-shadow-color: rgb(0 0 0 / 50%);
   }
+}
+
+:root[data-floating-panels] {
+  --floating-bubble-inset-start: var(--floating-panel-gap);
+  --floating-bubble-inset-end: var(--floating-panel-gap);
 }
 
 .wco {
@@ -198,6 +233,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      by the composer, its context strip and attached banners. */
   --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
   --shadow-composer-dark: 0 14px 32px -18px rgb(0 0 0 / 75%);
+  --shadow-float: var(--app-float-shadow);
   /* Overlap the lower toolbar backdrop by one pixel to cover the composer seam. */
   --spacing-composer-seam: calc(var(--spacing) * 4 - 1px);
   /* Dark-mode shade where an attached surface meets the composer: 10px of
@@ -258,6 +294,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--contrast-accent-foreground);
   --color-accent: var(--accent);
+  /* Row highlights inside glass never cover the backdrop more than the glass does. */
+  --color-accent-glass: rgb(from var(--accent) r g b / min(alpha, var(--glass-alpha)));
   --color-muted-foreground: var(--contrast-muted-foreground);
   --color-muted: var(--muted);
   --color-placeholder: var(--contrast-placeholder);
@@ -293,6 +331,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
+  --radius-glass-item: 0.875rem;
+  --radius-glass: calc(var(--radius-glass-item) + 0.375rem + 1px);
+  --radius-glass-list-item: calc(var(--radius-glass) - 0.5rem);
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
        per container, stepped so however many bars sit under it, the compositor
@@ -364,8 +405,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility surface-glass {
   background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
 
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     background: var(--background) !important;
@@ -375,13 +426,20 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 @utility alert-glass {
   --alert-glass-tint: transparent;
   background:
+    var(--glass-liquid-glare, none) border-box 0 0 / 100% 100% no-repeat,
     linear-gradient(
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent),
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent)
     ),
     color-mix(in srgb, var(--background) var(--glass-opacity), transparent) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
 
   &[data-variant="error"] {
     --alert-glass-tint: var(--destructive);
@@ -425,8 +483,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility dialog-glass {
   background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
   border-color: color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
   box-shadow: 0 24px 64px -24px rgb(0 0 0 / 65%);
 
@@ -458,13 +526,168 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     var(--popover) 18%,
     color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
   );
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
   border: 1px solid color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
 
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     background: var(--popover) !important;
   }
+}
+
+/* The glass layer behind a floating panel's content so toggling liquid glass never remounts panels. */
+@utility panel-glass {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: color-mix(
+    in srgb,
+    var(--panel-glass-tint, var(--background)) var(--glass-opacity),
+    transparent
+  );
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  border: 1px solid color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
+
+  @variant dark {
+    border-color: color-mix(in srgb, var(--color-white) 8%, transparent);
+  }
+
+  @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    background: var(--panel-glass-tint, var(--background)) !important;
+  }
+}
+
+/* Shared frost definition for composer surfaces (host, pseudo-element, or context strip). */
+@utility composer-frost {
+  -webkit-backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+  backdrop-filter: var(
+    --glass-liquid-filter,
+    blur(var(--glass-blur)) saturate(var(--glass-saturation))
+  );
+}
+
+/* Rim light for glass surfaces drawn outside the standard glass utilities. */
+@utility glass-glare {
+  background-image: var(--glass-liquid-glare, none);
+  background-origin: border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+/* Frost only while liquid glass is on; a plain blur of the flat chat canvas costs GPU for nothing. */
+@utility liquid-frost {
+  -webkit-backdrop-filter: var(--glass-liquid-filter);
+  backdrop-filter: var(--glass-liquid-filter);
+}
+
+/* Single frost pass for the composer card and its context strip to eliminate a seam at the joint. */
+@supports (clip-path: shape(from 0 0, line to 0 0)) {
+  [data-slot="composer-shell"][data-context-row]:not(
+      [data-liquid-glass-shaped],
+      [data-model-strip-transition],
+      :has([data-composer-banner-surface="attached"])
+    ) {
+    &::before {
+      --r: var(--chat-composer-radius);
+      --e: var(--chat-composer-context-extension);
+      --d: var(--chat-composer-drawer-inset);
+      --s: var(--chat-composer-strip-radius);
+      bottom: 0;
+      border-radius: 0;
+      clip-path: shape(
+        from var(--r) 0,
+        hline to calc(100% - var(--r)),
+        arc to 100% var(--r) of var(--r) cw,
+        vline to calc(100% - var(--e) - var(--r)),
+        arc to calc(100% - var(--r)) calc(100% - var(--e)) of var(--r) cw,
+        hline to var(--r),
+        arc to 0 calc(100% - var(--e) - var(--r)) of var(--r) cw,
+        vline to var(--r),
+        arc to var(--r) 0 of var(--r) cw,
+        close,
+        move to var(--d) calc(100% - var(--e) - var(--r)),
+        hline to calc(100% - var(--d)),
+        vline to calc(100% - var(--s)),
+        arc to calc(100% - var(--d) - var(--s)) 100% of var(--s) cw,
+        hline to calc(var(--d) + var(--s)),
+        arc to var(--d) calc(100% - var(--s)) of var(--s) cw,
+        close
+      );
+    }
+
+    & [data-slot="composer-context-strip"]::before {
+      background: none;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
+
+/* Multi-part shaped glass owns its box and outline; ::after draws the border along that outline. */
+[data-liquid-glass-shaped]::before,
+[data-liquid-glass-shaped]::after {
+  inset: var(--glass-liquid-top) var(--glass-liquid-right) var(--glass-liquid-bottom)
+    var(--glass-liquid-left);
+  border-radius: 0;
+  clip-path: none;
+}
+
+[data-liquid-glass-shaped]::before {
+  mask: var(--glass-liquid-mask) 0 0 / 100% 100% no-repeat;
+}
+
+[data-liquid-glass-shaped]::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--glass-liquid-edge, transparent);
+  mask: var(--glass-liquid-outline) 0 0 / 100% 100% no-repeat;
+}
+
+/* A shaped composer casts one shadow from its combined silhouette. */
+[data-slot="composer-glass-shadow"] {
+  display: none;
+}
+
+[data-liquid-glass-shaped] [data-slot="composer-glass-shadow"] {
+  display: block;
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  inset: calc(var(--glass-liquid-top) - var(--glass-liquid-shadow-margin, 0px))
+    calc(var(--glass-liquid-right) - var(--glass-liquid-shadow-margin, 0px))
+    calc(var(--glass-liquid-bottom) - var(--glass-liquid-shadow-margin, 0px))
+    calc(var(--glass-liquid-left) - var(--glass-liquid-shadow-margin, 0px));
+  background: var(--composer-glass-shadow-color);
+  mask: var(--glass-liquid-shadow, linear-gradient(transparent, transparent)) 0 0 / 100% 100%
+    no-repeat;
 }
 
 @utility topbar-scroll-fade {
@@ -1468,6 +1691,30 @@ html[data-theme-token-probe] *::after {
 html[data-theme-id] [data-chat-header] {
   background-color: var(--toolbar-background);
   color: var(--contrast-toolbar-foreground);
+}
+
+/* The ambient shimmer runs behind the titlebar too, so the bar keeps only its text. */
+html[data-theme-id][data-ambient-shimmer] [data-chat-header] {
+  background-color: transparent;
+}
+
+/* Position the sidebar bubble past the expanded floating card or in the window corner when collapsed. */
+[data-slot="sidebar-wrapper"] {
+  --floating-sidebar-bubble-left: var(--floating-panel-gap);
+}
+[data-slot="sidebar-wrapper"][data-sidebar-state="expanded"] {
+  --floating-sidebar-bubble-left: calc(var(--sidebar-width) + var(--floating-panel-gap));
+}
+
+/* Corner bubbles rest on the open terminal drawer and fall back to the bottom edge when closed. */
+[data-floating-terminal-dock] {
+  anchor-name: --floating-terminal;
+}
+[data-chat-column-maximized-away="true"] [data-floating-terminal-dock] {
+  anchor-name: none;
+}
+[data-floating-dock-bubble] {
+  bottom: anchor(--floating-terminal top, 0px);
 }
 
 html[data-theme-id] [data-chat-header] [data-slot="button"],
@@ -2595,10 +2842,12 @@ code {
 @layer components {
   .chat-composer-lane {
     padding-inline-start: calc(
-      env(safe-area-inset-left) + 0.75rem + var(--chat-lane-inset-start, 0px)
+      env(safe-area-inset-left) + max(0.75rem, var(--floating-bubble-inset-start)) +
+        var(--chat-lane-inset-start, 0px)
     );
     padding-inline-end: calc(
-      env(safe-area-inset-right) + 0.75rem + var(--chat-lane-inset-end, 0px)
+      env(safe-area-inset-right) + max(0.75rem, var(--floating-bubble-inset-end)) +
+        var(--chat-lane-inset-end, 0px)
     );
   }
   [data-chat-canvas] .messages-timeline-scroll {
@@ -2617,9 +2866,13 @@ code {
   @media (min-width: 640px) {
     .chat-composer-lane {
       padding-inline-start: calc(
-        env(safe-area-inset-left) + 3rem + var(--chat-lane-inset-start, 0px)
+        env(safe-area-inset-left) + max(3rem, var(--floating-bubble-inset-start)) +
+          var(--chat-lane-inset-start, 0px)
       );
-      padding-inline-end: calc(env(safe-area-inset-right) + 3rem + var(--chat-lane-inset-end, 0px));
+      padding-inline-end: calc(
+        env(safe-area-inset-right) + max(3rem, var(--floating-bubble-inset-end)) +
+          var(--chat-lane-inset-end, 0px)
+      );
     }
     [data-chat-canvas] .messages-timeline-scroll {
       padding-inline-start: calc(

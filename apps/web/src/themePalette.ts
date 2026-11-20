@@ -1,5 +1,11 @@
 import { pipe } from "effect/Function";
-import { THEME_CSS_MAX_LENGTH, type EnvironmentTheme } from "@t3tools/contracts";
+import {
+  isEnvironmentStyleTheme,
+  THEME_CSS_MAX_LENGTH,
+  ThemeEffects,
+  ThemeSettingsSchema,
+  type EnvironmentTheme,
+} from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -33,11 +39,21 @@ import {
 import { m } from "./i18n/messages";
 import { appAtomRegistry, subscribeAtomChanges } from "./rpc/atomRegistry";
 import { applyThemeBackground } from "./themeBackground";
-import { applyThemeCss } from "./themeCss";
+import { applyStyleThemeCss, applyThemeCss } from "./themeCss";
+import {
+  applyResolvedThemeSettingBindings,
+  BUILT_IN_STYLE_DEFINITIONS,
+  ENVIRONMENT_STYLES_STORAGE_KEY,
+  resolveThemeEffectsAndSettings,
+  type ResolvedThemeStyleState,
+  type ThemeSettingOverridesMap,
+  type ThemeStyleDefinition,
+} from "./themeEffects";
 import { themeServerEnvironmentThemesAtom } from "./state/server";
 
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
+export type { ThemeStyleDefinition };
 
 const T3_CHAT_THEME_ID = "t3-chat" as const;
 const GROVE_THEME_ID = "grove" as const;
@@ -176,6 +192,25 @@ function parseStoredThemeVariants(
   return Object.keys(variants).length > 0 ? variants : undefined;
 }
 
+const decodeThemeSettingsSchemaExit = Schema.decodeUnknownExit(ThemeSettingsSchema);
+const decodeThemeEffectsExit = Schema.decodeUnknownExit(ThemeEffects);
+
+function parseOptionalThemeSettings(value: unknown): ThemeSettingsSchema | undefined {
+  if (value === undefined) return undefined;
+  const decoded = decodeThemeSettingsSchemaExit(value);
+  return decoded._tag === "Success" && Object.keys(decoded.value).length > 0
+    ? decoded.value
+    : undefined;
+}
+
+function parseOptionalThemeEffects(value: unknown): ThemeEffects | undefined {
+  if (value === undefined) return undefined;
+  const decoded = decodeThemeEffectsExit(value);
+  return decoded._tag === "Success" && Object.keys(decoded.value).length > 0
+    ? decoded.value
+    : undefined;
+}
+
 function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!isRecord(value)) return null;
   if (!isThemeId(value.id) || RESERVED_THEME_IDS.has(value.id)) return null;
@@ -185,6 +220,8 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   const variants = parseStoredThemeVariants(value.variants, value.appearance);
   if (value.variants !== undefined && variants === null) return null;
   const collection = parseThemeCollection(value.collection);
+  const settings = parseOptionalThemeSettings(value.settings);
+  const effects = parseOptionalThemeEffects(value.effects);
 
   return {
     id: value.id,
@@ -195,7 +232,39 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
     ...(collection ? { collection } : {}),
     ...(value.managed === true ? { managed: true } : {}),
     ...(isThemeCss(value.css) && value.css.length > 0 ? { css: value.css } : {}),
+    ...(settings ? { settings } : {}),
+    ...(effects ? { effects } : {}),
   };
+}
+
+function parseStoredStyle(value: unknown): ThemeStyleDefinition | null {
+  if (!isRecord(value)) return null;
+  if (!isThemeId(value.id) || RESERVED_THEME_IDS.has(value.id)) return null;
+  if (!isThemeLabel(value.label)) return null;
+  const css = isThemeCss(value.css) && value.css.trim().length > 0 ? value.css : undefined;
+  const settings = parseOptionalThemeSettings(value.settings);
+  const effects = parseOptionalThemeEffects(value.effects);
+  if (!css && !effects) return null;
+  return {
+    id: value.id,
+    label: value.label.trim(),
+    ...(css ? { css } : {}),
+    ...(settings ? { settings } : {}),
+    ...(effects ? { effects } : {}),
+  };
+}
+
+function parseStoredStyles(
+  storedStyles: ReadonlyArray<unknown>,
+): ReadonlyArray<ThemeStyleDefinition> {
+  const styles: ThemeStyleDefinition[] = [];
+  for (const value of storedStyles) {
+    const style = parseStoredStyle(value);
+    if (style && !styles.some((existing) => existing.id === style.id)) {
+      styles.push(style);
+    }
+  }
+  return styles;
 }
 
 function parseStoredThemes(storedThemes: ReadonlyArray<unknown>): ReadonlyArray<ThemeDefinition> {
@@ -256,8 +325,10 @@ export function getCustomThemes(): ReadonlyArray<ThemeDefinition> {
   return snapshot.status === "ready" ? snapshot.themes : EMPTY_CUSTOM_THEMES;
 }
 
+type PublishedPaletteTheme = Exclude<EnvironmentTheme, { readonly kind: "style" }>;
+
 function publishedThemeColors(
-  theme: EnvironmentTheme,
+  theme: PublishedPaletteTheme,
   appearance: ThemeAppearance,
   colors: Readonly<Record<string, string>> | undefined,
 ): ThemeColors {
@@ -271,7 +342,7 @@ function publishedThemeColors(
   return { ...base, ...lenientThemeColorOverrides(colors ?? {}) };
 }
 
-function environmentThemeDefinition(theme: EnvironmentTheme): ThemeDefinition {
+function environmentThemeDefinition(theme: PublishedPaletteTheme): ThemeDefinition {
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
   for (const [variantAppearance, variantColors] of Object.entries(theme.variants ?? {})) {
     if (variantAppearance === theme.appearance) continue;
@@ -281,6 +352,8 @@ function environmentThemeDefinition(theme: EnvironmentTheme): ThemeDefinition {
       variantColors,
     );
   }
+  const settings = "settings" in theme ? theme.settings : undefined;
+  const effects = "effects" in theme ? theme.effects : undefined;
 
   return {
     id: theme.id,
@@ -299,6 +372,8 @@ function environmentThemeDefinition(theme: EnvironmentTheme): ThemeDefinition {
       ? { managed: true }
       : {}),
     ...(theme.css ? { css: theme.css } : {}),
+    ...(settings && Object.keys(settings).length > 0 ? { settings } : {}),
+    ...(effects && Object.keys(effects).length > 0 ? { effects } : {}),
   };
 }
 
@@ -312,7 +387,8 @@ export function publishedThemeDefinitions(
   themes: ReadonlyArray<EnvironmentTheme>,
 ): ReadonlyArray<ThemeDefinition> {
   return themes
-    .filter((theme) => {
+    .filter((theme): theme is PublishedPaletteTheme => {
+      if (isEnvironmentStyleTheme(theme)) return false;
       if (isReservedThemeId(theme.id)) return false;
       if (theme.canvas !== undefined && theme.accent !== undefined) return true;
       const otherAppearance = theme.appearance === "dark" ? "light" : "dark";
@@ -322,6 +398,30 @@ export function publishedThemeDefinitions(
       );
     })
     .map(environmentThemeDefinition);
+}
+
+function publishedStyleDefinitions(
+  themes: ReadonlyArray<EnvironmentTheme>,
+): ReadonlyArray<ThemeStyleDefinition> {
+  const styles: ThemeStyleDefinition[] = [];
+  for (const theme of themes) {
+    if (!isEnvironmentStyleTheme(theme)) continue;
+    if (isReservedThemeId(theme.id)) continue;
+    const css = theme.css && theme.css.trim().length > 0 ? theme.css : undefined;
+    const effects =
+      theme.effects && Object.keys(theme.effects).length > 0 ? theme.effects : undefined;
+    if (!css && !effects) continue;
+    styles.push({
+      id: theme.id,
+      label: theme.name,
+      ...(css ? { css } : {}),
+      ...(theme.settings && Object.keys(theme.settings).length > 0
+        ? { settings: theme.settings }
+        : {}),
+      ...(effects ? { effects } : {}),
+    });
+  }
+  return styles;
 }
 
 // Every reconnect snapshot delivers a fresh but usually identical array; keeping the
@@ -343,6 +443,17 @@ function readStoredEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
   }
 }
 
+function readStoredEnvironmentStyles(): ReadonlyArray<ThemeStyleDefinition> {
+  try {
+    const parsed: unknown = JSON.parse(
+      window.localStorage.getItem(ENVIRONMENT_STYLES_STORAGE_KEY) ?? "null",
+    );
+    return Array.isArray(parsed) ? parseStoredStyles(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Falls back to the last published set while the server connects, so boot and the
  * first render paint the selected palette. Kept alive because theme lookups read it
@@ -356,6 +467,14 @@ export const environmentThemeDefinitionsAtom = Atom.make((get) => {
   return previous !== null && Equal.equals(previous, definitions) ? previous : definitions;
 }).pipe(Atom.keepAlive, Atom.withLabel("web-environment-theme-definitions"));
 
+export const environmentStyleDefinitionsAtom = Atom.make((get) => {
+  const published = get(publishedThemesAtom);
+  const definitions =
+    published === null ? readStoredEnvironmentStyles() : publishedStyleDefinitions(published);
+  const previous = Option.getOrNull(get.self<ReadonlyArray<ThemeStyleDefinition>>());
+  return previous !== null && Equal.equals(previous, definitions) ? previous : definitions;
+}).pipe(Atom.keepAlive, Atom.withLabel("web-environment-style-definitions"));
+
 export function storePublishedEnvironmentThemes(definitions: ReadonlyArray<ThemeDefinition>) {
   if (appAtomRegistry.get(publishedThemesAtom) === null) return;
   try {
@@ -365,8 +484,36 @@ export function storePublishedEnvironmentThemes(definitions: ReadonlyArray<Theme
   }
 }
 
+export function storePublishedEnvironmentStyles(definitions: ReadonlyArray<ThemeStyleDefinition>) {
+  if (appAtomRegistry.get(publishedThemesAtom) === null) return;
+  try {
+    window.localStorage.setItem(ENVIRONMENT_STYLES_STORAGE_KEY, JSON.stringify(definitions));
+  } catch {
+    // Without the stored copy the next launch skips published styles until connect.
+  }
+}
+
 function getEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
   return appAtomRegistry.get(environmentThemeDefinitionsAtom);
+}
+
+function getEnvironmentStyleDefinitions(): ReadonlyArray<ThemeStyleDefinition> {
+  return appAtomRegistry.get(environmentStyleDefinitionsAtom);
+}
+
+export function getThemeStyleDefinitions(): ReadonlyArray<ThemeStyleDefinition> {
+  return [...BUILT_IN_STYLE_DEFINITIONS, ...getEnvironmentStyleDefinitions()];
+}
+
+export function getThemeStyleDefinition(
+  styleId: string | null | undefined,
+): ThemeStyleDefinition | null {
+  if (!styleId) return null;
+  return (
+    BUILT_IN_STYLE_DEFINITIONS.find((style) => style.id === styleId) ??
+    getEnvironmentStyleDefinitions().find((style) => style.id === styleId) ??
+    null
+  );
 }
 
 export function isReservedThemeId(themeId: string): boolean {
@@ -386,10 +533,12 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
   const unsubscribeEnvironment = subscribeAtomChanges(environmentThemeDefinitionsAtom, () =>
     listener(),
   );
+  const unsubscribeStyles = subscribeAtomChanges(environmentStyleDefinitionsAtom, () => listener());
   if (typeof window === "undefined") {
     return () => {
       customThemeListeners.delete(listener);
       unsubscribeEnvironment();
+      unsubscribeStyles();
     };
   }
   const handleStorage = (event: StorageEvent) => {
@@ -402,6 +551,7 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
   return () => {
     customThemeListeners.delete(listener);
     unsubscribeEnvironment();
+    unsubscribeStyles();
     window.removeEventListener("storage", handleStorage);
   };
 }
@@ -1740,16 +1890,49 @@ export function applyThemeColorPreview(
   setThemePreviewAppearance(appearance);
 }
 
-export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppearance): void {
-  if (typeof document === "undefined") return;
+export function resolveActiveThemeStyleState(
+  theme: ThemePreference,
+  styleId: string | null | undefined,
+  overrides: ThemeSettingOverridesMap,
+): ResolvedThemeStyleState {
+  const palette = getThemeDefinition(theme);
+  const style = getThemeStyleDefinition(styleId);
+  return resolveThemeEffectsAndSettings({
+    palette,
+    style,
+    overrides,
+  });
+}
+
+export function applyThemePalette(
+  theme: ThemePreference,
+  appearance?: ThemeAppearance,
+  styleId?: string | null,
+  overrides: ThemeSettingOverridesMap = {},
+): ResolvedThemeStyleState {
+  const palette = getThemeDefinition(theme);
+  const style = getThemeStyleDefinition(styleId);
+  const resolved = resolveThemeEffectsAndSettings({
+    palette,
+    style,
+    overrides,
+  });
+
+  if (typeof document === "undefined") return resolved;
 
   const root = document.documentElement;
-  if (!root?.style) return;
+  if (!root?.style) return resolved;
 
   setThemePreviewAppearance(null);
-  const palette = getThemeDefinition(theme);
   applyThemeCss(palette?.css);
+  applyStyleThemeCss(style?.css);
   applyThemeBackground(palette?.id);
+  applyResolvedThemeSettingBindings(root, resolved);
+  if (style) {
+    root.dataset.themeStyle = style.id;
+  } else {
+    delete root.dataset.themeStyle;
+  }
 
   if (palette) {
     root.dataset.themeId = palette.id;
@@ -1759,7 +1942,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
       root.style.setProperty(APP_THEME_VARIABLES[role], value);
     }
     applyContextChipVariables(root, colors);
-    return;
+    return resolved;
   }
 
   delete root.dataset.themeId;
@@ -1767,6 +1950,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
     root.style.removeProperty(variable);
   }
   applyContextChipVariables(root, getStandardPaintedThemeColors(appearance ?? "light"));
+  return resolved;
 }
 
 export function resolveThemeAppearance(

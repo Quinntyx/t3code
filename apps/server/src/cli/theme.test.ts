@@ -279,4 +279,33 @@ describe("t3 theme", () => {
       assert.equal(Object.hasOwn(readSettings(baseDir), "defaultTheme"), false);
     }),
   );
+
+  it.effect("sets, publishes, and clears styles with --style and v2 style files", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      writeSettings(baseDir, { defaultTheme: "ocean" });
+
+      yield* runCli(["theme", "set", "--style", "liquid-glass", "--base-dir", baseDir]);
+      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+      assert.equal(readSettings(baseDir).defaultStyle, "liquid-glass");
+
+      const styleFile = NodePath.join(baseDir, "frosted.json");
+      NodeFS.writeFileSync(
+        styleFile,
+        JSON.stringify({
+          version: 2,
+          kind: "style",
+          name: "Frosted",
+          effects: { floatingPanels: { enabled: true } },
+        }),
+      );
+      yield* runCli(["theme", "set", styleFile, "--base-dir", baseDir]);
+      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+      assert.equal(readSettings(baseDir).defaultStyle, "frosted");
+
+      yield* runCli(["theme", "clear", "--style", "--base-dir", baseDir]);
+      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+      assert.equal(Object.hasOwn(readSettings(baseDir), "defaultStyle"), false);
+    }),
+  );
 });

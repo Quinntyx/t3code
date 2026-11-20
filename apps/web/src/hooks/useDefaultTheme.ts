@@ -1,11 +1,17 @@
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { localEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { themeServerSettingsAtom } from "../state/server";
-import { getThemeDefinition, singleAppearanceOf, subscribeToCustomThemes } from "../themePalette";
-import { getThemeSnapshot, setAppearanceMode, setTheme } from "./useTheme";
+import {
+  getThemeDefinition,
+  getThemeStyleDefinition,
+  singleAppearanceOf,
+  subscribeToCustomThemes,
+} from "../themePalette";
+import { getThemeSnapshot, setAppearanceMode, setTheme, setThemeStyle } from "./useTheme";
 
 const APPLIED_DEFAULT_THEME_STORAGE_PREFIX = "t3code:default-theme-applied:v2:";
 const APPLIED_DEFAULT_APPEARANCE_STORAGE_PREFIX = "t3code:default-appearance-applied:v1:";
+const APPLIED_DEFAULT_STYLE_STORAGE_PREFIX = "t3code:default-style-applied:v1:";
 
 /** Include set time so reasserting the same theme still applies. */
 export function defaultThemeGeneration(theme: string, setAt: string): string {
@@ -104,9 +110,29 @@ function adoptDefaultAppearance(): void {
   if (setAppearanceMode(defaultAppearance)) writeAppliedGeneration(storageKey, generation);
 }
 
+/** Like the theme, the environment's style applies once per set, then local choices win. */
+function adoptDefaultStyle(): void {
+  if (typeof window === "undefined") return;
+  const environmentId = appAtomRegistry.get(localEnvironmentIdAtom);
+  if (environmentId === null) return;
+  const { defaultStyle, defaultStyleSetAt } = appAtomRegistry.get(themeServerSettingsAtom);
+  const definition = defaultStyle === "" ? null : getThemeStyleDefinition(defaultStyle);
+  const storageKey = `${APPLIED_DEFAULT_STYLE_STORAGE_PREFIX}${environmentId}`;
+  const generation = defaultThemeToApply({
+    environmentId,
+    defaultTheme: defaultStyle,
+    defaultThemeSetAt: defaultStyleSetAt,
+    appliedGeneration: readAppliedGeneration(storageKey),
+    resolves: definition !== null || defaultStyle === "",
+  });
+  if (generation === null) return;
+  if (setThemeStyle(definition?.id ?? null)) writeAppliedGeneration(storageKey, generation);
+}
+
 function adoptDefaults(): void {
   adoptDefaultTheme();
   adoptDefaultAppearance();
+  adoptDefaultStyle();
 }
 
 /**

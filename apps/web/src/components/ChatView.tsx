@@ -171,7 +171,8 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import { DEFAULT_INTERACTION_MODE, type ChatMessage } from "../types";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useTheme } from "../hooks/useTheme";
+import { useTheme, useThemeEffects } from "../hooks/useTheme";
+import { useAmbientShimmerProminence } from "~/ambient-shimmer/prominence";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -313,6 +314,7 @@ import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
+  FloatingPanelControls,
   PanelLayoutControls,
   type PanelLayoutControlsProps,
   RightPanelMaximizeControl,
@@ -354,10 +356,6 @@ import {
   latestProviderTurnTokenUsage,
   shouldOfferResumeCompaction,
 } from "@t3tools/client-runtime/state/context-window";
-import {
-  MOBILE_COMPOSER_VIEW_TRANSITION_NAME,
-  MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME,
-} from "./chat/draftHeroTransition";
 import {
   buildLocalDraftThread,
   deriveCommittedServerUserMessageIds,
@@ -740,6 +738,7 @@ export default function ChatView(props: ChatViewProps) {
     return () => window.removeEventListener("dragend", clearWorkspaceFileDrag);
   }, [isWorkspaceFileDragActive]);
   const prefersPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const isSidebarSheetViewport = useMediaQuery("max-md");
   const isMobileViewport = useMediaQuery("max-sm");
   // Focusing the composer without a tap raises the on-screen keyboard on touch devices.
   const isCoarsePointer = useMediaQuery({ pointer: "coarse" });
@@ -1150,6 +1149,12 @@ export default function ChatView(props: ChatViewProps) {
   const rightPanelMaximized =
     !embedded && canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
+  const floatingPanels = useThemeEffects().floatingPanels.enabled;
+  const floatingPanelControls =
+    floatingPanels && !embedded && !prefersPlanSidebarSheet && !isMobileViewport;
+  const floatingSidebarBubble = floatingPanels && !embedded && !isSidebarSheetViewport;
+  const chatCanvasClassName =
+    embedded && floatingPanels ? "bg-transparent" : "bg-background ambient-shimmer:bg-transparent";
   const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
@@ -1705,6 +1710,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const backgroundThread = use(BackgroundThreadContext);
+  useAmbientShimmerProminence(isDraftHeroState && !backgroundThread);
   const scriptKeybindings =
     useAtomValue(serverEnvironment.configValueAtom(environmentId))?.keybindings ??
     DEFAULT_RESOLVED_KEYBINDINGS;
@@ -3373,6 +3379,20 @@ export default function ChatView(props: ChatViewProps) {
     />
   );
   const threadPanelHeaderControl = <ThreadPanelHeaderControl {...panelToggleControlProps} />;
+  const floatingPanelControlsBubble = (
+    <FloatingPanelControls
+      {...panelToggleControlProps}
+      maximize={
+        rightPanelOpen ? (
+          <RightPanelMaximizeControl
+            maximized={rightPanelMaximized}
+            onToggle={toggleRightPanelMaximizedStable}
+            tooltipSide="left"
+          />
+        ) : null
+      }
+    />
+  );
   const panelLayoutControls = (
     <WorkspaceTitlebarControls
       showMaximizeControl={!shouldUsePlanSidebarSheet}
@@ -3393,7 +3413,12 @@ export default function ChatView(props: ChatViewProps) {
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 overflow-hidden",
+        chatCanvasClassName,
+        floatingPanelControls && "[--floating-bubble-inset-end:var(--floating-bubble-clearance)]",
+        floatingSidebarBubble && "[--floating-bubble-inset-start:var(--floating-bubble-clearance)]",
+      )}
     >
       {embedded ? null : (
         <DeviceSetupDialogHost
@@ -3402,10 +3427,10 @@ export default function ChatView(props: ChatViewProps) {
           state={deviceState}
         />
       )}
-      {rightPanelControlsAtRoot && !embedded ? panelLayoutControls : null}
+      {rightPanelControlsAtRoot && !embedded && !floatingPanelControls ? panelLayoutControls : null}
       <div
         className={cn(
-          "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
+          "relative flex min-h-0 min-w-0 flex-col overflow-x-hidden",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
@@ -3418,7 +3443,7 @@ export default function ChatView(props: ChatViewProps) {
             ref={threadPanelPopoverAnchorRef}
             data-chat-header
             className={cn(
-              "relative bg-background [[data-panel-animations=true]_&]:motion-safe:transition-[padding-left] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
+              "relative bg-background ambient-shimmer:bg-transparent [[data-panel-animations=true]_&]:motion-safe:transition-[padding-left] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
               isElectron
                 ? cn(
                     "drag-region flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center px-3 sm:px-5",
@@ -3427,17 +3452,25 @@ export default function ChatView(props: ChatViewProps) {
                       "wco:pr-(--workspace-native-controls-inset)",
                   )
                 : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)",
+              floatingPanelControls &&
+                threadPanelOpen &&
+                threadPanelPresentation === "inline" &&
+                "pr-(--floating-details-clearance) sm:pr-(--floating-details-clearance)",
               COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
             )}
           >
-            {isElectron && rightPanelControlsAtRoot ? (
+            {isElectron && rightPanelControlsAtRoot && !floatingPanelControls ? (
               <span
                 aria-hidden
                 className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
               />
             ) : null}
-            {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
-            {inlineRightPanelOwnsTitleBar ? threadPanelHeaderControl : null}
+            {!floatingPanelControls && !rightPanelControlsAtRoot && !rightPanelControlsInPanel
+              ? panelLayoutControls
+              : null}
+            {!floatingPanelControls && inlineRightPanelOwnsTitleBar
+              ? threadPanelHeaderControl
+              : null}
             <ChatHeader
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
@@ -3497,7 +3530,7 @@ export default function ChatView(props: ChatViewProps) {
             />
             <div
               {...conversationArea}
-              className="relative flex min-h-0 flex-1 flex-col bg-background"
+              className={cn("relative flex min-h-0 flex-1 flex-col", chatCanvasClassName)}
             >
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
@@ -3642,10 +3675,8 @@ export default function ChatView(props: ChatViewProps) {
                     <div className="absolute inset-x-0 bottom-full">
                       <div
                         className="pb-4 group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
-                        style={
-                          forceExpandedMobileComposer
-                            ? { viewTransitionName: MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME }
-                            : undefined
+                        data-mobile-composer-transition={
+                          forceExpandedMobileComposer ? "headline" : undefined
                         }
                       >
                         <DraftHeroHeadline
@@ -3659,10 +3690,8 @@ export default function ChatView(props: ChatViewProps) {
                   <div
                     ref={draftHeroComposerAnchorRef}
                     className="relative z-10"
-                    style={
-                      forceExpandedMobileComposer
-                        ? { viewTransitionName: MOBILE_COMPOSER_VIEW_TRANSITION_NAME }
-                        : undefined
+                    data-mobile-composer-transition={
+                      forceExpandedMobileComposer ? "composer" : undefined
                     }
                   >
                     <ChildThreadApprovals threadRef={activeThreadRef} />
@@ -4057,6 +4086,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddTerminalContext={addTerminalContextToDraftStable}
           />
         )}
+        {floatingPanelControls && !rightPanelMaximized ? floatingPanelControlsBubble : null}
       </div>
 
       {rightPanelPresent && activeThreadRef && !embedded ? (
@@ -4122,6 +4152,7 @@ export default function ChatView(props: ChatViewProps) {
           {rightPanelContent}
         </ChatRightPanel>
       ) : null}
+      {floatingPanelControls && rightPanelMaximized ? floatingPanelControlsBubble : null}
 
       <RevertConfirmHost
         threadKey={routeThreadKey}

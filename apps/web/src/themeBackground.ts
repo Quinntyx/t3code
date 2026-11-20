@@ -60,11 +60,13 @@ export function applyThemeBackground(themeId: string | undefined): void {
   appliedThemeId = themeId;
   const environmentId = appAtomRegistry.get(localEnvironmentIdAtom);
   // A saved theme wins its id over a published one, so the published image is not its.
-  const revision =
+  const matched =
     themeId === undefined || getCustomThemes().some((theme) => theme.id === themeId)
       ? undefined
-      : appAtomRegistry.get(themeServerEnvironmentThemesAtom)?.find((theme) => theme.id === themeId)
-          ?.background;
+      : appAtomRegistry
+          .get(themeServerEnvironmentThemesAtom)
+          ?.find((theme) => theme.id === themeId);
+  const revision = matched && "background" in matched ? matched.background : undefined;
   const key =
     environmentId === null || themeId === undefined || revision === undefined
       ? null

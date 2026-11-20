@@ -6,7 +6,9 @@ import { themeCssValueFetches } from "@t3tools/shared/themeCss";
 // CSS escapes in a function name cannot dodge them.
 
 let themeSheet: CSSStyleSheet | null = null;
+let styleSheet: CSSStyleSheet | null = null;
 let appliedCss = "";
+let appliedStyleCss = "";
 
 type RuleParent = Pick<CSSStyleSheet, "cssRules" | "deleteRule">;
 
@@ -49,16 +51,31 @@ function stripFetches(parent: RuleParent): void {
   }
 }
 
+function ensureThemeSheets(): void {
+  if (themeSheet && styleSheet) return;
+  // Adopted sheets order after the document's own, and they cannot hold @import.
+  // Adopt palette before overlay style so style rules predictably layer over palette rules.
+  themeSheet = new CSSStyleSheet();
+  styleSheet = new CSSStyleSheet();
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, themeSheet, styleSheet];
+}
+
 export function applyThemeCss(css: string | undefined): void {
   if (typeof document === "undefined" || typeof CSSStyleSheet === "undefined") return;
   const next = css ?? "";
   if (next === appliedCss) return;
   appliedCss = next;
-  if (!themeSheet) {
-    // Adopted sheets order after the document's own, and they cannot hold @import.
-    themeSheet = new CSSStyleSheet();
-    document.adoptedStyleSheets = [...document.adoptedStyleSheets, themeSheet];
-  }
-  themeSheet.replaceSync(next);
-  stripFetches(themeSheet);
+  ensureThemeSheets();
+  themeSheet!.replaceSync(next);
+  stripFetches(themeSheet!);
+}
+
+export function applyStyleThemeCss(css: string | undefined): void {
+  if (typeof document === "undefined" || typeof CSSStyleSheet === "undefined") return;
+  const next = css ?? "";
+  if (next === appliedStyleCss) return;
+  appliedStyleCss = next;
+  ensureThemeSheets();
+  styleSheet!.replaceSync(next);
+  stripFetches(styleSheet!);
 }

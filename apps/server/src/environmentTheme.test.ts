@@ -57,8 +57,12 @@ const withEnvironmentThemes = <A, E>(
     | Path.Path
     | Scope.Scope
   >,
-  /** Receives each theme and appearance the service makes the environment default. */
-  selected: Array<{ readonly theme?: string; readonly appearance?: string }> = [],
+  /** Receives each theme, style, and appearance the service makes the environment default. */
+  selected: Array<{
+    readonly theme?: string;
+    readonly style?: string;
+    readonly appearance?: string;
+  }> = [],
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -76,6 +80,7 @@ const withEnvironmentThemes = <A, E>(
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           Layer.provideMerge(
             Layer.mock(ServerSettingsService)({
+              getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
               updateSettings: (patch) =>
                 patch.defaultTheme === REFUSED_THEME_ID
                   ? Effect.fail(
@@ -87,6 +92,7 @@ const withEnvironmentThemes = <A, E>(
                   : Effect.sync(() => {
                       selected.push({
                         ...(patch.defaultTheme === undefined ? {} : { theme: patch.defaultTheme }),
+                        ...(patch.defaultStyle === undefined ? {} : { style: patch.defaultStyle }),
                         ...(patch.defaultAppearance === undefined
                           ? {}
                           : { appearance: patch.defaultAppearance }),
@@ -458,7 +464,9 @@ describe("environment theme", () => {
           const { environmentThemesDir } = yield* ServerConfig.ServerConfig;
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          const background = Effect.map(currentThemes, (themes) => themes[0]?.background);
+          const background = Effect.map(currentThemes, (themes) =>
+            themes[0] && "background" in themes[0] ? themes[0].background : undefined,
+          );
           const image = path.join(environmentThemesDir, "look.png");
 
           const first = yield* background;
@@ -539,5 +547,88 @@ describe("environment theme", () => {
         );
       }),
     ),
+  );
+
+  it.effect(
+    "publishes, selects, clears, and validates v2 style themes separately from palettes",
+    () => {
+      const selected: Array<{
+        readonly theme?: string;
+        readonly style?: string;
+        readonly appearance?: string;
+      }> = [];
+      const customStyle: EnvironmentThemeFile = {
+        version: 2,
+        kind: "style",
+        name: "Frosted Chrome",
+        settings: {
+          blur: { type: "number", label: "Blur", min: 0, max: 24, step: 1, default: 12 },
+          floating: { type: "boolean", label: "Floating", default: true },
+        },
+        effects: {
+          liquidGlass: { enabled: true, blur: { setting: "blur" } },
+          floatingPanels: { enabled: { setting: "floating" } },
+        },
+        css: '[data-slot="composer-shell"] { border-radius: 1.5rem; }',
+      };
+      return withEnvironmentThemes(
+        {},
+        Effect.gen(function* () {
+          const themes = yield* EnvironmentTheme.EnvironmentThemeService;
+          // Built-in style selection and clear work without touching defaultTheme.
+          yield* themes.apply({ styleId: "liquid-glass" });
+          yield* themes.apply({ styleId: null });
+          // Publish custom style and select it.
+          yield* themes.apply({ styleId: "frosted-chrome", theme: customStyle });
+          // Slot mismatches are refused cleanly.
+          const styleAsPalette = yield* themes
+            .apply({ themeId: "frosted-chrome" })
+            .pipe(Effect.flip);
+          assert.match(styleAsPalette.message, /is a style, not a palette/);
+          const paletteAsStyle = yield* themes.apply({ styleId: "grove" }).pipe(Effect.flip);
+          assert.match(paletteAsStyle.message, /is a palette, not a style/);
+          // Invalid setting reference is refused.
+          const brokenRef = yield* themes
+            .apply({
+              styleId: "broken-style",
+              theme: {
+                version: 2,
+                kind: "style",
+                name: "Broken",
+                effects: {
+                  liquidGlass: { enabled: true, blur: { setting: "missingKey" } },
+                },
+              },
+            })
+            .pipe(Effect.flip);
+          assert.match(brokenRef.message, /unknown setting/);
+          // Out-of-bounds number setting referenced by liquidGlass.blur is refused.
+          const outOfBounds = yield* themes
+            .apply({
+              styleId: "too-blurry",
+              theme: {
+                version: 2,
+                kind: "style",
+                name: "Too Blurry",
+                settings: {
+                  blur: { type: "number", label: "Blur", min: 0, max: 100, default: 12 },
+                },
+                effects: {
+                  liquidGlass: { enabled: true, blur: { setting: "blur" } },
+                },
+              },
+            })
+            .pipe(Effect.flip);
+          assert.match(outOfBounds.message, /exceeds 0\.\.24/);
+
+          assert.deepEqual(selected, [
+            { style: "liquid-glass" },
+            { style: "" },
+            { style: "frosted-chrome" },
+          ]);
+        }),
+        selected,
+      );
+    },
   );
 });

@@ -340,6 +340,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "appearance",
   },
   {
+    id: "theme-style",
+    title: msg("Style"),
+    to: "/settings/appearance",
+    searchTerms: [msg("appearance liquid glass floating panels ambient shimmer effects")],
+  },
+  {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
     id: "setting-appearance-contrast",
     title: msg("Contrast"),

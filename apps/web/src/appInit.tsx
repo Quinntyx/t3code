@@ -38,6 +38,7 @@ import {
 import { startDefaultThemeAdoption } from "./hooks/useDefaultTheme";
 import { startEnvironmentThemeRepaint } from "./hooks/useEnvironmentTheme";
 import { startThemeBackground } from "./themeBackground";
+import { migrateLegacyForkVisualSettings, startThemeEffectController } from "./themeEffects";
 import { readLocalStorageValue, subscribeLocalStorageKey } from "./hooks/useLocalStorage";
 import { startHostEnvironmentLookup } from "./state/primaryEnvironment";
 import {
@@ -45,7 +46,12 @@ import {
   startModelPreferencesMigration,
   subscribeClientSettings,
 } from "./hooks/useSettings";
-import { syncBrowserChromeTheme } from "./hooks/useTheme";
+import {
+  getResolvedThemeEffects,
+  refreshTheme,
+  subscribeThemeEffects,
+  syncBrowserChromeTheme,
+} from "./hooks/useTheme";
 import { startThreadVisitedMigration } from "./hooks/useThreadVisitedMigration";
 import { installDesktopPasteAsText } from "./lib/desktopPasteAsText";
 import {
@@ -94,6 +100,7 @@ function startClientAppearance(): void {
     }
     if (previous?.glassOpacity !== settings.glassOpacity) {
       root.style.setProperty("--glass-opacity", `${settings.glassOpacity}%`);
+      root.style.setProperty("--glass-alpha", String(settings.glassOpacity / 100));
       if (settings.glassOpacity === 100) {
         root.style.setProperty("--glass-blur", "0px");
       } else {
@@ -268,12 +275,16 @@ export function startAppServices(): AppRouter {
 
   installDesktopPasteAsText(window.desktopBridge, window);
 
+  if (migrateLegacyForkVisualSettings()) {
+    refreshTheme({ preservePreview: true });
+  }
   startClientAppearance();
   startI18n();
   startDocumentTitle(router);
   startHostEnvironmentLookup();
   startEnvironmentThemeRepaint();
   startThemeBackground();
+  startThemeEffectController(getResolvedThemeEffects, subscribeThemeEffects);
   startBrowserChromeThemeSync(router);
   startDefaultThemeAdoption();
   startModelPreferencesMigration();

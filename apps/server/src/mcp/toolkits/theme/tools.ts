@@ -1,7 +1,9 @@
 import {
+  DefaultAppearancePreference,
   DefaultThemePreference,
   EnvironmentThemeFile,
   EnvironmentThemeId,
+  EnvironmentThemeKind,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -27,7 +29,7 @@ const shared = {
 const ThemeReadTool = Tool.make("t3_theme_read", {
   ...shared,
   description:
-    "Read T3 Code's own themes and the guide to restyle it: color roles and CSS selectors. Call before `t3_theme_set`.",
+    "Read T3 Code's own themes (palettes and overlay styles) and the guide to restyle it: color roles, CSS selectors, settings, and visual effects. Call before `t3_theme_set`.",
   parameters: Schema.Struct({
     themeId: Schema.optionalKey(
       EnvironmentThemeId.annotate({ description: "Also return this published theme's file." }),
@@ -35,12 +37,18 @@ const ThemeReadTool = Tool.make("t3_theme_read", {
   }),
   success: Schema.Struct({
     current: DefaultThemePreference,
+    currentAppearance: DefaultAppearancePreference,
+    currentStyle: DefaultThemePreference,
     builtIn: Schema.Array(Schema.String),
+    builtInStyles: Schema.Array(Schema.String),
     published: Schema.Array(
       Schema.Struct({
         id: EnvironmentThemeId,
         name: Schema.String,
+        kind: EnvironmentThemeKind,
         hasCss: Schema.Boolean,
+        hasEffects: Schema.Boolean,
+        hasSettings: Schema.Boolean,
         hasBackground: Schema.Boolean,
       }),
     ),
@@ -55,14 +63,16 @@ const ThemeReadTool = Tool.make("t3_theme_read", {
 const ThemeSetTool = Tool.make("t3_theme_set", {
   ...shared,
   description:
-    "Restyle T3 Code itself, only when the user asks. With `theme`, publish it as `themeId` (same id updates it) and switch this server's web app and this machine's desktop app to it, not remote desktop apps. Without `theme`, switch to a built-in or published `themeId`. `appearance` sets light, dark, or system mode. Live full-access or default caller thread only.",
+    "Restyle T3 Code itself, only when the user asks. With `theme`, publish it under `themeId` (palette) or `styleId` (style, `version: 2, kind: 'style'`) and switch this server's web app and this machine's desktop app to it, not remote desktop apps. Without `theme`, switch `themeId` (palette), `styleId` (overlay style, or `null` to clear it), and/or `appearance` (light, dark, or system). Live full-access or default caller thread only.",
   parameters: Schema.Struct({
     themeId: Schema.optionalKey(EnvironmentThemeId),
+    styleId: Schema.optionalKey(Schema.NullOr(EnvironmentThemeId)),
     theme: Schema.optionalKey(EnvironmentThemeFile),
     appearance: Schema.optionalKey(Appearance),
   }),
   success: Schema.Struct({
     themeId: Schema.optionalKey(EnvironmentThemeId),
+    styleId: Schema.optionalKey(Schema.NullOr(EnvironmentThemeId)),
     appearance: Schema.optionalKey(Appearance),
     published: Schema.Boolean,
   }),

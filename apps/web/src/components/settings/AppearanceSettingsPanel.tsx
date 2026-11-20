@@ -26,6 +26,7 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ThemeLibrary } from "./ThemeSettings";
+import { ThemeStyleControls } from "./ThemeStyleControls";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -166,6 +167,8 @@ export function AppearanceSettingsPanel() {
           />
         </div>
       </SettingsSection>
+
+      <ThemeStyleControls />
 
       <SettingsSection id="appearance-interface" title={gt("Interface")}>
         <SettingsRow

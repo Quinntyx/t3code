@@ -6,6 +6,7 @@ import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useThemeEffects } from "../../hooks/useTheme";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
   navigateHistory,
@@ -50,13 +51,15 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const floatingPanels = useThemeEffects().floatingPanels.enabled;
   const gt = useGT();
-  const backdropVariant = resolveSidebarStageBackdropVariant(
-    stageLabel,
-    environmentIdentificationMode,
-  );
+  // A floating glass card shows the backdrop through it, so artwork falls back to the pill.
+  const backdropVariant = floatingPanels
+    ? null
+    : resolveSidebarStageBackdropVariant(stageLabel, environmentIdentificationMode);
   const pillLabel =
-    environmentIdentificationMode === "pill"
+    environmentIdentificationMode === "pill" ||
+    (floatingPanels && environmentIdentificationMode !== "none")
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
       : null;
 

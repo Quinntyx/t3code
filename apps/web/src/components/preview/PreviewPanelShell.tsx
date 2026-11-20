@@ -14,6 +14,7 @@ import {
 } from "~/hooks/usePreviewPanelInlineSize";
 import { RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
 import { canReturnFocusTo, workspaceAreaProps } from "../../lib/workspaceFocus";
+import { useThemeEffects } from "../../hooks/useTheme";
 import { cn } from "~/lib/utils";
 
 import { RightPanelResizeHandle } from "./RightPanelResizeHandle";
@@ -72,6 +73,7 @@ function PreviewPanelShellFrame(
   const gt = useGT();
   const panelArea = workspaceAreaProps("panel", 4, props.workspaceLabel ?? gt("Workspace panel"));
   const isInline = props.mode === "inline";
+  const floating = useThemeEffects().floatingPanels.enabled && isInline;
   const collapsible = isInline && props.open !== undefined;
   const open = props.open ?? true;
   const maximized = props.maximized ?? false;
@@ -156,17 +158,19 @@ function PreviewPanelShellFrame(
         lastBlurred.current = event.target;
       }}
       {...(props.workspaceArea ? panelArea : {})}
+      data-slot="preview-panel-shell"
       data-workspace-focus-key={props.workspaceFocusKey}
       data-workspace-unavailable={collapsible && !open ? "true" : undefined}
       onMouseDown={props.onMouseDown}
       onMouseUp={props.onMouseUp}
       className={cn(
-        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch bg-background",
+        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch",
+        !floating && "bg-background",
         isInline
           ? maximized
             ? // Maximizing meets the sidebar border or window edge; omit the duplicate border.
               "flex-1"
-            : "shrink-0 border-l border-border"
+            : cn("shrink-0", !floating && "border-l border-border")
           : "w-full",
         collapsible &&
           "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
@@ -190,26 +194,39 @@ function PreviewPanelShellFrame(
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >
       {isInline && !maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
-      {/* Content stays pinned to the right edge, so closing uncovers the chat
-          instead of sliding the tab bar under the title bar controls. */}
+      {/* Docked content stays pinned to the right edge; a floating card slides out past the edge. */}
       <div
         className={cn(
           "h-full min-h-0 w-full",
-          collapsible && "overflow-clip",
-          collapsible && !maximized && "flex justify-end",
+          collapsible && !floating && "overflow-clip",
+          collapsible && !floating && !maximized && "flex justify-end",
+          floating && "py-(--floating-panel-gap)",
+          floating &&
+            (maximized
+              ? "pr-(--floating-bubble-inset-end) pl-(--floating-bubble-inset-start)"
+              : "pr-(--floating-panel-gap)"),
         )}
       >
         <div
           className={cn(
             "flex h-full min-h-0 min-w-0 flex-col",
-            collapsible && !maximized && "shrink-0",
+            collapsible && !floating && !maximized && "shrink-0",
+            floating &&
+              "relative z-0 overflow-hidden rounded-(--floating-panel-radius) shadow-float [&_[data-right-panel-tabbar]]:pl-3.5 [&_[data-right-panel-tabbar]]:pr-3.5",
+            floating &&
+              collapsible &&
+              "[[data-panel-animations=true]_&]:transition-[visibility] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration)",
+            floating && collapsible && !open && "invisible",
           )}
           style={
             collapsible && !maximized
-              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)` }
+              ? {
+                  width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - ${floating ? "var(--floating-panel-gap)" : "1px"})`,
+                }
               : undefined
           }
         >
+          {floating ? <div aria-hidden className="panel-glass" /> : null}
           {props.children}
         </div>
       </div>

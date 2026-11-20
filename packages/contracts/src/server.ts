@@ -640,9 +640,120 @@ const EnvironmentThemeColors = Schema.Record(
 );
 
 export const THEME_CSS_MAX_LENGTH = 100_000;
+const MAX_THEME_SETTINGS = 32;
+export const MAX_LIQUID_GLASS_BLUR = 24;
+export const MAX_LIQUID_GLASS_PERCENT = 200;
+export const MAX_LIQUID_GLASS_DISPERSION = 2000;
 
-const environmentThemeFields = {
-  version: Schema.optional(Schema.Literal(1)),
+export const ThemeSettingKey = Schema.String.check(
+  Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/),
+);
+export type ThemeSettingKey = typeof ThemeSettingKey.Type;
+
+export const ThemeSettingCondition = Schema.Struct({
+  setting: ThemeSettingKey,
+  equals: Schema.Union([
+    Schema.Boolean,
+    Schema.Finite,
+    Schema.String.check(Schema.isMaxLength(64)),
+  ]),
+});
+export type ThemeSettingCondition = typeof ThemeSettingCondition.Type;
+
+const themeSettingBaseFields = {
+  label: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
+  description: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(240))),
+  when: Schema.optional(ThemeSettingCondition),
+};
+
+export const ThemeSettingBoolean = Schema.Struct({
+  type: Schema.Literal("boolean"),
+  ...themeSettingBaseFields,
+  default: Schema.Boolean,
+});
+export type ThemeSettingBoolean = typeof ThemeSettingBoolean.Type;
+
+export const ThemeSettingNumber = Schema.Struct({
+  type: Schema.Literal("number"),
+  ...themeSettingBaseFields,
+  default: Schema.Finite,
+  min: Schema.Finite,
+  max: Schema.Finite,
+  step: Schema.optional(Schema.Finite),
+  unit: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(12))),
+});
+export type ThemeSettingNumber = typeof ThemeSettingNumber.Type;
+
+export const ThemeSettingSelectOption = Schema.Struct({
+  id: ThemeSettingKey,
+  label: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
+});
+export type ThemeSettingSelectOption = typeof ThemeSettingSelectOption.Type;
+
+export const ThemeSettingSelect = Schema.Struct({
+  type: Schema.Literal("select"),
+  ...themeSettingBaseFields,
+  default: ThemeSettingKey,
+  options: Schema.Array(ThemeSettingSelectOption).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(24),
+  ),
+});
+export type ThemeSettingSelect = typeof ThemeSettingSelect.Type;
+
+export const ThemeSettingColor = Schema.Struct({
+  type: Schema.Literal("color"),
+  ...themeSettingBaseFields,
+  default: EnvironmentThemeColor,
+});
+export type ThemeSettingColor = typeof ThemeSettingColor.Type;
+
+export const ThemeSettingDefinition = Schema.Union([
+  ThemeSettingBoolean,
+  ThemeSettingNumber,
+  ThemeSettingSelect,
+  ThemeSettingColor,
+]);
+export type ThemeSettingDefinition = typeof ThemeSettingDefinition.Type;
+
+export const ThemeSettingsSchema = Schema.Record(ThemeSettingKey, ThemeSettingDefinition);
+export type ThemeSettingsSchema = typeof ThemeSettingsSchema.Type;
+
+export const ThemeSettingRef = Schema.Struct({
+  setting: ThemeSettingKey,
+});
+export type ThemeSettingRef = typeof ThemeSettingRef.Type;
+
+const ThemeEffectBooleanParam = Schema.Union([Schema.Boolean, ThemeSettingRef]);
+const ThemeEffectNumberParam = Schema.Union([Schema.Finite, ThemeSettingRef]);
+
+export const ThemeLiquidGlassEffect = Schema.Struct({
+  enabled: ThemeEffectBooleanParam,
+  blur: Schema.optional(ThemeEffectNumberParam),
+  centerBlur: Schema.optional(ThemeEffectNumberParam),
+  saturation: Schema.optional(ThemeEffectNumberParam),
+  refraction: Schema.optional(ThemeEffectNumberParam),
+  dispersion: Schema.optional(ThemeEffectNumberParam),
+  glare: Schema.optional(ThemeEffectNumberParam),
+});
+export type ThemeLiquidGlassEffect = typeof ThemeLiquidGlassEffect.Type;
+
+export const ThemeToggleEffect = Schema.Struct({
+  enabled: ThemeEffectBooleanParam,
+});
+export type ThemeToggleEffect = typeof ThemeToggleEffect.Type;
+
+export const ThemeEffects = Schema.Struct({
+  liquidGlass: Schema.optional(ThemeLiquidGlassEffect),
+  ambientShimmer: Schema.optional(ThemeToggleEffect),
+  floatingPanels: Schema.optional(ThemeToggleEffect),
+});
+export type ThemeEffects = typeof ThemeEffects.Type;
+
+export const EnvironmentThemeKind = Schema.Literals(["palette", "style"]);
+export type EnvironmentThemeKind = typeof EnvironmentThemeKind.Type;
+
+const environmentThemePaletteBaseFields = {
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
   appearance: Schema.Literals(["light", "dark"]),
   /** Derive the palette from canvas/accent, then overlay colors; without them, colors is the palette. */
@@ -659,22 +770,265 @@ const environmentThemeFields = {
   css: Schema.optional(Schema.String.check(Schema.isMaxLength(THEME_CSS_MAX_LENGTH))),
 };
 
-export const EnvironmentThemeFile = Schema.Struct(environmentThemeFields);
+const environmentThemeV1Fields = {
+  version: Schema.optional(Schema.Literal(1)),
+  ...environmentThemePaletteBaseFields,
+};
+
+const environmentThemeV2PaletteFields = {
+  version: Schema.Literal(2),
+  kind: Schema.Literal("palette"),
+  ...environmentThemePaletteBaseFields,
+  settings: Schema.optional(ThemeSettingsSchema),
+  effects: Schema.optional(ThemeEffects),
+};
+
+const environmentThemeV2StyleFields = {
+  version: Schema.Literal(2),
+  kind: Schema.Literal("style"),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
+  css: Schema.optional(Schema.String.check(Schema.isMaxLength(THEME_CSS_MAX_LENGTH))),
+  settings: Schema.optional(ThemeSettingsSchema),
+  effects: Schema.optional(ThemeEffects),
+};
+
+export const EnvironmentThemeFileV1 = Schema.Struct(environmentThemeV1Fields);
+export type EnvironmentThemeFileV1 = typeof EnvironmentThemeFileV1.Type;
+
+export const EnvironmentThemeFileV2Palette = Schema.Struct(environmentThemeV2PaletteFields);
+export type EnvironmentThemeFileV2Palette = typeof EnvironmentThemeFileV2Palette.Type;
+
+export const EnvironmentThemeFileV2Style = Schema.Struct(environmentThemeV2StyleFields);
+export type EnvironmentThemeFileV2Style = typeof EnvironmentThemeFileV2Style.Type;
+
+export const EnvironmentThemeFile = Schema.Union([
+  EnvironmentThemeFileV1,
+  EnvironmentThemeFileV2Palette,
+  EnvironmentThemeFileV2Style,
+]);
 export type EnvironmentThemeFile = typeof EnvironmentThemeFile.Type;
 
-export const EnvironmentTheme = Schema.Struct({
-  id: EnvironmentThemeId,
-  ...environmentThemeFields,
+const backgroundField = {
   /** Revision of the image file published beside the theme; absent without one. */
   background: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+};
+
+export const EnvironmentThemeV1 = Schema.Struct({
+  id: EnvironmentThemeId,
+  ...environmentThemeV1Fields,
+  ...backgroundField,
 });
+
+export const EnvironmentThemeV2Palette = Schema.Struct({
+  id: EnvironmentThemeId,
+  ...environmentThemeV2PaletteFields,
+  ...backgroundField,
+});
+
+export const EnvironmentThemeV2Style = Schema.Struct({
+  id: EnvironmentThemeId,
+  ...environmentThemeV2StyleFields,
+});
+
+export const EnvironmentTheme = Schema.Union([
+  EnvironmentThemeV1,
+  EnvironmentThemeV2Palette,
+  EnvironmentThemeV2Style,
+]);
 export type EnvironmentTheme = typeof EnvironmentTheme.Type;
 
-export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boolean {
+export type EnvironmentPaletteTheme =
+  | typeof EnvironmentThemeV1.Type
+  | typeof EnvironmentThemeV2Palette.Type;
+export type EnvironmentStyleTheme = typeof EnvironmentThemeV2Style.Type;
+
+export function environmentThemeKind(
+  file: EnvironmentThemeFile | EnvironmentTheme,
+): EnvironmentThemeKind {
+  return "kind" in file ? file.kind : "palette";
+}
+
+export function isEnvironmentStyleTheme(theme: EnvironmentTheme): theme is EnvironmentStyleTheme {
+  return environmentThemeKind(theme) === "style";
+}
+
+function environmentThemeFileHasColors(file: EnvironmentThemeFile): boolean {
+  if (environmentThemeKind(file) === "style") return false;
+  const palette = file as EnvironmentThemeFileV1 | EnvironmentThemeFileV2Palette;
   return (
-    (file.canvas !== undefined && file.accent !== undefined) ||
-    (file.colors !== undefined && Object.keys(file.colors).length > 0)
+    (palette.canvas !== undefined && palette.accent !== undefined) ||
+    (palette.colors !== undefined && Object.keys(palette.colors).length > 0)
   );
+}
+
+function isThemeSettingRef(value: unknown): value is ThemeSettingRef {
+  return typeof value === "object" && value !== null && "setting" in value;
+}
+
+const LIQUID_GLASS_NUMERIC_BOUNDS = {
+  blur: { min: 0, max: MAX_LIQUID_GLASS_BLUR },
+  centerBlur: { min: 0, max: MAX_LIQUID_GLASS_BLUR },
+  saturation: { min: 0, max: MAX_LIQUID_GLASS_PERCENT },
+  refraction: { min: 0, max: MAX_LIQUID_GLASS_PERCENT },
+  dispersion: { min: 0, max: MAX_LIQUID_GLASS_DISPERSION },
+  glare: { min: 0, max: MAX_LIQUID_GLASS_PERCENT },
+} as const;
+
+function validateThemeEffectBoolean(
+  path: string,
+  param: boolean | ThemeSettingRef,
+  settings: ThemeSettingsSchema | undefined,
+): string | null {
+  if (!isThemeSettingRef(param)) return null;
+  const def = settings?.[param.setting];
+  if (!def) return `references unknown setting "${param.setting}" in ${path}.`;
+  if (def.type !== "boolean") {
+    return `references non-boolean setting "${param.setting}" in ${path}.`;
+  }
+  return null;
+}
+
+function validateThemeEffectNumber(
+  path: string,
+  param: number | ThemeSettingRef | undefined,
+  bounds: { readonly min: number; readonly max: number },
+  settings: ThemeSettingsSchema | undefined,
+): string | null {
+  if (param === undefined) return null;
+  if (!isThemeSettingRef(param)) {
+    if (param < bounds.min || param > bounds.max) {
+      return `has ${path} outside ${bounds.min}..${bounds.max}.`;
+    }
+    return null;
+  }
+  const def = settings?.[param.setting];
+  if (!def) return `references unknown setting "${param.setting}" in ${path}.`;
+  if (def.type !== "number") {
+    return `references non-number setting "${param.setting}" in ${path}.`;
+  }
+  if (def.min < bounds.min || def.max > bounds.max) {
+    return `setting "${param.setting}" for ${path} exceeds ${bounds.min}..${bounds.max}.`;
+  }
+  return null;
+}
+
+/** Returns a problem suffix sentence if invalid, or null if valid. */
+export function validateEnvironmentThemeFile(file: EnvironmentThemeFile): string | null {
+  const kind = environmentThemeKind(file);
+  if (kind === "palette") {
+    if (!environmentThemeFileHasColors(file)) {
+      return "has no colors. Give canvas and accent, or at least one color role.";
+    }
+  } else {
+    const style = file as EnvironmentThemeFileV2Style;
+    const hasCss = style.css !== undefined && style.css.trim().length > 0;
+    const hasEffects =
+      style.effects !== undefined &&
+      (style.effects.liquidGlass !== undefined ||
+        style.effects.ambientShimmer !== undefined ||
+        style.effects.floatingPanels !== undefined);
+    if (!hasCss && !hasEffects) {
+      return "has no styles or effects. Give non-empty css or at least one effect.";
+    }
+  }
+
+  if (!("settings" in file) && !("effects" in file)) return null;
+  const settings = "settings" in file ? file.settings : undefined;
+  const effects = "effects" in file ? file.effects : undefined;
+
+  if (settings !== undefined) {
+    const entries = Object.entries(settings);
+    if (entries.length > MAX_THEME_SETTINGS) {
+      return `declares more than ${MAX_THEME_SETTINGS} settings.`;
+    }
+    for (const [key, def] of entries) {
+      if (def.type === "number") {
+        if (def.min >= def.max) {
+          return `has invalid range for setting "${key}" (min must be less than max).`;
+        }
+        if (def.default < def.min || def.default > def.max) {
+          return `has default outside [${def.min}, ${def.max}] for setting "${key}".`;
+        }
+        if (def.step !== undefined && def.step <= 0) {
+          return `has non-positive step for setting "${key}".`;
+        }
+      } else if (def.type === "select") {
+        const optionIds = new Set<string>();
+        for (const option of def.options) {
+          if (optionIds.has(option.id)) {
+            return `has duplicate option id "${option.id}" in setting "${key}".`;
+          }
+          optionIds.add(option.id);
+        }
+        if (!optionIds.has(def.default)) {
+          return `has default "${def.default}" missing from options in setting "${key}".`;
+        }
+      }
+      if (def.when !== undefined) {
+        if (def.when.setting === key) {
+          return `has self-referencing condition on setting "${key}".`;
+        }
+        const target = settings[def.when.setting];
+        if (!target) {
+          return `references unknown setting "${def.when.setting}" in condition for "${key}".`;
+        }
+        const valueType = typeof def.when.equals;
+        if (
+          (target.type === "boolean" && valueType !== "boolean") ||
+          (target.type === "number" && valueType !== "number") ||
+          ((target.type === "select" || target.type === "color") && valueType !== "string")
+        ) {
+          return `has mismatched condition value type for setting "${key}".`;
+        }
+        if (
+          target.type === "select" &&
+          !target.options.some((option) => option.id === def.when?.equals)
+        ) {
+          return `references unknown option "${String(def.when.equals)}" in condition for "${key}".`;
+        }
+      }
+    }
+  }
+
+  if (effects !== undefined) {
+    if (effects.liquidGlass !== undefined) {
+      const problem = validateThemeEffectBoolean(
+        "effects.liquidGlass.enabled",
+        effects.liquidGlass.enabled,
+        settings,
+      );
+      if (problem) return problem;
+      for (const [field, bounds] of Object.entries(LIQUID_GLASS_NUMERIC_BOUNDS) as Array<
+        [keyof typeof LIQUID_GLASS_NUMERIC_BOUNDS, { readonly min: number; readonly max: number }]
+      >) {
+        const numProblem = validateThemeEffectNumber(
+          `effects.liquidGlass.${field}`,
+          effects.liquidGlass[field],
+          bounds,
+          settings,
+        );
+        if (numProblem) return numProblem;
+      }
+    }
+    if (effects.ambientShimmer !== undefined) {
+      const problem = validateThemeEffectBoolean(
+        "effects.ambientShimmer.enabled",
+        effects.ambientShimmer.enabled,
+        settings,
+      );
+      if (problem) return problem;
+    }
+    if (effects.floatingPanels !== undefined) {
+      const problem = validateThemeEffectBoolean(
+        "effects.floatingPanels.enabled",
+        effects.floatingPanels.enabled,
+        settings,
+      );
+      if (problem) return problem;
+    }
+  }
+
+  return null;
 }
 
 /** tailnet means this machine's Tailscale interface; other private addresses are lan. */

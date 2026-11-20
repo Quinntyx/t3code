@@ -7,10 +7,15 @@ import * as NodeFS from "node:fs";
 import {
   EnvironmentThemeFile,
   EnvironmentThemeId,
-  environmentThemeFileHasColors,
+  environmentThemeKind,
+  validateEnvironmentThemeFile,
 } from "@t3tools/contracts";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
-import { BUILT_IN_THEME_IDS, UNPUBLISHABLE_THEME_IDS } from "@t3tools/shared/themePalettes";
+import {
+  BUILT_IN_STYLE_IDS,
+  BUILT_IN_THEME_IDS,
+  UNPUBLISHABLE_THEME_IDS,
+} from "@t3tools/shared/themePalettes";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
@@ -109,6 +114,15 @@ export class ThemeFileColorlessError extends Schema.TaggedError<ThemeFileColorle
 ) {
   override get message(): string {
     return `${this.filePath} has no colors to publish.`;
+  }
+}
+
+export class ThemeFileValidationError extends Schema.TaggedError<ThemeFileValidationError>()(
+  "ThemeFileValidationError",
+  { filePath: Schema.String, problem: Schema.String },
+) {
+  override get message(): string {
+    return `${this.filePath} ${this.problem}`;
   }
 }
 
@@ -228,20 +242,21 @@ const CONCURRENT_WRITE_ATTEMPTS = 5;
 const writeDefaultTheme = Effect.fn(function* (input: {
   readonly settingsPath: string;
   readonly themeId: string;
+  readonly slot?: "palette" | "style";
 }) {
   const fs = yield* FileSystem.FileSystem;
+  const valueKey = input.slot === "style" ? "defaultStyle" : "defaultTheme";
+  const setAtKey = input.slot === "style" ? "defaultStyleSetAt" : "defaultThemeSetAt";
 
   for (let attempt = 1; ; attempt++) {
     const { raw, settings } = yield* readSettingsObject(input.settingsPath);
     const setAt = DateTime.formatIso(yield* DateTime.now);
     const next =
       input.themeId.length > 0
-        ? // The timestamp lets clients reapply the same theme.
-          { ...settings, defaultTheme: input.themeId, defaultThemeSetAt: setAt }
+        ? // The timestamp lets clients reapply the same theme or style.
+          { ...settings, [valueKey]: input.themeId, [setAtKey]: setAt }
         : Object.fromEntries(
-            Object.entries(settings).filter(
-              ([key]) => key !== "defaultTheme" && key !== "defaultThemeSetAt",
-            ),
+            Object.entries(settings).filter(([key]) => key !== valueKey && key !== setAtKey),
           );
 
     const contents = yield* encodeSettingsJson(next);
@@ -306,8 +321,13 @@ const publishThemeFile = Effect.fn(function* (input: {
   if (decoded._tag === "Failure") {
     return yield* new ThemeFileInvalidError({ filePath: input.filePath, cause: decoded.cause });
   }
-  if (!environmentThemeFileHasColors(decoded.value)) {
-    return yield* new ThemeFileColorlessError({ filePath: input.filePath });
+  const kind = environmentThemeKind(decoded.value);
+  const problem = validateEnvironmentThemeFile(decoded.value);
+  if (problem !== null) {
+    if (kind === "palette" && problem.startsWith("has no colors")) {
+      return yield* new ThemeFileColorlessError({ filePath: input.filePath });
+    }
+    return yield* new ThemeFileValidationError({ filePath: input.filePath, problem });
   }
 
   const fileBasename = path.basename(input.filePath, ".json");
@@ -428,29 +448,50 @@ const publishThemeFile = Effect.fn(function* (input: {
     catch: publishFailure,
   }).pipe(Effect.onError(() => revert));
 
-  return { themeId, revert, cleanup };
+  return { themeId, kind, revert, cleanup };
 });
 
 /** Web and desktop cannot resolve the mobile default, and mobile does not follow this setting. */
 const resolvableThemeIds = Effect.fn(function* (themesDir: string) {
   const published = yield* readPublishedThemes(themesDir);
-  return [...BUILT_IN_THEME_IDS, ...published.map((theme) => theme.id)].toSorted();
+  return [
+    ...BUILT_IN_THEME_IDS,
+    ...published
+      .filter((theme) => environmentThemeKind(theme) === "palette")
+      .map((theme) => theme.id),
+  ].toSorted();
 });
+
+const resolvableStyleIds = Effect.fn(function* (themesDir: string) {
+  const published = yield* readPublishedThemes(themesDir);
+  return [
+    ...BUILT_IN_STYLE_IDS,
+    ...published
+      .filter((theme) => environmentThemeKind(theme) === "style")
+      .map((theme) => theme.id),
+  ].toSorted();
+});
+
+const styleFlag = Flag.Boolean("style").pipe(
+  Flag.withDescription("Target the overlay style slot instead of the palette theme slot."),
+  Flag.withDefault(false),
+);
 
 const themeSetCommand = Command.make("set", {
   baseDir: baseDirFlag,
+  style: styleFlag,
   id: Flag.String("id").pipe(
     Flag.withDescription("Theme id to publish a file under, instead of its filename."),
     Flag.optional,
   ),
   theme: Argument.String("theme").pipe(
     Argument.withDescription(
-      'A theme id (a built-in, or one this machine publishes, where themes/nightfall.json is "nightfall"), or a path to a theme JSON file to publish and set in one step.',
+      "A theme or style id (built-in or published), or a path to a theme JSON file to publish and set in one step.",
     ),
   ),
 }).pipe(
   Command.withDescription(
-    "Set the environment's theme. The web app this server serves and the desktop app on this machine switch to it; a desktop app connected from another machine does not.",
+    "Set the environment's theme or overlay style. The web app this server serves and the desktop app on this machine switch to it; a desktop app connected from another machine does not.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -470,6 +511,7 @@ const themeSetCommand = Command.make("set", {
       const targetIsFile =
         looksLikePath && (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)));
       let themeId: string;
+      let slot: "palette" | "style" = flags.style ? "style" : "palette";
       let revertPublish: Effect.Effect<void> = Effect.void;
       let cleanupPublish: Effect.Effect<void> = Effect.void;
       if (targetIsFile) {
@@ -479,13 +521,24 @@ const themeSetCommand = Command.make("set", {
           filePath: target,
           explicitId: flags.id,
         });
+        if (flags.style && published.kind !== "style") {
+          yield* published.revert;
+          return yield* new ThemeFileValidationError({
+            filePath: target,
+            problem: "is a palette theme, not a style. Omit `--style` to set it as a theme.",
+          });
+        }
         themeId = published.themeId;
+        slot = published.kind;
         revertPublish = published.revert;
         cleanupPublish = published.cleanup;
       } else if (looksLikePath) {
         return yield* new ThemeFileUnreadableError({ filePath: target });
       } else if (isEnvironmentThemeId(target)) {
-        const known = yield* resolvableThemeIds(paths.themesDir);
+        const known =
+          slot === "style"
+            ? yield* resolvableStyleIds(paths.themesDir)
+            : yield* resolvableThemeIds(paths.themesDir);
         if (!known.includes(target)) {
           return yield* new ThemeIdUnknownError({ themeId: target, known });
         }
@@ -494,32 +547,35 @@ const themeSetCommand = Command.make("set", {
         return yield* new ThemeIdInvalidError({ themeId: target });
       }
 
-      yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId }).pipe(
+      yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId, slot }).pipe(
         Effect.onError(() => revertPublish),
       );
       yield* cleanupPublish;
+      const label = slot === "style" ? "style" : "theme";
       yield* Console.log(
         targetIsFile
-          ? `Published ${target} as "${themeId}" and set it as the environment theme.\n`
-          : `Environment theme set to "${themeId}" in ${paths.settingsPath}.\n`,
+          ? `Published ${target} as "${themeId}" and set it as the environment ${label}.\n`
+          : `Environment ${label} set to "${themeId}" in ${paths.settingsPath}.\n`,
       );
     }),
   ),
 );
 
-const themeClearCommand = Command.make("clear", { baseDir: baseDirFlag }).pipe(
-  Command.withDescription("Remove the environment's theme; clients keep what they have."),
+const themeClearCommand = Command.make("clear", { baseDir: baseDirFlag, style: styleFlag }).pipe(
+  Command.withDescription("Remove the environment's theme or style; clients keep what they have."),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const paths = yield* resolveThemePaths(flags.baseDir);
-      yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId: "" });
-      yield* Console.log(`Environment theme cleared in ${paths.settingsPath}.\n`);
+      const slot = flags.style ? "style" : "palette";
+      yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId: "", slot });
+      const label = slot === "style" ? "style" : "theme";
+      yield* Console.log(`Environment ${label} cleared in ${paths.settingsPath}.\n`);
     }),
   ),
 );
 
 const themeShowCommand = Command.make("show", { baseDir: baseDirFlag }).pipe(
-  Command.withDescription("Show the environment's theme and its published themes."),
+  Command.withDescription("Show the environment's theme, style, and published themes."),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const paths = yield* resolveThemePaths(flags.baseDir);
@@ -528,8 +584,18 @@ const themeShowCommand = Command.make("show", { baseDir: baseDirFlag }).pipe(
         typeof settings.defaultTheme === "string" && settings.defaultTheme.length > 0
           ? settings.defaultTheme
           : null;
+      const defaultStyle =
+        typeof settings.defaultStyle === "string" && settings.defaultStyle.length > 0
+          ? settings.defaultStyle
+          : null;
 
-      const published = (yield* readPublishedThemes(paths.themesDir))
+      const published = yield* readPublishedThemes(paths.themesDir);
+      const publishedThemes = published
+        .filter((theme) => environmentThemeKind(theme) === "palette")
+        .map((theme) => theme.id)
+        .toSorted();
+      const publishedStyles = published
+        .filter((theme) => environmentThemeKind(theme) === "style")
         .map((theme) => theme.id)
         .toSorted();
 
@@ -538,11 +604,17 @@ const themeShowCommand = Command.make("show", { baseDir: baseDirFlag }).pipe(
           ? "Environment theme: not set.\n"
           : `Environment theme: "${defaultTheme}".\n`,
       );
+      if (defaultStyle !== null) {
+        yield* Console.log(`Environment style: "${defaultStyle}".\n`);
+      }
       yield* Console.log(
-        published.length === 0
+        publishedThemes.length === 0
           ? `Published themes: none (publish into ${paths.themesDir}).\n`
-          : `Published themes: ${published.join(", ")}.\n`,
+          : `Published themes: ${publishedThemes.join(", ")}.\n`,
       );
+      if (publishedStyles.length > 0) {
+        yield* Console.log(`Published styles: ${publishedStyles.join(", ")}.\n`);
+      }
     }),
   ),
 );
