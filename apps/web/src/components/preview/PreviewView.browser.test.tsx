@@ -172,6 +172,11 @@ vi.mock(import("~/browser/previewRuntime"), async (original) => ({
 vi.mock(import("~/state/previewStream"), async (original) => ({
   ...(await original()),
   usePreviewStreamAccess: () => mocks.streamAccess as never,
+  usePreviewStreamAccessState: () => ({
+    access: mocks.streamAccess as never,
+    error: null,
+    isPending: false,
+  }),
 }));
 
 vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (original) => ({

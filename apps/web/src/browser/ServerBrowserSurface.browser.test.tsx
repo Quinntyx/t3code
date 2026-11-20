@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
   reset: vi.fn(),
   refreshAccess: vi.fn(),
   sent: [] as PreviewStreamInput[],
-  access: { url: "ws://preview.test", token: "test" },
+  access: { url: "ws://preview.test", token: "test" } as { url: string; token: string } | null,
+  accessError: null as string | null,
+  accessPending: false,
   painted: null as (() => void) | null,
 }));
 
@@ -33,6 +35,11 @@ vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (
 vi.mock(import("~/state/previewStream"), async (original) => ({
   ...(await original()),
   usePreviewStreamAccess: () => mocks.access as never,
+  usePreviewStreamAccessState: () => ({
+    access: mocks.access as never,
+    error: mocks.accessError,
+    isPending: mocks.accessPending,
+  }),
   refreshPreviewStreamAccess: mocks.refreshAccess,
 }));
 
@@ -42,6 +49,8 @@ function setup() {
   mocks.sent.length = 0;
   mocks.painted = null;
   mocks.access = { url: "ws://preview.test", token: "test" };
+  mocks.accessError = null;
+  mocks.accessPending = false;
   mocks.reset.mockReset();
   mocks.refreshAccess.mockReset();
   mocks.createClient.mockReset().mockImplementation(() => ({
@@ -108,6 +117,7 @@ async function renderStream(tabId = "tab-copy") {
     screen,
     container,
     handlers,
+    flush: (nextTabId = tabId) => screen.rerender(surface(nextTabId)),
     rerender: async (nextTabId: string) => {
       await screen.rerender(surface(nextTabId));
       await vi.waitFor(() =>
@@ -243,6 +253,8 @@ describe("ServerBrowserSurface stream phases", () => {
     await userEvent.click(canvas);
     expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
 
+    const takeControlElement = takeControl.element() as HTMLElement;
+    takeControlElement.focus();
     await act(() =>
       handlers().onControl?.({
         canOperate: true,
@@ -252,6 +264,10 @@ describe("ServerBrowserSurface stream phases", () => {
       }),
     );
     await expect.element(screen.getByText("Blocking alert")).toBeVisible();
+    expect(document.activeElement).toBe(takeControlElement);
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Browser dialog: Blocking alert",
+    );
     await userEvent.click(screen.getByRole("button", { name: "Take control" }));
     expect(mocks.sent).toContainEqual({ type: "takeControl" });
   });
@@ -368,10 +384,27 @@ describe("ServerBrowserSurface stream phases", () => {
     expect(mocks.refreshAccess).toHaveBeenCalledTimes(1);
     expect(mocks.createClient).toHaveBeenCalledTimes(callsBeforeReconnect);
 
+    mocks.accessPending = true;
+    await second.flush("tab-2");
+    await expect
+      .element(second.screen.getByRole("button", { name: "Reconnecting…" }))
+      .toBeDisabled();
+
+    mocks.accessPending = false;
     mocks.access = { url: "ws://preview.test", token: "fresh-token" };
     await second.rerender("tab-2");
     expect(mocks.createClient).toHaveBeenCalledTimes(callsBeforeReconnect + 1);
     expect(second.container.querySelector('[data-error-layout="banner"]')).toBeNull();
+
+    // A mid-session ticket lookup failure surfaces in the retained-frame banner instead of looping on "Reconnecting stream…".
+    mocks.access = null;
+    mocks.accessError = "HTTP 403 Forbidden";
+    await second.flush("tab-2");
+    const banner = second.container.querySelector('[data-error-layout="banner"]');
+    expect(banner?.textContent).toContain("HTTP 403 Forbidden");
+    await expect.element(second.screen.getByRole("button", { name: "Reconnect" })).toBeEnabled();
+    await userEvent.click(second.screen.getByRole("button", { name: "Reconnect" }));
+    expect(mocks.refreshAccess).toHaveBeenCalledTimes(2);
   });
 });
 

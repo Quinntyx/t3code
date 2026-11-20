@@ -20,9 +20,12 @@ const IS_ANDROID = process.env.T3_MOBILE_TEST_PLATFORM === "android";
 
 const mocks = vi.hoisted(() => ({
   onMessage: null as ((event: { nativeEvent: { data: string } }) => void) | null,
+  onProcessTerminated: null as (() => void) | null,
+  lastSourceHtml: "",
   injected: [] as string[],
   webViewMounts: 0,
   announce: vi.fn(),
+  getClipboard: vi.fn<() => Promise<string>>(async () => ""),
   accessState: {
     access: {
       httpBase: "https://environment.test/api/preview",
@@ -70,15 +73,21 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-webview", () => ({
   WebView: ({
     ref,
+    source,
     onMessage,
+    onContentProcessDidTerminate,
   }: {
     readonly ref?: { current: { injectJavaScript: (script: string) => void } | null };
+    readonly source?: { readonly html?: string };
     readonly onMessage?: (event: { nativeEvent: { data: string } }) => void;
+    readonly onContentProcessDidTerminate?: () => void;
   }) => {
     useEffect(() => {
       mocks.webViewMounts += 1;
     }, []);
     mocks.onMessage = onMessage ?? null;
+    mocks.onProcessTerminated = onContentProcessDidTerminate ?? null;
+    mocks.lastSourceHtml = source?.html ?? "";
     if (ref) {
       ref.current = {
         injectJavaScript: (script: string) => {
@@ -92,7 +101,7 @@ vi.mock("react-native-webview", () => ({
 
 vi.mock("@t3tools/mobile-preview-stream", () => ({ default: "" }));
 vi.mock("expo-clipboard", () => ({
-  getStringAsync: vi.fn(async () => ""),
+  getStringAsync: () => mocks.getClipboard(),
   setStringAsync: vi.fn(async () => undefined),
 }));
 vi.mock("../../components/ui/AppText", () => ({
@@ -136,7 +145,7 @@ vi.mock("../../state/preview", () => ({
   usePreviewStreamAccess: () => mocks.accessState,
 }));
 
-import { PreviewStreamWebView } from "./PreviewStreamWebView";
+import { PreviewStreamWebView, type PreviewStreamRef } from "./PreviewStreamWebView";
 
 function emit(payload: object) {
   mocks.onMessage?.({ nativeEvent: { data: JSON.stringify(payload) } });
@@ -155,9 +164,12 @@ function mountView(
 ) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mocks.onMessage = null;
+  mocks.onProcessTerminated = null;
+  mocks.lastSourceHtml = "";
   mocks.injected.length = 0;
   mocks.webViewMounts = 0;
   mocks.announce.mockReset();
+  mocks.getClipboard.mockReset().mockResolvedValue("");
   mocks.accessState = {
     access:
       props.access !== undefined
@@ -176,9 +188,11 @@ function mountView(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  const streamRef: { current: PreviewStreamRef | null } = { current: null };
   let paused = props.paused;
   const renderElement = () => (
     <PreviewStreamWebView
+      ref={streamRef}
       environmentId={"env-1" as EnvironmentId}
       threadId="thread-1"
       tabId="tab-1"
@@ -197,6 +211,7 @@ function mountView(
   });
   return {
     container,
+    streamRef,
     rerender(next?: { readonly paused?: boolean }) {
       if (next && "paused" in next) paused = next.paused;
       act(() => {
@@ -262,7 +277,7 @@ it("announces phase transitions through one live region, suppresses duplicate ba
   }
 });
 
-it("keeps Take control available during awaiting-frame with or without a pending dialog", () => {
+it("keeps Take control available during awaiting-frame with or without a pending dialog and announces newly opened dialogs once", () => {
   const { container, cleanup } = mountView();
   try {
     act(() =>
@@ -281,6 +296,7 @@ it("keeps Take control available during awaiting-frame with or without a pending
     expect(mocks.injected.some((script) => script.includes('"takeControl"'))).toBe(true);
 
     mocks.injected.length = 0;
+    mocks.announce.mockClear();
     act(() =>
       emit({
         type: "control",
@@ -292,10 +308,37 @@ it("keeps Take control available during awaiting-frame with or without a pending
     );
     expect(container.textContent).toContain("Waiting for video frame…");
     expect(container.textContent).toContain("Confirm action");
+    const liveTexts = [...container.querySelectorAll('[data-live-region="polite"]')].map(
+      (el) => el.textContent,
+    );
+    expect(liveTexts).toContain("Confirm action");
+    if (IS_ANDROID) {
+      expect(mocks.announce).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
+        "Browser dialog: Confirm action",
+      ]);
+    }
     const button = container.querySelector("button");
     expect(button?.textContent).toBe("Take control");
     act(() => button?.click());
     expect(mocks.injected.some((script) => script.includes('"takeControl"'))).toBe(true);
+
+    // Gaining control for the same dialog does not re-announce it.
+    act(() =>
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 3,
+        dialog: { type: "alert", message: "Confirm action", defaultValue: "" },
+      }),
+    );
+    if (!IS_ANDROID) {
+      expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
+        "Browser dialog: Confirm action",
+      ]);
+    }
   } finally {
     cleanup();
   }
@@ -748,6 +791,157 @@ it("reports connecting rather than reconnecting through onPhaseChange when pause
     rerender({ paused: false });
     expect(mocks.webViewMounts).toBe(2);
     expect(phases.at(-1)).toBe("connecting");
+  } finally {
+    cleanup();
+  }
+});
+
+it("cancels pending deferred clipboard pastes across disconnect, access replacement, and loss of control", async () => {
+  const { streamRef, rerender, cleanup } = mountView();
+  try {
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+
+    // 1) Disconnect + reconnect + regain control before clipboard resolves must drop the old paste.
+    let resolveDisconnectPaste!: (text: string) => void;
+    mocks.getClipboard.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (resolveDisconnectPaste = resolve)),
+    );
+    act(() => streamRef.current?.paste());
+    act(() => {
+      emit({ type: "status", status: "connecting" });
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 2,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    mocks.injected.length = 0;
+    await act(async () => {
+      resolveDisconnectPaste("stale-after-reconnect");
+      await Promise.resolve();
+    });
+    expect(mocks.injected.some((script) => script.includes("stale-after-reconnect"))).toBe(false);
+
+    // 2) Loss of control + regaining control before clipboard resolves must drop the old paste.
+    let resolveControlPaste!: (text: string) => void;
+    mocks.getClipboard.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (resolveControlPaste = resolve)),
+    );
+    act(() => streamRef.current?.paste());
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "another-viewer",
+        generation: 3,
+        dialog: null,
+      });
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 4,
+        dialog: null,
+      });
+    });
+    mocks.injected.length = 0;
+    await act(async () => {
+      resolveControlPaste("stale-after-control-loss");
+      await Promise.resolve();
+    });
+    expect(mocks.injected.some((script) => script.includes("stale-after-control-loss"))).toBe(
+      false,
+    );
+
+    // 3) Access replacement before clipboard resolves must drop the old paste.
+    let resolveAccessPaste!: (text: string) => void;
+    mocks.getClipboard.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (resolveAccessPaste = resolve)),
+    );
+    act(() => streamRef.current?.paste());
+    mocks.accessState = {
+      ...mocks.accessState,
+      access: {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "replacement-ticket" },
+      },
+    };
+    rerender();
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 5,
+        dialog: null,
+        accessGeneration: 1,
+      });
+      emit({ type: "status", status: "streaming", accessGeneration: 1 });
+    });
+    mocks.injected.length = 0;
+    await act(async () => {
+      resolveAccessPaste("stale-after-access-refresh");
+      await Promise.resolve();
+    });
+    expect(mocks.injected.some((script) => script.includes("stale-after-access-refresh"))).toBe(
+      false,
+    );
+
+    // 4) A paste within the active session still sends cleanly.
+    mocks.getClipboard.mockResolvedValueOnce("fresh-paste");
+    await act(async () => {
+      streamRef.current?.paste();
+      await Promise.resolve();
+    });
+    expect(mocks.injected.some((script) => script.includes('"fresh-paste"'))).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+it("boots with null access instead of stale initial credentials if the WebView remounts during an outage", () => {
+  const { rerender, cleanup } = mountView({
+    access: {
+      httpBase: "https://environment.test/api/preview",
+      wsBase: "wss://environment.test/api/preview",
+      credentials: false,
+      query: { wsTicket: "initial-expired-ticket" },
+    },
+  });
+  try {
+    expect(mocks.lastSourceHtml).toContain("initial-expired-ticket");
+    act(() => {
+      emit({ type: "status", status: "streaming" });
+    });
+
+    // Mid-session access drops to null while WebView stays mounted.
+    mocks.accessState = {
+      ...mocks.accessState,
+      access: null,
+      error: "Relay unavailable",
+    };
+    rerender();
+    expect(mocks.webViewMounts).toBe(1);
+
+    // WebView process terminates during the outage and recovers by remounting.
+    act(() => mocks.onProcessTerminated?.());
+    expect(mocks.webViewMounts).toBe(2);
+    expect(mocks.lastSourceHtml).toContain('"access":null');
+    expect(mocks.lastSourceHtml).not.toContain("initial-expired-ticket");
   } finally {
     cleanup();
   }

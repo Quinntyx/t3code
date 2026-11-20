@@ -42,7 +42,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
-import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
+import { refreshPreviewStreamAccess, usePreviewStreamAccessState } from "~/state/previewStream";
 import { observeResize } from "~/lib/observeResize";
 
 export interface ServerBrowserHandle {
@@ -205,8 +205,12 @@ export function ServerBrowserSurface(props: {
   };
   const unauthorizedRef = useRef(0);
   const [refusedAccess, setRefusedAccess] =
-    useState<ReturnType<typeof usePreviewStreamAccess>>(null);
-  const access = usePreviewStreamAccess(environmentId, {
+    useState<ReturnType<typeof usePreviewStreamAccessState>["access"]>(null);
+  const {
+    access,
+    error: accessError,
+    isPending: accessPending,
+  } = usePreviewStreamAccessState(environmentId, {
     retry: visible && refusedAccess === null,
   });
   if (refusedAccess !== null && access !== refusedAccess) {
@@ -782,8 +786,15 @@ export function ServerBrowserSurface(props: {
   const hasCurrentFrame = hasRetainedFrame && currentFramePainted;
   const phase = previewStreamPhase(control, hasCurrentFrame, hasRetainedFrame);
   const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
-  const errorOverlayVisible = visible && (hostSetup !== null || accessDenied);
-  const overlaySuppressed = pdfUrl !== null || hostSetup !== null || accessDenied;
+  const streamError = accessDenied ? "Browser connection was refused." : accessError;
+  const hasStreamError = streamError !== null;
+  const errorOverlayVisible = visible && (hostSetup !== null || hasStreamError);
+  const overlaySuppressed = pdfUrl !== null || hostSetup !== null || hasStreamError;
+  const dialogAnnouncement = control?.dialog
+    ? control.dialog.message.trim()
+      ? `Browser dialog: ${control.dialog.message.trim()}`
+      : "Browser dialog opened."
+    : "";
 
   return (
     <div
@@ -805,13 +816,13 @@ export function ServerBrowserSurface(props: {
               "size-2 shrink-0 rounded-full",
               phase === "live"
                 ? "bg-success"
-                : accessDenied || hostSetup !== null
+                : hasStreamError || hostSetup !== null
                   ? "bg-destructive"
                   : "bg-warning ring-2 ring-warning/30",
             )}
           />
           <span role="status" className="truncate text-xs text-muted-foreground">
-            {accessDenied || hostSetup !== null
+            {hasStreamError || hostSetup !== null
               ? "Stream disconnected"
               : previewStreamStatusLabel(phase, control)}
           </span>
@@ -834,6 +845,9 @@ export function ServerBrowserSurface(props: {
         ) : null}
       </div>
       <div className="relative min-h-0 flex-1">
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {dialogAnnouncement}
+        </div>
         {pdfUrl ? (
           <embed
             src={pdfUrl}
@@ -884,23 +898,24 @@ export function ServerBrowserSurface(props: {
             </span>
           </div>
         ) : null}
-        {visible && accessDenied && hasRetainedFrame ? (
+        {visible && hasStreamError && hasRetainedFrame ? (
           <div
             data-error-layout="banner"
             className="visible absolute inset-x-3 bottom-3 z-20 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-sm"
           >
             <p role="alert" className="text-xs text-muted-foreground">
-              Browser connection was refused.
+              {streamError}
             </p>
             <Button
               variant="outline"
               size="xs"
+              disabled={accessPending}
               onClick={() => {
                 unauthorizedRef.current = 0;
                 refreshPreviewStreamAccess(environmentId);
               }}
             >
-              Reconnect
+              {accessPending ? "Reconnecting…" : "Reconnect"}
             </Button>
           </div>
         ) : null}
@@ -1030,24 +1045,25 @@ export function ServerBrowserSurface(props: {
           </Button>
         </div>
       ) : null}
-      {visible && accessDenied && !hasRetainedFrame ? (
+      {visible && hasStreamError && !hasRetainedFrame ? (
         // The page can be invisible beneath an empty or unreachable state; reconnect must remain reachable.
         <div
           data-error-layout="overlay"
           className="visible absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center"
         >
           <p role="alert" className="text-xs text-muted-foreground">
-            Browser connection was refused.
+            {streamError}
           </p>
           <Button
             variant="outline"
             size="sm"
+            disabled={accessPending}
             onClick={() => {
               unauthorizedRef.current = 0;
               refreshPreviewStreamAccess(environmentId);
             }}
           >
-            Reconnect
+            {accessPending ? "Reconnecting…" : "Reconnect"}
           </Button>
         </div>
       ) : null}

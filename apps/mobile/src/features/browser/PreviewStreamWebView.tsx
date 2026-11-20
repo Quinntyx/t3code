@@ -228,27 +228,25 @@ export function PreviewStreamWebView(
     background: props.background,
     reuseNearbyTouchProbe: Platform.OS === "ios",
   });
-  const [seeded, setSeeded] = useState<{
-    readonly key: string;
-    readonly access: PreviewStreamConfiguration["access"];
-  } | null>(() => (access && !props.paused ? { key: targetKey, access } : null));
-  const activeSeed = props.paused
+  const [seededKey, setSeededKey] = useState<string | null>(() =>
+    access && !props.paused ? targetKey : null,
+  );
+  const activeSeedKey = props.paused
     ? null
-    : seeded?.key === targetKey
-      ? seeded
+    : seededKey === targetKey
+      ? targetKey
       : access
-        ? { key: targetKey, access }
+        ? targetKey
         : null;
   // Keep the active WebView mounted across mid-session access outages for the same target so the painted frame survives recovery.
-  if ((seeded?.key ?? null) !== (activeSeed?.key ?? null)) {
-    setSeeded(activeSeed);
+  if (seededKey !== activeSeedKey) {
+    setSeededKey(activeSeedKey);
   }
-  if (activeSeed) {
+  if (activeSeedKey !== null) {
     return (
       <AuthorizedPreviewStream
         key={targetKey}
         {...props}
-        initialAccess={activeSeed.access}
         access={access}
         accessError={error}
         accessPending={isPending}
@@ -272,24 +270,21 @@ export function PreviewStreamWebView(
 
 function AuthorizedPreviewStream({
   ref,
-  initialAccess,
   access,
   accessError,
   accessPending,
   ...props
 }: Omit<NativeStreamConfiguration, "access"> &
   NativeStreamBridge & {
-    readonly initialAccess: PreviewStreamConfiguration["access"];
-    readonly access: PreviewStreamConfiguration["access"] | null;
+    readonly access: PreviewStreamConfiguration["access"];
     readonly accessError: string | null;
     readonly accessPending: boolean;
   }) {
   const [attempt, setAttempt] = useState(0);
   const processRetried = useRef(false);
   const unauthorized = useRef(0);
-  const bootAccess = access ?? initialAccess;
   const initialConfiguration = JSON.stringify({
-    access: bootAccess,
+    access,
     accessGeneration: 0,
     threadId: props.threadId,
     tabId: props.tabId,
@@ -302,7 +297,7 @@ function AuthorizedPreviewStream({
       key={attempt}
       {...props}
       ref={ref}
-      bootAccess={bootAccess}
+      bootAccess={access}
       access={access}
       accessError={accessError}
       accessPending={accessPending}
@@ -362,7 +357,7 @@ function PreviewStreamDocumentView({
   onRecoverProcess,
 }: Omit<NativeStreamBridge, "onUnauthorized" | "onRefused"> & {
   readonly bootAccess: PreviewStreamConfiguration["access"];
-  readonly access: PreviewStreamConfiguration["access"] | null;
+  readonly access: PreviewStreamConfiguration["access"];
   readonly accessError: string | null;
   readonly accessPending: boolean;
   readonly initialConfiguration: string;
@@ -377,8 +372,9 @@ function PreviewStreamDocumentView({
   const active = useRef(false);
   const failed = useRef(false);
   const bootstrapped = useRef(false);
-  const appliedAccess = useRef<PreviewStreamConfiguration["access"] | null>(bootAccess);
+  const appliedAccess = useRef<PreviewStreamConfiguration["access"]>(bootAccess);
   const accessGeneration = useRef(0);
+  const pasteGeneration = useRef(0);
   const bootstrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error">("connecting");
   // Survives mid-session reconnects and access outages because only a target or attempt change remounts this view.
@@ -388,9 +384,7 @@ function PreviewStreamDocumentView({
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
-  const [refusedAccess, setRefusedAccess] = useState<PreviewStreamConfiguration["access"] | null>(
-    null,
-  );
+  const [refusedAccess, setRefusedAccess] = useState<PreviewStreamConfiguration["access"]>(null);
   const [previousAccess, setPreviousAccess] = useState(access);
   if (previousAccess !== access) {
     setPreviousAccess(access);
@@ -416,6 +410,13 @@ function PreviewStreamDocumentView({
   const statusLabel = previewStreamStatusLabel(phase, control);
   const announcement = compact ? null : hasError ? displayError : statusLabel;
   const lastAnnouncement = useRef<string | null>(announcement);
+  const dialogAnnouncement =
+    !compact && control?.dialog
+      ? control.dialog.message.trim()
+        ? `Browser dialog: ${control.dialog.message.trim()}`
+        : "Browser dialog opened."
+      : null;
+  const lastDialogAnnouncement = useRef<string | null>(dialogAnnouncement);
   const dialogRef = useRef<PreviewStreamControl["dialog"]>(null);
   const [promptText, setPromptText] = useState("");
   const answerFileChooser = (pick: boolean) => {
@@ -434,14 +435,29 @@ function PreviewStreamDocumentView({
       `window.T3PreviewStream?.command(${JSON.stringify(input)}); true;`,
     );
   // Reads here rather than in the screen: a tab switch during the iOS paste prompt unmounts
-  // this view and nulls its WebView ref, so the text can never type into another tab.
-  const paste = () =>
+  // this view and nulls its WebView ref, and pasteGeneration cancels any read spanning a
+  // disconnect, access replacement, or loss of control.
+  const paste = () => {
+    if (
+      !active.current ||
+      failed.current ||
+      status !== "streaming" ||
+      control?.controller !== "you"
+    ) {
+      return;
+    }
+    const generation = pasteGeneration.current;
     void Clipboard.getStringAsync().then(
       (text) => {
+        if (!active.current || failed.current || pasteGeneration.current !== generation) return;
         if (text) command({ type: "text", text });
       },
-      () => Dialog.alert("Could not read the clipboard"),
+      () => {
+        if (!active.current || failed.current || pasteGeneration.current !== generation) return;
+        Dialog.alert("Could not read the clipboard");
+      },
     );
+  };
   const clearBootstrapTimer = () => {
     if (bootstrapTimer.current === null) return;
     clearTimeout(bootstrapTimer.current);
@@ -450,6 +466,7 @@ function PreviewStreamDocumentView({
   const fail = (message: string) => {
     if (!active.current || failed.current) return;
     failed.current = true;
+    pasteGeneration.current += 1;
     clearBootstrapTimer();
     webView.current?.injectJavaScript("window.T3PreviewStream?.stop(); true;");
     onStreamingChange?.(false);
@@ -469,6 +486,7 @@ function PreviewStreamDocumentView({
     onErrorChange?.(failedState);
   });
   const streamEnded = useEffectEvent(() => {
+    pasteGeneration.current += 1;
     onStreamingChange?.(false);
     onControl?.(null);
   });
@@ -516,6 +534,15 @@ function PreviewStreamDocumentView({
     lastAnnouncement.current = announcement;
     if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility(announcement);
   }, [announcement]);
+  // Announce newly opened blocking page dialogs once to VoiceOver on iOS without stealing focus.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- announces newly opened page dialogs to VoiceOver on iOS
+  useEffect(() => {
+    if (dialogAnnouncement === lastDialogAnnouncement.current) return;
+    lastDialogAnnouncement.current = dialogAnnouncement;
+    if (dialogAnnouncement !== null && Platform.OS === "ios") {
+      AccessibilityInfo.announceForAccessibility(dialogAnnouncement);
+    }
+  }, [dialogAnnouncement]);
   const [source] = useState(() => ({
     html: previewStreamDocument(initialConfiguration, previewStreamScript),
     baseUrl: Platform.OS === "android" ? "https://localhost/" : "file:///",
@@ -631,6 +658,7 @@ function PreviewStreamDocumentView({
             }
             switch (message.type) {
               case "control": {
+                if (message.controller !== "you") pasteGeneration.current += 1;
                 setControl(message);
                 const previousDialog = dialogRef.current;
                 dialogRef.current = message.dialog;
@@ -686,6 +714,7 @@ function PreviewStreamDocumentView({
                 if (message.status === "streaming") setHasStreamed(true);
                 if (message.status === "connecting") {
                   // Dialogs may have closed and reopened while this viewer was disconnected.
+                  pasteGeneration.current += 1;
                   dialogRef.current = null;
                   setControl(null);
                   onControl?.(null);
@@ -792,7 +821,9 @@ function PreviewStreamDocumentView({
       ) : null}
       {!compact && control?.dialog ? (
         <View className="absolute inset-x-3 top-16 gap-3 rounded-xl border border-secondary-border bg-secondary p-4">
-          <AppText className="text-sm text-secondary-foreground">{control.dialog.message}</AppText>
+          <AppText accessibilityLiveRegion="polite" className="text-sm text-secondary-foreground">
+            {control.dialog.message}
+          </AppText>
           {control.controller === "you" ? (
             <>
               {control.dialog.type === "prompt" ? (
