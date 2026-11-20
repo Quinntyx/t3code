@@ -525,13 +525,15 @@ const refreshOnSignalWhileRead =
     // registry can sweep this node while `self` keeps the data, and the rebuilt node must still
     // see a change it missed.
     const readUnder = new WeakMap<AtomRegistry.AtomRegistry, unknown>();
+    const selfKey = Atom.isSerializable(self) ? self[Atom.SerializableTypeId].key : self;
     return Atom.transform(
       self,
       (get) => {
         const current = get(signal);
+        const cached = get.registry.getNodes().has(selfKey);
         get.subscribe(self, (value) => get.setSelf(value));
         const changed =
-          readUnder.has(get.registry) && !Object.is(readUnder.get(get.registry), current);
+          cached && readUnder.has(get.registry) && !Object.is(readUnder.get(get.registry), current);
         readUnder.set(get.registry, current);
         if (changed && !isFinal(get.once(self))) get.refresh(self);
         return get.once(self);
@@ -795,6 +797,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         });
       })
       .pipe(
+        Atom.setIdleTTL(0),
         Atom.swr({
           staleTime: options.staleTimeMs ?? 30_000,
           revalidateOnMount: true,

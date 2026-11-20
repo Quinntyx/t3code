@@ -1391,6 +1391,8 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:thread-usage",
       tag: WS_METHODS.serverGetThreadUsage,
       staleTimeMs: 30_000,
+      // Only the open thread's details panel reads this; an idle atom would stay live and refetch on reconnect.
+      idleTtlMs: 0,
       refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
     }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {

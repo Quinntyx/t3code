@@ -15,6 +15,7 @@ import {
   buildThreadUsage,
   delegateThreadIds,
   threadRunDurationMs,
+  threadRunDurationReadAtMs,
   threadUsageTurns,
   type ThreadUsageRecords,
 } from "./threadUsage.ts";
@@ -328,6 +329,21 @@ describe("thread usage", () => {
         T0 + 200 * MINUTE,
       ),
     ).toBe(20 * MINUTE);
+  });
+
+  it("pairs duration readAt with beforeReadMs while active and with latest completedAt once closed", () => {
+    const main = records("main", claude, "claude-opus-5-5", [
+      { from: 0, to: 15, usage: usage(1_000, 100) },
+      { from: 20, to: 30, usage: usage(1_000, 100) },
+    ]);
+    // Run completed during the read (completedAt > beforeReadMs): advances readAt to completedAt.
+    expect(threadRunDurationReadAtMs(main, T0 + 29 * MINUTE)).toBe(T0 + 30 * MINUTE);
+    // Active run still open when read: stays at beforeReadMs, never past a later completion.
+    const active = {
+      ...main,
+      runs: [main.runs[0]!, { ...main.runs[1]!, status: "running" as const, completedAt: null }],
+    };
+    expect(threadRunDurationReadAtMs(active, T0 + 25 * MINUTE)).toBe(T0 + 25 * MINUTE);
   });
 
   it("splits a turn's tokens across the buckets it ran in and prices each group", () => {

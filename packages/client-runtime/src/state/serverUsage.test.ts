@@ -19,6 +19,7 @@ import {
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -85,17 +86,24 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     input: UsageSummaryInput,
   ) => Effect.Effect<void, UsageReadError> = () => Effect.void,
   sources: (input: UsageSummaryInput) => readonly UsageSource[] = () => [],
+  defaultIdleTTL?: number,
 ) {
   const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
+  const threadUsageRequested = yield* Queue.unbounded<ThreadId>();
   let settings = DEFAULT_SERVER_SETTINGS;
   let requests = 0;
   let threadUsageRequests = 0;
+  const threadUsageRequestIds: ThreadId[] = [];
   const inputs: UsageSummaryInput[] = [];
   const client = {
     [WS_METHODS.serverRefreshUsageRates]: () => Effect.succeed(PRICING),
     [WS_METHODS.subscribeServerConfig]: () =>
       Stream.concat(
-        Stream.make({ version: 1 as const, type: "snapshot" as const, config: CONFIG }),
+        Stream.make({
+          version: 1 as const,
+          type: "snapshot" as const,
+          config: { ...CONFIG, settings },
+        }),
         Stream.fromQueue(events),
       ),
     [WS_METHODS.serverGetUsageSummary]: (input: UsageSummaryInput) =>
@@ -133,9 +141,11 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
           scanDurationMs: 0,
         } satisfies UsageSummary;
       }),
-    [WS_METHODS.serverGetThreadUsage]: () =>
-      Effect.sync(() => {
+    [WS_METHODS.serverGetThreadUsage]: (input: { readonly threadId: ThreadId }) =>
+      Effect.gen(function* () {
         threadUsageRequests += 1;
+        threadUsageRequestIds.push(input.threadId);
+        yield* Queue.offer(threadUsageRequested, input.threadId);
         const price =
           settings.usagePriceOverrides["custom-model"]?.inputCostPerMillionTokens ?? null;
         return {
@@ -164,7 +174,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
         } satisfies ThreadUsage;
       }),
   } as unknown as WsRpcProtocolClient;
-  const session: RpcSession = {
+  const makeSession = (): RpcSession => ({
     client,
     initialConfig: Effect.succeed(CONFIG),
     subscribeServerConfig: (input = {}) => client.subscribeServerConfig(input),
@@ -172,14 +182,18 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
     closed: Effect.never,
-  };
+  });
+  let generation = 1;
+  const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>({
+    ...AVAILABLE_CONNECTION_STATE,
+    phase: "connected",
+    generation,
+  });
+  const supervisorSession = yield* SubscriptionRef.make(Option.some(makeSession()));
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: TARGET,
-    state: yield* SubscriptionRef.make<SupervisorConnectionState>({
-      ...AVAILABLE_CONNECTION_STATE,
-      phase: "connected",
-    }),
-    session: yield* SubscriptionRef.make(Option.some(session)),
+    state: supervisorState,
+    session: supervisorSession,
     prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
     connect: Effect.void,
     disconnect: Effect.void,
@@ -215,8 +229,11 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   const atoms = createServerEnvironmentAtoms(runtime, {
     initialConfigValueAtom: () => initialConfigValueAtom,
   });
-  const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
-    Effect.sync(() => registry.dispose()),
+  const registry = yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      AtomRegistry.make(defaultIdleTTL === undefined ? undefined : { defaultIdleTTL }),
+    ),
+    (registry) => Effect.sync(() => registry.dispose()),
   );
   const updateSettings = Effect.fn("ServerUsageTest.updateSettings")(function* (
     next: ServerSettings,
@@ -233,16 +250,34 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
       Stream.runHead,
     );
   });
+  const reconnect = Effect.fn("ServerUsageTest.reconnect")(function* () {
+    yield* SubscriptionRef.set(supervisorState, {
+      ...AVAILABLE_CONNECTION_STATE,
+      phase: "connecting" as const,
+      generation,
+    });
+    yield* SubscriptionRef.set(supervisorSession, Option.none());
+    generation += 1;
+    yield* SubscriptionRef.set(supervisorSession, Option.some(makeSession()));
+    yield* SubscriptionRef.set(supervisorState, {
+      ...AVAILABLE_CONNECTION_STATE,
+      phase: "connected" as const,
+      generation,
+    });
+  });
   return {
     registry,
     atoms,
     requests: () => requests,
     inputs: () => inputs,
     updateSettings,
+    reconnect,
     summary: (input = INPUT) => atoms.usageSummary({ environmentId: TARGET.environmentId, input }),
     threadUsage: (threadId: ThreadId) =>
       atoms.threadUsage({ environmentId: TARGET.environmentId, input: { threadId } }),
     threadUsageRequests: () => threadUsageRequests,
+    threadUsageRequestIds: () => threadUsageRequestIds,
+    threadUsageRequested,
   };
 });
 
@@ -353,6 +388,58 @@ it.effect("refetches thread usage after a price change", () =>
       yield* waitForThreadCost(harness.registry, threadUsage, 5);
       expect(harness.threadUsageRequests()).toBe(2);
       unmount();
+    }),
+  ),
+);
+
+it.effect("drops unmounted thread usage so reconnects only refetch the open thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(undefined, undefined, 60_000);
+      const closedId = ThreadId.make("closed-thread");
+      const openId = ThreadId.make("open-thread");
+      const closedUsage = harness.threadUsage(closedId);
+      const openUsage = harness.threadUsage(openId);
+
+      const unmountOpen = harness.registry.mount(openUsage);
+      yield* waitForThreadCost(harness.registry, openUsage, null);
+      const baselineNodes = harness.registry.getNodes().size;
+
+      const unmountClosed = harness.registry.mount(closedUsage);
+      yield* waitForThreadCost(harness.registry, closedUsage, null);
+      expect(harness.registry.getNodes().size).toBeGreaterThan(baselineNodes);
+
+      const closedEvicted = yield* Deferred.make<void>();
+      harness.registry.onNodeRemoved = () => {
+        if (harness.registry.getNodes().size <= baselineNodes) {
+          Deferred.doneUnsafe(closedEvicted, Exit.void);
+        }
+      };
+      unmountClosed();
+      yield* Deferred.await(closedEvicted);
+      expect(harness.registry.getNodes().has(closedUsage)).toBe(false);
+      expect(harness.registry.getNodes().size).toBe(baselineNodes);
+
+      yield* harness.updateSettings({
+        ...DEFAULT_SERVER_SETTINGS,
+        usagePriceOverrides: {
+          "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+        },
+      });
+      yield* waitForThreadCost(harness.registry, openUsage, 5);
+      yield* Queue.clear(harness.threadUsageRequested);
+
+      yield* harness.reconnect();
+      expect(yield* Queue.take(harness.threadUsageRequested)).toBe(openId);
+      expect(harness.threadUsageRequestIds().filter((id) => id === closedId)).toHaveLength(1);
+
+      // Re-mounting the evicted thread after price changes fetches once, not twice.
+      const remountClosed = harness.registry.mount(closedUsage);
+      yield* waitForThreadCost(harness.registry, closedUsage, 5);
+      expect(harness.threadUsageRequestIds().filter((id) => id === closedId)).toHaveLength(2);
+      expect(harness.threadUsageRequestIds().filter((id) => id === openId)).toHaveLength(3);
+      remountClosed();
+      unmountOpen();
     }),
   ),
 );

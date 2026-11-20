@@ -205,6 +205,8 @@ export type ThreadUsageSeries = typeof ThreadUsageSeries.Type;
 export const ThreadUsage = Schema.Struct({
   /** Sum of this thread's run durations, excluding gaps between runs; absent on older servers. */
   durationMs: Schema.optional(NonNegativeInt),
+  /** Server timestamp when `durationMs` was sampled; absent on older servers. */
+  readAt: Schema.optional(IsoDateTime),
   startedAt: Schema.NullOr(IsoDateTime),
   bucketMs: PositiveInt,
   models: Schema.Array(ThreadUsageModel),

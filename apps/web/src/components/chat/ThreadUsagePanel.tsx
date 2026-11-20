@@ -16,10 +16,12 @@ import type {
   ThreadUsageModel,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { deriveThreadWorkedDuration, formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { formatThreadUsageCost, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
-import { ChevronDownIcon, GaugeIcon, UsersIcon } from "lucide-react";
+import { ChevronDownIcon, GaugeIcon, TimerIcon, UsersIcon } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 
+import { useNowSecond } from "../../hooks/useNowSecond";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useThreadUsage } from "../../hooks/useThreadUsage";
 import { readLocalApi } from "../../localApi";
@@ -253,13 +255,18 @@ function UsageGroupRow({
   );
 }
 
+function RunningDuration(props: { readonly durationMs: number; readonly updatedAt: number }) {
+  const nowMs = useNowSecond();
+  return formatDuration(props.durationMs + Math.max(0, nowMs - props.updatedAt));
+}
+
 /** Tokens and API-list cost the thread and its delegates used, over wall-clock time. */
 export function ThreadUsagePanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
   const threadRef = scopeThreadRef(props.environmentId, props.threadId);
-  const { data, shell } = useThreadUsage(threadRef);
+  const { data, dataUpdatedAt, isPending, shell } = useThreadUsage(threadRef);
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ?? EMPTY_PROVIDERS;
@@ -271,6 +278,13 @@ export function ThreadUsagePanel(props: {
   });
   if (data === null) return null;
   const hasUsage = data.startedAt !== null && data.models.length > 0;
+  const workedFor = deriveThreadWorkedDuration({
+    durationMs: data.durationMs,
+    readAt: data.readAt,
+    dataUpdatedAt,
+    isPending,
+    latestRun: shell?.latestRun,
+  });
 
   const entries = deriveProviderInstanceEntries(providers);
   const present = (
@@ -428,6 +442,19 @@ export function ThreadUsagePanel(props: {
               formatTime={(iso, spanMs) => formatUsageChartTimestamp(iso, timestampFormat, spanMs)}
               formatTooltipTime={(iso) => formatDayAwareTimestamp(iso, timestampFormat)}
             />
+          </div>
+        ) : null}
+        {workedFor !== null ? (
+          <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
+            <TimerIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+            <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Worked for</span>
+            <span className="shrink-0 text-xs font-normal text-foreground/85 tabular-nums">
+              {workedFor.liveFromMs !== null ? (
+                <RunningDuration durationMs={workedFor.baseMs} updatedAt={workedFor.liveFromMs} />
+              ) : (
+                formatDuration(workedFor.baseMs)
+              )}
+            </span>
           </div>
         ) : null}
         <div

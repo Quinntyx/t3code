@@ -10,6 +10,7 @@ import {
   buildThreadUsage,
   delegateThreadIds,
   threadRunDurationMs,
+  threadRunDurationReadAtMs,
   threadUsageTurns,
 } from "./threadUsage.ts";
 import * as UsageService from "./UsageService.ts";
@@ -35,11 +36,17 @@ const make = Effect.gen(function* () {
       });
       const family = (yield* decodeFamily).threads;
       const delegates = delegateThreadIds(threadId, family);
-      const [main, children, pricing] = yield* Effect.all(
+      const [[main, mainBeforeReadMs], children, pricing] = yield* Effect.all(
         [
-          threads.getThreadRecords(threadId, [...USAGE_FIELDS, "turnItems"], {
-            turnItemTypes: ["compaction"],
-          }),
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap((beforeReadMs) =>
+              threads
+                .getThreadRecords(threadId, [...USAGE_FIELDS, "turnItems"], {
+                  turnItemTypes: ["compaction"],
+                })
+                .pipe(Effect.map((records) => [records, beforeReadMs] as const)),
+            ),
+          ),
           Effect.forEach(delegates, (id) => threads.getThreadRecords(id, USAGE_FIELDS), {
             concurrency: 4,
           }),
@@ -64,7 +71,13 @@ const make = Effect.gen(function* () {
         nowMs,
         active: family.some((thread) => counted.has(thread.id) && thread.activeRunId !== null),
       });
-      return { ...result, durationMs: threadRunDurationMs(main, nowMs) };
+      return {
+        ...result,
+        durationMs: threadRunDurationMs(main, mainBeforeReadMs),
+        readAt: DateTime.formatIso(
+          DateTime.makeUnsafe(threadRunDurationReadAtMs(main, mainBeforeReadMs)),
+        ),
+      };
     },
     (effect, threadId) =>
       effect.pipe(Effect.mapError((cause) => new ThreadUsageError({ threadId, cause }))),

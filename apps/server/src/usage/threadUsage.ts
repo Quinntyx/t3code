@@ -72,6 +72,9 @@ export interface ThreadUsageRecords {
   >;
 }
 
+const isActiveRunStatus = (status: ThreadUsageRecords["runs"][number]["status"]): boolean =>
+  status === "starting" || status === "running" || status === "waiting";
+
 export function threadRunDurationMs(
   records: Pick<ThreadUsageRecords, "thread" | "runs">,
   nowMs: number,
@@ -81,7 +84,7 @@ export function threadRunDurationMs(
     const endMs =
       run.completedAt !== null
         ? DateTime.toEpochMillis(run.completedAt)
-        : run.status === "starting" || run.status === "running" || run.status === "waiting"
+        : isActiveRunStatus(run.status)
           ? nowMs
           : null;
     // workStartedAt can carry an earlier run's start across a continuation.
@@ -89,6 +92,28 @@ export function threadRunDurationMs(
       ? total
       : total + Math.max(0, endMs - DateTime.toEpochMillis(run.startedAt));
   }, 0);
+}
+
+/**
+ * Timestamp paired with `threadRunDurationMs(records, beforeReadMs)`: stays at `beforeReadMs` while
+ * any run in `records` is still active (never past a later completion), and advances to at least
+ * the latest recorded `completedAt` once all runs are closed.
+ */
+export function threadRunDurationReadAtMs(
+  records: Pick<ThreadUsageRecords, "thread" | "runs">,
+  beforeReadMs: number,
+): number {
+  let latestCompletedAtMs = beforeReadMs;
+  for (const run of records.runs) {
+    if (run.threadId !== records.thread.id || run.startedAt === null) continue;
+    if (run.completedAt === null) {
+      if (isActiveRunStatus(run.status)) return beforeReadMs;
+      continue;
+    }
+    const completedAtMs = DateTime.toEpochMillis(run.completedAt);
+    if (completedAtMs > latestCompletedAtMs) latestCompletedAtMs = completedAtMs;
+  }
+  return latestCompletedAtMs;
 }
 
 function usageSpeed(selection: ModelSelection): UsageSpeed {
