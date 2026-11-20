@@ -204,8 +204,15 @@ export function ServerBrowserSurface(props: {
     );
   };
   const unauthorizedRef = useRef(0);
-  const [accessDenied, setAccessDenied] = useState(false);
-  const access = usePreviewStreamAccess(environmentId, { retry: visible && !accessDenied });
+  const [refusedAccess, setRefusedAccess] =
+    useState<ReturnType<typeof usePreviewStreamAccess>>(null);
+  const access = usePreviewStreamAccess(environmentId, {
+    retry: visible && refusedAccess === null,
+  });
+  if (refusedAccess !== null && access !== refusedAccess) {
+    setRefusedAccess(null);
+  }
+  const accessDenied = refusedAccess !== null;
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const pendingMoveRef = useRef<MouseInput | null>(null);
   const pendingWheelRef = useRef<WheelInput | null>(null);
@@ -460,7 +467,7 @@ export function ServerBrowserSurface(props: {
           const refusals = ++unauthorizedRef.current;
           if (refusals >= MAX_UNAUTHORIZED_REFUSALS) {
             inputRef.current?.blur();
-            setAccessDenied(true);
+            setRefusedAccess(access);
             return;
           }
           refreshTimer = setTimeout(
@@ -809,7 +816,7 @@ export function ServerBrowserSurface(props: {
               : previewStreamStatusLabel(phase, control)}
           </span>
         </div>
-        {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
+        {control?.canOperate ? (
           <Button
             variant="outline"
             size="xs"
@@ -890,7 +897,6 @@ export function ServerBrowserSurface(props: {
               size="xs"
               onClick={() => {
                 unauthorizedRef.current = 0;
-                setAccessDenied(false);
                 refreshPreviewStreamAccess(environmentId);
               }}
             >
@@ -1038,7 +1044,6 @@ export function ServerBrowserSurface(props: {
             size="sm"
             onClick={() => {
               unauthorizedRef.current = 0;
-              setAccessDenied(false);
               refreshPreviewStreamAccess(environmentId);
             }}
           >

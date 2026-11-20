@@ -11,6 +11,7 @@ import {
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   type PreviewStreamInput,
+  type PreviewStreamPhase,
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 import type { EnvironmentId, PreviewStreamHostSetup } from "@t3tools/contracts";
 import {
@@ -62,6 +63,7 @@ type NativeStreamBridge = {
   readonly onPictureInPicture?: (state: PreviewPictureInPictureState, detail?: string) => void;
   /** True while frames show, so commands reach the page. */
   readonly onStreamingChange?: (streaming: boolean) => void;
+  readonly onPhaseChange?: (phase: PreviewStreamPhase) => void;
   readonly onErrorChange?: (failed: boolean) => void;
   readonly compact?: boolean;
   readonly pdfUri?: string | null;
@@ -87,6 +89,7 @@ function PreviewStreamFallback({
   retrying,
   paused,
   onRetry,
+  onPhaseChange,
   onErrorChange,
 }: {
   readonly compact?: boolean | undefined;
@@ -94,11 +97,17 @@ function PreviewStreamFallback({
   readonly retrying?: boolean | undefined;
   readonly paused?: boolean | undefined;
   readonly onRetry: () => void;
+  readonly onPhaseChange?: ((phase: PreviewStreamPhase) => void) | undefined;
   readonly onErrorChange?: ((failed: boolean) => void) | undefined;
 }) {
   const hasError = !paused && error !== null;
   const lastAnnouncedError = useRef<string | null>(null);
+  const reportPhase = useEffectEvent((phase: PreviewStreamPhase) => onPhaseChange?.(phase));
   const reportError = useEffectEvent((failed: boolean) => onErrorChange?.(failed));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports connecting phase to compact parent containers while no frame-bearing WebView is mounted
+  useLayoutEffect(() => {
+    reportPhase("connecting");
+  }, []);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports terminal access failure to compact parent containers while the stream WebView is unmounted
   useLayoutEffect(() => {
     reportError(hasError);
@@ -255,6 +264,7 @@ export function PreviewStreamWebView(
       retrying={isPending}
       paused={props.paused}
       onRetry={refresh}
+      onPhaseChange={props.onPhaseChange}
       onErrorChange={props.onErrorChange}
     />
   );
@@ -345,6 +355,7 @@ function PreviewStreamDocumentView({
   onControl,
   onPictureInPicture,
   onStreamingChange,
+  onPhaseChange,
   onErrorChange,
   onRetry,
   onStreaming,
@@ -451,6 +462,9 @@ function PreviewStreamDocumentView({
   const bootstrapTimedOut = useEffectEvent(() =>
     fail("Browser viewer could not start. Reconnect to try again."),
   );
+  const reportPhase = useEffectEvent((nextPhase: PreviewStreamPhase) => {
+    onPhaseChange?.(nextPhase);
+  });
   const reportError = useEffectEvent((failedState: boolean) => {
     onErrorChange?.(failedState);
   });
@@ -472,6 +486,10 @@ function PreviewStreamDocumentView({
       streamEnded();
     };
   }, []);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports authoritative stream phase to compact parent containers without reconstructing retained-frame state
+  useLayoutEffect(() => {
+    reportPhase(phase);
+  }, [phase]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports terminal stream or access failure to compact parent containers
   useLayoutEffect(() => {
     reportError(hasError);
@@ -534,7 +552,7 @@ function PreviewStreamDocumentView({
               {hasError ? "Stream disconnected" : statusLabel}
             </AppText>
           </View>
-          {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
+          {control?.canOperate ? (
             <Button
               label={control.controller === "you" ? "Release control" : "Take control"}
               tone="secondary"

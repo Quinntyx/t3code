@@ -1,3 +1,4 @@
+import type { PreviewStreamPhase } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { useIsFocused } from "@react-navigation/native";
 import type { EnvironmentId, PreviewSessionSnapshot, ThreadId } from "@t3tools/contracts";
 import { previewPdfAssetUrl } from "@t3tools/shared/preview";
@@ -88,9 +89,7 @@ function FloatingBrowserPlayer(props: {
   const prepared = usePreparedConnection(props.environmentId);
   const httpBaseUrl = Option.isSome(prepared) ? prepared.value.httpBaseUrl : null;
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
-  const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">(
-    "connecting",
-  );
+  const [streamPhase, setStreamPhase] = useState<PreviewStreamPhase>("connecting");
   const [streamError, setStreamError] = useState(false);
   const pdfUri =
     props.tab.navStatus._tag === "Success"
@@ -101,7 +100,15 @@ function FloatingBrowserPlayer(props: {
   const height = Math.round(width / aspect);
   const background = themeVariables["--color-sheet-solid"];
   const title = browserTabTitle(props.tab);
-  const effectiveState = streamError ? "error" : pdfUri !== null ? "live" : streamState;
+  const effectiveState = streamError
+    ? "error"
+    : pdfUri !== null
+      ? "live"
+      : streamPhase === "live"
+        ? "live"
+        : streamPhase === "reconnecting"
+          ? "reconnecting"
+          : "connecting";
   const accessibilityLabel =
     effectiveState === "live"
       ? `Open browser, ${title}`
@@ -137,15 +144,7 @@ function FloatingBrowserPlayer(props: {
             background={background}
             compact
             paused={!props.live}
-            onStreamingChange={(streaming) =>
-              setStreamState((current) =>
-                streaming
-                  ? "live"
-                  : current === "live" || current === "reconnecting"
-                    ? "reconnecting"
-                    : "connecting",
-              )
-            }
+            onPhaseChange={setStreamPhase}
             onErrorChange={setStreamError}
             onViewport={setViewport}
             onGone={props.onClose}

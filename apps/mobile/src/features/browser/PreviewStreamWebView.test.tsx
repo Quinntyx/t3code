@@ -1,3 +1,4 @@
+import type { PreviewStreamPhase } from "@t3tools/client-runtime/preview/server-browser-stream";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -144,7 +145,9 @@ function emit(payload: object) {
 function mountView(
   props: {
     readonly compact?: boolean;
+    readonly paused?: boolean;
     readonly onStreamingChange?: (streaming: boolean) => void;
+    readonly onPhaseChange?: (phase: PreviewStreamPhase) => void;
     readonly onErrorChange?: (failed: boolean) => void;
     readonly access?: typeof mocks.accessState.access;
     readonly accessError?: string | null;
@@ -173,6 +176,7 @@ function mountView(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  let paused = props.paused;
   const renderElement = () => (
     <PreviewStreamWebView
       environmentId={"env-1" as EnvironmentId}
@@ -182,7 +186,9 @@ function mountView(
       background="#000"
       environmentLabel="build-box"
       compact={props.compact}
+      paused={paused}
       onStreamingChange={props.onStreamingChange}
+      onPhaseChange={props.onPhaseChange}
       onErrorChange={props.onErrorChange}
     />
   );
@@ -191,7 +197,8 @@ function mountView(
   });
   return {
     container,
-    rerender() {
+    rerender(next?: { readonly paused?: boolean }) {
+      if (next && "paused" in next) paused = next.paused;
       act(() => {
         root.render(renderElement());
       });
@@ -225,7 +232,7 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     );
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Waiting for video frame…"]);
     expect(container.textContent).toContain("Waiting for first frame…");
-    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("button")?.textContent).toBe("Take control");
 
     act(() => emit({ type: "status", status: "streaming" }));
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
@@ -255,7 +262,7 @@ it("announces phase transitions through one live region, suppresses duplicate ba
   }
 });
 
-it("keeps Take control available during awaiting-frame when a blocking dialog is pending", () => {
+it("keeps Take control available during awaiting-frame with or without a pending dialog", () => {
   const { container, cleanup } = mountView();
   try {
     act(() =>
@@ -264,6 +271,22 @@ it("keeps Take control available during awaiting-frame when a blocking dialog is
         canOperate: true,
         controller: "unclaimed",
         generation: 1,
+        dialog: null,
+      }),
+    );
+    expect(container.textContent).toContain("Waiting for video frame…");
+    const buttonWithoutDialog = container.querySelector("button");
+    expect(buttonWithoutDialog?.textContent).toBe("Take control");
+    act(() => buttonWithoutDialog?.click());
+    expect(mocks.injected.some((script) => script.includes('"takeControl"'))).toBe(true);
+
+    mocks.injected.length = 0;
+    act(() =>
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 2,
         dialog: { type: "alert", message: "Confirm action", defaultValue: "" },
       }),
     );
@@ -674,6 +697,57 @@ it("retries exhausted mid-session authorization in place over a banner without r
       emit({ type: "status", status: "streaming", accessGeneration: 2 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+  } finally {
+    cleanup();
+  }
+});
+
+it("reports connecting rather than reconnecting through onPhaseChange when paused discards the canvas", () => {
+  const phases: PreviewStreamPhase[] = [];
+  const { rerender, cleanup } = mountView({
+    compact: true,
+    onPhaseChange: (phase) => phases.push(phase),
+  });
+  try {
+    expect(phases).toEqual(["connecting"]);
+
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: false,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(phases.at(-1)).toBe("live");
+
+    // Socket drop with retained canvas transitions to reconnecting.
+    act(() => emit({ type: "status", status: "connecting" }));
+    expect(phases.at(-1)).toBe("reconnecting");
+
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: false,
+        controller: "unclaimed",
+        generation: 2,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(phases.at(-1)).toBe("live");
+
+    // Pausing unmounts the WebView and discards the canvas, resetting phase to connecting.
+    rerender({ paused: true });
+    expect(phases.at(-1)).toBe("connecting");
+    expect(mocks.webViewMounts).toBe(1);
+
+    // Resuming mounts a fresh WebView in connecting, never reconnecting.
+    rerender({ paused: false });
+    expect(mocks.webViewMounts).toBe(2);
+    expect(phases.at(-1)).toBe("connecting");
   } finally {
     cleanup();
   }

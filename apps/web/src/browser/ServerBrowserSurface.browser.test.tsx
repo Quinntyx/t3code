@@ -12,6 +12,7 @@ import { act, render } from "../../test/render";
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn<(target: unknown, handlers: PreviewStreamEvents) => unknown>(),
   reset: vi.fn(),
+  refreshAccess: vi.fn(),
   sent: [] as PreviewStreamInput[],
   access: { url: "ws://preview.test", token: "test" },
   painted: null as (() => void) | null,
@@ -32,6 +33,7 @@ vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (
 vi.mock(import("~/state/previewStream"), async (original) => ({
   ...(await original()),
   usePreviewStreamAccess: () => mocks.access as never,
+  refreshPreviewStreamAccess: mocks.refreshAccess,
 }));
 
 import { ServerBrowserSurface } from "./ServerBrowserSurface";
@@ -39,7 +41,9 @@ import { ServerBrowserSurface } from "./ServerBrowserSurface";
 function setup() {
   mocks.sent.length = 0;
   mocks.painted = null;
+  mocks.access = { url: "ws://preview.test", token: "test" };
   mocks.reset.mockReset();
+  mocks.refreshAccess.mockReset();
   mocks.createClient.mockReset().mockImplementation(() => ({
     send: (input: PreviewStreamInput) => mocks.sent.push(input),
     requestKeyFrame: () => undefined,
@@ -142,9 +146,7 @@ describe("ServerBrowserSurface stream phases", () => {
     await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
     await expect.element(screen.getByText("Waiting for first frame…")).toBeVisible();
     expect(input.disabled).toBe(true);
-    await expect
-      .element(screen.getByRole("button", { name: "Release control" }))
-      .not.toBeInTheDocument();
+    await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
     mocks.sent.length = 0;
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     expect(keys()).toEqual([]);
@@ -165,7 +167,7 @@ describe("ServerBrowserSurface stream phases", () => {
       .element(screen.getByRole("button", { name: "Release control" }))
       .not.toBeInTheDocument();
 
-    // Control returning before a replacement frame paints keeps reconnecting active and gates input.
+    // Control returning before a replacement frame paints keeps reconnecting active and gates input while exposing control recovery.
     await act(() =>
       handlers().onControl?.({
         canOperate: true,
@@ -177,9 +179,7 @@ describe("ServerBrowserSurface stream phases", () => {
     await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
     await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
     expect(input.disabled).toBe(true);
-    await expect
-      .element(screen.getByRole("button", { name: "Release control" }))
-      .not.toBeInTheDocument();
+    await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
     mocks.sent.length = 0;
     await userEvent.click(canvas);
     expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
@@ -218,24 +218,41 @@ describe("ServerBrowserSurface stream phases", () => {
       .not.toBeInTheDocument();
   });
 
-  it("allows taking control during awaiting-frame when a blocking dialog is open", async () => {
+  it("allows taking control during awaiting-frame with or without a dialog while gating page input", async () => {
     setup();
-    const { screen, handlers } = await renderStream();
+    const { screen, container, handlers } = await renderStream();
     await using _screen = screen;
+    const input = container.querySelector("textarea")!;
+    const canvas = container.querySelector("canvas")!;
 
     await act(() =>
       handlers().onControl?.({
         canOperate: true,
         controller: "unclaimed",
         generation: 1,
-        dialog: { type: "alert", message: "Blocking alert", defaultValue: "" },
+        dialog: null,
       }),
     );
     await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
-    await expect.element(screen.getByText("Blocking alert")).toBeVisible();
     const takeControl = screen.getByRole("button", { name: "Take control" });
     await expect.element(takeControl).toBeVisible();
     await userEvent.click(takeControl);
+    expect(mocks.sent).toContainEqual({ type: "takeControl" });
+    expect(input.disabled).toBe(true);
+    mocks.sent.length = 0;
+    await userEvent.click(canvas);
+    expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
+
+    await act(() =>
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 2,
+        dialog: { type: "alert", message: "Blocking alert", defaultValue: "" },
+      }),
+    );
+    await expect.element(screen.getByText("Blocking alert")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Take control" }));
     expect(mocks.sent).toContainEqual({ type: "takeControl" });
   });
 
@@ -343,6 +360,18 @@ describe("ServerBrowserSurface stream phases", () => {
     });
     expect(second.container.querySelector('[data-error-layout="banner"]')).not.toBeNull();
     expect(second.container.querySelector('[data-error-layout="overlay"]')).toBeNull();
+
+    // Clicking Reconnect refreshes credentials and waits for a fresh access object instead of reopening with the refused token.
+    const callsBeforeReconnect = mocks.createClient.mock.calls.length;
+    mocks.refreshAccess.mockClear();
+    await userEvent.click(second.screen.getByRole("button", { name: "Reconnect" }));
+    expect(mocks.refreshAccess).toHaveBeenCalledTimes(1);
+    expect(mocks.createClient).toHaveBeenCalledTimes(callsBeforeReconnect);
+
+    mocks.access = { url: "ws://preview.test", token: "fresh-token" };
+    await second.rerender("tab-2");
+    expect(mocks.createClient).toHaveBeenCalledTimes(callsBeforeReconnect + 1);
+    expect(second.container.querySelector('[data-error-layout="banner"]')).toBeNull();
   });
 });
 
