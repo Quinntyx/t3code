@@ -671,7 +671,10 @@ function MessageAttachmentFile(props: {
     setOpening(true);
     const finish = (message: string | null) => {
       if (message !== null && !controller.signal.aborted) {
-        Dialog.alert("Could not open attachment", message);
+        Dialog.alert(
+          kind === "download" ? "Could not download attachment" : "Could not open attachment",
+          message,
+        );
       }
       if (openingRef.current === controller) {
         openingRef.current = null;

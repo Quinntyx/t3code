@@ -226,6 +226,7 @@ it.each([
   ["granted", granted],
 ] as const)("downloads a %s host file only through a fresh grant check", async (_, session) => {
   state.sessions.set(environmentId, session);
+  state.refresh.mockResolvedValue("https://host.test/report.pdf");
   const source = { ...hostSource(), name: "report.pdf", mimeType: "application/pdf" };
   const saved = Promise.withResolvers<void>();
   state.saveDownload.mockImplementation(async () => saved.resolve());
@@ -241,7 +242,7 @@ it.each([
   if (session === granted) {
     expect(state.saveDownload).toHaveBeenCalledWith(
       expect.objectContaining({
-        uri: "https://host.test/image.png",
+        uri: "https://host.test/report.pdf",
         attachment: { name: "report.pdf", mimeType: "application/pdf" },
       }),
     );

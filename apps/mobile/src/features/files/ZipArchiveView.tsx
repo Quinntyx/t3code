@@ -373,6 +373,7 @@ function ZipArchiveFailure(props: {
   readonly failure: ZipFailure;
   readonly onRetry: () => void;
   readonly onSave: () => void;
+  readonly onDownload: (() => void) | null;
 }) {
   return (
     <View className="flex-1 items-center justify-center bg-sheet px-6">
@@ -387,8 +388,8 @@ function ZipArchiveFailure(props: {
             ) : null}
             <Button
               tone={props.failure.retry ? "secondary" : "primary"}
-              label="Save ZIP"
-              onPress={props.onSave}
+              label={props.onDownload ? "Download ZIP" : "Save ZIP"}
+              onPress={props.onDownload ?? props.onSave}
             />
           </View>
         }
@@ -550,7 +551,12 @@ export function ZipArchiveView(props: {
                 />
               )
             ) : (
-              <ZipArchiveFailure failure={state.failure} onRetry={retry} onSave={props.onSave} />
+              <ZipArchiveFailure
+                failure={state.failure}
+                onRetry={retry}
+                onSave={props.onSave}
+                onDownload={props.onDownload}
+              />
             )}
           </View>
         )}
@@ -809,7 +815,21 @@ function ZipEntryView(props: {
               title={content.title}
               detail={content.message}
               action={
-                <Button tone="primary" label="Save file" loading={busy === "save"} onPress={save} />
+                canDownload ? (
+                  <Button
+                    tone="primary"
+                    label="Download file"
+                    loading={busy === "download"}
+                    onPress={download}
+                  />
+                ) : (
+                  <Button
+                    tone="primary"
+                    label="Save file"
+                    loading={busy === "save"}
+                    onPress={save}
+                  />
+                )
               }
             />
           </ScrollView>

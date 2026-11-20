@@ -63,9 +63,9 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   });
   const [nativeOpen, setNativeOpen] = useState(false);
   const nativeKind = nativeViewerKind(document.kind);
-  const [nativeViewer, setNativeViewer] = useState<"pending" | "open" | "unavailable" | null>(
-    nativeKind ? "pending" : null,
-  );
+  const [nativeViewer, setNativeViewer] = useState<
+    "pending" | "open" | "closed" | "unavailable" | null
+  >(nativeKind ? "pending" : null);
   const [nativeError, setNativeError] = useState<string | null>(null);
   const pendingNativeError = useRef<string | null>(null);
   const handleBack = () => {
@@ -101,7 +101,9 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
       setNativeViewer("unavailable");
       return;
     }
-    handleBack();
+    // Android viewers have no save, so the screen stays to offer Download.
+    if (canSaveFileToDownloads()) setNativeViewer("closed");
+    else handleBack();
   };
   const removeFromDraft = () => {
     if (!draftKey) return;

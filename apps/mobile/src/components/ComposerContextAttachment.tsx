@@ -5,7 +5,7 @@ import * as Dialog from "./ui/Dialog";
 import type { ComposerContextRecord, EnvironmentId } from "@t3tools/contracts";
 import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { composerAttachmentInlineUri, isFileBackedComposerAttachment } from "../lib/composerImages";
 import {
@@ -42,6 +42,9 @@ export function ComposerContextAttachment(props: {
   const localPreview = useLocalAttachmentPreview(local ?? null);
   const error = localPreview.error ? "The local file is unavailable. Attach it again." : null;
   const [busy, setBusy] = useState<"share" | "download" | null>(null);
+  const task = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts an in-flight share or download when the attachment closes
+  useEffect(() => () => task.current?.abort(), []);
   const [previewOpen, setPreviewOpen] = useState(false);
   const uri = local
     ? localPreview.uri
@@ -50,6 +53,7 @@ export function ComposerContextAttachment(props: {
     if (busy) return;
     setBusy(kind);
     const controller = new AbortController();
+    task.current = controller;
     const { signal } = controller;
     const result = await settlePromise(async () => {
       if (local) {
@@ -77,6 +81,8 @@ export function ComposerContextAttachment(props: {
         sourceIdentifier: shareSourceIdentifier,
       });
     });
+    if (task.current === controller) task.current = null;
+    if (signal.aborted) return;
     setBusy(null);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);

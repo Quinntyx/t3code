@@ -186,8 +186,11 @@ function ResolvedFilePreview(
             {
               text: "Download",
               onPress: () =>
-                void downloadAttachmentToDevice({ ...input, uri }).catch(() =>
-                  Dialog.alert("Could not download file", "Please try again."),
+                void downloadAttachmentToDevice({ ...input, uri }).catch((cause: unknown) =>
+                  Dialog.alert(
+                    "Could not download file",
+                    cause instanceof Error ? cause.message : "Please try again.",
+                  ),
                 ),
             },
           ]

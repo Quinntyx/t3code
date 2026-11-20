@@ -208,7 +208,7 @@ private fun saveToMediaStore(
     put(MediaStore.MediaColumns.IS_PENDING, 1)
   }
   val target = resolver.insert(collection, values) ?: error("Could not create $name.")
-  return runCatching {
+  runCatching {
     val input = resolver.openInputStream(source) ?: error("The file is no longer available.")
     input.use { from ->
       val output = resolver.openOutputStream(target) ?: error("Could not write $name.")
@@ -221,8 +221,9 @@ private fun saveToMediaStore(
       null
     )
     check(published == 1) { "Could not finish saving $name." }
+  }.onFailure { resolver.delete(target, null, null) }.getOrThrow()
+  return runCatching {
     resolver.query(target, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
       ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-      ?: name
-  }.onFailure { resolver.delete(target, null, null) }.getOrThrow()
+  }.getOrNull() ?: name
 }

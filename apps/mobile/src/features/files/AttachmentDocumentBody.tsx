@@ -34,7 +34,7 @@ export function AttachmentDocumentBody(props: {
   readonly name: string;
   readonly environmentId: EnvironmentId | null;
   readonly htmlRender: boolean;
-  readonly nativeViewer: "pending" | "open" | "unavailable" | null;
+  readonly nativeViewer: "pending" | "open" | "closed" | "unavailable" | null;
   readonly nativeError: string | null;
   readonly onOpenNative: () => void;
 }) {
@@ -51,8 +51,20 @@ export function AttachmentDocumentBody(props: {
       </View>
     );
   }
-  if (props.nativeViewer !== null && props.nativeViewer !== "unavailable") {
+  if (props.nativeViewer === "pending" || props.nativeViewer === "open") {
     return <FilePreviewLoading message="Opening in file viewer..." />;
+  }
+  if (props.nativeViewer === "closed") {
+    return (
+      <View className="flex-1 items-center justify-center bg-sheet px-6">
+        <EmptyState
+          title={props.name}
+          detail="Open it in the file viewer, or download or share it from the menu."
+          actionLabel="Open"
+          onAction={props.onOpenNative}
+        />
+      </View>
+    );
   }
   // ZIP text entries are read into memory and have no file URI.
   if (document.needsText ? !document.content : !document.uri) {

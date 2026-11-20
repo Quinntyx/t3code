@@ -19,6 +19,7 @@ export function canSaveImageToLibrary(mimeType: string): boolean {
   );
 }
 
+// Loaded on use so screens importing the platform checks stay renderable in jsdom tests.
 async function nativeModule() {
   const { requireNativeModule } = await import("expo");
   return requireNativeModule<SaveToDeviceModule>("T3NativeControls");
