@@ -35,8 +35,14 @@ export function canSaveFileToDownloads(): boolean {
   return Platform.OS === "android" && Platform.Version >= 29;
 }
 
+export function showDownloadStarted(name: string) {
+  ToastAndroid.show(`Downloading ${name}…`, ToastAndroid.SHORT);
+}
+
 /** Copies a local `file:` or `content:` URI into Android's public Downloads folder. */
-export async function saveFileToDownloads(uri: string, name: string) {
-  const saved = await (await nativeModule()).saveFileToDownloads(uri, name);
+export async function saveFileToDownloads(uri: string, name: string, signal: AbortSignal) {
+  const native = await nativeModule();
+  if (signal.aborted) return;
+  const saved = await native.saveFileToDownloads(uri, name);
   ToastAndroid.show(`Saved ${saved} to Downloads`, ToastAndroid.SHORT);
 }

@@ -252,16 +252,18 @@ export async function downloadAttachmentToDevice(input: {
   readonly attachment: AttachmentFileMetadata;
   readonly signal: AbortSignal;
 }): Promise<void> {
-  const { saveFileToDownloads } = await import("./saveToDevice");
+  const { saveFileToDownloads, showDownloadStarted } = await import("./saveToDevice");
   const name = downloadFileName(input.attachment.name);
   if (/^(file|content):/i.test(input.uri)) {
-    if (!input.signal.aborted) await saveFileToDownloads(input.uri, name);
+    await saveFileToDownloads(input.uri, name, input.signal);
     return;
   }
+  if (input.signal.aborted) return;
+  showDownloadStarted(name);
   const file = await downloadAttachmentForPreview({ ...input, url: input.uri });
   if (file === null) return;
   try {
-    if (!input.signal.aborted) await saveFileToDownloads(file.uri, name);
+    await saveFileToDownloads(file.uri, name, input.signal);
   } finally {
     file.dispose();
   }

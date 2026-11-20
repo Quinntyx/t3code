@@ -845,7 +845,9 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
                 title: sheetSaves && !mediaActions.sharing ? "Download or share" : action.title,
                 icon:
                   saves || sheetSaves
-                    ? ("tray.and.arrow.down" as const)
+                    ? Platform.OS === "ios"
+                      ? ("arrow.down.to.line" as const)
+                      : ("tray.and.arrow.down" as const)
                     : action.id === "save"
                       ? ("square.and.arrow.up" as const)
                       : ("doc.on.doc" as const),

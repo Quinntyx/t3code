@@ -72,7 +72,10 @@ vi.mock("expo-sharing", () => ({
 }));
 
 vi.mock("./uuid", () => ({ uuidv4: mocks.uuid }));
-vi.mock("./saveToDevice", () => ({ saveFileToDownloads: mocks.saveToDownloads }));
+vi.mock("./saveToDevice", () => ({
+  saveFileToDownloads: mocks.saveToDownloads,
+  showDownloadStarted: () => {},
+}));
 vi.mock("./shareFileFromSource", () => ({ shareFileFromSource: mocks.shareFromSource }));
 
 import {
@@ -361,7 +364,7 @@ describe("downloadAttachmentToDevice", () => {
       signal: new AbortController().signal,
     });
     const cached = mocks.download.mock.calls[0]![1] as { uri: string };
-    expect(mocks.saveToDownloads).toHaveBeenCalledWith(cached.uri, "report.pdf");
+    expect(mocks.saveToDownloads).toHaveBeenCalledWith(cached.uri, "report.pdf", expect.anything());
     expect(mocks.share).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
   });
@@ -373,7 +376,7 @@ describe("downloadAttachmentToDevice", () => {
       attachment: input.attachment,
       signal: new AbortController().signal,
     });
-    expect(mocks.saveToDownloads).toHaveBeenCalledWith(uri, "report.pdf");
+    expect(mocks.saveToDownloads).toHaveBeenCalledWith(uri, "report.pdf", expect.anything());
     expect(mocks.download).not.toHaveBeenCalled();
     expect(mocks.deleted).not.toHaveBeenCalled();
   });
@@ -387,6 +390,7 @@ describe("downloadAttachmentToDevice", () => {
     expect(mocks.saveToDownloads).toHaveBeenCalledWith(
       expect.stringMatching(/^file:\/\/\/cache\/.+\/notes\.md$/),
       "notes.md",
+      expect.anything(),
     );
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
   });

@@ -221,32 +221,37 @@ it("saves a host image from its downloaded file, then removes the file", async (
   expect(state.saveImage).toHaveBeenCalledWith("file:///cache/image.png", "image/png", "image.png");
 });
 
-it.each([
-  ["denied", denied],
-  ["granted", granted],
-] as const)("downloads a %s host file only through a fresh grant check", async (_, session) => {
-  state.sessions.set(environmentId, session);
+function pdfSource(): MediaActionsSource {
+  return { ...hostSource(), name: "report.pdf", mimeType: "application/pdf" };
+}
+
+it("disables a denied host download and never saves", () => {
+  const media = useMediaActions(pdfSource());
+  const download = media.actions.find(({ id }) => id === "download")!;
+  download.run();
+
+  expect(download.disabled).toBe(true);
+  expect(media.actions.find(({ id }) => id === "save")?.title).toBe("Share");
+  expect(state.saveDownload).not.toHaveBeenCalled();
+});
+
+it("downloads a granted host file from a freshly minted URL", async () => {
+  state.sessions.set(environmentId, granted);
   state.refresh.mockResolvedValue("https://host.test/report.pdf");
-  const source = { ...hostSource(), name: "report.pdf", mimeType: "application/pdf" };
   const saved = Promise.withResolvers<void>();
   state.saveDownload.mockImplementation(async () => saved.resolve());
-  const media = useMediaActions(source);
-  const download = media.actions.find(({ id }) => id === "download")!;
 
-  download.run();
-  if (session === granted) await saved.promise;
+  useMediaActions(pdfSource())
+    .actions.find(({ id }) => id === "download")!
+    .run();
+  await saved.promise;
 
-  expect(download.disabled).toBe(session === denied);
-  expect(media.actions.find(({ id }) => id === "save")?.title).toBe("Share");
-  expect(state.saveDownload).toHaveBeenCalledTimes(session === granted ? 1 : 0);
-  if (session === granted) {
-    expect(state.saveDownload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        uri: "https://host.test/report.pdf",
-        attachment: { name: "report.pdf", mimeType: "application/pdf" },
-      }),
-    );
-  }
+  expect(state.saveDownload).toHaveBeenCalledWith(
+    expect.objectContaining({
+      uri: "https://host.test/report.pdf",
+      attachment: { name: "report.pdf", mimeType: "application/pdf" },
+    }),
+  );
 });
 
 it("leaves image downloads to Save image", () => {
