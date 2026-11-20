@@ -12,6 +12,7 @@ import {
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 import type { EnvironmentId, PreviewStreamHostSetup } from "@t3tools/contracts";
 import {
+  useEffect,
   useEffectEvent,
   useImperativeHandle,
   useLayoutEffect,
@@ -58,6 +59,8 @@ type NativeStreamBridge = {
   readonly onPictureInPicture?: (state: PreviewPictureInPictureState, detail?: string) => void;
   /** True while frames show, so commands reach the page. */
   readonly onStreamingChange?: (streaming: boolean) => void;
+  /** False when this tab's page cannot encode audio, so a mute control would do nothing. */
+  readonly onAudioUnavailable?: (available: boolean) => void;
   readonly compact?: boolean;
   readonly pdfUri?: string | null;
 };
@@ -111,7 +114,10 @@ function offerDownload(download: PreviewStreamDownload) {
 
 const MAX_REFUSALS = 3;
 
-type NativeStreamConfiguration = Omit<PreviewStreamConfiguration, "reuseNearbyTouchProbe">;
+type NativeStreamConfiguration = Omit<PreviewStreamConfiguration, "reuseNearbyTouchProbe"> & {
+  /** The muted tab still streams; the viewer only turns its own gain down. */
+  readonly audioMuted: boolean;
+};
 
 export function PreviewStreamWebView(
   props: Omit<NativeStreamConfiguration, "access"> &
@@ -174,6 +180,9 @@ function AuthorizedPreviewStream({
   }
   const processRetried = useRef(false);
   const unauthorized = useRef(0);
+  // Mute is not part of the document's identity: toggling it must not remount the WebView and
+  // reset its control, dialogs, input and picture in picture. Whether this surface plays audio
+  // at all is, and never changes while it is mounted.
   const configuration = JSON.stringify({
     access: props.access,
     threadId: props.threadId,
@@ -181,6 +190,7 @@ function AuthorizedPreviewStream({
     interactive: props.interactive,
     background: props.background,
     reuseNearbyTouchProbe: Platform.OS === "ios",
+    ...(props.audio === false ? { audio: false } : {}),
   } satisfies PreviewStreamConfiguration);
   return (
     <PreviewStreamDocumentView
@@ -216,6 +226,7 @@ function AuthorizedPreviewStream({
 function PreviewStreamDocumentView({
   ref,
   configuration,
+  audioMuted,
   background,
   compact,
   pdfUri,
@@ -225,11 +236,14 @@ function PreviewStreamDocumentView({
   onControl,
   onPictureInPicture,
   onStreamingChange,
+  onAudioUnavailable,
   onRetry,
   onStreaming,
   onRecoverProcess,
 }: Omit<NativeStreamBridge, "onUnauthorized" | "onRefused"> & {
   readonly configuration: string;
+  /** The live tab mute; it reaches the page through the bridge, never through the document. */
+  readonly audioMuted: boolean;
   readonly background: string;
   readonly onUnauthorized: () => boolean;
   readonly onRetry: () => void;
@@ -310,10 +324,22 @@ function PreviewStreamDocumentView({
       streamEnded();
     };
   }, []);
-  const source = {
-    html: previewStreamDocument(configuration, previewStreamScript),
+  const muted = useRef<boolean | null>(audioMuted);
+  // The one path a mute takes to the page: the document key omits it, so a toggle never
+  // remounts the WebView, and the first render's value is already in the document it seeded.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the audio player lives in the WebView, outside React
+  useEffect(() => {
+    if (muted.current === audioMuted) return;
+    muted.current = audioMuted;
+    webView.current?.injectJavaScript(
+      `window.T3PreviewStream?.setMuted(${audioMuted ? "true" : "false"}); true;`,
+    );
+  }, [audioMuted]);
+  // The document is built once; a tab reopened while muted seeds the page before it starts.
+  const [source] = useState(() => ({
+    html: previewStreamDocument(configuration, previewStreamScript, audioMuted),
     baseUrl: Platform.OS === "android" ? "https://localhost/" : "file:///",
-  };
+  }));
   useImperativeHandle(ref, () => ({
     command,
     paste,
@@ -394,6 +420,9 @@ function PreviewStreamDocumentView({
                 return;
               case "viewport":
                 onViewport?.(message);
+                return;
+              case "audio":
+                onAudioUnavailable?.(message.available);
                 return;
               case "clipboard":
                 void Clipboard.setStringAsync(message.text).catch(() => undefined);

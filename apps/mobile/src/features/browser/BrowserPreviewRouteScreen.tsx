@@ -2,6 +2,8 @@ import { SheetHeader } from "../../components/ui/SheetHeader";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
 import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
 import { EnvironmentId, ThreadId, type PreviewSessionSnapshot } from "@t3tools/contracts";
 import { normalizePreviewUrl, previewPdfAssetUrl } from "@t3tools/shared/preview";
 import * as Option from "effect/Option";
@@ -10,8 +12,10 @@ import { Platform, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPill } from "../../components/ui/ControlPill";
+import type { AppBarAction } from "../../components/ui/AppBar.types";
 import { useAppForeground } from "../../lib/appState";
 
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import { usePreparedConnection } from "../../state/session";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -65,12 +69,42 @@ function BrowserPreviewScreen({
   const [pictureInPicture, setPictureInPicture] = useState(NO_PICTURE_IN_PICTURE);
   const [streaming, setStreaming] = useState(false);
   const [canControl, setCanControl] = useState(false);
+
   const streamRef = useRef<PreviewStreamRef>(null);
   const { tabs, loaded } = useThreadServerBrowserTabs({ environmentId, threadId, enabled: true });
+  // Mute belongs to the tab, not the screen: switching tabs must not carry it over.
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const mutedTabIds =
+    (AsyncResult.isSuccess(preferences) ? preferences.value.mutedPreviewTabIds : null) ?? [];
+  const setMutedTabs = useAtomSet(updateMobilePreferencesAtom);
   const tab = tabs.find((entry) => entry.tabId === selectedTabId) ?? latestBrowserTab(tabs);
   const pdfUri =
     tab?.navStatus._tag === "Success" ? previewPdfAssetUrl(tab.navStatus.url, httpBaseUrl) : null;
   const tabId = tab?.tabId ?? null;
+  const audioMuted = tabId !== null && mutedTabIds.includes(tabId);
+  // Per tab, so switching tabs never borrows another page's answer.
+  const [unavailableTabs, setUnavailableTabs] = useState<ReadonlySet<string>>(new Set());
+  const audioUnavailable = tabId !== null && unavailableTabs.has(tabId);
+  const reportAudioAvailability = (available: boolean) => {
+    if (tabId === null) return;
+    setUnavailableTabs((current) => {
+      if (available === !current.has(tabId)) return current;
+      const next = new Set(current);
+      if (available) next.delete(tabId);
+      else next.add(tabId);
+      return next;
+    });
+  };
+  // The preference is the only mute path: the WebView follows it through its bridge effect, so
+  // a toggle never reconnects the stream and never sends the same value twice.
+  const setAudioMuted = (next: boolean) => {
+    if (tabId === null) return;
+    setMutedTabs({
+      mutedPreviewTabIds: next
+        ? [...mutedTabIds.filter((id: string) => id !== tabId), tabId]
+        : mutedTabIds.filter((id: string) => id !== tabId),
+    });
+  };
   if (tabId !== null && tabId !== selectedTabId) {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
     setSelectedTabId(tabId);
@@ -96,24 +130,39 @@ function BrowserPreviewScreen({
         onClose={onClose}
         accessibilityLabel="Close browser"
         actions={
-          // Android WebView cannot play video in picture in picture.
-          Platform.OS === "ios" &&
-          pictureInPicture.supported &&
-          (pictureInPicture.active || pdfUri === null)
-            ? [
-                {
-                  accessibilityLabel: pictureInPicture.active
-                    ? "Exit picture in picture"
-                    : "Picture in picture",
-                  icon: {
-                    ios: pictureInPicture.active ? "pip.exit" : "pip.enter",
-                    android: "visibility",
-                  },
-                  selected: pictureInPicture.active,
-                  onPress: () => streamRef.current?.togglePictureInPicture(),
-                },
-              ]
-            : []
+          [
+            // Android WebView cannot play video in picture in picture.
+            ...(Platform.OS === "ios" &&
+            pictureInPicture.supported &&
+            (pictureInPicture.active || pdfUri === null)
+              ? [
+                  {
+                    accessibilityLabel: pictureInPicture.active
+                      ? "Exit picture in picture"
+                      : "Picture in picture",
+                    icon: {
+                      ios: pictureInPicture.active ? "pip.exit" : "pip.enter",
+                      android: "visibility",
+                    },
+                    selected: pictureInPicture.active,
+                    onPress: () => streamRef.current?.togglePictureInPicture(),
+                  } satisfies AppBarAction,
+                ]
+              : []),
+            ...(pdfUri === null && !audioUnavailable
+              ? [
+                  {
+                    accessibilityLabel: audioMuted ? "Unmute tab" : "Mute tab",
+                    icon: {
+                      ios: audioMuted ? "speaker.slash" : "speaker.wave.2",
+                      android: audioMuted ? "volume_off" : "volume_up",
+                    } as AppBarAction["icon"],
+                    selected: audioMuted,
+                    onPress: () => setAudioMuted(!audioMuted),
+                  } satisfies AppBarAction,
+                ]
+              : []),
+          ] satisfies ReadonlyArray<AppBarAction>
         }
         menus={
           tabs.length > 1
@@ -154,6 +203,8 @@ function BrowserPreviewScreen({
               ref={streamRef}
               interactive
               background={themeVariables["--color-sheet-solid"]}
+              audioMuted={audioMuted}
+              onAudioUnavailable={(available) => reportAudioAvailability(available)}
               onPictureInPicture={onPictureInPicture}
               onStreamingChange={setStreaming}
               onControl={(control) => setCanControl(control?.controller === "you")}

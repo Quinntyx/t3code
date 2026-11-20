@@ -107,6 +107,9 @@ function makeSession(
   const events = new NodeEvents.EventEmitter();
   return {
     on: vi.fn((name: string, callback: (...args: unknown[]) => void) => events.on(name, callback)),
+    off: vi.fn((name: string, callback: (...args: unknown[]) => void) =>
+      events.off(name, callback),
+    ),
     emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
     emitAsync: (name: string, ...args: unknown[]) =>
       Promise.all(events.listeners(name).map((listener) => listener(...args))),
@@ -1939,6 +1942,200 @@ it.live.each(["main", "iframe"])(
         expect(setFiles).not.toHaveBeenCalled();
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.live("gives concurrent audio viewers one capture and stops it only after the last leaves", () =>
+  Effect.gen(function* () {
+    const { browser, tabId } = yield* ready;
+    const cdp = contexts[0]!.sessions[0]!;
+    const calls = () => cdp.send.mock.calls.map(([method, input]) => [method, input] as const);
+    const scriptsInstalled = () =>
+      calls().filter(([method]) => method === "Page.addScriptToEvaluateOnNewDocument").length;
+    const bindingsAdded = () =>
+      calls().filter(([method]) => method === "Runtime.addBinding").length;
+    const bindingsRemoved = () =>
+      calls().filter(([method]) => method === "Runtime.removeBinding").length;
+    const scripts = scriptsInstalled();
+    const bindings = bindingsAdded();
+
+    // A viewer attaches inside its own scope so its release can be timed.
+    const attach = Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const viewer = yield* browser
+        .attachViewer({ ...viewerInput(tabId, true), audio: true })
+        .pipe(Effect.provideService(Scope.Scope, scope));
+      return { scope, viewer };
+    });
+    // Both attach before either acquisition can finish, so they must share one capture.
+    const [first, second] = yield* Effect.all([attach, attach], { concurrency: "unbounded" });
+    expect(scriptsInstalled() - scripts).toBe(1);
+    expect(bindingsAdded() - bindings).toBe(1);
+
+    // The first viewer leaving keeps the capture the second is still listening to.
+    yield* Scope.close(first.scope, Exit.void);
+    expect(bindingsRemoved()).toBe(0);
+    yield* Scope.close(second.scope, Exit.void);
+    expect(bindingsRemoved()).toBe(1);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live("tells a viewer when a tab it cannot capture audio from is streamed", () =>
+  Effect.gen(function* () {
+    const { browser } = yield* ready;
+    const manager = yield* Manager.PreviewManager;
+    // A desktop renders this tab itself, so the server has no tracker to capture from.
+    desktopRendersNext = true;
+    const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+    const viewer = yield* browser.attachViewer({
+      ...viewerInput(opened.tabId, true),
+      audio: true,
+    });
+    const availability = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
+      items.flatMap((item) => (item._tag === "audio" ? [item.available] : []));
+    // The viewer is told before anything could be captured, so a mute control can say why it
+    // does nothing.
+    expect(availability(yield* Queue.takeAll(viewer.output))).toContain(false);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live("reports an insecure origin's audio as unavailable, then clears it on navigation", () =>
+  Effect.gen(function* () {
+    const { browser, tabId } = yield* ready;
+    const cdp = contexts[0]!.sessions[0]!;
+    const viewer = yield* browser.attachViewer({ ...viewerInput(tabId, true), audio: true });
+    const availability = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
+      items.flatMap((item) => (item._tag === "audio" ? [item.available] : []));
+    yield* Queue.takeAll(viewer.output);
+
+    // The capture reports that its document has no encoder, as a plain-HTTP page cannot.
+    const binding = cdp.send.mock.calls
+      .filter(([method]) => method === "Runtime.addBinding")
+      .at(-1)?.[1] as { name: string };
+    cdp.emit("Runtime.bindingCalled", {
+      name: binding.name,
+      payload: JSON.stringify({ type: "capture", run: "insecure", available: false }),
+    });
+    expect(availability(yield* Queue.takeAll(viewer.output))).toEqual([false]);
+
+    // A new document may be able to encode. The server asks it rather than assuming, so the
+    // answer decides whether the state clears.
+    const send = cdp.send.getMockImplementation()!;
+    const probed = Promise.withResolvers<void>();
+    cdp.send.mockImplementation(async (method, input) => {
+      const expression = (input as { expression?: unknown } | undefined)?.expression;
+      if (method === "Runtime.evaluate" && String(expression ?? "").includes("AudioEncoder")) {
+        probed.resolve();
+        return { result: { value: true } };
+      }
+      return send(method, input);
+    });
+    contexts[0]!.page.emit("framenavigated", contexts[0]!.page);
+    yield* Effect.promise(() => probed.promise);
+    expect(availability(yield* Queue.takeAll(viewer.output))).toEqual([true]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live("establishes audio availability again for a document reached with no viewer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const cdp = contexts[0]!.sessions[0]!;
+      const availability = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
+        items.flatMap((item) => (item._tag === "audio" ? [item.available] : []));
+      const firstScope = yield* Scope.make();
+      const first = yield* browser
+        .attachViewer({ ...viewerInput(tabId, true), audio: true })
+        .pipe(Effect.provideService(Scope.Scope, firstScope));
+      const binding = cdp.send.mock.calls
+        .filter(([method]) => method === "Runtime.addBinding")
+        .at(-1)?.[1] as { name: string };
+      // An insecure page cannot encode, so the tab's answer is recorded as unavailable.
+      cdp.emit("Runtime.bindingCalled", {
+        name: binding.name,
+        payload: JSON.stringify({ type: "capture", run: "insecure", available: false }),
+      });
+      const told = yield* Queue.takeAll(first.output);
+      expect(availability(told).at(-1)).toBe(false);
+
+      // The last viewer leaves, so no capture is running while the tab navigates elsewhere.
+      yield* Scope.close(firstScope, Exit.void);
+      const probed = Promise.withResolvers<void>();
+      const send = cdp.send.getMockImplementation()!;
+      cdp.send.mockImplementation(async (method, input) => {
+        const expression = (input as { expression?: unknown } | undefined)?.expression;
+        if (method === "Runtime.evaluate" && String(expression ?? "").includes("AudioEncoder")) {
+          probed.resolve();
+          return { result: { value: true } };
+        }
+        return send(method, input);
+      });
+      contexts[0]!.page.emit("framenavigated", contexts[0]!.page);
+      yield* Effect.promise(() => probed.promise);
+
+      // The next document answers for itself, and that answer is what a new viewer is told.
+      const viewer = yield* browser.attachViewer({ ...viewerInput(tabId, true), audio: true });
+      cdp.emit("Runtime.bindingCalled", {
+        name: binding.name,
+        payload: JSON.stringify({ type: "capture", run: "secure", available: true }),
+      });
+      expect(availability(yield* Queue.takeAll(viewer.output))).toEqual([true]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("follows the document's encoder timeline with a new generation on navigation", () =>
+  Effect.gen(function* () {
+    const { browser, tabId } = yield* ready;
+    const cdp = contexts[0]!.sessions[0]!;
+    const viewer = yield* browser.attachViewer({ ...viewerInput(tabId, true), audio: true });
+    const audio = viewer.audio!;
+    const binding = cdp.send.mock.calls
+      .filter(([method]) => method === "Runtime.addBinding")
+      .at(-1)?.[1] as { name: string };
+    const announce = (run: string, available: boolean) =>
+      cdp.emit("Runtime.bindingCalled", {
+        name: binding.name,
+        payload: JSON.stringify({ type: "capture", run, available }),
+      });
+    const chunk = (run: string, timestamp: number) =>
+      cdp.emit("Runtime.bindingCalled", {
+        name: binding.name,
+        payload: JSON.stringify({
+          type: "chunk",
+          run,
+          data: Buffer.from([0x4f, 0x70]).toString("base64"),
+          timestamp,
+        }),
+      });
+    const packets = () =>
+      Effect.gen(function* () {
+        const taken = yield* Queue.takeAll(audio);
+        return Array.from(taken);
+      });
+
+    announce("first", true);
+    chunk("first", 0);
+    chunk("first", 20_000);
+    const before = yield* packets();
+    expect(before.map((packet) => packet.generation)).toEqual([1, 1]);
+    expect(before.map((packet) => packet.sequence)).toEqual([0, 1]);
+    expect(before.map((packet) => packet.timestampMicros)).toEqual([0, 20_000]);
+
+    // The page navigates and its capture announces the new document before sending anything.
+    // The forwarded generation must change here, where the encoder's clock restarts.
+    announce("second", true);
+    // Output from the replaced document is obsolete and never reaches a viewer.
+    chunk("first", 40_000);
+    chunk("second", 0);
+    chunk("second", 20_000);
+    const after = yield* packets();
+    expect(after.map((packet) => packet.generation)).toEqual([2, 2]);
+    expect(after.map((packet) => packet.sequence)).toEqual([0, 1]);
+    expect(after.map((packet) => packet.timestampMicros)).toEqual([0, 20_000]);
+
+    // The client half, that this stream schedules rather than dropping after the stall, is
+    // proven in the player's own test: "schedules a navigated document's audio from its new clock".
+  }).pipe(Effect.provide(layer)),
 );
 
 it.live("a file picker closes when its page is replaced while control changes hands", () =>

@@ -1229,3 +1229,457 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
     },
   };
 })()`;
+
+/**
+ * Installed with every tab, before page scripts run, and never removed: a graph or a media
+ * element that started before a viewer asked for sound is still known when capture turns on.
+ * It only records, and only weakly, so a page that builds and drops graphs is not retained.
+ */
+export const audioTrackerScript = `(() => {
+  if (window !== window.top) return;
+  if (window.__t3AudioTrack) return;
+  const edges = new WeakMap();
+  const traced = new Set();
+  const tracedSeen = new WeakSet();
+  const routed = new WeakSet();
+  const mediaSeen = new WeakSet();
+  const mediaListened = new WeakSet();
+  const media = new Set();
+  let listeners = [];
+  const notify = (change) => {
+    for (const listener of listeners) {
+      try { listener(change); } catch {}
+    }
+  };
+  const outputsOf = (node) => {
+    let outputs = edges.get(node);
+    if (!outputs) edges.set(node, (outputs = new Set()));
+    return outputs;
+  };
+  const remember = (node) => {
+    if (tracedSeen.has(node)) return;
+    tracedSeen.add(node);
+    traced.add(new WeakRef(node));
+  };
+  const connect = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (...args) {
+    // Recorded only after the native call accepts the edge.
+    const result = connect.apply(this, args);
+    if (args[0] instanceof AudioDestinationNode) {
+      outputsOf(this).add(typeof args[1] === "number" ? args[1] : 0);
+      remember(this);
+      notify({ type: "destination", node: this });
+    }
+    return result;
+  };
+  const disconnect = AudioNode.prototype.disconnect;
+  AudioNode.prototype.disconnect = function (...args) {
+    // The native call throws for a bad target, so a failed removal records nothing.
+    const result = disconnect.apply(this, args);
+    const outputs = edges.get(this);
+    if (outputs) {
+      const target = args[0];
+      if (target === undefined) outputs.clear();
+      else if (target instanceof AudioDestinationNode) {
+        if (typeof args[1] === "number") outputs.delete(args[1]);
+        else outputs.clear();
+      } else if (typeof target === "number") outputs.delete(target);
+      if (outputs.size === 0) edges.delete(this);
+    }
+    notify({ type: "destination", node: this });
+    return result;
+  };
+  const createMediaElementSource = AudioContext.prototype.createMediaElementSource;
+  AudioContext.prototype.createMediaElementSource = function (element) {
+    // A media element has one media source for its whole life. Once the page's own call has
+    // taken it, a capture must let go rather than hold it.
+    const node = createMediaElementSource.call(this, element);
+    if (element instanceof HTMLMediaElement) {
+      routed.add(element);
+      notify({ type: "routed", element });
+    }
+    return node;
+  };
+  const forget = (element) => {
+    if (!mediaSeen.delete(element)) return;
+    notify({ type: "media", element, gone: true });
+  };
+  const heard = (element) => {
+    if (!(element instanceof HTMLMediaElement)) return;
+    if (!mediaListened.has(element)) {
+      mediaListened.add(element);
+      // A finished or reset element is not playing until it starts again. Its own playing
+      // event finds it then, since a detached element's events never reach the document.
+      element.addEventListener("playing", () => heard(element));
+      element.addEventListener("ended", () => forget(element));
+      element.addEventListener("emptied", () => forget(element));
+    }
+    if (mediaSeen.has(element)) return;
+    mediaSeen.add(element);
+    media.add(new WeakRef(element));
+    notify({ type: "media", element });
+  };
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function (...args) {
+    // A detached new Audio() never reaches the DOM, so a playing event alone cannot find it.
+    // It also arrives here before playback has given it a track; a capture then waits for one.
+    heard(this);
+    return play.apply(this, args);
+  };
+  document.addEventListener("playing", (event) => heard(event.target), true);
+  for (const element of document.querySelectorAll("audio,video")) {
+    if (!element.paused) heard(element);
+  }
+  window.__t3AudioTrack = {
+    isRouted: (element) => routed.has(element),
+    destinationEdges: (node) => edges.get(node) ?? new Set(),
+    nodes: () => {
+      const live = [];
+      for (const ref of traced) {
+        const node = ref.deref();
+        // A node with no destination edges is pruned so it can register again if reconnected.
+        if (!node || !edges.get(node)?.size) { traced.delete(ref); if (node) tracedSeen.delete(node); continue; }
+        live.push(node);
+      }
+      return live;
+    },
+    media: () => {
+      const live = [];
+      for (const ref of media) {
+        const element = ref.deref();
+        // An element heard again after it reset may hold a second ref here.
+        if (!element || !mediaSeen.has(element) || live.includes(element)) { media.delete(ref); continue; }
+        live.push(element);
+      }
+      return live;
+    },
+    subscribe: (listener) => { listeners.push(listener); },
+    unsubscribe: (listener) => { listeners = listeners.filter((each) => each !== listener); },
+  };
+})()`;
+
+/** One Opus packet, tagged with the source clock it was captured at. */
+export interface AudioPacket {
+  readonly data: Uint8Array;
+  readonly timestampMicros: number;
+}
+
+export interface ParsedAudioTapMessage {
+  readonly chunk: AudioPacket | null;
+  /** Set when a document's capture announces itself: its identity and whether it can encode. */
+  readonly run: string | null;
+  readonly available: boolean | null;
+}
+
+const NO_AUDIO_TAP_MESSAGE: ParsedAudioTapMessage = {
+  chunk: null,
+  run: null,
+  available: null,
+};
+
+/** Reads one tap message from `Runtime.bindingCalled`; anything else is a page's own binding. */
+export const parseAudioTapMessage = (payload: string): ParsedAudioTapMessage => {
+  let message: unknown;
+  try {
+    message = JSON.parse(payload);
+  } catch {
+    return NO_AUDIO_TAP_MESSAGE;
+  }
+  if (typeof message !== "object" || message === null) return NO_AUDIO_TAP_MESSAGE;
+  const { type, data, timestamp, available, run } = message as {
+    readonly type?: unknown;
+    readonly data?: unknown;
+    readonly timestamp?: unknown;
+    readonly available?: unknown;
+    readonly run?: unknown;
+  };
+  // Each document's capture announces itself, so the server can tell one document's packets
+  // from the last one's and restart the timeline when the encoder does.
+  if (type === "capture" && typeof run === "string")
+    return { chunk: null, run, available: available === true };
+  if (type !== "chunk" || typeof data !== "string" || typeof timestamp !== "number")
+    return NO_AUDIO_TAP_MESSAGE;
+  try {
+    return {
+      chunk: { data: new Uint8Array(Buffer.from(data, "base64")), timestampMicros: timestamp },
+      run: typeof run === "string" ? run : null,
+      available: null,
+    };
+  } catch {
+    return NO_AUDIO_TAP_MESSAGE;
+  }
+};
+
+/**
+ * Feeds one Opus encoder while a viewer listens. Both kinds of source reach one 48 kHz mono
+ * destination, so the encoder sees a real downmix and one timeline. The mixer lives no longer
+ * than the capture: a document with no listener pays nothing.
+ */
+export const audioCaptureScript = (binding: string) => `(() => {
+  if (window !== window.top) return;
+  const tracker = window.__t3AudioTrack;
+  const send = window[${JSON.stringify(binding)}];
+  if (!tracker || typeof send !== "function") return;
+  // A capture from before this run outlived its binding; its stop can only scratch.
+  try { window.__t3AudioTap?.stop(); } catch {}
+  // Insecure origins (plain http on a LAN host) have no WebCodecs, so nothing can encode here.
+  const encoderAvailable =
+    typeof AudioEncoder !== "undefined" && typeof MediaStreamTrackProcessor !== "undefined";
+  // This document's own identity: a new document restarts the encoder clock, so its packets
+  // must reach viewers under a new run rather than continuing the last document's timeline.
+  const run = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  try { send(JSON.stringify({ type: "capture", run, available: encoderAvailable })); } catch {}
+  if (!encoderAvailable) return;
+  const FRAME = 960;
+  const GESTURES = ["click", "pointerdown", "keydown", "pointerup", "touchend"];
+  let stopped = false;
+  let encoder = null;
+  let pending = new Float32Array(0);
+  let pendingFrom = 0;
+  let buffered = false;
+  const readers = new Set();
+  const taps = new Map();
+  const awaiting = new Map();
+  const graphs = new Map();
+  const context = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+  const mix = context.createMediaStreamDestination();
+  // A real mono downmix, or a right-only source would be dropped with the left channel.
+  mix.channelCount = 1;
+  mix.channelCountMode = "explicit";
+  let gestures = false;
+  const release = () => {
+    if (!gestures) return;
+    gestures = false;
+    for (const type of GESTURES) removeEventListener(type, resume, { capture: true });
+  };
+  const resume = () => {
+    void context.resume().then(
+      () => { if (context.state === "running") release(); },
+      () => {},
+    );
+  };
+  context.onstatechange = () => { if (context.state === "running") release(); };
+  // A document with sticky activation allows this immediately; one without waits for a gesture.
+  resume();
+  if (context.state !== "running") {
+    gestures = true;
+    for (const type of GESTURES) addEventListener(type, resume, { capture: true, passive: true });
+  }
+  const sendChunk = (packet) => {
+    const bytes = new Uint8Array(packet.byteLength);
+    packet.copyTo(bytes);
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000)
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    try {
+      send(JSON.stringify({ type: "chunk", run, data: btoa(binary), timestamp: Math.round(packet.timestamp) }));
+    } catch {}
+  };
+  /*
+   * Silence costs a packet a viewer would only skip, so it is not encoded; its timestamp still
+   * moves the clock on. Leaving it out means the encoder's delayed frames would stay buffered
+   * until more audio arrived, so the first silent frame flushes instead.
+   */
+  const flush = (pcm) => {
+    const merged = new Float32Array(pending.length + pcm.length);
+    merged.set(pending);
+    merged.set(pcm, pending.length);
+    pending = merged;
+    while (pending.length >= FRAME) {
+      const frame = pending.slice(0, FRAME);
+      pending = pending.slice(FRAME);
+      // The source clock at this frame's first sample, before its own samples advance it.
+      const timestamp = Math.round((pendingFrom / 48000) * 1e6);
+      pendingFrom += FRAME;
+      let peak = 0;
+      for (const sample of frame) peak = Math.max(peak, Math.abs(sample));
+      if (peak === 0) {
+        if (buffered) {
+          buffered = false;
+          void encoder?.flush().catch(() => stop());
+        }
+        continue;
+      }
+      const data = new AudioData({
+        format: "f32-planar", sampleRate: 48000, numberOfFrames: FRAME,
+        numberOfChannels: 1, timestamp, data: frame,
+      });
+      buffered = true;
+      encoder.encode(data);
+      data.close();
+    }
+  };
+  const pump = async (track) => {
+    const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+    readers.add(reader);
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || stopped) { value?.close(); return; }
+        const pcm = new Float32Array(value.numberOfFrames);
+        value.copyTo(pcm, { planeIndex: 0, format: "f32-planar" });
+        value.close();
+        flush(pcm);
+      }
+    } catch {}
+  };
+  const include = (stream) => {
+    if (stopped) return;
+    try { context.createMediaStreamSource(stream).connect(mix); } catch {}
+  };
+  /*
+   * A page graph is captured by mirroring each node's destination edges onto one tap belonging
+   * to that graph, so the page's own gain, mute and volume apply and a node it disconnects from
+   * its speakers stops playing into the tap too.
+   */
+  const tapGraph = (graphContext) => {
+    if (stopped || graphs.has(graphContext)) return;
+    let tap;
+    try { tap = graphContext.createMediaStreamDestination(); } catch { return; }
+    const injected = new Map();
+    const mirror = (node) => {
+      if (stopped || node.context !== graphContext) return;
+      const outputs = tracker.destinationEdges(node);
+      const held = injected.get(node) ?? new Set();
+      for (const output of [...held]) {
+        if (outputs.has(output)) continue;
+        try { node.disconnect(tap, output); } catch {}
+        held.delete(output);
+      }
+      for (const output of outputs) {
+        if (held.has(output)) continue;
+        try { node.connect(tap, output); held.add(output); } catch {}
+      }
+      if (held.size === 0) injected.delete(node);
+      else injected.set(node, held);
+    };
+    const onChange = (change) => {
+      if (change?.node?.context === graphContext) mirror(change.node);
+    };
+    for (const node of tracker.nodes()) mirror(node);
+    tracker.subscribe(onChange);
+    include(tap.stream);
+    graphs.set(graphContext, () => {
+      tracker.unsubscribe(onChange);
+      for (const node of injected.keys()) {
+        try { node.disconnect(tap); } catch {}
+      }
+      for (const track of tap.stream.getTracks()) track.stop();
+    });
+  };
+  /*
+   * A media element is captured from its own stream rather than from its media source: that
+   * source is the page's to take once, and capture must not consume it. The element's muted and
+   * volume do not reach a captured track, so a gain applies them and follows volumechange.
+   */
+  const untap = (element) => {
+    untrack(element);
+    const tap = taps.get(element);
+    if (!tap) return;
+    taps.delete(element);
+    element.removeEventListener("volumechange", tap.apply);
+    element.removeEventListener("playing", tap.retap);
+    element.removeEventListener("loadstart", tap.retap);
+    try { tap.source.disconnect(); } catch {}
+    try { tap.gain.disconnect(); } catch {}
+    for (const track of tap.stream.getTracks()) track.stop();
+  };
+  /*
+   * A play() hook sees an element before playback has given its stream an audio track, and the
+   * tracker reports each element only once. Chromium adds the track to that same stream later,
+   * so the capture waits on the stream rather than asking an event that may precede it.
+   */
+  const awaitTrack = (element, stream) => {
+    if (awaiting.has(element)) return;
+    const onAddTrack = () => {
+      const [track] = stream.getAudioTracks();
+      if (!track) return;
+      untrack(element);
+      tapTrack(element, stream, track);
+    };
+    // A new src replaces the stream this wait belongs to, so the next one is asked for instead.
+    const replace = () => {
+      untrack(element);
+      tapElement(element);
+    };
+    stream.addEventListener("addtrack", onAddTrack);
+    element.addEventListener("loadstart", replace);
+    awaiting.set(element, { stream, onAddTrack, replace });
+  };
+  const untrack = (element) => {
+    const waited = awaiting.get(element);
+    if (!waited) return;
+    awaiting.delete(element);
+    waited.stream.removeEventListener("addtrack", waited.onAddTrack);
+    element.removeEventListener("loadstart", waited.replace);
+  };
+  const tapTrack = (element, stream, track) => {
+    const source = context.createMediaStreamSource(new MediaStream([track]));
+    const gain = context.createGain();
+    const apply = () => { gain.gain.value = element.muted ? 0 : element.volume; };
+    apply();
+    const retap = () => tapElement(element);
+    element.addEventListener("volumechange", apply);
+    // A new src or a finished stream ends the captured track; the next playback taps again.
+    element.addEventListener("playing", retap);
+    element.addEventListener("loadstart", retap);
+    source.connect(gain);
+    gain.connect(mix);
+    taps.set(element, { stream, source, gain, apply, retap, track });
+  };
+  const tapElement = (element) => {
+    if (stopped || tracker.isRouted(element) || typeof element.captureStream !== "function") {
+      untrack(element);
+      return;
+    }
+    const held = taps.get(element);
+    // A captured track follows its element until the element's source is replaced.
+    if (held && held.track.readyState === "live") { untrack(element); return; }
+    if (held) untap(element);
+    if (awaiting.has(element)) return;
+    let stream;
+    try { stream = element.captureStream(); } catch { return; }
+    const [track] = stream.getAudioTracks();
+    if (!track) { awaitTrack(element, stream); return; }
+    untrack(element);
+    tapTrack(element, stream, track);
+  };
+  const onChange = (change) => {
+    if (change?.type === "media") {
+      if (!(change.element instanceof HTMLMediaElement)) return;
+      if (change.gone) untap(change.element);
+      else tapElement(change.element);
+      return;
+    }
+    // A routed element's own source would be a second copy of the sound the page's graph
+    // already carries, so its tap is dropped as soon as that graph takes it.
+    if (change?.type === "routed") {
+      if (change.element instanceof HTMLMediaElement) untap(change.element);
+      return;
+    }
+    if (change?.node?.context instanceof AudioContext) tapGraph(change.node.context);
+  };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    tracker.unsubscribe(onChange);
+    for (const stopGraph of graphs.values()) stopGraph();
+    graphs.clear();
+    for (const element of [...taps.keys()]) untap(element);
+    for (const element of [...awaiting.keys()]) untrack(element);
+    for (const reader of readers) void reader.cancel().catch(() => {});
+    release();
+    try { encoder?.close(); } catch {}
+    encoder = null;
+    for (const track of mix.stream.getTracks()) track.stop();
+    void context.close().catch(() => {});
+    if (window.__t3AudioTap?.stop === stop) window.__t3AudioTap = undefined;
+  };
+  encoder = new AudioEncoder({ output: sendChunk, error: () => stop() });
+  encoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1, bitrate: 32000 });
+  tracker.subscribe(onChange);
+  void pump(mix.stream.getAudioTracks()[0]);
+  for (const node of tracker.nodes()) tapGraph(node.context);
+  for (const element of tracker.media()) tapElement(element);
+  window.__t3AudioTap = { stop };
+})()`;

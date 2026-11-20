@@ -55,6 +55,7 @@ import type { DeviceScreenSize } from "@t3tools/client-runtime/device/stream";
 import { Atom } from "effect/reactivity";
 import { deviceScreenKey, deviceStreamScreenAtom } from "../device/deviceStreamSession";
 import type { PreviewStreamViewport } from "@t3tools/client-runtime/preview/server-browser-stream";
+import { useOwnsPreviewAudio, usePreviewAudioMuted } from "~/previewAudioMuteStore";
 import { previewBridge } from "./previewBridge";
 import { showPreviewPopup } from "./showPreviewPopup";
 import {
@@ -222,6 +223,11 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
   const serverSurfaceRef = useRef<ServerBrowserHandle | null>(null);
   const serverPictureInPicture =
     useServerPictureInPictureKey() === serverPictureInPictureKey(threadRef.threadId, tabId);
+  // Mute is the tab's, shared with the panel and remembered per session tab id.
+  const audioMuted = usePreviewAudioMuted(tabId);
+  // A popped-out window outranks this surface; otherwise the newest surface wins.
+  const ownsAudio = useOwnsPreviewAudio(tabId, "mini-player", true);
+  const audioPaused = serverPictureInPicture || !ownsAudio;
   const viewportKey = streamedSourceKey(
     threadRef,
     previewMiniPlayerSourceKey(browserMiniPlayerSource(tabId)),
@@ -314,6 +320,8 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
               tabId={tabId}
               pdfUrl={pdfUrl}
               visible
+              audioPaused={audioPaused}
+              audioMuted={audioMuted}
               followSize={false}
               controlPosition="bottom"
               onViewport={(viewport) =>

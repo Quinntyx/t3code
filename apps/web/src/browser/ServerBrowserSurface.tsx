@@ -1,8 +1,10 @@
 import {
+  createPreviewAudioPlayer,
   createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamControlLabel,
   previewStreamModifiers,
+  type PreviewAudioPlayer,
   type PreviewStreamClient,
   type PreviewStreamControl,
   type PreviewStreamDownload,
@@ -40,6 +42,7 @@ import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
+import { usePreviewAudioAvailabilityStore } from "~/previewAudioMuteStore";
 import { observeResize } from "~/lib/observeResize";
 
 export interface ServerBrowserHandle {
@@ -152,6 +155,9 @@ export function ServerBrowserSurface(props: {
   readonly onPopup?: (tabId: string) => void;
   readonly className?: string;
   readonly pdfUrl?: string | null;
+  readonly audioMuted?: boolean;
+  /** Another surface owns this tab's playback (a popped-out window), so this one stays silent. */
+  readonly audioPaused?: boolean;
   readonly ref?: Ref<ServerBrowserHandle>;
 }) {
   const {
@@ -167,12 +173,15 @@ export function ServerBrowserSurface(props: {
     onPopup,
     className,
     pdfUrl = null,
+    audioMuted = false,
+    audioPaused = false,
     ref,
   } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const keySentRef = useRef(false);
   const clientRef = useRef<PreviewStreamClient | null>(null);
+  const audioRef = useRef<PreviewAudioPlayer | null>(null);
   const viewportRef = useRef<PreviewStreamViewport | null>(null);
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
   const hasFrameRef = useRef(false);
@@ -219,6 +228,9 @@ export function ServerBrowserSurface(props: {
   );
   const controlChanged = useEffectEvent((next: PreviewStreamControl | null) => onControl?.(next));
   const popupOpened = useEffectEvent((popupTabId: string) => onPopup?.(popupTabId));
+  const setAudioUnavailable = usePreviewAudioAvailabilityStore((state) => state.setUnavailable);
+  // Read at connect time: mute only changes the player's gain, so it must not reconnect.
+  const mutedAtConnect = useEffectEvent(() => audioMuted || audioPaused);
   const [cap, setCap] = useState<{ width: number; height: number } | null>(null);
 
   // Keep clearInput stable: a new identity reconnects the stream.
@@ -377,13 +389,29 @@ export function ServerBrowserSurface(props: {
       },
       () => client.requestKeyFrame(),
     );
+    // Browsers hold audio until a gesture, which the canvas takes on the next pointer or key.
+    const audio = createPreviewAudioPlayer();
+    audio.setMuted(mutedAtConnect());
+    audioRef.current = audio;
     const client = createPreviewStreamClient(
-      { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
+      {
+        access,
+        threadId,
+        tabId,
+        maxWidth: cap.width,
+        maxHeight: cap.height,
+        // Mute is only this player's gain, so it never changes what the stream sends. A surface
+        // another one has displaced has no consumer, so it asks for no packets; taking the tab
+        // back reconnects for them.
+        audio: !audioPaused,
+      },
       {
         onFrame: (frame) => {
           unauthorizedRef.current = 0;
           painter.paint(frame);
         },
+        onAudio: (frame) => audio.push(frame),
+        onAudioAvailable: (available) => setAudioUnavailable(tabId, !available),
         onProbe: (result) => {
           if (controlRef.current?.controller !== "you") return;
           lastProbeRef.current = { ...result, at: performance.now() };
@@ -451,6 +479,8 @@ export function ServerBrowserSurface(props: {
     clientRef.current = client;
     return () => {
       painter.stop();
+      audio.stop();
+      if (audioRef.current === audio) audioRef.current = null;
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
@@ -462,15 +492,25 @@ export function ServerBrowserSurface(props: {
   }, [
     access,
     accessDenied,
+    // Ownership decides whether this connection asks for packets at all, so gaining or losing
+    // the tab renegotiates rather than leaving a displaced surface connected for nothing.
+    audioPaused,
     cap,
     clearInput,
     environmentId,
     followSize,
     hostSetup,
+    setAudioUnavailable,
     tabId,
     threadId,
     visible,
   ]);
+
+  // Muting mid-stream stops the player's own clock without reconnecting the stream.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the audio player owns an AudioContext outside React
+  useEffect(() => {
+    audioRef.current?.setMuted(audioMuted || audioPaused);
+  }, [audioMuted, audioPaused]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers a non-passive wheel listener on the canvas so it can stop the panel scrolling
   useEffect(() => {
@@ -502,6 +542,8 @@ export function ServerBrowserSurface(props: {
   );
 
   const handlePointer = (event: PointerEvent<HTMLCanvasElement>) => {
+    // Any pointer gesture can unblock the browser's audio, even when it reaches no page.
+    if (event.type === "pointerdown") audioRef.current?.resume();
     if (controlRef.current?.controller !== "you") return;
     // Thumb buttons drive this tab's history in handleMouseUp, never the page.
     if (historyDeltaOf(event.button) !== null) return;
@@ -674,6 +716,7 @@ export function ServerBrowserSurface(props: {
   };
 
   const handleKey = (action: "down" | "up", event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (action === "down") audioRef.current?.resume();
     if (controlRef.current?.controller !== "you") return;
     keySentRef.current = false;
     if (
