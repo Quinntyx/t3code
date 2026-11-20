@@ -818,8 +818,9 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             setModeOverride({ path: relativePath, mode: rendered ? "preview" : "source" }),
         })
       : null;
+  // iOS Save image only adds to Photos; its share sheet still saves the file to Files.
   const hasDeviceSave = mediaActions.actions.some(
-    ({ id }) => id === "download" || id === "save-image",
+    ({ id }) => id === "download" || (id === "save-image" && Platform.OS === "android"),
   );
   const fileMenuActions = (() => {
     if (relativePath === null) return [];

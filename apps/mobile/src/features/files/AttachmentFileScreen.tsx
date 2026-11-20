@@ -101,8 +101,8 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
       setNativeViewer("unavailable");
       return;
     }
-    // Android viewers have no save, so the screen stays to offer Download.
-    if (canSaveFileToDownloads()) setNativeViewer("closed");
+    // External Android document apps have no save, so the screen stays to offer Download.
+    if (nativeKind === "document" && canSaveFileToDownloads()) setNativeViewer("closed");
     else handleBack();
   };
   const removeFromDraft = () => {

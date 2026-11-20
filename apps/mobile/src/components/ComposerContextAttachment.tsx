@@ -117,7 +117,7 @@ export function ComposerContextAttachment(props: {
           {error ?? "Attachment unavailable. Reconnect and try again."}
         </Text>
       ) : null}
-      {canSaveFileToDownloads() ? (
+      {record.kind !== "image" && canSaveFileToDownloads() ? (
         <Button
           label={busy === "download" ? "Downloading…" : "Download attachment"}
           tone="secondary"
