@@ -183,6 +183,47 @@ export type ProjectionRecoveryKind =
   | "subagent-results"
   | "delegated-completions";
 
+/**
+ * SQL predicate over `orchestration_v2_projection_threads` (aliased as `threadAlias`) matching
+ * threads with work that blocks automatic usage-limit snooze, arming, or continuation:
+ * a pending runtime request, or active workflows / native subagents / async delegates.
+ */
+export function hasLimitRecoveryBlockingWorkSql(
+  sql: SqlClient.SqlClient,
+  threadAlias: "t" = "t",
+): Statement.Fragment {
+  const thread = sql.literal(threadAlias);
+  return sql`(
+    EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+      WHERE request.thread_id = ${thread}.thread_id AND request.status = 'pending'
+    )
+    OR EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_turn_items active_subagent
+      LEFT JOIN orchestration_v2_projection_runs subagent_run
+        ON subagent_run.run_id = active_subagent.run_id
+      WHERE active_subagent.thread_id = ${thread}.thread_id
+        AND active_subagent.type = 'subagent'
+        AND active_subagent.status IN ('pending', 'running', 'waiting')
+        AND COALESCE(subagent_run.status, '') <> 'rolled_back'
+    )
+    OR EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_provider_threads pt
+      WHERE pt.thread_id = ${thread}.thread_id
+        AND (
+          ${thread}.active_provider_thread_id IS NULL
+          OR pt.provider_thread_id = ${thread}.active_provider_thread_id
+        )
+        AND json_type(pt.payload_json, '$.pendingBackgroundTasks') = 'array'
+        AND EXISTS (
+          SELECT 1 FROM json_each(pt.payload_json, '$.pendingBackgroundTasks') task
+          WHERE json_extract(task.value, '$.kind') = 'subagent'
+            AND LENGTH(COALESCE(json_extract(task.value, '$.taskId'), '')) > 0
+        )
+    )
+  )`;
+}
+
 export type ProjectionLimitRecoveryCandidate = Pick<
   OrchestrationV2ThreadShell,
   | "id"
@@ -193,6 +234,7 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "archivedAt"
   | "settledOverride"
   | "pendingRuntimeRequest"
+  | "pendingBackgroundTasks"
   | "latestRunCompletedAt"
   | "updatedAt"
   | "limitRecovery"
@@ -4316,10 +4358,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 )
               )
             )
-            AND NOT EXISTS (
-              SELECT 1 FROM orchestration_v2_projection_runtime_requests request
-              WHERE request.thread_id = t.thread_id AND request.status = 'pending'
-            )
+            -- Pending runtime requests and active workflows, native subagents, or async delegates
+            -- keep the thread working (Delegating) even after a root turn hits a provider quota limit.
+            AND NOT ${hasLimitRecoveryBlockingWorkSql(sql)}
           ORDER BY t.thread_id
         `;
         const candidates: Array<ProjectionLimitRecoveryCandidate> = [];
@@ -4344,6 +4385,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             archivedAt: thread.archivedAt,
             settledOverride: thread.settledOverride,
             pendingRuntimeRequest: null,
+            pendingBackgroundTasks: [],
             limitRecovery: thread.limitRecovery ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
             hasLinkedPullRequest:

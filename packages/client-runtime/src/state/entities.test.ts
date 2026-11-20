@@ -193,6 +193,44 @@ describe("V2 client presentation", () => {
     expect(shell.pendingBackgroundTasks).toHaveLength(1);
   });
 
+  it("parks a failed usage-limited shell at idle while a subagent or workflow is still running", () => {
+    const activeWorkflow = [
+      { taskId: "wf-1", description: "Run workflow", kind: "subagent" as const },
+    ];
+    const delegating = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: RunId.make("run-limited"),
+      activeRunId: null,
+      status: "failed",
+      lastError: "Usage limit reached",
+      lastErrorClass: "usage_limit",
+      pendingBackgroundTasks: activeWorkflow,
+    });
+
+    expect(delegating.runtime).toMatchObject({
+      status: "idle",
+      lastError: "Usage limit reached",
+      lastErrorClass: "usage_limit",
+    });
+
+    const capped = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: RunId.make("run-capped"),
+      activeRunId: null,
+      status: "failed",
+      consumptionCapHit: {
+        at: "2026-06-20T01:05:00.000Z",
+        reason: "Token cap reached",
+      },
+      pendingBackgroundTasks: activeWorkflow,
+    });
+
+    expect(capped.runtime).toMatchObject({
+      status: "failed",
+      lastErrorCode: "consumption_cap",
+    });
+  });
+
   it("keeps an older active run visible over a newer cancelled run", () => {
     const activeRunId = RunId.make("run-active");
     const cancelledRunId = RunId.make("run-cancelled");
@@ -425,7 +463,40 @@ describe("V2 client presentation", () => {
         runs: [{ ...run, status: "failed" as const, completedAt: now }],
         turnItems: [backgroundItem],
       }),
-    ).toMatchObject({ status: "failed", activeRunId: null });
+    ).toMatchObject({ status: "idle", activeRunId: null });
+    expect(
+      deriveThreadRuntime({
+        ...v2Projection,
+        runs: [{ ...run, status: "failed" as const, completedAt: now }],
+        turnItems: [
+          backgroundItem,
+          {
+            id: TurnItemId.make("item-usage-limit-error"),
+            threadId: v2Projection.thread.id,
+            runId,
+            nodeId: run.rootNodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "failed" as const,
+            title: "Usage limit",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "error" as const,
+            failure: {
+              class: "usage_limit" as const,
+              code: "usage_limit",
+              message: "Out of quota",
+              retryable: true,
+              resetAt: "2026-06-20T05:00:00.000Z",
+            },
+          },
+        ],
+      }),
+    ).toMatchObject({ status: "idle", activeRunId: null, lastErrorClass: "usage_limit" });
     const commandItem = {
       ...backgroundItem,
       id: TurnItemId.make("item-background-command"),

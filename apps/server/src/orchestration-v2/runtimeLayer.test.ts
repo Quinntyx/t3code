@@ -10001,6 +10001,760 @@ it.layer(layerTest)("manual continuation and usage-limit recovery", (it) => {
         assert.isNull(resumed.thread.snoozedUntil);
       }),
   );
+
+  it.effect(
+    "defers auto-snooze and usage-limit continuation while an active subagent or workflow is running",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const events = yield* EventSink.EventSinkV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const projectId = ProjectId.make("recovery:project:active-subagent");
+        yield* seedProject({
+          projectId,
+          title: "Recovery active subagent project",
+          workspaceRoot: process.cwd(),
+          defaultModelSelection: modelSelection,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+        const now = yield* DateTime.now;
+        const nowMs = DateTime.toEpochMillis(now);
+        const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+        const threadId = ThreadId.make("recovery:active-subagent:thread");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("recovery:active-subagent:create"),
+          threadId,
+          projectId,
+          title: "Delegating thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("recovery:active-subagent:msg"),
+          threadId,
+          messageId: MessageId.make("recovery:active-subagent:msg"),
+          text: "Check status",
+          attachments: [],
+          dispatchMode: { type: "defer_start" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+        const workflowNodeId = NodeId.make("recovery:active-subagent:workflow");
+        const workflowItemId = TurnItemId.make("recovery:active-subagent:workflow-item");
+        const workflowTurnItem = {
+          id: workflowItemId,
+          type: "subagent" as const,
+          threadId,
+          runId: run.id,
+          nodeId: workflowNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running" as const,
+          title: "Non-Claude workflow",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          subagentId: workflowNodeId,
+          origin: "provider_native" as const,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          childThreadId: ThreadId.make("recovery:active-subagent:child"),
+          prompt: "Run workflow",
+          result: null,
+        };
+        yield* events.write({
+          commandId: CommandId.make("recovery:active-subagent:failure"),
+          events: [
+            {
+              id: EventId.make("recovery:active-subagent:run"),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...run, status: "failed", completedAt: now },
+            },
+            {
+              id: EventId.make("recovery:active-subagent:subagent"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: workflowTurnItem,
+            },
+            {
+              id: EventId.make("recovery:active-subagent:error"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("recovery:active-subagent:error"),
+                type: "error",
+                threadId,
+                runId: run.id,
+                nodeId: run.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 2,
+                status: "failed",
+                title: "Usage limit reached",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "usage_limit",
+                  message: "Plan limit reached.",
+                  code: "usageLimitExceeded",
+                  retryable: null,
+                  resetAt,
+                },
+              },
+            },
+          ],
+        });
+
+        // While the workflow/subagent is running, recovery candidates, command derivation,
+        // autoArmLimitRecovery, and usage-limit continuation all defer.
+        assert.isUndefined(
+          (yield* projections.getLimitRecoveryCandidates({
+            now,
+            autoResume: true,
+            snooze: true,
+          })).find((row) => row.id === threadId),
+        );
+        const activeShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        assert.isNull(limitRecoveryCommand(activeShell, true, nowMs, true));
+        yield* orchestrator.autoArmLimitRecovery({
+          commandId: CommandId.make("recovery:active-subagent:auto-arm-deferred"),
+          threadId,
+          limitRecovery: { runId: run.id, resetAt, autoResume: true, snooze: true },
+        });
+        const afterDeferredArm = yield* orchestrator.getThreadProjection(threadId);
+        assert.isNull(afterDeferredArm.thread.limitRecovery ?? null);
+        assert.isNull(afterDeferredArm.thread.snoozedUntil);
+
+        // Once the workflow settles, limit recovery can arm/snooze.
+        const settledAt = yield* DateTime.now;
+        const futureResetAt = DateTime.formatIso(DateTime.add(settledAt, { minutes: 2 }));
+        yield* events.write({
+          commandId: CommandId.make("recovery:active-subagent:settle"),
+          events: [
+            {
+              id: EventId.make("recovery:active-subagent:subagent-done"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: settledAt,
+              payload: {
+                ...workflowTurnItem,
+                status: "completed",
+                completedAt: settledAt,
+                updatedAt: settledAt,
+              },
+            },
+            {
+              id: EventId.make("recovery:active-subagent:error-refresh"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: settledAt,
+              payload: {
+                id: TurnItemId.make("recovery:active-subagent:error"),
+                type: "error",
+                threadId,
+                runId: run.id,
+                nodeId: run.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 2,
+                status: "failed",
+                title: "Usage limit reached",
+                startedAt: now,
+                completedAt: settledAt,
+                updatedAt: settledAt,
+                failure: {
+                  class: "usage_limit",
+                  message: "Plan limit reached.",
+                  code: "usageLimitExceeded",
+                  retryable: null,
+                  resetAt: futureResetAt,
+                },
+              },
+            },
+          ],
+        });
+
+        assert.isDefined(
+          (yield* projections.getLimitRecoveryCandidates({
+            now: settledAt,
+            autoResume: true,
+            snooze: true,
+          })).find((row) => row.id === threadId),
+        );
+        const settledShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        const arm = limitRecoveryCommand(
+          settledShell,
+          true,
+          DateTime.toEpochMillis(settledAt),
+          true,
+        );
+        assert(arm?.type === "thread.metadata.update" && arm.limitRecovery != null);
+        yield* orchestrator.autoArmLimitRecovery({
+          commandId: arm.commandId,
+          threadId: arm.threadId,
+          limitRecovery: arm.limitRecovery,
+        });
+        const armed = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          armed.thread.snoozedUntil == null ? null : DateTime.formatIso(armed.thread.snoozedUntil),
+          futureResetAt,
+        );
+
+        // Advance past the reset and capture the worker-generated resume command while recovery is
+        // armed and eligible. If a subagent starts before that command commits, dispatch must defer
+        // AND rotate requestId so the next sweep can resume once the subagent settles.
+        yield* TestClock.adjust("3 minutes");
+        const afterReset = yield* DateTime.now;
+        const candidateBeforeRace = (yield* projections.getLimitRecoveryCandidates({
+          now: afterReset,
+          autoResume: true,
+          snooze: true,
+        })).find((row) => row.id === threadId);
+        assert.isDefined(candidateBeforeRace);
+        const racedResume = limitRecoveryCommand(
+          candidateBeforeRace!,
+          true,
+          DateTime.toEpochMillis(afterReset),
+          true,
+        );
+        assert(racedResume?.type === "message.dispatch");
+
+        const racedSubagentItem = {
+          ...workflowTurnItem,
+          id: TurnItemId.make("recovery:active-subagent:raced-item"),
+          subagentId: NodeId.make("recovery:active-subagent:raced-node"),
+          nodeId: NodeId.make("recovery:active-subagent:raced-node"),
+          childThreadId: ThreadId.make("recovery:active-subagent:raced-child"),
+          ordinal: 3,
+          status: "running" as const,
+          startedAt: afterReset,
+          completedAt: null,
+          updatedAt: afterReset,
+        };
+        yield* events.write({
+          commandId: CommandId.make("recovery:active-subagent:race-start"),
+          events: [
+            {
+              id: EventId.make("recovery:active-subagent:race-subagent"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: afterReset,
+              payload: racedSubagentItem,
+            },
+          ],
+        });
+
+        yield* orchestrator.dispatch(racedResume);
+        const afterRacedResume = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(afterRacedResume.runs, 1);
+        assert.equal(afterRacedResume.thread.limitRecovery?.requestId, racedResume.commandId);
+
+        // Once the racing subagent settles, the next sweep derives a fresh resume command ID and
+        // succeeds instead of replaying the deferred receipt forever.
+        const afterRaceSettledAt = yield* DateTime.now;
+        yield* events.write({
+          commandId: CommandId.make("recovery:active-subagent:race-settle"),
+          events: [
+            {
+              id: EventId.make("recovery:active-subagent:race-subagent-done"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: afterRaceSettledAt,
+              payload: {
+                ...racedSubagentItem,
+                status: "completed",
+                completedAt: afterRaceSettledAt,
+                updatedAt: afterRaceSettledAt,
+              },
+            },
+          ],
+        });
+        const candidateAfterSettle = (yield* projections.getLimitRecoveryCandidates({
+          now: afterRaceSettledAt,
+          autoResume: true,
+          snooze: true,
+        })).find((row) => row.id === threadId);
+        assert.isDefined(candidateAfterSettle);
+        const nextResume = limitRecoveryCommand(
+          candidateAfterSettle!,
+          true,
+          DateTime.toEpochMillis(afterRaceSettledAt),
+          true,
+        );
+        assert(nextResume?.type === "message.dispatch");
+        assert.notEqual(nextResume.commandId, racedResume.commandId);
+        assert.equal(nextResume.usageLimitRecoveryRequestId, racedResume.commandId);
+        yield* orchestrator.dispatch(nextResume);
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+      }),
+  );
+
+  it.effect(
+    "does not auto-arm or snooze a stale usage-limit run when a newer run has already started",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const events = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const projectId = ProjectId.make("project:recovery:stale-run-race");
+        const threadId = ThreadId.make("thread:recovery:stale-run-race");
+        yield* seedProject({
+          projectId,
+          title: "Recovery stale-run race project",
+          workspaceRoot: process.cwd(),
+          defaultModelSelection: modelSelection,
+          createdAt: DateTime.formatIso(now),
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("recovery:stale-run:create"),
+          threadId,
+          projectId,
+          title: "Stale-run race thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("recovery:stale-run:msg-1"),
+          messageId: MessageId.make("recovery:stale-run:msg-1"),
+          threadId,
+          text: "First attempt",
+          attachments: [],
+          dispatchMode: { type: "defer_start" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const firstRun = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+        const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 5 }));
+        yield* events.write({
+          commandId: CommandId.make("recovery:stale-run:fail-1"),
+          events: [
+            {
+              id: EventId.make("recovery:stale-run:run-1-failed"),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...firstRun, status: "failed", completedAt: now },
+            },
+            {
+              id: EventId.make("recovery:stale-run:error-1"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("recovery:stale-run:error-1"),
+                type: "error",
+                threadId,
+                runId: firstRun.id,
+                nodeId: firstRun.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "failed",
+                title: "Usage limit reached",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "usage_limit",
+                  message: "Plan limit reached.",
+                  code: "usageLimitExceeded",
+                  retryable: null,
+                  resetAt,
+                },
+              },
+            },
+          ],
+        });
+
+        // A newer run starts (for example, a workflow completion wake or a new user turn) before
+        // autoArmLimitRecovery acquires the thread dispatch lock for the earlier failed run.
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("recovery:stale-run:msg-2"),
+          messageId: MessageId.make("recovery:stale-run:msg-2"),
+          threadId,
+          text: "Second attempt",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+
+        yield* orchestrator.autoArmLimitRecovery({
+          commandId: CommandId.make("recovery:stale-run:auto-arm"),
+          threadId,
+          limitRecovery: { runId: firstRun.id, resetAt, autoResume: true, snooze: true },
+        });
+        const afterRace = yield* orchestrator.getThreadProjection(threadId);
+        assert.isNull(afterRace.thread.limitRecovery ?? null);
+        assert.isNull(afterRace.thread.snoozedUntil);
+      }),
+  );
+
+  it.effect(
+    "defers auto-arm and usage-limit continuation atomically when provider agent work commits between check and commit",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const projectId = ProjectId.make("project:usage-limit-atomic-commit-race");
+        const threadId = ThreadId.make("thread:usage-limit-atomic-commit-race");
+        yield* seedProject({
+          projectId,
+          title: "Atomic commit guard project",
+          workspaceRoot: process.cwd(),
+          defaultModelSelection: modelSelection,
+          createdAt: DateTime.formatIso(now),
+        });
+
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("recovery:atomic:create"),
+          threadId,
+          projectId,
+          title: "Atomic commit guard",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("recovery:atomic:msg-1"),
+          messageId: MessageId.make("recovery:atomic:msg-1"),
+          threadId,
+          text: "First attempt",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+
+        const initial = yield* orchestrator.getThreadProjection(threadId);
+        const firstRun = initial.runs[0]!;
+        const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 15 }));
+        const providerThreadId = ProviderThreadId.make(`${threadId}:provider-thread`);
+        const driver = ProviderDriverKind.make("codex");
+        const subagentNodeId = NodeId.make("recovery:atomic:subagent-node");
+        const baseProviderThread = {
+          id: providerThreadId,
+          driver,
+          providerInstanceId: modelSelection.instanceId,
+          providerSessionId: null,
+          appThreadId: threadId,
+          ownerNodeId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "idle" as const,
+          firstRunOrdinal: null,
+          lastRunOrdinal: null,
+          handoffIds: [],
+          forkedFrom: null,
+          pendingBackgroundTasks: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make("recovery:atomic:provider-thread"),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: baseProviderThread,
+            },
+            {
+              id: EventId.make("recovery:atomic:run-failed"),
+              type: "run.updated",
+              threadId,
+              runId: firstRun.id,
+              occurredAt: now,
+              payload: {
+                ...firstRun,
+                status: "failed",
+                completedAt: now,
+              },
+            },
+            {
+              id: EventId.make("recovery:atomic:error-item"),
+              type: "turn-item.updated",
+              threadId,
+              runId: firstRun.id,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("recovery:atomic:error-item"),
+                type: "error",
+                threadId,
+                runId: firstRun.id,
+                nodeId: firstRun.rootNodeId,
+                providerThreadId,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "failed",
+                title: "Usage limit reached",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "usage_limit",
+                  message: "Plan limit reached.",
+                  code: "usageLimitExceeded",
+                  retryable: null,
+                  resetAt,
+                },
+              },
+            },
+          ],
+        });
+
+        const subagentItem = {
+          id: TurnItemId.make("recovery:atomic:subagent-item"),
+          type: "subagent" as const,
+          threadId,
+          runId: firstRun.id,
+          nodeId: subagentNodeId,
+          providerThreadId,
+          providerTurnId: null,
+          nativeItemRef: {
+            driver,
+            nativeId: "atomic-subagent-1",
+            strength: "strong" as const,
+          },
+          parentItemId: null,
+          ordinal: 2,
+          status: "running" as const,
+          title: "Background subagent",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          subagentId: subagentNodeId,
+          origin: "provider_native" as const,
+          driver,
+          providerInstanceId: modelSelection.instanceId,
+          childThreadId: null,
+          prompt: "Inspect files",
+          result: null,
+        };
+
+        // Inject concurrent provider work right before EventSink.commitCommand acquires its
+        // transaction so pre-commit eligibility reads saw no blockers.
+        const realCommitCommand = eventSink.commitCommand;
+        let injectOnArm = true;
+        let injectBgOnResume = false;
+        let injectRequestOnResume = false;
+        const raceRequestId = RuntimeRequestId.make("recovery:atomic:race-request");
+        const raceRequestNodeId = NodeId.make("recovery:atomic:race-request-node");
+        const commitSpy = vi.spyOn(eventSink, "commitCommand").mockImplementation((input) =>
+          Effect.gen(function* () {
+            if (injectOnArm && input.commandType === "thread.metadata.update") {
+              injectOnArm = false;
+              yield* eventSink.write({
+                events: [
+                  {
+                    id: EventId.make("recovery:atomic:race-subagent-started"),
+                    type: "turn-item.updated",
+                    threadId,
+                    runId: firstRun.id,
+                    occurredAt: now,
+                    payload: subagentItem,
+                  },
+                ],
+              });
+            } else if (injectBgOnResume && input.commandType === "message.dispatch") {
+              injectBgOnResume = false;
+              yield* eventSink.write({
+                events: [
+                  {
+                    id: EventId.make("recovery:atomic:race-bg-task-started"),
+                    type: "provider-thread.updated",
+                    threadId,
+                    occurredAt: now,
+                    payload: {
+                      ...baseProviderThread,
+                      pendingBackgroundTasks: [
+                        {
+                          taskId: "atomic-bg-worker-1",
+                          kind: "subagent" as const,
+                          description: "Async delegate",
+                        },
+                      ],
+                      updatedAt: yield* DateTime.now,
+                    },
+                  },
+                ],
+              });
+            } else if (injectRequestOnResume && input.commandType === "message.dispatch") {
+              injectRequestOnResume = false;
+              const requestAt = yield* DateTime.now;
+              yield* eventSink.write({
+                events: [
+                  {
+                    id: EventId.make("recovery:atomic:race-request-pending"),
+                    type: "runtime-request.updated",
+                    threadId,
+                    nodeId: raceRequestNodeId,
+                    occurredAt: requestAt,
+                    payload: {
+                      id: raceRequestId,
+                      nodeId: raceRequestNodeId,
+                      providerTurnId: null,
+                      nativeRequestRef: null,
+                      kind: "user_input",
+                      status: "pending",
+                      responseCapability: { type: "message" },
+                      createdAt: requestAt,
+                      resolvedAt: null,
+                    },
+                  },
+                ],
+              });
+            }
+            return yield* realCommitCommand(input);
+          }),
+        );
+
+        yield* Effect.gen(function* () {
+          const armCommandId = CommandId.make("recovery:atomic:auto-arm");
+          yield* orchestrator.autoArmLimitRecovery({
+            commandId: armCommandId,
+            threadId,
+            limitRecovery: { runId: firstRun.id, resetAt, autoResume: true, snooze: true },
+          });
+          const afterArmRace = yield* orchestrator.getThreadProjection(threadId);
+          assert.isNull(afterArmRace.thread.limitRecovery ?? null);
+          assert.isNull(afterArmRace.thread.snoozedUntil);
+
+          // Once the subagent settles, retrying with the exact same deterministic commandId arms.
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("recovery:atomic:race-subagent-completed"),
+                type: "turn-item.updated",
+                threadId,
+                runId: firstRun.id,
+                occurredAt: now,
+                payload: { ...subagentItem, status: "completed", completedAt: now },
+              },
+            ],
+          });
+          yield* orchestrator.autoArmLimitRecovery({
+            commandId: armCommandId,
+            threadId,
+            limitRecovery: { runId: firstRun.id, resetAt, autoResume: true, snooze: true },
+          });
+          const armed = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(armed.thread.limitRecovery?.runId, firstRun.id);
+          assert.isNotNull(armed.thread.snoozedUntil);
+
+          // Now advance past reset and race provider-thread pendingBackgroundTasks into resume.
+          yield* TestClock.adjust("16 minutes");
+          injectBgOnResume = true;
+          const resumeCommand = {
+            type: "message.dispatch" as const,
+            commandId: CommandId.make("recovery:atomic:resume"),
+            messageId: MessageId.make("recovery:atomic:resume"),
+            threadId,
+            text: "Continue.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" as const },
+            usageLimitContinuationOfRunId: firstRun.id,
+            usageLimitRecoveryRequestId: armed.thread.limitRecovery!.requestId,
+            createdBy: "user" as const,
+            creationSource: "server" as const,
+          };
+          yield* orchestrator.dispatch(resumeCommand);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+
+          // Clear the racing background task, then race a pending runtime request into the retry.
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("recovery:atomic:race-bg-task-cleared"),
+                type: "provider-thread.updated",
+                threadId,
+                occurredAt: yield* DateTime.now,
+                payload: {
+                  ...baseProviderThread,
+                  pendingBackgroundTasks: [],
+                  updatedAt: yield* DateTime.now,
+                },
+              },
+            ],
+          });
+          injectRequestOnResume = true;
+          yield* orchestrator.dispatch(resumeCommand);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+
+          // Resolving the racing runtime request lets the exact same commandId commit.
+          const resolvedAt = yield* DateTime.now;
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("recovery:atomic:race-request-resolved"),
+                type: "runtime-request.updated",
+                threadId,
+                nodeId: raceRequestNodeId,
+                occurredAt: resolvedAt,
+                payload: {
+                  id: raceRequestId,
+                  nodeId: raceRequestNodeId,
+                  providerTurnId: null,
+                  nativeRequestRef: null,
+                  kind: "user_input",
+                  status: "resolved",
+                  decision: "cancel",
+                  responseCapability: { type: "message" },
+                  createdAt: resolvedAt,
+                  resolvedAt,
+                },
+              },
+            ],
+          });
+          yield* orchestrator.dispatch(resumeCommand);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+        }).pipe(Effect.ensuring(Effect.sync(() => commitSpy.mockRestore())));
+      }),
+  );
 });
 
 const queueResumeDisabledInstanceProjectId = ProjectId.make(

@@ -1,4 +1,5 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
+import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
 import { effectiveSnoozed } from "./threadSettled.ts";
@@ -14,7 +15,8 @@ type WorkingThreadInput = Pick<
   | "interactionMode"
   | "latestRun"
   | "runtime"
->;
+> &
+  Partial<Pick<EnvironmentThreadShell, "blockedOnThreadWait" | "pendingBackgroundTasks">>;
 
 /** Working for shelf placement: the thread's own runs, or the pull request it is generating. */
 export function isThreadWorkingInShelf(thread: WorkingThreadInput & ThreadKeyInput): boolean {
@@ -70,6 +72,7 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
   if (thread.pendingSubagentRequest != null) return false;
   if (!threadRuntimeIsActive(thread.runtime) && thread.runtime?.status !== "idle") return false;
+  if (waitingOnAgents(thread)) return true;
   const run = thread.latestRun;
   const runSettled =
     run !== null &&

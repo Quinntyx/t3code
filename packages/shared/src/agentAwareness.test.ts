@@ -24,6 +24,7 @@ describe("projectThreadAwarenessV2", () => {
       Pick<
         OrchestrationV2ThreadShell,
         | "activityRunStatus"
+        | "consumptionCapHit"
         | "latestRunStopRequested"
         | "status"
         | "pendingBackgroundTasks"
@@ -216,5 +217,40 @@ describe("projectThreadAwarenessV2", () => {
         }),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
+  });
+
+  it("reports a failed root run as running while an active subagent or workflow continues", () => {
+    const tasks = [{ taskId: "wf-1", kind: "subagent" as const }];
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({ status: "failed", pendingBackgroundTasks: tasks }),
+      }),
+    ).toMatchObject({ phase: "running", headline: "Agent is working" });
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({
+          status: "failed",
+          pendingBackgroundTasks: tasks,
+          consumptionCapHit: {
+            at: NOW,
+            reason: "Token budget reached",
+          },
+        }),
+      }),
+    ).toMatchObject({ phase: "failed" });
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({
+          status: "failed",
+          pendingBackgroundTasks: [{ taskId: "watch-1", kind: "monitor", awaited: true }],
+        }),
+      }),
+    ).toMatchObject({ phase: "failed" });
   });
 });

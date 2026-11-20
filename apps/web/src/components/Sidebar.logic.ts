@@ -1224,6 +1224,18 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  if (
+    (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
+    (thread.runtime?.status !== "failed" && waitingOnAgents(thread))
+  ) {
+    return {
+      label: "Delegating",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
+    };
+  }
+
   if (hasUnseenFailure(thread)) {
     return {
       label: "Failed",
@@ -1234,22 +1246,15 @@ export function resolveThreadStatusPill(input: {
   }
 
   if (
-    (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
+    thread.runtime?.status !== "failed" &&
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
   ) {
-    return waitingOnAgents(thread)
-      ? {
-          label: "Delegating",
-          colorClass: "text-sky-600 dark:text-sky-300/80",
-          dotClass: "bg-sky-500 dark:bg-sky-300/80",
-          pulse: false,
-        }
-      : {
-          label: "Waiting",
-          colorClass: "text-sidebar-muted-foreground",
-          dotClass: "bg-sidebar-muted-foreground",
-          pulse: false,
-        };
+    return {
+      label: "Waiting",
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
+      pulse: false,
+    };
   }
 
   const hasPlanReadyPrompt =

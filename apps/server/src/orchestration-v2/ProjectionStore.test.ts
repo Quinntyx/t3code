@@ -6235,6 +6235,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             archivedAt: sqlShell.archivedAt,
             settledOverride: sqlShell.settledOverride,
             pendingRuntimeRequest: null,
+            pendingBackgroundTasks: [],
             limitRecovery: sqlShell.limitRecovery,
             snoozedUntil: sqlShell.snoozedUntil,
             hasLinkedPullRequest:
@@ -6458,6 +6459,24 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ),
       );
       yield* sql`DELETE FROM orchestration_v2_projection_runtime_requests WHERE runtime_request_id = 'limit-shell:pending-request'`;
+      // An active native workflow or subagent keeps the thread delegating instead of auto-snoozing or auto-resuming.
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+        (turn_item_id, thread_id, run_id, node_id, provider_turn_id, type, status, ordinal, updated_at, payload_json)
+        VALUES ('limit-shell:active-workflow', ${threadId}, ${original.id}, ${original.rootNodeId}, NULL, 'subagent', 'running', 9, ${DateTime.formatIso(now)}, '{}')`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ ...recoveryOptions, now: reset })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`UPDATE orchestration_v2_projection_turn_items
+        SET status = 'completed'
+        WHERE turn_item_id = 'limit-shell:active-workflow'`;
+      assert.isDefined(
+        (yield* store.getLimitRecoveryCandidates({ ...recoveryOptions, now: reset })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'limit-shell:active-workflow'`;
       yield* sql`UPDATE orchestration_v2_projection_threads
         SET payload_json = json_set(payload_json, '$.snoozedUntil', ${DateTime.formatIso(DateTime.add(reset, { minutes: 1 }))})
         WHERE thread_id = ${threadId}`;
@@ -6501,6 +6520,63 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         })).find((row) => row.id === threadId),
       );
       yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = ${originalRow!.payload_json} WHERE thread_id = ${threadId}`;
+      const activeProviderThreadId = ProviderThreadId.make("provider-thread:limit-shell:bg-tasks");
+      const bgProviderThread = {
+        id: activeProviderThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId: null,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "idle" as const,
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        pendingBackgroundTasks: [
+          { taskId: "bg-subagent-1", kind: "subagent" as const, description: "Active delegate" },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      };
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:bg-subagent"),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: bgProviderThread,
+      });
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:bg-monitor-only"),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...bgProviderThread,
+          pendingBackgroundTasks: [
+            { taskId: "bg-monitor-1", kind: "monitor" as const, awaited: true as const },
+          ],
+        },
+      });
+      assert.isDefined(
+        (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:bg-cleared"),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...bgProviderThread, pendingBackgroundTasks: [] },
+      });
       const session = {
         id: ProviderSessionId.make("session:limit-shell:shared"),
         driver,

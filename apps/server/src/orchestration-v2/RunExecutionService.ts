@@ -387,14 +387,18 @@ export function routeProviderEvent(
     case "provider_session.updated":
       return [false, state];
     case "app_thread.created": {
-      if (event.appThread.id === input.threadId) {
+      if (event.appThread.id === input.threadId || ownsChildThread(event.appThread.id)) {
         return [true, state];
+      }
+      if (event.runId !== undefined && !ownsRun(event.runId)) {
+        return [false, state];
       }
       const isOwnedSubagent =
         event.appThread.lineage.relationshipToParent === "subagent" &&
         event.appThread.lineage.parentThreadId !== null &&
         ownsThread(event.appThread.lineage.parentThreadId) &&
-        (!state.rootTurnEnded ||
+        ((event.runId !== undefined && ownsRun(event.runId)) ||
+          !state.rootTurnEnded ||
           state.workflowMemberParents.get(event.appThread.id) ===
             event.appThread.lineage.parentThreadId);
       if (!isOwnedSubagent) {
@@ -458,10 +462,10 @@ export function routeProviderEvent(
       }
       const belongs = ownsRun(event.subagent.runId) || ownsChildThread(event.subagent.threadId);
       const coordinator = event.subagent;
-      // Resumes reattribute child threads to the live run, which may not have observed their creation.
+      // Resumes reattribute child threads to the live run, and surviving earlier-turn subagents
+      // keep ownership of nested children spawned after rootTurnEnded.
       const adopted =
         ownsRun(coordinator.runId) &&
-        !state.rootTurnEnded &&
         isOrchestrationV2WorkActive(coordinator.status) &&
         coordinator.origin === "provider_native" &&
         coordinator.childThreadId !== null &&

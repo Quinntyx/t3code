@@ -1,4 +1,7 @@
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  backgroundWorkHoldsCompletion,
+  waitingOnAgents,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "../threadPullRequests.ts";
 import type {
   ThreadLinkedPullRequest,
@@ -226,9 +229,10 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
 // server suppresses the roster while an interruptible activity run exists, so a
 // remaining roster is stronger than checkpoint-oriented waiting.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
+  const pendingBackgroundTasks = thread.pendingBackgroundTasks ?? [];
   const parkAtIdle =
-    backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
-    thread.status !== "failed";
+    waitingOnAgents({ pendingBackgroundTasks }) ||
+    (backgroundWorkHoldsCompletion(pendingBackgroundTasks) && thread.status !== "failed");
   if (
     thread.latestRunId === null &&
     thread.activeProviderThreadId === null &&

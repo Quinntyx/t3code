@@ -1,5 +1,6 @@
 import {
   CommandId,
+  isOrchestrationV2WorkActive,
   MessageId,
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
@@ -8,6 +9,7 @@ import {
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
+import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Cause from "effect/Cause";
@@ -51,7 +53,9 @@ export function limitRecoveryCommand(
     !thread.usageLimitResetAt ||
     thread.archivedAt !== null ||
     thread.settledOverride === "settled" ||
-    thread.pendingRuntimeRequest !== null
+    thread.pendingRuntimeRequest !== null ||
+    // getLimitRecoveryCandidates already filters active agents in SQL; keep this pure guard for direct callers.
+    waitingOnAgents(thread)
   )
     return null;
   const resetMs = Date.parse(thread.usageLimitResetAt);
@@ -204,6 +208,7 @@ const affectsLimitRecovery = (event: OrchestrationV2DomainEvent) =>
   event.type === "run.created" ||
   event.type === "run.updated" ||
   event.type === "runtime-request.updated" ||
+  event.type === "provider-thread.updated" ||
   event.type.startsWith("provider-session.") ||
   (event.type === "turn-item.updated" && event.payload.type === "error");
 
@@ -214,6 +219,9 @@ export const isLimitRecoverySignal = (event: OrchestrationV2DomainEvent) =>
   (event.type === "turn-item.updated" &&
     event.payload.type === "error" &&
     event.payload.failure.class === "usage_limit") ||
+  (event.type === "turn-item.updated" &&
+    event.payload.type === "subagent" &&
+    !isOrchestrationV2WorkActive(event.payload.status)) ||
   (event.type === "run.updated" && event.payload.status === "failed") ||
   (event.type === "runtime-request.updated" && event.payload.status !== "pending");
 

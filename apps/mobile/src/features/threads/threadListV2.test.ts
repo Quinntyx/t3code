@@ -1,5 +1,8 @@
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
+import {
+  createInboxReturnTracker,
+  isThreadWorking,
+} from "@t3tools/client-runtime/state/thread-inbox";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -209,6 +212,36 @@ describe("resolveThreadListV2Status", () => {
       expect(threadHasUnseenCompletion(thread)).toBe(true);
     },
   );
+
+  it("keeps a usage-limit-failed thread working and waiting while delegated subagents run, unless cap-blocked", () => {
+    const raw = makeRawThreadShell({
+      latestRunId: RunId.make("run-delegating-limit"),
+      status: "failed",
+      latestRunCompletedAt: DateTime.makeUnsafe(NOW),
+      lastError: "You've hit your limit",
+      lastErrorClass: "usage_limit",
+      usageLimitResetAt: "2026-06-02T01:00:00.000Z",
+      pendingBackgroundTasks: [
+        { taskId: "workflow-1", kind: "subagent", description: "Council review" },
+      ],
+    });
+    const delegating = presentThreadShell(environmentId, decodeThreadShell(raw));
+    expect(isThreadWorking(delegating)).toBe(true);
+    expect(resolveThreadListV2Status(delegating)).toBe("waiting");
+
+    const capBlocked = presentThreadShell(
+      environmentId,
+      decodeThreadShell({
+        ...raw,
+        consumptionCapHit: {
+          at: NOW,
+          reason: "Daily spending limit reached",
+        },
+      }),
+    );
+    expect(isThreadWorking(capBlocked)).toBe(false);
+    expect(resolveThreadListV2Status(capBlocked)).toBe("limited");
+  });
 });
 
 describe("resolveThreadListV2SwipeActions", () => {

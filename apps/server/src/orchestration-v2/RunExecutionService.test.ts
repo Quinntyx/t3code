@@ -485,6 +485,171 @@ it("moves a child thread to the run that shows its subagent now", () => {
   );
 });
 
+it("routes a nested subagent spawned by a surviving earlier-turn subagent to its owning run", () => {
+  const threadId = ThreadId.make("thread:nested-surviving");
+  const providerThreadId = ProviderThreadId.make("provider-thread:nested-surviving");
+  const rootProviderTurn1 = ProviderTurnId.make("provider-turn:nested-surviving:1");
+  const rootProviderTurn2 = ProviderTurnId.make("provider-turn:nested-surviving:2");
+  const outerChild = ThreadId.make("thread:nested-surviving:outer");
+  const nestedChild = ThreadId.make("thread:nested-surviving:nested");
+  const idleNestedChild = ThreadId.make("thread:nested-surviving:idle-nested");
+
+  const run1: RunExecutionService.ProviderEventRouteIdentity = {
+    threadId,
+    runId: RunId.make("run:nested-surviving:1"),
+    attemptId: RunAttemptId.make("attempt:nested-surviving:1"),
+    providerThreadId,
+  };
+  const run2: RunExecutionService.ProviderEventRouteIdentity = {
+    threadId,
+    runId: RunId.make("run:nested-surviving:2"),
+    attemptId: RunAttemptId.make("attempt:nested-surviving:2"),
+    providerThreadId,
+  };
+
+  const run1Ended = RunExecutionService.routeProviderEvent(
+    {
+      type: "turn.terminal",
+      driver,
+      providerThreadId,
+      providerTurnId: rootProviderTurn1,
+      runOrdinal: 1,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    },
+    run1,
+    RunExecutionService.makeProviderEventRoutingState({
+      identity: run1,
+      providerTurnId: rootProviderTurn1,
+      relatedThreadIds: [outerChild],
+    }),
+  )[1];
+  const run2Live = RunExecutionService.makeProviderEventRoutingState({
+    identity: run2,
+    providerTurnId: rootProviderTurn2,
+  });
+
+  const makeNestedEvents = (
+    childThreadId: ThreadId,
+    nodeId: NodeId,
+    childRootNodeId: NodeId,
+  ): ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> => [
+    {
+      type: "app_thread.created",
+      driver,
+      runId: run1.runId,
+      appThread: {
+        id: childThreadId,
+        lineage: {
+          parentThreadId: threadId,
+          relationshipToParent: "subagent",
+          rootThreadId: threadId,
+        },
+      },
+    } as ProviderAdapter.ProviderAdapterV2Event,
+    {
+      type: "node.updated",
+      driver,
+      node: {
+        id: nodeId,
+        threadId,
+        runId: run1.runId,
+        parentNodeId: NodeId.make("node:nested-surviving:outer"),
+        rootNodeId: NodeId.make("node:nested-surviving:root:1"),
+        kind: "subagent",
+        status: "running",
+        countsForRun: false,
+        providerThreadId,
+        providerTurnId: rootProviderTurn2,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: DateTime.makeUnsafe(0),
+        completedAt: null,
+      },
+    },
+    {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        id: nodeId,
+        threadId,
+        runId: run1.runId,
+        parentNodeId: NodeId.make("node:nested-surviving:outer"),
+        origin: "provider_native",
+        createdBy: "agent",
+        driver,
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Inspect nested details",
+        title: "Nested",
+        model: null,
+        status: "running",
+        result: null,
+        startedAt: DateTime.makeUnsafe(0),
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe(0),
+      },
+    },
+    {
+      type: "node.updated",
+      driver,
+      node: {
+        id: childRootNodeId,
+        threadId: childThreadId,
+        runId: null,
+        parentNodeId: null,
+        rootNodeId: childRootNodeId,
+        kind: "root_turn",
+        status: "running",
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: DateTime.makeUnsafe(0),
+        completedAt: null,
+      },
+    },
+    {
+      type: "message.updated",
+      driver,
+      message: { threadId: childThreadId, runId: null },
+    } as ProviderAdapter.ProviderAdapterV2Event,
+  ];
+
+  // Concurrent follow-up run2 is live while run1's surviving outer subagent spawns nestedChild.
+  let state1 = run1Ended;
+  let state2 = run2Live;
+  for (const event of makeNestedEvents(
+    nestedChild,
+    NodeId.make("node:nested-surviving:nested"),
+    NodeId.make("node:nested-surviving:nested:root"),
+  )) {
+    const [accepted1, next1] = RunExecutionService.routeProviderEvent(event, run1, state1);
+    const [accepted2, next2] = RunExecutionService.routeProviderEvent(event, run2, state2);
+    assert.isTrue(accepted1, `run1 must route ${event.type} for nested subagent`);
+    assert.isFalse(accepted2, `run2 must drop ${event.type} for run1's nested subagent`);
+    state1 = next1;
+    state2 = next2;
+  }
+
+  // Also works while idle (only run1 with rootTurnEnded: true).
+  for (const event of makeNestedEvents(
+    idleNestedChild,
+    NodeId.make("node:nested-surviving:idle-nested"),
+    NodeId.make("node:nested-surviving:idle-nested:root"),
+  )) {
+    const [accepted1, next1] = RunExecutionService.routeProviderEvent(event, run1, state1);
+    assert.isTrue(accepted1, `idle run1 must route ${event.type} for nested subagent`);
+    state1 = next1;
+  }
+});
+
 it("does not route a superseded attempt through a reused provider thread", () => {
   const threadId = ThreadId.make("thread:shared-runtime:restart");
   const providerThreadId = ProviderThreadId.make("provider-thread:shared-runtime:restart");

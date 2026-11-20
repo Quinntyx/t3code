@@ -178,11 +178,14 @@ export interface EventSinkV2Shape {
     };
     /** Like writeWithEffects' updateDelegatedCompletionOnly, for this run's run.updated only. */
     readonly updateDelegatedCompletionOnlyRunId?: RunId;
+    /** Abort without consuming the command receipt if pending runtime requests or active subagents/workflows exist at commit time. */
+    readonly requireNoLimitRecoveryBlockers?: boolean;
   }) => Effect.Effect<
     {
       readonly receipt: CommandReceiptStore.CommandReceiptV2;
       readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
       readonly committed: boolean;
+      readonly deferred?: boolean;
       readonly cancelledEffectCount: number;
     },
     EventSinkV2Error
@@ -695,11 +698,59 @@ const layerBase: Layer.Layer<
         return { receipt: existing.value, storedEvents };
       });
 
+    const threadHasLimitRecoveryBlockers = Effect.fnUntraced(function* (threadId: ThreadId) {
+      const rows = yield* sql<{ readonly blocked: number }>`
+        SELECT ${ProjectionStore.hasLimitRecoveryBlockingWorkSql(sql)} AS blocked
+        FROM orchestration_v2_projection_threads t
+        WHERE t.thread_id = ${threadId}
+        LIMIT 1
+      `;
+      return (rows[0]?.blocked ?? 0) !== 0;
+    });
+
     const commitCommandEffect = Effect.fn("orchestrationV2.EventSink.commitCommand")(function* (
       input: Parameters<EventSinkV2Shape["commitCommand"]>[0],
     ) {
       const result = yield* commitThenPublish(
         Effect.gen(function* () {
+          if (input.requireNoLimitRecoveryBlockers === true) {
+            const existing = yield* commandReceipts.getByCommandId(input.commandId);
+            if (Option.isSome(existing)) {
+              const storedEvents = yield* eventStore
+                .readByCommandId({ commandId: input.commandId })
+                .pipe(
+                  Stream.runCollect,
+                  Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> =>
+                    Array.from(events),
+                  ),
+                );
+              return {
+                receipt: existing.value,
+                storedEvents,
+                committed: false as const,
+                deferred: false as const,
+                cancelledEffectIds: [],
+              };
+            }
+            if (yield* threadHasLimitRecoveryBlockers(input.threadId)) {
+              const sequence = yield* eventStore.latestSequence({ threadId: input.threadId });
+              return {
+                receipt: {
+                  commandId: input.commandId,
+                  threadId: input.threadId,
+                  commandType: input.commandType,
+                  acceptedAt: input.acceptedAt,
+                  resultSequence: sequence,
+                  status: "accepted" as const,
+                  error: null,
+                },
+                storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+                committed: false as const,
+                deferred: true as const,
+                cancelledEffectIds: [],
+              };
+            }
+          }
           const reserved = yield* commandReceipts.insertIfAbsent({
             commandId: input.commandId,
             threadId: input.threadId,
@@ -711,7 +762,12 @@ const layerBase: Layer.Layer<
           });
           if (!reserved) {
             const existing = yield* existingCommandResult(input.commandId);
-            return { ...existing, committed: false as const, cancelledEffectIds: [] };
+            return {
+              ...existing,
+              committed: false as const,
+              deferred: false as const,
+              cancelledEffectIds: [],
+            };
           }
 
           const runId = input.updateDelegatedCompletionOnlyRunId;
@@ -754,7 +810,14 @@ const layerBase: Layer.Layer<
                   threadId: input.threadId,
                   ...input.cancelUnsettledEffects,
                 });
-          return { receipt, storedEvents, outcomes, committed: true as const, cancelledEffectIds };
+          return {
+            receipt,
+            storedEvents,
+            outcomes,
+            committed: true as const,
+            deferred: false as const,
+            cancelledEffectIds,
+          };
         }),
         (result) =>
           Effect.gen(function* () {
@@ -769,6 +832,7 @@ const layerBase: Layer.Layer<
         receipt: result.receipt,
         storedEvents: result.storedEvents,
         committed: result.committed,
+        ...(result.deferred ? { deferred: true as const } : {}),
         cancelledEffectCount: result.cancelledEffectIds.length,
       };
     });
