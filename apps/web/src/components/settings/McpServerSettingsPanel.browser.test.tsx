@@ -101,16 +101,22 @@ const setup = async () => {
 describe("registered MCP server settings", () => {
   it("keeps an earlier edit when a later field is saved before the first round trip", async () => {
     await using screen = await setup();
+    // No save is echoed back, so each one has to start from the page's own earlier edits.
+    state.updateSettings.mockReset();
 
+    // Unstyled here, the switch has no box for a pointer click, so it is clicked through the DOM.
+    (screen.getByRole("switch", { name: "Run this MCP server" }).element() as HTMLElement).click();
     await userEvent.fill(screen.getByRole("textbox", { name: "Workspace" }), "acme");
     await userEvent.tab();
-    // No rerender between the two: the second save starts from the page, not a server answer.
     await userEvent.fill(screen.getByRole("textbox", { name: "Region" }), "eu");
     await userEvent.tab();
 
-    expect(state.registeredMcpServers[0]?.config).toEqual({
-      workspace: "acme",
-      region: "eu",
+    const [last] = state.updateSettings.mock.lastCall as [
+      { registeredMcpServers: ReadonlyArray<RegisteredMcpServerEntry> },
+    ];
+    expect(last.registeredMcpServers[0]).toMatchObject({
+      enabled: false,
+      config: { workspace: "acme", region: "eu" },
     });
   });
 

@@ -322,6 +322,33 @@ describe("parseMcpRegistration", () => {
         },
       ],
     },
+    {
+      label: "a server.json variable declared secret by only one of its inputs",
+      source: serverJson([
+        {
+          ...npmPackage,
+          environmentVariables: [{ name: "SHARED_TOKEN" }],
+          packageArguments: [
+            {
+              type: "positional",
+              value: "{SHARED_TOKEN}",
+              variables: { SHARED_TOKEN: { isRequired: true, isSecret: true } },
+            },
+          ],
+        },
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "SHARED_TOKEN",
+          label: "SHARED_TOKEN",
+          type: "string",
+          required: true,
+          secret: true,
+        },
+      ],
+    },
   ])("reads $label", ({ source, expectedKind, expectedName, expectedFields }) => {
     const parsed = parseMcpRegistration(source);
     expect(parsed.ok).toBe(true);

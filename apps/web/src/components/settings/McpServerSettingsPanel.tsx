@@ -30,6 +30,7 @@ const valueOf = (config: Readonly<Record<string, McpConfigValue>>, field: McpCon
 /** This entry's edited fields, kept until the server-backed entry for another id replaces it. */
 interface McpEntryDraft {
   readonly id: string;
+  readonly enabled: boolean;
   readonly toolName: string;
   readonly config: Readonly<Record<string, McpConfigValue>>;
 }
@@ -51,7 +52,6 @@ export function McpServerSettingsPanel() {
   );
   const runtime = data?.servers.find((server) => server.id === serverId);
   const entry = settings.registeredMcpServers.find((server) => server.id === serverId);
-  const [notFound] = useState(() => entry === undefined);
   // A save is built from the last server-backed settings, so edits made before it round-trips
   // would revert each other. The draft holds this entry's fields and every save starts from it.
   const [draft, setDraft] = useState<McpEntryDraft | null>(null);
@@ -75,11 +75,7 @@ export function McpServerSettingsPanel() {
         <SettingsSection id="mcp-server-missing" title="MCP server">
           <SettingsRow
             title="Not registered"
-            description={
-              notFound
-                ? "This server is no longer registered. Add it again from Settings → Capabilities."
-                : "Loading…"
-            }
+            description="This server is no longer registered. Add it again from Settings → Capabilities."
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -90,32 +86,24 @@ export function McpServerSettingsPanel() {
   if (draft !== null && draft.id !== entry.id) setDraft(null);
   const current: McpEntryDraft = draft ?? {
     id: entry.id,
+    enabled: entry.enabled,
     toolName: entry.toolName,
     config: entry.config,
   };
   const shownEntry = { ...entry, toolName: current.toolName, config: current.config };
-  const save = (edit: {
-    readonly toolName?: string;
-    readonly config?: Readonly<Record<string, McpConfigValue>>;
-    readonly enabled?: boolean;
-  }) => {
-    setDraft({
-      id: entry.id,
-      toolName: edit.toolName ?? current.toolName,
-      config: edit.config ?? current.config,
-    });
-    updateSettings({
-      registeredMcpServers: settings.registeredMcpServers.map((candidate) =>
-        candidate.id === entry.id
-          ? {
-              ...candidate,
-              toolName: edit.toolName ?? current.toolName,
-              config: edit.config ?? current.config,
-              ...(edit.enabled === undefined ? {} : { enabled: edit.enabled }),
-            }
-          : candidate,
-      ),
-    });
+  const save = (edit: Partial<Omit<McpEntryDraft, "id">>) => {
+    const next: McpEntryDraft = { ...current, ...edit };
+    setDraft(next);
+    updateSettings(
+      {
+        registeredMcpServers: settings.registeredMcpServers.map((candidate) =>
+          candidate.id === entry.id
+            ? { ...candidate, enabled: next.enabled, toolName: next.toolName, config: next.config }
+            : candidate,
+        ),
+      },
+      { onFailed: () => setDraft(null) },
+    );
   };
 
   const parsed = parseMcpRegistration(
@@ -133,12 +121,12 @@ export function McpServerSettingsPanel() {
           description="While on, T3 Code runs this server and its tools are available to agents."
           status={
             <McpServerStatusBadge
-              status={runtime?.status ?? (entry.enabled ? "starting" : "stopped")}
+              status={runtime?.status ?? (current.enabled ? "starting" : "stopped")}
             />
           }
           control={
             <Switch
-              checked={entry.enabled}
+              checked={current.enabled}
               onCheckedChange={(next) => save({ enabled: Boolean(next) })}
               aria-label="Run this MCP server"
             />
