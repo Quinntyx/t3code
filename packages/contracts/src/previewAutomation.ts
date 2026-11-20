@@ -622,7 +622,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   threadId: ThreadId,
   tabId: Schema.optional(PreviewTabId),
   tabIdExplicit: Schema.optional(Schema.Boolean),
-  /** Supplied by the broker from authenticated scope, never from tool input. */
+  /** Broker's per-thread ownership key from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
   operation: PreviewAutomationOperation,
   input: Schema.Unknown,
@@ -805,11 +805,11 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
 ) {
   override get message(): string {
     if (this.reason === "agentMismatch")
-      return "This browser tab belongs to another agent session or a human. Open your own tab.";
+      return "This browser tab is not owned by this thread's agent. Open your own tab.";
     if (this.reason === "humanControl")
       return "A human controls this browser tab. Wait until they release control.";
     if (this.reason === "tabRequired")
-      return "Multiple browser tabs belong to this session. Pass a tabId from preview_open or from the tabs listed by preview_status.";
+      return "This thread's agent owns multiple browser tabs. Pass a tabId from preview_open or from the tabs listed by preview_status.";
     if (this.reason === "dialogPending")
       return "A browser dialog is pending. Read preview_status and resolve it with preview_dialog.";
     if (this.reason === "tabLimit")

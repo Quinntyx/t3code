@@ -1472,7 +1472,7 @@ const make = Effect.gen(function* () {
   const assertTabCapacity = (agentSessionId: string) => {
     if (atTabLimit(agentSessionId))
       throw new BrowserControlInterrupted({
-        message: `Too many server browser tabs are open (${AGENT_TAB_LIMIT} per agent session, ${SERVER_TAB_LIMIT} per server). Close one with t3_preview_close or reuse one from preview_status tabs.`,
+        message: `Too many server browser tabs are open (${AGENT_TAB_LIMIT} per thread, ${SERVER_TAB_LIMIT} per server). Close one with t3_preview_close or reuse one from preview_status tabs.`,
         reason: "tabLimit",
       });
   };
@@ -1996,7 +1996,7 @@ const make = Effect.gen(function* () {
   const requireTab = async (request: PreviewAutomationRequest) => {
     if (!request.agentSessionId)
       throw new BrowserControlInterrupted({
-        message: "The agent session is missing. Reconnect the provider.",
+        message: "The thread's preview ownership key is missing. Reconnect the provider.",
       });
     const owned = [...tabs.values()].filter(
       (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
@@ -2004,7 +2004,7 @@ const make = Effect.gen(function* () {
     if (!request.tabIdExplicit && owned.length > 1)
       throw new BrowserControlInterrupted({
         message:
-          "Multiple tabs belong to this agent session. Pass a tabId from preview_open or preview_status tabs.",
+          "This thread's agent owns multiple tabs. Pass a tabId from preview_open or preview_status tabs.",
         reason: "tabRequired",
       });
     const tab =
@@ -2022,7 +2022,7 @@ const make = Effect.gen(function* () {
     if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
       throw new BrowserControlInterrupted({
         message:
-          "This tab belongs to another agent session. You can read it, but open your own tab to act.",
+          "This tab is not owned by this thread's agent. You can read it, but open your own tab to act.",
         reason: "agentMismatch",
       });
     return tab;
@@ -2055,7 +2055,7 @@ const make = Effect.gen(function* () {
       case "open": {
         if (!request.agentSessionId)
           throw new BrowserControlInterrupted({
-            message: "The agent session is missing. Reconnect the provider.",
+            message: "The thread's preview ownership key is missing. Reconnect the provider.",
           });
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
@@ -2097,7 +2097,7 @@ const make = Effect.gen(function* () {
               : "The requested server preview tab does not exist.",
           });
         }
-        // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
+        // Reusing a tab this thread does not own requires explicit tabId; reading it grants no implicit takeover.
         const existing =
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
@@ -2180,7 +2180,7 @@ const make = Effect.gen(function* () {
         )
           throw new BrowserControlInterrupted({
             message:
-              "Multiple tabs belong to this agent session. Pass a tabId from preview_open or preview_status tabs.",
+              "This thread's agent owns multiple tabs. Pass a tabId from preview_open or preview_status tabs.",
             reason: "tabRequired",
           });
         const recordings = [...tabs.values()].filter(
@@ -2210,7 +2210,7 @@ const make = Effect.gen(function* () {
     if (request.operation === "close") {
       if (tab.control.agentId !== request.agentSessionId)
         throw new BrowserControlInterrupted({
-          message: "Only the agent session that opened this tab can close it.",
+          message: "This tab was not opened by this thread's agent, so it cannot be closed here.",
           reason: "agentMismatch",
         });
       if (tab.control.controller !== null)
