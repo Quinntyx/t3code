@@ -610,3 +610,125 @@ it.effect("settles blocked and subsequent refreshes when the service scope close
     );
   }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "clears spent resetCredits while keeping cached windows when a post-redemption probe fails",
+  () => {
+    let failUsageProbe = false;
+    return Effect.gen(function* () {
+      const sources = yield* UsageLimitSources.make;
+      yield* sources.refresh;
+      const before = (yield* sources.current)[0]?.accounts[0];
+      expect(before?.usageLimits.windows).toMatchObject([{ usedPercent: 100 }]);
+      expect(before?.usageLimits.resetCredits).toMatchObject({
+        availableCount: 1,
+        nextCreditId: "credit-1",
+      });
+
+      failUsageProbe = true;
+      const result = yield* sources.consumeResetCredit({
+        sourceId: UsageLimitSourceId.make("hub"),
+        accountId: "codex.json",
+        creditId: "credit-1",
+      });
+      expect(result).toEqual({ outcome: "reset" });
+
+      const after = (yield* sources.current)[0]?.accounts[0];
+      expect(after?.usageLimits.windows).toMatchObject([{ usedPercent: 100 }]);
+      expect(after?.usageLimits.resetCredits).toBeUndefined();
+    }).pipe(
+      Effect.provide([
+        layerSecrets(),
+        ServerSettings.layerTest({
+          usageLimitSources: {
+            [UsageLimitSourceId.make("hub")]: {
+              kind: "cliproxy",
+              url: "https://hub.test",
+              managementKey: "secret",
+              enabled: true,
+            },
+          },
+        }),
+        Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+          shouldRunScopeWork: () => Effect.succeed(false),
+        }),
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              const path = new URL(request.url).pathname;
+              if (path.startsWith("/v8/")) {
+                return HttpClientResponse.fromWeb(request, Response.json({}, { status: 404 }));
+              }
+              if (path.endsWith("/auth-files")) {
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    files: [
+                      {
+                        id: "codex.json",
+                        auth_index: "c",
+                        provider: "codex",
+                        email: "alice@example.com",
+                        id_token: { chatgpt_account_id: "ws-1" },
+                      },
+                    ],
+                  }),
+                );
+              }
+              if (path.endsWith("/reset-quota")) {
+                return HttpClientResponse.fromWeb(request, Response.json({}));
+              }
+              const payload =
+                request.body._tag === "Uint8Array"
+                  ? (JSON.parse(new TextDecoder().decode(request.body.body)) as {
+                      readonly url?: string;
+                    })
+                  : undefined;
+              if (payload?.url?.endsWith("/consume")) {
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({ status_code: 200, body: JSON.stringify({ code: "reset" }) }),
+                );
+              }
+              if (payload?.url?.endsWith("/rate-limit-reset-credits")) {
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    status_code: 200,
+                    body: JSON.stringify({
+                      credits: [
+                        {
+                          id: "credit-1",
+                          status: "available",
+                          reset_type: "codex_rate_limits",
+                          expires_at: "2099-01-01T00:00:00Z",
+                        },
+                      ],
+                    }),
+                  }),
+                );
+              }
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json(
+                  failUsageProbe
+                    ? { status_code: 429, body: JSON.stringify({ error: "rate_limited" }) }
+                    : {
+                        status_code: 200,
+                        body: JSON.stringify({
+                          plan_type: "plus",
+                          rate_limit: { primary_window: { used_percent: 100 } },
+                        }),
+                      },
+                ),
+              );
+            }),
+          ),
+        ),
+        NodeCrypto.layer,
+      ]),
+      Effect.scoped,
+    );
+  },
+);

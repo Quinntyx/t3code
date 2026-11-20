@@ -139,6 +139,31 @@ function mergeSourceSnapshots(
   });
 }
 
+function clearCachedResetCredits(
+  snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
+  sourceId: UsageLimitSourceId,
+  accountId: string,
+): ReadonlyArray<UsageLimitSourceSnapshot> {
+  return snapshots.map((source) =>
+    source.id !== sourceId
+      ? source
+      : {
+          ...source,
+          accounts: source.accounts.map((account) => {
+            if (
+              account.driver !== "codex" ||
+              account.id !== accountId ||
+              account.usageLimits.resetCredits === undefined
+            ) {
+              return account;
+            }
+            const { resetCredits: _, ...usageLimits } = account.usageLimits;
+            return { ...account, usageLimits };
+          }),
+        },
+  );
+}
+
 export const readSourceManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
   secrets: SecretResolver.SecretResolver["Service"],
   config: UsageLimitSourceConfig,
@@ -200,7 +225,7 @@ export const make = Effect.gen(function* () {
 
   // Serialize refreshes so slow old-settings reads cannot resurrect removed sources after newer refreshes.
   const refreshLock = yield* Semaphore.make(1);
-  const queuedRefresh = yield* Ref.make<Deferred.Deferred<void> | null>(null);
+  let queuedRefresh: Deferred.Deferred<void> | null = null;
   const runRefresh = Effect.gen(function* () {
     const settings = yield* settingsService.getSettings.pipe(
       Effect.orElseSucceed((): ServerSettings | null => null),
@@ -219,26 +244,21 @@ export const make = Effect.gen(function* () {
   // Coalesce concurrent callers into at most one queued follow-up on the service scope.
   const refresh: Effect.Effect<void> = Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const candidate = yield* Deferred.make<void>();
-      const pending = yield* Ref.modify(queuedRefresh, (queued) => {
-        const next = queued ?? candidate;
-        return [next, next] as const;
-      });
-      if (pending === candidate) {
-        const release = Ref.update(queuedRefresh, (queued) =>
-          queued === candidate ? null : queued,
-        );
-        const fiber = yield* Effect.ensuring(
-          Effect.interruptible(
-            refreshLock.withPermits(1)(release.pipe(Effect.andThen(runRefresh))),
-          ),
-          release.pipe(Effect.andThen(Deferred.succeed(candidate, undefined))),
-        ).pipe(Effect.forkIn(serviceScope, { startImmediately: true }));
-        // An already-closed scope interrupts the fork before Effect.ensuring installs.
-        if (fiber.pollUnsafe() !== undefined) {
-          yield* release;
-          yield* Deferred.succeed(candidate, undefined);
-        }
+      let pending = queuedRefresh;
+      if (pending === null) {
+        const candidate = Deferred.makeUnsafe<void>();
+        queuedRefresh = candidate;
+        pending = candidate;
+        const release = () => {
+          if (queuedRefresh === candidate) queuedRefresh = null;
+        };
+        const fiber = yield* refreshLock
+          .withPermits(1)(Effect.sync(release).pipe(Effect.andThen(runRefresh)))
+          .pipe(Effect.forkIn(serviceScope, { startImmediately: true }));
+        fiber.addObserver(() => {
+          release();
+          Deferred.doneUnsafe(candidate, Effect.void);
+        });
       }
       yield* restore(Deferred.await(pending));
     }),
@@ -266,6 +286,11 @@ export const make = Effect.gen(function* () {
       input.accountId,
       input.creditId,
     );
+    if (result.outcome !== "nothingToReset") {
+      yield* Ref.update(stateRef, (previous) =>
+        clearCachedResetCredits(previous, input.sourceId, input.accountId),
+      );
+    }
     const snapshot = yield* readSource(input.sourceId, config);
     const previous = yield* Ref.get(stateRef);
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
