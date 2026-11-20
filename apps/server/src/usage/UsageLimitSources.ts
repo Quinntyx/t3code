@@ -234,6 +234,7 @@ export const make = Effect.gen(function* () {
           ),
           release.pipe(Effect.andThen(Deferred.succeed(candidate, undefined))),
         ).pipe(Effect.forkIn(serviceScope, { startImmediately: true }));
+        // An already-closed scope interrupts the fork before Effect.ensuring installs.
         if (fiber.pollUnsafe() !== undefined) {
           yield* release;
           yield* Deferred.succeed(candidate, undefined);

@@ -284,6 +284,7 @@ it.effect(
       readonly email: string;
       readonly disabled?: boolean;
     }> = [{ id: "claude.json", auth_index: "a", provider: "claude", email: "alice@example.com" }];
+    let authFilesStatus = 200;
     let apiCallResponse: { readonly status_code: number; readonly body: string } = {
       status_code: 200,
       body: JSON.stringify({
@@ -291,6 +292,7 @@ it.effect(
       }),
     };
     return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
       const sources = yield* UsageLimitSources.make;
       yield* sources.refresh;
       const initial = (yield* sources.current)[0]?.accounts[0];
@@ -340,7 +342,48 @@ it.effect(
         { id: "five_hour", usedPercent: 25, resetsAt: "2099-01-01T10:00:00.000Z" },
       ]);
 
+      // Repointing the source id to a different hub URL does not inherit the old hub's cache.
+      yield* TestClock.adjust("1 minute");
+      apiCallResponse = { status_code: 429, body: JSON.stringify({ error: "rate_limited" }) };
+      yield* settings.updateSettings({
+        usageLimitSources: {
+          [UsageLimitSourceId.make("hub")]: {
+            kind: "cliproxy",
+            url: "https://other-hub.test",
+            managementKey: "secret",
+            enabled: true,
+          },
+        },
+      });
+      yield* sources.refresh;
+      const repointed = (yield* sources.current)[0];
+      expect(repointed?.url).toBe("https://other-hub.test");
+      expect(repointed?.accounts[0]?.usageLimits.unavailable?.reason).toBe("probeFailed");
+      expect(repointed?.accounts[0]?.usageLimits.windows).toEqual([]);
+
+      // Recover on the new hub, then verify a source-level failure clears accounts and surfaces the error.
+      yield* TestClock.adjust("1 minute");
+      apiCallResponse = {
+        status_code: 200,
+        body: JSON.stringify({
+          five_hour: { utilization: 40, resets_at: "2099-01-01T11:00:00Z" },
+        }),
+      };
+      yield* sources.refresh;
+      expect((yield* sources.current)[0]?.accounts[0]?.usageLimits.windows).toMatchObject([
+        { id: "five_hour", usedPercent: 40 },
+      ]);
+
+      authFilesStatus = 500;
+      yield* sources.refresh;
+      const errored = (yield* sources.current)[0];
+      expect(errored?.error).toBeDefined();
+      expect(errored?.accounts).toEqual([]);
+
       // Removing the account from CLIProxyAPI drops it immediately.
+      authFilesStatus = 200;
+      yield* sources.refresh;
+      expect((yield* sources.current)[0]?.accounts).toHaveLength(1);
       files = [];
       yield* sources.refresh;
       expect((yield* sources.current)[0]?.accounts).toEqual([]);
@@ -369,7 +412,10 @@ it.effect(
                 return HttpClientResponse.fromWeb(request, Response.json({}, { status: 404 }));
               }
               if (path.endsWith("/auth-files")) {
-                return HttpClientResponse.fromWeb(request, Response.json({ files }));
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({ files }, { status: authFilesStatus }),
+                );
               }
               return HttpClientResponse.fromWeb(request, Response.json(apiCallResponse));
             }),
