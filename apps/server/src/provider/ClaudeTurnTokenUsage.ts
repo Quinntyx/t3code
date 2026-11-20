@@ -144,6 +144,37 @@ export function claudeLedgerDelta(
 }
 
 /**
+ * Growth less usage already billed from frames of a window that settled without a result. The
+ * kept baseline means the growth holds all of that window's work, of which frames saw a floor.
+ */
+export function deductClaudeLedgerUsage(
+  growth: ClaudeModelLedger,
+  billed: ReadonlyArray<TurnModelTokenUsage>,
+  canonicalModel: (model: string) => string = (model) => model,
+): ClaudeModelLedger {
+  const remaining = new Map([...growth].map(([model, usage]) => [model, tokenCounts(usage)]));
+  for (const row of billed) {
+    const model = canonicalModel(row.model);
+    const unclaimed = tokenCounts(row);
+    for (const [key, usage] of growth) {
+      if (canonicalModel(key) !== model && canonicalModel(usage.model) !== model) continue;
+      const counts = remaining.get(key)!;
+      for (const field of TOKEN_FIELDS) {
+        const count = Math.min(counts[field], unclaimed[field]);
+        counts[field] -= count;
+        unclaimed[field] -= count;
+      }
+    }
+  }
+  return new Map(
+    [...growth].map(([model, usage]) => [
+      model,
+      turnModelUsage(usage.model, remaining.get(model)!, usage.reasoningTokens !== undefined),
+    ]),
+  );
+}
+
+/**
  * Stream deltas and snapshots repeat a message's usage; keep each counter's largest report.
  * Returns whether the stored entry changed, so a caller can emit only on new usage.
  */
@@ -221,6 +252,8 @@ function claudeResultUsage(counts: TokenCounts, withReasoning: boolean): Record<
 
 interface ClaudeSegmentResult {
   readonly subtype: SDKResultMessage["subtype"] | undefined;
+  // The SDK also reports API errors and aborts as a success with is_error.
+  readonly is_error?: boolean | undefined;
   readonly usage?: unknown;
   readonly local_command?: unknown;
 }
@@ -229,6 +262,7 @@ function hasValidSuccessUsage(result: ClaudeSegmentResult | undefined): boolean 
   const usage = result?.usage as Record<string, unknown> | undefined;
   return (
     result?.subtype === "success" &&
+    result.is_error !== true &&
     finiteNonNegativeInteger(usage?.input_tokens) !== undefined &&
     finiteNonNegativeInteger(usage?.output_tokens) !== undefined &&
     BILLED_USAGE_FIELDS.every(
@@ -245,6 +279,7 @@ export interface ClaudeSegmentUsage {
   readonly delegateRows: ReadonlyArray<TurnModelTokenUsage>;
   readonly otherUsage: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
   readonly subtype: SDKResultMessage["subtype"] | undefined;
+  readonly isError: boolean;
   readonly localCommand: boolean;
   readonly mainFromResult: boolean;
   readonly delegatesMeasured: boolean;
@@ -299,11 +334,13 @@ export function sealClaudeSegment(input: {
   readonly mainModel?: string;
   // The id form live subagent rows are keyed by, to check the ledger covers them.
   readonly canonicalModel?: (model: string) => string;
+  // The model the process's ledger names each raw model id, for windows without growth.
+  readonly ledgerModelNames?: ReadonlyMap<string, string>;
 }): ClaudeSegmentUsage {
-  const { result, ledgerGrowth: growth } = input;
-  const ledgerModel = (model: string) => growth?.get(model)?.model ?? model;
+  const { result, ledgerGrowth: growth, ledgerModelNames: names } = input;
+  const ledgerModel = (model: string) => growth?.get(model)?.model ?? names?.get(model) ?? model;
   const live = totalsByModel(
-    growth === undefined
+    growth === undefined && (names === undefined || names.size === 0)
       ? input.mainMessages.values()
       : [...input.mainMessages.values()].map((usage) => ({
           ...usage,
@@ -339,15 +376,9 @@ export function sealClaudeSegment(input: {
   const delegateRows =
     growth === undefined ? modelRows(liveDelegates) : ledgerResidual(growth, main);
   const canonicalModel = input.canonicalModel ?? ((model: string) => model);
-  const grownModels = new Set(
-    [...(growth ?? [])].flatMap(([model, usage]) =>
-      usage.inputTokens + usage.outputTokens > 0
-        ? [canonicalModel(model), canonicalModel(usage.model)]
-        : [],
-    ),
-  );
-  const liveDelegateTotal = sumCounts(liveDelegates.countsByModel.values());
-  const delegateTotal = sumCounts(delegateRows);
+  const delegatesByModel = totalsByModel(
+    delegateRows.map((usage) => ({ ...usage, model: canonicalModel(usage.model) })),
+  ).countsByModel;
   // The result omits subagent and compaction work that the process-wide ledger records.
   const ledgerTotal = growth === undefined ? undefined : sumCounts(growth.values());
   return {
@@ -371,15 +402,19 @@ export function sealClaudeSegment(input: {
           }
         : undefined,
     subtype: result?.subtype,
+    isError: result?.is_error === true,
     localCommand: typeof result?.local_command === "string" && result.local_command.length > 0,
     mainFromResult: fromResult !== undefined,
     delegatesMeasured:
       growth !== undefined &&
-      [...liveDelegates.countsByModel.keys()].every((model) =>
-        grownModels.has(canonicalModel(model)),
-      ) &&
-      liveDelegateTotal.inputTokens + liveDelegateTotal.outputTokens <=
-        delegateTotal.inputTokens + delegateTotal.outputTokens,
+      [...liveDelegates.countsByModel].every(([model, live]) => {
+        const measured = delegatesByModel.get(canonicalModel(model));
+        return (
+          measured !== undefined &&
+          live.inputTokens <= measured.inputTokens &&
+          live.outputTokens <= measured.outputTokens
+        );
+      }),
   };
 }
 
@@ -389,13 +424,13 @@ export function claudeTurnTokenUsage(
   turn: {
     readonly hasSubagents: boolean;
     readonly status: RuntimeTurnState | "running";
-    // Models on the turn's root assistant messages; without them, the main rows' models.
+    // Models on the turn's root assistant messages; without any, the main rows' models.
     readonly rootModels?: ReadonlySet<string>;
   },
 ): TurnTokenUsage {
   const last = segments.at(-1);
   const measured = normalizeClaudeMainAgentTokenUsage(
-    { subtype: last?.subtype, usage: last?.mainUsage },
+    { subtype: last?.subtype, is_error: last?.isError, usage: last?.mainUsage },
     turn.hasSubagents,
     turn.status,
     segments.slice(0, -1).map((segment) => segment.mainUsage),
@@ -411,7 +446,10 @@ export function claudeTurnTokenUsage(
   const otherUsages = segments.flatMap((segment) =>
     segment.otherUsage === undefined ? [] : [segment.otherUsage],
   );
-  const models = turn.rootModels ?? new Set(mainAgentUsage.map((usage) => usage.model));
+  const models =
+    turn.rootModels !== undefined && turn.rootModels.size > 0
+      ? turn.rootModels
+      : new Set(mainAgentUsage.map((usage) => usage.model));
   const observedFields = {
     ...(models.size > 0 ? { models: [...models] } : {}),
     ...(last?.localCommand === true ? { localCommand: true } : {}),
@@ -444,6 +482,7 @@ export function liveClaudeTurnTokenUsage(input: {
   readonly mainMessages: ReadonlyMap<string, TurnModelTokenUsage>;
   readonly subagentMessages: ReadonlyMap<string, TurnModelTokenUsage>;
   readonly hasSubagents: boolean;
+  readonly ledgerModelNames?: ReadonlyMap<string, string>;
 }): TurnTokenUsage | undefined {
   const open = sealClaudeSegment(input);
   const usage = claudeTurnTokenUsage(
@@ -458,9 +497,7 @@ export function liveClaudeTurnTokenUsage(input: {
 }
 
 function normalizeClaudeMainAgentTokenUsage(
-  result:
-    | { readonly subtype: SDKResultMessage["subtype"] | undefined; readonly usage?: unknown }
-    | undefined,
+  result: ClaudeSegmentResult | undefined,
   hasSubagents: boolean,
   terminalStatus: RuntimeTurnState | "running",
   earlierSegmentUsage: ReadonlyArray<unknown> = [],

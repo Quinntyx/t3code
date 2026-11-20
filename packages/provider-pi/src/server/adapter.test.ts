@@ -3214,6 +3214,7 @@ describe("PiAdapterV2", () => {
       if (runningUsage.type !== "provider_turn.updated") return;
       assert.isUndefined(runningUsage.providerTurn.tokenUsage);
       assert.equal(runningUsage.providerTurn.turnTokenUsage?.usageStatus, "partial");
+      assert.equal(runningUsage.providerTurn.turnTokenUsage?.otherUsageStatus, "partial");
       assert.deepEqual(runningUsage.providerTurn.turnTokenUsage?.subagentUsage, [
         {
           model: "opencode-go/test-model",
@@ -3305,6 +3306,62 @@ describe("PiAdapterV2", () => {
           ? settled.providerTurn.turnTokenUsage?.subagentUsage
           : undefined,
         [childTotal],
+      );
+      assert.isUndefined(
+        settled.type === "provider_turn.updated"
+          ? settled.providerTurn.turnTokenUsage?.otherUsageStatus
+          : "missing",
+      );
+
+      // An aborted child's last cumulative usage stays a floor after the main agent finishes.
+      yield* startTurn(runtime, providerThread, "default", [], "Map it again", undefined, 2);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_aborted",
+        toolName: "subagent",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "aborted" }],
+          details: {
+            mode: "single",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo again",
+                exitCode: 0,
+                stopReason: "aborted",
+                stderr: "",
+                messages: [],
+                model: "opencode-go/test-model",
+                usage: {
+                  input: 4,
+                  output: 2,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 1,
+                },
+              },
+            ],
+          },
+        },
+      });
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const settledAfterAbort = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "completed" &&
+          event.providerTurn.ordinal === 2,
+      );
+      assert.equal(
+        settledAfterAbort.type === "provider_turn.updated"
+          ? settledAfterAbort.providerTurn.turnTokenUsage?.otherUsageStatus
+          : undefined,
+        "partial",
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
