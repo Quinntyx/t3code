@@ -27,15 +27,15 @@ import {
 
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import {
-  addClaudeLedgerUsage,
   claudeLedgerDelta,
   claudeModelLedger,
   claudeReportedContextWindows,
+  claudeTurnTokenUsage,
   liveClaudeTurnTokenUsage,
-  normalizeClaudeTurnTokenUsage,
   recordClaudeMessageUsage,
+  sealClaudeSegment,
   type ClaudeModelLedger,
-  type ClaudeTurnLedger,
+  type ClaudeSegmentUsage,
 } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
 import {
@@ -4407,14 +4407,13 @@ interface ActiveClaudeTurnContext {
   // Set while this turn's latest compaction status reports a failure, with
   // Claude's error text when it sent one.
   compactionFailure: { readonly message: string | undefined } | null;
-  // Steers end segments whose usage is excluded from the final result; bill them too, oldest first.
-  readonly steeredSegmentUsage: Array<SDKResultMessage["usage"]>;
-  // Ledger growth of the steered segments; incomplete once any segment's growth is unknown.
-  steeredLedgerUsage: ClaudeTurnLedger;
+  // Segments steers closed, oldest first; each SDK result reports only its own segment.
+  readonly sealedSegments: Array<ClaudeSegmentUsage>;
+  // Snapshots repeat a sealed message's usage; it must not claim usage in the open segment.
+  readonly sealedMessageIds: Set<string>;
   readonly rootModels: Set<string>;
-  // Root messages' usage by id and the main agent's latest model split its usage by model.
+  // The open segment's root and subagent messages' usage by id.
   readonly mainMessages: Map<string, TurnModelTokenUsage>;
-  // Subagent messages' usage by id, which the final ledger reports at turn end.
   readonly subagentMessages: Map<string, TurnModelTokenUsage>;
   mainUsageModel: string;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
@@ -4477,6 +4476,7 @@ interface ClaudeLiveQueryContext {
   // Subagents this process still ran when a replacement took over; only its exit can end them.
   handedOffSubagents: ReadonlySet<ActiveClaudeSubagent>;
   // The SDK's per-process model ledger at the last result; a new process starts at zero.
+  // Unknown after a turn settles unmeasured, until the next result re-anchors it.
   modelLedger: ClaudeModelLedger | undefined;
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
@@ -5501,13 +5501,45 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
         });
 
+        const turnHasSubagents = (context: ActiveClaudeTurnContext) =>
+          context.subagentsByTaskId.size > 0 || context.subagentsByToolUseId.size > 0;
+
         const liveTurnTokenUsage = (context: ActiveClaudeTurnContext) =>
           liveClaudeTurnTokenUsage({
+            sealedSegments: context.sealedSegments,
             mainMessages: context.mainMessages,
             subagentMessages: context.subagentMessages,
-            hasSubagents:
-              context.subagentsByTaskId.size > 0 || context.subagentsByToolUseId.size > 0,
+            hasSubagents: turnHasSubagents(context),
           });
+
+        const recordTurnMessageUsage = (
+          context: ActiveClaudeTurnContext,
+          messages: Map<string, TurnModelTokenUsage>,
+          messageId: string,
+          model: string,
+          usage: unknown,
+        ) =>
+          !context.sealedMessageIds.has(messageId) &&
+          recordClaudeMessageUsage(messages, messageId, model, usage);
+
+        const sealTurnSegment = (
+          context: ActiveClaudeTurnContext,
+          result: SDKResultMessage | undefined,
+        ) => {
+          const segment = sealClaudeSegment({
+            result,
+            ledgerGrowth: result === undefined ? undefined : resultLedgerUsage.get(result),
+            mainMessages: context.mainMessages,
+            subagentMessages: context.subagentMessages,
+            mainModel: context.mainUsageModel,
+            canonicalModel: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+          });
+          for (const id of context.mainMessages.keys()) context.sealedMessageIds.add(id);
+          for (const id of context.subagentMessages.keys()) context.sealedMessageIds.add(id);
+          context.mainMessages.clear();
+          context.subagentMessages.clear();
+          return segment;
+        };
 
         // Usage without input is a placeholder, not a context measurement.
         const emitContextUsage = Effect.fnUntraced(function* (
@@ -8200,6 +8232,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
 
+          if (input.result === undefined) {
+            const liveQuery = yield* Ref.get(queryContext);
+            // Frames billed this unmeasured segment; the process's next ledger growth spans it too.
+            if (liveQuery?.lastTurn === input.context) liveQuery.modelLedger = undefined;
+          }
           const threadDisposition = input.threadDisposition ?? "reusable";
           const terminalEvent: ProviderAdapter.ProviderAdapterV2Event =
             input.status === "failed"
@@ -8245,23 +8282,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     status: input.status,
                     completedAt: input.completedAt,
                   }),
-                  turnTokenUsage: normalizeClaudeTurnTokenUsage(
-                    input.result,
-                    input.context.subagentsByTaskId.size > 0 ||
-                      input.context.subagentsByToolUseId.size > 0,
-                    input.status,
-                    input.context.steeredSegmentUsage,
+                  turnTokenUsage: claudeTurnTokenUsage(
+                    [...input.context.sealedSegments, sealTurnSegment(input.context, input.result)],
                     {
+                      hasSubagents: turnHasSubagents(input.context),
+                      status: input.status,
                       rootModels: input.context.rootModels,
-                      // Without a final result the turn's last segment is unmeasured.
-                      ledger: addClaudeLedgerUsage(
-                        input.context.steeredLedgerUsage,
-                        input.result === undefined
-                          ? undefined
-                          : resultLedgerUsage.get(input.result),
-                      ),
-                      mainMessages: input.context.mainMessages,
-                      mainModel: input.context.mainUsageModel,
                     },
                   ),
                 },
@@ -9207,7 +9233,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 usage === undefined ? null : { messageId: event.message.id, usage };
               if (usage !== undefined) {
                 context.mainUsageModel = event.message.model;
-                recordClaudeMessageUsage(
+                recordTurnMessageUsage(
+                  context,
                   context.mainMessages,
                   event.message.id,
                   event.message.model,
@@ -9220,7 +9247,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const stream = context.streamUsage;
               if (stream?.usage && usage !== undefined) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
-                recordClaudeMessageUsage(
+                recordTurnMessageUsage(
+                  context,
                   context.mainMessages,
                   stream.messageId,
                   context.mainUsageModel,
@@ -9584,7 +9612,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
-              const usageChanged = recordClaudeMessageUsage(
+              const usageChanged = recordTurnMessageUsage(
+                context,
                 context.mainMessages,
                 message.message.id,
                 message.message.model,
@@ -9623,7 +9652,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               parentToolUseId !== null &&
               model !== undefined &&
               message.message.usage !== undefined &&
-              recordClaudeMessageUsage(
+              recordTurnMessageUsage(
+                context,
                 context.subagentMessages,
                 message.message.id,
                 model,
@@ -10254,11 +10284,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
-              context.steeredSegmentUsage.push(message.usage);
-              context.steeredLedgerUsage = addClaudeLedgerUsage(
-                context.steeredLedgerUsage,
-                resultLedgerUsage.get(message),
-              );
+              context.sealedSegments.push(sealTurnSegment(context, message));
               return;
             }
             yield* Ref.update(steeredTurns, (current) => {
@@ -11497,8 +11523,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               rateLimitResetTimes: new Map(),
               latestAssistantRateLimit: null,
               compactionFailure: null,
-              steeredSegmentUsage: [],
-              steeredLedgerUsage: { growth: new Map(), complete: true },
+              sealedSegments: [],
+              sealedMessageIds: new Set(),
               rootModels: new Set(),
               mainMessages: new Map(),
               subagentMessages: new Map(),

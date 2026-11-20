@@ -6368,6 +6368,21 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             });
             assert.equal(harness.offeredMessages.at(-1)?.priority, "now");
           }
+          const steeredUsage = {
+            input_tokens: 600,
+            output_tokens: 40,
+            cache_creation_input_tokens: 500,
+            cache_read_input_tokens: 2000,
+          };
+          if (steered) {
+            yield* harness.offerAndWait(
+              usageSnapshotFrame(
+                "msg_steered",
+                "00000000-0000-4000-8000-000000000903",
+                steeredUsage,
+              ),
+            );
+          }
           yield* harness.offerAndWait(
             makeResultFrame({
               uuid: "00000000-0000-4000-8000-000000000901",
@@ -6390,6 +6405,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             }),
           );
           if (steered) {
+            // A snapshot repeating the sealed segment's message must not bill it again.
+            yield* harness.offerAndWait(
+              usageSnapshotFrame(
+                "msg_steered",
+                "00000000-0000-4000-8000-000000000904",
+                steeredUsage,
+              ),
+            );
             yield* harness.offerAndWait(wakeAssistant);
           }
           if (queryExited) {
@@ -6447,8 +6470,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 usageScope: "main_agent",
                 usageStatus: failed ? "partial" : "complete",
                 hasSubagents: false,
-                inputTokens: failed ? 600 + 500 + 2000 : 603 + 2847 + 11455,
-                outputTokens: failed ? 40 : 46,
+                // Without a measured last segment, its live frames count: the wake reply's 1 and 1.
+                inputTokens: failed ? 600 + 500 + 2000 + 1 : 603 + 2847 + 11455,
+                outputTokens: failed ? 40 + 1 : 46,
                 cachedInputTokens: failed ? 2000 : 11455,
                 cacheCreationTokens: failed ? 500 : 2847,
                 models: ["claude-sonnet-4-6"],
@@ -12467,6 +12491,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
+        yield* harness.offerAndWait(
+          usageSnapshotFrame("msg_unmeasured", "00000000-0000-4000-8000-000000000791", {
+            input_tokens: 300,
+            output_tokens: 30,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          }),
+        );
         yield* Queue.offer(
           harness.sdkMessages,
           claudeSdkFrame({
@@ -12483,6 +12515,55 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         if (terminal?.status !== "failed") return;
         assert.equal(terminal.threadDisposition, "reusable");
         assert.include(terminal.failure.message, "never started a turn");
+        const openedOptions = harness.getOpenedOptions();
+
+        // The reused process's next ledger growth spans the unmeasured turn its frames billed.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-after-unmeasured-turn"),
+            text: "Try again.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000792",
+            result: "Bumped.",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 20,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+            modelUsage: { "claude-sonnet-4-6": billedModelUsage(400, 50) },
+          }),
+        );
+        yield* harness.awaitTerminal(2);
+        assert.strictEqual(harness.getOpenedOptions(), openedOptions);
+        assert.deepEqual(
+          harness.events.flatMap((event) =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.status !== "running" &&
+            event.providerTurn.turnTokenUsage !== undefined
+              ? [
+                  {
+                    input: event.providerTurn.turnTokenUsage.inputTokens,
+                    output: event.providerTurn.turnTokenUsage.outputTokens,
+                    subagentUsage: event.providerTurn.turnTokenUsage.subagentUsage,
+                  },
+                ]
+              : [],
+          ),
+          [
+            { input: 300, output: 30, subagentUsage: undefined },
+            { input: 100, output: 20, subagentUsage: undefined },
+          ],
+        );
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

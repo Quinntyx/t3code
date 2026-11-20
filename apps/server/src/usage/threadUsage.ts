@@ -177,6 +177,8 @@ export function threadUsageTurns(
     const speed = usageSpeed(run.modelSelection);
     // Unmeasured usage beyond the main agent belongs with the delegates, as measured usage does.
     if (usage.otherUsageStatus !== undefined) incompleteGroups.add("delegates");
+    // Running turns stay partial until they settle; a settled partial turn is a floor.
+    if (usage.usageStatus === "partial" && turn.completedAt !== null) incompleteGroups.add(group);
     const entries = [
       ...(usage.mainAgentUsage ?? [{ ...usage, model: mainModel }]).map((main) => ({
         ...main,
