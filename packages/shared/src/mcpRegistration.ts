@@ -205,6 +205,25 @@ const environmentVariableFields = (
         ),
   );
 
+// Several inputs can declare one variable; a secret or required declaration in any of them wins.
+const mergeFieldsByKey = (fields: ReadonlyArray<McpConfigField>): ReadonlyArray<McpConfigField> => {
+  const byKey = new Map<string, McpConfigField>();
+  for (const field of fields) {
+    const seen = byKey.get(field.key);
+    byKey.set(
+      field.key,
+      seen === undefined
+        ? field
+        : {
+            ...seen,
+            secret: seen.secret || field.secret,
+            required: seen.required || field.required,
+          },
+    );
+  }
+  return [...byKey.values()];
+};
+
 const readArgumentFields = (
   argumentsList: ReadonlyArray<NormalizedArgument>,
   prefix: string,
@@ -315,13 +334,11 @@ const parseServerJson = (document: Readonly<Record<string, unknown>>): McpRegist
       continue;
     }
     const { value } = parsed;
-    const fields = [
+    const fields = mergeFieldsByKey([
       ...environmentVariableFields(value.environmentVariables),
       ...readArgumentFields(value.runtimeArguments, "runtime argument"),
       ...readArgumentFields(value.packageArguments, "package argument"),
-    ].filter(
-      (field, index, all) => all.findIndex((candidate) => candidate.key === field.key) === index,
-    );
+    ]);
     const description = asString(document.description)?.trim();
     return {
       ok: true,

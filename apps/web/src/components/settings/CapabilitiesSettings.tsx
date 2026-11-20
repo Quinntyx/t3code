@@ -38,9 +38,13 @@ export function CapabilitiesSettingsPanel() {
   const states: RegisteredMcpServersState = data ?? { servers: [] };
   const stateOf = (id: string) => states.servers.find((server) => server.id === id);
 
-  const entries = settings.registeredMcpServers;
-  const save = (next: ReadonlyArray<RegisteredMcpServerEntry>) =>
-    updateSettings({ registeredMcpServers: [...next] });
+  // Each save replaces the whole list, so it starts from the last one sent, not the last echoed.
+  const [draft, setDraft] = useState<ReadonlyArray<RegisteredMcpServerEntry> | null>(null);
+  const entries = draft ?? settings.registeredMcpServers;
+  const save = (next: ReadonlyArray<RegisteredMcpServerEntry>) => {
+    setDraft(next);
+    updateSettings({ registeredMcpServers: [...next] }, { onFailed: () => setDraft(null) });
+  };
 
   // A server runs on the machine that registered it, so its list is that machine's alone.
   if (scope.kind !== "environment" || environment === null) {
