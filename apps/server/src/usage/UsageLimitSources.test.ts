@@ -9,9 +9,11 @@ import {
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -282,7 +284,7 @@ it.effect(
       readonly auth_index: string;
       readonly provider: string;
       readonly email: string;
-      readonly disabled?: boolean;
+      readonly id_token?: { readonly chatgpt_account_id: string };
     }> = [{ id: "claude.json", auth_index: "a", provider: "claude", email: "alice@example.com" }];
     let authFilesStatus = 200;
     let apiCallResponse: { readonly status_code: number; readonly body: string } = {
@@ -323,6 +325,48 @@ it.effect(
       expect(switched?.email).toBe("bob@example.com");
       expect(switched?.usageLimits.unavailable?.reason).toBe("probeFailed");
       expect(switched?.usageLimits.windows).toEqual([]);
+
+      // Switching workspaceId on the same auth file and email does not inherit the prior workspace's cache.
+      yield* TestClock.adjust("1 minute");
+      files = [
+        {
+          id: "codex.json",
+          auth_index: "c",
+          provider: "codex",
+          email: "alice@example.com",
+          id_token: { chatgpt_account_id: "ws-1" },
+        },
+      ];
+      apiCallResponse = {
+        status_code: 200,
+        body: JSON.stringify({
+          plan_type: "plus",
+          rate_limit: { primary_window: { used_percent: 60 } },
+        }),
+      };
+      yield* sources.refresh;
+      expect((yield* sources.current)[0]?.accounts[0]).toMatchObject({
+        id: "codex.json",
+        workspaceId: "ws-1",
+        usageLimits: { windows: [{ usedPercent: 60 }] },
+      });
+
+      yield* TestClock.adjust("1 minute");
+      files = [
+        {
+          id: "codex.json",
+          auth_index: "c",
+          provider: "codex",
+          email: "alice@example.com",
+          id_token: { chatgpt_account_id: "ws-2" },
+        },
+      ];
+      apiCallResponse = { status_code: 429, body: JSON.stringify({ error: "rate_limited" }) };
+      yield* sources.refresh;
+      const switchedWorkspace = (yield* sources.current)[0]?.accounts[0];
+      expect(switchedWorkspace?.workspaceId).toBe("ws-2");
+      expect(switchedWorkspace?.usageLimits.unavailable?.reason).toBe("probeFailed");
+      expect(switchedWorkspace?.usageLimits.windows).toEqual([]);
 
       // A subsequent healthy read replaces the failed state with fresh limits.
       yield* TestClock.adjust("1 minute");
@@ -510,4 +554,59 @@ it.effect("coalesces concurrent refreshes into at most one queued follow-up", ()
       Effect.scoped,
     );
   }),
+);
+
+it.effect("settles blocked and subsequent refreshes when the service scope closes", () =>
+  Effect.gen(function* () {
+    const firstStarted = yield* Deferred.make<void>();
+    const serviceScope = yield* Scope.make();
+    yield* Effect.addFinalizer(() => Scope.close(serviceScope, Exit.void));
+    let authFilesCalls = 0;
+
+    yield* Effect.gen(function* () {
+      const sources = yield* UsageLimitSources.make.pipe(Scope.provide(serviceScope));
+      const first = yield* Effect.forkChild(sources.refresh, { startImmediately: true });
+      yield* Deferred.await(firstStarted);
+
+      const queued = yield* Effect.forkChild(sources.refresh, { startImmediately: true });
+      yield* Scope.close(serviceScope, Exit.void);
+
+      yield* Fiber.join(first);
+      yield* Fiber.join(queued);
+      yield* sources.refresh;
+      expect(authFilesCalls).toBe(1);
+    }).pipe(
+      Effect.provide([
+        layerSecrets(),
+        ServerSettings.layerTest({
+          usageLimitSources: {
+            [UsageLimitSourceId.make("hub")]: {
+              kind: "cliproxy",
+              url: "https://hub.test",
+              managementKey: "secret",
+              enabled: true,
+            },
+          },
+        }),
+        Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+          shouldRunScopeWork: () => Effect.succeed(false),
+        }),
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.gen(function* () {
+              const path = new URL(request.url).pathname;
+              if (path.startsWith("/v8/")) {
+                return HttpClientResponse.fromWeb(request, Response.json({}, { status: 404 }));
+              }
+              authFilesCalls += 1;
+              yield* Deferred.succeed(firstStarted, undefined);
+              return yield* Effect.never;
+            }),
+          ),
+        ),
+        NodeCrypto.layer,
+      ]),
+    );
+  }).pipe(Effect.scoped),
 );
