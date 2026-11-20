@@ -178,8 +178,10 @@ export function ServerBrowserSurface(props: {
   const clientRef = useRef<PreviewStreamClient | null>(null);
   const viewportRef = useRef<PreviewStreamViewport | null>(null);
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
+  const targetKey = `${environmentId}:${threadId}:${tabId}`;
   const hasFrameRef = useRef(false);
   const frameTargetRef = useRef<string | null>(null);
+  const retainedFrameTargetRef = useRef<string | null>(null);
   const [retainedFrameTargetKey, setRetainedFrameTargetKey] = useState<string | null>(null);
   const [currentFramePainted, setCurrentFramePainted] = useState(false);
   const controlRef = useRef<PreviewStreamControl | null>(null);
@@ -331,9 +333,10 @@ export function ServerBrowserSurface(props: {
       reload: (options) =>
         send({ type: "reload", ...(options?.ignoreCache ? { ignoreCache: true } : {}) }),
       viewport: (setting) => send({ type: "viewport", setting }),
-      canvas: () => (!pdfUrl && hasFrameRef.current ? canvasRef.current : null),
+      canvas: () =>
+        !pdfUrl && retainedFrameTargetRef.current === targetKey ? canvasRef.current : null,
     }),
-    [pdfUrl, send],
+    [pdfUrl, send, targetKey],
   );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the canvas container's size, sends resizes to the stream and grows the frame cap
@@ -385,10 +388,10 @@ export function ServerBrowserSurface(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the preview stream client and paints its frames onto the canvas while visible
   useEffect(() => {
     const canvas = canvasRef.current;
-    const targetKey = `${environmentId}:${threadId}:${tabId}`;
     if (frameTargetRef.current !== targetKey) {
       frameTargetRef.current = targetKey;
       hasFrameRef.current = false;
+      retainedFrameTargetRef.current = null;
       setCurrentFramePainted(false);
       setRetainedFrameTargetKey(null);
       canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
@@ -402,6 +405,7 @@ export function ServerBrowserSurface(props: {
       () => {
         if (hasFrameRef.current) return;
         hasFrameRef.current = true;
+        retainedFrameTargetRef.current = targetKey;
         setCurrentFramePainted(true);
         setRetainedFrameTargetKey(targetKey);
       },
@@ -503,6 +507,7 @@ export function ServerBrowserSurface(props: {
     followSize,
     hostSetup,
     tabId,
+    targetKey,
     threadId,
     visible,
   ]);
@@ -780,7 +785,6 @@ export function ServerBrowserSurface(props: {
     resetInput(textarea);
   };
 
-  const targetKey = `${environmentId}:${threadId}:${tabId}`;
   const control = controlState?.targetKey === targetKey ? controlState.control : null;
   const hasRetainedFrame = retainedFrameTargetKey === targetKey;
   const hasCurrentFrame = hasRetainedFrame && currentFramePainted;

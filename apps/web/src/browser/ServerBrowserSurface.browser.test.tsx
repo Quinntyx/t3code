@@ -43,7 +43,7 @@ vi.mock(import("~/state/previewStream"), async (original) => ({
   refreshPreviewStreamAccess: mocks.refreshAccess,
 }));
 
-import { ServerBrowserSurface } from "./ServerBrowserSurface";
+import { type ServerBrowserHandle, ServerBrowserSurface } from "./ServerBrowserSurface";
 
 function setup() {
   mocks.sent.length = 0;
@@ -95,8 +95,10 @@ const keys = () => mocks.sent.filter((input) => input.type === "key");
 async function renderStream(tabId = "tab-copy") {
   const container = document.createElement("div");
   container.style.cssText = "width: 400px; height: 300px; display: flex;";
+  const handleRef: { current: ServerBrowserHandle | null } = { current: null };
   const surface = (nextTabId: string) => (
     <ServerBrowserSurface
+      ref={handleRef}
       environmentId={EnvironmentId.make("environment-copy")}
       threadId="thread-copy"
       tabId={nextTabId}
@@ -116,6 +118,7 @@ async function renderStream(tabId = "tab-copy") {
   return {
     screen,
     container,
+    handleRef,
     handlers,
     flush: (nextTabId = tabId) => screen.rerender(surface(nextTabId)),
     rerender: async (nextTabId: string) => {
@@ -405,6 +408,38 @@ describe("ServerBrowserSurface stream phases", () => {
     await expect.element(second.screen.getByRole("button", { name: "Reconnect" })).toBeEnabled();
     await userEvent.click(second.screen.getByRole("button", { name: "Reconnect" }));
     expect(mocks.refreshAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps imperative canvas() available during reconnect for retained frames and clears it on tab change", async () => {
+    setup();
+    const { screen, container, handleRef, handlers, rerender } = await renderStream("tab-one");
+    await using _screen = screen;
+    const canvas = container.querySelector("canvas")!;
+
+    expect(handleRef.current?.canvas()).toBeNull();
+
+    await act(() =>
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+      }),
+    );
+    expect(handleRef.current?.canvas()).toBeNull();
+
+    await act(() => mocks.painted?.());
+    expect(handleRef.current?.canvas()).toBe(canvas);
+
+    await act(() => handlers().onConnectedChange?.(false));
+    await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
+    expect(handleRef.current?.canvas()).toBe(canvas);
+
+    await rerender("tab-two");
+    expect(handleRef.current?.canvas()).toBeNull();
+
+    await rerender("tab-one");
+    expect(handleRef.current?.canvas()).toBeNull();
   });
 });
 
