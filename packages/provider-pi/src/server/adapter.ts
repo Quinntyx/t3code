@@ -410,7 +410,7 @@ type PiSubagentUsage = PiMessageUsage & { readonly model: string };
 
 function piSubagentUsageByModel(turn: ActivePiTurn): TurnModelTokenUsage[] {
   const byModel = new Map<string, PiSubagentUsage>();
-  for (const usage of turn.subagentUsage.values()) {
+  for (const { usage } of turn.subagentUsage.values()) {
     const seen = byModel.get(usage.model);
     byModel.set(
       usage.model,
@@ -439,7 +439,13 @@ function piTurnTokenUsage(turn: ActivePiTurn, completed = false): TurnTokenUsage
         ? turn.pendingUsage
         : addPiMessageUsage(turn.completedUsage, turn.pendingUsage);
   const subagentUsage = piSubagentUsageByModel(turn);
-  const subagentFields = subagentUsage.length === 0 ? {} : { subagentUsage };
+  // A child that is still running, aborted or failed reports a floor of its cumulative usage.
+  const subagentFields = {
+    ...(subagentUsage.length === 0 ? {} : { subagentUsage }),
+    ...([...turn.subagentUsage.values()].some((child) => !child.complete)
+      ? { otherUsageStatus: "partial" as const }
+      : {}),
+  };
   if (usage === null) {
     if (subagentUsage.length === 0) {
       return {
@@ -488,7 +494,10 @@ interface ActivePiTurn {
   pendingUsage: PiMessageUsage | null;
   usageComplete: boolean;
   hasSubagents: boolean;
-  readonly subagentUsage: Map<string, PiSubagentUsage>;
+  readonly subagentUsage: Map<
+    string,
+    { readonly usage: PiSubagentUsage; readonly complete: boolean }
+  >;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
@@ -1512,9 +1521,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               model: recordString(result, "model") ?? turn.turnInput.modelSelection.model,
               ...usage,
             };
+            const complete = finished && !interrupted && !failed;
             const previous = turn.subagentUsage.get(nativeTaskId);
-            if (previous?.model !== nextUsage.model || !samePiMessageUsage(previous, nextUsage)) {
-              turn.subagentUsage.set(nativeTaskId, nextUsage);
+            if (
+              previous?.complete !== complete ||
+              previous.usage.model !== nextUsage.model ||
+              !samePiMessageUsage(previous.usage, nextUsage)
+            ) {
+              turn.subagentUsage.set(nativeTaskId, { usage: nextUsage, complete });
               subagentUsageChanged = true;
             }
           }

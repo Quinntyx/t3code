@@ -31,6 +31,7 @@ import {
   claudeModelLedger,
   claudeReportedContextWindows,
   claudeTurnTokenUsage,
+  deductClaudeLedgerUsage,
   liveClaudeTurnTokenUsage,
   recordClaudeMessageUsage,
   sealClaudeSegment,
@@ -4411,6 +4412,8 @@ interface ActiveClaudeTurnContext {
   readonly sealedSegments: Array<ClaudeSegmentUsage>;
   // Snapshots repeat a sealed message's usage; it must not claim usage in the open segment.
   readonly sealedMessageIds: Set<string>;
+  // The attached process's ledger names, which live in that process's context.
+  readonly ledgerModelNames: ReadonlyMap<string, string>;
   readonly rootModels: Set<string>;
   // The open segment's root and subagent messages' usage by id.
   readonly mainMessages: Map<string, TurnModelTokenUsage>;
@@ -4476,8 +4479,11 @@ interface ClaudeLiveQueryContext {
   // Subagents this process still ran when a replacement took over; only its exit can end them.
   handedOffSubagents: ReadonlySet<ActiveClaudeSubagent>;
   // The SDK's per-process model ledger at the last result; a new process starts at zero.
-  // Unknown after a turn settles unmeasured, until the next result re-anchors it.
   modelLedger: ClaudeModelLedger | undefined;
+  // Usage frames billed to turns that settled without a result since then; the next growth spans it.
+  liveBilledUsage: Array<TurnModelTokenUsage>;
+  // The model this process's ledger names each raw model id.
+  readonly ledgerModelNames: Map<string, string>;
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
   readonly taskOutputRoot: string | undefined;
@@ -5510,6 +5516,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             mainMessages: context.mainMessages,
             subagentMessages: context.subagentMessages,
             hasSubagents: turnHasSubagents(context),
+            ledgerModelNames: context.ledgerModelNames,
           });
 
         const recordTurnMessageUsage = (
@@ -5533,6 +5540,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             subagentMessages: context.subagentMessages,
             mainModel: context.mainUsageModel,
             canonicalModel: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+            ledgerModelNames: context.ledgerModelNames,
           });
           for (const id of context.mainMessages.keys()) context.sealedMessageIds.add(id);
           for (const id of context.subagentMessages.keys()) context.sealedMessageIds.add(id);
@@ -8232,10 +8240,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
 
+          const lastSegment = sealTurnSegment(input.context, input.result);
           if (input.result === undefined) {
             const liveQuery = yield* Ref.get(queryContext);
-            // Frames billed this unmeasured segment; the process's next ledger growth spans it too.
-            if (liveQuery?.lastTurn === input.context) liveQuery.modelLedger = undefined;
+            if (liveQuery?.lastTurn === input.context) {
+              liveQuery.liveBilledUsage.push(...lastSegment.mainRows, ...lastSegment.delegateRows);
+            }
           }
           const threadDisposition = input.threadDisposition ?? "reusable";
           const terminalEvent: ProviderAdapter.ProviderAdapterV2Event =
@@ -8283,7 +8293,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     completedAt: input.completedAt,
                   }),
                   turnTokenUsage: claudeTurnTokenUsage(
-                    [...input.context.sealedSegments, sealTurnSegment(input.context, input.result)],
+                    [...input.context.sealedSegments, lastSegment],
                     {
                       hasSubagents: turnHasSubagents(input.context),
                       status: input.status,
@@ -11311,6 +11321,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
             ),
             modelLedger: new Map(),
+            liveBilledUsage: [],
+            ledgerModelNames: new Map(),
             taskOutputRoot: claudeTaskOutputRoot(
               adapterOptions.environment,
               path,
@@ -11353,7 +11365,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   if (message.type === "result") {
                     const ledger = claudeModelLedger(message.modelUsage);
                     const growth = claudeLedgerDelta(context.modelLedger, ledger);
-                    if (growth !== undefined) resultLedgerUsage.set(message, growth);
+                    if (growth !== undefined) {
+                      resultLedgerUsage.set(
+                        message,
+                        context.liveBilledUsage.length === 0
+                          ? growth
+                          : deductClaudeLedgerUsage(growth, context.liveBilledUsage, (model) =>
+                              canonicalClaudeSubagentModel(modelCatalog, model),
+                            ),
+                      );
+                    }
+                    context.liveBilledUsage = [];
+                    for (const [model, usage] of ledger ?? []) {
+                      context.ledgerModelNames.set(model, usage.model);
+                    }
                     // A ledger that went backwards cannot anchor the next turn's growth.
                     context.modelLedger =
                       growth === undefined && context.modelLedger !== undefined
@@ -11525,6 +11550,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               compactionFailure: null,
               sealedSegments: [],
               sealedMessageIds: new Set(),
+              ledgerModelNames: querySession.ledgerModelNames,
               rootModels: new Set(),
               mainMessages: new Map(),
               subagentMessages: new Map(),

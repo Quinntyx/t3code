@@ -4,6 +4,7 @@ import {
   claudeLedgerDelta,
   claudeModelLedger,
   claudeTurnTokenUsage,
+  deductClaudeLedgerUsage,
   liveClaudeTurnTokenUsage,
   recordClaudeMessageUsage,
   sealClaudeSegment,
@@ -480,6 +481,32 @@ describe("billable native turn usage", () => {
     expect(claudeLedgerDelta(ledger(25), ledger(10))).toBeUndefined();
     expect(claudeLedgerDelta(undefined, ledger(10))).toBeUndefined();
     expect(claudeModelLedger({})).toBeUndefined();
+    const usage = (model: string, inputTokens: number, outputTokens: number) => ({
+      model,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    // Billed rows spread across aliases of their model and clip at zero; unmatched rows drop.
+    expect([
+      ...deductClaudeLedgerUsage(
+        new Map([
+          ["claude-haiku-4-5-20251001", usage("claude-haiku-4-5", 30, 5)],
+          ["haiku-alias", usage("claude-haiku-4-5", 20, 3)],
+          ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
+        ]),
+        [
+          usage("claude-haiku-4-5", 40, 6),
+          usage("claude-opus-5-5", 10, 1),
+          usage("claude-sonnet-4-6", 150, 10),
+        ],
+      ),
+    ]).toEqual([
+      ["claude-haiku-4-5-20251001", usage("claude-haiku-4-5", 0, 0)],
+      ["haiku-alias", usage("claude-haiku-4-5", 10, 2)],
+      ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 0, 10)],
+    ]);
   });
 
   it("adds Claude steering segments to the final measured result once", () => {
@@ -584,7 +611,7 @@ describe("billable native turn usage", () => {
       },
     },
     {
-      name: "a ledger that misses a live delegate model keeps its rows and marks a floor",
+      name: "a ledger that misses a live delegate model drops its live row and marks a floor",
       hasSubagents: true,
       status: "completed" as const,
       rootModels: [sonnet],
@@ -690,6 +717,120 @@ describe("billable native turn usage", () => {
         outputTokens: 50,
         models: [sonnet, "claude-opus-5-5"],
         mainAgentUsage: [row(sonnet, 100, 20), row("claude-opus-5-5", 200, 30)],
+        otherUsageStatus: "partial",
+      },
+    },
+    {
+      name: "one delegate model's surplus does not hide another's shortfall",
+      hasSubagents: true,
+      status: "completed" as const,
+      rootModels: ["claude-opus-5-5"],
+      segments: [
+        sealClaudeSegment({
+          result: success(100, 20),
+          ledgerGrowth: ledger(
+            row("claude-opus-5-5", 100, 20),
+            row("claude-haiku-4-5", 50, 10),
+            row(sonnet, 10, 2),
+          ),
+          mainMessages: byId(["main", row("claude-opus-5-5", 100, 20)]),
+          subagentMessages: byId(
+            ["haiku", row("claude-haiku-4-5", 20, 5)],
+            ["sonnet", row(sonnet, 30, 5)],
+          ),
+          mainModel: "claude-opus-5-5",
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: true,
+        inputTokens: 100,
+        outputTokens: 20,
+        models: ["claude-opus-5-5"],
+        subagentUsage: [row("claude-haiku-4-5", 50, 10), row(sonnet, 10, 2)],
+        otherUsage: { inputTokens: 60, outputTokens: 12 },
+        otherUsageStatus: "partial",
+      },
+    },
+    {
+      name: "a zero-count success flagged is_error yields to live main usage",
+      hasSubagents: false,
+      status: "failed" as const,
+      rootModels: [sonnet],
+      segments: [
+        sealClaudeSegment({
+          result: { ...success(0, 0), is_error: true },
+          mainMessages: byId(["main", row(sonnet, 450, 50)]),
+          subagentMessages: new Map(),
+          mainModel: sonnet,
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        usageStatus: "partial",
+        hasSubagents: false,
+        inputTokens: 450,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 50,
+        models: [sonnet],
+        otherUsageStatus: "partial",
+      },
+    },
+    {
+      name: "an interrupt before any assistant snapshot names the streamed model",
+      hasSubagents: false,
+      status: "interrupted" as const,
+      rootModels: [],
+      segments: [
+        sealClaudeSegment({
+          mainMessages: byId(["main", row("claude-opus-5-5", 200, 30)]),
+          subagentMessages: new Map(),
+          mainModel: "claude-opus-5-5",
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        usageStatus: "partial",
+        hasSubagents: false,
+        inputTokens: 200,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 30,
+        models: ["claude-opus-5-5"],
+        otherUsageStatus: "partial",
+      },
+    },
+    {
+      name: "a window without ledger growth names models as the process ledger does",
+      hasSubagents: false,
+      status: "interrupted" as const,
+      rootModels: ["provider-opus"],
+      segments: [
+        sealClaudeSegment({
+          result: success(100, 20),
+          ledgerGrowth: new Map([["provider-opus", row("claude-opus-5-5", 100, 20)]]),
+          mainMessages: byId(["first", row("provider-opus", 100, 20)]),
+          subagentMessages: new Map(),
+          mainModel: "provider-opus",
+        }),
+        sealClaudeSegment({
+          mainMessages: byId(["second", row("provider-opus", 200, 30)]),
+          subagentMessages: new Map(),
+          mainModel: "provider-opus",
+          ledgerModelNames: new Map([["provider-opus", "claude-opus-5-5"]]),
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        usageStatus: "partial",
+        hasSubagents: false,
+        inputTokens: 300,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 50,
+        models: ["provider-opus"],
         otherUsageStatus: "partial",
       },
     },

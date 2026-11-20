@@ -65,7 +65,8 @@ time, with its estimated API-equivalent cost. **Main agent** is the thread's own
 subagents and workflows and Pi's subagent tool. A group that ran more than one model reads
 **Mixed**; select it for the per-model breakdown. A dotted line marks each time the thread's context
 was compacted. Figures update while the thread works; a cost ending in **+** is a floor, usually
-replaced by the exact figure when the turn finishes. Turns from providers that do not report
+replaced by the exact figure when the turn finishes. An interrupted or failed turn can keep its
+**+**, because part of its work was never measured. Turns from providers that do not report
 per-turn usage show nothing here, and other providers' native subagents may count toward the main
 agent or not appear at all.
 
