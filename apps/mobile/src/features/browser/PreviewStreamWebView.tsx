@@ -364,17 +364,32 @@ function PreviewStreamDocumentView({
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
+  const [refusedAccess, setRefusedAccess] = useState<PreviewStreamConfiguration["access"] | null>(
+    null,
+  );
   const [previousAccess, setPreviousAccess] = useState(access);
   if (previousAccess !== access) {
     setPreviousAccess(access);
+    if (refusedAccess !== null && access !== refusedAccess) {
+      setRefusedAccess(null);
+    }
     if (access === null) {
       setControl(null);
       setFileChooser(null);
       setStatus((current) => (current === "error" ? current : "connecting"));
     }
   }
-  const displayError = status === "error" ? error : access === null ? accessError : null;
+  const authRefused = refusedAccess !== null;
+  const displayError =
+    status === "error"
+      ? error
+      : authRefused
+        ? "This session can't open the browser stream. Reconnect to try again."
+        : access === null
+          ? accessError
+          : null;
   const hasError = displayError !== null;
+  const showRetainedErrorBanner = hasError && status !== "error" && hasStreamed;
   const phase = previewStreamPhase(control, status === "streaming", hasStreamed);
   const statusLabel = previewStreamStatusLabel(phase, control);
   const announcement = compact ? null : hasError ? displayError : statusLabel;
@@ -458,12 +473,12 @@ function PreviewStreamDocumentView({
       dialogRef.current = null;
       streamEnded();
     }
-    if (!bootstrapped.current || appliedAccess.current === access) return;
+    if (authRefused || !bootstrapped.current || appliedAccess.current === access) return;
     appliedAccess.current = access;
     webView.current?.injectJavaScript(
       `window.T3PreviewStream?.updateAccess(${JSON.stringify(access)}); true;`,
     );
-  }, [access]);
+  }, [access, authRefused]);
   // Announce distinct status transitions to VoiceOver on iOS, where accessibilityLiveRegion is unsupported.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- announces stream phase and error changes to VoiceOver on iOS
   useEffect(() => {
@@ -495,7 +510,7 @@ function PreviewStreamDocumentView({
         >
           <View className="flex-1 flex-row items-center gap-2">
             <ConnectionStatusDot
-              state={phase === "live" ? "connected" : "connecting"}
+              state={hasError ? "error" : phase === "live" ? "connected" : "connecting"}
               pulse={!hasError && phase !== "live"}
               size={7}
             />
@@ -504,7 +519,7 @@ function PreviewStreamDocumentView({
               numberOfLines={1}
               className="flex-1 text-xs text-foreground-muted"
             >
-              {statusLabel}
+              {hasError ? "Stream disconnected" : statusLabel}
             </AppText>
           </View>
           {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
@@ -516,6 +531,13 @@ function PreviewStreamDocumentView({
                 command({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
               }
             />
+          ) : phase !== "live" && environmentLabel?.trim() ? (
+            <AppText
+              numberOfLines={1}
+              className="rounded bg-secondary px-1.5 py-0.5 font-mono text-2xs text-foreground-muted"
+            >
+              {environmentLabel.trim()}
+            </AppText>
           ) : null}
         </View>
       ) : null}
@@ -550,6 +572,7 @@ function PreviewStreamDocumentView({
             clearBootstrapTimer();
             if (
               !wasBootstrapped &&
+              !authRefused &&
               appliedAccess.current !== access &&
               message.type !== "gone" &&
               message.type !== "hostSetup" &&
@@ -561,8 +584,10 @@ function PreviewStreamDocumentView({
               );
             }
             if (
-              access === null &&
+              (access === null || authRefused) &&
               (message.type === "control" ||
+                message.type === "unauthorized" ||
+                message.type === "fileChooser" ||
                 (message.type === "status" && message.status === "streaming"))
             ) {
               return;
@@ -578,7 +603,16 @@ function PreviewStreamDocumentView({
               }
               case "unauthorized":
                 if (!onUnauthorized()) {
-                  fail("This session can't open the browser stream. Reconnect to try again.");
+                  dialogRef.current = null;
+                  setControl(null);
+                  setFileChooser(null);
+                  setStatus((current) => (current === "error" ? current : "connecting"));
+                  setRefusedAccess(access);
+                  appliedAccess.current = null;
+                  webView.current?.injectJavaScript(
+                    "window.T3PreviewStream?.updateAccess(null); true;",
+                  );
+                  streamEnded();
                 }
                 return;
               case "gone":
@@ -631,6 +665,8 @@ function PreviewStreamDocumentView({
         ) : null}
         {!hasError && (phase === "connecting" || phase === "awaiting-frame") && !pdfUri ? (
           <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
             className="absolute inset-0 items-center justify-center gap-2 px-6"
             style={{ backgroundColor: background }}
           >
@@ -673,6 +709,31 @@ function PreviewStreamDocumentView({
               </AppText>
             </View>
           </View>
+        ) : null}
+        {showRetainedErrorBanner ? (
+          compact ? (
+            <View testID="stream-error-banner" className="absolute bottom-1.5 left-1.5">
+              <CompactErrorBadge />
+            </View>
+          ) : (
+            <View
+              testID="stream-error-banner"
+              className="absolute inset-x-3 bottom-3 flex-row items-center justify-between gap-3 rounded-xl border border-secondary-border bg-secondary px-3 py-2.5"
+            >
+              <AppText
+                accessibilityLiveRegion="polite"
+                selectable
+                className="flex-1 text-xs text-secondary-foreground"
+              >
+                {displayError}
+              </AppText>
+              <Button
+                label={authRefused ? "Reconnect" : "Retry"}
+                tone="secondary"
+                onPress={onRefreshAccess}
+              />
+            </View>
+          )
         ) : null}
       </View>
       {!compact && fileChooser && control?.controller === "you" ? (
@@ -729,8 +790,9 @@ function PreviewStreamDocumentView({
           )}
         </View>
       ) : null}
-      {hasError ? (
+      {hasError && !showRetainedErrorBanner ? (
         <View
+          testID="stream-error-overlay"
           className="absolute inset-0 items-center justify-center gap-4 px-6"
           style={{ backgroundColor: background }}
         >
@@ -763,7 +825,15 @@ function PreviewStreamDocumentView({
           {!gone && !compact ? (
             <View className="items-center">
               <Button
-                label={status === "error" ? (hostSetup ? "Try again" : "Reconnect") : "Retry"}
+                label={
+                  status === "error"
+                    ? hostSetup
+                      ? "Try again"
+                      : "Reconnect"
+                    : authRefused
+                      ? "Reconnect"
+                      : "Retry"
+                }
                 tone="secondary"
                 onPress={status === "error" ? onRetry : onRefreshAccess}
               />

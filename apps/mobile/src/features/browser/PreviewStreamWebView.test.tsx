@@ -5,6 +5,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 type ViewProps = {
   readonly children?: ReactNode;
+  readonly testID?: string;
   readonly accessibilityElementsHidden?: boolean;
   readonly importantForAccessibility?: string;
 };
@@ -40,8 +41,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: mocks.announce },
   Platform: { OS: "ios" },
-  View: ({ children, accessibilityElementsHidden, importantForAccessibility }: ViewProps) => (
+  View: ({
+    children,
+    testID,
+    accessibilityElementsHidden,
+    importantForAccessibility,
+  }: ViewProps) => (
     <div
+      data-testid={testID}
       data-a11y-hidden={accessibilityElementsHidden ? "true" : undefined}
       data-a11y-important={importantForAccessibility}
     >
@@ -191,7 +198,9 @@ it("announces phase transitions through one live region, suppresses duplicate ba
   try {
     const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Connecting to remote stream…"]);
-    expect(container.textContent).toContain("Starting video stream from build-box…");
+    const hiddenConnecting = container.querySelector('[data-a11y-hidden="true"]');
+    expect(hiddenConnecting?.textContent).toContain("Connecting to remote browser");
+    expect(hiddenConnecting?.textContent).toContain("Starting video stream from build-box…");
     expect(mocks.announce).not.toHaveBeenCalled();
 
     act(() =>
@@ -443,10 +452,31 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null); true;");
     expect(streamingChanges.at(-1)).toBe(false);
     expect(errorChanges).toEqual([false, true]);
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-overlay"]')).toBeNull();
     expect(liveRegions().map((el) => el.textContent)).toEqual([
       "Could not authorize browser stream.",
     ]);
     expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+
+    // Stale in-flight unauthorized or fileChooser messages while access is null must not fail or trigger retries.
+    act(() => {
+      emit({ type: "unauthorized" });
+      emit({ type: "unauthorized" });
+      emit({ type: "unauthorized" });
+      emit({
+        type: "fileChooser",
+        chooser: {
+          multiple: false,
+          accept: "*/*",
+          uploadUrl: "https://example.test",
+          credentials: false,
+        },
+      });
+    });
+    expect(mocks.accessState.retryAfter).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-overlay"]')).toBeNull();
 
     const retryButton = container.querySelector("button");
     expect(retryButton?.textContent).toBe("Retry");
@@ -491,6 +521,85 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
     expect(mocks.announce).toHaveBeenLastCalledWith("Watching");
+  } finally {
+    cleanup();
+  }
+});
+
+it("retries exhausted mid-session authorization in place over a banner without remounting the WebView", () => {
+  const { container, rerender, cleanup } = mountView();
+  try {
+    expect(mocks.webViewMounts).toBe(1);
+    const liveRegions = () => [...container.querySelectorAll('[data-live-region="polite"]')];
+
+    act(() => {
+      emit({ type: "status", status: "connecting" });
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    mocks.injected.length = 0;
+
+    act(() => {
+      emit({ type: "status", status: "connecting" });
+      emit({ type: "unauthorized" });
+      emit({ type: "unauthorized" });
+      emit({ type: "unauthorized" });
+    });
+
+    expect(mocks.webViewMounts).toBe(1);
+    expect(mocks.injected).toContain("window.T3PreviewStream?.updateAccess(null); true;");
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-overlay"]')).toBeNull();
+    expect(liveRegions().map((el) => el.textContent)).toEqual([
+      "This session can't open the browser stream. Reconnect to try again.",
+    ]);
+
+    const reconnectButton = container.querySelector("button");
+    expect(reconnectButton?.textContent).toBe("Reconnect");
+    act(() => reconnectButton?.click());
+    expect(mocks.accessState.refresh).toHaveBeenCalledOnce();
+    expect(mocks.webViewMounts).toBe(1);
+
+    mocks.accessState = {
+      ...mocks.accessState,
+      access: {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "reconnected-ticket" },
+      },
+      error: null,
+    };
+    rerender();
+
+    expect(mocks.webViewMounts).toBe(1);
+    expect(
+      mocks.injected.some(
+        (script) =>
+          script.includes("window.T3PreviewStream?.updateAccess(") &&
+          script.includes('"reconnected-ticket"'),
+      ),
+    ).toBe(true);
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
+    expect(container.textContent).not.toContain("Connecting to remote browser");
+
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 2,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+    expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
   } finally {
     cleanup();
   }

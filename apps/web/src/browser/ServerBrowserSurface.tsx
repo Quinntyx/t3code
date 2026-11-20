@@ -796,11 +796,17 @@ export function ServerBrowserSurface(props: {
             aria-hidden
             className={cn(
               "size-2 shrink-0 rounded-full",
-              phase === "live" ? "bg-success" : "bg-warning ring-2 ring-warning/30",
+              phase === "live"
+                ? "bg-success"
+                : accessDenied || hostSetup !== null
+                  ? "bg-destructive"
+                  : "bg-warning ring-2 ring-warning/30",
             )}
           />
           <span role="status" className="truncate text-xs text-muted-foreground">
-            {previewStreamStatusLabel(phase, control)}
+            {accessDenied || hostSetup !== null
+              ? "Stream disconnected"
+              : previewStreamStatusLabel(phase, control)}
           </span>
         </div>
         {control?.canOperate && (phase === "live" || control.dialog !== null) ? (
@@ -840,7 +846,10 @@ export function ServerBrowserSurface(props: {
           onContextMenu={(event) => event.preventDefault()}
         />
         {!overlaySuppressed && (phase === "connecting" || phase === "awaiting-frame") ? (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/35 p-4 text-center">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/35 p-4 text-center"
+          >
             <div className="relative flex size-10 items-center justify-center rounded-full bg-background/80">
               <Monitor aria-hidden className="size-5 text-muted-foreground" />
               <span
@@ -855,7 +864,10 @@ export function ServerBrowserSurface(props: {
           </div>
         ) : null}
         {!overlaySuppressed && phase === "reconnecting" ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-2 transition-opacity delay-300 duration-150 motion-reduce:transition-none starting:opacity-0">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-2 transition-opacity delay-300 duration-150 motion-reduce:transition-none starting:opacity-0"
+          >
             <span className="flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
               <span
                 aria-hidden
@@ -863,6 +875,27 @@ export function ServerBrowserSurface(props: {
               />
               {previewStreamOverlayDetail(phase, trimmedEnvironmentLabel)}
             </span>
+          </div>
+        ) : null}
+        {visible && accessDenied && hasRetainedFrame ? (
+          <div
+            data-error-layout="banner"
+            className="visible absolute inset-x-3 bottom-3 z-20 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-sm"
+          >
+            <p role="alert" className="text-xs text-muted-foreground">
+              Browser connection was refused.
+            </p>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => {
+                unauthorizedRef.current = 0;
+                setAccessDenied(false);
+                refreshPreviewStreamAccess(environmentId);
+              }}
+            >
+              Reconnect
+            </Button>
           </div>
         ) : null}
         {!pdfUrl && agentCursor && control?.controller !== "you" ? (
@@ -991,9 +1024,12 @@ export function ServerBrowserSurface(props: {
           </Button>
         </div>
       ) : null}
-      {visible && accessDenied ? (
+      {visible && accessDenied && !hasRetainedFrame ? (
         // The page can be invisible beneath an empty or unreachable state; reconnect must remain reachable.
-        <div className="visible absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center">
+        <div
+          data-error-layout="overlay"
+          className="visible absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center"
+        >
           <p role="alert" className="text-xs text-muted-foreground">
             Browser connection was refused.
           </p>

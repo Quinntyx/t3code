@@ -95,7 +95,9 @@ async function renderStream(tabId = "tab-copy") {
   );
   await using stack = new AsyncDisposableStack();
   const screen = stack.use(await render(surface(tabId), { container }));
-  await vi.waitFor(() => expect(mocks.createClient).toHaveBeenCalled());
+  await vi.waitFor(() =>
+    expect(mocks.createClient.mock.calls.at(-1)?.[0]).toMatchObject({ tabId }),
+  );
   stack.move();
   const handlers = () => mocks.createClient.mock.calls.at(-1)![1];
   return {
@@ -278,6 +280,69 @@ describe("ServerBrowserSurface stream phases", () => {
       }),
     );
     expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
+  });
+
+  it("hides decorative connecting and reconnecting overlays from assistive technology", async () => {
+    setup();
+    const { screen, handlers } = await renderStream();
+    await using _screen = screen;
+
+    const connectingOverlay = screen
+      .getByText("Connecting to remote browser")
+      .element()
+      .closest('[aria-hidden="true"]');
+    expect(connectingOverlay).not.toBeNull();
+    expect(connectingOverlay?.textContent).toContain("Starting video stream from build-box…");
+
+    await act(() => {
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      mocks.painted?.();
+    });
+    await act(() => handlers().onConnectedChange?.(false));
+
+    const reconnectingOverlay = screen
+      .getByText("Reconnecting to remote browser…")
+      .element()
+      .closest('[aria-hidden="true"]');
+    expect(reconnectingOverlay).not.toBeNull();
+  });
+
+  it("uses a full overlay for pre-frame refusal and a non-obscuring banner once a frame is retained", async () => {
+    setup();
+    const first = await renderStream();
+    await using _first = first.screen;
+    await act(() => {
+      first.handlers().onUnauthorized?.();
+      first.handlers().onUnauthorized?.();
+      first.handlers().onUnauthorized?.();
+    });
+    expect(first.container.querySelector('[data-error-layout="overlay"]')).not.toBeNull();
+    expect(first.container.querySelector('[data-error-layout="banner"]')).toBeNull();
+
+    const second = await renderStream("tab-2");
+    await using _second = second.screen;
+    await act(() => {
+      second.handlers().onControl?.({
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      mocks.painted?.();
+    });
+    await act(() => {
+      second.handlers().onConnectedChange?.(false);
+      second.handlers().onUnauthorized?.();
+      second.handlers().onUnauthorized?.();
+      second.handlers().onUnauthorized?.();
+    });
+    expect(second.container.querySelector('[data-error-layout="banner"]')).not.toBeNull();
+    expect(second.container.querySelector('[data-error-layout="overlay"]')).toBeNull();
   });
 });
 
