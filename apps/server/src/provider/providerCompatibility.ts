@@ -10,7 +10,9 @@ import {
 import { brokenVersionDetail } from "@t3tools/provider-core/server/compatibility";
 import { satisfiesSemverRange } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
-import packageJson from "../../package.json" with { type: "json" };
+
+// Pinned to upstream e6d521012d so fork release versions never mis-match remote t3CodeRange policies.
+export const UPSTREAM_T3_CODE_VERSION = "0.1.11";
 
 const StableVersion = TrimmedNonEmptyString.pipe(
   Schema.check(Schema.makeFilter((value) => /^\d+\.\d+\.\d+$/.test(value))),
@@ -74,7 +76,7 @@ export function resolveProviderCompatibility(
   policies: ReadonlyArray<ProviderCompatibilityPolicy> | undefined,
   driver: ProviderDriverKind,
   version: string | null,
-  t3CodeVersion = packageJson.version,
+  t3CodeVersion = UPSTREAM_T3_CODE_VERSION,
 ): ServerProviderCompatibilityAdvisory | undefined {
   const policy = policies?.find(
     (entry) => entry.driver === driver && satisfiesSemverRange(t3CodeVersion, entry.t3CodeRange),

@@ -98,6 +98,49 @@ it.layer(NodeServices.layer)("service preflight database", (it) => {
           .status,
       ).toBe("ready");
 
+      // Startup reconciles legacy fork 81/82 index migrations, so preflight accepts valid tails and blocks invalid ones.
+      const legacyFork = path.join(path.dirname(databasePath), "legacy-fork.sqlite");
+      const legacyForkDb = new NodeSqlite.DatabaseSync(legacyFork);
+      legacyForkDb.exec(
+        "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT)",
+      );
+      const insertLegacy = legacyForkDb.prepare("INSERT INTO effect_sql_migrations VALUES (?, ?)");
+      for (const [id, name] of migrationManifest.filter(([id]) => id <= 80)) {
+        insertLegacy.run(id, name);
+      }
+      insertLegacy.run(81, "VoiceNotificationIndex");
+      insertLegacy.run(82, "SubagentLineageIndex");
+      legacyForkDb.close();
+      expect(
+        runServicePreflight({
+          databasePath: legacyFork,
+          launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+        }).status,
+      ).toBe("ready");
+
+      const invalidFork = path.join(path.dirname(databasePath), "invalid-fork.sqlite");
+      const invalidForkDb = new NodeSqlite.DatabaseSync(invalidFork);
+      invalidForkDb.exec(
+        "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT)",
+      );
+      const insertInvalid = invalidForkDb.prepare(
+        "INSERT INTO effect_sql_migrations VALUES (?, ?)",
+      );
+      for (const [id, name] of migrationManifest.filter(([id]) => id <= 80)) {
+        insertInvalid.run(id, name);
+      }
+      insertInvalid.run(81, "VoiceNotificationIndex");
+      insertInvalid.run(83, "CommandReadIndexes");
+      invalidForkDb.close();
+      const invalidForkPreflight = runServicePreflight({
+        databasePath: invalidFork,
+        launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+      });
+      expect(invalidForkPreflight.status).toBe("blocked");
+      expect(
+        invalidForkPreflight.status === "blocked" ? invalidForkPreflight.reason : "",
+      ).toContain("83_CommandReadIndexes");
+
       const newerId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
       insert.run(newerId, "FromNightly");
       db.close();

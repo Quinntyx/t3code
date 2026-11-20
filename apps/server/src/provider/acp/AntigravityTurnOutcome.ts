@@ -94,9 +94,12 @@ const lastStepAfter =
   };
 
 function resetAtFrom(text: string, now: DateTime.Utc): string | undefined {
-  // makeProviderFailure drops a timestamp that does not parse, so fall back to the delay.
+  // Ignore unparsable or stale timestamps (e.g. replayed checkpoint 429s) so delay fallback wins.
   const timestamp = RESET_TIMESTAMP.exec(text)?.[1];
-  if (timestamp !== undefined && Option.isSome(DateTime.make(timestamp))) return timestamp;
+  const parsedTimestamp = timestamp !== undefined ? DateTime.make(timestamp) : Option.none();
+  if (Option.isSome(parsedTimestamp) && DateTime.isGreaterThan(parsedTimestamp.value, now)) {
+    return timestamp;
+  }
   const delay = RESET_DELAY.exec(text)?.[1] ?? RETRY_DELAY.exec(text)?.[1];
   if (delay === undefined) return undefined;
   let delayMs = 0;

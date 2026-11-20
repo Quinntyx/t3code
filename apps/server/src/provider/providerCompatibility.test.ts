@@ -21,6 +21,7 @@ import {
   applyProviderCompatibility,
   ProviderCompatibilityPolicy,
   resolveProviderCompatibility,
+  UPSTREAM_T3_CODE_VERSION,
 } from "./providerCompatibility.ts";
 import bundledManifest from "./model-manifest.json" with { type: "json" };
 
@@ -179,6 +180,16 @@ describe("provider compatibility", () => {
     for (const version of ["0.0.41", "0.1.0"]) {
       assert.isUndefined(resolveProviderCompatibility([scopedPolicy], driver, "0.9.0", version));
     }
+    const futureUpstreamPolicy = { ...policy, t3CodeRange: ">=0.2.0" };
+    assert.isUndefined(resolveProviderCompatibility([futureUpstreamPolicy], driver, "0.9.0"));
+    assert.strictEqual(
+      resolveProviderCompatibility(
+        [{ ...policy, t3CodeRange: `>=${UPSTREAM_T3_CODE_VERSION} <0.2.0` }],
+        driver,
+        "0.9.0",
+      )?.status,
+      "broken",
+    );
   });
 
   it("relaxes remote policy without losing probe errors, and falls back when a policy is omitted", () => {

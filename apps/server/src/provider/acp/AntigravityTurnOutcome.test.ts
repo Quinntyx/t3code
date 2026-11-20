@@ -2,9 +2,11 @@ import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type { OrchestrationV2ProviderFailure } from "@t3tools/contracts";
 
@@ -180,6 +182,61 @@ describe("watchAntigravityPromptOutcome", () => {
           retryable: true,
         }),
       );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("ignores stale or equal quotaResetTimeStamp and falls back to quotaResetDelay", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const profileDirectory = yield* fs.makeTempDirectoryScoped();
+      const sessionId = "f7aba774-5472-4277-b6ee-27b2e05570a7";
+      const conversations = path.join(profileDirectory, "antigravity-acp", "conversations");
+      yield* fs.makeDirectory(conversations, { recursive: true });
+      const nowIso = "2026-11-20T08:14:00.000Z";
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(nowIso)));
+
+      let nextIndex = 0;
+      const runErrorTurn = (error: string) =>
+        Effect.gen(function* () {
+          const check = yield* watchAntigravityPromptOutcome(profileDirectory, sessionId);
+          const database = new NodeSqlite.DatabaseSync(path.join(conversations, `${sessionId}.db`));
+          try {
+            database.exec(
+              "CREATE TABLE IF NOT EXISTS steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)",
+            );
+            database
+              .prepare("INSERT INTO steps VALUES (?, ?, ?)")
+              .run(nextIndex++, ERROR_MESSAGE, errorPayload(error));
+          } finally {
+            database.close();
+          }
+          return yield* check({ stopReason: "end_turn" });
+        });
+
+      // Replayed historical 429 from hours ago alongside a fresh 1h13m reset delay.
+      const staleWithDelay = yield* runErrorTurn(
+        "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[quotaResetDelay:1h13m quotaResetTimeStamp:2026-11-19T23:19:00Z] reason:QUOTA_EXHAUSTED]]",
+      );
+      assert.strictEqual(staleWithDelay?.failure.resetAt, "2026-11-20T09:27:00.000Z");
+
+      // Timestamp equal to now is not a future reset time and falls back to retryDelay.
+      const equalWithRetry = yield* runErrorTurn(
+        `Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [map[@type:type.googleapis.com/google.rpc.RetryInfo retryDelay:90s] map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[quotaResetTimeStamp:${nowIso}] reason:QUOTA_EXHAUSTED]]`,
+      );
+      assert.strictEqual(equalWithRetry?.failure.resetAt, "2026-11-20T08:15:30.000Z");
+
+      // Stale timestamp with no delay leaves resetAt omitted rather than reporting the past.
+      const staleWithoutDelay = yield* runErrorTurn(
+        "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[quotaResetTimeStamp:2026-11-19T23:19:00Z] reason:QUOTA_EXHAUSTED]]",
+      );
+      assert.isUndefined(staleWithoutDelay?.failure.resetAt);
+
+      // Strictly future timestamp is preserved over delay.
+      const futureWithDelay = yield* runErrorTurn(
+        "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[quotaResetDelay:1h quotaResetTimeStamp:2026-11-20T10:00:00Z] reason:QUOTA_EXHAUSTED]]",
+      );
+      assert.strictEqual(futureWithDelay?.failure.resetAt, "2026-11-20T10:00:00.000Z");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
