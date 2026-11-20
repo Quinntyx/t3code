@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   injected: [] as string[],
   webViewMounts: 0,
   announce: vi.fn(),
+  announceWithOptions: vi.fn(),
   getClipboard: vi.fn<() => Promise<string>>(async () => ""),
   accessState: {
     access: {
@@ -46,7 +47,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("react-native", () => ({
-  AccessibilityInfo: { announceForAccessibility: mocks.announce },
+  AccessibilityInfo: {
+    announceForAccessibility: mocks.announce,
+    announceForAccessibilityWithOptions: mocks.announceWithOptions,
+  },
   Platform: { OS: process.env.T3_MOBILE_TEST_PLATFORM === "android" ? "android" : "ios" },
   View: ({
     children,
@@ -169,6 +173,7 @@ function mountView(
   mocks.injected.length = 0;
   mocks.webViewMounts = 0;
   mocks.announce.mockReset();
+  mocks.announceWithOptions.mockReset();
   mocks.getClipboard.mockReset().mockResolvedValue("");
   mocks.accessState = {
     access:
@@ -226,6 +231,8 @@ function mountView(
   };
 }
 
+const POLITE_IOS_ANNOUNCEMENT = { queue: true, priority: "low" };
+
 it("announces phase transitions through one live region, suppresses duplicate badges, and hides the status row on error", () => {
   const { container, cleanup } = mountView();
   try {
@@ -235,6 +242,7 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     expect(hiddenConnecting?.textContent).toContain("Connecting to remote browser");
     expect(hiddenConnecting?.textContent).toContain("Starting video stream from build-box…");
     expect(mocks.announce).not.toHaveBeenCalled();
+    expect(mocks.announceWithOptions).not.toHaveBeenCalled();
 
     act(() =>
       emit({
@@ -262,14 +270,15 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     act(() => emit({ type: "status", status: "error", detail: "Stream failed." }));
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Stream failed."]);
     expect(container.textContent).not.toContain("Reconnecting to remote browser…");
+    expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {
-      expect(mocks.announce).not.toHaveBeenCalled();
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
-      expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
-        "Waiting for video frame…",
-        "Watching",
-        "Reconnecting stream…",
-        "Stream failed.",
+      expect(mocks.announceWithOptions.mock.calls).toEqual([
+        ["Waiting for video frame…", POLITE_IOS_ANNOUNCEMENT],
+        ["Watching", POLITE_IOS_ANNOUNCEMENT],
+        ["Reconnecting stream…", POLITE_IOS_ANNOUNCEMENT],
+        ["Stream failed.", POLITE_IOS_ANNOUNCEMENT],
       ]);
     }
   } finally {
@@ -296,7 +305,7 @@ it("keeps Take control available during awaiting-frame with or without a pending
     expect(mocks.injected.some((script) => script.includes('"takeControl"'))).toBe(true);
 
     mocks.injected.length = 0;
-    mocks.announce.mockClear();
+    mocks.announceWithOptions.mockClear();
     act(() =>
       emit({
         type: "control",
@@ -312,11 +321,12 @@ it("keeps Take control available during awaiting-frame with or without a pending
       (el) => el.textContent,
     );
     expect(liveTexts).toContain("Confirm action");
+    expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {
-      expect(mocks.announce).not.toHaveBeenCalled();
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
-      expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
-        "Browser dialog: Confirm action",
+      expect(mocks.announceWithOptions.mock.calls).toEqual([
+        ["Browser dialog: Confirm action", POLITE_IOS_ANNOUNCEMENT],
       ]);
     }
     const button = container.querySelector("button");
@@ -335,8 +345,32 @@ it("keeps Take control available during awaiting-frame with or without a pending
       }),
     );
     if (!IS_ANDROID) {
-      expect(mocks.announce.mock.calls.map(([message]) => message)).toEqual([
-        "Browser dialog: Confirm action",
+      expect(mocks.announceWithOptions.mock.calls).toEqual([
+        ["Browser dialog: Confirm action", POLITE_IOS_ANNOUNCEMENT],
+      ]);
+    }
+
+    // Empty-message dialogs announce a non-empty fallback on both Android and iOS.
+    mocks.announceWithOptions.mockClear();
+    act(() =>
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "you",
+        generation: 4,
+        dialog: { type: "alert", message: "   ", defaultValue: "" },
+      }),
+    );
+    const emptyDialogLiveTexts = [...container.querySelectorAll('[data-live-region="polite"]')].map(
+      (el) => el.textContent,
+    );
+    expect(emptyDialogLiveTexts).toContain("Browser dialog opened.");
+    expect(mocks.announce).not.toHaveBeenCalled();
+    if (IS_ANDROID) {
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.announceWithOptions.mock.calls).toEqual([
+        ["Browser dialog opened.", POLITE_IOS_ANNOUNCEMENT],
       ]);
     }
   } finally {
@@ -382,6 +416,7 @@ it("shows compact reconnect and terminal error badges while reporting error stat
     expect(container.textContent).toContain("Unavailable");
     expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
     expect(mocks.announce).not.toHaveBeenCalled();
+    expect(mocks.announceWithOptions).not.toHaveBeenCalled();
   } finally {
     cleanup();
   }
@@ -401,6 +436,7 @@ it("reports terminal access errors without spinning in compact mode", () => {
     expect(container.textContent).toContain("Unavailable");
     expect(container.querySelector('[data-dot="error"]')).not.toBeNull();
     expect(mocks.announce).not.toHaveBeenCalled();
+    expect(mocks.announceWithOptions).not.toHaveBeenCalled();
   } finally {
     cleanup();
   }
@@ -414,6 +450,7 @@ it("announces initial fallback access errors via live region and VoiceOver", () 
   try {
     expect(container.querySelector('[data-live-region="polite"]')).toBeNull();
     expect(mocks.announce).not.toHaveBeenCalled();
+    expect(mocks.announceWithOptions).not.toHaveBeenCalled();
 
     mocks.accessState = {
       ...mocks.accessState,
@@ -424,11 +461,15 @@ it("announces initial fallback access errors via live region and VoiceOver", () 
     expect(container.querySelector('[data-live-region="polite"]')?.textContent).toBe(
       "Could not authorize browser stream.",
     );
+    expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {
-      expect(mocks.announce).not.toHaveBeenCalled();
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
-      expect(mocks.announce).toHaveBeenCalledTimes(1);
-      expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+      expect(mocks.announceWithOptions).toHaveBeenCalledTimes(1);
+      expect(mocks.announceWithOptions).toHaveBeenCalledWith(
+        "Could not authorize browser stream.",
+        POLITE_IOS_ANNOUNCEMENT,
+      );
     }
   } finally {
     cleanup();
@@ -554,6 +595,7 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
     mocks.injected.length = 0;
     mocks.announce.mockClear();
+    mocks.announceWithOptions.mockClear();
 
     // Mid-session access failure suspends transport without unmounting the WebView.
     mocks.accessState = {
@@ -572,10 +614,14 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     expect(liveRegions().map((el) => el.textContent)).toEqual([
       "Could not authorize browser stream.",
     ]);
+    expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {
-      expect(mocks.announce).not.toHaveBeenCalled();
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
-      expect(mocks.announce).toHaveBeenCalledWith("Could not authorize browser stream.");
+      expect(mocks.announceWithOptions).toHaveBeenCalledWith(
+        "Could not authorize browser stream.",
+        POLITE_IOS_ANNOUNCEMENT,
+      );
     }
 
     // Stale in-flight unauthorized or fileChooser messages while access is null must not fail or trigger retries.
@@ -628,10 +674,14 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
     ).toBe(true);
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Reconnecting stream…"]);
     expect(container.textContent).not.toContain("Connecting to remote browser");
+    expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {
-      expect(mocks.announce).not.toHaveBeenCalled();
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
-      expect(mocks.announce).toHaveBeenCalledWith("Reconnecting stream…");
+      expect(mocks.announceWithOptions).toHaveBeenCalledWith(
+        "Reconnecting stream…",
+        POLITE_IOS_ANNOUNCEMENT,
+      );
     }
 
     act(() => {
@@ -646,10 +696,14 @@ it("keeps the WebView mounted across a mid-session access failure and recovers i
       emit({ type: "status", status: "streaming", accessGeneration: 2 });
     });
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Watching"]);
+    expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {
-      expect(mocks.announce).not.toHaveBeenCalled();
+      expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
-      expect(mocks.announce).toHaveBeenLastCalledWith("Watching");
+      expect(mocks.announceWithOptions).toHaveBeenLastCalledWith(
+        "Watching",
+        POLITE_IOS_ANNOUNCEMENT,
+      );
     }
   } finally {
     cleanup();
@@ -806,6 +860,7 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
         controller: "you",
         generation: 1,
         dialog: null,
+        inputSession: 1,
       });
       emit({ type: "status", status: "streaming" });
     });
@@ -824,6 +879,7 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
         controller: "you",
         generation: 2,
         dialog: null,
+        inputSession: 2,
       });
       emit({ type: "status", status: "streaming" });
     });
@@ -847,6 +903,7 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
         controller: "another-viewer",
         generation: 3,
         dialog: null,
+        inputSession: 3,
       });
       emit({
         type: "control",
@@ -854,6 +911,7 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
         controller: "you",
         generation: 4,
         dialog: null,
+        inputSession: 4,
       });
     });
     mocks.injected.length = 0;
@@ -888,6 +946,7 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
         controller: "you",
         generation: 5,
         dialog: null,
+        inputSession: 5,
         accessGeneration: 1,
       });
       emit({ type: "status", status: "streaming", accessGeneration: 1 });
@@ -901,13 +960,15 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
       false,
     );
 
-    // 4) A paste within the active session still sends cleanly.
+    // 4) A paste within the active session forwards the current inputSession token to the WebView.
     mocks.getClipboard.mockResolvedValueOnce("fresh-paste");
     await act(async () => {
       streamRef.current?.paste();
       await Promise.resolve();
     });
-    expect(mocks.injected.some((script) => script.includes('"fresh-paste"'))).toBe(true);
+    expect(mocks.injected).toContain(
+      'window.T3PreviewStream?.command({"type":"text","text":"fresh-paste"}, 5); true;',
+    );
   } finally {
     cleanup();
   }
@@ -942,6 +1003,33 @@ it("boots with null access instead of stale initial credentials if the WebView r
     expect(mocks.webViewMounts).toBe(2);
     expect(mocks.lastSourceHtml).toContain('"access":null');
     expect(mocks.lastSourceHtml).not.toContain("initial-expired-ticket");
+  } finally {
+    cleanup();
+  }
+});
+
+it("boots with null access if the WebView remounts after authorization refusals are exhausted", () => {
+  const { cleanup } = mountView({
+    access: {
+      httpBase: "https://environment.test/api/preview",
+      wsBase: "wss://environment.test/api/preview",
+      credentials: false,
+      query: { wsTicket: "refused-ticket" },
+    },
+  });
+  try {
+    expect(mocks.lastSourceHtml).toContain("refused-ticket");
+    act(() => {
+      emit({ type: "status", status: "streaming", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+      emit({ type: "unauthorized", accessGeneration: 0 });
+    });
+
+    act(() => mocks.onProcessTerminated?.());
+    expect(mocks.webViewMounts).toBe(2);
+    expect(mocks.lastSourceHtml).toContain('"access":null');
+    expect(mocks.lastSourceHtml).not.toContain("refused-ticket");
   } finally {
     cleanup();
   }

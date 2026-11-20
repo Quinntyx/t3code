@@ -120,7 +120,9 @@ export async function openServerPictureInPicture(input: {
           painter.paint(frame);
         },
         onViewport: () => undefined,
-        onConnectedChange: () => undefined,
+        onConnectedChange: (connected) => {
+          if (!connected) painter.reset();
+        },
         onUnauthorized: () => {
           if (stopped) return;
           if (refusals >= 5) {

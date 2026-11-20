@@ -390,8 +390,10 @@ export function ServerBrowserSurface(props: {
     const canvas = canvasRef.current;
     if (frameTargetRef.current !== targetKey) {
       frameTargetRef.current = targetKey;
+      unauthorizedRef.current = 0;
       hasFrameRef.current = false;
       retainedFrameTargetRef.current = null;
+      setHostSetup(null);
       setCurrentFramePainted(false);
       setRetainedFrameTargetKey(null);
       canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
@@ -902,7 +904,7 @@ export function ServerBrowserSurface(props: {
             </span>
           </div>
         ) : null}
-        {visible && hasStreamError && hasRetainedFrame ? (
+        {visible && hostSetup === null && hasStreamError && hasRetainedFrame ? (
           <div
             data-error-layout="banner"
             className="visible absolute inset-x-3 bottom-3 z-20 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-sm"
@@ -1049,7 +1051,7 @@ export function ServerBrowserSurface(props: {
           </Button>
         </div>
       ) : null}
-      {visible && hasStreamError && !hasRetainedFrame ? (
+      {visible && hostSetup === null && hasStreamError && !hasRetainedFrame ? (
         // The page can be invisible beneath an empty or unreachable state; reconnect must remain reachable.
         <div
           data-error-layout="overlay"

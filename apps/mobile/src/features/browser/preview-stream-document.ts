@@ -17,7 +17,7 @@ export interface PreviewStreamConfiguration {
 }
 
 export type PreviewStreamMessage = (
-  | ({ readonly type: "control" } & PreviewStreamControl)
+  | ({ readonly type: "control"; readonly inputSession?: number } & PreviewStreamControl)
   | {
       readonly type: "status";
       readonly status: "connecting" | "streaming" | "error";

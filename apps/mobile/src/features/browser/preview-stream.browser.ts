@@ -44,7 +44,7 @@ const AGENT_CURSOR_SVG =
 
 interface Viewer {
   readonly stop: () => void;
-  readonly command: (input: PreviewStreamInput) => void;
+  readonly command: (input: PreviewStreamInput, expectedInputSession?: number) => void;
   readonly updateAccess: (
     access: PreviewStreamConfiguration["access"] | null,
     generation?: number,
@@ -59,8 +59,8 @@ export function stop() {
   activeViewer = null;
 }
 
-export function command(input: PreviewStreamInput) {
-  activeViewer?.command(input);
+export function command(input: PreviewStreamInput, expectedInputSession?: number) {
+  activeViewer?.command(input, expectedInputSession);
 }
 
 export function updateAccess(
@@ -104,6 +104,7 @@ export function start(configuration: PreviewStreamConfiguration) {
 
   let stopped = false;
   let streaming = false;
+  let inputSession = 0;
   let viewport: PreviewStreamViewport | null = null;
   let size: { width: number; height: number } | null = null;
   let cap: { width: number; height: number } | null = null;
@@ -175,6 +176,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const connect = () => {
+    inputSession += 1;
     if (client) reportStatus("connecting");
     painter.reset();
     client?.stop();
@@ -228,7 +230,14 @@ export function start(configuration: PreviewStreamConfiguration) {
         onControl: (nextControl) => {
           const previous = control;
           control = nextControl;
-          post({ type: "control", ...nextControl });
+          if (
+            nextControl.controller !== "you" ||
+            previous?.controller !== "you" ||
+            previous.generation !== nextControl.generation
+          ) {
+            inputSession += 1;
+          }
+          post({ type: "control", ...nextControl, inputSession });
           if (nextControl.controller === "you") agentCursor.style.opacity = "0";
           if (nextControl.controller !== "you") clearInput();
           else {
@@ -240,6 +249,7 @@ export function start(configuration: PreviewStreamConfiguration) {
         onConnectedChange: (connected) => {
           if (!connected) {
             const hadControl = control !== null;
+            inputSession += 1;
             painter.reset();
             control = null;
             clearInput();
@@ -715,6 +725,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   activeViewer = {
     stop: () => {
       stopped = true;
+      inputSession += 1;
       observer.disconnect();
       visualViewport?.removeEventListener("resize", followVisualViewport);
       visualViewport?.removeEventListener("scroll", followVisualViewport);
@@ -728,8 +739,15 @@ export function start(configuration: PreviewStreamConfiguration) {
       track?.stop();
       if (video) video.srcObject = null;
     },
-    command: (message) => {
-      if (message.type === "text" && !streaming) return;
+    command: (message, expectedInputSession) => {
+      if (
+        message.type === "text" &&
+        (!streaming ||
+          control?.controller !== "you" ||
+          (expectedInputSession !== undefined && expectedInputSession !== inputSession))
+      ) {
+        return;
+      }
       send(message);
     },
     updateAccess: (nextAccess, nextGeneration) => {

@@ -513,3 +513,74 @@ it("suspends transport and input on updateAccess(null) and resumes on fresh acce
     harness.cleanup();
   }
 });
+
+it("drops text commands carrying a stale inputSession across reconnects and control handoffs", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    const firstControl = [...harness.posted].reverse().find((entry) => entry.type === "control") as
+      | { inputSession?: number }
+      | undefined;
+    expect(typeof firstControl?.inputSession).toBe("number");
+    const firstSession = firstControl!.inputSession!;
+
+    // Reconnect and immediately regain control and paint a fresh frame before native processes the disconnect.
+    first.disconnect();
+    vi.runOnlyPendingTimers();
+    const second = harness.sockets[1]!;
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    second.receiveFrame();
+    await flushMicrotasks();
+
+    const secondControl = [...harness.posted]
+      .reverse()
+      .find((entry) => entry.type === "control") as { inputSession?: number } | undefined;
+    const secondSession = secondControl!.inputSession!;
+    expect(secondSession).toBeGreaterThan(firstSession);
+
+    second.sent.length = 0;
+    command({ type: "text", text: "stale-after-reconnect" }, firstSession);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "text")).toEqual([]);
+
+    // Control handoff (generation bump) also invalidates the previous inputSession.
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 3,
+      dialog: null,
+    });
+    const thirdControl = [...harness.posted].reverse().find((entry) => entry.type === "control") as
+      | { inputSession?: number }
+      | undefined;
+    const thirdSession = thirdControl!.inputSession!;
+    expect(thirdSession).toBeGreaterThan(secondSession);
+
+    command({ type: "text", text: "stale-after-handoff" }, secondSession);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "text")).toEqual([]);
+
+    command({ type: "text", text: "current-session-paste" }, thirdSession);
+    expect(second.sent).toContainEqual({ type: "text", text: "current-session-paste" });
+  } finally {
+    harness.cleanup();
+  }
+});
