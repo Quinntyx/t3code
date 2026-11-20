@@ -1042,7 +1042,6 @@ export default function ChatView(props: ChatViewProps) {
     selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
   const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
-  // Voice is app-wide and pinned into whichever panel is on screen.
   const rightPanelView = threadRightPanelView(rightPanelState, {
     open: voiceOpen,
     active: voiceActive,

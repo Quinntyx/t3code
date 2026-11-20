@@ -860,7 +860,6 @@ function SortableTabList(props: {
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const { onMove } = props;
-  // Voice is pinned by the app, not ordered by this thread, so it takes no drag slot.
   const sortable = props.surfaces.filter((surface) => surface.kind !== "voice");
   const surfaceIds = sortable.map((surface) => surface.id);
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
@@ -932,7 +931,6 @@ function RightPanelTab(
     id: surface.id,
     disabled: props.dragDisabled,
   });
-  // Voice belongs to the app, not this thread, so it never joins the drag order.
   const dragListeners = surface.kind === "voice" ? {} : listeners;
   const sideChatShell = useQuietThreadShell(
     surface.kind === "side-chat" && props.environmentId !== null

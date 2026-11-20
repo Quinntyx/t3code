@@ -15,7 +15,6 @@ import {
 import { useDiffPanelStore } from "../../diffPanelStore";
 import { type ThreadPanelPresentation } from "../../rightPanelLayout";
 import {
-  selectActiveRightPanel,
   selectThreadPanelOpen,
   type RightPanelSurface,
   useRightPanelStore,
@@ -177,8 +176,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const openFileSurfaceStable = useStableCallback(openFileSurface);
   const closePreviewPanel = () => {
-    // Voice is app-wide and keeps every panel open while it is; closing the panel ends it and
-    // still runs the normal close, so the surface underneath does not stay on screen.
+    // Voice keeps every panel open while it is, so closing the panel must end it too.
     if (useRightPanelStore.getState().voiceOpen) setVoiceOpen(false);
     if (activeThreadRef) {
       if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
@@ -218,7 +216,6 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
       activateVoice();
       return;
     }
-    // Voice is app-wide: picking another tab shows this thread's surface without closing it.
     useRightPanelStore.getState().setVoiceActive(false);
     explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
       surfaceKind: surface.kind,
@@ -318,18 +315,22 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const addPullRequestSurfaceStable = useStableCallback(addPullRequestSurface);
   const onOpenTurnDiff = (runId: RunId, filePath?: string) => {
     if (!isServerThread || !activeThreadRef) return;
-    const diffOpen =
-      selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
-    explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
+    explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
+      surfaceKind: "diff",
+      diffOpen,
+      activeThreadRef,
+    });
     useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   };
   const onOpenToolDiffStable = useStableCallback((target: ToolCallDiffTarget) => {
     if (!isServerThread || !activeThreadRef) return;
-    const diffOpen =
-      selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
-    explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
+    explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
+      surfaceKind: "diff",
+      diffOpen,
+      activeThreadRef,
+    });
     useDiffPanelStore.getState().selectToolCall(activeThreadRef, target);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();

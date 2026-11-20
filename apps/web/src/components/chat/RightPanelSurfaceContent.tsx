@@ -193,7 +193,6 @@ export function RightPanelSurfaceContent(props: {
     case "voice":
       return (
         <Suspense fallback={null}>
-          {/* Voice is app-wide: the panel that renders it belongs to whichever thread is on screen. */}
           <VoicePanel visible={visible && props.activeSurfaceId === surface.id} />
         </Suspense>
       );

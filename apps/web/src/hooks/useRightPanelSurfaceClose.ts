@@ -137,7 +137,6 @@ export function useRightPanelSurfaceClose(input: {
   const closeSurface = useStableCallback((surface: RightPanelSurface) => {
     if (!threadRef) return;
     if (surface.kind === "voice") {
-      // Voice is app-wide, so its tab closes the one surface rather than this thread's panel.
       useRightPanelStore.getState().setVoiceOpen(false);
       return;
     }
