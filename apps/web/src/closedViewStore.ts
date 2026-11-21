@@ -11,13 +11,13 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 import { randomUUID } from "./lib/utils";
-import { type RightPanelSurface } from "./rightPanelStore";
+import { type ThreadRightPanelSurface } from "./rightPanelStore";
 
 export type ClosedView =
   | {
       kind: "panel-tab";
       threadRef: ScopedThreadRef;
-      surface: Exclude<RightPanelSurface, { kind: "terminal" }>;
+      surface: Exclude<ThreadRightPanelSurface, { kind: "terminal" }>;
     }
   | { kind: "browser"; threadRef: ScopedThreadRef; snapshot: PreviewSessionSnapshot };
 
@@ -64,7 +64,6 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
     case "files":
     case "notebook":
     case "pull-requests":
-    case "voice":
       return surface.id === surface.kind;
     case "preview":
       return surface.resourceId === null || typeof surface.resourceId === "string";
@@ -141,7 +140,7 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      version: 2,
+      version: 3,
       migrate: (persisted) => {
         const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)
           ?.entries;

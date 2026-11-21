@@ -94,9 +94,13 @@ function setup(mode: "single" | "all") {
   });
   fixture.confirm = () => confirmation;
   function Harness({ threadRef }: { threadRef: ScopedThreadRef }) {
+    const displayedSurfaces = useRightPanelStore(
+      (state) => selectThreadRightPanelState(state.byThreadKey, threadRef).surfaces,
+    );
     const { closeSurface, closeAllSurfaces } = useRightPanelSurfaceClose({
       threadRef,
       terminalLabelsById: new Map(),
+      displayedSurfaces,
     });
     return (
       <button onClick={() => (mode === "all" ? closeAllSurfaces() : closeSurface(surface))}>

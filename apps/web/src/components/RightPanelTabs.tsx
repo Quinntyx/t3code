@@ -68,7 +68,7 @@ import {
 
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import { bulkCloseAvailability, type RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { issueStatePresentation } from "~/components/issue/issuePresentation";
 import { issueEnvironment } from "~/state/issues";
@@ -919,11 +919,12 @@ function SortableTabList(props: {
   children: ReactNode;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const surfaceIds = props.surfaces.map((surface) => surface.id);
-  const { onMove, surfaces } = props;
+  const { onMove } = props;
+  const sortable = props.surfaces.filter((surface) => surface.kind !== "voice");
+  const surfaceIds = sortable.map((surface) => surface.id);
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const toIndex = surfaces.findIndex((surface) => surface.id === over.id);
+    const toIndex = sortable.findIndex((surface) => surface.id === over.id);
     if (toIndex >= 0) onMove?.(String(active.id), toIndex);
   };
   return (
@@ -1007,6 +1008,7 @@ function RightPanelTab(
     id: surface.id,
     disabled: props.dragDisabled,
   });
+  const dragListeners = surface.kind === "voice" ? {} : listeners;
   const sideChatShell = useQuietThreadShell(
     surface.kind === "side-chat" && props.environmentId !== null
       ? scopeThreadRef(props.environmentId, surface.threadId)
@@ -1135,7 +1137,7 @@ function RightPanelTab(
       onMouseUp={preventTabMiddleButtonDefault}
       onAuxClick={(event) => onAuxClick(event, surface)}
       onContextMenu={(event) => onContextMenu(event, surface)}
-      {...listeners}
+      {...dragListeners}
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
@@ -1329,8 +1331,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     const api = readLocalApi();
     if (!api) return;
 
-    const surfaceIndex = props.surfaces.findIndex((entry) => entry.id === surface.id);
-    if (surfaceIndex < 0) return;
+    if (!props.surfaces.some((entry) => entry.id === surface.id)) return;
+    // Enablement comes from the same targets the closes use, on the tabs actually displayed.
+    const bulk = bulkCloseAvailability(props.surfaces, surface.id);
 
     const items: ContextMenuItem<TabContextMenuAction>[] = [];
     if (surface.kind === "device" && props.onRenameDevice)
@@ -1368,17 +1371,17 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {
         id: "close-others",
         label: gt("Close others"),
-        disabled: props.surfaces.length <= 1,
+        disabled: !bulk.others,
       },
       {
         id: "close-to-right",
         label: gt("Close to the right"),
-        disabled: surfaceIndex >= props.surfaces.length - 1,
+        disabled: !bulk.right,
       },
       {
         id: "close-all",
         label: gt("Close all"),
-        disabled: props.surfaces.length === 0,
+        disabled: !bulk.all,
       },
     );
 
@@ -1570,7 +1573,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <RightPanelTab
                     key={surface.id}
                     surface={surface}
-                    dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
+                    dragDisabled={
+                      !props.onMoveSurface ||
+                      renamingDevice === surface.id ||
+                      surface.kind === "voice"
+                    }
                     active={surface.id === props.activeSurfaceId}
                     pending={props.pendingSurfaceIds.has(surface.id)}
                     title={surfaceTitle(

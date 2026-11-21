@@ -1811,7 +1811,7 @@ function OpenCommandPaletteDialog(props: {
       title: gt("Toggle Voice"),
       icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        toggleVoice(scopeThreadRef(activeThread.environmentId, activeThread.id));
+        toggleVoice();
       },
     });
   actionItems.push({

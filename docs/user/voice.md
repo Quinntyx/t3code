@@ -20,10 +20,13 @@ section; clear it to restore the default native-audio model. Customize Voice sho
 ## Use
 
 Open Voice from a right panel's add menu, the command palette, or its keyboard shortcut.
-It follows you between threads. Typing works without a microphone; opening Voice never
+Voice belongs to the window rather than to one thread: its tab appears in every thread's
+right panel while it is open, and switching threads keeps the same conversation and
+connection. Selecting another tab shows that thread's own surface without closing Voice;
+selecting Voice again returns to it. Typing works without a microphone; opening Voice never
 requests microphone access, only **Talk** does, using the preferred microphone under
 **Settings → Voice → Input**. Mute stops capture, stop speaking discards the current spoken
-reply, and closing the panel ends the connection. Reconnecting is always explicit.
+reply, and closing the Voice tab ends the connection. Reconnecting is always explicit.
 
 ## Notifications from threads
 

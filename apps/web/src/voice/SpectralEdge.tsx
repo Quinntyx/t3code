@@ -24,7 +24,7 @@ export function SpectralEdge({
     let failed = false;
     const loop = createSpectrumLoop({
       request: (callback) => requestAnimationFrame(callback),
-      cancel: cancelAnimationFrame,
+      cancel: (frame) => cancelAnimationFrame(frame),
       paint: (active) => {
         if (failed || document.hidden) return;
         try {
