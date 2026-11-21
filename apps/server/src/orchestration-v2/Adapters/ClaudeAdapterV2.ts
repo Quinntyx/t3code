@@ -4409,8 +4409,12 @@ interface ActiveClaudeTurnContext {
   compactionFailure: { readonly message: string | undefined } | null;
   // Segments steers closed, oldest first; each SDK result reports only its own segment.
   readonly sealedSegments: Array<ClaudeSegmentUsage>;
-  // Snapshots repeat a sealed message's usage; it must not claim usage in the open segment.
+  // The attached process's sealed message ids; a repeated snapshot must not book them again.
   readonly sealedMessageIds: Set<string>;
+  // Each subagent's latest message, keyed by its parent tool use id.
+  readonly latestSubagentMessages: Map<string, string>;
+  // Usage changed since the last running update that carried it.
+  turnUsageDirty: boolean;
   // The attached process's ledger names, which live in that process's context.
   readonly ledgerModelNames: ReadonlyMap<string, string>;
   readonly rootModels: Set<string>;
@@ -4483,6 +4487,8 @@ interface ClaudeLiveQueryContext {
   liveBilledUsage: Array<TurnModelTokenUsage>;
   // The model this process's ledger names each raw model id.
   readonly ledgerModelNames: Map<string, string>;
+  // Messages a window of this process already settled; background subagents can replay them.
+  readonly sealedMessageIds: Set<string>;
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
   readonly taskOutputRoot: string | undefined;
@@ -5515,6 +5521,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             subagentMessages: context.subagentMessages,
             hasSubagents: turnHasSubagents(context),
             ledgerModelNames: context.ledgerModelNames,
+            rootModels: context.rootModels,
           });
 
         const recordTurnMessageUsage = (
@@ -5523,18 +5530,40 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           messageId: string,
           model: string,
           usage: unknown,
-        ) =>
-          !context.sealedMessageIds.has(messageId) &&
-          recordClaudeMessageUsage(messages, messageId, model, usage);
+        ) => {
+          if (context.sealedMessageIds.has(messageId)) return false;
+          const changed = recordClaudeMessageUsage(messages, messageId, model, usage);
+          if (changed) context.turnUsageDirty = true;
+          return changed;
+        };
 
-        const sealTurnSegment = (
+        const sealTurnSegment = Effect.fn("ClaudeAdapterV2.sealTurnSegment")(function* (
           context: ActiveClaudeTurnContext,
           result: SDKResultMessage | undefined,
-        ) => {
+        ) {
+          const unfinishedMessageIds = new Set<string>();
+          for (const [toolUseId, messageId] of context.latestSubagentMessages) {
+            const status = (yield* resolveSubagentByToolUseId(context, toolUseId))?.task.status;
+            if (
+              status !== "completed" &&
+              status !== "failed" &&
+              status !== "cancelled" &&
+              status !== "interrupted"
+            ) {
+              unfinishedMessageIds.add(messageId);
+            }
+          }
           const segment = sealClaudeSegment({
             result,
             ledgerGrowth: result === undefined ? undefined : resultLedgerUsage.get(result),
-            aborted: result !== undefined && isClaudeActiveSteeringAbortResult(result),
+            abortedBy:
+              result !== undefined &&
+              isClaudeActiveSteeringAbortResult(result) &&
+              (result.terminal_reason === "aborted_streaming" ||
+                result.terminal_reason === "aborted_tools")
+                ? result.terminal_reason
+                : undefined,
+            unfinishedMessageIds,
             mainMessages: context.mainMessages,
             subagentMessages: context.subagentMessages,
             mainModel: context.mainUsageModel,
@@ -5545,8 +5574,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           for (const id of context.subagentMessages.keys()) context.sealedMessageIds.add(id);
           context.mainMessages.clear();
           context.subagentMessages.clear();
+          context.turnUsageDirty = true;
           return segment;
-        };
+        });
 
         // Usage without input is a placeholder, not a context measurement.
         const emitContextUsage = Effect.fnUntraced(function* (
@@ -5578,7 +5608,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (claudeMessageInputTokens(usage) <= 0) return;
             context.compactionTokens = undefined;
           }
-          const liveUsage = liveTurnTokenUsage(context);
+          // Both projections keep the last turn usage, so only a change needs to travel.
+          const liveUsage = context.turnUsageDirty ? liveTurnTokenUsage(context) : undefined;
+          context.turnUsageDirty = false;
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver: CLAUDE_PROVIDER,
@@ -5596,6 +5628,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // Background subagents keep sending frames to a settled turn; its final usage stands.
           if ((yield* Ref.get(activeTurn))?.providerTurnId !== context.providerTurnId) return;
           const liveUsage = liveTurnTokenUsage(context);
+          context.turnUsageDirty = false;
           if (liveUsage === undefined) return;
           yield* emitProviderEvent({
             type: "provider_turn.updated",
@@ -8209,7 +8242,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
 
-          const lastSegment = sealTurnSegment(input.context, input.result);
+          const lastSegment = yield* sealTurnSegment(input.context, input.result);
           if (input.result === undefined) {
             const liveQuery = yield* Ref.get(queryContext);
             if (liveQuery?.lastTurn === input.context) {
@@ -9621,6 +9654,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               snapshotModel.length === 0 || snapshotModel === "<synthetic>"
                 ? undefined
                 : canonicalClaudeSubagentModel(modelCatalog, snapshotModel);
+            if (parentToolUseId !== null && model !== undefined) {
+              context.latestSubagentMessages.set(parentToolUseId, message.message.id);
+            }
             if (
               parentToolUseId !== null &&
               model !== undefined &&
@@ -10257,7 +10293,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
-              context.sealedSegments.push(sealTurnSegment(context, message));
+              context.sealedSegments.push(yield* sealTurnSegment(context, message));
               return;
             }
             yield* Ref.update(steeredTurns, (current) => {
@@ -11286,6 +11322,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             modelLedger: new Map(),
             liveBilledUsage: [],
             ledgerModelNames: new Map(),
+            sealedMessageIds: new Set(),
             taskOutputRoot: claudeTaskOutputRoot(
               adapterOptions.environment,
               path,
@@ -11512,7 +11549,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               latestAssistantRateLimit: null,
               compactionFailure: null,
               sealedSegments: [],
-              sealedMessageIds: new Set(),
+              sealedMessageIds: querySession.sealedMessageIds,
+              latestSubagentMessages: new Map(),
+              turnUsageDirty: false,
               ledgerModelNames: querySession.ledgerModelNames,
               rootModels: new Set(),
               mainMessages: new Map(),

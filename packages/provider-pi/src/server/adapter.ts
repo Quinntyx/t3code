@@ -1452,13 +1452,25 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           });
           const startedAt = turn.toolStartedAt.get(nativeTaskId) ?? emittedAt;
           turn.toolStartedAt.set(nativeTaskId, startedAt);
-          const finished = completed || recordField(result, "finished") === true;
+          // Pi's subagent tool reports `status`; a spawn failure or abort can leave exitCode null.
+          const childStatus = recordString(result, "status");
           const stopReason = recordString(result, "stopReason");
-          const interrupted = finished && stopReason === "aborted";
+          const finished =
+            childStatus === undefined
+              ? completed || recordField(result, "finished") === true
+              : childStatus === "completed" ||
+                childStatus === "failed" ||
+                childStatus === "aborted";
+          const interrupted =
+            childStatus === undefined
+              ? finished && stopReason === "aborted"
+              : childStatus === "aborted";
           const failed =
-            finished &&
-            !interrupted &&
-            ((recordNumber(result, "exitCode") ?? 0) !== 0 || stopReason === "error");
+            childStatus === undefined
+              ? finished &&
+                !interrupted &&
+                ((recordNumber(result, "exitCode") ?? 0) !== 0 || stopReason === "error")
+              : childStatus === "failed";
           const status = interrupted
             ? "interrupted"
             : failed
