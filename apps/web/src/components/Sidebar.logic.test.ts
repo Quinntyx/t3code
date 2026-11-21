@@ -746,6 +746,60 @@ describe("resolveThreadStatusPill", () => {
     expect(isSidebarThreadWorking(seen)).toBe(false);
   });
 
+  it("shows delegating instead of failed when an unseen root run failed while a subagent or workflow is still running", () => {
+    const delegatingThread = {
+      ...baseThread,
+      interactionMode: "default" as const,
+      latestRun: { ...makeLatestRun(), status: "failed" as const },
+      lastVisitedAt: "2026-03-09T10:04:00.000Z",
+      pendingBackgroundTasks: [
+        { taskId: "wf-1", description: "Workflow", kind: "subagent" as const },
+      ],
+      runtime: {
+        ...baseThread.runtime,
+        status: "idle" as const,
+        activeRunId: null,
+        lastError: "Usage limit reached",
+        lastErrorClass: "usage_limit" as const,
+      },
+    };
+    expect(resolveThreadStatusPill({ thread: delegatingThread })).toMatchObject({
+      label: "Delegating",
+      pulse: false,
+    });
+    expect(resolveSidebarThreadStatus(delegatingThread)).toBe("waiting");
+    expect(isSidebarThreadWorking(delegatingThread)).toBe(true);
+  });
+
+  it("does not fall through to delegating or waiting when runtime remains failed (e.g. consumption cap hit)", () => {
+    const capBlockedBase = {
+      ...baseThread,
+      interactionMode: "default" as const,
+      latestRun: { ...makeLatestRun(), status: "failed" as const },
+      pendingBackgroundTasks: [
+        { taskId: "wf-1", description: "Workflow", kind: "subagent" as const },
+      ],
+      runtime: {
+        ...baseThread.runtime,
+        status: "failed" as const,
+        activeRunId: null,
+        lastError: "Consumption cap hit",
+      },
+    };
+    const unseen = { ...capBlockedBase, lastVisitedAt: "2026-03-09T10:04:00.000Z" };
+    expect(resolveThreadStatusPill({ thread: unseen })).toMatchObject({
+      label: "Failed",
+      pulse: false,
+    });
+    expect(resolveSidebarThreadStatus(unseen)).toBe("failed");
+    expect(isSidebarThreadWorking(unseen)).toBe(false);
+
+    const seen = { ...capBlockedBase, lastVisitedAt: "2026-03-09T10:06:00.000Z" };
+    expect(resolveThreadStatusPill({ thread: seen })).toBeNull();
+    expect(resolveSidebarThreadStatus(seen)).toBe("failed");
+    expect(isSidebarThreadWorking(seen)).toBe(false);
+  });
+
   it("shows failed, not plan ready, when a plan run proposed a plan and then failed", () => {
     expect(
       resolveThreadStatusPill({

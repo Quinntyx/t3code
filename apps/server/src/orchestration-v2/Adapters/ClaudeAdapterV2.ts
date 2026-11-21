@@ -6109,6 +6109,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const subagentToolCalls = new Map<string, ActiveClaudeToolCall>();
         const pendingSubagentLaunchesByToolUseId = new Map<string, PendingClaudeSubagentLaunch>();
         const settledTurnByNativeThread = new Map<string, ActiveClaudeTurnContext>();
+        const suppressedPromptSuggestionsByNativeThread = new Set<string>();
         const subagentStopOutcomes = new Map<
           string,
           Deferred.Deferred<ProviderAdapter.ProviderAdapterV2SubagentOutcome>
@@ -8152,11 +8153,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     )
                   : undefined));
           const model = input.model ?? priorTask?.model ?? null;
+          const ownerRunId = input.owner?.task.runId ?? input.context.input.runId;
           const task = {
             ...(priorTask ?? {
               id: nodeId,
               threadId: input.context.input.threadId,
-              runId: input.context.input.runId,
+              runId: ownerRunId,
               parentNodeId: input.owner?.task.id ?? input.context.input.rootNodeId,
               origin: "provider_native" as const,
               createdBy: "agent" as const,
@@ -8179,7 +8181,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(input.reopen === true &&
             input.status === "running" &&
             existingSubagent !== undefined
-              ? { runId: input.context.input.runId }
+              ? { runId: ownerRunId }
               : {}),
             ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
             ...(input.title === undefined ? {} : { title: input.title }),
@@ -8210,7 +8212,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : isReopen
                   ? undefined
                   : existingSubagent?.confirmedOutcome,
-            rootNodeId: existingSubagent?.rootNodeId ?? input.context.input.rootNodeId,
+            rootNodeId:
+              existingSubagent?.rootNodeId ??
+              input.owner?.rootNodeId ??
+              input.context.input.rootNodeId,
             childThreadId,
             childRootNodeId,
             turnItemId: existingSubagent?.turnItemId ?? derivedIds.turnItemId,
@@ -8304,6 +8309,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               driver: CLAUDE_PROVIDER,
               appThread: childThread,
               ...(existingSubagent === undefined ? {} : { createOnly: true }),
+              ...(task.runId === null ? {} : { runId: task.runId }),
             });
             subagent.childThread = childThread;
           }
@@ -9475,8 +9481,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
           input.context.compaction = null;
+          const liveQuery = yield* Ref.get(queryContext);
           if (input.status !== "completed") {
-            const liveQuery = yield* Ref.get(queryContext);
             for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
               if (
                 subagent.task.workflow === undefined ||
@@ -9498,17 +9504,42 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               });
             }
           }
-          const liveQuery = yield* Ref.get(queryContext);
+          const currentLiveQuery = yield* Ref.get(queryContext);
           const runningChildThreadIds = new Set(
             [...(yield* Ref.get(sessionSubagentsByTaskId)).values()].flatMap((subagent) =>
               subagent.task.status === "running" &&
               (input.status === "completed" ||
-                (liveQuery !== null && subagent.task.runId !== input.context.input.runId)) &&
-              liveQuery?.subagentsFromEarlierProcesses.has(subagent) !== true
+                (currentLiveQuery !== null && subagent.task.runId !== input.context.input.runId)) &&
+              currentLiveQuery?.subagentsFromEarlierProcesses.has(subagent) !== true
                 ? [subagent.childThreadId]
                 : [],
             ),
           );
+          const survivingChildTurns =
+            currentLiveQuery !== null &&
+            !currentLiveQuery.stopping &&
+            runningChildThreadIds.size > 0;
+          if (input.status === "failed" && survivingChildTurns) {
+            // `childTurnsContinue` skips RunExecutionService's run-owned cascade so earlier-turn
+            // work keeps running; terminalize same-turn non-workflow subagents explicitly here.
+            for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
+              if (
+                subagent.task.workflow !== undefined ||
+                subagent.task.status !== "running" ||
+                subagent.task.runId !== input.context.input.runId
+              )
+                continue;
+              yield* currentLiveQuery.query
+                .stopTask(taskId)
+                .pipe(Effect.timeout("15 seconds"), Effect.ignore, Effect.forkIn(sessionScope));
+              yield* updateClaudeSubagentNode({
+                context: input.context,
+                taskId,
+                status: "failed",
+                onlyIfRunningInRun: input.context.input.runId,
+              });
+            }
+          }
           const endingSubagentCalls = [...subagentToolCalls.values()].filter(
             (toolCall) => !runningChildThreadIds.has(toolCall.threadId),
           );
@@ -9665,6 +9696,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         retry: providerRetry.retry,
                         retryStartedAt: providerRetry.startedAt,
                       }),
+                  ...(survivingChildTurns ? { childTurnsContinue: true as const } : {}),
                   threadDisposition,
                 }
               : {
@@ -9817,8 +9849,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
           if (input.status === "completed") {
             settledTurnByNativeThread.set(input.context.nativeThreadId, input.context);
+            suppressedPromptSuggestionsByNativeThread.delete(input.context.nativeThreadId);
+          } else if (survivingChildTurns) {
+            suppressedPromptSuggestionsByNativeThread.add(input.context.nativeThreadId);
           } else {
             settledTurnByNativeThread.delete(input.context.nativeThreadId);
+            suppressedPromptSuggestionsByNativeThread.delete(input.context.nativeThreadId);
           }
           yield* Ref.update(interruptedTurns, (current) => {
             const next = new Set(current);
@@ -10691,6 +10727,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const text = message.suggestion.trim();
             if (
               settled !== undefined &&
+              !suppressedPromptSuggestionsByNativeThread.has(liveQuery.nativeThreadId) &&
               !isClaudeProviderContinuationTurn(settled.input) &&
               text.length > 0 &&
               (yield* Ref.get(activeTurn)) === null

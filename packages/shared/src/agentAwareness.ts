@@ -12,6 +12,7 @@ import * as DateTime from "effect/DateTime";
 import {
   backgroundWorkHoldsCompletion,
   monitorHoldsWakeCompletion,
+  waitingOnAgents,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
 export type AgentAwarenessPhase =
@@ -87,6 +88,7 @@ export interface ProjectThreadAwarenessV2Input {
   readonly thread: Pick<
     OrchestrationV2ThreadShell,
     | "activityRunStatus"
+    | "consumptionCapHit"
     | "id"
     | "lineage"
     | "latestRunBackgroundWake"
@@ -180,7 +182,7 @@ function resolveThreadAwarenessPhaseV2(
         ? "running"
         : "completed";
     case "failed":
-      return "failed";
+      return thread.consumptionCapHit == null && waitingOnAgents(thread) ? "running" : "failed";
     case "idle":
     case "queued":
     case "interrupted":

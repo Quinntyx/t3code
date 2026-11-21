@@ -245,6 +245,12 @@ it.effect("recognizes only events that can change limit recovery", () =>
     );
     assert.isTrue(signal({ type: "runtime-request.updated", payload: { status: "cancelled" } }));
     assert.isFalse(signal({ type: "runtime-request.updated", payload: { status: "pending" } }));
+    assert.isTrue(
+      signal({ type: "turn-item.updated", payload: { type: "subagent", status: "completed" } }),
+    );
+    assert.isFalse(
+      signal({ type: "turn-item.updated", payload: { type: "subagent", status: "running" } }),
+    );
   }),
 );
 
@@ -398,6 +404,7 @@ const waitingThread = (
   archivedAt: null,
   settledOverride: null,
   pendingRuntimeRequest: null,
+  pendingBackgroundTasks: [],
   limitRecovery: {
     runId: RunId.make("run:waiting"),
     resetAt,
@@ -448,6 +455,32 @@ describe("limitRecoveryCommand arming", () => {
     const thread = waitingThread(resetAt, { limitRecovery: null });
     const command = limitRecoveryCommand(thread, true, nowMs, false, nowMs);
     assert.equal(command?.type, "thread.metadata.update");
+  });
+
+  it("defers arming, auto-snoozing, and resuming while active subagents or workflows are running", () => {
+    const unarmed = waitingThread(resetAt, { limitRecovery: null });
+    assert.isNull(
+      limitRecoveryCommand(
+        {
+          ...unarmed,
+          pendingBackgroundTasks: [{ taskId: "wf-1", kind: "subagent" }],
+        },
+        true,
+        nowMs,
+        true,
+      ),
+    );
+    const armed = waitingThread(resetAt);
+    assert.isNull(
+      limitRecoveryCommand(
+        {
+          ...armed,
+          pendingBackgroundTasks: [{ taskId: "wf-1", kind: "subagent" }],
+        },
+        true,
+        Date.parse(resetAt),
+      ),
+    );
   });
 });
 

@@ -86,6 +86,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     driver: ProviderDriverKind,
     appThread: OrchestrationV2AppThread,
     createOnly: Schema.optional(Schema.Boolean),
+    runId: Schema.optional(RunId),
   }),
   Schema.Struct({
     type: Schema.Literal("provider_session.updated"),

@@ -99,6 +99,7 @@ import {
   derivePendingBackgroundWork,
   hasPendingBackgroundSubagent,
   pendingBackgroundTurnItems,
+  waitingOnAgents,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -7362,10 +7363,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         snoozedUntilMs !== null &&
         snoozedUntilMs > DateTime.toEpochMillis(now) &&
         !(resetObserved && recovery != null && snoozedUntilMs === Date.parse(recovery.resetAt));
+      const activeSubagentTurnItems = (yield* projectionStore
+        .getThreadRecords(command.threadId, ["turnItems"], {
+          turnItemTypes: ["subagent"],
+          turnItemStatuses: ["pending", "running", "waiting"],
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        )).turnItems;
+      const existingTurnItemIds = new Set(projection.turnItems.map((item) => item.id));
+      const shell = threadShellFromProjection({
+        ...projection,
+        turnItems: [
+          ...projection.turnItems,
+          ...activeSubagentTurnItems.filter((item) => !existingTurnItemIds.has(item.id)),
+        ],
+      });
+      const agentsWaiting = waitingOnAgents(shell);
+      const hasPendingRuntimeRequest = projection.runtimeRequests.some(
+        (request) => request.status === "pending",
+      );
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
         failure?.class !== "usage_limit" ||
-        threadShellFromProjection(projection).lastErrorClass !== "usage_limit" ||
+        shell.lastErrorClass !== "usage_limit" ||
+        agentsWaiting ||
         !recovery?.autoResume ||
         recovery.requestId !== command.usageLimitRecoveryRequestId ||
         recovery.runId !== run.id ||
@@ -7375,9 +7399,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection.thread.deletedAt !== null ||
         projection.thread.settledOverride === "settled" ||
         projection.thread.providerInstanceId !== run.providerInstanceId ||
-        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        hasPendingRuntimeRequest ||
         snoozeHolds
       ) {
+        const shouldRotateRecoveryRequestId =
+          recovery?.autoResume === true &&
+          recovery.requestId === command.usageLimitRecoveryRequestId &&
+          recovery.runId === command.usageLimitContinuationOfRunId &&
+          ((projection.thread.snoozedUntil != null &&
+            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)) ||
+            ((agentsWaiting || hasPendingRuntimeRequest) &&
+              run?.id === command.usageLimitContinuationOfRunId &&
+              failure?.class === "usage_limit" &&
+              recovery.resetAt === failure.resetAt &&
+              shell.lastErrorClass === "usage_limit" &&
+              projection.thread.archivedAt === null &&
+              projection.thread.deletedAt === null &&
+              projection.thread.settledOverride !== "settled"));
         yield* emit(
           events,
           command,
@@ -7387,11 +7425,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: {
             ...projection.thread,
-            ...(recovery?.autoResume &&
-            recovery.requestId === command.usageLimitRecoveryRequestId &&
-            recovery.runId === command.usageLimitContinuationOfRunId &&
-            projection.thread.snoozedUntil != null &&
-            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)
+            ...(shouldRotateRecoveryRequestId
               ? { limitRecovery: { ...recovery, requestId: command.commandId } }
               : {}),
           },
@@ -15927,6 +15961,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly reason: string;
       };
       readonly updateDelegatedCompletionOnlyRunId?: RunId;
+      readonly requireNoLimitRecoveryBlockers?: boolean;
     },
     OrchestratorV2Error
   > {
@@ -15945,6 +15980,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       | undefined;
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
+    let requireNoLimitRecoveryBlockers = false;
     switch (command.type) {
       case "thread.create": {
         yield* dispatchThreadCreate(command, events);
@@ -16230,6 +16266,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 context: { version: 1 as const, records: [], guest: guestSend.guest },
               };
         cancelUnsettledEffects = yield* dispatchMessage(dispatched, events, effects);
+        if (
+          dispatched.usageLimitContinuationOfRunId !== undefined &&
+          (yield* Ref.get(events)).some((event) => event.type === "run.created")
+        ) {
+          requireNoLimitRecoveryBlockers = true;
+        }
         yield* recordSubagentFollowup(dispatched, events).pipe(mapDispatchError(command));
         break;
       }
@@ -16460,6 +16502,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(updateDelegatedCompletionOnlyRunId === undefined
         ? {}
         : { updateDelegatedCompletionOnlyRunId }),
+      ...(requireNoLimitRecoveryBlockers ? { requireNoLimitRecoveryBlockers: true } : {}),
     };
   });
 
@@ -16516,6 +16559,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: OrchestrationV2ServerCommand,
     sideChatIds: ReadonlyArray<ThreadId> = [],
     cancelledTask?: OrchestrationV2Subagent,
+    options?: { readonly requireNoLimitRecoveryBlockers?: boolean },
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
@@ -16693,6 +16737,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       } satisfies OrchestratorV2DispatchResult;
     }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
+    const requireNoLimitRecoveryBlockers =
+      options?.requireNoLimitRecoveryBlockers === true ||
+      plan.requireNoLimitRecoveryBlockers === true;
     const committed = yield* eventSink
       .commitCommand({
         commandId: command.commandId,
@@ -16719,6 +16766,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.updateDelegatedCompletionOnlyRunId === undefined
           ? {}
           : { updateDelegatedCompletionOnlyRunId: plan.updateDelegatedCompletionOnlyRunId }),
+        ...(requireNoLimitRecoveryBlockers ? { requireNoLimitRecoveryBlockers: true } : {}),
       })
       .pipe(
         Effect.mapError(
@@ -16790,7 +16838,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return {
       sequence: committed.receipt.resultSequence,
       storedEvents: committed.storedEvents,
-      ...(committed.committed ? {} : { replayed: true as const }),
+      ...(committed.committed || committed.deferred === true ? {} : { replayed: true as const }),
     } satisfies OrchestratorV2DispatchResult;
   }, withCommandMetrics);
 
@@ -17380,19 +17428,71 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return threadDispatch.withLock(
         input.threadId,
         Effect.gen(function* () {
-          const thread = yield* projectionStore
-            .getThread(input.threadId)
+          const projection = yield* projectionStore
+            .getThreadRecords(
+              input.threadId,
+              ["runs", "providerThreads", "turnItems", "runtimeRequests"],
+              { turnItemTypes: ["error"] },
+            )
             .pipe(
               Effect.mapError(
                 (cause) => new OrchestratorProjectionError({ threadId: input.threadId, cause }),
               ),
             );
+          const thread = projection.thread;
+          if (
+            thread.archivedAt !== null ||
+            thread.deletedAt !== null ||
+            thread.settledOverride === "settled"
+          )
+            return;
           // Stop or an explicit recovery choice can commit after the sweep reads its candidate.
           if (
             thread.limitRecovery?.runId === input.limitRecovery.runId &&
             thread.limitRecovery.resetAt === input.limitRecovery.resetAt
           )
             return;
+          const latestRun = latestExecutedRun(projection.runs);
+          if (
+            latestRun?.id !== input.limitRecovery.runId ||
+            latestRun.status !== "failed" ||
+            projection.runs.some(
+              (candidate) =>
+                candidate.status === "preparing" ||
+                candidate.status === "starting" ||
+                candidate.status === "running",
+            ) ||
+            projection.runtimeRequests.some((request) => request.status === "pending")
+          ) {
+            return;
+          }
+          const failure = latestRootProviderFailure(latestRun, projection.turnItems);
+          if (failure?.class !== "usage_limit" || failure.resetAt !== input.limitRecovery.resetAt) {
+            return;
+          }
+          const activeSubagentTurnItems = (yield* projectionStore
+            .getThreadRecords(input.threadId, ["turnItems"], {
+              turnItemTypes: ["subagent"],
+              turnItemStatuses: ["pending", "running", "waiting"],
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestratorProjectionError({ threadId: input.threadId, cause }),
+              ),
+            )).turnItems;
+          if (
+            waitingOnAgents({
+              pendingBackgroundTasks: derivePendingBackgroundWork({
+                latestRun,
+                providerThreads: projection.providerThreads,
+                turnItems: activeSubagentTurnItems,
+                activeProviderThreadId: thread.activeProviderThreadId,
+                runs: projection.runs,
+              }),
+            })
+          ) {
+            return;
+          }
           const command = { type: "thread.metadata.update", ...input } as const;
           // A Stop that reached the run before its limit failure landed had nothing to disarm.
           const stopped = yield* stopReachedRun(command, input.threadId, input.limitRecovery.runId);
@@ -17403,6 +17503,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   limitRecovery: { ...input.limitRecovery, autoResume: false, snooze: false },
                 }
               : command,
+            [],
+            undefined,
+            stopped ? undefined : { requireNoLimitRecoveryBlockers: true },
           );
         }),
       );

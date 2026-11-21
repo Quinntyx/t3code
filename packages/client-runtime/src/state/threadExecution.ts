@@ -30,6 +30,7 @@ import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
   findPullRequestForWatchTask,
+  waitingOnAgents,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   getModelSelectionStringOptionValue,
@@ -410,18 +411,18 @@ export function deriveThreadStructureRuntime(
   const liveActivityRun = latestMatchingRun(projection, (run) =>
     ACTIVITY_RUN_STATUSES.has(run.status),
   );
-  const backgroundWorkHoldsRun = backgroundWorkHoldsCompletion(
-    derivePendingBackgroundWork({
-      latestRun: latestRunProjection,
-      providerThreads: projection.providerThreads,
-      turnItems: projection.turnItems,
-      activeProviderThreadId: projection.thread.activeProviderThreadId,
-      runs: projection.runs,
-      pullRequests: projection.thread.pullRequests,
-      awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
-      threadWatches: projection.thread.threadWatches,
-    }),
-  );
+  const pendingBackgroundTasks = derivePendingBackgroundWork({
+    latestRun: latestRunProjection,
+    providerThreads: projection.providerThreads,
+    turnItems: projection.turnItems,
+    activeProviderThreadId: projection.thread.activeProviderThreadId,
+    runs: projection.runs,
+    pullRequests: projection.thread.pullRequests,
+    awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
+    threadWatches: projection.thread.threadWatches,
+  });
+  const backgroundWorkHoldsRun = backgroundWorkHoldsCompletion(pendingBackgroundTasks);
+  const agentsHoldRun = waitingOnAgents({ pendingBackgroundTasks });
   // A pull request watch can hold a thread that never ran.
   if (latestRun === null && !backgroundWorkHoldsRun && capHit === null) return null;
   const activeRunId =
@@ -429,12 +430,18 @@ export function deriveThreadStructureRuntime(
   const failureItem = latestRootProviderFailureItem(latestRunProjection, projection.turnItems);
   const sessionError = providerSession?.lastError ?? null;
   return {
+    // Active subagents/workflows keep the thread parked in Working (Delegating) and intentionally
+    // defer the usage-limit recovery notice until delegated work settles (unless cap-blocked).
     status:
-      capHit !== null || usageLimitedRun
+      capHit !== null
         ? "failed"
-        : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
+        : agentsHoldRun
           ? "idle"
-          : (activityRun?.status ?? "idle"),
+          : usageLimitedRun
+            ? "failed"
+            : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
+              ? "idle"
+              : (activityRun?.status ?? "idle"),
     activeRunId,
     activityStartedAt:
       liveActivityRun === null

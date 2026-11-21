@@ -24661,6 +24661,622 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect(
+    "keeps a surviving earlier-turn workflow alive and projecting when a follow-up turn fails with a usage limit",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarness;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-launch"),
+              providerTurnOrdinal: 1,
+              text: "Run the alpha workflow.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001410" });
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001411", result: "Launched." }),
+          );
+          const launchTerminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(launchTerminal.status, "completed");
+          assert.isTrue(yield* harness.runtime.hasPendingBackgroundWork!);
+
+          // A follow-up turn fails on Claude quota while the workflow keeps running on a non-Claude model.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-limited-followup"),
+              providerTurnOrdinal: 2,
+              text: "Check status",
+              attachments: [],
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "rate_limit_event",
+              rate_limit_info: {
+                status: "rejected",
+                rateLimitType: "five_hour",
+                resetsAt: 1_800_000_000,
+              },
+              uuid: "00000000-0000-4000-8000-000000001412",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "result",
+              subtype: "error_during_execution",
+              is_error: true,
+              errors: ["You've hit your limit"],
+              uuid: "00000000-0000-4000-8000-000000001413",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          const failedTerminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(failedTerminal.status, "failed");
+          if (failedTerminal.status === "failed") {
+            assert.equal(failedTerminal.failure.class, "usage_limit");
+            assert.isTrue(failedTerminal.childTurnsContinue);
+          }
+          assert.isTrue(yield* harness.runtime.hasPendingBackgroundWork!);
+
+          // A prompt suggestion arriving after the failed follow-up turn must not attach to the
+          // retained earlier completed turn.
+          const suggestionsBefore = harness.events.filter(
+            (event) => event.type === "prompt_suggestion.updated",
+          ).length;
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "prompt_suggestion",
+              suggestion: "Stale suggestion from failed turn",
+              uuid: "00000000-0000-4000-8000-000000001417",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          assert.equal(
+            harness.events.filter((event) => event.type === "prompt_suggestion.updated").length,
+            suggestionsBefore,
+          );
+
+          // Subsequent workflow snapshot progress and child frames still project through the preserved settled turn.
+          const eventsBeforeProgress = harness.events.length;
+          yield* harness.offerAndWait(
+            workflowSnapshot({
+              uuid: "00000000-0000-4000-8000-000000001414",
+              state: "done",
+              secondState: "start",
+              model: "gemini-2.5-pro",
+            }),
+          );
+          const progressEvents = harness.events
+            .slice(eventsBeforeProgress)
+            .filter(
+              (
+                event,
+              ): event is Extract<
+                ProviderAdapter.ProviderAdapterV2Event,
+                { type: "subagent.updated" }
+              > =>
+                event.type === "subagent.updated" &&
+                event.subagent.nativeTaskRef?.nativeId === WORKFLOW_TASK_ID,
+            );
+          assert.isAtLeast(progressEvents.length, 1);
+          assert.equal(progressEvents.at(-1)?.subagent.status, "running");
+
+          const coordinatorThreadId = progressEvents.at(-1)?.subagent.childThreadId;
+          const messagesBeforeChild = threadMessages(harness.events, coordinatorThreadId).length;
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "assistant",
+              message: {
+                id: "msg-surviving-workflow-child",
+                model: "gemini-2.5-pro",
+                content: [{ type: "text", text: "Non-Claude workflow step output" }],
+              },
+              parent_tool_use_id: WORKFLOW_TOOL_USE_ID,
+              uuid: "00000000-0000-4000-8000-000000001416",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.until(
+            () => threadMessages(harness.events, coordinatorThreadId).length > messagesBeforeChild,
+          );
+          const childMessages = threadMessages(harness.events, coordinatorThreadId);
+          assert.isAbove(childMessages.length, messagesBeforeChild);
+          assert.equal(childMessages.at(-1)?.message.text, "Non-Claude workflow step output");
+
+          // Completing the workflow still queues a continuation wake on the live session.
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000001415",
+              status: "completed",
+            }),
+          );
+          yield* harness.until(() => harness.continuationRequests.length === 1);
+          assert.equal(harness.continuationRequests[0]?.threadId, harness.threadId);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
+  it.effect(
+    "terminalizes same-turn non-workflow subagents while keeping an earlier-turn workflow alive when a follow-up turn fails",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const stoppedTaskIds: Array<string> = [];
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            stopTask: (taskId) =>
+              Effect.sync(() => {
+                stoppedTaskIds.push(taskId);
+              }),
+          });
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-mixed-workflow-launch"),
+              providerTurnOrdinal: 1,
+              text: "Run the alpha workflow.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001420" });
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001421", result: "Launched." }),
+          );
+          const launchTerminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(launchTerminal.status, "completed");
+
+          // A follow-up turn spawns a plain non-workflow subagent and then fails on quota.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-mixed-followup"),
+              providerTurnOrdinal: 2,
+              text: "Check files",
+              attachments: [],
+            }),
+          );
+          const sameTurnTaskId = "same-turn-subagent-1";
+          const sameTurnToolUseId = "toolu_same_turn_subagent_1";
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "assistant",
+              message: {
+                model: "claude-sonnet-4-6",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: sameTurnToolUseId,
+                    name: "Agent",
+                    input: { description: "Inspect files", prompt: "Inspect files" },
+                  },
+                ],
+              },
+              parent_tool_use_id: null,
+              uuid: "00000000-0000-4000-8000-000000001422",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: sameTurnTaskId,
+              tool_use_id: sameTurnToolUseId,
+              description: "Inspect files",
+              task_type: "local_agent",
+              uuid: "00000000-0000-4000-8000-000000001423",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "rate_limit_event",
+              rate_limit_info: {
+                status: "rejected",
+                rateLimitType: "five_hour",
+                resetsAt: 1_800_000_000,
+              },
+              uuid: "00000000-0000-4000-8000-000000001424",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "result",
+              subtype: "error_during_execution",
+              is_error: true,
+              errors: ["You've hit your limit"],
+              uuid: "00000000-0000-4000-8000-000000001425",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          const failedTerminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(failedTerminal.status, "failed");
+          if (failedTerminal.status === "failed") {
+            assert.isTrue(failedTerminal.childTurnsContinue);
+          }
+
+          // The same-turn plain subagent is stopped and terminalized as failed, while the earlier
+          // workflow remains running until it completes.
+          yield* harness.until(() => stoppedTaskIds.includes(sameTurnTaskId));
+          assert.notInclude(stoppedTaskIds, WORKFLOW_TASK_ID);
+          const sameTurnSubagentEvents = harness.events.filter(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "subagent.updated" }
+            > =>
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === sameTurnTaskId,
+          );
+          assert.equal(sameTurnSubagentEvents.at(-1)?.subagent.status, "failed");
+          const sameTurnItemEvents = harness.events.filter(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "turn_item.updated" }
+            > =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "subagent" &&
+              event.turnItem.nativeItemRef?.nativeId === sameTurnTaskId,
+          );
+          assert.equal(sameTurnItemEvents.at(-1)?.turnItem.status, "failed");
+          const workflowEvents = harness.events.filter(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "subagent.updated" }
+            > =>
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === WORKFLOW_TASK_ID,
+          );
+          assert.equal(workflowEvents.at(-1)?.subagent.status, "running");
+          assert.isTrue(yield* harness.runtime.hasPendingBackgroundWork!);
+
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000001426",
+              status: "completed",
+            }),
+          );
+          yield* harness.until(() => harness.continuationRequests.length === 1);
+
+          // Drain the workflow's continuation wake and verify the workflow completes and the
+          // already-failed same-turn subagent does not keep pending background work pinned open.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-mixed-wake"),
+              providerTurnOrdinal: 3,
+              text: "",
+              attachments: [],
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001427", result: "Done." }),
+          );
+          const wakeTerminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(wakeTerminal.status, "completed");
+          const workflowAfterComplete = harness.events.filter(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "subagent.updated" }
+            > =>
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === WORKFLOW_TASK_ID,
+          );
+          assert.equal(workflowAfterComplete.at(-1)?.subagent.status, "completed");
+          assert.isFalse(yield* harness.runtime.hasPendingBackgroundWork!);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
+  it.effect(
+    "preserves nested subagents spawned by a surviving earlier-turn subagent when a follow-up turn hits a usage limit",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const stoppedTaskIds: Array<string> = [];
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            stopTask: (taskId) =>
+              Effect.sync(() => {
+                stoppedTaskIds.push(taskId);
+              }),
+          });
+          const now = yield* DateTime.now;
+          const outerTaskId = "outer-subagent-task-1";
+          const outerToolUseId = "toolu_outer_subagent_1";
+          const nestedTaskId = "nested-subagent-task-1";
+          const nestedToolUseId = "toolu_nested_subagent_1";
+          const sameTurnTaskId = "same-turn-root-subagent-1";
+          const sameTurnToolUseId = "toolu_same_turn_root_subagent_1";
+
+          const firstTurnInput = makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-nested-turn-1"),
+            providerTurnOrdinal: 1,
+            text: "Start background research",
+            attachments: [],
+          });
+          yield* harness.runtime.startTurn(firstTurnInput);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "assistant",
+              message: {
+                id: "msg-outer-subagent-launch",
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: outerToolUseId,
+                    name: "Agent",
+                    input: {
+                      description: "Outer background agent",
+                      prompt: "Research in background",
+                      run_in_background: true,
+                    },
+                  },
+                ],
+              },
+              parent_tool_use_id: null,
+              uuid: "00000000-0000-4000-8000-000000001430",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: outerTaskId,
+              tool_use_id: outerToolUseId,
+              description: "Outer background agent",
+              task_type: "local_agent",
+              is_backgrounded: true,
+              uuid: "00000000-0000-4000-8000-000000001431",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000001432",
+              result: "Outer agent running.",
+            }),
+          );
+          assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+
+          // Start a follow-up turn during which the surviving outer subagent spawns a nested child,
+          // and the root turn also spawns its own same-turn subagent before hitting a usage limit.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-nested-turn-2"),
+              providerTurnOrdinal: 2,
+              text: "Check status",
+              attachments: [],
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "assistant",
+              message: {
+                id: "msg-nested-subagent-launch",
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: nestedToolUseId,
+                    name: "Agent",
+                    input: {
+                      description: "Nested child agent",
+                      prompt: "Inspect details",
+                    },
+                  },
+                ],
+              },
+              parent_tool_use_id: outerToolUseId,
+              uuid: "00000000-0000-4000-8000-000000001433",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: nestedTaskId,
+              tool_use_id: nestedToolUseId,
+              description: "Nested child agent",
+              task_type: "local_agent",
+              uuid: "00000000-0000-4000-8000-000000001434",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "assistant",
+              message: {
+                id: "msg-same-turn-root-launch",
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: sameTurnToolUseId,
+                    name: "Agent",
+                    input: {
+                      description: "Same-turn root subagent",
+                      prompt: "Check local state",
+                    },
+                  },
+                ],
+              },
+              parent_tool_use_id: null,
+              uuid: "00000000-0000-4000-8000-000000001435",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: sameTurnTaskId,
+              tool_use_id: sameTurnToolUseId,
+              description: "Same-turn root subagent",
+              task_type: "local_agent",
+              uuid: "00000000-0000-4000-8000-000000001436",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "rate_limit_event",
+              rate_limit_info: {
+                status: "rejected",
+                rateLimitType: "five_hour",
+                resetsAt: 1_800_000_000,
+              },
+              uuid: "00000000-0000-4000-8000-000000001437",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "result",
+              subtype: "error_during_execution",
+              is_error: true,
+              errors: ["You've hit your limit"],
+              uuid: "00000000-0000-4000-8000-000000001438",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+
+          const failedTerminal = yield* Queue.take(harness.terminalReceipts);
+          assert.equal(failedTerminal.status, "failed");
+          if (failedTerminal.status === "failed") {
+            assert.isTrue(failedTerminal.childTurnsContinue);
+          }
+
+          yield* harness.until(() => stoppedTaskIds.includes(sameTurnTaskId));
+          assert.deepEqual(stoppedTaskIds, [sameTurnTaskId]);
+          const latestSubagent = (taskId: string) =>
+            harness.events
+              .filter(
+                (
+                  event,
+                ): event is Extract<
+                  ProviderAdapter.ProviderAdapterV2Event,
+                  { type: "subagent.updated" }
+                > =>
+                  event.type === "subagent.updated" &&
+                  event.subagent.nativeTaskRef?.nativeId === taskId,
+              )
+              .at(-1)?.subagent;
+          assert.equal(latestSubagent(sameTurnTaskId)?.status, "failed");
+          assert.equal(latestSubagent(outerTaskId)?.status, "running");
+          const nestedSubagent = latestSubagent(nestedTaskId);
+          assert.equal(nestedSubagent?.status, "running");
+          assert.equal(nestedSubagent?.runId, firstTurnInput.runId);
+          const nestedNode = harness.events
+            .filter(
+              (
+                event,
+              ): event is Extract<
+                ProviderAdapter.ProviderAdapterV2Event,
+                { type: "node.updated" }
+              > => event.type === "node.updated" && event.node.id === nestedSubagent?.id,
+            )
+            .at(-1)?.node;
+          assert.equal(nestedNode?.runId, firstTurnInput.runId);
+          assert.equal(nestedNode?.rootNodeId, firstTurnInput.rootNodeId);
+          const nestedThreadCreated = harness.events.find(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "app_thread.created" }
+            > =>
+              event.type === "app_thread.created" &&
+              event.appThread.id === nestedSubagent?.childThreadId,
+          );
+          assert.equal(nestedThreadCreated?.runId, firstTurnInput.runId);
+          const firstNestedSubagentIndex = harness.events.findIndex(
+            (event) =>
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === nestedTaskId,
+          );
+          assert.isAtLeast(firstNestedSubagentIndex, 0);
+          assert.isBelow(harness.events.indexOf(nestedThreadCreated!), firstNestedSubagentIndex);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
   describe("native goals", () => {
     const syntheticFrame = (uuid: string, text: string) =>
       claudeSdkFrame({
