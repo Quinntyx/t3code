@@ -5534,6 +5534,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const segment = sealClaudeSegment({
             result,
             ledgerGrowth: result === undefined ? undefined : resultLedgerUsage.get(result),
+            aborted: result !== undefined && isClaudeActiveSteeringAbortResult(result),
             mainMessages: context.mainMessages,
             subagentMessages: context.subagentMessages,
             mainModel: context.mainUsageModel,

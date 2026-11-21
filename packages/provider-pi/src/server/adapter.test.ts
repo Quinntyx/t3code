@@ -3363,6 +3363,60 @@ describe("PiAdapterV2", () => {
           : undefined,
         "partial",
       );
+
+      // A child that fails before its first answer reports no usage, yet leaves delegates unmeasured.
+      yield* startTurn(runtime, providerThread, "default", [], "Map it once more", undefined, 3);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_failed",
+        toolName: "subagent",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "failed" }],
+          details: {
+            mode: "single",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo once more",
+                exitCode: 1,
+                stopReason: "error",
+                stderr: "boom",
+                messages: [],
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+              },
+            ],
+          },
+        },
+      });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_end",
+        message: { role: "assistant", usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0 } },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+      const settledAfterFailure = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "completed" &&
+          event.providerTurn.ordinal === 3,
+      );
+      assert.deepInclude(
+        settledAfterFailure.type === "provider_turn.updated"
+          ? settledAfterFailure.providerTurn.turnTokenUsage
+          : undefined,
+        { usageStatus: "complete", inputTokens: 2, outputTokens: 1, otherUsageStatus: "partial" },
+      );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

@@ -411,6 +411,7 @@ type PiSubagentUsage = PiMessageUsage & { readonly model: string };
 function piSubagentUsageByModel(turn: ActivePiTurn): TurnModelTokenUsage[] {
   const byModel = new Map<string, PiSubagentUsage>();
   for (const { usage } of turn.subagentUsage.values()) {
+    if (usage === null) continue;
     const seen = byModel.get(usage.model);
     byModel.set(
       usage.model,
@@ -496,7 +497,7 @@ interface ActivePiTurn {
   hasSubagents: boolean;
   readonly subagentUsage: Map<
     string,
-    { readonly usage: PiSubagentUsage; readonly complete: boolean }
+    { readonly usage: PiSubagentUsage | null; readonly complete: boolean }
   >;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
@@ -1515,22 +1516,24 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             },
           });
           const usage = piMessageUsage(recordField(result, "usage"));
+          const complete = finished && !interrupted && !failed;
+          const previous = turn.subagentUsage.get(nativeTaskId);
           // A child that has not answered yet reports all-zero usage, which measures nothing.
-          if (usage !== null && usage.inputTokens + usage.outputTokens > 0) {
-            const nextUsage: PiSubagentUsage = {
-              model: recordString(result, "model") ?? turn.turnInput.modelSelection.model,
-              ...usage,
-            };
-            const complete = finished && !interrupted && !failed;
-            const previous = turn.subagentUsage.get(nativeTaskId);
-            if (
-              previous?.complete !== complete ||
-              previous.usage.model !== nextUsage.model ||
-              !samePiMessageUsage(previous.usage, nextUsage)
-            ) {
-              turn.subagentUsage.set(nativeTaskId, { usage: nextUsage, complete });
-              subagentUsageChanged = true;
-            }
+          const nextUsage: PiSubagentUsage | null =
+            usage !== null && usage.inputTokens + usage.outputTokens > 0
+              ? {
+                  model: recordString(result, "model") ?? turn.turnInput.modelSelection.model,
+                  ...usage,
+                }
+              : (previous?.usage ?? null);
+          const countsChanged =
+            nextUsage !== null &&
+            (previous?.usage?.model !== nextUsage.model ||
+              !samePiMessageUsage(previous.usage, nextUsage));
+          if (countsChanged || previous?.complete !== complete) {
+            turn.subagentUsage.set(nativeTaskId, { usage: nextUsage, complete });
+            // A child seen before its first answer changes nothing until it finishes.
+            subagentUsageChanged ||= countsChanged || finished;
           }
         }
         if (!subagentUsageChanged) return;
