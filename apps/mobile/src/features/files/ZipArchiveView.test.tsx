@@ -103,6 +103,10 @@ vi.mock("@react-navigation/native", () => ({
   },
 }));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
+vi.mock("./AttachmentViewerCard", () => ({
+  ATTACHMENT_VIEWER_PAGE_CLASS_NAME: "flex-1 bg-sheet",
+  AttachmentViewerCard: (props: { readonly children?: ReactNode }) => props.children,
+}));
 vi.mock("../../components/ui/AppBar", () => {
   interface Item {
     readonly id: string;

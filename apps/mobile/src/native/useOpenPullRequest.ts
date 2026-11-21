@@ -21,7 +21,10 @@ const nextLinkNavigationId = () => ++linkNavigationId;
 type PullRequestContext = { readonly environmentId: string; readonly projectId: string };
 
 // Avoid useRoute so layouts without route context can open any thread's pull requests.
-export function useNavigateToPullRequest(options?: { readonly replace?: boolean }) {
+export function useNavigateToPullRequest(options?: {
+  readonly replace?: boolean;
+  readonly drillIn?: boolean;
+}) {
   const navigation = useNavigation();
   const projects = useProjects();
   const replace = options?.replace;
@@ -102,6 +105,7 @@ export function useNavigateToPullRequest(options?: { readonly replace?: boolean 
 
 export function useOpenPullRequest(options?: {
   readonly replace?: boolean;
+  readonly drillIn?: boolean;
   readonly context?: PullRequestContext;
 }) {
   const route = useRoute();
@@ -125,7 +129,10 @@ export function useOpenPullRequest(options?: {
   );
   const projectId =
     options?.context?.projectId ?? first(routeContext?.projectId) ?? thread?.projectId;
-  const navigateToPullRequest = useNavigateToPullRequest({ replace: options?.replace });
+  const navigateToPullRequest = useNavigateToPullRequest({
+    replace: options?.replace,
+    drillIn: options?.drillIn,
+  });
   return (url: string) =>
     navigateToPullRequest(
       url,

@@ -7,6 +7,7 @@ import { WorkspaceExtraTab } from "./WorkspaceExtraTab";
 import type { ReactNode } from "react";
 import { View } from "react-native";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
+import { LiquidGlassTarget } from "../../../native/LiquidGlass";
 import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { AppBar } from "../../../components/ui/AppBar";
 import { WorkspaceEmptyDetail } from "../WorkspaceEmptyDetail";
@@ -85,62 +86,63 @@ function WorkspaceRoot() {
           }
         >
           {enabled.length === 0 ? (
-            layout.usesSplitView ? (
-              <View className="flex-1 bg-screen" />
-            ) : (
-              <WorkspaceNoTabs />
-            )
+            <LiquidGlassTarget style={{ flex: 1 }}>
+              {layout.usesSplitView ? <View className="flex-1 bg-screen" /> : <WorkspaceNoTabs />}
+            </LiquidGlassTarget>
           ) : (
             <WorkspaceAppBarScope enabled={!layout.usesSplitView}>
-              <WorkspaceTabPanes
-                tabs={TABS}
-                selected={tab}
-                renderTab={(tab) =>
-                  tab === "threads" ? (
-                    <HomeRouteScreen />
-                  ) : tab === "usage" ? (
-                    <WorkspacePageFrame width={workspacePageWidth ?? null}>
-                      <WorkspaceExtraTab tab={tab} />
-                    </WorkspacePageFrame>
-                  ) : layout.usesSplitView ? (
-                    <>
-                      <NativeStackScreenOptions options={{ headerShown: false }} />
-                      <AppBar
-                        embedded
-                        title={
-                          tab === "issues"
-                            ? gt("Issues", { $context: "screen title, list of issues" })
-                            : gt("Pull requests")
-                        }
+              {/* The shared bar stays outside the target: glass inside its own target finds nothing to sample. */}
+              <LiquidGlassTarget style={{ flex: 1 }}>
+                <WorkspaceTabPanes
+                  tabs={TABS}
+                  selected={tab}
+                  renderTab={(tab) =>
+                    tab === "threads" ? (
+                      <HomeRouteScreen />
+                    ) : tab === "usage" ? (
+                      <WorkspacePageFrame width={workspacePageWidth ?? null}>
+                        <WorkspaceExtraTab tab={tab} />
+                      </WorkspacePageFrame>
+                    ) : layout.usesSplitView ? (
+                      <>
+                        <NativeStackScreenOptions options={{ headerShown: false }} />
+                        <AppBar
+                          embedded
+                          title={
+                            tab === "issues"
+                              ? gt("Issues", { $context: "screen title, list of issues" })
+                              : gt("Pull requests")
+                          }
+                        />
+                        <WorkspaceEmptyDetail tab={tab} />
+                      </>
+                    ) : tab === "issues" ? (
+                      <IssuesScreen
+                        renderFrame={(filters, list) => (
+                          <>
+                            <ListSearchToolbar tab="issues" filters={filters} />
+                            <ScreenContent>{list}</ScreenContent>
+                          </>
+                        )}
                       />
-                      <WorkspaceEmptyDetail tab={tab} />
-                    </>
-                  ) : tab === "issues" ? (
-                    <IssuesScreen
-                      renderFrame={(filters, list) => (
-                        <>
-                          <ListSearchToolbar tab="issues" filters={filters} />
-                          <ScreenContent>{list}</ScreenContent>
-                        </>
-                      )}
-                    />
-                  ) : (
-                    <PullRequestsScreen
-                      renderFrame={(filters, list) => (
-                        <>
-                          <ListSearchToolbar tab="pullRequests" filters={filters} />
-                          <ScreenContent>{list}</ScreenContent>
-                        </>
-                      )}
-                    />
-                  )
-                }
-              />
+                    ) : (
+                      <PullRequestsScreen
+                        renderFrame={(filters, list) => (
+                          <>
+                            <ListSearchToolbar tab="pullRequests" filters={filters} />
+                            <ScreenContent>{list}</ScreenContent>
+                          </>
+                        )}
+                      />
+                    )
+                  }
+                />
+              </LiquidGlassTarget>
             </WorkspaceAppBarScope>
           )}
         </SafeAreaInsetsContext>
         {layout.usesSplitView ? null : floatingTabsEnabled ? (
-          <FloatingWorkspaceTabs fillWidth onNewThread={startNewTask} />
+          <FloatingWorkspaceTabs fillWidth glass onNewThread={startNewTask} />
         ) : (
           <AndroidWorkspaceNavigation onNewThread={startNewTask} />
         )}

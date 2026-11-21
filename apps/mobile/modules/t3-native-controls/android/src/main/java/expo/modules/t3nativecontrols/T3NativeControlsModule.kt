@@ -3,11 +3,15 @@ package expo.modules.t3nativecontrols
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.text.format.DateFormat
+import android.view.PixelCopy
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
@@ -46,6 +50,43 @@ class T3NativeControlsModule : Module() {
     }
 
     AsyncFunction("signDpop") { key: ByteArray, input: ByteArray -> T3DpopKeys.sign(key, input) }
+
+    AsyncFunction("captureScreenshot") { promise: Promise ->
+      val activity = appContext.currentActivity ?: error("The app is not active.")
+      activity.runOnUiThread {
+        val view = activity.window.decorView
+        if (view.width <= 0 || view.height <= 0) {
+          promise.reject("SCREENSHOT_UNAVAILABLE", "The window is not ready.", null)
+          return@runOnUiThread
+        }
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        try {
+          PixelCopy.request(
+            activity.window,
+            bitmap,
+            { result ->
+              try {
+                check(result == PixelCopy.SUCCESS) { "Could not capture the window ($result)." }
+                val directory = File(activity.cacheDir, "t3-composer-paste").apply { mkdirs() }
+                val file = File.createTempFile("debug-shake-", ".png", directory)
+                file.outputStream().use {
+                  check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+                }
+                promise.resolve(file.toURI().toString())
+              } catch (error: Exception) {
+                promise.reject("SCREENSHOT_FAILED", "Could not save the screenshot.", error)
+              } finally {
+                bitmap.recycle()
+              }
+            },
+            Handler(Looper.getMainLooper())
+          )
+        } catch (error: Exception) {
+          bitmap.recycle()
+          promise.reject("SCREENSHOT_FAILED", "Could not capture the window.", error)
+        }
+      }
+    }
 
     AsyncFunction("openFile") { uri: String, mimeType: String, promise: Promise ->
       check(filePreviewPromise == null) { "A document viewer is already open." }

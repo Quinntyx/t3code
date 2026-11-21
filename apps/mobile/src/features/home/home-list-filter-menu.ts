@@ -39,10 +39,18 @@ export function buildHomeListFilterMenuItems(
     readonly selectedProjectKey: string | null;
     readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
     readonly onProjectChange: (projectKey: string | null) => void;
+    readonly showHidden: boolean;
+    readonly onShowHiddenChange: (showHidden: boolean) => void;
   },
   resolve: MessageResolver = m,
 ): AppBarMenuItem[] {
   const items: AppBarMenuItem[] = [
+    {
+      id: "show-hidden",
+      title: resolve(msg("Show hidden threads on this device")),
+      selected: props.showHidden,
+      onPress: () => props.onShowHiddenChange(!props.showHidden),
+    },
     {
       id: "environment",
       title: resolve(msg("Environment", { $context: "filter menu heading" })),

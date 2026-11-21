@@ -230,6 +230,7 @@ vi.mock("react-native-reanimated", () => {
     FadeIn: transition,
     FadeInDown: transition,
     FadeInUp: transition,
+    useAnimatedRef: () => ({ current: null }),
   };
 });
 vi.mock("react-native-safe-area-context", () => ({
@@ -283,7 +284,14 @@ vi.mock("../features/layout/workspace-content-width", () => ({
   useWorkspaceSettledContentWidth: () => null,
 }));
 vi.mock("../features/settings/appearance/AppearancePreferencesProvider", () => ({
-  useAppearancePreferences: () => ({ appearance: { baseFontSize: 14 }, themeAppearance: "dark" }),
+  useAppearancePreferences: () => ({
+    appearance: {
+      baseFontSize: 14,
+      uiFont: { regular: "System", bold: "System", boldByWeight: false },
+      codeFontFamily: "Menlo",
+    },
+    themeAppearance: "dark",
+  }),
 }));
 vi.mock("./useUniwindTheme", () => ({
   useUniwindTheme: () => new Proxy({}, { get: () => "#000000" }),
@@ -303,6 +311,11 @@ vi.mock("../features/threads/CopyTextButton", () => ({ CopyTextButton: () => nul
 vi.mock("../features/threads/thread-work-log", () => ({ THREAD_DISCLOSURE_TRANSITION_MS: 100 }));
 vi.mock("../features/threads/CollapsibleUserMessageBody", () => ({
   CollapsibleUserMessageBody: (props: { children: ReactNode }) => props.children,
+}));
+vi.mock("../features/threads/ThreadFeedHistory", () => ({
+  ThreadFeedHistoryProvider: ({ children }: { children?: ReactNode }) => children,
+  ThreadFeedLoadEarlierControl: () => null,
+  ThreadHistoryScrollView: () => null,
 }));
 vi.mock("../features/threads/HtmlRenderWebView", () => ({}));
 vi.mock("../features/threads/McpAppWebView", () => ({}));

@@ -11,17 +11,20 @@ import {
   IssueInvolvement,
   IssueListSort,
   IssueListState,
+  type ProjectCloneLayout,
   PullRequestInvolvement,
   PullRequestListFilters,
   PullRequestListState,
   type ProviderInstanceId,
   PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { ToolCallVisibility } from "@t3tools/contracts/settings";
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
+import { isLiquidGlassValue } from "../lib/liquidGlass";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
@@ -117,6 +120,13 @@ const WorkspaceSelections = Schema.Struct({
 });
 export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 
+const NotebookView = Schema.Struct({
+  selectedKernelId: Schema.optional(Schema.String),
+  collapsed: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+});
+export type NotebookView = typeof NotebookView.Type;
+const isNotebookViews = Schema.is(Schema.Record(Schema.String, NotebookView));
+
 const PullRequestActivityVisibility = Schema.Struct({
   bots: Schema.Boolean,
   resolved: Schema.Boolean,
@@ -136,6 +146,7 @@ const isThreadProject = Schema.is(ThreadProject);
 export interface Preferences {
   readonly navigationTabOrder?: readonly string[];
   readonly hiddenNavigationTabs?: readonly string[];
+  readonly hiddenThreadKeys?: readonly string[];
   /** Whether pull requests or issues last held the tab bar slot they share. */
   readonly sharedSlotTab?: "pullRequests" | "issues";
   readonly pullRequestHideTestFiles?: boolean;
@@ -153,7 +164,16 @@ export interface Preferences {
   readonly markdownFontSize?: number;
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
+  readonly uiFontId?: string | null;
+  readonly codeFontId?: string | null;
+  readonly terminalFontId?: string | null;
   readonly mathRenderingEnabled?: boolean;
+  readonly liquidGlassEnabled?: boolean;
+  readonly glassOpacity?: number;
+  readonly liquidGlassBlur?: number;
+  readonly liquidGlassSaturation?: number;
+  readonly liquidGlassRefraction?: number;
+  readonly liquidGlassDispersion?: number;
   /** Unset means on: crash reports are sent unless the user turns them off. */
   readonly crashReportsEnabled?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
@@ -168,9 +188,12 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   readonly toolCallVisibility?: ToolCallVisibility;
+  readonly foldContextCompactions?: boolean;
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
+  readonly debugShakeEnabled?: boolean;
+  readonly debugShakeProject?: typeof ThreadProject.Type;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -183,6 +206,10 @@ export interface Preferences {
   readonly workspaceSelections?: WorkspaceSelections;
   readonly pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
   readonly issueSavedViews?: ReadonlyArray<IssueSavedView>;
+  readonly notebookViews?: Readonly<Record<string, NotebookView>>;
+  /** The checkout layout and publishing host a new project last used. */
+  readonly newProjectLayout?: ProjectCloneLayout;
+  readonly newProjectPublishHost?: SourceControlProviderKind;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -226,11 +253,13 @@ export class MobilePreferencesStore extends Context.Service<
 
 const isToolCallVisibility = Schema.is(ToolCallVisibility);
 const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
+const isSourceControlProviderKind = Schema.is(SourceControlProviderKind);
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     navigationTabOrder?: readonly string[];
     hiddenNavigationTabs?: readonly string[];
+    hiddenThreadKeys?: readonly string[];
     sharedSlotTab?: "pullRequests" | "issues";
     pullRequestHideTestFiles?: boolean;
     pullRequestActivityVisibility?: PullRequestActivityVisibility;
@@ -246,7 +275,16 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     markdownFontSize?: number;
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
+    uiFontId?: string | null;
+    codeFontId?: string | null;
+    terminalFontId?: string | null;
     mathRenderingEnabled?: boolean;
+    liquidGlassEnabled?: boolean;
+    glassOpacity?: number;
+    liquidGlassBlur?: number;
+    liquidGlassSaturation?: number;
+    liquidGlassRefraction?: number;
+    liquidGlassDispersion?: number;
     crashReportsEnabled?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
@@ -258,9 +296,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
     toolCallVisibility?: ToolCallVisibility;
+    foldContextCompactions?: boolean;
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
+    debugShakeEnabled?: boolean;
+    debugShakeProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -270,12 +311,25 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     workspaceSelections?: WorkspaceSelections;
     pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
     issueSavedViews?: ReadonlyArray<IssueSavedView>;
+    notebookViews?: Readonly<Record<string, NotebookView>>;
+    newProjectLayout?: ProjectCloneLayout;
+    newProjectPublishHost?: SourceControlProviderKind;
   } = {};
 
   if (Array.isArray(parsed.hiddenNavigationTabs)) {
     preferences.hiddenNavigationTabs = parsed.hiddenNavigationTabs.filter(
       (tab): tab is string => typeof tab === "string",
     );
+  }
+
+  if (Array.isArray(parsed.hiddenThreadKeys)) {
+    preferences.hiddenThreadKeys = [
+      ...new Set(
+        parsed.hiddenThreadKeys.filter(
+          (key): key is string => typeof key === "string" && key.length > 0,
+        ),
+      ),
+    ];
   }
 
   if (Array.isArray(parsed.navigationTabOrder)) {
@@ -342,8 +396,35 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.codeFontSize = parsed.codeFontSize;
   }
   if (typeof parsed.codeWordBreak === "boolean") preferences.codeWordBreak = parsed.codeWordBreak;
+  if (typeof parsed.uiFontId === "string" || parsed.uiFontId === null) {
+    preferences.uiFontId = parsed.uiFontId;
+  }
+  if (typeof parsed.codeFontId === "string" || parsed.codeFontId === null) {
+    preferences.codeFontId = parsed.codeFontId;
+  }
+  if (typeof parsed.terminalFontId === "string" || parsed.terminalFontId === null) {
+    preferences.terminalFontId = parsed.terminalFontId;
+  }
   if (typeof parsed.mathRenderingEnabled === "boolean")
     preferences.mathRenderingEnabled = parsed.mathRenderingEnabled;
+  if (typeof parsed.liquidGlassEnabled === "boolean") {
+    preferences.liquidGlassEnabled = parsed.liquidGlassEnabled;
+  }
+  if (isLiquidGlassValue("glassOpacity", parsed.glassOpacity)) {
+    preferences.glassOpacity = parsed.glassOpacity;
+  }
+  if (isLiquidGlassValue("blur", parsed.liquidGlassBlur)) {
+    preferences.liquidGlassBlur = parsed.liquidGlassBlur;
+  }
+  if (isLiquidGlassValue("saturation", parsed.liquidGlassSaturation)) {
+    preferences.liquidGlassSaturation = parsed.liquidGlassSaturation;
+  }
+  if (isLiquidGlassValue("refraction", parsed.liquidGlassRefraction)) {
+    preferences.liquidGlassRefraction = parsed.liquidGlassRefraction;
+  }
+  if (isLiquidGlassValue("dispersion", parsed.liquidGlassDispersion)) {
+    preferences.liquidGlassDispersion = parsed.liquidGlassDispersion;
+  }
   if (typeof parsed.crashReportsEnabled === "boolean") {
     preferences.crashReportsEnabled = parsed.crashReportsEnabled;
   }
@@ -391,6 +472,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (isToolCallVisibility(parsed.toolCallVisibility)) {
     preferences.toolCallVisibility = parsed.toolCallVisibility;
   }
+  if (typeof parsed.foldContextCompactions === "boolean") {
+    preferences.foldContextCompactions = parsed.foldContextCompactions;
+  }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;
   }
@@ -399,6 +483,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isThreadProject(parsed.lastThreadProject)) {
     preferences.lastThreadProject = parsed.lastThreadProject;
+  }
+  if (typeof parsed.debugShakeEnabled === "boolean") {
+    preferences.debugShakeEnabled = parsed.debugShakeEnabled;
+  }
+  if (isThreadProject(parsed.debugShakeProject)) {
+    preferences.debugShakeProject = parsed.debugShakeProject;
   }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(
@@ -434,6 +524,15 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (Array.isArray(parsed.issueSavedViews)) {
     preferences.issueSavedViews = parsed.issueSavedViews.filter(isIssueSavedView);
+  }
+  if (isNotebookViews(parsed.notebookViews)) {
+    preferences.notebookViews = parsed.notebookViews;
+  }
+  if (parsed.newProjectLayout === "standard" || parsed.newProjectLayout === "worktree-container") {
+    preferences.newProjectLayout = parsed.newProjectLayout;
+  }
+  if (isSourceControlProviderKind(parsed.newProjectPublishHost)) {
+    preferences.newProjectPublishHost = parsed.newProjectPublishHost;
   }
   return preferences;
 }

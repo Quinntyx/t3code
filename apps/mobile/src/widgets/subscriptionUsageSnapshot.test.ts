@@ -164,6 +164,33 @@ describe("subscription widget snapshots", () => {
     expect(snapshot.providers[0]?.totalWindows).toBe(20);
     expect(snapshot.providers[0]?.windows[0]?.remaining).toBe(5);
   });
+  it("skips a login that only reports money because the widget draws bars", () => {
+    const snapshot = buildSubscriptionUsageSnapshot(
+      presentations([
+        provider({
+          usageLimits: {
+            checkedAt,
+            windows: [],
+            amounts: [
+              {
+                id: "key-spend",
+                label: "Key spend",
+                amount: { currency: "usd", used: 3.5 },
+              },
+            ],
+          },
+        }),
+      ]),
+      deepLink,
+    );
+    expect(snapshot.providers[0]).toMatchObject({
+      name: "Codex",
+      detail: "No limits available",
+      windows: [],
+      totalWindows: 0,
+      expiresAt: 0,
+    });
+  });
   it("uses the freshest copy of an account across environments before pooling", () => {
     const input = presentations();
     input.set(EnvironmentId.make("other"), {

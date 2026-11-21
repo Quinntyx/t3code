@@ -24,6 +24,7 @@ import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2"
 import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
 import IconBan from "@tabler/icons-react-native/IconBan";
 import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
+import IconBlur from "@tabler/icons-react-native/IconBlur";
 import IconBolt from "@tabler/icons-react-native/IconBolt";
 import IconBox from "@tabler/icons-react-native/IconBox";
 import IconBrain from "@tabler/icons-react-native/IconBrain";
@@ -41,6 +42,7 @@ import IconCircleFilled from "@tabler/icons-react-native/IconCircleFilled";
 import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
 import IconCircleDashed from "@tabler/icons-react-native/IconCircleDashed";
 import IconCircleDot from "@tabler/icons-react-native/IconCircleDot";
+import IconCircleHalf2 from "@tabler/icons-react-native/IconCircleHalf2";
 import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
 import IconMoodPlus from "@tabler/icons-react-native/IconMoodPlus";
 import IconTag from "@tabler/icons-react-native/IconTag";
@@ -49,6 +51,7 @@ import IconClock from "@tabler/icons-react-native/IconClock";
 import IconClipboard from "@tabler/icons-react-native/IconClipboard";
 import IconCode from "@tabler/icons-react-native/IconCode";
 import IconCopy from "@tabler/icons-react-native/IconCopy";
+import IconDropletHalf2 from "@tabler/icons-react-native/IconDropletHalf2";
 import IconDatabase from "@tabler/icons-react-native/IconDatabase";
 import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
 import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
@@ -99,6 +102,7 @@ import IconMinus from "@tabler/icons-react-native/IconMinus";
 import IconMoon from "@tabler/icons-react-native/IconMoon";
 import IconNetwork from "@tabler/icons-react-native/IconNetwork";
 import IconPalette from "@tabler/icons-react-native/IconPalette";
+import IconPrism from "@tabler/icons-react-native/IconPrism";
 import IconPencil from "@tabler/icons-react-native/IconPencil";
 import IconPlug from "@tabler/icons-react-native/IconPlug";
 import IconPhoto from "@tabler/icons-react-native/IconPhoto";
@@ -121,6 +125,7 @@ import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
 import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
 import IconSun from "@tabler/icons-react-native/IconSun";
 import IconShieldQuestion from "@tabler/icons-react-native/IconShieldQuestion";
+import IconTable from "@tabler/icons-react-native/IconTable";
 import IconTarget from "@tabler/icons-react-native/IconTarget";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
@@ -287,7 +292,9 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "plus.bubble": IconMessagePlus,
   "ellipsis.bubble": IconMessageDots,
   robot: IconRobot,
+  tablecells: IconTable,
   "text.word.spacing": IconLetterSpacing,
+  textformat: IconTypography,
   "textformat.size": IconTypography,
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,
@@ -299,6 +306,10 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "wrench.and.screwdriver": IconTool,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
+  "aqi.medium": IconBlur,
+  "circle.lefthalf.filled": IconCircleHalf2,
+  "drop.halffull": IconDropletHalf2,
+  rainbow: IconPrism,
 } satisfies Partial<
   Record<
     | SFSymbol
@@ -344,6 +355,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   keyboard_arrow_up: IconChevronUp,
   keyboard_hide: IconKeyboardHide,
   lock: IconLock,
+  mail: IconMail,
   more_vert: IconDotsVertical,
   merge: IconGitMerge,
   psychology: IconBrain,

@@ -27,7 +27,7 @@ vi.mock("@react-navigation/native", async () => {
   };
 });
 
-import { useOpenThreadInspector } from "./thread-inspector-navigation";
+import { resolveThreadInspectorMode, useOpenThreadInspector } from "./thread-inspector-navigation";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
 const requireNavigation = NodeModule.createRequire(
@@ -296,4 +296,27 @@ it("keeps a focused inspector registered across renders and updates its content"
   act(() => root.unmount());
   expect(activeRender).toBeUndefined();
   expect(listeners.focus.size + listeners.blur.size).toBe(0);
+});
+
+it("keeps thread details reachable without a workspace, unlike files", () => {
+  const select = (chosen: Parameters<typeof resolveThreadInspectorMode>[0]["chosen"]) =>
+    resolveThreadInspectorMode({ previewing: false, routeInspector: false, chosen, hasCwd: false });
+  expect(select("details")).toBe("details");
+  expect(select("files")).toBeNull();
+  expect(
+    resolveThreadInspectorMode({
+      previewing: true,
+      routeInspector: true,
+      chosen: "details",
+      hasCwd: true,
+    }),
+  ).toBe("preview");
+  expect(
+    resolveThreadInspectorMode({
+      previewing: false,
+      routeInspector: true,
+      chosen: null,
+      hasCwd: true,
+    }),
+  ).toBe("route");
 });

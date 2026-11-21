@@ -79,6 +79,8 @@ vi.mock("../layout/workspace/workspace-selection-store", () => ({
 }));
 vi.mock("../cloud/publicConfig", () => ({ hasCloudPublicConfig: () => false }));
 vi.mock("./CloudEnvironmentRows", () => ({ CloudEnvironmentRows: () => null }));
+vi.mock("../../state/discover", () => ({ directoryDiscovery: { enroll: {} } }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("./environmentSections", () => ({
   splitEnvironmentSections: () => ({ connectedCloudEnvironments: [] }),
 }));
@@ -112,7 +114,7 @@ it("does not show another feature's error as a pairing failure", () => {
   act(() => root.render(<ConnectionsNewRouteScreen route={{ params: undefined }} />));
 
   expect(container.textContent).not.toContain("Could not send the message.");
-  expect(container.textContent).toContain("For machines on your local network or tailnet.");
+  expect(container.textContent).toContain("on your local network or tailnet.");
 
   act(() => root.unmount());
   // Leaving the form must not wipe an error that belongs to another screen.

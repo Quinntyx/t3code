@@ -54,6 +54,8 @@ interface TerminalSurfaceProps extends ViewProps {
   readonly buffer: string | null;
   readonly output: TerminalOutputState | null;
   readonly fontSize?: number;
+  /** Null keeps the native terminal's bundled font. */
+  readonly fontFamily?: string | null;
   readonly grid?: TerminalGrid | null;
   readonly isRunning: boolean;
   readonly readOnly?: boolean;
@@ -145,7 +147,7 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface({
             selectable
             style={{
               color: theme.foreground,
-              fontFamily: "Menlo",
+              fontFamily: props.fontFamily ?? "Menlo",
               fontSize,
               lineHeight: Math.round(fontSize * 1.35),
             }}
@@ -173,7 +175,7 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface({
           style={{
             color: theme.foreground,
             flex: 1,
-            fontFamily: "Menlo",
+            fontFamily: props.fontFamily ?? "Menlo",
             padding: 0,
           }}
           onSubmitEditing={(event) => {
@@ -296,9 +298,10 @@ const ReadyTerminalSurface = memo(function ReadyTerminalSurface({
           terminalKey={props.terminalKey}
           initialBuffer={streaming ? "" : props.buffer}
           fontSize={fontSize}
+          fontFamily={props.fontFamily ?? ""}
           sharedGrid={sharedGrid}
           style={{ flex: 1 }}
-          themeConfig={buildGhosttyThemeConfig(theme)}
+          themeConfig={buildGhosttyThemeConfig(theme, props.fontFamily ?? null)}
           onInput={handleNativeInput}
           onPaste={(event) => {
             if (props.isRunning && !props.readOnly) props.onPaste?.(event.nativeEvent.text);

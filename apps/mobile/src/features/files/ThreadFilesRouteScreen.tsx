@@ -15,6 +15,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { EnvironmentId, type ProjectReadFileResult, ThreadId } from "@t3tools/contracts";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
+  hostPreviewMimeTypeFromExtension,
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   mediaMimeTypeFromExtension,
@@ -55,7 +56,8 @@ import { useFileTreeEntries } from "./useFileTreeEntries";
 import { preloadWorkspaceFileContents } from "./preload-workspace-file";
 import { SourceFileSurface } from "./SourceFileSurface";
 import { ThreadFileNavigatorPane } from "./thread-file-navigator-pane";
-import { AppBar } from "../../components/ui/AppBar";
+import { renderedToggleAction } from "./renderedToggleAction";
+import { AppBar, type AppBarAction } from "../../components/ui/AppBar";
 import { useContentTopInset } from "../../components/ui/useBarInset";
 import { WorkspaceFileImagePreview } from "./WorkspaceFileImagePreview";
 import { WorkspaceFilePreviewError } from "./WorkspaceFilePreviewError";
@@ -105,7 +107,7 @@ function FilesBrowserHeader(props: {
 function FileHeader(props: {
   readonly title: string;
   readonly subtitle: string;
-  readonly activeMode: string;
+  readonly modeToggle: AppBarAction | null;
   readonly fileInspectorSupported: boolean;
   readonly onBack: () => void;
   readonly onReturnToThread: () => void;
@@ -113,14 +115,13 @@ function FileHeader(props: {
     readonly id: string;
     readonly title: string;
     readonly icon: string;
-    readonly inline: boolean;
+    readonly disabled?: boolean;
     readonly onPress: () => unknown;
   }>;
 }) {
   const { toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
   const gt = useGT();
   const { panes } = useWorkspacePaneState();
-  const modes = props.actions.filter(({ inline }) => inline);
   return (
     <AppBar
       title={props.title}
@@ -136,40 +137,27 @@ function FileHeader(props: {
             }
           : undefined
       }
-      actions={
-        props.fileInspectorSupported
+      actions={[
+        ...(props.modeToggle ? [props.modeToggle] : []),
+        ...(props.fileInspectorSupported
           ? [
               {
                 accessibilityLabel: panes.auxiliaryPaneVisible
                   ? gt("Hide file navigator")
                   : gt("Show file navigator"),
-                icon: "sidebar.right",
+                icon: "sidebar.right" as const,
                 selected: panes.auxiliaryPaneVisible,
                 onPress: toggleAuxiliaryPane,
               },
             ]
-          : undefined
-      }
+          : []),
+      ]}
       menus={[
         {
           title: gt("File actions"),
           icon: "ellipsis",
           separateBackground: false,
-          items: [
-            ...(modes.length > 0
-              ? [
-                  {
-                    id: "modes",
-                    inline: true,
-                    items: modes.map((action) => ({
-                      ...action,
-                      selected: action.id === props.activeMode,
-                    })),
-                  },
-                ]
-              : []),
-            ...props.actions.filter(({ inline }) => !inline),
-          ],
+          items: props.actions,
         },
       ]}
     />
@@ -720,19 +708,35 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   const mediaSource: MediaActionsSource | undefined =
     environmentId !== null &&
     relativePath !== null &&
-    assetPreview.resource !== null &&
-    "path" in assetPreview.resource &&
-    typeof assetPreview.resource.path === "string" &&
-    (isImageFile || isVideoFile)
+    targetPath !== null &&
+    cwd !== null &&
+    !metadataPending &&
+    directoryPath === null
       ? {
-          reference: mediaFileReference(assetPreview.resource.path, cwd),
+          reference: mediaFileReference(targetPath, cwd),
           name: basename(relativePath),
           mimeType:
-            mediaMimeTypeFromExtension(relativePath.slice(relativePath.lastIndexOf("."))) ??
-            "application/octet-stream",
+            (isImageFile || isVideoFile
+              ? mediaMimeTypeFromExtension(relativePath.slice(relativePath.lastIndexOf(".")))
+              : hostPreviewMimeTypeFromExtension(
+                  relativePath.slice(relativePath.lastIndexOf(".")),
+                )) ?? "application/octet-stream",
           environmentId,
           ...(threadId === null ? {} : { threadId }),
-          resource: assetPreview.resource,
+          resource:
+            threadId === null
+              ? {
+                  _tag: "draft-workspace-file",
+                  cwd,
+                  path: relativePath,
+                  disposition: "attachment",
+                }
+              : {
+                  _tag: "media-file",
+                  threadId,
+                  path: targetPath,
+                  disposition: "attachment",
+                },
         }
       : undefined;
   const mediaActions = useMediaActions(mediaSource);
@@ -838,36 +842,23 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
     </>
   );
 
+  const modeToggle =
+    relativePath !== null && canPreview && !isImageFile && !isVideoFile && !isAudioFile
+      ? renderedToggleAction({
+          rendered: resolvedActiveMode === "preview",
+          table: filePreviewDelimiter({ name: relativePath }) !== null,
+          onToggle: (rendered) =>
+            setModeOverride({ path: relativePath, mode: rendered ? "preview" : "source" }),
+        })
+      : null;
   const fileMenuActions = (() => {
     if (relativePath === null) return [];
-    const canToggleMode = canPreview && !isImageFile && !isVideoFile && !isAudioFile;
     return [
-      canToggleMode
-        ? ({
-            id: "preview",
-            title: filePreviewDelimiter({ name: relativePath })
-              ? gt("Table", { $context: "file view mode" })
-              : gt("Preview", { $context: "file view mode" }),
-            icon: filePreviewDelimiter({ name: relativePath }) ? "tablecells" : "eye",
-            inline: true,
-            onPress: () => setModeOverride({ path: relativePath, mode: "preview" }),
-          } as const)
-        : null,
-      canToggleMode
-        ? ({
-            id: "source",
-            title: gt("Source", { $context: "file view mode, raw source text" }),
-            icon: "doc.text",
-            inline: true,
-            onPress: () => setModeOverride({ path: relativePath, mode: "source" }),
-          } as const)
-        : null,
       resolvedActiveMode === "source"
         ? ({
             id: "word-wrap",
             title: appearance.codeWordBreak ? gt("Disable word wrap") : gt("Enable word wrap"),
             icon: "text.alignleft",
-            inline: false,
             onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
           } as const)
         : null,
@@ -876,7 +867,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "select-text",
             title: selectingText ? gt("Done selecting") : gt("Select text"),
             icon: "character.cursor.ibeam",
-            inline: false,
             onPress: () => setTextSelectionPath(selectingText ? null : relativePath),
           } as const)
         : null,
@@ -885,10 +875,13 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             .filter(({ id }) => id !== "open-file")
             .map((action) => ({
               id: action.id,
-              title: action.title,
+              title:
+                action.id === "save" && !mediaActions.sharing
+                  ? gt("Download or share")
+                  : action.title,
               icon:
-                action.id === "save" ? ("square.and.arrow.up" as const) : ("doc.on.doc" as const),
-              inline: false,
+                action.id === "save" ? ("arrow.down.to.line" as const) : ("doc.on.doc" as const),
+              disabled: action.disabled,
               onPress: action.run,
             }))
         : [
@@ -896,7 +889,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
               id: "copy-path",
               title: gt("Copy path"),
               icon: "doc.on.doc",
-              inline: false,
               onPress: () =>
                 copyTextWithHaptic(
                   formatFilePathForClipboard(
@@ -911,7 +903,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "copy-contents",
             title: fileData.truncated ? gt("Copy preview") : gt("Copy contents"),
             icon: "doc.on.doc",
-            inline: false,
             onPress: () => copyTextWithHaptic(fileData.contents),
           } as const)
         : null,
@@ -920,7 +911,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "open-pdf",
             title: gt("Open PDF"),
             icon: "arrow.up.left.and.arrow.down.right",
-            inline: false,
             onPress: () =>
               setFullScreenPreview({
                 kind: "pdf",
@@ -944,7 +934,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "open-browser",
             title: Platform.OS === "ios" ? gt("Open in Safari") : gt("Open in browser"),
             icon: "safari",
-            inline: false,
             onPress: () => tryOpenExternalUrl(assetPreviewUri, "file-preview"),
           } as const)
         : null,
@@ -954,7 +943,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             id: "refresh",
             title: gt("Refresh", { $context: "verb, reloads the file" }),
             icon: "arrow.clockwise",
-            inline: false,
             onPress: async () => {
               if (isVideoFile || isAudioFile) await assetPreview.refresh();
               setPreviewRevision((current) => current + 1);
@@ -1065,7 +1053,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       <FileHeader
         title={basename(relativePath)}
         subtitle={headerSubtitle}
-        activeMode={resolvedActiveMode}
+        modeToggle={modeToggle}
         fileInspectorSupported={fileInspector.supported}
         onBack={handleBack}
         onReturnToThread={handleReturnToThread}

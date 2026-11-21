@@ -88,6 +88,12 @@ import { useWorkspaceTabs } from "./workspace/WorkspaceTabsContext";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "../home/homeThreadList";
 import { newTaskDestination, newTaskFilteredProject } from "../threads/new-task-project-selection";
+import {
+  ThreadListDrawerHost,
+  ThreadListDrawerProvider,
+  threadListDrawerWidth,
+} from "../threads/thread-list-drawer";
+import { ThreadListDrawerPanel } from "./workspace/ThreadListDrawerPanel";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { PaneContext } from "../../components/ui/Pane";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
@@ -229,21 +235,23 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly workspaceRouteName: string | undefined;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  if (!AsyncResult.isSuccess(preferencesResult)) {
-    return AsyncResult.isFailure(preferencesResult) ? (
+  if (!AsyncResult.isSuccess(preferencesResult) && !AsyncResult.isFailure(preferencesResult)) {
+    return null;
+  }
+  const preferences = AsyncResult.isSuccess(preferencesResult)
+    ? preferencesResult.value
+    : undefined;
+  const groupingSettings = preferences
+    ? resolveMobileProjectGroupingSettings(preferences)
+    : DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS;
+  return (
+    <ThreadListDrawerProvider>
       <AdaptiveWorkspaceLayoutContent
         {...props}
-        projectGroupingMode={DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS.sidebarProjectGroupingMode}
+        projectGroupingMode={groupingSettings.sidebarProjectGroupingMode}
+        savedThreadListFilters={preferences?.threadListFilters}
       />
-    ) : null;
-  }
-  const groupingSettings = resolveMobileProjectGroupingSettings(preferencesResult.value);
-  return (
-    <AdaptiveWorkspaceLayoutContent
-      {...props}
-      projectGroupingMode={groupingSettings.sidebarProjectGroupingMode}
-      savedThreadListFilters={preferencesResult.value.threadListFilters}
-    />
+    </ThreadListDrawerProvider>
   );
 }
 
@@ -369,6 +377,7 @@ function AdaptiveWorkspaceLayoutContent(
   ]);
   // The rail keeps its room even while the sidebar floats; only the list pane overlays the page.
   const width = viewportWidth - navigationRailWidth;
+  const threadListDrawerPanelWidth = threadListDrawerWidth(layout.listPaneWidth, viewportWidth);
   // The sidebar stays mounted under a workspace page, so its list is ready on the way back.
   const shouldRenderPrimarySidebar = layout.usesSplitView;
   const fileInspector = useMemo(
@@ -1186,6 +1195,11 @@ function AdaptiveWorkspaceLayoutContent(
             ) : (
               renderColumns(props.children)
             )}
+            <ThreadListDrawerHost width={threadListDrawerPanelWidth}>
+              {(drawer) => (
+                <ThreadListDrawerPanel drawer={drawer} width={threadListDrawerPanelWidth} />
+              )}
+            </ThreadListDrawerHost>
           </WindowHingeContext>
         </WorkspacePaneStateContext>
       </AdaptiveWorkspaceContext>

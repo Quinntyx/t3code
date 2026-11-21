@@ -10,7 +10,7 @@ import type {
 import {
   type ComposerEnvironmentCandidate,
   matchComposerEnvironmentItems,
-  matchComposerThreadItems,
+  matchComposerThreadTriggerItems,
 } from "@t3tools/client-runtime/composerThreadItems";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
@@ -356,11 +356,12 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
+  const mentionsThreads = trigger?.kind === "thread";
   // Mounts older settled threads matching the mention, here and on linked machines, which shells
   // may leave out.
   useThreadSearch(
-    trigger?.kind === "path" && environmentId ? [environmentId, ...linkedEnvironments.keys()] : [],
-    trigger?.kind === "path" ? trigger.query : "",
+    mentionsThreads && environmentId ? [environmentId, ...linkedEnvironments.keys()] : [],
+    mentionsThreads ? trigger.query : "",
     { titlesOnly: true },
   );
   const pullRequestSearch = useComposerPullRequestSearch({
@@ -517,9 +518,9 @@ export function useComposerCommandMenu({
       }));
     }
 
-    if (trigger.kind === "path") {
-      const threadItems = environmentId
-        ? matchComposerThreadItems(
+    if (trigger.kind === "thread") {
+      return environmentId
+        ? matchComposerThreadTriggerItems(
             {
               shells: threadShells,
               environmentId,
@@ -531,6 +532,9 @@ export function useComposerCommandMenu({
             messages,
           )
         : [];
+    }
+
+    if (trigger.kind === "path") {
       const environmentItems = environmentId
         ? matchComposerEnvironmentItems(
             { environments, environmentId, query: trigger.query },
@@ -542,7 +546,6 @@ export function useComposerCommandMenu({
           ? buildComposerModelItems(modelOptions, trigger.query, modelProviders)
           : [];
       return [
-        ...threadItems,
         ...environmentItems,
         ...modelItems,
         ...pathSearch.entries.map((entry) => {
@@ -594,7 +597,7 @@ export function useComposerCommandMenu({
       return;
     }
     if (item.type === "thread") {
-      if (!ownerKey || trigger.kind !== "path") return;
+      if (!ownerKey || trigger.kind !== "thread") return;
       const shell = threadShells.find(
         (candidate) =>
           candidate.environmentId === item.thread.environmentId &&

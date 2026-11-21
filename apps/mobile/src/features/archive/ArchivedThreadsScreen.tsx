@@ -30,7 +30,7 @@ import { RelativeTime } from "../../components/RelativeTime";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useServerConfigs } from "../../state/entities";
 import { useEnvironmentScope } from "../../state/session";
-import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadSwipeable, useSwipeRowSide } from "../home/thread-swipe-actions";
 import type { ArchivedThreadGroup, ArchivedThreadSortOrder } from "./archivedThreadList";
 import { SettingsScreenContent } from "../settings/components/SettingsScreen";
 
@@ -185,6 +185,7 @@ function ArchivedThreadRow(props: {
   readonly onUnarchive: () => void;
   readonly thread: EnvironmentThreadShell;
 }) {
+  const swipeRowSide = useSwipeRowSide();
   const { width: windowWidth } = useWindowDimensions();
   const gt = useGT();
   const cardColor = useUniwindTheme()["--color-grouped-card"];
@@ -250,6 +251,7 @@ function ArchivedThreadRow(props: {
 
   return (
     <ThreadSwipeable
+      side={swipeRowSide}
       resetKey={`${props.thread.environmentId}:${props.thread.id}`}
       threadKey={`${props.thread.environmentId}:${props.thread.id}`}
       backgroundColor={cardColor}

@@ -7,7 +7,7 @@ import {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
+import type { AcknowledgedThreadMessage } from "../../state/thread-outbox-model";
 import {
   appendAcceptedThreadMessages,
   appendPendingThreadMessages,
@@ -17,7 +17,7 @@ import {
   selectPendingAcknowledgedMessages,
 } from "./pending-thread-feed";
 
-const pending = (id: string): QueuedThreadMessage => ({
+const pending = (id: string): AcknowledgedThreadMessage => ({
   environmentId: EnvironmentId.make("env"),
   threadId: ThreadId.make("thread"),
   messageId: MessageId.make(id),
@@ -224,11 +224,34 @@ describe("pending timeline messages", () => {
       queuedMessages: [],
       sequence: 45,
       projectedMessages: [{ id: echoed.messageId }],
+      runs: [
+        { userMessageId: echoed.messageId, status: "rolled_back" },
+        { userMessageId: waiting.messageId, status: "starting" },
+      ],
     });
     expect(shown).toEqual([waiting]);
     expect(appendPendingThreadMessages([], [], shown).map((entry) => entry.id)).toEqual([
       "waiting",
     ]);
+  });
+
+  it("stops showing a long-delivered acknowledged message whose settled run left the bounded window", () => {
+    // After a bounded reload, projection.messages keeps only recent turns, so an
+    // hour-old delivered message is no longer echoed there. Its run settled long
+    // ago, which is proof of delivery on its own; the row must not resurrect.
+    const delivered = pending("delivered");
+    const waiting = pending("waiting");
+    const shown = selectPendingAcknowledgedMessages([delivered, waiting], {
+      threadKey: "env:thread",
+      queuedMessages: [],
+      sequence: 0,
+      projectedMessages: [],
+      runs: [
+        { userMessageId: delivered.messageId, status: "failed" },
+        { userMessageId: waiting.messageId, status: "running" },
+      ],
+    });
+    expect(shown).toEqual([waiting]);
   });
 
   it("holds the run's rows after a sent message until the run shows", () => {

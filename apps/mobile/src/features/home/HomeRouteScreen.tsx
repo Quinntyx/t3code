@@ -10,6 +10,7 @@ import { useGT, useMessages } from "gt-react-native";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { useProjects } from "../../state/entities";
 import { steadyNavigationThreadShellsAtom } from "../../state/threads";
 import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -34,6 +35,7 @@ import {
 } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
+import { useHiddenThreads } from "./use-hidden-threads";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { openSettings } from "../settings/settings-navigation";
 import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
@@ -147,6 +149,7 @@ export function HomeRouteScreen() {
       })),
     [projectScopes, threads],
   );
+  const { showHidden, setShowHidden } = useHiddenThreads();
   const selectedProjectKey =
     resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
 
@@ -173,7 +176,7 @@ export function HomeRouteScreen() {
             accessibilityLabel: gt("Search threads"),
           }}
           filter={{
-            customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
+            customized: selectedEnvironmentId !== null || selectedProjectKey !== null || showHidden,
             items: buildHomeListFilterMenuItems(
               {
                 environments,
@@ -182,58 +185,62 @@ export function HomeRouteScreen() {
                 selectedProjectKey,
                 onEnvironmentChange: setSelectedEnvironmentId,
                 onProjectChange: setSelectedProjectKey,
+                showHidden,
+                onShowHiddenChange: setShowHidden,
               },
               m,
             ),
           }}
         />
 
-        <HomeScreen
-          catalogState={catalogState}
-          environments={environments}
-          onAddConnection={() => openSettings(navigation, "SettingsEnvironmentNew")}
-          onArchiveThread={archiveThread}
-          onDeleteThread={confirmDeleteThread}
-          onSettleThread={settleThread}
-          onSnoozeThread={snoozeThread}
-          onUnsnoozeThread={unsnoozeThread}
-          onUnsettleThread={unsettleThread}
-          onPinThread={pinThread}
-          onUnpinThread={unpinThread}
-          onSetThreadAutoSettle={setThreadAutoSettle}
-          onMoveThread={moveThread}
-          onRenameThread={renameThread}
-          onRegenerateThreadTitle={regenerateThreadTitle}
-          onEnvironmentChange={setSelectedEnvironmentId}
-          onProjectChange={setSelectedProjectKey}
-          onOpenSettings={() => selectTab("settings")}
-          onSearchQueryChange={setSearchQuery}
-          onSelectThread={handleSelectThread}
-          onSelectPendingTask={openPendingTask}
-          onDeletePendingTask={confirmDeletePendingTask}
-          onNewThreadOnBranch={handleNewThreadOnBranch}
-          onNewThreadInProject={(project) => {
-            selectThreadRoute({
-              draft: {
-                requestId: uuidv4(),
-                environmentId: String(project.environmentId),
-                projectId: String(project.id),
-                title: project.title,
-              },
-            });
-          }}
-          onStartNewTask={startNewTask}
-          pendingTasks={pendingTasks}
-          projectGroupingMode={listOptions.projectGroupingMode}
-          projects={projects}
-          projectSortOrder={listOptions.projectSortOrder}
-          savedConnectionsById={savedConnectionsById}
-          searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
-          selectedProjectKey={selectedProjectKey}
-          threads={threads}
-          visible={visible}
-        />
+        <LiquidGlassTarget style={{ flex: 1 }}>
+          <HomeScreen
+            catalogState={catalogState}
+            environments={environments}
+            onAddConnection={() => openSettings(navigation, "SettingsEnvironmentNew")}
+            onArchiveThread={archiveThread}
+            onDeleteThread={confirmDeleteThread}
+            onSettleThread={settleThread}
+            onSnoozeThread={snoozeThread}
+            onUnsnoozeThread={unsnoozeThread}
+            onUnsettleThread={unsettleThread}
+            onPinThread={pinThread}
+            onUnpinThread={unpinThread}
+            onSetThreadAutoSettle={setThreadAutoSettle}
+            onMoveThread={moveThread}
+            onRenameThread={renameThread}
+            onRegenerateThreadTitle={regenerateThreadTitle}
+            onEnvironmentChange={setSelectedEnvironmentId}
+            onProjectChange={setSelectedProjectKey}
+            onOpenSettings={() => selectTab("settings")}
+            onSearchQueryChange={setSearchQuery}
+            onSelectThread={handleSelectThread}
+            onSelectPendingTask={openPendingTask}
+            onDeletePendingTask={confirmDeletePendingTask}
+            onNewThreadOnBranch={handleNewThreadOnBranch}
+            onNewThreadInProject={(project) => {
+              selectThreadRoute({
+                draft: {
+                  requestId: uuidv4(),
+                  environmentId: String(project.environmentId),
+                  projectId: String(project.id),
+                  title: project.title,
+                },
+              });
+            }}
+            onStartNewTask={startNewTask}
+            pendingTasks={pendingTasks}
+            projectGroupingMode={listOptions.projectGroupingMode}
+            projects={projects}
+            projectSortOrder={listOptions.projectSortOrder}
+            savedConnectionsById={savedConnectionsById}
+            searchQuery={searchQuery}
+            selectedEnvironmentId={selectedEnvironmentId}
+            selectedProjectKey={selectedProjectKey}
+            threads={threads}
+            visible={visible}
+          />
+        </LiquidGlassTarget>
         <ThreadUndoNotice visible={visible} />
       </>
     </AndroidHomeFabLayout>

@@ -89,11 +89,16 @@ const denied: Pick<AuthSessionState, "authenticated" | "scopes"> = {
   scopes: [],
 };
 
-function hostSource(_tag: "workspace-file" | "media-file" = "media-file"): MediaActionsSource {
+function hostSource(
+  _tag: "workspace-file" | "media-file" | "draft-workspace-file" = "media-file",
+): MediaActionsSource {
   return {
     environmentId,
     threadId,
-    resource: { _tag, threadId, path: "/repo/image.png" },
+    resource:
+      _tag === "draft-workspace-file"
+        ? { _tag, cwd: "/repo", path: "image.png", disposition: "attachment" }
+        : { _tag, threadId, path: "/repo/image.png" },
     reference: { kind: "file", path: "/repo/image.png", relativePath: "image.png" },
     name: "image.png",
     mimeType: "image/png",
@@ -113,7 +118,7 @@ beforeEach(() => {
   state.copy.mockReset();
 });
 
-it.each(["workspace-file", "media-file"] as const)(
+it.each(["workspace-file", "media-file", "draft-workspace-file"] as const)(
   "blocks denied %s sharing and file opening while preserving path copying",
   async (_tag) => {
     const media = useMediaActions(hostSource(_tag));

@@ -15,6 +15,7 @@ import { Pressable, View } from "react-native";
 import { AndroidAnchoredMenu } from "./AndroidAnchoredMenu.android";
 import { AndroidHeaderIconButton } from "./AndroidScreenHeader.android";
 import { AppText } from "./AppText";
+import { FloatingHeaderButtonBackdrop } from "./FloatingHeaderButtonBackdrop";
 import { NativeAppBar } from "./NativeAppBar.android";
 import { useControlTheme } from "./useControlTheme";
 import { useToolbarLayout } from "./useToolbarLayout";
@@ -25,6 +26,8 @@ const FILTER_FILLED_ICON = require("../../../assets/icons/filter-filled.xml");
 // Material TopAppBar: 48dp icon buttons, the last one 4dp from the end.
 const ACTION_SIZE = 48;
 const ACTION_END_INSET = 4;
+// The floating chip behind each Compose action: Material's 40dp button, centred in its slot.
+const ACTION_CHIP_SIZE = 40;
 
 export interface WorkspaceAppBarProps {
   readonly title: string;
@@ -164,14 +167,23 @@ function WorkspaceAppBarView(props: WorkspaceAppBarProps) {
     </AndroidAnchoredMenu>
   ) : null;
   return (
-    <View className="bg-header" style={{ paddingTop, paddingBottom }}>
+    <View style={{ paddingTop, paddingBottom }}>
       <View
         pointerEvents={searching ? "none" : "auto"}
         accessibilityElementsHidden={searching}
         importantForAccessibility={searching ? "no-hide-descendants" : "auto"}
         style={{ opacity: searching ? 0 : 1 }}
       >
+        <View
+          pointerEvents="none"
+          className="absolute flex-row"
+          style={{ right: ACTION_END_INSET, top: (height - ACTION_SIZE) / 2 }}
+        >
+          <ActionChip visible={search !== undefined} />
+          <ActionChip visible={filter !== undefined} />
+        </View>
         <NativeAppBar
+          containerColor="transparent"
           title={
             <RNHostView matchContents={{ vertical: true }}>
               <View collapsable={false} className="justify-center" style={{ height: ACTION_SIZE }}>
@@ -219,7 +231,7 @@ function WorkspaceAppBarView(props: WorkspaceAppBarProps) {
           className="absolute inset-0 bg-header"
           style={{ paddingTop, paddingBottom, paddingHorizontal: ACTION_END_INSET }}
         >
-          <View className="flex-1 flex-row items-center gap-1">
+          <View className="flex-1 flex-row items-center gap-2">
             <AndroidHeaderIconButton
               accessibilityLabel={gt("Close search")}
               icon="arrow.left"
@@ -228,6 +240,21 @@ function WorkspaceAppBarView(props: WorkspaceAppBarProps) {
             {search.field}
             {filterMenu}
           </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function ActionChip(props: { readonly visible: boolean }) {
+  return (
+    <View
+      className="items-center justify-center"
+      style={{ width: ACTION_SIZE, height: ACTION_SIZE }}
+    >
+      {props.visible ? (
+        <View style={{ width: ACTION_CHIP_SIZE, height: ACTION_CHIP_SIZE }}>
+          <FloatingHeaderButtonBackdrop />
         </View>
       ) : null}
     </View>

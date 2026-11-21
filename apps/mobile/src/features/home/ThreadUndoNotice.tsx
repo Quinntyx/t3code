@@ -19,7 +19,10 @@ import {
   useThreadUndoNotice,
 } from "./thread-undo-notice";
 
-export function ThreadUndoNotice(props: { readonly visible: boolean }) {
+export function ThreadUndoNotice(props: {
+  readonly visible: boolean;
+  readonly bottomClearance?: number;
+}) {
   const gt = useGT();
   const floatingTabsEnabled = useAndroidFloatingTabs();
   const notice = useThreadUndoNotice();
@@ -51,7 +54,8 @@ export function ThreadUndoNotice(props: { readonly visible: boolean }) {
     rootMetrics.horizontalSizeClass === "compact" &&
     workspace?.state.tabs.threads.searchMode === "resting";
   const bottom =
-    Platform.OS === "ios"
+    props.bottomClearance ??
+    (Platform.OS === "ios"
       ? foldedResting
         ? // Sit level with the rail's tab pill, which floats inside the bottom safe area.
           Math.max(
@@ -74,7 +78,7 @@ export function ThreadUndoNotice(props: { readonly visible: boolean }) {
             ) + 8
       : floatingTabsEnabled && keyboardHeight === 0
         ? Math.max(insets.bottom + 12, workspace?.bottomClearance ?? 0)
-        : insets.bottom + 12;
+        : insets.bottom + 12);
   return (
     <View
       key={instance.key}
@@ -85,11 +89,13 @@ export function ThreadUndoNotice(props: { readonly visible: boolean }) {
     >
       <Toast
         message={
-          notice.action === "Settled"
-            ? gt("Settled thread")
-            : notice.action === "Snoozed"
-              ? gt("Snoozed thread")
-              : gt("Unpinned thread")
+          notice.action === "Hidden"
+            ? gt("Hidden thread on this device")
+            : notice.action === "Settled"
+              ? gt("Settled thread")
+              : notice.action === "Snoozed"
+                ? gt("Snoozed thread")
+                : gt("Unpinned thread")
         }
         action={{
           label: gt("Undo"),

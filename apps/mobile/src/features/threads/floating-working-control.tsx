@@ -20,6 +20,8 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ControlPill } from "../../components/ui/ControlPill";
+import { GlassBackdrop, useLiquidGlassActive } from "../../components/ui/GlassBackdrop";
+import { cn } from "../../lib/cn";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { BrowserPreviewButton } from "../browser/browser-preview-button";
 import { DevicePreviewButton } from "../devices/device-preview-button";
@@ -76,6 +78,10 @@ export function FloatingWorkingControl(props: {
   const gt = useGT();
   const { width: windowWidth } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
+  const liquidGlass = useLiquidGlassActive();
+  const fallbackSurface = liquidGlass
+    ? "border border-border"
+    : "border border-border bg-glass-fallback shadow-md shadow-black/10";
   const [overlayWidth, setOverlayWidth] = useState(windowWidth);
   const [queueWidth, setQueueWidth] = useState(0);
   const [actionWidth, setActionWidth] = useState(0);
@@ -343,9 +349,13 @@ export function FloatingWorkingControl(props: {
         <View pointerEvents="box-none" className="flex-row items-center gap-4">
           <Animated.View
             pointerEvents={capsuleInteractive ? "box-none" : "none"}
-            className="h-11 items-center justify-center overflow-hidden rounded-full border border-border bg-glass-fallback shadow-md shadow-black/10"
+            className={cn(
+              "h-11 items-center justify-center overflow-hidden rounded-full",
+              fallbackSurface,
+            )}
             style={capsuleStyle}
           >
+            {liquidGlass ? <GlassBackdrop /> : null}
             {capsuleContent}
           </Animated.View>
 
@@ -355,12 +365,10 @@ export function FloatingWorkingControl(props: {
             importantForAccessibility={props.showScrollToEnd ? "auto" : "no-hide-descendants"}
             style={[arrowTransformStyle, arrowContentStyle]}
           >
-            <ControlPill
-              accessibilityLabel={gt("Scroll to end")}
-              activateOnPressIn
-              className="h-11 w-11 border border-border bg-glass-fallback shadow-md shadow-black/10"
+            <FallbackScrollToEnd
+              glass={liquidGlass}
+              className={fallbackSurface}
               disabled={!props.showScrollToEnd}
-              icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
               onPress={props.onScrollToEnd}
             />
           </Animated.View>
@@ -375,11 +383,9 @@ export function FloatingWorkingControl(props: {
           <ScrollToEndButton onPress={props.onScrollToEnd} />
         </UniwindGlassView>
       ) : (
-        <ControlPill
-          accessibilityLabel={gt("Scroll to end")}
-          activateOnPressIn
-          className="h-11 w-11 border border-border bg-glass-fallback shadow-md shadow-black/10"
-          icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
+        <FallbackScrollToEnd
+          glass={liquidGlass}
+          className={fallbackSurface}
           onPress={props.onScrollToEnd}
         />
       )}
@@ -548,6 +554,37 @@ function StatusLabelRow(props: {
         </View>
       )}
     </Animated.View>
+  );
+}
+
+function FallbackScrollToEnd(props: {
+  readonly glass: boolean;
+  readonly className: string;
+  readonly disabled?: boolean;
+  readonly onPress: () => void;
+}) {
+  const gt = useGT();
+  if (!props.glass)
+    return (
+      <ControlPill
+        accessibilityLabel={gt("Scroll to end")}
+        activateOnPressIn
+        className={cn("h-11 w-11", props.className)}
+        disabled={props.disabled}
+        icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
+        onPress={props.onPress}
+      />
+    );
+  return (
+    <View
+      className={cn(
+        "h-11 w-11 items-center justify-center overflow-hidden rounded-full",
+        props.className,
+      )}
+    >
+      <GlassBackdrop />
+      <ScrollToEndButton disabled={props.disabled} onPress={props.onPress} />
+    </View>
   );
 }
 

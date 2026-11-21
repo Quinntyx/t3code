@@ -3,6 +3,7 @@ import { Box, ExtendedFloatingActionButton, Icon, Text } from "@expo/ui/jetpack-
 import {
   defaultMinSize,
   fillMaxWidth,
+  graphicsLayer,
   height,
   onSizeChanged,
   size,
@@ -17,6 +18,8 @@ import { resolveScaledTextRole } from "../lib/appearancePreferences";
 /** Keep the animated width and icon positioning entirely inside Compose, not Yoga. */
 export function ScrollComposeButton(props: {
   readonly expanded: boolean;
+  /** Match the floating tab bar's pill instead of Material's rounded square. */
+  readonly round?: boolean;
   readonly onPress: () => void;
   readonly size?: number;
   readonly className?: string;
@@ -60,6 +63,9 @@ export function ScrollComposeButton(props: {
               modifiers={[
                 defaultMinSize({ minWidth: nativeSize }),
                 height(nativeSize),
+                ...(props.round
+                  ? [graphicsLayer({ shape: { type: "circle" }, clip: true, shadowElevation: 6 })]
+                  : []),
                 onSizeChanged(rememberWidth),
               ]}
             >
@@ -100,7 +106,7 @@ export function ScrollComposeButton(props: {
           top: 0,
           bottom: 0,
           width: props.expanded ? buttonWidth * scale : fabSize,
-          borderRadius: 16 * scale,
+          borderRadius: props.round ? fabSize / 2 : 16 * scale,
           overflow: "hidden",
         }}
       />

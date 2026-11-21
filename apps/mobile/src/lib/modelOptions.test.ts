@@ -12,6 +12,7 @@ import {
 
 import {
   buildModelOptions,
+  buildMachineHandoffModelOptions,
   describeUnavailableModelSelection,
   groupByProvider,
   isModelSelectionUnavailable,
@@ -423,6 +424,29 @@ describe("mobile model options", () => {
     expect(isModelSelectionUnavailable(config, disabled, null)).toBe(true);
     expect(isModelSelectionUnavailable(config, removed, null)).toBe(false);
     expect(resolveSelectableModelSelection(null, disabled, null)).toBe(disabled);
+    const handoffConfig = {
+      ...config,
+      providers: config.providers.map((provider) => ({
+        ...provider,
+        status: "ready" as const,
+        models: [{ slug: usable.model, name: "Test", isCustom: false, capabilities: null }],
+      })),
+    };
+    expect(buildMachineHandoffModelOptions(handoffConfig, usable, null)).toHaveLength(1);
+    expect(
+      buildMachineHandoffModelOptions(
+        {
+          ...handoffConfig,
+          providers: handoffConfig.providers.map((provider) => ({
+            ...provider,
+            status: "error" as const,
+            auth: { status: "unknown" as const },
+          })),
+        },
+        usable,
+        null,
+      ),
+    ).toEqual([]);
   });
 
   describe("Antigravity selections", () => {
@@ -822,6 +846,45 @@ describe("synchronized mobile model visibility", () => {
         .filter((option) => option.providerKey === other)
         .map((option) => option.selection.model),
     ).toEqual(["hidden", "first", "second", "custom"]);
+  });
+
+  it("hides newly discovered models without resurrecting them through the saved selection", () => {
+    const optedOut = {
+      ...config,
+      settings: {
+        ...config.settings,
+        providerModelPreferences: {
+          [provider]: {
+            hiddenModels: ["hidden", "custom"],
+            modelOrder: ["second", "first"],
+            newModelsEnabled: false,
+            enabledModels: ["first"],
+          },
+        },
+      },
+    };
+    expect(
+      buildModelOptions(optedOut, { instanceId: provider, model: "second" }, provider, null).map(
+        (option) => option.selection.model,
+      ),
+    ).toEqual(["first", "custom"]);
+    for (const model of ["second", "missing", "hidden"]) {
+      const saved = { instanceId: provider, model };
+      expect(resolveSelectableModelSelection(optedOut, saved, null)).toBeNull();
+      expect(resolveDefaultableModelSelection(optedOut, saved, null)).toBeNull();
+    }
+    for (const model of ["first", "custom"]) {
+      const saved = { instanceId: provider, model };
+      expect(resolveDefaultableModelSelection(optedOut, saved, null)).toBe(saved);
+    }
+    const management = buildModelOptions(optedOut, null, provider, null, true);
+    expect(management.find((option) => option.selection.model === "second")?.isHidden).toBe(true);
+    expect(management.find((option) => option.selection.model === "custom")?.isHidden).toBe(false);
+    expect(
+      buildModelOptions(optedOut, { instanceId: provider, model: "missing" }, provider, null).map(
+        (option) => option.selection.model,
+      ),
+    ).not.toContain("missing");
   });
 
   it("exposes hidden built-ins for management without offering custom visibility controls", () => {

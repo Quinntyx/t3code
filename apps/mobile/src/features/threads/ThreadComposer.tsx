@@ -181,7 +181,7 @@ export interface ThreadComposerProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  /** Present while the thread's queue is held. */
+  /** Present while the thread's queue is held or its last run can be continued. */
   readonly onResumeQueue: (() => Promise<void>) | null;
   /** `stillSendable` reports whether the draft is unchanged after any wait before sending. */
   readonly onSendMessage: (

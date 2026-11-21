@@ -49,7 +49,9 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
   const hostEnvironmentId =
     source &&
     "resource" in source &&
-    (source.resource._tag === "workspace-file" || source.resource._tag === "media-file")
+    (source.resource._tag === "workspace-file" ||
+      source.resource._tag === "media-file" ||
+      source.resource._tag === "draft-workspace-file")
       ? source.environmentId
       : null;
   const fileSession = useEnvironmentQuery(

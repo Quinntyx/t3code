@@ -2,7 +2,10 @@ import { useGT, useMessages } from "gt-react-native";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
-import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  pickableProjectGroups,
+  resolveFocusProjectKeys,
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -50,6 +53,7 @@ import {
   buildHomeListFilterMenuItems,
   homeListFilterEnvironments,
 } from "../home/home-list-filter-menu";
+import { useHiddenThreads } from "../home/use-hidden-threads";
 import {
   buildHomeProjectScopes,
   resolveHomeProjectFilterScope,
@@ -97,6 +101,8 @@ interface ThreadNavigationSidebarProps {
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironmentSettings: () => void;
+  /** Set by the compact drawer, whose brand returns to the home thread list. */
+  readonly onOpenHome?: () => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onOpenPendingTask: (pendingTask: PendingNewTask) => void;
@@ -132,6 +138,11 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const projects = useProjects();
   const threads = useAtomValue(steadyNavigationThreadShellsAtom);
   const selectedThreadKey = useSidebarRowThreadKey(props.selectedThreadKey);
+  const selectedThread =
+    threads.find(
+      (thread) => scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey,
+    ) ?? null;
+  const { showHidden, setShowHidden } = useHiddenThreads();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
@@ -187,6 +198,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         messages,
       ),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode, messages],
+  );
+  const focusProjectKeys = resolveFocusProjectKeys(
+    projectScopes.map((scope) => scope.projectRefs),
+    selectedThread,
   );
   const projectFilterOptions = pickableProjectGroups(
     sortHomeProjectScopes({
@@ -456,6 +471,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
               !activeNewTask &&
               scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey
             }
+            stackDepth={item.item.stack?.depth}
+            stackForeignBranches={item.item.stack?.foreignBranches}
+            offFocusProject={focusProjectKeys !== null && !focusProjectKeys.has(scopeKey)}
             fullSwipeWidth={props.width - 20}
             onSelectThread={handleSelectThread}
             onOpenThreadPullRequests={handleOpenThreadPullRequests}
@@ -538,6 +556,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     <WorkspaceListHeader
       accessibilityLabel={gt("{appName}, Threads", { appName: "T3 Code" })}
       onOpenEnvironments={props.onOpenEnvironmentSettings}
+      onOpenHome={props.onOpenHome}
       onOpenSettings={props.onOpenSettings}
       search={{
         value: props.searchQuery,
@@ -546,15 +565,18 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         accessibilityLabel: gt("Search threads"),
       }}
       filter={{
-        customized: options.selectedEnvironmentId !== null || selectedProjectKey !== null,
+        customized:
+          options.selectedEnvironmentId !== null || selectedProjectKey !== null || showHidden,
         items: buildHomeListFilterMenuItems(
           {
             environments,
             projects: projectFilterOptions,
             selectedEnvironmentId: options.selectedEnvironmentId,
             selectedProjectKey,
+            showHidden,
             onEnvironmentChange: setSelectedEnvironmentId,
             onProjectChange: setSelectedProjectKey,
+            onShowHiddenChange: setShowHidden,
           },
           messages,
         ),

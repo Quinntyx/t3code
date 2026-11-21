@@ -265,7 +265,7 @@ function AppBarView(props: AppBarProps & { readonly searchState?: SearchState })
             // Match Material TopAppBar's 4dp icon inset so buttons stay where the bar drew them.
             style={{ paddingTop, paddingBottom, paddingHorizontal: 4 }}
           >
-            <View className="flex-1 flex-row items-center gap-1">
+            <View className="flex-1 flex-row items-center gap-2">
               {inline ? (
                 props.onClose ? (
                   <ScreenHeaderButton

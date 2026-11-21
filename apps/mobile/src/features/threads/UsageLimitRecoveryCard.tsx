@@ -32,6 +32,7 @@ export function UsageLimitRecoveryCard({
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const consumptionCapHit = thread.consumptionCapHit ?? null;
   const resetAt = thread.runtime?.usageLimitResetAt ?? null;
   const canSchedule =
     thread.settledOverride !== "settled" &&
@@ -59,10 +60,23 @@ export function UsageLimitRecoveryCard({
   if (
     thread.runtime?.status !== "failed" ||
     // Older servers report ChatGPT sharing limits as provider errors.
-    (thread.runtime.lastErrorClass !== "usage_limit" && !chatGptLimit) ||
-    !runId
+    (thread.runtime.lastErrorClass !== "usage_limit" && !chatGptLimit)
   )
     return null;
+  if (consumptionCapHit !== null) {
+    return (
+      <View className="mx-3 mb-2 flex-row gap-2 rounded-xl border border-warning-foreground/25 bg-screen p-3">
+        <View className="min-w-0 flex-1 gap-1">
+          <Text className="text-sm text-warning-foreground">{gt("Consumption cap reached.")}</Text>
+          <Text className="text-sm text-foreground-muted">{consumptionCapHit.reason}</Text>
+          <Text className="text-sm text-foreground-muted">
+            {gt("Raise or remove the thread's consumption cap to continue.")}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+  if (!runId) return null;
   const resetDate = displayAt
     ? new Date(displayAt).toLocaleString(undefined, {
         month: "short",

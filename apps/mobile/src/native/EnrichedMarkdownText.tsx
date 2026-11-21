@@ -11,6 +11,7 @@ import {
   markdownWithInlineFileLinks,
   markdownWithTableBreaks,
   markdownWithTextDirection,
+  singleLineMath,
 } from "../lib/markdownDocument";
 import { useGT } from "gt-react-native";
 import { isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
@@ -48,7 +49,7 @@ function enrichedStyle(
   dark: boolean,
   fontScale: number,
 ): MarkdownStyle {
-  const monospace = Platform.OS === "ios" ? "Menlo" : "monospace";
+  const monospace = style.codeFontFamily ?? (Platform.OS === "ios" ? "Menlo" : "monospace");
   // Keep the radius modest: iOS clips square table-cell borders without stroking the corner arcs.
   const block = {
     marginTop: 4,
@@ -93,7 +94,11 @@ function enrichedStyle(
     h4: heading(4),
     h5: heading(5),
     h6: heading(6),
-    strong: { color: style.strongColor, fontFamily: style.boldFontFamily, fontWeight: "normal" },
+    strong: {
+      color: style.strongColor,
+      fontFamily: style.boldFontFamily,
+      fontWeight: style.boldByWeight ? "bold" : "normal",
+    },
     link: { color: style.linkColor, underline: false },
     code: {
       fontFamily: monospace,
@@ -193,8 +198,7 @@ function codeBlockElement(
   if (renderer.kind === "math") {
     return block.isComplete ? (
       <EnrichedMarkdownText
-        // A blank line would end the paragraph, and so the math, early.
-        markdown={`$$\n${block.code.replace(/\n\s*\n/g, "\n").trim()}\n$$`}
+        markdown={`$$${singleLineMath(block.code)}$$`}
         markdownStyle={markdownStyle}
         md4cFlags={{ latexMath: true }}
         containerStyle={{ flexShrink: 1, minWidth: 0 }}
@@ -223,7 +227,7 @@ function codeBlockElement(
 }
 
 export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
-  const { renderImage, resolveImageSource, fileEmbedLabel } = props;
+  const { renderImage, resolveImageSource, fileEmbedLabel, blockingGestureTags } = props;
   const gt = useGT();
   const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
   // The library fills in {n}, {content} and {speech} itself when VoiceOver or TalkBack speaks.
@@ -441,6 +445,11 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           markdown={markdown}
           markdownStyle={markdownStyle}
           writingDirection={props.writingDirection}
+          blockingGestureTags={blockingGestureTags}
+          // Android trims the last block's bottom margin during measurement
+          // (removeTrailingMargin); ask for it back so a message ending in a
+          // paragraph doesn't glue to the meta row below the text view.
+          allowTrailingMargin={Platform.OS === "android"}
           onLinksChange={onLinksChange}
           renderers={renderers}
           resolveImageSource={resolveNativeImageSource}
@@ -452,7 +461,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           linkRecognition={linkRecognition}
           containerStyle={{ flexShrink: 1, minWidth: 0 }}
           flavor="github"
-          selectable
+          selectable={props.selectable ?? true}
           contextMenuItems={
             props.onCiteText
               ? [

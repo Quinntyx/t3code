@@ -11,6 +11,7 @@ import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
 import { AppText } from "../../components/ui/AppText";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
 import { VideoAttachmentTile } from "../../components/VideoAttachmentTile";
@@ -30,12 +31,18 @@ export function usePullRequestMediaUrl(url: string) {
   const context = useContext(PullRequestMediaContext);
   const source = pullRequestMediaSource(url, context);
   const resource = "resource" in source ? (source.resource ?? null) : null;
-  const asset = useAssetUrlState(context?.environmentId ?? null, resource);
-  const refresh = useRefreshAssetUrl(context?.environmentId ?? null, resource);
+  const environmentId = context?.environmentId ?? null;
+  const asset = useAssetUrlState(environmentId, resource);
+  const refresh = useRefreshAssetUrl(environmentId, resource);
+  const uri = useCachedAssetImageUri(
+    environmentId,
+    resource,
+    asset._tag === "Success" ? asset.url : resource ? null : url,
+  );
   return {
-    uri: asset._tag === "Success" ? asset.url : resource ? null : url,
+    uri,
     cacheKey: context && resource ? assetImageCacheKey(context.environmentId, resource) : undefined,
-    unavailable: resource !== null && asset._tag === "Failure",
+    unavailable: resource !== null && asset._tag === "Failure" && uri === null,
     source,
     resolvePlaybackUri: resource ? async () => (await refresh()) ?? null : undefined,
   };

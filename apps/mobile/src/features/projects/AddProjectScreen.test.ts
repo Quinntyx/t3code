@@ -140,6 +140,14 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
   }),
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: () => AsyncResult.success({}),
+  useAtomSet: () => () => {},
+}));
+vi.mock("../../state/preferences", () => ({
+  mobilePreferencesAtom: {},
+  saveMobilePreferences: () => Promise.resolve({ _tag: "Success", value: {} }),
+}));
 // Only filesystem.browse of `~` answers, with the host's home as its parentPath.
 vi.mock("../../state/use-atom-query-runner", () => ({
   useAtomQueryRunner:
@@ -183,6 +191,7 @@ vi.mock("../../state/projects", () => ({
 vi.mock("../../state/use-composer-drafts", () => ({
   waitForComposerDraftsLoaded: async () => {},
   createNewTaskDraft: () => "prompt-draft",
+  updateComposerDraftSettings: () => {},
   setComposerDraftText: () => {},
 }));
 

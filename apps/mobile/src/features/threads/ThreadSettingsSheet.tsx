@@ -18,6 +18,7 @@ import type {
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
+  ScopedThreadRef,
   ServerSettings,
   ThreadId,
 } from "@t3tools/contracts";
@@ -60,6 +61,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppBar } from "../../components/ui/AppBar";
+import { Button } from "../../components/ui/Button";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
@@ -109,6 +111,7 @@ import {
 import { useSearchToolbarInset } from "../../components/ui/useBarInset";
 import type { AppBarSearch } from "../../components/ui/AppBar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
+import { MachineHandoffScreen } from "./MachineHandoffScreen";
 import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
@@ -264,6 +267,7 @@ function SwitchRow(props: {
   readonly label: string;
   readonly value: boolean;
   readonly onValueChange: (value: boolean) => void;
+  readonly disabled?: boolean;
   readonly isLast?: boolean;
 }) {
   return (
@@ -276,6 +280,7 @@ function SwitchRow(props: {
       <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
       <ThemedSwitch
         accessibilityLabel={props.label}
+        disabled={props.disabled}
         onValueChange={props.onValueChange}
         value={props.value}
       />
@@ -784,19 +789,62 @@ function ThreadSettingsModelListRow(props: {
 function ThreadSettingsProviderListHeader(props: {
   readonly provider: ThreadSettingsProviderCatalog;
 }) {
+  const gt = useGT();
   const session = useThreadSettingsSession();
   const onToggle = () => session.toggleProvider(props.provider.key);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const config = session.environmentId ? configs.get(session.environmentId) : undefined;
+  const provider = config?.providers.find(
+    (candidate) => candidate.instanceId === props.provider.key,
+  );
+  const permission = useAtomValue(
+    serverEnvironment.updateSettings.permissionAtom(session.environmentId),
+  );
+  const saveSettings = useAtomCommand(serverEnvironment.updateSettings, "new model default update");
+  const [pending, setPending] = useState(false);
 
   return (
-    <ProviderHeader
-      collapsible={props.provider.collapsible}
-      collapsed={props.provider.collapsed}
-      driver={props.provider.driver}
-      iconUrl={props.provider.iconUrl}
-      label={props.provider.label}
-      modelCount={props.provider.modelCount}
-      onToggle={onToggle}
-    />
+    <>
+      <ProviderHeader
+        collapsible={props.provider.collapsible}
+        collapsed={props.provider.collapsed}
+        driver={props.provider.driver}
+        iconUrl={props.provider.iconUrl}
+        label={props.provider.label}
+        modelCount={props.provider.modelCount}
+        onToggle={onToggle}
+      />
+      {session.manageHidden && !props.provider.collapsed && provider ? (
+        <View className="mx-3 overflow-hidden rounded-t-2xl">
+          <SwitchRow
+            label={gt("Enable new models by default")}
+            value={
+              config?.settings.providerModelPreferences?.[provider.instanceId]?.newModelsEnabled ??
+              true
+            }
+            disabled={pending || !permission}
+            onValueChange={(enabled) => {
+              if (!session.environmentId || pending) return;
+              setPending(true);
+              void saveSettings({
+                environmentId: session.environmentId,
+                input: {
+                  patch: {
+                    setProviderNewModelsEnabled: {
+                      provider: provider.instanceId,
+                      enabled,
+                      models: provider.models
+                        .filter((model) => !model.isCustom)
+                        .map((model) => model.slug),
+                    },
+                  },
+                },
+              }).then(() => setPending(false));
+            }}
+          />
+        </View>
+      ) : null}
+    </>
   );
 }
 
@@ -1072,6 +1120,7 @@ function ThreadSettingsOptionsItem(props: {
 function ThreadSettingsMainContent(props: {
   readonly bottomInset: number;
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
+  readonly onMachineHandoff?: () => void;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -1200,6 +1249,18 @@ function ThreadSettingsMainContent(props: {
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
       maintainVisibleContentPosition={THREAD_SETTINGS_MAINTAIN_VISIBLE_CONTENT_POSITION}
+      ListHeaderComponent={
+        props.onMachineHandoff ? (
+          <View className="px-4 py-3">
+            <Button
+              label={gt("Hand off to another machine")}
+              icon="arrow.left.arrow.right"
+              fullWidth
+              onPress={props.onMachineHandoff}
+            />
+          </View>
+        ) : null
+      }
       recycleItems
       refreshControl={
         session.environmentId ? (
@@ -1320,10 +1381,12 @@ function ThreadSettingsChoiceContent(props: {
 type ThreadSettingsPickerStackParams = {
   ThreadSettingsModels: undefined;
   ThreadSettingsChoice: ThreadSettingsSubmenuPage & { readonly title: string };
+  ThreadSettingsMachineHandoff: { readonly modelSelection: ModelSelection };
 };
 
 type ThreadSettingsPickerPresentation = {
   readonly onClose: () => void;
+  readonly machineHandoffThreadRef?: ScopedThreadRef;
 };
 
 const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
@@ -1422,6 +1485,17 @@ function ThreadSettingsModelsScreen() {
       />
       <ScreenContent>
         <ThreadSettingsMainContent
+          onMachineHandoff={
+            presentation.machineHandoffThreadRef && session.displayedModelSelection
+              ? () => {
+                  if (session.displayedModelSelection) {
+                    navigation.navigate("ThreadSettingsMachineHandoff", {
+                      modelSelection: session.displayedModelSelection,
+                    });
+                  }
+                }
+              : undefined
+          }
           bottomInset={searchToolbarInset}
           onOpenSubmenu={(submenu) => {
             const title =
@@ -1455,11 +1529,30 @@ function ThreadSettingsChoiceScreen() {
   );
 }
 
+function ThreadSettingsMachineHandoffScreen() {
+  const gt = useGT();
+  const presentation = useThreadSettingsPickerPresentation();
+  const route =
+    useRoute<RouteProp<ThreadSettingsPickerStackParams, "ThreadSettingsMachineHandoff">>();
+  const navigation = useNavigation();
+  if (!presentation.machineHandoffThreadRef) return null;
+  return (
+    <>
+      <AppBar title={gt("Machine handoff")} onBack={() => navigation.goBack()} hideBottomBorder />
+      <MachineHandoffScreen
+        sourceRef={presentation.machineHandoffThreadRef}
+        modelSelection={route.params.modelSelection}
+      />
+    </>
+  );
+}
+
 function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) {
   const screenOptions = useSheetStackOptions();
   const gt = useGT();
   const presentation = {
     onClose: props.onClose,
+    machineHandoffThreadRef: props.machineHandoffThreadRef,
   };
 
   return (
@@ -1478,17 +1571,25 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
           component={ThreadSettingsChoiceScreen}
           options={({ route }) => ({ title: route.params.title })}
         />
+        <ThreadSettingsPickerStack.Screen
+          name="ThreadSettingsMachineHandoff"
+          component={ThreadSettingsMachineHandoffScreen}
+          options={{ title: gt("Machine handoff") }}
+        />
       </ThreadSettingsPickerStack.Navigator>
     </ThreadSettingsPickerPresentationContext.Provider>
   );
 }
 
 export function ThreadSettingsPickerScreen(
-  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
+  props: ThreadSettingsSessionProps & ThreadSettingsPickerPresentation,
 ) {
   return (
     <ThreadSettingsSessionProvider {...props}>
-      <ThreadSettingsPickerNavigator onClose={props.onClose} />
+      <ThreadSettingsPickerNavigator
+        onClose={props.onClose}
+        machineHandoffThreadRef={props.machineHandoffThreadRef}
+      />
     </ThreadSettingsSessionProvider>
   );
 }
@@ -1543,6 +1644,10 @@ export function ExistingThreadSettingsRouteScreen({
 
   return (
     <ThreadSettingsPickerScreen
+      machineHandoffThreadRef={{
+        environmentId: selectedThread.environmentId,
+        threadId: selectedThread.id,
+      }}
       environmentId={selectedThread.environmentId}
       projectId={selectedThread.projectId}
       cwd={selectedThreadCwd}

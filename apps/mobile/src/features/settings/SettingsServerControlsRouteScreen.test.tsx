@@ -45,6 +45,7 @@ vi.mock("../../state/preferences", () => ({
   saveMobilePreferences: {},
 }));
 vi.mock("./components/AutoSettleDaysField", () => ({ AutoSettleDaysField: () => null }));
+vi.mock("./DebugShakeSettingsSection", () => ({ DebugShakeSettingsSection: () => null }));
 vi.mock("./components/IssueTrackerSection", () => ({ IssueTrackerSection: () => null }));
 vi.mock("./components/SourceControlProvidersSection", () => ({
   SourceControlProvidersSection: () => null,
@@ -95,6 +96,7 @@ vi.mock("./components/SettingsEnvironmentFilterHeader", () => ({
   }),
 }));
 vi.mock("./components/DatabaseStorageNotice", () => ({ DatabaseStorageNotice: () => null }));
+vi.mock("./components/BrowserRenderingSections", () => ({ BrowserRenderingSections: () => null }));
 vi.mock("./components/SettingsSection", () => ({ SettingsSection: Children }));
 vi.mock("../../components/ui/ListChoiceRow", () => ({ ListChoiceRow: () => null }));
 vi.mock("./components/SettingsSwitchRow", () => ({
@@ -120,6 +122,9 @@ vi.mock("./components/SettingsSwitchRow", () => ({
   ),
 }));
 vi.mock("./components/SettingsRow", () => ({ SettingsRow: () => null }));
+vi.mock("./components/DefaultBranchRemoteSetting", () => ({
+  DefaultBranchRemoteSetting: () => null,
+}));
 vi.mock("./components/BranchNamingSettings", () => ({
   BranchNamingSettings: (props: { onChange: (patch: ServerSettingsPatch) => void }) => {
     mocks.branchNaming.onChange = props.onChange;

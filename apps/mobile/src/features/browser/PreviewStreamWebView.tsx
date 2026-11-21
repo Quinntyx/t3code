@@ -116,8 +116,10 @@ function offerDownload(download: PreviewStreamDownload) {
 
 const MAX_REFUSALS = 3;
 
+type NativeStreamConfiguration = Omit<PreviewStreamConfiguration, "reuseNearbyTouchProbe">;
+
 export function PreviewStreamWebView(
-  props: Omit<PreviewStreamConfiguration, "access" | "labels"> &
+  props: Omit<NativeStreamConfiguration, "access" | "labels"> &
     Omit<NativeStreamBridge, "onUnauthorized" | "onRefused"> & {
       readonly environmentId: EnvironmentId;
       readonly paused?: boolean;
@@ -168,7 +170,7 @@ export function PreviewStreamWebView(
 function AuthorizedPreviewStream({
   ref,
   ...props
-}: Omit<PreviewStreamConfiguration, "labels"> & NativeStreamBridge) {
+}: Omit<NativeStreamConfiguration, "labels"> & NativeStreamBridge) {
   const gt = useGT();
   const [attempt, setAttempt] = useState(0);
   const [previousAccess, setPreviousAccess] = useState(props.access);
@@ -185,6 +187,7 @@ function AuthorizedPreviewStream({
     tabId: props.tabId,
     interactive: props.interactive,
     background: props.background,
+    reuseNearbyTouchProbe: Platform.OS === "ios",
     labels: {
       page: gt("Browser page"),
       pageInput: gt("Browser page input"),

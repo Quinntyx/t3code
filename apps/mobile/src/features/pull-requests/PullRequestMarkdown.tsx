@@ -228,7 +228,7 @@ function PullRequestMarkdownContent(props: {
   const changeRequestUrl = useContext(ChangeRequestUrlContext);
   const resolveMediaUrl = (href: string) =>
     changeRequestUrl ? resolveChangeRequestMediaUrl(href, changeRequestUrl) : href;
-  const openPullRequest = useOpenPullRequest();
+  const openPullRequest = useOpenPullRequest({ drillIn: true });
   const openLink = (href: string) => {
     void openPullRequest(href);
   };

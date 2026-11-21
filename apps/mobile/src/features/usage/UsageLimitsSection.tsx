@@ -9,10 +9,12 @@ import {
   type ProviderConsumeResetCreditInput,
   type ServerProvider,
   type ServerProviderResetCredits,
+  type ServerProviderUsageAmount,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import {
   type ResetCreditChoice,
+  describeUsageAmount,
   paceOf,
   paceRemainingPercent,
   remainingPercent,
@@ -54,6 +56,50 @@ function useBarColor(driver: Driver): string | null {
   return kind ? colors[kind] : null;
 }
 
+// Money is one phrase: the value keeps its width and the qualifier gives way on a narrow screen.
+export function AmountText({
+  amount,
+  resetsIn,
+}: {
+  readonly amount: ServerProviderUsageAmount;
+  readonly resetsIn?: string | null;
+}) {
+  const { value, qualifier } = describeUsageAmount(amount);
+  return (
+    <View className="shrink flex-row items-baseline justify-end gap-1">
+      <Text
+        numberOfLines={1}
+        className="shrink-0 text-sm font-t3-medium tabular-nums text-foreground"
+      >
+        {value}
+      </Text>
+      <Text numberOfLines={1} className="min-w-0 shrink text-xs text-foreground-muted">
+        {qualifier}
+        {resetsIn ? ` · ${resetsIn}` : ""}
+      </Text>
+    </View>
+  );
+}
+
+export function AmountLineRow({
+  label,
+  amount,
+  resetsIn,
+}: {
+  readonly label: string;
+  readonly amount: ServerProviderUsageAmount;
+  readonly resetsIn?: string | null;
+}) {
+  return (
+    <View className="flex-row items-baseline justify-between gap-3">
+      <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+        {label}
+      </Text>
+      <AmountText amount={amount} resetsIn={resetsIn} />
+    </View>
+  );
+}
+
 function WindowRow(props: {
   readonly window: ServerProviderUsageWindow;
   readonly color: string | null;
@@ -65,6 +111,7 @@ function WindowRow(props: {
   const pace = paceOf(window, now);
   const m = useMessages();
   const resetsIn = resetLabels(window, now, m)?.full;
+  const amount = window.amount ? describeUsageAmount(window.amount) : null;
   const [barWidth, setBarWidth] = useState(0);
   const tickX =
     timeLeft === null || barWidth < 6
@@ -133,6 +180,11 @@ function WindowRow(props: {
           />
         ) : null}
       </View>
+      {amount ? (
+        <Text numberOfLines={1} className="text-xs tabular-nums text-foreground-muted">
+          {amount.value} {amount.qualifier}
+        </Text>
+      ) : null}
       {pace || resetsIn ? (
         <View className="flex-row justify-between gap-3">
           <Text className="text-xs text-foreground-tertiary">
@@ -218,6 +270,18 @@ export function AccountLimits(props: {
           {limits.windows.map((window) => (
             <WindowRow key={window.id} window={window} color={color} now={now} />
           ))}
+          {(limits.amounts?.length ?? 0) > 0 ? (
+            <View className="gap-1.5">
+              {(limits.amounts ?? []).map((line) => (
+                <AmountLineRow
+                  key={line.id}
+                  label={line.label}
+                  amount={line.amount}
+                  resetsIn={resetLabels(line, now, m)?.full}
+                />
+              ))}
+            </View>
+          ) : null}
         </View>
       )}
       {externalUsage ? (
@@ -378,7 +442,7 @@ export function useRefreshLimits(
 }
 
 export function resetLabels(
-  window: ServerProviderUsageWindow,
+  window: Pick<ServerProviderUsageWindow, "resetsAt">,
   now: number,
   resolve: MessageResolver,
 ): { readonly full: string; readonly compact: string } | null {

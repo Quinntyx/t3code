@@ -65,6 +65,7 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
         <WorkspaceBrandTitle
           accessibilityLabel={props.accessibilityLabel}
           onOpenEnvironments={props.onOpenEnvironments}
+          onOpenHome={props.onOpenHome}
         />
       }
       search={{

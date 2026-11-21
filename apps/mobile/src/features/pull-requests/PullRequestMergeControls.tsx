@@ -11,6 +11,7 @@ import { useGT, useMessages } from "gt-react-native";
 import { useRef, useState } from "react";
 import { View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { Button } from "../../components/ui/Button";
 import { SplitButton } from "../../components/ui/SplitButton";
 import { useEnvironmentServerConfig } from "../../state/entities";
@@ -18,7 +19,6 @@ import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/prefer
 import { composerPullRequests } from "../../state/pull-requests";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
-  allowedMergeMethods,
   canPerformPullRequestAction,
   mergeUnavailableReason,
   MERGE_METHODS,
@@ -57,7 +57,7 @@ export function PullRequestMergeControls(props: {
   const [selectedMethod, setSelectedMethod] = useState<PullRequestMergeMethod | null>(null);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
-  const methods = allowedMergeMethods(pr);
+  const methods = allowedPullRequestMergeMethods(pr);
   const method = resolveMergeMethod(
     pr,
     selectedMethod,
@@ -72,9 +72,14 @@ export function PullRequestMergeControls(props: {
     supportsStackActions: stack.supportsStackActions,
     hasStack: stack.stack !== null,
     isFresh: stack.isFresh,
+    liveMembership: pr.stack,
   });
   const checkingStack =
-    permissions.connected && stack.supportsStackActions && !stack.isFresh && !stack.error;
+    permissions.connected &&
+    stack.supportsStackActions &&
+    !stack.isFresh &&
+    !stack.error &&
+    (stack.stack !== null || !canMergeSingle);
   const reason =
     (!permissions.connected
       ? gt("Reconnect to merge.")
@@ -183,7 +188,7 @@ export function PullRequestMergeControls(props: {
                 resolveMergeMethod: (fresh) => {
                   if (
                     !canPerformPullRequestAction(fresh, "merge") ||
-                    !allowedMergeMethods(fresh).includes(method)
+                    !allowedPullRequestMergeMethods(fresh).includes(method)
                   )
                     throw new Error(
                       gt(

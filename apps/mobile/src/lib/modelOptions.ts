@@ -20,6 +20,7 @@ import {
 } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
+  createModelHiddenPredicate,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
@@ -66,6 +67,28 @@ type ProviderUpdateRequired = Pick<
   T3ServerConfig["providers"][number],
   "driver" | "updateRequiredModels"
 >;
+
+export function buildMachineHandoffModelOptions(
+  config: T3ServerConfig | null | undefined,
+  selection: ModelSelection,
+  projectId: ProjectId | null,
+) {
+  const available = new Set(
+    buildModelOptions(config, null, undefined, projectId).map((option) => option.key),
+  );
+  return buildModelOptions(config, selection, undefined, projectId).filter((option) => {
+    const provider = config?.providers.find(
+      (candidate) => candidate.instanceId === option.selection.instanceId,
+    );
+    return (
+      available.has(option.key) &&
+      !option.isUnavailable &&
+      provider?.status === "ready" &&
+      provider.availability !== "unavailable" &&
+      !provider.updateRequiredModels?.some((model) => model.slug === option.selection.model)
+    );
+  });
+}
 
 export type ProviderGroup = {
   readonly providerKey: string;
@@ -268,6 +291,16 @@ export function resolveSelectableModelSelection(
   );
   const driver =
     provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
+  const isHidden = createModelHiddenPredicate(
+    config.settings?.providerModelPreferences?.[selection.instanceId],
+  );
+  if (
+    isHidden(
+      provider?.models.find((model) => model.slug === selection.model) ?? { slug: selection.model },
+    )
+  ) {
+    return null;
+  }
   if (driver === "antigravity") {
     return isProjectDisabledOverride(config, selection.instanceId, projectId) ? null : selection;
   }
@@ -403,11 +436,9 @@ export function buildModelOptions(
       ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
     const preferences = config?.settings?.providerModelPreferences?.[provider.instanceId];
-    const hiddenModels = new Set(preferences?.hiddenModels ?? []);
+    const isHidden = createModelHiddenPredicate(preferences);
     const order = new Map((preferences?.modelOrder ?? []).map((slug, index) => [slug, index]));
-    const models = provider.models.filter(
-      (model) => includeHidden || model.isCustom || !hiddenModels.has(model.slug),
-    );
+    const models = provider.models.filter((model) => includeHidden || !isHidden(model));
     if (order.size > 0)
       models.sort((a, b) => (order.get(a.slug) ?? Infinity) - (order.get(b.slug) ?? Infinity));
     for (const model of models) {
@@ -426,7 +457,7 @@ export function buildModelOptions(
           ? {}
           : { supportedRuntimeModes: provider.supportedRuntimeModes }),
         ...(provider.iconUrl ? { providerIconUrl: provider.iconUrl } : {}),
-        isHidden: !model.isCustom && hiddenModels.has(model.slug),
+        isHidden: isHidden(model),
         canHide: !model.isCustom,
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
@@ -448,12 +479,15 @@ export function buildModelOptions(
     fallbackModelSelection &&
     (providerInstanceId === undefined ||
       fallbackModelSelection.instanceId === providerInstanceId) &&
-    (!config?.settings?.providerModelPreferences?.[
-      fallbackModelSelection.instanceId
-    ]?.hiddenModels.includes(fallbackModelSelection.model) ||
-      config?.providers
-        .find((provider) => provider.instanceId === fallbackModelSelection.instanceId)
-        ?.models.find((model) => model.slug === fallbackModelSelection.model)?.isCustom)
+    !createModelHiddenPredicate(
+      config?.settings?.providerModelPreferences?.[fallbackModelSelection.instanceId],
+    )({
+      slug: fallbackModelSelection.model,
+      isCustom:
+        config?.providers
+          .find((provider) => provider.instanceId === fallbackModelSelection.instanceId)
+          ?.models.find((model) => model.slug === fallbackModelSelection.model)?.isCustom ?? false,
+    })
   ) {
     const key = `${fallbackModelSelection.instanceId}:${fallbackModelSelection.model}`;
     const existing = options.get(key);

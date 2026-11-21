@@ -36,6 +36,12 @@ import {
   type ThreadStatusLineModel,
 } from "./thread-context-divider";
 import {
+  ThreadFeedHistoryProvider,
+  ThreadFeedLoadEarlierControl,
+  ThreadHistoryScrollView,
+  type ThreadFeedHistoryControls,
+} from "./ThreadFeedHistory";
+import {
   ThreadHandoffDivider,
   ThreadHandoffRow,
   ThreadModelSwitchDivider,
@@ -43,6 +49,7 @@ import {
 import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { LinkRequestCard } from "./LinkRequestCard";
+import { EmailRequestCard } from "./EmailRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
@@ -57,7 +64,7 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
+import { handoffFilePrompt, type HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import {
   IDLE_COMPACTING_LABELS,
   resolveUserMessageFileCards,
@@ -66,6 +73,7 @@ import {
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { compactTrajectoryLabel } from "@t3tools/client-runtime/work-log/trajectory-summary";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   AuthFilesystemReadScope,
@@ -122,7 +130,12 @@ import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { textDirection } from "@t3tools/shared/textDirection";
-import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
+import {
+  StackActions,
+  useFocusEffect,
+  useIsFocused,
+  useNavigation,
+} from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { isDuoDevice } from "../../lib/device-type";
@@ -181,9 +194,13 @@ import { ThreadInlineFilePreview } from "./ThreadInlineFilePreview";
 import { flattenThemeColor, themeColorWithContrast } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/ui/NativePresentation";
 import { NativeScrollViewMarker } from "../../native/NativeScrollViewMarker";
-import Animated, { FadeIn, FadeInDown, type SharedValue } from "react-native-reanimated";
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  useAnimatedRef,
+  type SharedValue,
+} from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
@@ -209,6 +226,7 @@ import {
   type MediaVideoPreviewSource,
 } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
+import { ThreadTrajectorySegments } from "./ThreadTrajectorySegments";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
 import { Menu } from "../../components/ui/Menu";
@@ -243,6 +261,7 @@ import {
   threadFeedRunIsUnsettled,
   isContextCompactionActivityGroup,
   isContextHandoffActivityGroup,
+  isEmailRequestActivityGroup,
   isLinkRequestActivityGroup,
   isSecretRequestActivityGroup,
   type ThreadFeedEntry,
@@ -275,6 +294,7 @@ import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
 import { assetEnvironment, useAssetUrl, useRefreshAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { readEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { environmentProjects, projectEnvironment } from "../../state/projects";
@@ -307,6 +327,11 @@ import {
   environmentThreadShells,
   threadEnvironment,
 } from "../../state/threads";
+import {
+  createNewTaskDraft,
+  setComposerDraftText,
+  updateComposerDraftSettings,
+} from "../../state/use-composer-drafts";
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
@@ -318,6 +343,7 @@ import {
   resolveWorkspaceRelativeFilePath,
 } from "../files/filePath";
 import { waitForThreadShell } from "./threadForkNavigation";
+import { UNSENT_MESSAGE_ANNOUNCEMENT, unsentMessageBubbleClassName } from "./unsentMessageStyle";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
 import { useFileChipShare } from "./useFileChipShare";
@@ -353,17 +379,9 @@ function isFreshTimestamp(input: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
 }
 
-export interface ThreadFeedHistoryControls {
-  readonly hasMoreHistory: boolean;
-  readonly loading: boolean;
-  readonly error: string | null;
-  readonly onLoadEarlier: () => void;
-  /** Loads earlier history down to the entry, in one request. */
-  readonly onLoadThrough: (entryId: string) => void;
-}
-
 export interface ThreadFeedProps {
   readonly toolCallVisibility?: ToolCallVisibility;
+  readonly foldContextCompactions?: boolean;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly preparingWorktree?: boolean;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
@@ -393,6 +411,7 @@ export interface ThreadFeedProps {
   readonly keyboardOffset: number;
   readonly sendingWithKeyboard?: boolean;
   readonly fitShortFeedToViewport?: boolean;
+  readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
   readonly historyControls?: ThreadFeedHistoryControls;
   readonly contentMaxWidth?: number;
@@ -624,7 +643,11 @@ function MessageAttachmentImage(props: {
     environmentId: props.environmentId,
     resource,
   });
-  const uri = useAssetUrl(props.environmentId, resource);
+  const uri = useCachedAssetImageUri(
+    props.environmentId,
+    resource,
+    useAssetUrl(props.environmentId, resource),
+  );
   const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, resource);
   const retriedImage = useRef(false);
   const { handoff } = props;
@@ -1200,10 +1223,11 @@ const THREAD_MEDIA_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 };
 // The composer and overlays beside the feed keep UIKit from finding it on its own, so
 // register it with the screen controller. Header minimization observes this scroll view.
 function ThreadFeedScrollView(props: ComponentPropsWithRef<typeof Animated.ScrollView>) {
-  return (
-    <NativeScrollViewMarker style={{ flex: 1 }}>
-      <Animated.ScrollView {...props} />
-    </NativeScrollViewMarker>
+  const scrollView = <ThreadHistoryScrollView {...props} />;
+  return Platform.OS === "ios" ? (
+    <NativeScrollViewMarker style={{ flex: 1 }}>{scrollView}</NativeScrollViewMarker>
+  ) : (
+    scrollView
   );
 }
 
@@ -1543,6 +1567,77 @@ function MarkdownDetailsFold(props: {
   );
 }
 
+function ThreadCommandOutput(props: {
+  readonly command: string;
+  readonly text: string;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly linkHandlers: MarkdownLinkHandlers;
+  readonly renderImage: MarkdownImageRenderer;
+  readonly contentWidth: number;
+  readonly iconColor: ColorValue;
+}) {
+  const gt = useGT();
+  const [contentHeight, setContentHeight] = useState(0);
+  const collapsedHeight = props.markdownStyles.nativeTextStyle.lineHeight * 16;
+  const canFold = contentHeight > collapsedHeight;
+
+  return (
+    <View className="min-w-0 overflow-hidden rounded-lg border border-border/70 bg-subtle/30">
+      <View className="flex-row items-center gap-1.5 border-b border-border/60 px-3 py-1.5">
+        <SymbolView name="terminal" size={14} tintColor={props.iconColor} />
+        <Text
+          className={cn(
+            "min-w-0 flex-1 text-xs",
+            props.command ? "font-mono text-foreground" : "text-foreground-muted",
+          )}
+          numberOfLines={1}
+        >
+          {props.command ? `/${props.command}` : gt("Command output")}
+        </Text>
+        <CopyTextButton
+          accessibilityLabel={gt("Copy command output")}
+          text={props.text}
+          tintColor={props.iconColor}
+          buttonSize={28}
+          iconSize={13}
+        />
+      </View>
+      <View className="px-3 py-2">
+        <View
+          className="overflow-hidden"
+          style={props.expanded ? undefined : { maxHeight: collapsedHeight }}
+        >
+          <View onLayout={(event) => setContentHeight(event.nativeEvent.layout.height)}>
+            <MarkdownImageAvailableWidthContext value={Math.max(0, props.contentWidth - 26)}>
+              <SelectableMarkdownText
+                markdown={props.text}
+                textStyle={props.markdownStyles.nativeTextStyle}
+                preserveSoftBreaks
+                {...props.linkHandlers}
+                renderImage={props.renderImage}
+              />
+            </MarkdownImageAvailableWidthContext>
+          </View>
+        </View>
+        {canFold ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: props.expanded }}
+            onPress={props.onToggle}
+            className="self-start py-1 active:opacity-70"
+          >
+            <Text className="font-t3-medium text-xs text-foreground-muted">
+              {props.expanded ? gt("Show less") : gt("Show more")}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function useMarkdownStyles(): MarkdownStyleSets {
   const { appearance } = useAppearancePreferences();
   const nativeMarkdownTypography = resolveNativeMarkdownTypography(appearance.baseFontSize);
@@ -1565,8 +1660,13 @@ function useMarkdownStyles(): MarkdownStyleSets {
   const markdownUserCodeText = theme["--color-md-user-code-text"];
   const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
   const markdownUserFenceBg = theme["--color-md-user-fence-bg"];
-  const regularFontFamily = FONT_FAMILIES.regular;
-  const boldFontFamily = FONT_FAMILIES.bold;
+  const fonts = {
+    fontFamily: appearance.uiFont.regular,
+    headingFontFamily: appearance.uiFont.bold,
+    boldFontFamily: appearance.uiFont.bold,
+    boldByWeight: appearance.uiFont.boldByWeight,
+    codeFontFamily: appearance.codeFontFamily,
+  };
 
   return {
     user: {
@@ -1586,9 +1686,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
         fontSize: nativeMarkdownTypography.fontSize,
         lineHeight: nativeMarkdownTypography.lineHeight,
         headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-        fontFamily: regularFontFamily,
-        headingFontFamily: boldFontFamily,
-        boldFontFamily,
+        ...fonts,
       },
     },
     assistant: {
@@ -1608,9 +1706,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
         fontSize: nativeMarkdownTypography.fontSize,
         lineHeight: nativeMarkdownTypography.lineHeight,
         headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-        fontFamily: regularFontFamily,
-        headingFontFamily: boldFontFamily,
-        boldFontFamily,
+        ...fonts,
       },
     },
   };
@@ -1875,23 +1971,20 @@ function RunFoldWorking(props: {
   );
 }
 
-function RunFoldButton({
-  entry,
-  environmentId,
-  threadId,
-  onToggle,
-  rowSizing,
-  iconColor,
-}: {
-  entry: Extract<ThreadFeedEntry, { type: "run-fold" }>;
-  environmentId: EnvironmentId;
-  threadId: ThreadId;
-  onToggle: (runId: RunId) => void;
-  rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
-  iconColor: ColorValue;
+function ThreadRunFoldRow(props: {
+  readonly entry: Extract<ThreadFeedEntry, { type: "run-fold" }>;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly iconSubtleColor: string | ColorValue;
+  readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
+  readonly worktreeSetupChip?: ReactNode;
+  readonly onToggleTurnFold: (runId: RunId) => void;
+  readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
 }) {
   const gt = useGT();
+  const { width: windowWidth } = useWindowDimensions();
   const loadWork = useAtomCommand(threadEnvironment.loadEarlierHistory, { reportFailure: false });
+  const { entry, environmentId, threadId } = props;
   const anchorsKey = entry.deferredWorkItemIds?.join("\n") ?? "";
   const [failed, setFailed] = useState(false);
   const load = () => {
@@ -1916,47 +2009,132 @@ function RunFoldButton({
   const toggle = () => {
     setFailed(false);
     if (error && entry.expanded) load();
-    else onToggle(entry.runId);
+    else props.onToggleTurnFold(entry.runId);
+  };
+  const [availableWidth, setAvailableWidth] = useState(0);
+  const [measurement, setMeasurement] = useState<{
+    readonly width: number;
+    readonly textSizeKey: string;
+  } | null>(null);
+  const naturalWidth =
+    measurement?.textSizeKey === props.workRowSizing.textSizeKey ? measurement.width : null;
+  const compact =
+    naturalWidth === null ||
+    !(availableWidth > 0 && naturalWidth > 0 && naturalWidth <= availableWidth);
+  const minHeight = Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight);
+
+  const content = (compactLabel: boolean, measurement = false) => {
+    const FoldButton = measurement ? View : Pressable;
+    const FoldChevron = measurement ? View : Pressable;
+    const label = compactLabel ? compactTrajectoryLabel(props.entry.label) : props.entry.label;
+    return (
+      <>
+        <FoldButton
+          accessibilityRole="button"
+          accessibilityState={{ expanded: props.entry.expanded, busy: loading }}
+          accessibilityLabel={props.entry.label}
+          onPress={measurement ? undefined : toggle}
+          hitSlop={4}
+          className="min-h-11 min-w-0 flex-row items-center"
+          style={{ minHeight }}
+        >
+          <Text
+            key={props.workRowSizing.textSizeKey}
+            numberOfLines={1}
+            className={cn(
+              "font-t3-medium text-sm tabular-nums text-foreground-muted",
+              !measurement && "shrink",
+            )}
+          >
+            {label}
+            {error ? ` · ${error}` : ""}
+          </Text>
+        </FoldButton>
+        <ThreadTrajectorySegments
+          summary={props.entry.trajectory}
+          compact={compactLabel}
+          measurement={measurement}
+        />
+        <FoldChevron
+          accessible={false}
+          onPress={measurement ? undefined : toggle}
+          hitSlop={8}
+          className="min-h-11 justify-center"
+        >
+          <ThreadDisclosureChevron
+            expanded={props.entry.expanded}
+            collapsedDirection="right"
+            size={15}
+            tintColor={props.iconSubtleColor}
+          />
+        </FoldChevron>
+      </>
+    );
   };
 
   return (
-    <View className="min-w-0 flex-1">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: entry.expanded, busy: loading }}
-        onPress={toggle}
-        hitSlop={4}
-        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-        style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
-      >
-        <Text
-          key={rowSizing.textSizeKey}
-          numberOfLines={1}
-          className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
-        >
-          {entry.label}
-          {error ? ` · ${error}` : ""}
-        </Text>
-        <ThreadDisclosureChevron
-          expanded={entry.expanded}
-          collapsedDirection="right"
-          size={15}
-          tintColor={iconColor}
+    <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
+      {entry.workingSince ? (
+        <RunFoldWorking
+          environmentId={environmentId}
+          startedAt={entry.workingSince}
+          rowSizing={props.workRowSizing}
         />
-      </Pressable>
-      {loading ? (
+      ) : (
         <View
-          accessible={false}
-          importantForAccessibility="no-hide-descendants"
-          className="gap-2 px-1 pb-2"
+          className="min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1"
+          onLayout={(event) => setAvailableWidth(event.nativeEvent.layout.width)}
         >
-          {(["40%", "60%", "33%"] as const).map((width) => (
-            <View key={width} className="flex-row items-center gap-2">
-              <View className="size-3 rounded bg-subtle-strong" />
-              <View className="h-2.5 rounded-full bg-subtle-strong" style={{ width }} />
+          <View
+            pointerEvents="none"
+            accessible={false}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: windowWidth,
+              opacity: 0,
+              alignItems: "flex-start",
+            }}
+          >
+            <View
+              className="flex-row items-center gap-x-1"
+              style={{ alignSelf: "flex-start" }}
+              onLayout={(event) =>
+                setMeasurement({
+                  width: event.nativeEvent.layout.width,
+                  textSizeKey: props.workRowSizing.textSizeKey,
+                })
+              }
+            >
+              {content(false, true)}
             </View>
-          ))}
+          </View>
+          {content(compact)}
+          {loading ? (
+            <View
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
+              className="basis-full gap-2 px-1 pb-2"
+            >
+              {(["40%", "60%", "33%"] as const).map((width) => (
+                <View key={width} className="flex-row items-center gap-2">
+                  <View className="size-3 rounded bg-subtle-strong" />
+                  <View className="h-2.5 rounded-full bg-subtle-strong" style={{ width }} />
+                </View>
+              ))}
+            </View>
+          ) : null}
         </View>
+      )}
+      {props.worktreeSetupChip}
+      {props.entry.checkpointSummary ? (
+        <TurnDiffStat
+          checkpoint={props.entry.checkpointSummary}
+          onOpenTurnDiff={props.onOpenTurnDiff}
+        />
       ) : null}
     </View>
   );
@@ -2065,38 +2243,24 @@ function renderFeedEntry(
 
   if (entry.type === "run-fold") {
     return (
-      <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
-        {entry.workingSince ? (
-          <RunFoldWorking
-            environmentId={props.environmentId}
-            startedAt={entry.workingSince}
-            rowSizing={props.workRowSizing}
-          />
-        ) : (
-          <RunFoldButton
-            key={entry.id}
-            entry={entry}
-            environmentId={props.environmentId}
-            threadId={props.threadId}
-            onToggle={props.onToggleTurnFold}
-            rowSizing={props.workRowSizing}
-            iconColor={iconSubtleColor}
-          />
-        )}
-        {props.worktreeSetup && entry.id === props.setupFoldRowId ? (
-          <WorktreeSetupFoldChip
-            {...props.worktreeSetup}
-            detailsOpen={props.setupDetailsOpen}
-            onOpenDetails={props.onOpenSetupDetails}
-          />
-        ) : null}
-        {entry.checkpointSummary ? (
-          <TurnDiffStat
-            checkpoint={entry.checkpointSummary}
-            onOpenTurnDiff={props.onOpenTurnDiff}
-          />
-        ) : null}
-      </View>
+      <ThreadRunFoldRow
+        entry={entry}
+        environmentId={props.environmentId}
+        threadId={props.threadId}
+        iconSubtleColor={iconSubtleColor}
+        workRowSizing={props.workRowSizing}
+        worktreeSetupChip={
+          props.worktreeSetup && entry.id === props.setupFoldRowId ? (
+            <WorktreeSetupFoldChip
+              {...props.worktreeSetup}
+              detailsOpen={props.setupDetailsOpen}
+              onOpenDetails={props.onOpenSetupDetails}
+            />
+          ) : null
+        }
+        onToggleTurnFold={props.onToggleTurnFold}
+        onOpenTurnDiff={props.onOpenTurnDiff}
+      />
     );
   }
 
@@ -2213,6 +2377,16 @@ function renderFeedEntry(
   if (entry.type === "activity-group" && isSecretRequestActivityGroup(entry)) {
     return (
       <SecretRequestCard
+        environmentId={props.environmentId}
+        projectedItem={entry.activities[0]!.projectedItem}
+        iconColor={iconSubtleColor}
+      />
+    );
+  }
+
+  if (entry.type === "activity-group" && isEmailRequestActivityGroup(entry)) {
+    return (
+      <EmailRequestCard
         environmentId={props.environmentId}
         projectedItem={entry.activities[0]!.projectedItem}
         iconColor={iconSubtleColor}
@@ -2342,13 +2516,11 @@ function renderFeedEntry(
           : null);
       const foldExpanded = foldRowId !== null && (props.expandedWorkRows[foldRowId] ?? false);
       const bubbleBodyVisible = foldRowId === null || foldExpanded;
+      // Until the provider consumes it, an unsent message wears the queue's dashed look.
+      const unsent = message.projectedItem?.item.status === "pending";
       const intentBadge = props.userMessageGrouping.continuesSteer
         ? null
-        : resolveUserMessageIntentBadge(
-            message.inputIntent,
-            message.projectedItem?.item.status === "pending",
-            props.m,
-          );
+        : resolveUserMessageIntentBadge(message.inputIntent, unsent, props.m);
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );
@@ -2447,9 +2619,15 @@ function renderFeedEntry(
           ) : null}
           {hasBubble ? (
             <View
-              className="min-w-0 rounded-[20px]"
+              className={cn(
+                "min-w-0 rounded-[20px]",
+                unsent &&
+                  unsentMessageBubbleClassName(
+                    presentation.attribution === "guest" ? "guest" : "default",
+                  ),
+              )}
               style={{
-                backgroundColor: userBubbleColor,
+                ...(unsent ? null : { backgroundColor: userBubbleColor }),
                 maxWidth: props.duoColumns ? "85%" : props.userBubbleMaxWidth,
                 ...(!bubbleBodyVisible
                   ? null
@@ -2460,7 +2638,13 @@ function renderFeedEntry(
                       : null),
               }}
             >
-              {presentation.attribution === "guest" ? <GuestBubbleTint /> : null}
+              {presentation.attribution === "guest" && !unsent ? <GuestBubbleTint /> : null}
+              {unsent ? (
+                // React Native has no visually-hidden text; a transparent 1px node carries the state.
+                <Text className="absolute h-px w-px overflow-hidden opacity-0">
+                  {UNSENT_MESSAGE_ANNOUNCEMENT}
+                </Text>
+              ) : null}
               {foldRowId !== null ? (
                 <AgentMessageFoldHeader
                   environmentId={senderRef?.environmentId ?? props.environmentId}
@@ -2658,6 +2842,37 @@ function renderFeedEntry(
       );
     }
 
+    if (message.localCommand !== undefined) {
+      const rowId = `command-output:${message.id}`;
+      return (
+        <View className={showAssistantMeta ? "mb-5 px-1" : "mb-1 px-1"}>
+          <ThreadCommandOutput
+            key={message.id}
+            command={message.localCommand}
+            text={message.text}
+            expanded={props.expandedWorkRows[rowId] ?? false}
+            onToggle={() => props.onToggleWorkRow(rowId, entry.id)}
+            markdownStyles={styles}
+            linkHandlers={props.markdownLinkHandlers}
+            renderImage={props.renderMarkdownImage}
+            contentWidth={props.markdownContentWidth}
+            iconColor={iconSubtleColor}
+          />
+          <MessageAttachmentList
+            attachments={attachments}
+            environmentId={props.environmentId}
+            onPressPreview={props.onPressPreview}
+            onPlaybackStart={props.onPlaybackStart}
+          />
+          {showAssistantMeta ? (
+            <Text className="mt-1 font-t3-medium text-xs tabular-nums text-foreground-secondary">
+              {timestampLabel}
+            </Text>
+          ) : null}
+        </View>
+      );
+    }
+
     if (renderedText.trim().length === 0 && attachments.length === 0) {
       return null;
     }
@@ -2759,17 +2974,26 @@ function TurnDiffStat(props: {
   const { files } = props.checkpoint;
   const additions = files.reduce((total, file) => total + file.additions, 0);
   const deletions = files.reduce((total, file) => total + file.deletions, 0);
+  const fileCount = files.length;
   const gt = useGT();
+  const fileCountLabel = gt("{files, plural, one {{files} file} other {{files} files}}", {
+    files: fileCount,
+  });
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={gt(
         "{files, plural, one {Review {files} file changed, {additions} additions, {deletions} deletions} other {Review {files} files changed, {additions} additions, {deletions} deletions}}",
-        { files: files.length, additions, deletions },
+        { files: fileCount, additions, deletions },
       )}
       onPress={() => props.onOpenTurnDiff(props.checkpoint)}
       className="min-h-11 shrink-0 flex-row items-center gap-2 px-2 active:bg-subtle"
     >
+      {fileCount > 0 ? (
+        <Text className="font-t3-medium text-xs tabular-nums text-foreground-muted">
+          {fileCountLabel} ·
+        </Text>
+      ) : null}
       <Text className="font-t3-medium text-xs tabular-nums text-adaptive-emerald-700-300">
         +{formatDiffCount(additions)}
       </Text>
@@ -3024,7 +3248,11 @@ function useThreadFeedPresentation(
       props.activeWorkStartedAt,
       props.runlessWorkActive ?? false,
       feedCache,
-      { toolCallVisibility: props.toolCallVisibility ?? "showAll", revealedMessageId },
+      {
+        toolCallVisibility: props.toolCallVisibility ?? "showAll",
+        revealedMessageId,
+        foldContextCompactions: props.foldContextCompactions === true,
+      },
       messages,
       locale,
     ),
@@ -3171,6 +3399,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     fontScale,
   });
   const settledPaneWidth = useWorkspaceSettledContentWidth();
+  const historyScrollRef = useAnimatedRef<Animated.ScrollView>();
   const splitLayout = (props.layoutVariant ?? "compact") !== "compact";
   const [initialSplitViewport] = useState(() =>
     splitLayout && lastSplitViewport?.windowWidth === windowWidth ? lastSplitViewport : null,
@@ -3265,7 +3494,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const usesNativeAutomaticInsets =
     props.usesAutomaticContentInsets === true && Platform.OS === "ios";
   // Without the native contentInset, a list-header spacer clears the bar the column lays content under.
-  const topContentInset = usesNativeAutomaticInsets ? 0 : columnTopInset;
+  const topContentInset = usesNativeAutomaticInsets
+    ? 0
+    : Math.max(columnTopInset, props.contentTopInset ?? 0);
   const anchorTopInset = usesNativeAutomaticInsets ? barInset : topContentInset;
 
   const theme = useUniwindTheme();
@@ -3288,6 +3519,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       threadId: String(props.threadId),
       path: fileRoutePathSegments(path),
     });
+  };
+  const handOffToNewThread = (handoffPath: string) => {
+    const thread = appAtomRegistry.get(
+      environmentThreadShells.threadShellAtom(scopeThreadRef(props.environmentId, props.threadId)),
+    );
+    if (!thread) return;
+    const draftKey = createNewTaskDraft({
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+    });
+    setComposerDraftText(draftKey, handoffFilePrompt(handoffPath));
+    updateComposerDraftSettings(draftKey, { modelSelection: thread.modelSelection });
+    navigation.dispatch(StackActions.push("Thread", { draft: { draftId: draftKey } }));
   };
   const resolveLinkedThread = (href: string) => {
     const link = parseThreadLinkHref(href);
@@ -3641,6 +3885,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         }
         case "open-file":
           onMarkdownLinkPress(href, false, reply);
+          return;
+        case "hand-off":
+          if (target.fullPath) handOffToNewThread(target.fullPath);
           return;
         case "save":
           shareFileChip(target);
@@ -4355,115 +4602,122 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           className="flex-1"
           style={splitLayout && viewportWidth > 0 ? { width: viewportWidth } : undefined}
         >
-          {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- ThreadFeedScrollView is passed through the iOS-only spread below; the prop rejects undefined. */}
-          <KeyboardAwareLegendList
-            ref={attachList}
-            dataKey={feedThreadKey}
-            style={settling ? { flex: 1, opacity: 0 } : { flex: 1 }}
-            // RN 0.81+ drops inset-area touches (facebook/react-native#54123), making blank post-send space unscrollable.
-            applyWorkaroundForContentInsetHitTestBug
-            {...(Platform.OS === "ios" ? { ScrollViewComponent: ThreadFeedScrollView } : {})}
-            contentInsetAdjustmentBehavior="never"
-            automaticallyAdjustsScrollIndicatorInsets={usesNativeAutomaticInsets}
-            scrollIndicatorInsets={{ top: anchorTopInset, bottom: 0 }}
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={props.contentInsetEndAdjustment}
-            keyboardOffset={props.keyboardOffset}
-            {...(usesNativeAutomaticInsets ? { contentInset: { top: anchorTopInset } } : {})}
-            freeze={props.freeze}
-            maintainScrollAtEnd={jumpReady ? false : THREAD_FEED_MAINTAIN_SCROLL_AT_END}
-            maintainVisibleContentPosition
-            data={groupedFeed}
-            extraData={listAppearanceData}
-            renderItem={renderItem}
-            viewabilityConfig={THREAD_MEDIA_VIEWABILITY_CONFIG}
-            keyExtractor={(entry) => entry.id}
-            getItemType={(entry) => {
-              // Same container as the live fold that replaces it.
-              if (entry.type === "pending-fold") return "run-fold";
-              if (entry.type !== "message") return entry.type;
-              if (isCompactionCommandFeedEntry(entry)) return "message:compaction";
-              if (
-                entry.message.role === "assistant" &&
-                !terminalAssistantMessageIds.has(entry.message.id)
-              ) {
-                return "message:assistant-progress";
-              }
-              const { attribution } = resolveUserMessagePresentation(entry.message);
-              return attribution === "automation" || attribution === "agent"
-                ? `message:${attribution}`
-                : `message:${entry.message.role}`;
-            }}
-            getFixedItemSize={getFixedItemSize}
-            drawDistance={500}
-            {...(retainedMediaRowId ? { alwaysRender: { keys: [retainedMediaRowId] } } : {})}
-            keyboardShouldPersistTaps="always"
-            keyboardDismissMode="none"
-            // Android scrolls a tapped selectable message into view when it takes focus, which reads
-            // as a user scroll and drops end following before the keyboard closes.
-            scrollsChildToFocus={false}
-            keyboardLiftBehavior={props.sendingWithKeyboard ? "persistent" : "whenAtEnd"}
-            // Seed the initial viewport before native onLayout.
-            {...(viewportHeight > 0 && viewportWidth > 0
-              ? { estimatedListSize: { height: viewportHeight, width: viewportWidth } }
-              : {})}
-            scrollToOverflowEnabled
-            estimatedItemSize={180}
-            alignItemsAtEnd
-            initialScrollAtEnd
-            onReady={() => {
-              setLoadedListKey(feedThreadKey);
-              reportMetrics(true);
-              // Never leave the feed hidden if end following stalls short of the end.
-              landingFallback.current = setTimeout(() => setLandedListKey(feedThreadKey), 1000);
-            }}
-            onLayout={handleMetricsChange}
-            onItemSizeChanged={handleItemSizeChanged}
-            onScroll={handleScroll}
-            scrollEventThrottle={16}
-            ListHeaderComponent={
-              <>
-                {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
-                {setupAnchorIndex < 0 && props.worktreeSetup ? (
-                  <WorktreeSetupCard
-                    key={props.threadId}
-                    {...props.worktreeSetup}
-                    detailsOpen={setupDetailsOpen}
-                    onOpenDetails={openSetupDetails}
-                  />
-                ) : setupAnchorIndex < 0 && props.preparingWorktree ? (
-                  <WorktreePreparingHeader />
-                ) : null}
-                {props.historyControls ? (
-                  <ThreadFeedLoadEarlierControl {...props.historyControls} />
-                ) : null}
-              </>
-            }
-            ListFooterComponent={
-              props.pendingHandoff || props.statusLines?.length ? (
+          <ThreadFeedHistoryProvider
+            controls={props.historyControls}
+            topInset={usesNativeAutomaticInsets ? anchorTopInset : 0}
+            scrollRef={historyScrollRef}
+          >
+            {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- ThreadFeedScrollView uses a spread because KeyboardAwareLegendList omits the forwarded ScrollViewComponent prop from its public type. */}
+            <KeyboardAwareLegendList
+              ref={attachList}
+              refScrollView={historyScrollRef}
+              dataKey={feedThreadKey}
+              style={settling ? { flex: 1, opacity: 0 } : { flex: 1 }}
+              // RN 0.81+ drops inset-area touches (facebook/react-native#54123), making blank post-send space unscrollable.
+              applyWorkaroundForContentInsetHitTestBug
+              {...{ ScrollViewComponent: ThreadFeedScrollView }}
+              contentInsetAdjustmentBehavior="never"
+              automaticallyAdjustsScrollIndicatorInsets={usesNativeAutomaticInsets}
+              scrollIndicatorInsets={{ top: anchorTopInset, bottom: 0 }}
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={props.contentInsetEndAdjustment}
+              keyboardOffset={props.keyboardOffset}
+              {...(usesNativeAutomaticInsets ? { contentInset: { top: anchorTopInset } } : {})}
+              freeze={props.freeze}
+              maintainScrollAtEnd={jumpReady ? false : THREAD_FEED_MAINTAIN_SCROLL_AT_END}
+              maintainVisibleContentPosition
+              data={groupedFeed}
+              extraData={listAppearanceData}
+              renderItem={renderItem}
+              viewabilityConfig={THREAD_MEDIA_VIEWABILITY_CONFIG}
+              keyExtractor={(entry) => entry.id}
+              getItemType={(entry) => {
+                // Same container as the live fold that replaces it.
+                if (entry.type === "pending-fold") return "run-fold";
+                if (entry.type !== "message") return entry.type;
+                if (isCompactionCommandFeedEntry(entry)) return "message:compaction";
+                if (
+                  entry.message.role === "assistant" &&
+                  !terminalAssistantMessageIds.has(entry.message.id)
+                ) {
+                  return "message:assistant-progress";
+                }
+                const { attribution } = resolveUserMessagePresentation(entry.message);
+                return attribution === "automation" || attribution === "agent"
+                  ? `message:${attribution}`
+                  : `message:${entry.message.role}`;
+              }}
+              getFixedItemSize={getFixedItemSize}
+              drawDistance={500}
+              {...(retainedMediaRowId ? { alwaysRender: { keys: [retainedMediaRowId] } } : {})}
+              keyboardShouldPersistTaps="always"
+              keyboardDismissMode="none"
+              // Android scrolls a tapped selectable message into view when it takes focus, which reads
+              // as a user scroll and drops end following before the keyboard closes.
+              scrollsChildToFocus={false}
+              keyboardLiftBehavior={props.sendingWithKeyboard ? "persistent" : "whenAtEnd"}
+              // Seed the initial viewport before native onLayout.
+              {...(viewportHeight > 0 && viewportWidth > 0
+                ? { estimatedListSize: { height: viewportHeight, width: viewportWidth } }
+                : {})}
+              scrollToOverflowEnabled
+              estimatedItemSize={180}
+              alignItemsAtEnd
+              initialScrollAtEnd
+              onReady={() => {
+                setLoadedListKey(feedThreadKey);
+                reportMetrics(true);
+                // Never leave the feed hidden if end following stalls short of the end.
+                landingFallback.current = setTimeout(() => setLandedListKey(feedThreadKey), 1000);
+              }}
+              onLayout={handleMetricsChange}
+              onItemSizeChanged={handleItemSizeChanged}
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              ListHeaderComponent={
                 <>
-                  {props.pendingHandoff ? (
-                    <ThreadHandoffDivider
-                      environmentId={props.environmentId}
-                      endpoints={props.pendingHandoff}
-                      iconColor={iconSubtleColor}
-                      surfaceColor={screenColor}
-                      label={gt("Context handoff pending")}
+                  {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
+                  {setupAnchorIndex < 0 && props.worktreeSetup ? (
+                    <WorktreeSetupCard
+                      key={props.threadId}
+                      {...props.worktreeSetup}
+                      detailsOpen={setupDetailsOpen}
+                      onOpenDetails={openSetupDetails}
                     />
+                  ) : setupAnchorIndex < 0 && props.preparingWorktree ? (
+                    <WorktreePreparingHeader />
                   ) : null}
-                  {props.statusLines?.map((line) => (
-                    <ThreadStatusLine key={line.key} line={line} iconColor={iconSubtleColor} />
-                  ))}
+                  {props.historyControls ? (
+                    <ThreadFeedLoadEarlierControl {...props.historyControls} />
+                  ) : null}
                 </>
-              ) : null
-            }
-            contentContainerStyle={{
-              ...(props.fitShortFeedToViewport ? { minHeight: "100%" } : {}),
-              paddingTop: FEED_PADDING_TOP,
-              paddingLeft: contentHorizontalPadding + contentLeftInset,
-              paddingRight: contentHorizontalPadding + contentRightInset,
-            }}
-          />
+              }
+              ListFooterComponent={
+                props.pendingHandoff || props.statusLines?.length ? (
+                  <>
+                    {props.pendingHandoff ? (
+                      <ThreadHandoffDivider
+                        environmentId={props.environmentId}
+                        endpoints={props.pendingHandoff}
+                        iconColor={iconSubtleColor}
+                        surfaceColor={screenColor}
+                        label={gt("Context handoff pending")}
+                      />
+                    ) : null}
+                    {props.statusLines?.map((line) => (
+                      <ThreadStatusLine key={line.key} line={line} iconColor={iconSubtleColor} />
+                    ))}
+                  </>
+                ) : null
+              }
+              contentContainerStyle={{
+                ...(props.fitShortFeedToViewport ? { minHeight: "100%" } : {}),
+                paddingTop: FEED_PADDING_TOP,
+                paddingLeft: contentHorizontalPadding + contentLeftInset,
+                paddingRight: contentHorizontalPadding + contentRightInset,
+              }}
+            />
+          </ThreadFeedHistoryProvider>
         </View>
         {presentedFeed.length === 0 &&
         !props.worktreeSetup &&
@@ -4496,37 +4750,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     </PresentationSource>
   );
 });
-
-function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
-  const gt = useGT();
-  const theme = useUniwindTheme();
-  const mutedColor = theme["--color-icon-subtle"];
-  if (!props.hasMoreHistory && props.error === null) {
-    return null;
-  }
-  return (
-    <View className="mb-3 items-center gap-1.5 px-2">
-      {props.hasMoreHistory ? (
-        <View className="self-center">
-          <Button
-            label={props.loading ? gt("Loading earlier activity…") : gt("Load earlier activity")}
-            tone="secondary"
-            accessibilityLabel={gt("Load earlier activity")}
-            disabled={props.loading}
-            onPress={props.onLoadEarlier}
-            icon="chevron.up"
-            loading={props.loading}
-          />
-        </View>
-      ) : null}
-      {props.error !== null ? (
-        <Text className="text-center text-xs" style={{ color: mutedColor }}>
-          {props.error}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
 
 function MessageImageGalleryScope(props: {
   entry: ThreadFeedRow;

@@ -1,5 +1,7 @@
 import {
   isCompactionCommandMessage,
+  type OrchestrationV2Run,
+  type OrchestrationV2RunStatus,
   type ThreadGuestMessage,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
@@ -34,6 +36,16 @@ export type PendingThreadFeedEntry = ThreadFeedEntry & {
 
 // An acknowledged row stops being pending once the thread catches up to it,
 // even when the feed hides that message (a rolled-back or cancelled run).
+// A bounded reload drops historic messages from projection.messages, so a
+// settled run that consumed the message is delivery proof on its own too.
+const SETTLED_RUN_STATUSES: ReadonlySet<OrchestrationV2RunStatus> = new Set([
+  "completed",
+  "interrupted",
+  "failed",
+  "cancelled",
+  "rolled_back",
+]);
+
 export function selectPendingAcknowledgedMessages(
   acknowledged: ReadonlyArray<AcknowledgedThreadMessage>,
   thread: {
@@ -41,11 +53,18 @@ export function selectPendingAcknowledgedMessages(
     readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
     readonly sequence: number;
     readonly projectedMessages: ReadonlyArray<{ readonly id: string }> | undefined;
+    readonly runs?: ReadonlyArray<Pick<OrchestrationV2Run, "userMessageId" | "status">> | undefined;
   },
 ): ReadonlyArray<AcknowledgedThreadMessage> {
+  const settledUserMessageIds = new Set(
+    (thread.runs ?? [])
+      .filter((run) => SETTLED_RUN_STATUSES.has(run.status))
+      .map((run) => run.userMessageId),
+  );
   return acknowledged.filter(
     (message) =>
       scopedThreadKey(message.environmentId, message.threadId) === thread.threadKey &&
+      !settledUserMessageIds.has(message.messageId) &&
       !thread.queuedMessages.some((queued) => queued.messageId === message.messageId) &&
       !threadHasCaughtUpTo(message, {
         sequence: thread.sequence,

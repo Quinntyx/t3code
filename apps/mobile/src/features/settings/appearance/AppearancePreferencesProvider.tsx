@@ -17,6 +17,11 @@ import {
   resolveAppearancePreferences,
   type ResolvedAppearance,
 } from "../../../lib/appearancePreferences";
+import { defaultCodeFontFamily } from "../../../lib/fontFamilies";
+import {
+  DEFAULT_LIQUID_GLASS_PREFERENCES,
+  type LiquidGlassPreferences,
+} from "../../../lib/liquidGlass";
 import { appAtomRegistry } from "../../../state/atom-registry";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../../state/preferences";
 import { useAtomCommand } from "../../../state/use-atom-command";
@@ -71,8 +76,13 @@ interface AppearancePreferencesContextValue {
   readonly setTerminalFontSize: (value: number | null) => void;
   readonly setCodeFontSize: (value: number | null) => void;
   readonly setCodeWordBreak: (value: boolean) => void;
+  readonly setUiFontId: (value: string | null) => void;
+  readonly setCodeFontId: (value: string | null) => void;
+  readonly setTerminalFontId: (value: string | null) => void;
   readonly mathRenderingEnabled: boolean;
   readonly setMathRenderingEnabled: (value: boolean) => void;
+  readonly liquidGlass: LiquidGlassPreferences;
+  readonly setLiquidGlass: (patch: Partial<LiquidGlassPreferences>) => void;
 }
 
 const AppearancePreferencesContext = createContext<AppearancePreferencesContextValue | null>(null);
@@ -127,8 +137,12 @@ export function resolveThemeAppearance(stored: Preferences | null): MobileThemeA
 }
 
 function runtimeStateFor(stored: Preferences | null): MobileThemeRuntimeState {
+  const preferences = resolveAppearancePreferences(stored);
+  const appearance = resolveAppearance(preferences, Platform.OS);
   return {
-    baseFontSize: resolveAppearancePreferences(stored).baseFontSize,
+    baseFontSize: preferences.baseFontSize,
+    uiFont: appearance.uiFont,
+    monoFontFamily: appearance.codeFontFamily ?? defaultCodeFontFamily(Platform.OS),
     themeMode: normalizeMobileThemeMode(stored?.themeMode),
     themeAppearance: resolveThemeAppearance(stored),
   };
@@ -140,6 +154,8 @@ const themeRuntimeStateAtom = Atom.make((get) =>
   Atom.withEquality(
     (left: MobileThemeRuntimeState, right: MobileThemeRuntimeState) =>
       left.baseFontSize === right.baseFontSize &&
+      left.uiFont === right.uiFont &&
+      left.monoFontFamily === right.monoFontFamily &&
       left.themeMode === right.themeMode &&
       left.themeAppearance === right.themeAppearance,
   ),
@@ -153,7 +169,7 @@ let appliedRuntimeState: MobileThemeRuntimeState | null = null;
 
 function applyThemeRuntime(next: MobileThemeRuntimeState) {
   for (const operation of createMobileThemeRuntimeOperations(appliedRuntimeState, next)) {
-    if (operation.kind === "update-text-variables") {
+    if (operation.kind === "update-css-variables") {
       Uniwind.updateCSSVariables(operation.themeName, operation.variables);
       continue;
     }
@@ -218,10 +234,38 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   );
   const themeVariables = themeVariablesByAppearance[themeAppearance];
   const activeThemeName = getMobileUniwindThemeName(themeId, themeAppearance);
-  const { baseFontSize, codeFontSize, codeWordBreak, terminalFontSize } = preferences;
+  const {
+    baseFontSize,
+    codeFontSize,
+    codeWordBreak,
+    terminalFontSize,
+    uiFontId,
+    codeFontId,
+    terminalFontId,
+  } = preferences;
   const appearance = useMemo(
-    () => resolveAppearance({ baseFontSize, codeFontSize, codeWordBreak, terminalFontSize }),
-    [baseFontSize, codeFontSize, codeWordBreak, terminalFontSize],
+    () =>
+      resolveAppearance(
+        {
+          baseFontSize,
+          codeFontSize,
+          codeWordBreak,
+          terminalFontSize,
+          uiFontId,
+          codeFontId,
+          terminalFontId,
+        },
+        Platform.OS,
+      ),
+    [
+      baseFontSize,
+      codeFontSize,
+      codeWordBreak,
+      terminalFontSize,
+      uiFontId,
+      codeFontId,
+      terminalFontId,
+    ],
   );
   const isReady = AsyncResult.isSuccess(preferencesResult);
   const updatePreferences = (patch: Partial<Preferences>) => {
@@ -292,9 +336,51 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
     updatePreferences({ codeWordBreak: value });
   };
 
+  const setUiFontId = (value: string | null) => {
+    const next = runtimeStateFor({ ...storedPreferences, uiFontId: value });
+    applyThemeRuntime({ ...currentRuntimeState(), uiFont: next.uiFont });
+    updatePreferences({ uiFontId: value });
+  };
+
+  const setCodeFontId = (value: string | null) => {
+    const next = runtimeStateFor({ ...storedPreferences, codeFontId: value });
+    applyThemeRuntime({ ...currentRuntimeState(), monoFontFamily: next.monoFontFamily });
+    updatePreferences({ codeFontId: value });
+  };
+
+  const setTerminalFontId = (value: string | null) => {
+    updatePreferences({ terminalFontId: value });
+  };
+
   const mathRenderingEnabled = storedPreferences?.mathRenderingEnabled === true;
   const setMathRenderingEnabled = (value: boolean) =>
     updatePreferences({ mathRenderingEnabled: value });
+
+  const liquidGlass = useMemo(
+    (): LiquidGlassPreferences => ({
+      enabled: storedPreferences?.liquidGlassEnabled ?? DEFAULT_LIQUID_GLASS_PREFERENCES.enabled,
+      glassOpacity:
+        storedPreferences?.glassOpacity ?? DEFAULT_LIQUID_GLASS_PREFERENCES.glassOpacity,
+      blur: storedPreferences?.liquidGlassBlur ?? DEFAULT_LIQUID_GLASS_PREFERENCES.blur,
+      saturation:
+        storedPreferences?.liquidGlassSaturation ?? DEFAULT_LIQUID_GLASS_PREFERENCES.saturation,
+      refraction:
+        storedPreferences?.liquidGlassRefraction ?? DEFAULT_LIQUID_GLASS_PREFERENCES.refraction,
+      dispersion:
+        storedPreferences?.liquidGlassDispersion ?? DEFAULT_LIQUID_GLASS_PREFERENCES.dispersion,
+    }),
+    [storedPreferences],
+  );
+  // Undefined keys would overwrite the stored values they leave out.
+  const setLiquidGlass = (patch: Partial<LiquidGlassPreferences>) =>
+    updatePreferences({
+      ...(patch.enabled === undefined ? {} : { liquidGlassEnabled: patch.enabled }),
+      ...(patch.glassOpacity === undefined ? {} : { glassOpacity: patch.glassOpacity }),
+      ...(patch.blur === undefined ? {} : { liquidGlassBlur: patch.blur }),
+      ...(patch.saturation === undefined ? {} : { liquidGlassSaturation: patch.saturation }),
+      ...(patch.refraction === undefined ? {} : { liquidGlassRefraction: patch.refraction }),
+      ...(patch.dispersion === undefined ? {} : { liquidGlassDispersion: patch.dispersion }),
+    });
 
   const value = useMemo(
     (): AppearancePreferencesContextValue => ({
@@ -318,8 +404,13 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontSize,
       setCodeFontSize,
       setCodeWordBreak,
+      setUiFontId,
+      setCodeFontId,
+      setTerminalFontId,
       mathRenderingEnabled,
       setMathRenderingEnabled,
+      liquidGlass,
+      setLiquidGlass,
     }),
     [
       appearance,
@@ -341,8 +432,13 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontSize,
       setCodeFontSize,
       setCodeWordBreak,
+      setUiFontId,
+      setCodeFontId,
+      setTerminalFontId,
       mathRenderingEnabled,
       setMathRenderingEnabled,
+      liquidGlass,
+      setLiquidGlass,
     ],
   );
 

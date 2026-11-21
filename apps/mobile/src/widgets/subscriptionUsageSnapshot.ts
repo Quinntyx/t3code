@@ -220,7 +220,9 @@ function subscriptionUsageProps(
           configuredDrivers.has(driver) || accounts.some((account) => account.driver === driver),
       )
       .map((driver) => {
-        const pool = pools.find((candidate) => candidate.driver === driver);
+        const pool = pools.find(
+          (candidate) => candidate.driver === driver && candidate.windows.length > 0,
+        );
         const name = driver === "codex" ? "Codex" : "Claude";
         const kind = driver === "codex" ? "codex" : "claude";
         const colors = { light: providerColors("light")[kind], dark: providerColors("dark")[kind] };

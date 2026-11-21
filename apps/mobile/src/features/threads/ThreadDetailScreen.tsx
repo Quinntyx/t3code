@@ -36,7 +36,9 @@ import {
 import { useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import type { LegendListRef } from "@legendapp/list/react-native";
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   deriveBottomControlInsets,
   deriveContentSideInsets,
@@ -211,8 +213,13 @@ import {
   type ThreadComposerProps,
 } from "./ThreadComposer";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
-import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
+import { ThreadFeed } from "./ThreadFeed";
+import type { ThreadFeedHistoryControls } from "./ThreadFeedHistory";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
+import {
+  THREAD_FLOATING_CONTROL_ROW_OFFSET,
+  THREAD_FLOATING_TOP_SCRIM_HEIGHT,
+} from "./ThreadFloatingControls";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
@@ -295,6 +302,11 @@ export interface ThreadDetailScreenProps {
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
+  /**
+   * Android phones float the thread controls over the feed instead of rendering
+   * a header, so the body pads the status bar itself.
+   */
+  readonly usesFloatingThreadControls?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenConnectionEditor: () => void;
   readonly onChangeDraftMessage: (value: string) => void;
@@ -500,7 +512,15 @@ function ThreadDetailBody(
     }
   };
   const windowHeight = useWindowDimensions().height;
+  const insets = useSafeAreaInsets();
   const navigationHeaderHeight = useBarOverlap();
+  // With no bar, the floating controls make the feed and overlays clear the status bar (and the
+  // pills) from the safe-area insets.
+  const floatingHeaderInset = props.usesFloatingThreadControls === true ? insets.top : 0;
+  // Clear the top scrim so the first message never rests under its fade.
+  const floatingFeedTopInset =
+    props.usesFloatingThreadControls === true ? insets.top + THREAD_FLOATING_TOP_SCRIM_HEIGHT : 0;
+  const overlayHeaderInset = floatingHeaderInset > 0 ? floatingHeaderInset : navigationHeaderHeight;
   const [screenMetrics, setScreenMetrics] = useState<NativeLayoutMetrics | null>(null);
   const columnMetrics = useNativeColumnLayoutMetrics();
   const nativeMetrics = usesNativeWorkspaceColumns ? columnMetrics : screenMetrics;
@@ -515,6 +535,8 @@ function ThreadDetailBody(
   const toolCallVisibility = AsyncResult.isSuccess(preferences)
     ? (preferences.value.toolCallVisibility ?? "showAll")
     : "showAll";
+  const foldContextCompactions =
+    AsyncResult.isSuccess(preferences) && preferences.value.foldContextCompactions === true;
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents, messages);
@@ -1072,7 +1094,7 @@ function ThreadDetailBody(
     );
   };
   const screenAreaHeight = screenHeight ?? windowHeight;
-  const draftViewportHeight = screenAreaHeight - navigationHeaderHeight - liveKeyboardHeight;
+  const draftViewportHeight = screenAreaHeight - overlayHeaderInset - liveKeyboardHeight;
   // The question card reads the keyboard frame on the UI thread, in the same frame the sticky
   // view translates, so it gets the full height while the keyboard is closed and never crosses
   // the header while the keyboard moves.
@@ -1081,7 +1103,7 @@ function ThreadDetailBody(
     derivePendingUserInputMaxHeight({
       windowHeight: screenAreaHeight,
       keyboardHeight: keyboardStickyEnabled ? -keyboardTranslation.value : 0,
-      navigationHeaderHeight,
+      navigationHeaderHeight: overlayHeaderInset,
       // An in-flow question shares the room above it with the floating control.
       composerOverlapHeight:
         composerBottomInset +
@@ -1099,7 +1121,7 @@ function ThreadDetailBody(
     maxHeight: derivePendingUserInputMaxHeight({
       windowHeight: screenAreaHeight,
       keyboardHeight: keyboardStickyEnabled ? -keyboardTranslation.value : 0,
-      navigationHeaderHeight,
+      navigationHeaderHeight: overlayHeaderInset,
       composerOverlapHeight,
     }),
     flexGrow: 0,
@@ -1131,7 +1153,7 @@ function ThreadDetailBody(
     Math.min(
       Math.round(screenAreaHeight * 0.4),
       screenAreaHeight -
-        navigationHeaderHeight -
+        overlayHeaderInset -
         reservedKeyboardHeight -
         overlayBesideUsageLimits -
         USAGE_LIMITS_PANEL_GAP * 2,
@@ -1492,12 +1514,12 @@ function ThreadDetailBody(
       {!usesNativeWorkspaceColumns ? <NativeLayoutObserver onChange={setScreenMetrics} /> : null}
       {props.draftMode ? (
         props.draftMode.content(
-          navigationHeaderHeight,
+          overlayHeaderInset,
           liveKeyboardHeight + estimatedOverlayHeight + 24,
           draftViewportHeight,
         )
       ) : showContent ? (
-        <View
+        <LiquidGlassTarget
           style={{ flex: 1 }}
           onTouchStart={handleFeedTouchStart}
           onTouchMove={handleFeedTouchMove}
@@ -1527,6 +1549,7 @@ function ThreadDetailBody(
               <ColumnWidth width={columnWidth}>
                 <ThreadFeed
                   toolCallVisibility={toolCallVisibility}
+                  foldContextCompactions={foldContextCompactions}
                   environmentId={props.environmentId}
                   threadId={props.selectedThread.id}
                   detailRef={props.selectedThreadDetailRef}
@@ -1563,6 +1586,7 @@ function ThreadDetailBody(
                   keyboardOffset={composerKeyboardOffset}
                   sendingWithKeyboard={sendingWithKeyboard}
                   fitShortFeedToViewport={questionInFlow && !isKeyboardVisible}
+                  contentTopInset={floatingFeedTopInset}
                   contentBottomInset={
                     questionInFlow
                       ? 0
@@ -1583,7 +1607,7 @@ function ThreadDetailBody(
               </ColumnWidth>
             </WorkspaceMutationIdProvider>
           </RenderErrorBoundary>
-        </View>
+        </LiquidGlassTarget>
       ) : (
         <View className="flex-1" />
       )}
@@ -1595,7 +1619,11 @@ function ThreadDetailBody(
           threadId={props.selectedThread.id}
           tabs={browserTabs.tabs}
           loaded={browserTabs.loaded}
-          top={navigationHeaderHeight + 8}
+          top={
+            (props.usesFloatingThreadControls === true
+              ? insets.top + THREAD_FLOATING_CONTROL_ROW_OFFSET
+              : navigationHeaderHeight) + 8
+          }
           onOpen={openBrowserPreview}
         />
       ) : null}

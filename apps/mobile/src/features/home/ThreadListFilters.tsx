@@ -7,6 +7,7 @@ import type {
   HomeListFilterMenuEnvironment,
   HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
+import { useHiddenThreads } from "./use-hidden-threads";
 
 export function ThreadListFilters(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
@@ -19,6 +20,7 @@ export function ThreadListFilters(props: {
   readonly gutter: number;
 }) {
   const gt = useGT();
+  const { showHidden, setShowHidden } = useHiddenThreads();
   const selectedEnvironment = props.environments.find(
     (environment) => environment.environmentId === props.selectedEnvironmentId,
   );
@@ -87,7 +89,21 @@ export function ThreadListFilters(props: {
           }
         }}
       />
-      {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null ? (
+      <ListFilterMenu
+        label={showHidden ? gt("Including hidden") : gt("Visible threads")}
+        accessibilityLabel={gt("Show or exclude device-hidden threads")}
+        active={showHidden}
+        actions={[
+          { id: "visible", title: gt("Visible threads"), state: showHidden ? "off" : "on" },
+          {
+            id: "hidden",
+            title: gt("Show hidden threads on this device"),
+            state: showHidden ? "on" : "off",
+          },
+        ]}
+        onSelect={(id) => setShowHidden(id === "hidden")}
+      />
+      {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null || showHidden ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={gt("Reset thread filters")}
@@ -95,6 +111,7 @@ export function ThreadListFilters(props: {
           onPress={() => {
             props.onEnvironmentChange(null);
             props.onProjectChange(null);
+            setShowHidden(false);
           }}
         >
           <SymbolView name="xmark.circle.fill" size={18} tintColorClassName="accent-icon-muted" />

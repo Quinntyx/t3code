@@ -24,6 +24,25 @@ type GitBranchesSheetProps = StaticScreenProps<{
 export function GitBranchesSheet(_props: GitBranchesSheetProps) {
   const gt = useGT();
   const navigation = useNavigation();
+  return (
+    <FitSheet
+      header={
+        <SheetHeader title={gt("Branches & worktrees")} onClose={() => navigation.goBack()} />
+      }
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <GitBranchesContent
+        onDone={() => {
+          if (navigation.isFocused()) navigation.goBack();
+        }}
+      />
+    </FitSheet>
+  );
+}
+
+export function GitBranchesContent({ onDone }: { readonly onDone?: () => void }) {
+  const gt = useGT();
   const { selectedThread } = useThreadSelection();
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
@@ -60,13 +79,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
   const disabledExistingBranches = new Set(disabledExistingBranchNames);
 
   return (
-    <FitSheet
-      header={
-        <SheetHeader title={gt("Branches & worktrees")} onClose={() => navigation.goBack()} />
-      }
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
+    <>
       <FormSection title={gt("New branch")}>
         <FormField
           value={newBranchName}
@@ -83,9 +96,9 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
             const branch = sanitizeFeatureBranchName(newBranchName.trim());
             if (branch.length === 0) return;
             void gitActions.onCreateSelectedThreadBranch(branch).then((result) => {
-              if (result === null || !navigation.isFocused()) return;
+              if (result === null) return;
               setNewBranchName("");
-              navigation.goBack();
+              onDone?.();
             });
           }}
         />
@@ -123,9 +136,9 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
             void gitActions
               .onCreateSelectedThreadWorktree({ baseBranch, newBranch })
               .then((result) => {
-                if (result === null || !navigation.isFocused()) return;
+                if (result === null) return;
                 setWorktreeBranchName("");
-                navigation.goBack();
+                onDone?.();
               });
           }}
         />
@@ -161,14 +174,14 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
               disabled={!canChangeThreadBranch || busy || disabled}
               onPress={() => {
                 void gitActions.onCheckoutSelectedThreadBranch(branch.name).then((result) => {
-                  if (result === null || !navigation.isFocused()) return;
-                  navigation.goBack();
+                  if (result === null) return;
+                  onDone?.();
                 });
               }}
             />
           );
         })}
       </ListSection>
-    </FitSheet>
+    </>
   );
 }

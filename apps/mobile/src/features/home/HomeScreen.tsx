@@ -104,6 +104,7 @@ import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
+import { useHiddenThreads } from "./use-hidden-threads";
 
 interface HomeScreenProps {
   /** Whether this list is the one on screen; see `useHomeRouteVisible`. */
@@ -196,6 +197,7 @@ function renderHomeScrollView(props: ScrollViewProps) {
 export function HomeScreen(props: HomeScreenProps) {
   const gt = useGT();
   const m = useMessages();
+  const { hiddenThreadKeys, showHidden } = useHiddenThreads();
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const workspace = useWorkspaceTabs();
   const [initialScrollOffset] = useState(() => workspace?.getScrollOffset("threads") ?? 0);
@@ -536,6 +538,8 @@ export function HomeScreen(props: HomeScreenProps) {
         onNewThreadOnBranch={props.onNewThreadOnBranch}
         thread={thread}
         variant={item.item.variant}
+        stackDepth={item.item.stack?.depth}
+        stackForeignBranches={item.item.stack?.foreignBranches}
         hasQueuedMessages={item.hasQueuedMessages}
         snoozed={item.item.snoozed}
         pinned={item.item.pinned}
@@ -742,8 +746,14 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     ) : (
       <EmptyState
-        title={gt("No threads yet")}
-        detail={gt("Create a task to start a new coding session.")}
+        title={
+          !showHidden && hiddenThreadKeys.size > 0 ? gt("No visible threads") : gt("No threads yet")
+        }
+        detail={
+          !showHidden && hiddenThreadKeys.size > 0
+            ? gt("Show hidden threads in the list filters to restore them on this device.")
+            : gt("Create a task to start a new coding session.")
+        }
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     );

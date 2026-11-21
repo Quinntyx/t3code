@@ -3,6 +3,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import {
   resolveTerminalOpenLocation,
+  stageCommandTerminalLaunch,
   stagePendingTerminalLaunch,
   takePendingTerminalLaunch,
 } from "./terminalLaunchContext";
@@ -52,6 +53,62 @@ describe("resolveTerminalOpenLocation", () => {
         activeSessionLocation: checkout,
       }),
     ).toEqual(checkout);
+  });
+});
+
+describe("command terminal launches", () => {
+  it("stages a command in the detail worktree with the project runtime environment", () => {
+    const target = {
+      environmentId: EnvironmentId.make("env-command"),
+      threadId: ThreadId.make("thread-command"),
+      terminalId: "term-follow-worktree",
+    };
+    const launch = stageCommandTerminalLaunch({
+      target,
+      workspaceRoot: "/repo/root",
+      threadShellWorktreePath: "/repo/worktrees/stale",
+      threadDetailWorktreePath: "/repo/worktrees/feature",
+      command: "tail -n +1 -F '/tmp/task.output'",
+    });
+
+    expect(launch).toEqual({
+      cwd: "/repo/worktrees/feature",
+      worktreePath: "/repo/worktrees/feature",
+      env: {
+        T3CODE_PROJECT_ROOT: "/repo/root",
+        T3CODE_WORKTREE_PATH: "/repo/worktrees/feature",
+      },
+      initialInput: " tail -n +1 -F '/tmp/task.output'\r",
+    });
+    expect(takePendingTerminalLaunch(target)).toEqual(launch);
+    expect(takePendingTerminalLaunch(target)).toBeNull();
+  });
+
+  it("falls back to the shell worktree and then the project checkout", () => {
+    for (const worktreePath of ["/repo/worktrees/feature", null]) {
+      const target = {
+        environmentId: EnvironmentId.make("env-command"),
+        threadId: ThreadId.make("thread-command"),
+        terminalId: worktreePath === null ? "term-project" : "term-shell-worktree",
+      };
+      stageCommandTerminalLaunch({
+        target,
+        workspaceRoot: "/repo/root",
+        threadShellWorktreePath: worktreePath,
+        threadDetailWorktreePath: null,
+        command: "printf 'hello'",
+      });
+
+      expect(takePendingTerminalLaunch(target)).toEqual({
+        cwd: worktreePath ?? "/repo/root",
+        worktreePath,
+        env: {
+          T3CODE_PROJECT_ROOT: "/repo/root",
+          ...(worktreePath ? { T3CODE_WORKTREE_PATH: worktreePath } : {}),
+        },
+        initialInput: " printf 'hello'\r",
+      });
+    }
   });
 });
 

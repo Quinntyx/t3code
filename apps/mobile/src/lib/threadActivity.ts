@@ -4,6 +4,11 @@ import type {
 } from "@t3tools/client-runtime/state/thread-requests";
 import { linkRequestTargetName } from "@t3tools/client-runtime/link-request";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+import {
+  summarizeAgentTrajectory,
+  trajectorySummariesEqual,
+  type AgentTrajectorySummary,
+} from "@t3tools/client-runtime/work-log/trajectory-summary";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
@@ -139,6 +144,7 @@ export interface ThreadFeedMessage {
   readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
   readonly id: MessageId;
   readonly role: "user" | "assistant";
+  readonly localCommand?: string;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly runId: RunId | null;
@@ -258,6 +264,7 @@ type ThreadFeedEntryContent =
       readonly createdAt: string;
       readonly runId: RunId;
       readonly label: string;
+      readonly trajectory: AgentTrajectorySummary;
       readonly expanded: boolean;
     }
   | {
@@ -444,6 +451,13 @@ export function isSecretRequestActivityGroup(entry: ThreadFeedActivityGroup): bo
   );
 }
 
+export function isEmailRequestActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return (
+    entry.activities.length === 1 &&
+    entry.activities[0]?.projectedItem.item.type === "email_request"
+  );
+}
+
 export function isLinkRequestActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return (
     entry.activities.length === 1 && entry.activities[0]?.projectedItem.item.type === "link_request"
@@ -492,6 +506,7 @@ function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
     item.type === "system_notice" ||
     item.type === "proposed_plan" ||
     item.type === "secret_request" ||
+    item.type === "email_request" ||
     item.type === "link_request"
   );
 }
@@ -614,6 +629,8 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
       return "zap";
     case "secret_request":
       return "lock";
+    case "email_request":
+      return "message";
     case "link_request":
       return "globe";
   }
@@ -688,6 +705,8 @@ function itemSummary(
       return resolve(msg("Thread created"));
     case "secret_request":
       return item.label;
+    case "email_request":
+      return item.draft.subject || resolve(msg("Email draft"));
     case "link_request":
       return resolve(msg("Link {target}", { target: linkRequestTargetName(item, resolve) }));
     case "dynamic_tool": {
@@ -758,6 +777,8 @@ function itemPreview(item: OrchestrationV2TurnItem, resolve: MessageResolver): s
     case "secret_request":
     case "link_request":
       return item.reason || null;
+    case "email_request":
+      return item.draft.to.join(", ") || null;
     case "subagent":
       return item.result ?? item.progress ?? item.prompt;
     case "dynamic_tool":
@@ -1105,6 +1126,7 @@ interface ThreadFeedRunFold {
   readonly createdAt: string;
   readonly hiddenEntryIds: ReadonlySet<string>;
   readonly label: string;
+  readonly trajectory: AgentTrajectorySummary;
 }
 
 export function failedFeedRunIds(
@@ -1200,6 +1222,7 @@ function deriveThreadFeedRunFolds(
   latestRun: ThreadFeedLatestRun | null,
   runlessWorkActive: boolean,
   feedFailedRunIds: ReadonlySet<RunId>,
+  foldContextCompactions: boolean,
   resolve: MessageResolver,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
@@ -1231,8 +1254,14 @@ function deriveThreadFeedRunFolds(
   let runlessKey: RunId | null = null;
   let responseKey: RunId | null = null;
   let pendingUserBoundary: string | null = null;
+  const latestResponseRunIds = new Set<RunId>();
+  let latestResponseHasDelegates = false;
   for (const [index, entry] of feed.entries()) {
     if (entry.type === "message" && entry.message.role === "user") {
+      if (!isSteerMessage(entry.message)) {
+        latestResponseRunIds.clear();
+        latestResponseHasDelegates = false;
+      }
       const steerGroup =
         isSteerMessage(entry.message) && entry.message.runId != null
           ? groupsByRunId.get(entry.message.runId)
@@ -1263,12 +1292,14 @@ function deriveThreadFeedRunFolds(
       groupsByRunId.set(runId, group);
     }
     group.entries.push(entry);
+    latestResponseRunIds.add(runId);
     if (entry.type === "message") {
       terminalAssistantMessageIdByRun.set(runId, entry.id);
     }
     if (entry.type !== "activity-group") continue;
     for (const activity of entry.activities) {
       const item = activity.projectedItem.item;
+      if (item.type === "subagent") latestResponseHasDelegates = true;
       if (item.type === "run_interrupt_result") interruptedRunIds.add(runId);
       if (
         runId === runlessKey &&
@@ -1286,18 +1317,32 @@ function deriveThreadFeedRunFolds(
   for (const [runId, group] of groupsByRunId) {
     if (
       runId === activeRunId ||
+      (activeRunId !== null && latestResponseHasDelegates && latestResponseRunIds.has(runId)) ||
       (runlessWorkActive && runId === runlessKey) ||
       interruptedRunIds.has(runId) ||
       failedRunIds.has(runId) ||
-      group.entries.some((entry) => entry.type === "message" && entry.message.streaming)
+      group.entries.some(
+        (entry) =>
+          (entry.type === "message" && entry.message.streaming) ||
+          (entry.type === "activity-group" &&
+            entry.activities.some((activity) =>
+              isLiveSubagentTurnItem(activity.projectedItem.item),
+            )),
+      )
     ) {
       continue;
     }
     const terminalAssistantId = terminalAssistantMessageIdByRun.get(runId);
-    // Folded dividers lose their place in the turn, so only the latest stays visible.
-    const visibleCompactionId = group.entries.findLast(
-      (entry) => entry.type === "activity-group" && isContextCompactionActivityGroup(entry),
-    )?.id;
+    // Folded dividers lose their place in the turn, so only the latest stays visible unless folding compactions.
+    const visibleCompactionId = foldContextCompactions
+      ? undefined
+      : group.entries.findLast(
+          (entry) => entry.type === "activity-group" && isContextCompactionActivityGroup(entry),
+        )?.id;
+    const isFailedCompaction = (entry: ThreadFeedEntry) =>
+      entry.type === "activity-group" &&
+      isContextCompactionActivityGroup(entry) &&
+      entry.activities[0]?.projectedItem.item.status === "failed";
     const hiddenEntryIds = new Set(
       group.entries
         .filter(
@@ -1305,6 +1350,7 @@ function deriveThreadFeedRunFolds(
             entry.id !== terminalAssistantId &&
             !(entry.type === "message" && retainedAnswerIds.has(entry.message.id)) &&
             entry.id !== visibleCompactionId &&
+            !isFailedCompaction(entry) &&
             !staysOutOfFold(entry),
         )
         .map((entry) => entry.id),
@@ -1392,6 +1438,13 @@ function deriveThreadFeedRunFolds(
         hiddenEntryIds: new Set(
           segment.entries.flatMap((entry) => (hiddenEntryIds.has(entry.id) ? [entry.id] : [])),
         ),
+        trajectory: summarizeAgentTrajectory(
+          segment.entries.flatMap((entry) =>
+            entry.type === "activity-group"
+              ? entry.activities.map((activity) => activity.projectedItem.item)
+              : [],
+          ),
+        ),
         label: segment.label,
       });
     }
@@ -1410,6 +1463,7 @@ function deriveThreadFeedRunFolds(
       createdAt: entry.createdAt,
       hiddenEntryIds: new Set([entry.id]),
       label: resolve(msg("Earlier work")),
+      trajectory: [],
       deferredWorkItemIds,
     });
   }
@@ -1508,11 +1562,15 @@ function isUserMessageEntry(entry: ThreadFeedEntry | undefined): boolean {
   return entry?.type === "message" && entry.message.role === "user";
 }
 
+function isUserResponseStart(entry: ThreadFeedEntry | undefined): boolean {
+  return (
+    entry?.type === "message" && entry.message.role === "user" && !isSteerMessage(entry.message)
+  );
+}
+
 /**
- * A user message starts every fold and is never hidden or grouped, so the
- * rows before it depend only on the entries before it, their runs, and the
- * shared inputs. Returns the user message entry to restart from, or null to
- * present the whole feed.
+ * Delegate wakes and steers share response-wide folding state, so a reused
+ * prefix must end before the non-steer user message that began the response.
  */
 function presentationRestart(
   previous: ThreadFeedPresentationBuild | null,
@@ -1532,6 +1590,8 @@ function presentationRestart(
     previous.activeWorkStartedAt !== activeWorkStartedAt ||
     previous.runlessWorkActive !== runlessWorkActive ||
     previous.display.toolCallVisibility !== display.toolCallVisibility ||
+    (previous.display.foldContextCompactions ?? false) !==
+      (display.foldContextCompactions ?? false) ||
     previous.display.revealedMessageId !== display.revealedMessageId ||
     !setsEqual(previous.expandedRunIds, expandedRunIds) ||
     !setsEqual(previous.expandedWorkGroupIds, expandedWorkGroupIds)
@@ -1542,7 +1602,7 @@ function presentationRestart(
   let index = previous.restarts.length - 1;
   while (index >= 0 && previous.restarts[index]!.entry > firstChanged) index -= 1;
   const restart = previous.restarts[index];
-  if (restart === undefined || !isUserMessageEntry(feed[restart.entry])) return null;
+  if (restart === undefined || !isUserResponseStart(feed[restart.entry])) return null;
   for (let entryIndex = restart.entry; entryIndex < feed.length; entryIndex += 1) {
     const runId = feedEntryRunId(feed[entryIndex]!);
     const firstEntry = runId === null ? undefined : previous.firstEntryByRun.get(runId);
@@ -1681,11 +1741,13 @@ function liveAnswerPreview(feed: ReadonlyArray<ThreadFeedEntry>): string | null 
 export interface ThreadFeedDisplay {
   readonly toolCallVisibility: ToolCallVisibility;
   readonly revealedMessageId: MessageId | null;
+  readonly foldContextCompactions?: boolean;
 }
 
 const DEFAULT_THREAD_FEED_DISPLAY: ThreadFeedDisplay = {
   toolCallVisibility: "showAll",
   revealedMessageId: null,
+  foldContextCompactions: false,
 };
 
 export function deriveThreadFeedPresentation(
@@ -1802,6 +1864,7 @@ export function deriveThreadFeedPresentation(
         latestRun,
         isWorking && runlessWorkActive,
         failedRunIds,
+        display.foldContextCompactions ?? false,
         resolve,
       );
   const collapsedEntryIds = new Set<string>();
@@ -1848,7 +1911,7 @@ export function deriveThreadFeedPresentation(
         liveFoldPlaced = true;
       }
     }
-    if (isUserMessageEntry(entry)) {
+    if (isUserResponseStart(entry)) {
       restarts.push({ entry: feedIndex, rowsLength: result.length });
     }
     const isActiveTailGroup =
@@ -1867,6 +1930,7 @@ export function deriveThreadFeedPresentation(
         row.runId !== fold.runId ||
         row.createdAt !== fold.createdAt ||
         row.label !== fold.label ||
+        !trajectorySummariesEqual(row.trajectory, fold.trajectory) ||
         row.expanded !== expanded ||
         row.deferredWorkItemIds?.join("|") !== fold.deferredWorkItemIds?.join("|")
       ) {
@@ -1877,6 +1941,7 @@ export function deriveThreadFeedPresentation(
           createdAt: fold.createdAt,
           runId: fold.runId,
           label: fold.label,
+          trajectory: fold.trajectory,
           expanded,
         };
         runFoldRowsCache.set(entry, row);
@@ -2092,6 +2157,7 @@ function liveRunFoldRow(runId: RunId, startedAt: string, resolve: MessageResolve
       createdAt: startedAt,
       runId,
       label,
+      trajectory: [],
       expanded: false,
       workingSince: startedAt,
     };
@@ -2678,6 +2744,9 @@ export function buildThreadFeed(
           id: item.messageId,
           role: item.type === "user_message" ? "user" : "assistant",
           text: item.text,
+          ...(item.type === "assistant_message" && item.localCommand !== undefined
+            ? { localCommand: item.localCommand }
+            : {}),
           ...(item.type === "user_message" && item.context ? { context: item.context } : {}),
           attachments: item.attachments ?? [],
           runId: item.runId,

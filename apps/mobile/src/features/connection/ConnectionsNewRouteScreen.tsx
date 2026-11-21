@@ -14,6 +14,8 @@ import {
 } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { parseDiscoverEnrollmentUrl } from "@t3tools/client-runtime/discover";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useState } from "react";
 import { Linking, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Defs, RadialGradient, Rect, Stop } from "react-native-svg";
@@ -34,6 +36,8 @@ import { splitEnvironmentSections } from "./environmentSections";
 import { leaveSettingsPage } from "../settings/settings-navigation";
 import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { m } from "../../i18n/messages";
+import { directoryDiscovery } from "../../state/discover";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 type ConnectionsNewRouteParams = {
   readonly mode?: string;
@@ -70,9 +74,16 @@ function PairingForm({
     useRemoteConnections();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const [initialPairing] = useState(() => parsePairingUrl(routePairingUrl || connectionPairingUrl));
+  const enrollDiscovery = useAtomCommand(directoryDiscovery.enroll, { reportFailure: false });
+  const [initialPairing] = useState(() => {
+    const value = routePairingUrl || connectionPairingUrl;
+    return parseDiscoverEnrollmentUrl(value) !== null
+      ? { host: value, code: "" }
+      : parsePairingUrl(value);
+  });
   const [hostInput, setHostInput] = useState(initialPairing.host);
   const [codeInput, setCodeInput] = useState(initialPairing.code);
+  const isDiscoveryEnrollment = parseDiscoverEnrollmentUrl(hostInput) !== null;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // The user's own edit or submit dismisses the dev auto-connect report.
@@ -92,7 +103,10 @@ function PairingForm({
 
   const headerIconColor = useUniwindTheme()["--color-icon"];
 
-  const connectDisabled = connecting || hostInput.trim().length === 0;
+  const connectDisabled =
+    connecting ||
+    hostInput.trim().length === 0 ||
+    (isDiscoveryEnrollment && routeFor !== undefined);
 
   const clearError = () => {
     setSubmitError(null);
@@ -100,12 +114,17 @@ function PairingForm({
   };
 
   const handleHostChange = (value: string) => {
-    const pairing = parsePairingUrl(value);
-    if (pairing.code) {
-      setHostInput(pairing.host);
-      setCodeInput(pairing.code);
-    } else {
+    if (parseDiscoverEnrollmentUrl(value) !== null) {
       setHostInput(value);
+      setCodeInput("");
+    } else {
+      const pairing = parsePairingUrl(value);
+      if (pairing.code) {
+        setHostInput(pairing.host);
+        setCodeInput(pairing.code);
+      } else {
+        setHostInput(value);
+      }
     }
     clearError();
   };
@@ -141,10 +160,15 @@ function PairingForm({
 
     try {
       const pairingUrl = extractPairingUrlFromQrPayload(data);
-      const { host, code } = parsePairingUrl(pairingUrl);
-      setHostInput(host);
-      setCodeInput(code);
-      onChangeConnectionPairingUrl(pairingUrl);
+      if (parseDiscoverEnrollmentUrl(pairingUrl) !== null) {
+        setHostInput(pairingUrl);
+        setCodeInput("");
+      } else {
+        const { host, code } = parsePairingUrl(pairingUrl);
+        setHostInput(host);
+        setCodeInput(code);
+        onChangeConnectionPairingUrl(pairingUrl);
+      }
       setScanComplete(true);
       setScannerLocked(false);
     } catch (error) {
@@ -162,12 +186,27 @@ function PairingForm({
   };
 
   const handleSubmit = async () => {
-    const pairingUrl = buildPairingUrl(hostInput, codeInput);
+    if (connectDisabled) return;
     setOwnAttempt(true);
     setSubmitError(null);
     setIsSubmitting(true);
-    onChangeConnectionPairingUrl(pairingUrl);
-    const outcome = await onConnectPress(pairingUrl, routeFor);
+    const connect = async () => {
+      if (isDiscoveryEnrollment) {
+        const result = await enrollDiscovery({ enrollmentUrl: hostInput.trim() });
+        if (result._tag === "Failure") {
+          const failure = squashAtomCommandFailure(result);
+          return {
+            ok: false,
+            error: failure instanceof Error ? failure.message : gt("Could not join discovery."),
+          };
+        }
+        return { ok: true, error: null };
+      }
+      const pairingUrl = buildPairingUrl(hostInput, codeInput);
+      onChangeConnectionPairingUrl(pairingUrl);
+      return onConnectPress(pairingUrl, routeFor);
+    };
+    const outcome = await connect();
     setIsSubmitting(false);
     setSubmitError(outcome.error);
     void Haptics.notificationAsync(
@@ -193,7 +232,9 @@ function PairingForm({
         {
           accessibilityLabel: connecting
             ? gt("Connecting", { $context: "connection status" })
-            : gt("Add environment"),
+            : isDiscoveryEnrollment
+              ? gt("Join discovery")
+              : gt("Add environment"),
           loading: connecting,
           icon: "checkmark",
           tintColor: headerIconColor,
@@ -249,6 +290,7 @@ function PairingForm({
                 placeholder={gt("Pairing code")}
                 returnKeyType="go"
                 value={codeInput}
+                editable={!isDiscoveryEnrollment}
                 onChangeText={handleCodeChange}
                 onSubmitEditing={() => {
                   if (!connectDisabled) void handleSubmit();
@@ -263,9 +305,17 @@ function PairingForm({
               )}
             >
               {pairingConnectionError ??
-                gt(
-                  "For machines on your local network or tailnet. The machine keeps its own provider credentials.",
-                )}
+                (isDiscoveryEnrollment
+                  ? routeFor
+                    ? gt(
+                        "Discovery enrollment cannot add a route. Use a direct environment pairing URL.",
+                      )
+                    : gt(
+                        "Join this discovery directory. Discovered environments appear in your existing list.",
+                      )
+                  : gt(
+                      "Paste a pairing or discovery enrollment URL, or enter a machine on your local network or tailnet.",
+                    ))}
             </Text>
           </View>
 

@@ -17,6 +17,7 @@ import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.widget.OverScroller
+import com.facebook.react.common.assets.ReactFontManager
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -80,10 +81,10 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     TerminalTypefaces.ensureLoaded(context)
   }
 
-  private val regularTypeface = TerminalTypefaces.regular
-  private val boldTypeface = TerminalTypefaces.bold
-  private val italicTypeface = Typeface.create(TerminalTypefaces.regular, Typeface.ITALIC)
-  private val boldItalicTypeface = Typeface.create(TerminalTypefaces.bold, Typeface.ITALIC)
+  private var regularTypeface = TerminalTypefaces.regular
+  private var boldTypeface = TerminalTypefaces.bold
+  private var italicTypeface = Typeface.create(TerminalTypefaces.regular, Typeface.ITALIC)
+  private var boldItalicTypeface = Typeface.create(TerminalTypefaces.bold, Typeface.ITALIC)
   private val gestureDetector = GestureDetector(context, TerminalGestureListener())
   private val contentPadding = 8f * density
   private var frame: TerminalFrame? = null
@@ -151,6 +152,23 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     set(value) {
       if (field == value) return
       field = value
+      updateCellMetrics()
+    }
+
+  /** A system or app-bundled family name; empty uses the bundled Meslo font. */
+  var fontFamily: String = ""
+    set(value) {
+      if (field == value) return
+      field = value
+      val fonts = ReactFontManager.getInstance()
+      val regular =
+        if (value.isEmpty()) TerminalTypefaces.regular else fonts.getTypeface(value, Typeface.NORMAL, context.assets)
+      val bold =
+        if (value.isEmpty()) TerminalTypefaces.bold else fonts.getTypeface(value, Typeface.BOLD, context.assets)
+      regularTypeface = regular
+      boldTypeface = bold
+      italicTypeface = Typeface.create(regular, Typeface.ITALIC)
+      boldItalicTypeface = Typeface.create(bold, Typeface.ITALIC)
       updateCellMetrics()
     }
 

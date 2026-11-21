@@ -18,6 +18,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
+import { deviceHiddenThreadKeysAtom } from "./hidden-threads";
 import {
   pendingThreadCreationOutcomesAtom,
   selectThreadCreationDetail,
@@ -46,6 +47,7 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
   hiddenThreadTagsAtom: serverEnvironment.hiddenThreadTagsAtom,
+  deviceHiddenThreadKeysAtom,
 });
 const steadyShells = createSteadyShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,

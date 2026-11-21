@@ -2,6 +2,7 @@ import type { Root, RootContent } from "mdast";
 import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
+import { markdownMathRanges } from "@t3tools/shared/markdownMath";
 import { remarkKeepWindowsProsePaths } from "@t3tools/shared/markdownWindowsPaths";
 import {
   absoluteFilePathMatches,
@@ -498,9 +499,41 @@ function markdownWithWindowsPathDestinations(markdown: string): string {
   return applyMarkdownEdits(markdown, edits);
 }
 
+// TeX comments consume their newline; joining it first would comment out the rest of the formula.
+export function singleLineMath(tex: string): string {
+  return tex
+    .replace(
+      /((?:^|[^\\])(?:\\\\)*)(\\[A-Za-z]+)?%[^\r\n]*(?:\r\n?|\n|$)/gm,
+      (_, prefix: string, command: string | undefined) =>
+        `${prefix}${command ? `${command} ` : ""}`,
+    )
+    .replace(/\s*[\r\n]+\s*/g, " ")
+    .trim();
+}
+
+// md4c splits blocks before recognizing math, so an equation's `=` line becomes a heading.
+function markdownWithSingleLineDisplayMath(markdown: string): string {
+  if (!/\$\$|\\\[/.test(markdown)) return markdown;
+  const edits: MarkdownEdit[] = [];
+  for (const range of markdownMathRanges(markdown)) {
+    if (!range.display || !/^(?:\$\$|\\\[)/.test(range.source) || !/[\r\n]/.test(range.source))
+      continue;
+    const opening = range.source.slice(0, 2);
+    const closing = opening === "\\[" ? "\\]" : "$$";
+    edits.push({
+      start: range.start,
+      end: range.end,
+      content: `${opening}${singleLineMath(range.tex)}${closing}`,
+    });
+  }
+  return applyMarkdownEdits(markdown, edits);
+}
+
 // HTML wrappers can expose Markdown that wasn't in the first AST, so normalize them first.
 export function markdownForNativeParsing(markdown: string): string {
-  return markdownWithWindowsPathDestinations(markdownWithHtml(markdown));
+  return markdownWithWindowsPathDestinations(
+    markdownWithSingleLineDisplayMath(markdownWithHtml(markdown)),
+  );
 }
 
 export function parseMarkdownDocument(markdown: string): Root {

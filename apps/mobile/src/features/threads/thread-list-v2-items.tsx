@@ -1,3 +1,4 @@
+import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
@@ -34,6 +35,7 @@ import { toServerClock } from "@t3tools/client-runtime/clock";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import { ownStackPullRequests } from "@t3tools/client-runtime/threadStacks";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useNavigation } from "@react-navigation/native";
 import { msg, T, useGT, useMessages } from "gt-react-native";
@@ -54,6 +56,7 @@ import {
 } from "../../components/ProviderIcon";
 import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { copyThreadReference } from "../../lib/copyThreadReference";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -71,7 +74,8 @@ import {
 } from "../../state/thread-pr-presentation";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { useSwipeRowDormant } from "../home/swipe-row-activation";
-import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadSwipeable, useSwipeRowSide } from "../home/thread-swipe-actions";
+import { useHiddenThreads, useSetThreadHidden } from "../home/use-hidden-threads";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadIntoProject";
 import { threadCanArchive } from "../home/threadArchive";
@@ -94,6 +98,7 @@ import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -147,6 +152,12 @@ const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> =
     className: "text-warning-foreground",
     iconTintClassName: "accent-warning-foreground",
   },
+};
+const DELEGATING_STATUS_LABEL: StatusLabel = {
+  label: msg("Delegating", { $context: "thread status, waiting on delegated agents" }),
+  icon: "circle.dashed",
+  className: "text-adaptive-sky-600-400",
+  iconTintClassName: "accent-adaptive-sky-600-400",
 };
 const DONE_STATUS_LABEL: StatusLabel = {
   label: msg("Done", { $context: "thread status, turn finished" }),
@@ -234,6 +245,7 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
 
 function ThreadListV2Section(props: {
   readonly label: string;
+  readonly count?: number;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
   readonly disclosure?: {
@@ -268,8 +280,23 @@ function ThreadListV2Section(props: {
         className={cn(
           "h-px flex-1",
           snoozed ? "bg-primary/20" : sidebarPane ? "bg-drawer-border" : "bg-border",
+          props.count !== undefined && "opacity-0",
         )}
       />
+      {props.count !== undefined ? (
+        <Text
+          className={cn(
+            "text-xs font-t3-medium tabular-nums",
+            sidebarPane
+              ? "text-drawer-foreground-muted"
+              : snoozed
+                ? "text-foreground-secondary"
+                : "text-foreground-tertiary",
+          )}
+        >
+          {props.count}
+        </Text>
+      ) : null}
       {props.disclosure ? (
         <SymbolView
           name="chevron.down"
@@ -348,13 +375,12 @@ const SHELF_COPY = {
 function ThreadListV2ShelfHeader(
   props: ThreadListV2ShelfHeaderProps & { readonly kind: keyof typeof SHELF_COPY },
 ) {
-  const gt = useGT();
   const m = useMessages();
   const copy = SHELF_COPY[props.kind];
-  const label = m(copy.label);
   return (
     <ThreadListV2Section
-      label={props.expanded ? label : gt("{label} ({count})", { label, count: props.count })}
+      label={m(copy.label)}
+      count={props.count}
       pane={props.pane}
       tone={props.kind === "snoozed" ? "snoozed" : "default"}
       disclosure={{
@@ -434,6 +460,9 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
   );
 });
 
+/** Left indent per stack level; stacked rows still run to the right edge. */
+const STACK_INDENT = 14;
+
 const PENDING_TASK_MENU_ACTIONS: MenuAction[] = [
   {
     id: "delete",
@@ -470,6 +499,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }) {
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
+  const monoFont = useAppearancePreferences().appearance.codeFontFamily ?? MONO_FONT;
   const { width: windowWidth, fontScale } = useWindowDimensions();
   const titleTypography = useScaledTextRole("body");
   const metadataTypography = useScaledTextRole("label");
@@ -481,6 +511,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   );
   const titleLineHeight =
     Platform.OS === "android" ? androidTitleLineHeight : titleTypography.lineHeight * fontScale;
+  const swipeRowSide = useSwipeRowSide();
   const dormant = useSwipeRowDormant(props.activationKey);
   const theme = useUniwindTheme();
   const sidebarPane = props.pane === "sidebar";
@@ -645,7 +676,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
                     ? selectedThreadRowColors.mutedForegroundClassName
                     : rowAppearance.mutedForegroundClassName,
                 )}
-                style={{ fontFamily: MONO_FONT }}
+                style={{ fontFamily: monoFont }}
               >
                 {branch}
               </Text>
@@ -678,6 +709,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         />
       ) : null}
       <ThreadSwipeable
+        side={swipeRowSide}
         dormant={dormant}
         threadKey={pendingTask.key}
         backgroundColor={rowAppearance.swipeBackgroundColor}
@@ -709,10 +741,16 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
             <RowPressable
               accessibilityHint={
                 isDraft
-                  ? gt("Opens the draft in the new task composer. Swipe left to discard.")
-                  : gt(
-                      "Sends when the environment reconnects. Opens the task for editing. Swipe left to delete.",
-                    )
+                  ? swipeRowSide === "left"
+                    ? gt("Opens the draft in the new task composer. Swipe right to discard.")
+                    : gt("Opens the draft in the new task composer. Swipe left to discard.")
+                  : swipeRowSide === "left"
+                    ? gt(
+                        "Sends when the environment reconnects. Opens the task for editing. Swipe right to delete.",
+                      )
+                    : gt(
+                        "Sends when the environment reconnects. Opens the task for editing. Swipe left to delete.",
+                      )
               }
               accessibilityLabel={pendingTask.title}
               accessibilityRole="button"
@@ -760,6 +798,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly pane?: "screen" | "sidebar";
   readonly showTrailingDivider?: boolean;
   readonly selected?: boolean;
+  /** Outside the selected thread's project; settled and snoozed rows ignore it. */
+  readonly offFocusProject?: boolean;
+  /** Nesting under a stack's root; stacked members share the root's project. */
+  readonly stackDepth?: number;
+  /** Branches other members of this thread's stack own, one per line. */
+  readonly stackForeignBranches?: string;
   readonly fullSwipeWidth?: number;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenThreadPullRequests: (
@@ -798,7 +842,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly searchQuery?: string;
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }) {
+  const swipeRowSide = useSwipeRowSide();
   const { width: windowWidth, fontScale } = useWindowDimensions();
+  const monoFont = useAppearancePreferences().appearance.codeFontFamily ?? MONO_FONT;
   const titleTypography = useScaledTextRole("body");
   const metadataTypography = useScaledTextRole("label");
   const projectIconSize = titleTypography.fontSize * 1.25 * fontScale;
@@ -830,6 +876,25 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
+  const { hiddenThreadKeys } = useHiddenThreads();
+  const setThreadHidden = useSetThreadHidden();
+  const hidden = hiddenThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id));
+  const handleHidden = useCallback(() => {
+    void setThreadHidden(thread, !hidden);
+  }, [setThreadHidden, thread, hidden]);
+  const hiddenAction = useMemo(
+    () => ({
+      accessibilityLabel: hidden
+        ? gt("Restore {title} on this device", { title: thread.title })
+        : gt("Hide {title} on this device", { title: thread.title }),
+      icon: hidden ? ("eye" as const) : ("eye.slash" as const),
+      label: hidden
+        ? gt("Restore", { $context: "verb, thread action" })
+        : gt("Hide", { $context: "verb, thread action" }),
+      onPress: handleHidden,
+    }),
+    [gt, hidden, thread.title, handleHidden],
+  );
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
@@ -856,7 +921,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         showBadge: providerInstance.showBadge,
       })
     : null;
-  const pr = useThreadPr(thread);
+  const stackDepth = props.stackDepth ?? 0;
+  const project = stackDepth > 0 ? null : props.project;
+  const stackForeignBranches = props.stackForeignBranches ?? "";
+  const pullRequests = useMemo(
+    () =>
+      ownStackPullRequests(
+        thread.pullRequests,
+        new Set(stackForeignBranches === "" ? [] : stackForeignBranches.split("\n")),
+      ),
+    [thread.pullRequests, stackForeignBranches],
+  );
+  const pr = useThreadPr(thread, pullRequests);
   const prBadgeLabel = pr ? resolveThreadPrBadgeAction(pr, m).accessibilityLabel : null;
   const handleOpenPullRequests = useCallback(() => {
     if (pr) onOpenThreadPullRequests(thread, pr);
@@ -878,7 +954,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           ...workingLabel,
           label: msg("Goal", { $context: "thread status, working toward a goal" }),
         }
-      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
+      : status === "waiting" && waitingOnAgents(thread)
+        ? DELEGATING_STATUS_LABEL
+        : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const statusLabel = statusEntry && {
     ...statusEntry,
     label: statusEntry.label === null ? null : m(statusEntry.label),
@@ -922,10 +1000,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   // VoiceOver cannot focus buttons inside the accessible row.
   const rowAccessibilityActions = useMemo(
     () => [
+      {
+        name: "hideLocal",
+        label: hidden ? gt("Restore on this device") : gt("Hide on this device"),
+      },
       ...(prBadgeLabel ? [{ name: "openPullRequests", label: prBadgeLabel }] : []),
       ...(showsWoke ? [{ name: "dismissWoke", label: gt("Dismiss Woke notification") }] : []),
     ],
-    [gt, prBadgeLabel, showsWoke],
+    [gt, hidden, prBadgeLabel, showsWoke],
   );
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
@@ -1098,7 +1180,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const menuActions = useMemo<MenuAction[]>(() => {
     const nested = Platform.OS === "ios";
     const localized = (action: MenuAction): MenuAction => ({ ...action, title: m(action.title) });
+    const hideLocal: MenuAction = {
+      id: "hide-local",
+      title: hidden ? gt("Restore on this device") : gt("Hide on this device"),
+      image: hidden ? "eye" : "eye.slash",
+    };
+    const copyActions: MenuAction[] = [
+      { id: "copy-thread", title: gt("Copy thread"), image: "text.bubble" },
+      { id: "copy-thread-id", title: gt("Copy thread ID"), image: "doc.on.doc" },
+    ];
+    if (!canOperateThread) return [hideLocal, ...copyActions];
     const direct: MenuAction[] = [
+      hideLocal,
       ...(thread.branch
         ? [
             {
@@ -1108,8 +1201,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             },
           ]
         : []),
-      { id: "copy-thread", title: gt("Copy thread"), image: "text.bubble" },
-      { id: "copy-thread-id", title: gt("Copy thread ID"), image: "doc.on.doc" },
+      ...copyActions,
       ...(canShareWithGuest
         ? [{ id: "share-guest", title: gt("Share with guest"), image: "person.badge.plus" }]
         : []),
@@ -1192,8 +1284,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
   }, [
     autoSettleMenuItems,
+    canOperateThread,
     canShareWithGuest,
     canUnsettle,
+    hidden,
     pinMenuItems,
     props.settlementSupported,
     reorderMenuItems,
@@ -1207,6 +1301,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   ]);
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "hide-local") {
+        handleHidden();
+        return;
+      }
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -1272,6 +1370,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       gt,
       m,
       onNewThreadOnBranch,
+      handleHidden,
       thread,
       navigation,
       handleArchive,
@@ -1294,13 +1393,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
   );
   const primaryAction = useMemo(() => {
+    const swipeRight = swipeRowSide === "left";
     if (swipeActions.primary === "archive") {
       return {
         accessibilityLabel: gt("Archive {title}", { title: thread.title }),
         icon: "archivebox" as const,
         label: gt("Archive", { $context: "verb, thread action" }),
-        swipeHint: gt("Opens the thread. Swipe left to archive."),
-        swipeSnoozeHint: gt("Opens the thread. Swipe left for archive and snooze actions."),
+        swipeHint: swipeRight
+          ? gt("Opens the thread. Swipe right to archive.")
+          : gt("Opens the thread. Swipe left to archive."),
+        swipeSnoozeHint: swipeRight
+          ? gt("Opens the thread. Swipe right for archive and snooze actions.")
+          : gt("Opens the thread. Swipe left for archive and snooze actions."),
         onPress: handleArchive,
       };
     }
@@ -1309,8 +1413,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityLabel: gt("Wake {title} now", { title: thread.title }),
         icon: "clock" as const,
         label: gt("Wake", { $context: "verb, thread action" }),
-        swipeHint: gt("Opens the thread. Swipe left to wake."),
-        swipeSnoozeHint: gt("Opens the thread. Swipe left for wake and snooze actions."),
+        swipeHint: swipeRight
+          ? gt("Opens the thread. Swipe right to wake.")
+          : gt("Opens the thread. Swipe left to wake."),
+        swipeSnoozeHint: swipeRight
+          ? gt("Opens the thread. Swipe right for wake and snooze actions.")
+          : gt("Opens the thread. Swipe left for wake and snooze actions."),
         onPress: handleUnsnooze,
       };
     }
@@ -1319,16 +1427,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           accessibilityLabel: gt("Un-settle {title}", { title: thread.title }),
           icon: "arrow.uturn.backward" as const,
           label: gt("Un-settle", { $context: "verb, thread action" }),
-          swipeHint: gt("Opens the thread. Swipe left to un-settle."),
-          swipeSnoozeHint: gt("Opens the thread. Swipe left for un-settle and snooze actions."),
+          swipeHint: swipeRight
+            ? gt("Opens the thread. Swipe right to un-settle.")
+            : gt("Opens the thread. Swipe left to un-settle."),
+          swipeSnoozeHint: swipeRight
+            ? gt("Opens the thread. Swipe right for un-settle and snooze actions.")
+            : gt("Opens the thread. Swipe left for un-settle and snooze actions."),
           onPress: handleUnsettle,
         }
       : {
           accessibilityLabel: gt("Settle {title}", { title: thread.title }),
           icon: "checkmark" as const,
           label: gt("Settle", { $context: "verb, thread action" }),
-          swipeHint: gt("Opens the thread. Swipe left to settle."),
-          swipeSnoozeHint: gt("Opens the thread. Swipe left for settle and snooze actions."),
+          swipeHint: swipeRight
+            ? gt("Opens the thread. Swipe right to settle.")
+            : gt("Opens the thread. Swipe left to settle."),
+          swipeSnoozeHint: swipeRight
+            ? gt("Opens the thread. Swipe right for settle and snooze actions.")
+            : gt("Opens the thread. Swipe left for settle and snooze actions."),
           onPress: handleSettle,
         };
   }, [
@@ -1338,6 +1454,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     handleUnsettle,
     handleUnsnooze,
     swipeActions.primary,
+    swipeRowSide,
     thread.title,
   ]);
   const secondaryAction = useMemo(
@@ -1358,24 +1475,30 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [gt, handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
   const swipeAccessibilityHint = !canOperateThread
-    ? gt("Opens the thread")
+    ? swipeRowSide === "left"
+      ? hidden
+        ? gt("Opens the thread. Swipe right to restore on this device.")
+        : gt("Opens the thread. Swipe right to hide on this device.")
+      : hidden
+        ? gt("Opens the thread. Swipe left to restore on this device.")
+        : gt("Opens the thread. Swipe left to hide on this device.")
     : secondaryAction === null
       ? primaryAction.swipeHint
       : primaryAction.swipeSnoozeHint;
 
-  const titleTextInset = props.project ? projectIconSize + 8 : 0;
+  const titleTextInset = project ? projectIconSize + 8 : 0;
   const cardContent = (
     <>
       <View className="flex-row items-start gap-2">
-        {props.project ? (
+        {project ? (
           <View className="justify-center" style={{ height: titleLineHeight }}>
             <ProjectFavicon
               environmentId={thread.environmentId}
-              faviconPath={props.project.faviconPath}
-              projectIcon={props.project.projectIcon}
+              faviconPath={project.faviconPath}
+              projectIcon={project.projectIcon}
               size={projectIconSize}
-              projectTitle={props.project.title}
-              workspaceRoot={props.project.workspaceRoot}
+              projectTitle={project.title}
+              workspaceRoot={project.workspaceRoot}
             />
           </View>
         ) : null}
@@ -1577,7 +1700,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             <Text
               accessibilityLabel={pr.accessibilityLabel}
               className={cn("text-xs", pr.textClassName)}
-              style={{ fontFamily: MONO_FONT }}
+              style={{ fontFamily: monoFont }}
             >
               {pr.label}
             </Text>
@@ -1625,11 +1748,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 
-  const fadedCardContent = recede ? (
-    <View style={{ opacity: 0.55 }}>{cardContent}</View>
-  ) : (
-    cardContent
-  );
+  const offFocus = props.offFocusProject === true && variant === "card" && !selected && !recede;
+  const fadedCardContent =
+    recede || offFocus ? (
+      <View style={{ opacity: recede ? 0.55 : 0.6 }}>{cardContent}</View>
+    ) : (
+      cardContent
+    );
 
   const rowContent = (close: () => void) =>
     variant === "card" ? (
@@ -1644,6 +1769,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityState={{ selected }}
         accessibilityActions={rowAccessibilityActions}
         onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === "hideLocal") handleHidden();
           if (event.nativeEvent.actionName === "openPullRequests") handleOpenPullRequests();
           if (event.nativeEvent.actionName === "dismissWoke") handleAcknowledgeWoke();
         }}
@@ -1687,15 +1813,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             sidebarPane && "px-3",
           )}
         >
-          {props.project ? (
+          {project ? (
             <View className="opacity-40">
               <ProjectFavicon
                 environmentId={thread.environmentId}
-                faviconPath={props.project.faviconPath}
-                projectIcon={props.project.projectIcon}
+                faviconPath={project.faviconPath}
+                projectIcon={project.projectIcon}
                 size={projectIconSize}
-                projectTitle={props.project.title}
-                workspaceRoot={props.project.workspaceRoot}
+                projectTitle={project.title}
+                workspaceRoot={project.workspaceRoot}
               />
             </View>
           ) : null}
@@ -1745,7 +1871,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ? rowAppearance.mutedForegroundClassName
                   : rowAppearance.tertiaryForegroundClassName,
             )}
-            style={{ fontFamily: MONO_FONT }}
+            style={{ fontFamily: monoFont }}
           >
             {snoozedRow && snoozeWakeLabelText !== undefined ? snoozeWakeLabelText : timeLabel}
           </Text>
@@ -1753,15 +1879,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </RowPressable>
     );
 
-  if (!canOperateThread)
-    return <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>;
-
   return (
-    <View collapsable={false}>
+    <View
+      collapsable={false}
+      style={stackDepth > 0 ? { marginLeft: stackDepth * STACK_INDENT } : undefined}
+    >
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}
       <ThreadSwipeable
+        side={swipeRowSide}
         dormant={dormant}
         threadKey={`${thread.environmentId}:${thread.id}`}
         backgroundColor={rowAppearance.swipeBackgroundColor}
@@ -1774,9 +1901,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}
-        primaryAction={primaryAction}
-        secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}`}
+        primaryAction={canOperateThread ? primaryAction : hiddenAction}
+        secondaryAction={canOperateThread ? secondaryAction : null}
+        oppositeAction={canOperateThread ? hiddenAction : undefined}
+        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}:${hidden}`}
         simultaneousWith={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
       >

@@ -8,15 +8,28 @@ import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
-import { olderSettledThreads } from "../../state/threads";
+import { environmentThreadShells, olderSettledThreads } from "../../state/threads";
 import { makeRawThreadShell } from "../../test-fixtures";
 import { useThreadListV2 } from "./useThreadListV2";
 
-vi.mock("../../state/threads", () => ({
-  olderSettledThreads: { shelfAtom: vi.fn() },
-  threadFamilies: { mountRows: () => () => {} },
-}));
+vi.mock("../../state/threads", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentThreadShells: { threadShellsAtom: Atom.make([]).pipe(Atom.keepAlive) },
+    olderSettledThreads: { shelfAtom: vi.fn() },
+    threadFamilies: { mountRows: () => () => {} },
+  };
+});
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: undefined }));
+
+function setLoadedThreads(
+  registry: AtomRegistry.AtomRegistry,
+  threads: Parameters<typeof useThreadListV2>[0]["threads"],
+) {
+  const atom = environmentThreadShells.threadShellsAtom;
+  if (!Atom.isWritable(atom)) throw new Error("Expected writable thread fixture");
+  registry.set(atom, threads);
+}
 
 it("reuses a large thread list across tab renders and updates when its inputs change", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -38,6 +51,7 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
       }),
     ),
   );
+  setLoadedThreads(registry, threads);
   const environmentIds = new Set([environmentId, otherEnvironmentId]);
   const input: Parameters<typeof useThreadListV2>[0] = {
     threads,
@@ -241,4 +255,89 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
   expect(loaded.layout.items).toHaveLength(160);
   expect(loaded.olderSettledShelf.isListed(threads[150]!)).toBe(true);
   expect(loaded.items).not.toBe(loading.items);
+});
+
+it("counts filtered loaded settled rows as local, then restores their visible count", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const environmentId = EnvironmentId.make("environment-test");
+  const before = "2026-10-20T00:00:00.000Z";
+  const shelfAtom = Atom.make<ReadonlyMap<EnvironmentId, OlderSettledShelfEnvironment>>(
+    new Map([
+      [
+        environmentId,
+        {
+          older: {
+            before,
+            beforeMs: Date.parse(before),
+            counts: new Map([[ProjectId.make("project-test"), 1]]),
+          },
+          pages: { reads: [], frontier: null, status: "ready" as const },
+        },
+      ],
+    ]),
+  );
+  vi.mocked(olderSettledThreads.shelfAtom).mockReturnValue(shelfAtom);
+  const registry = AtomRegistry.make();
+  const thread = presentThreadShell(
+    environmentId,
+    makeRawThreadShell({
+      id: ThreadId.make("hidden"),
+      projectId: ProjectId.make("project-test"),
+      createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00.000Z"),
+      settledAt: DateTime.makeUnsafe("2026-10-10T00:00:00.000Z"),
+      settledOverride: "settled",
+    }),
+  );
+  setLoadedThreads(registry, [thread]);
+  let visibleThreads: readonly (typeof thread)[] = [];
+  let result: ReturnType<typeof useThreadListV2> | undefined;
+  function ListProbe() {
+    const list = useThreadListV2({
+      threads: visibleThreads,
+      pendingTasks: [],
+      environmentId,
+      projectRefs: null,
+      searchQuery: "",
+      searchMatches: new Map(),
+      settlementEnvironmentIds: new Set([environmentId]),
+      snoozeEnvironmentIds: new Set([environmentId]),
+      pinReorderEnvironmentIds: new Set(),
+      activeReorderEnvironmentIds: new Set(),
+      queuedThreadKeys: new Set(),
+      settledLimit: 20,
+      now: "2026-10-27T00:00:00.000Z",
+      pendingOrder: null,
+      shelfPreferencesLoaded: true,
+      workingShelfEnabled: false,
+      workingShelfExpanded: false,
+      snoozedShelfExpanded: false,
+      settledShelfExpanded: true,
+      selectedThreadKey: null,
+    });
+    useLayoutEffect(() => {
+      result = list;
+    });
+    return null;
+  }
+  const probe = () => (
+    <RegistryContext value={registry}>
+      <ListProbe />
+    </RegistryContext>
+  );
+  const root = createRoot(document.createElement("div"));
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      act(() => root.unmount());
+      registry.dispose();
+      vi.unstubAllGlobals();
+    },
+  };
+  act(() => root.render(probe()));
+  expect(result?.layout.listedSettledThreads).toEqual([]);
+  expect(result?.layout.settledCount).toBe(0);
+
+  visibleThreads = [thread];
+  act(() => root.render(probe()));
+  expect(result?.layout.listedSettledThreads).toEqual([thread]);
+  expect(result?.layout.settledCount).toBe(1);
 });

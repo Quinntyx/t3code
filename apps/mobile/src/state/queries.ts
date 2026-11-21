@@ -10,7 +10,7 @@ import {
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { environmentSession } from "./session";
 import { useEnvironmentPresentation } from "./presentation";
-import type { VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
+import { type VcsRefTarget, vcsRefTargetListInput } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
@@ -308,9 +308,11 @@ export function useBranches(input: {
 export function usePaginatedBranches(target: VcsRefTarget) {
   const resolve = useMessages();
   const query = target.query?.trim() ?? "";
+  const remoteName = target.remoteName ?? null;
+  const remoteRefsOnly = target.remoteRefsOnly === true;
   const targetKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([target.environmentId, target.cwd, query])
+      ? JSON.stringify([target.environmentId, target.cwd, query, remoteName, remoteRefsOnly])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
@@ -329,13 +331,14 @@ export function usePaginatedBranches(target: VcsRefTarget) {
               input: {
                 cwd: target.cwd!,
                 ...(query.length > 0 ? { query } : {}),
+                ...vcsRefTargetListInput({ remoteName, remoteRefsOnly }),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit: VCS_REF_LIST_LIMIT,
               },
             }),
           )
         : [],
-    [target.environmentId, target.cwd, query, cursors],
+    [target.environmentId, target.cwd, query, remoteName, remoteRefsOnly, cursors],
   );
   const pagesAtom = useMemo(
     () =>
@@ -364,6 +367,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
           refs: [...refs.values()],
           isRepo: first.isRepo,
           hasPrimaryRemote: first.hasPrimaryRemote,
+          ...(first.remoteNames ? { remoteNames: first.remoteNames } : {}),
           nextCursor: last.nextCursor,
           totalCount: Math.max(...values.map((value) => value.totalCount)),
         };

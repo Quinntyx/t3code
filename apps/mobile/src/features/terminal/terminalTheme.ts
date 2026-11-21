@@ -114,13 +114,15 @@ export function getMobileTerminalTheme(
   };
 }
 
-export function buildGhosttyThemeConfig(theme: TerminalTheme): string {
+/** The iOS terminal loads this as Ghostty config; Android ignores it. */
+export function buildGhosttyThemeConfig(theme: TerminalTheme, fontFamily: string | null): string {
   const lines = [
     `background = ${theme.background}`,
     `foreground = ${theme.foreground}`,
     `cursor-color = ${theme.cursorForeground}`,
     `cursor-text = ${theme.cursorBackground}`,
   ];
+  if (fontFamily !== null) lines.push(`font-family = "${fontFamily}"`);
 
   for (const [index, color] of theme.palette.entries()) {
     lines.push(`palette = ${index}=${color}`);

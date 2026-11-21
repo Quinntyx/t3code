@@ -1,5 +1,5 @@
 import { createContext, use, useEffect, useState, type ReactNode } from "react";
-import { Animated, Platform, Pressable, View } from "react-native";
+import { Animated, Platform, Pressable, View, type ViewStyle } from "react-native";
 import { useGT, useMessages } from "gt-react-native";
 
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -94,9 +94,34 @@ function StatusFadeIn(props: {
   );
 }
 
+const GROW_ROW: ViewStyle = { alignItems: "center", flex: 1, flexDirection: "row", minWidth: 0 };
+
+/** The brand is the title's tap target, with or without a connection status beside it. */
+function BrandPress(props: {
+  readonly children: ReactNode;
+  readonly onPress?: () => void;
+  readonly grow?: boolean;
+}) {
+  if (props.onPress === undefined) {
+    return props.grow ? <View style={GROW_ROW}>{props.children}</View> : <>{props.children}</>;
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      hitSlop={8}
+      onPress={props.onPress}
+      style={props.grow ? GROW_ROW : undefined}
+    >
+      {props.children}
+    </Pressable>
+  );
+}
+
 export function WorkspaceConnectionTitle(props: {
   readonly brand: ReactNode;
   readonly onPress?: () => void;
+  /** The status chip keeps the environments shortcut while the brand opens the list. */
+  readonly onPressStatus?: () => void;
   readonly grow?: boolean;
   readonly size?: "navbar" | "pageTitle";
   readonly statusOffset?: number;
@@ -106,26 +131,26 @@ export function WorkspaceConnectionTitle(props: {
   const gt = useGT();
   const size = props.size ?? "navbar";
   const { scale } = useAndroidControlSizing();
+  const statusPress = props.onPressStatus ?? props.onPress;
 
   if (status === null) {
-    return props.grow ? (
-      <View style={{ alignItems: "center", flex: 1, flexDirection: "row", minWidth: 0 }}>
+    return (
+      <BrandPress grow={props.grow} onPress={props.onPress}>
         {props.brand}
-      </View>
-    ) : (
-      <>{props.brand}</>
+      </BrandPress>
     );
   }
 
   return (
     <StatusFadeIn animate={status.fadeIn} grow={props.grow} maxWidth={props.maxWidth}>
+      <BrandPress onPress={props.onPress}>{props.brand}</BrandPress>
       <Pressable
         accessibilityHint={gt("Opens environment settings")}
         accessibilityLabel={status.label}
         accessibilityRole="button"
-        disabled={props.onPress === undefined}
+        disabled={statusPress === undefined}
         hitSlop={8}
-        onPress={props.onPress}
+        onPress={statusPress}
         className="flex-row items-center gap-2"
         style={[
           { flexShrink: 1, marginLeft: props.statusOffset ?? 0 },

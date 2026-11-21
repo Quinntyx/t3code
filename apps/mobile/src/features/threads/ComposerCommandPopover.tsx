@@ -155,6 +155,8 @@ function groupLabel(
       return items.every((item) => item.type === "path")
         ? resolve(msg("Files"))
         : resolve(msg("Mentions"));
+    case "thread":
+      return resolve(msg("Threads"));
     default:
       return null;
   }
@@ -177,6 +179,8 @@ function emptyText(
       return resolve(msg("No skills found."));
     case "slash-command":
       return resolve(msg("No matching commands."));
+    case "thread":
+      return resolve(msg("No matching threads."));
     default:
       return resolve(msg("No results."));
   }

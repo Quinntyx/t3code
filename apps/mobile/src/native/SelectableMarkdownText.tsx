@@ -1,5 +1,5 @@
+import { useMemo, useState } from "react";
 import { Platform } from "react-native";
-import { useState } from "react";
 import { useGT } from "gt-react-native";
 import type { AssistantCitation } from "@t3tools/contracts";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
@@ -10,6 +10,10 @@ import type { SelectableMarkdownTextProps } from "./SelectableMarkdownText.types
 import { MobileEnrichedMarkdownText } from "./EnrichedMarkdownText";
 import { themeColorWithAlpha } from "../lib/mobileTheme";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
+import {
+  useBlockingGestureTags,
+  useCoveredByThreadDrawer,
+} from "../features/threads/thread-list-drawer";
 
 export type {
   MarkdownFileContextMenu,
@@ -27,16 +31,25 @@ export function SelectableMarkdownText(props: SelectableMarkdownTextProps) {
   const gt = useGT();
   const hasCitations = props.markdown.includes("t3-citation:");
   const theme = useUniwindTheme();
+  // Over-wide tables and code blocks are horizontally scrollable natively; the
+  // drawer pans learn those touches through the fork's blockingGestureTags.
+  const blockingGestureTags = useBlockingGestureTags();
+  const coveredByDrawer = useCoveredByThreadDrawer();
   const selectionColor = themeColorWithAlpha(theme["--color-focus"], 0.32);
   const selectionHandleColor = theme["--color-focus"];
-  const textStyle =
-    Platform.OS === "android"
-      ? { selectionColor, selectionHandleColor, ...props.textStyle }
-      : props.textStyle;
+  const textStyle = useMemo(
+    () =>
+      Platform.OS === "android"
+        ? { selectionColor, selectionHandleColor, ...props.textStyle }
+        : props.textStyle,
+    [props.textStyle, selectionColor, selectionHandleColor],
+  );
   return (
     <>
       <MobileEnrichedMarkdownText
         {...props}
+        blockingGestureTags={blockingGestureTags}
+        selectable={(props.selectable ?? true) && !coveredByDrawer}
         textStyle={textStyle}
         onLinkPress={
           hasCitations

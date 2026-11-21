@@ -4,8 +4,10 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/development/DebugShakeCoordinator.test.tsx",
   "src/features/threads/ThreadGuestShareSheet.test.tsx",
   "src/features/threads/useSubmitAfterNativeImages.test.tsx",
+  "src/state/cached-asset-image.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",
   "src/features/threads/NewTaskRouteScreen.test.tsx",
@@ -20,10 +22,12 @@ const reactTests = [
   "src/features/pull-requests/usePullRequestEnvironmentFallback.test.tsx",
   "src/lib/filePreview.test.ts",
   "src/features/threads/thread-inspector-navigation.test.tsx",
+  "src/features/threads/thread-list-drawer.test.tsx",
   "src/features/diffs/nativeReviewDiffSurface.test.tsx",
   "src/features/pull-requests/usePullRequestDiff.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/components/ui/Dialog.android.test.tsx",
+  "src/components/ui/Toast.test.tsx",
   "src/features/pull-requests/usePullRequestList.test.tsx",
   "src/components/ui/AppBar.android.test.tsx",
   "src/features/files/ZipArchiveView.test.tsx",
@@ -50,13 +54,17 @@ const reactTests = [
   "src/features/threads/useThreadListV2.test.tsx",
   "src/features/home/home-list-options.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",
+  "src/features/home/thread-swipe-actions.test.tsx",
   "src/features/layout/workspace/useSearchScrollRestoration.test.tsx",
   "src/features/connection/useRetryEnvironment.test.tsx",
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/connection/LinkedEnvironmentsSection.test.tsx",
+  "src/features/browser/preview-stream.browser.test.ts",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/keyboard/keyboardControllerState.test.tsx",
 ];
+
+const crossPlatformTests = ["src/native/useOpenPullRequest.test.tsx"];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
 const require = NodeModule.createRequire(import.meta.url);
@@ -113,9 +121,22 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["**/*.test.{ts,tsx,mjs}"],
-          exclude: ["**/node_modules/**", ...reactTests],
+          exclude: ["**/node_modules/**", ...reactTests, ...crossPlatformTests],
           setupFiles: [
             "../../packages/shared/src/testing/longTempDir.ts",
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.ts",
+          ],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "cross-platform",
+          include: crossPlatformTests,
+          // The release compiler below folds Platform.OS to iOS before platform mocks can run.
+          environment: "jsdom",
+          setupFiles: [
             "../../packages/shared/src/testing/providerEnv.ts",
             "../../packages/shared/src/testing/gitEnv.ts",
           ],

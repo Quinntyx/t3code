@@ -70,6 +70,7 @@ export function AndroidHomeFabLayout(props: ComponentProps<typeof SharedAndroidH
           key={`${appearance.baseFontSize}:${fontScale}:${layoutWidth}`}
           size={size}
           expanded={floatingTabsEnabled ? false : expanded}
+          round={floatingTabsEnabled}
           onPress={props.onStartNewTask}
           className="absolute"
           style={

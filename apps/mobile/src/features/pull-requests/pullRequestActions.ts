@@ -1,3 +1,4 @@
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import {
   sourceControlClients,
   type ChangeRequestTerminology,
@@ -117,17 +118,13 @@ export const PR_ACTION_ICONS = {
   "approve-workflows": "checkmark",
 } as const satisfies Record<PullRequestAction, AppSymbolName>;
 
-export function allowedMergeMethods(pr: ActionDetail) {
-  return pr.capabilities.mergeMethods.filter((method) => pr.mergeCapabilities[method]);
-}
-
 export function resolveMergeMethod(
   pr: ActionDetail,
   selected: PullRequestMergeMethod | null,
   projectDefault: PullRequestMergeMethod | null,
   lastUsed: PullRequestMergeMethod | undefined,
 ) {
-  const methods = allowedMergeMethods(pr);
+  const methods = allowedPullRequestMergeMethods(pr);
   return (
     [selected, projectDefault, lastUsed, "squash" as const].find(
       (method) => method != null && methods.includes(method),
@@ -159,9 +156,17 @@ export function canPerformPullRequestAction(pr: ActionDetail, action: PullReques
     case "draft":
       return !pr.isDraft;
     case "merge":
-      return !pr.isDraft && pr.mergeability !== "conflicting" && allowedMergeMethods(pr).length > 0;
+      return (
+        !pr.isDraft &&
+        pr.mergeability !== "conflicting" &&
+        allowedPullRequestMergeMethods(pr).length > 0
+      );
     case "enable-auto-merge":
-      return !pr.isDraft && pr.autoMergeEnabled === false && allowedMergeMethods(pr).length > 0;
+      return (
+        !pr.isDraft &&
+        pr.autoMergeEnabled === false &&
+        allowedPullRequestMergeMethods(pr).length > 0
+      );
     case "disable-auto-merge":
       return pr.autoMergeEnabled === true;
     default:
@@ -203,7 +208,7 @@ export function mergeUnavailableReason(
   if (pr.isDraft) return resolve(msg("Mark this draft ready for review before merging."));
   if (pr.mergeability === "conflicting")
     return resolve(msg("Resolve the branch conflicts before merging."));
-  if (!allowedMergeMethods(pr).length)
+  if (!allowedPullRequestMergeMethods(pr).length)
     return resolve(msg("This repository has no available merge methods."));
   return null;
 }

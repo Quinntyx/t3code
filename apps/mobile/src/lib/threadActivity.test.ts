@@ -29,6 +29,7 @@ import {
   threadFeedCompactionLabels,
   createThreadFeedCache,
   deriveThreadFeedPresentation,
+  isContextCompactionActivityGroup,
   messageFoldRunId,
   type ThreadFeedCache,
   type ThreadFeedEntry,
@@ -331,6 +332,54 @@ it("keeps only the latest compaction divider visible when a turn that compacted 
   ]);
 });
 
+it("folds a mid-turn compaction divider with its work only when the setting asks", () => {
+  const feedFor = (status: "completed" | "failed") =>
+    buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command(), 1),
+      projected(
+        {
+          ...base("compaction", "2026-06-20T00:00:02.500Z", 2),
+          type: "compaction",
+          driver: ProviderDriverKind.make("claude"),
+          status,
+          beforeTokenCount: 100_000,
+          afterTokenCount: 20_000,
+        },
+        2,
+      ),
+      projected({ ...command(), id: TurnItemId.make("item-command-after") }, 3),
+      projected(assistantMessage(), 4),
+    ]);
+  for (const [foldContextCompactions, status, shown] of [
+    [false, "completed", true],
+    [true, "completed", false],
+    [true, "failed", true],
+  ] as const) {
+    const rows = deriveThreadFeedPresentation(
+      feedFor(status),
+      {
+        runId,
+        status: "completed",
+        startedAt: "2026-06-20T00:00:01.000Z",
+        completedAt: "2026-06-20T00:00:03.000Z",
+      },
+      new Set(),
+      new Set(),
+      null,
+      false,
+      undefined,
+      { toolCallVisibility: "showAll", revealedMessageId: null, foldContextCompactions },
+    );
+    expect(rows.filter((entry) => entry.type === "run-fold")).toHaveLength(1);
+    expect(
+      rows.some(
+        (entry) => entry.type === "activity-group" && isContextCompactionActivityGroup(entry),
+      ),
+    ).toBe(shown);
+  }
+});
+
 it("binds a persisted resume answer only to the next compaction in its run", () => {
   const requestId = RuntimeRequestId.make("resume-compaction");
   const question = projected(
@@ -453,6 +502,26 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it.each(["config", "", undefined])(
+    "preserves local command output in feed messages (%s)",
+    (localCommand) => {
+      const item = {
+        ...assistantMessage(),
+        text: "Available settings:\nmodel\ntheme",
+        ...(localCommand === undefined ? {} : { localCommand }),
+      };
+      const [entry] = buildThreadFeed([projected(item, 0)]);
+      expect(entry?.type).toBe("message");
+      if (entry?.type !== "message") throw new Error("Expected a message row");
+      expect(entry.message.text).toBe(item.text);
+      if (localCommand === undefined) {
+        expect(entry.message).not.toHaveProperty("localCommand");
+      } else {
+        expect(entry.message.localCommand).toBe(localCommand);
+      }
+    },
+  );
+
   it("keeps async answers in question history instead of user bubbles", () => {
     const requestId = RuntimeRequestId.make("question");
     const question: OrchestrationV2TurnItem = {
@@ -1196,7 +1265,7 @@ describe("buildThreadFeed", () => {
     ).toBe(true);
   });
 
-  it("keeps a settled run's still-running subagents visible while its other work folds", () => {
+  it("keeps a settled run's replies and subagents visible while a child is live", () => {
     const subagent = (
       id: string,
       updatedAt: string,
@@ -1206,7 +1275,7 @@ describe("buildThreadFeed", () => {
       ...base(id, updatedAt, ordinal),
       providerTurnId: ProviderTurnId.make("provider-turn-1"),
       status,
-      completedAt: status === "running" ? null : DateTime.makeUnsafe(updatedAt),
+      completedAt: status === "completed" ? DateTime.makeUnsafe(updatedAt) : null,
       type: "subagent",
       subagentId: NodeId.make(id),
       origin: "app_owned",
@@ -1222,17 +1291,46 @@ describe("buildThreadFeed", () => {
       startedAt: "2026-06-20T00:00:01.000Z",
       completedAt: "2026-06-20T00:00:05.000Z",
     };
-    const present = (children: ReadonlyArray<OrchestrationV2TurnItem>) =>
+    const opening = {
+      ...assistantMessage("2026-06-20T00:00:01.500Z"),
+      id: TurnItemId.make("item-opening"),
+      messageId: MessageId.make("message-opening"),
+      text: "I will delegate the deployment checks.",
+    };
+    const present = (children: ReadonlyArray<OrchestrationV2TurnItem>) => {
+      const rows = [
+        projected(userMessage(), 0),
+        projected(opening, 1),
+        projected(command("2026-06-20T00:00:02.000Z"), 2),
+        ...children.map((child, index) => projected(child, index + 3)),
+        projected(assistantMessage("2026-06-20T00:00:05.000Z"), 6),
+      ];
+      const cache = createThreadFeedCache();
       deriveThreadFeedPresentation(
-        buildThreadFeed([
-          projected(userMessage(), 0),
-          projected(command("2026-06-20T00:00:02.000Z"), 1),
-          ...children.map((child, index) => projected(child, index + 2)),
-          projected(assistantMessage("2026-06-20T00:00:05.000Z"), 5),
-        ]),
+        buildThreadFeed(rows, { cache }),
+        { ...latestRun, status: "running", completedAt: null },
+        new Set(),
+        new Set(),
+        null,
+        false,
+        cache,
+      );
+      const presented = deriveThreadFeedPresentation(
+        buildThreadFeed(rows, { cache }),
         latestRun,
         new Set(),
+        new Set(),
+        null,
+        false,
+        cache,
       );
+      expect(
+        deriveThreadFeedPresentation(buildThreadFeed(rows), latestRun, new Set()).map(
+          (entry) => entry.id,
+        ),
+      ).toEqual(presented.map((entry) => entry.id));
+      return presented;
+    };
     const visibleSubagentIds = (presented: ReadonlyArray<ThreadFeedEntry>) =>
       presented.flatMap((entry) =>
         entry.type === "activity-group"
@@ -1244,14 +1342,15 @@ describe("buildThreadFeed", () => {
           : [],
       );
 
-    const live = present([subagent("item-live", "2026-06-20T00:00:03.000Z", 2, "running")]);
-    expect(live.map((entry) => entry.type)).toEqual([
-      "message",
-      "run-fold",
-      "activity-group",
-      "message",
-    ]);
-    expect(visibleSubagentIds(live)).toEqual(["item-live"]);
+    for (const status of ["pending", "running", "waiting"] as const) {
+      const live = present([subagent("item-live", "2026-06-20T00:00:03.000Z", 3, status)]);
+      expect(live.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual([
+        "message-user",
+        "message-opening",
+        "message-assistant",
+      ]);
+      expect(visibleSubagentIds(live)).toEqual(["item-live"]);
+    }
 
     const mixed = present([
       subagent("item-done", "2026-06-20T00:00:03.000Z", 2, "completed"),
@@ -1261,6 +1360,56 @@ describe("buildThreadFeed", () => {
 
     const finished = present([subagent("item-done", "2026-06-20T00:00:03.000Z", 2, "completed")]);
     expect(finished.map((entry) => entry.type)).toEqual(["message", "run-fold", "message"]);
+
+    const resumedRunId = RunId.make("run-resumed");
+    const resumed = {
+      ...assistantMessage("2026-06-20T00:00:06.000Z"),
+      id: TurnItemId.make("item-resumed"),
+      messageId: MessageId.make("message-resumed"),
+      runId: resumedRunId,
+      text: "I am checking the delegate's findings.",
+    };
+    const resumedRows = [
+      projected(userMessage(), 0),
+      projected(opening, 1),
+      projected(command("2026-06-20T00:00:02.000Z"), 2),
+      projected(subagent("item-done", "2026-06-20T00:00:03.000Z", 3, "completed"), 3),
+      projected(assistantMessage("2026-06-20T00:00:05.000Z"), 4),
+      projected(resumed, 5),
+    ];
+    const resuming = {
+      ...latestRun,
+      runId: resumedRunId,
+      status: "running" as const,
+      completedAt: null,
+    };
+    const resumedFeed = buildThreadFeed(resumedRows);
+    const resumedPresentation = deriveThreadFeedPresentation(resumedFeed, resuming, new Set());
+    expect(
+      resumedPresentation.filter((entry) => entry.type === "message").map((entry) => entry.id),
+    ).toEqual(["message-user", "message-opening", "message-assistant", "message-resumed"]);
+    expect(visibleSubagentIds(resumedPresentation)).toEqual(["item-done"]);
+    for (const inputIntent of ["turn_start", "steer", "promoted_queued_to_steer"] as const) {
+      const followUp = {
+        ...userMessage("2026-06-20T00:00:05.500Z"),
+        id: TurnItemId.make("item-follow-up"),
+        messageId: MessageId.make("message-follow-up"),
+        runId: resumedRunId,
+        inputIntent,
+      };
+      const rows = [...resumedRows.slice(0, -1), projected(followUp, 5), projected(resumed, 6)];
+      const visible = deriveThreadFeedPresentation(buildThreadFeed(rows), resuming, new Set());
+      expect(visible.some((entry) => entry.id === "message-opening")).toBe(
+        inputIntent !== "turn_start",
+      );
+    }
+    expect(
+      deriveThreadFeedPresentation(
+        resumedFeed,
+        { ...latestRun, runId: resumedRunId },
+        new Set(),
+      ).map((entry) => entry.id),
+    ).not.toContain("message-opening");
   });
 
   it("folds each run of a provider-native subagent thread like a normal turn", () => {
@@ -1283,7 +1432,11 @@ describe("buildThreadFeed", () => {
       buildThreadFeed(
         [
           prompt("launch", 1, "2026-06-20T00:00:00.000Z"),
-          runless(command("2026-06-20T00:00:04.000Z"), "launch-ls", 2),
+          runless(
+            { ...command("2026-06-20T00:00:04.000Z"), input: "cat /skills/git/SKILL.md" },
+            "launch-ls",
+            2,
+          ),
           answer("launch-answer", 3, "2026-06-20T00:00:08.000Z"),
           prompt("resume", 4, "2026-06-20T00:01:12.000Z"),
           resumeRunning
@@ -1316,6 +1469,16 @@ describe("buildThreadFeed", () => {
     ]);
     const launchFold = settled.find((entry) => entry.type === "run-fold");
     if (launchFold?.type !== "run-fold") throw new Error("Expected the launch fold");
+    expect(launchFold.trajectory).toEqual([
+      { kind: "skills", label: "Used 1 skill", title: "Skills used", details: ["git"] },
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls", details: ["Shell · 1 call"] },
+    ]);
+    const resumeFold = settled.find(
+      (entry) => entry.type === "run-fold" && entry.runId !== launchFold.runId,
+    );
+    expect(resumeFold?.type === "run-fold" ? resumeFold.trajectory : null).toEqual([
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls", details: ["Shell · 1 call"] },
+    ]);
     expect(
       shape(deriveThreadFeedPresentation(feed(false), null, new Set([launchFold.runId]))),
     ).toEqual([
@@ -1481,7 +1644,7 @@ describe("buildThreadFeed", () => {
         latestRun ? at(1) : null,
         false,
         undefined,
-        { toolCallVisibility, revealedMessageId: null },
+        { toolCallVisibility, revealedMessageId: null, foldContextCompactions: false },
       ).map((row) =>
         row.type === "activity-group"
           ? row.activities.map((activity) => activity.projectedItem.item.id).join("+")
@@ -2069,6 +2232,22 @@ describe("streamed feed updates", () => {
     completedAt: null,
   };
   const settled = { ...running, status: "completed" as const, completedAt: at(50) };
+  const delegatedSteerSteps = (
+    ["steer", "promoted_queued_to_steer", "turn_start"] as const
+  ).flatMap((inputIntent) => {
+    const prefix = [
+      user("u1", 1, runs[0]),
+      { ...lateChild, ...item("late-child", 3, runs[0]) },
+      reply("a1", 4, runs[0]),
+      { ...user("steer", 10, runs[1]), inputIntent },
+      reply("progress", 11, runs[1]),
+      reply("a2", 12, runs[1]),
+    ];
+    return ["W", "Working"].map((text) => ({
+      items: [...prefix, reply("a3", 22, runs[2], text, true)],
+      latestRun: running,
+    }));
+  });
   // Each step is what one streamed event leaves behind, including the edits
   // that reach back into earlier runs.
   const steps: ReadonlyArray<{
@@ -2155,6 +2334,7 @@ describe("streamed feed updates", () => {
       ],
       latestRun: running,
     },
+    ...delegatedSteerSteps,
   ];
   // Like the projection reducer, an unchanged item at an unchanged position keeps its row.
   const rowsByItem = new Map<

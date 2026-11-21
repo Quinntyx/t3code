@@ -1,11 +1,13 @@
 import { installPermissionUpdateNotice } from "./features/connection/permissionUpdateNotice";
 import { installComposerAttachmentUploads } from "./state/composer-attachment-uploads";
 import { installThreadOutboxDelivery } from "./state/threadOutboxDelivery";
+import { installThreadPrefetch } from "./state/thread-prefetch";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { requireNativeModule } from "expo";
 import { useLocale } from "gt-react-native";
 import { useEffect, useRef, useState } from "react";
+import { DebugShakeCoordinator } from "./features/development/DebugShakeCoordinator";
 import { Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -211,6 +213,7 @@ const appServiceDisposers = [
   installSubscriptionUsageRefresh(),
   installPermissionUpdateNotice(),
   installThreadOutboxDelivery(),
+  installThreadPrefetch(),
   installComposerAttachmentUploads(),
   startIncomingShareInbox(),
   installAgentNotificationNavigation(linkToAppPath),
@@ -300,6 +303,7 @@ function AppContent() {
   return (
     <>
       <SplashScreenCoordinator />
+      <DebugShakeCoordinator />
       <QuickActionsLanguage />
       <SubscriptionUsageCoordinator />
       <ConnectDeviceApprovalCoordinator />

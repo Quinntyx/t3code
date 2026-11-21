@@ -17,6 +17,7 @@ import { T, useGT, useMessages } from "gt-react-native";
 import { useRef, useState } from "react";
 import { ScrollView, View, type ScrollViewInstance } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
+import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { NativeScrollViewMarker as ScrollViewMarker } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -195,110 +196,112 @@ function Discussion({ params }: { params: PullRequestParams & { readonly discuss
               : []
           }
         />
-        <ScrollViewMarker style={{ flex: 1 }}>
-          <ScrollView
-            ref={scrollRef}
-            onContentSizeChange={() => {
-              if (pendingTop.current === null) return;
-              scrollRef.current?.scrollTo({ y: pendingTop.current, animated: false });
-              pendingTop.current = null;
-            }}
-            className="flex-1"
-            contentInsetAdjustmentBehavior="automatic"
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{
-              padding: 20,
-              paddingBottom: canReply ? composerHeight + bottomInset + 24 : 24,
-            }}
-          >
-            {activity.isPending && !thread ? <AppActivityIndicator /> : null}
-            {thread ? (
-              <View className="gap-2 pb-4">
-                {thread.path === null ? null : (
-                  <Text selectable className="font-mono text-xs text-foreground-muted">
-                    {thread.path}
-                    {thread.line ? `:${thread.line}` : ""}
+        <LiquidGlassTarget style={{ flex: 1 }}>
+          <ScrollViewMarker style={{ flex: 1 }}>
+            <ScrollView
+              ref={scrollRef}
+              onContentSizeChange={() => {
+                if (pendingTop.current === null) return;
+                scrollRef.current?.scrollTo({ y: pendingTop.current, animated: false });
+                pendingTop.current = null;
+              }}
+              className="flex-1"
+              contentInsetAdjustmentBehavior="automatic"
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{
+                padding: 20,
+                paddingBottom: canReply ? composerHeight + bottomInset + 24 : 24,
+              }}
+            >
+              {activity.isPending && !thread ? <AppActivityIndicator /> : null}
+              {thread ? (
+                <View className="gap-2 pb-4">
+                  {thread.path === null ? null : (
+                    <Text selectable className="font-mono text-xs text-foreground-muted">
+                      {thread.path}
+                      {thread.line ? `:${thread.line}` : ""}
+                    </Text>
+                  )}
+                  <Text className="text-xs text-foreground-muted">
+                    {thread.isResolved
+                      ? gt("Resolved", { $context: "review thread state" })
+                      : gt("Unresolved", { $context: "review thread state" })}
+                    {thread.isOutdated
+                      ? ` · ${gt("Outdated", { $context: "review thread state" })}`
+                      : ""}
                   </Text>
-                )}
-                <Text className="text-xs text-foreground-muted">
-                  {thread.isResolved
-                    ? gt("Resolved", { $context: "review thread state" })
-                    : gt("Unresolved", { $context: "review thread state" })}
-                  {thread.isOutdated
-                    ? ` · ${gt("Outdated", { $context: "review thread state" })}`
-                    : ""}
-                </Text>
-                {filePath === null ? null : (
-                  <Button
-                    label={gt("View file diff")}
-                    onPress={() =>
-                      navigation.navigate("PullRequestFile", { ...params, path: filePath })
-                    }
-                  />
-                )}
-              </View>
-            ) : !activity.isPending ? (
-              <Text>
-                <T>This discussion is no longer available.</T>
-              </Text>
-            ) : null}
-            {comments.map((comment) => (
-              <View
-                key={comment.id}
-                onLayout={(event) => {
-                  if (
-                    anchor === null ||
-                    !pullRequestAnchorMatchesUrl(anchor, comment.url) ||
-                    positionedComment.current === comment.id
-                  )
-                    return;
-                  positionedComment.current = comment.id;
-                  pendingTop.current = event.nativeEvent.layout.y;
-                  scrollRef.current?.scrollTo({ y: pendingTop.current, animated: false });
-                }}
-                className={
-                  anchor !== null && pullRequestAnchorMatchesUrl(anchor, comment.url)
-                    ? "-mx-3 gap-3 rounded-2xl border border-primary bg-primary/10 px-3 py-4"
-                    : "gap-3 border-b border-border-subtle py-4"
-                }
-              >
-                <View className="flex-row items-center gap-2">
-                  <PullRequestAvatar actor={comment.author} size={28} />
-                  <Text className="min-w-0 flex-1 text-sm font-t3-medium">
-                    {comment.author?.login ?? gt("Unknown author")}
-                  </Text>
-                  <Text className="text-2xs text-foreground-muted">
-                    {relativeTime(comment.createdAt, undefined, messages)}
-                  </Text>
+                  {filePath === null ? null : (
+                    <Button
+                      label={gt("View file diff")}
+                      onPress={() =>
+                        navigation.navigate("PullRequestFile", { ...params, path: filePath })
+                      }
+                    />
+                  )}
                 </View>
-                <PullRequestMarkdown markdown={comment.body} />
-                <PullRequestCommentFooter
-                  params={params}
-                  comment={{ ...comment, kind: "review-comment" }}
-                  permissions={permissions}
-                  onChanged={refresh}
-                  onEdit={() => {
-                    if (extra.some((loaded) => loaded.id === comment.id))
-                      extraEdited.current = true;
+              ) : !activity.isPending ? (
+                <Text>
+                  <T>This discussion is no longer available.</T>
+                </Text>
+              ) : null}
+              {comments.map((comment) => (
+                <View
+                  key={comment.id}
+                  onLayout={(event) => {
+                    if (
+                      anchor === null ||
+                      !pullRequestAnchorMatchesUrl(anchor, comment.url) ||
+                      positionedComment.current === comment.id
+                    )
+                      return;
+                    positionedComment.current = comment.id;
+                    pendingTop.current = event.nativeEvent.layout.y;
+                    scrollRef.current?.scrollTo({ y: pendingTop.current, animated: false });
                   }}
+                  className={
+                    anchor !== null && pullRequestAnchorMatchesUrl(anchor, comment.url)
+                      ? "-mx-3 gap-3 rounded-2xl border border-primary bg-primary/10 px-3 py-4"
+                      : "gap-3 border-b border-border-subtle py-4"
+                  }
+                >
+                  <View className="flex-row items-center gap-2">
+                    <PullRequestAvatar actor={comment.author} size={28} />
+                    <Text className="min-w-0 flex-1 text-sm font-t3-medium">
+                      {comment.author?.login ?? gt("Unknown author")}
+                    </Text>
+                    <Text className="text-2xs text-foreground-muted">
+                      {relativeTime(comment.createdAt, undefined, messages)}
+                    </Text>
+                  </View>
+                  <PullRequestMarkdown markdown={comment.body} />
+                  <PullRequestCommentFooter
+                    params={params}
+                    comment={{ ...comment, kind: "review-comment" }}
+                    permissions={permissions}
+                    onChanged={refresh}
+                    onEdit={() => {
+                      if (extra.some((loaded) => loaded.id === comment.id))
+                        extraEdited.current = true;
+                    }}
+                  />
+                </View>
+              ))}
+              {nextCursor ? (
+                <Button
+                  label={busy ? gt("Loading…") : gt("Load more replies")}
+                  disabled={busy}
+                  onPress={() => void more()}
                 />
-              </View>
-            ))}
-            {nextCursor ? (
-              <Button
-                label={busy ? gt("Loading…") : gt("Load more replies")}
-                disabled={busy}
-                onPress={() => void more()}
-              />
-            ) : null}
-            {error || activity.error ? (
-              <Text selectable className="py-4 text-sm text-danger-foreground">
-                {error ?? activity.error}
-              </Text>
-            ) : null}
-            {notice ? <Text className="py-4 text-sm text-foreground-muted">{notice}</Text> : null}
-          </ScrollView>
-        </ScrollViewMarker>
+              ) : null}
+              {error || activity.error ? (
+                <Text selectable className="py-4 text-sm text-danger-foreground">
+                  {error ?? activity.error}
+                </Text>
+              ) : null}
+              {notice ? <Text className="py-4 text-sm text-foreground-muted">{notice}</Text> : null}
+            </ScrollView>
+          </ScrollViewMarker>
+        </LiquidGlassTarget>
         {canReply ? (
           <View
             className="absolute inset-x-4 bottom-0 gap-2"

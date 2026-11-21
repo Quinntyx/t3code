@@ -18,6 +18,9 @@ export interface NativeMarkdownTextStyle {
   readonly fontFamily: string;
   readonly headingFontFamily: string;
   readonly boldFontFamily: string;
+  /** Set when the bold family also covers regular text, so bold must request the weight. */
+  readonly boldByWeight?: boolean;
+  readonly codeFontFamily?: string | null;
   readonly headingFontSizes?: ReadonlyArray<number>;
 }
 
@@ -73,6 +76,9 @@ export interface MarkdownLinkCustomization {
 export interface SelectableMarkdownTextProps {
   readonly markdown: string;
   readonly textStyle: NativeMarkdownTextStyle;
+  /** Gesture-handler tags whose handlers yield to over-wide horizontally scrolled blocks. */
+  readonly blockingGestureTags?: ReadonlyArray<number>;
+  readonly selectable?: boolean;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly models?: ReadonlyArray<SelectableMarkdownModel>;
   readonly preserveSoftBreaks?: boolean;

@@ -9,6 +9,7 @@ import { getQuestionAnswerText } from "@t3tools/client-runtime/work-log/user-inp
 import { AppText as Text } from "../../components/ui/AppText";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { useAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 
 function AnswerFile(props: {
   environmentId: EnvironmentId;
@@ -16,6 +17,7 @@ function AnswerFile(props: {
 }) {
   const resource = { _tag: "attachment", attachmentId: props.attachment.id } as const;
   const url = useAssetUrl(props.environmentId, resource);
+  const imageUri = useCachedAssetImageUri(props.environmentId, resource, url);
   return (
     <Pressable
       accessibilityRole="link"
@@ -26,9 +28,9 @@ function AnswerFile(props: {
       }}
       className="gap-1"
     >
-      {props.attachment.type === "image" && url ? (
+      {props.attachment.type === "image" && imageUri ? (
         <Image
-          source={assetImageSource(props.environmentId, resource, url)}
+          source={assetImageSource(props.environmentId, resource, imageUri)}
           cachePolicy="memory-disk"
           style={{ width: 160, height: 96 }}
           contentFit="contain"

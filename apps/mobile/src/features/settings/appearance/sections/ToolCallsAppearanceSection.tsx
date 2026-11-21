@@ -6,6 +6,7 @@ import { View } from "react-native";
 
 import { AppText as Text } from "../../../../components/ui/AppText";
 import { ListChoiceRow } from "../../../../components/ui/ListChoiceRow";
+import { ListToggleRow } from "../../../../components/ui/ListToggleRow";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../../../state/preferences";
 import { useAtomCommand } from "../../../../state/use-atom-command";
 import { SettingsSection } from "../../components/SettingsSection";
@@ -51,6 +52,21 @@ export function ToolCallsAppearanceSection() {
           shows only final answers. Approvals, questions, and errors always show.
         </T>
       </Text>
+      <SettingsSection>
+        <ListToggleRow
+          label={gt("Fold context compactions")}
+          description={gt(
+            "Hide “Context compacted” dividers inside a finished turn’s collapsed work instead of showing them below it.",
+          )}
+          value={
+            AsyncResult.isSuccess(preferences) && preferences.value.foldContextCompactions === true
+          }
+          disabled={selected === null}
+          onValueChange={(value) => {
+            void savePreferences({ foldContextCompactions: value });
+          }}
+        />
+      </SettingsSection>
     </View>
   );
 }

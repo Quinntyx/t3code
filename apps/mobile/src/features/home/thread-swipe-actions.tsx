@@ -1,5 +1,6 @@
 import { msg, useMessages } from "gt-react-native";
 
+import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Menu } from "../../components/ui/Menu";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -47,6 +48,7 @@ import type { MessageResolver } from "../../i18n/messages";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { SwipeRowActivationContext, type SwipeRowActivation } from "./swipe-row-activation";
 import { registerThreadDismissal } from "./thread-dismissal";
+import { resolveThreadSwipeRelease } from "./thread-swipe-direction";
 
 const ACTION_ITEM_WIDTH = 58;
 const ACTION_CIRCLE_SIZE = 36;
@@ -156,6 +158,19 @@ export function SwipeableScrollGateProvider(props: {
   );
 }
 
+/**
+ * Which edge the swipe actions dock on. Android phones keep them reachable on a
+ * rightward swipe so the rows inside the threads drawer are not fighting the
+ * drawer's leftward close gesture; every other surface keeps the classic left
+ * reveal.
+ */
+export function useSwipeRowSide(): "left" | "right" {
+  const { layout } = useAdaptiveWorkspaceLayout();
+  return Platform.OS === "android" && !layout.usesSplitView ? "left" : "right";
+}
+
+const SCROLL_GATE_IDLE_MS = 240;
+
 /** Trackpads can start pans mid-momentum, bypassing failOffsetY; disable swipes during vertical scrolls. */
 export function useSwipeableScrollGate(options?: {
   readonly onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
@@ -163,9 +178,8 @@ export function useSwipeableScrollGate(options?: {
 }) {
   const [gateActive, setGateActive] = useState(false);
   const gateActiveRef = useRef(false);
-  const draggingRef = useRef(false);
-  const dragStartYRef = useRef(0);
-  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollOriginYRef = useRef(0);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const externalOnScroll = options?.onScroll;
   const externalOnScrollBeginDrag = options?.onScrollBeginDrag;
 
@@ -175,48 +189,58 @@ export function useSwipeableScrollGate(options?: {
       setGateActive(next);
     }
   }, []);
-  const clearSettle = useCallback(() => {
-    if (settleTimerRef.current !== null) {
-      clearTimeout(settleTimerRef.current);
-      settleTimerRef.current = null;
+  const clearIdle = useCallback(() => {
+    if (idleTimerRef.current !== null) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
     }
   }, []);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the scroll settle timer on unmount
-  useEffect(() => clearSettle, [clearSettle]);
+  // A finger landing during momentum ends it without a momentum-end event, so the gate re-arms its
+  // own clear while scrolls arrive rather than trusting an end callback that may never come.
+  const holdWhileScrolling = useCallback(() => {
+    clearIdle();
+    idleTimerRef.current = setTimeout(() => update(false), SCROLL_GATE_IDLE_MS);
+  }, [clearIdle, update]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Dispose the scrolling gate's idle timer when its list unmounts.
+  useEffect(() => clearIdle, [clearIdle]);
 
+  const startScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollOriginYRef.current = event.nativeEvent.contentOffset.y;
+  }, []);
   const onScrollBeginDrag = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      draggingRef.current = true;
-      dragStartYRef.current = event.nativeEvent.contentOffset.y;
-      clearSettle();
+      update(false);
+      clearIdle();
+      startScroll(event);
       externalOnScrollBeginDrag?.(event);
     },
-    [clearSettle, externalOnScrollBeginDrag],
+    [clearIdle, externalOnScrollBeginDrag, startScroll, update],
   );
   const onScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (
-        draggingRef.current &&
-        !gateActiveRef.current &&
-        Math.abs(event.nativeEvent.contentOffset.y - dragStartYRef.current) > 4
-      ) {
+      if (gateActiveRef.current) {
+        holdWhileScrolling();
+      } else if (Math.abs(event.nativeEvent.contentOffset.y - scrollOriginYRef.current) > 4) {
         update(true);
+        holdWhileScrolling();
       }
       externalOnScroll?.(event);
     },
-    [externalOnScroll, update],
+    [externalOnScroll, holdWhileScrolling, update],
   );
   const onScrollEndDrag = useCallback(() => {
-    draggingRef.current = false;
-    clearSettle();
-    settleTimerRef.current = setTimeout(() => update(false), 160);
-  }, [clearSettle, update]);
-  const onMomentumScrollBegin = useCallback(() => {
-    clearSettle();
-  }, [clearSettle]);
+    holdWhileScrolling();
+  }, [holdWhileScrolling]);
+  const onMomentumScrollBegin = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      startScroll(event);
+    },
+    [startScroll],
+  );
   const onMomentumScrollEnd = useCallback(() => {
+    clearIdle();
     update(false);
-  }, [update]);
+  }, [clearIdle, update]);
 
   return {
     swipeEnabled: !gateActive,
@@ -246,11 +270,14 @@ interface ThreadSwipeableProps {
   readonly onSwipeableClose?: (methods: SwipeableMethods) => void;
   readonly onSwipeableWillOpen?: (methods: SwipeableMethods) => void;
   readonly primaryAction: ThreadSwipeAction;
+  readonly oppositeAction?: ThreadSwipeAction;
   readonly threadKey: string;
   /** Omitted defaults to Delete; null removes it so gated Snooze cannot fall back to Delete. */
   readonly secondaryAction?: ThreadSwipeAction | null;
   readonly resetKey?: string;
   readonly dormant?: boolean;
+  /** Which row edge the actions dock to; "left" reveals them on a rightward swipe. */
+  readonly side?: "left" | "right";
   readonly simultaneousWith?: ComponentProps<typeof ReanimatedSwipeable>["simultaneousWith"];
   readonly threadTitle: string;
 }
@@ -259,6 +286,8 @@ const COLLAPSED_ROW_STYLE = { height: 0, overflow: "hidden" } as const;
 
 export function ThreadSwipeable(props: ThreadSwipeableProps) {
   const m = useMessages();
+  const swipeRowSide = props.side ?? "right";
+  const revealMultiplier = swipeRowSide === "left" ? 1 : -1;
   const swipeableRef = useRef<SwipeableMethods | null>(null);
   const hasSecondaryAction = props.secondaryAction !== null;
   const actionsWidth = swipeActionsWidth(hasSecondaryAction);
@@ -273,8 +302,8 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
   const dismissalIdRef = useRef(0);
   const activeTranslationRef = useRef<SharedValue<number> | null>(null);
   const content = useMemo(
-    () => ({ resetKey: props.resetKey, threadKey: props.threadKey }),
-    [props.resetKey, props.threadKey],
+    () => ({ resetKey: props.resetKey, threadKey: props.threadKey, side: swipeRowSide }),
+    [props.resetKey, props.threadKey, swipeRowSide],
   );
   const contentRef = useRef(content);
   const [isDismissing, setIsDismissing] = useState(false);
@@ -364,20 +393,24 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
       };
       actionOpacity.set(withTiming(0, timing));
       translation.set(
-        withTiming(Math.min(translation.value, -rowWidth.value), timing, (finished) => {
-          if (!finished) return;
-          // LegendList re-measures rows only on React commits, so a UI-thread height animation
-          // reaches it in late jumps. Collapse through React and let its transition move rows.
-          if (listAnimatesLayout) {
-            runOnJS(collapseInList)(id);
-            return;
-          }
-          collapse.set(
-            withTiming(1, { ...timing, duration: 180 }, (collapsed) => {
-              if (collapsed) runOnJS(finishDismiss)(id);
-            }),
-          );
-        }),
+        withTiming(
+          revealMultiplier * Math.max(translation.value * revealMultiplier, rowWidth.value),
+          timing,
+          (finished) => {
+            if (!finished) return;
+            // LegendList re-measures rows only on React commits, so a UI-thread height animation
+            // reaches it in late jumps. Collapse through React and let its transition move rows.
+            if (listAnimatesLayout) {
+              runOnJS(collapseInList)(id);
+              return;
+            }
+            collapse.set(
+              withTiming(1, { ...timing, duration: 180 }, (collapsed) => {
+                if (collapsed) runOnJS(finishDismiss)(id);
+              }),
+            );
+          },
+        ),
       );
     },
     [
@@ -387,6 +420,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
       dismissing,
       finishDismiss,
       listAnimatesLayout,
+      revealMultiplier,
       rowWidth,
     ],
   );
@@ -437,17 +471,40 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
       onDelete();
     }
   }, [commitPrimaryAction, content, fullSwipeAction, onDelete]);
+  const oppositeAction = props.oppositeAction;
+  const hasOppositeAction = oppositeAction !== undefined;
+  const oppositeActionsWidth = hasOppositeAction ? ACTION_ITEM_WIDTH : undefined;
+  const leftActionsWidth = swipeRowSide === "left" ? actionsWidth : oppositeActionsWidth;
+  const rightActionsWidth = swipeRowSide === "right" ? actionsWidth : oppositeActionsWidth;
+  const commitOppositeAction = useCallback(() => {
+    if (!mountedRef.current || contentRef.current !== content) return;
+    swipeableRef.current?.close();
+    oppositeAction?.onPress();
+  }, [content, oppositeAction]);
   const handleRelease = useCallback(
     (translation: SharedValue<number>, canceled: boolean) => {
       "worklet";
       if (dismissing.value) return true;
-      if (!canceled && -translation.value >= fullSwipeThreshold) {
-        runOnJS(commitFullSwipe)();
-        return true;
-      }
-      return false;
+      // A canceled pan restores the row; it never commits an action.
+      if (canceled) return false;
+      const action = resolveThreadSwipeRelease(
+        translation.value,
+        swipeRowSide,
+        fullSwipeThreshold,
+        hasOppositeAction,
+      );
+      if (action === "opposite") runOnJS(commitOppositeAction)();
+      if (action === "primary") runOnJS(commitFullSwipe)();
+      return action !== null;
     },
-    [commitFullSwipe, dismissing, fullSwipeThreshold],
+    [
+      commitFullSwipe,
+      commitOppositeAction,
+      hasOppositeAction,
+      dismissing,
+      fullSwipeThreshold,
+      swipeRowSide,
+    ],
   );
   const handleFullSwipeArmedChange = useCallback(
     (armed: boolean) => {
@@ -476,7 +533,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
   // Swipeable calls this on every render; returning the previous element while nothing it shows
   // changed keeps a selection change from re-rendering the hidden actions.
   const rightActions = useRef<{ deps: readonly unknown[]; element: ReactNode } | null>(null);
-  const renderRightActions = (
+  const renderActions = (
     _progress: SharedValue<number>,
     translation: SharedValue<number>,
     methods: SwipeableMethods,
@@ -497,6 +554,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
       onDelete,
       secondaryAction,
       threadTitle,
+      swipeRowSide,
     ];
     const cached = rightActions.current;
     if (cached && deps.every((dep, index) => Object.is(dep, cached.deps[index]))) {
@@ -524,6 +582,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
             threadTitle,
             resolve: m,
           })}
+          side={swipeRowSide}
           translation={translation}
         />
       </Animated.View>
@@ -531,6 +590,26 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
     rightActions.current = { deps, element };
     return element;
   };
+  const renderOppositeActions =
+    oppositeAction === undefined
+      ? undefined
+      : (_progress: SharedValue<number>, translation: SharedValue<number>) =>
+          dormant ? null : (
+            <Animated.View style={actionStyle}>
+              <ThreadSwipeActions
+                backgroundColor={backgroundColor}
+                compact={compactActions}
+                rowHeight={measuredRowHeight}
+                fullSwipeAction="primary"
+                fullSwipeThreshold={fullSwipeThreshold}
+                onFullSwipeArmedChange={handleFullSwipeArmedChange}
+                primaryAction={{ ...oppositeAction, onPress: commitOppositeAction }}
+                secondaryAction={null}
+                side={swipeRowSide === "left" ? "right" : "left"}
+                translation={translation}
+              />
+            </Animated.View>
+          );
   const childrenContainerStyle = useMemo(() => ({ backgroundColor }), [backgroundColor]);
   const swipeableContainerStyle = useMemo(
     () => [{ backgroundColor }, containerStyle],
@@ -552,7 +631,12 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
             animationOptions={THREAD_SWIPE_SPRING}
             childrenContainerStyle={childrenContainerStyle}
             containerStyle={swipeableContainerStyle}
-            dragOffsetFromRight={-8}
+            dragOffsetFromLeft={leftActionsWidth === undefined ? undefined : 8}
+            dragOffsetFromRight={rightActionsWidth === undefined ? undefined : -8}
+            overshootLeft={leftActionsWidth === undefined ? undefined : true}
+            overshootRight={rightActionsWidth === undefined ? undefined : true}
+            leftThreshold={leftActionsWidth === undefined ? undefined : leftActionsWidth * 0.42}
+            rightThreshold={rightActionsWidth === undefined ? undefined : rightActionsWidth * 0.42}
             enabled={!props.dormant && !isDismissing && props.enabled !== false && gateEnabled}
             enableTrackpadTwoFingerGesture={props.enableTrackpadSwipe ?? true}
             // Reject vertical pans via patched RNGH failOffsetY; simultaneous trackpad scrolls otherwise open rows on horizontal drift.
@@ -563,9 +647,8 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
             onSwipeableOpenStartDrag={handleWillOpen}
             onSwipeableWillOpen={handleWillOpen}
             overshootFriction={1}
-            overshootRight
-            renderRightActions={renderRightActions}
-            rightThreshold={actionsWidth * 0.42}
+            renderLeftActions={swipeRowSide === "left" ? renderActions : renderOppositeActions}
+            renderRightActions={swipeRowSide === "right" ? renderActions : renderOppositeActions}
             // Only iPad trackpad pans need rows to swipe while the list scrolls; on Android touch it
             // lets a diagonal swipe scroll the list, which the scroll gate turns into a closed row.
             simultaneousWith={Platform.OS === "ios" ? props.simultaneousWith : undefined}
@@ -595,6 +678,8 @@ function SwipeActionButton(props: {
   readonly onPress: () => void;
   readonly rowHeight: number;
   readonly stretchesOnFullSwipe: boolean;
+  /** Which row edge the actions dock to: "right" reveals on a leftward drag, "left" on a rightward one. */
+  readonly side: "left" | "right";
   readonly translation: SharedValue<number>;
 }) {
   const {
@@ -606,6 +691,7 @@ function SwipeActionButton(props: {
   } = props;
   const circleSize = props.compact ? COMPACT_ACTION_CIRCLE_SIZE : ACTION_CIRCLE_SIZE;
   const iconSize = props.compact ? COMPACT_ACTION_ICON_SIZE : ACTION_ICON_SIZE;
+  const revealMultiplier = props.side === "left" ? 1 : -1;
   const { fontScale } = useWindowDimensions();
   // Even compact actions can outgrow a short row at large app text sizes; shrink the label's
   // leading to the room left under the circle.
@@ -622,7 +708,7 @@ function SwipeActionButton(props: {
         : labelLineHeight,
   };
   const actionStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(-translation.value, 0);
+    const reveal = Math.max(translation.value * revealMultiplier, 0);
     const entryProgress = interpolate(
       reveal,
       [entryRangeStart, entryRangeEnd],
@@ -642,23 +728,24 @@ function SwipeActionButton(props: {
       transform: [
         {
           translateX:
-            interpolate(entryProgress, [0, 1], [22, 0]) - (stretchesOnFullSwipe ? 0 : stretch),
+            revealMultiplier *
+            (interpolate(entryProgress, [0, 1], [-22, 0]) + (stretchesOnFullSwipe ? 0 : stretch)),
         },
         { scale: interpolate(entryProgress, [0, 1], [0.78, 1]) },
       ],
     };
   });
   const circleStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(-translation.value, 0);
+    const reveal = Math.max(translation.value * revealMultiplier, 0);
     const stretch = stretchesOnFullSwipe ? Math.max(reveal - actionsWidth, 0) : 0;
 
     return {
-      transform: [{ translateX: -stretch }],
+      transform: [{ translateX: revealMultiplier * stretch }],
       width: circleSize + stretch,
     };
   });
   const iconStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(-translation.value, 0);
+    const reveal = Math.max(translation.value * revealMultiplier, 0);
     const stretch = stretchesOnFullSwipe ? Math.max(reveal - actionsWidth, 0) : 0;
     const armedProgress = interpolate(
       reveal,
@@ -668,7 +755,7 @@ function SwipeActionButton(props: {
     );
 
     return {
-      transform: [{ translateX: -stretch * (0.5 + armedProgress * 0.5) }],
+      transform: [{ translateX: revealMultiplier * stretch * (0.5 + armedProgress * 0.5) }],
     };
   });
   const labelStyle = useAnimatedStyle(() => {
@@ -676,7 +763,7 @@ function SwipeActionButton(props: {
       return { opacity: 1 };
     }
 
-    const reveal = Math.max(-translation.value, 0);
+    const reveal = Math.max(translation.value * revealMultiplier, 0);
     const stretch = Math.max(reveal - actionsWidth, 0);
     return {
       opacity: interpolate(
@@ -685,7 +772,7 @@ function SwipeActionButton(props: {
         [1, 0],
         Extrapolation.CLAMP,
       ),
-      transform: [{ translateX: -stretch * 0.5 }],
+      transform: [{ translateX: revealMultiplier * stretch * 0.5 }],
     };
   });
 
@@ -715,7 +802,7 @@ function SwipeActionButton(props: {
             {
               borderRadius: 999,
               height: circleSize,
-              left: 0,
+              ...(props.side === "left" ? { right: 0 } : { left: 0 }),
               position: "absolute",
               top: 0,
             },
@@ -811,26 +898,28 @@ function ThreadSwipeActions(props: {
   readonly primaryAction: ThreadSwipeAction;
   readonly rowHeight: number;
   readonly secondaryAction: ThreadSwipeSecondaryAction | null;
+  readonly side: "left" | "right";
   readonly translation: SharedValue<number>;
 }) {
   const { fullSwipeThreshold, onFullSwipeArmedChange, secondaryAction, translation } = props;
+  const revealMultiplier = props.side === "left" ? 1 : -1;
   const fullSwipeIsPrimary = props.fullSwipeAction === "primary" || secondaryAction === null;
   const actionsWidth = swipeActionsWidth(secondaryAction !== null);
   useAnimatedReaction(
-    () => -translation.value >= fullSwipeThreshold,
+    () => translation.value * revealMultiplier >= fullSwipeThreshold,
     (armed, previous) => {
       if (armed !== previous) {
         runOnJS(onFullSwipeArmedChange)(armed);
       }
     },
-    [fullSwipeThreshold, onFullSwipeArmedChange, translation],
+    [fullSwipeThreshold, onFullSwipeArmedChange, revealMultiplier, translation],
   );
 
   return (
     <View
       style={{
         backgroundColor: props.backgroundColor,
-        flexDirection: "row",
+        flexDirection: props.side === "left" ? "row-reverse" : "row",
         height: "100%",
         width: actionsWidth,
       }}
@@ -851,6 +940,7 @@ function ThreadSwipeActions(props: {
         onPress={props.primaryAction.onPress}
         rowHeight={props.rowHeight}
         stretchesOnFullSwipe={fullSwipeIsPrimary}
+        side={props.side}
         translation={props.translation}
       />
       {secondaryAction === null ? null : (
@@ -867,6 +957,7 @@ function ThreadSwipeActions(props: {
           onPress={secondaryAction.onPress}
           rowHeight={props.rowHeight}
           stretchesOnFullSwipe={!fullSwipeIsPrimary}
+          side={props.side}
           translation={props.translation}
         />
       )}

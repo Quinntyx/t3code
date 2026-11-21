@@ -1,5 +1,6 @@
 import { T, useGT } from "gt-react-native";
 import { Button } from "../../components/ui/Button";
+import { DebugShakeSettingsSection } from "./DebugShakeSettingsSection";
 import {
   AuthSettingsWriteScope,
   isManagedSettingPath,
@@ -63,6 +64,7 @@ export function SettingsLabsRouteScreen() {
             "On a Mac, clone new worktrees from a checkout cached in the T3 home folder instead of writing every file. Uses Git’s normal checkout when it can’t. Turning it off deletes the cache.",
           )}
         />
+        <DebugShakeSettingsSection />
       </ScrollView>
     </SettingsScreen>
   );
@@ -107,6 +109,7 @@ export function AutoSettleSettingsRows(props: {
   const writeToAll = (
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
+      autoResumePullRequestThreadsFirst?: boolean;
       snoozeLimitedThreads?: boolean;
     },
   ) => props.write(patch);
@@ -143,6 +146,16 @@ export function AutoSettleSettingsRows(props: {
             value={uniformMobileSetting(displayTargets, "autoResumeLimitedThreads")}
             disabled={disabledFor("autoResumeLimitedThreads")}
             onValueChange={(value) => writeToAll({ autoResumeLimitedThreads: value })}
+          />
+          <SettingsSwitchRow
+            icon="clock"
+            label={gt("Resume threads with PRs first")}
+            subtitle={gt(
+              "Resume limited threads with a linked pull request before the rest. Other limited threads wait until those finish.",
+            )}
+            value={uniformMobileSetting(displayTargets, "autoResumePullRequestThreadsFirst")}
+            disabled={disabledFor("autoResumePullRequestThreadsFirst")}
+            onValueChange={(value) => writeToAll({ autoResumePullRequestThreadsFirst: value })}
           />
           <SettingsSwitchRow
             icon="clock"

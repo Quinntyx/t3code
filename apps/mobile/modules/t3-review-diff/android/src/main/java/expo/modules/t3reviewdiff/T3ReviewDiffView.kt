@@ -653,6 +653,7 @@ internal data class DiffStyle(
   val changeBarWidthPx: Float,
   val fileHeaderHeightPx: Float,
   val fileHeaderHorizontalPaddingPx: Float,
+  val codeFontFamily: String,
   val codeFontSizePx: Float,
   val codeFontWeight: String,
   val lineNumberFontSizePx: Float,
@@ -675,6 +676,7 @@ internal data class DiffStyle(
       changeBarWidthPx = 3f * density,
       fileHeaderHeightPx = 44f * density,
       fileHeaderHorizontalPaddingPx = 10f * density,
+      codeFontFamily = DEFAULT_CODE_FONT_FAMILY,
       codeFontSizePx = 12f * density,
       codeFontWeight = "regular",
       lineNumberFontSizePx = 10f * density,
@@ -703,6 +705,7 @@ internal data class DiffStyle(
           fallback.fileHeaderHorizontalPaddingPx,
           density,
         ),
+        codeFontFamily = json.optString("codeFontFamily", fallback.codeFontFamily),
         codeFontSizePx = json.floatSp("codeFontSize", fallback.codeFontSizePx, density),
         codeFontWeight = json.optString("codeFontWeight", fallback.codeFontWeight),
         lineNumberFontSizePx = json.floatSp(

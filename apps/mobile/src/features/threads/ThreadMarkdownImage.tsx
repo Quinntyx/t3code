@@ -19,6 +19,7 @@ import { PresentationSource } from "../../components/ui/NativePresentation";
 import { useMediaActions } from "../../state/mediaActions";
 import type { MediaActionsSource } from "../../lib/mediaActionsSource";
 import { useAssetUrlState } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { WorkspaceMutationIdContext } from "./workspaceMutationIdContext";
 import { ZoomableImagePressable } from "./ZoomableImagePressable";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
@@ -292,6 +293,11 @@ export function ThreadMarkdownImage(props: {
     props.resource,
     props.resource._tag === "media-file" ? workspaceMutationId : undefined,
   );
+  const uri = useCachedAssetImageUri(
+    props.environmentId,
+    props.resource,
+    assetUrl._tag === "Success" ? assetUrl.url + (props.srcFragment ?? "") : null,
+  );
   const resourceKey =
     props.resource._tag === "attachment"
       ? `attachment:${props.resource.attachmentId}`
@@ -307,19 +313,19 @@ export function ThreadMarkdownImage(props: {
 
   return (
     <ThreadMarkdownImageView
-      uri={assetUrl._tag === "Success" ? assetUrl.url + (props.srcFragment ?? "") : null}
-      cacheKey={
-        assetUrl._tag === "Success"
-          ? assetImageCacheKey(props.environmentId, props.resource, assetUrl.fileRevision)
-          : undefined
-      }
+      uri={uri}
+      cacheKey={assetImageCacheKey(
+        props.environmentId,
+        props.resource,
+        assetUrl._tag === "Success" ? assetUrl.fileRevision : undefined,
+      )}
       sourceKey={sourceKey}
       sourceIdentifier={filePreviewSourceIdentifier({
         kind: "image",
         environmentId: props.environmentId,
         resource: props.resource,
       })}
-      unavailable={assetUrl._tag === "Failure"}
+      unavailable={assetUrl._tag === "Failure" && uri === null}
       unavailableDetail={
         assetUrl._tag === "Failure" && assetUrl.reason === "missing-file-access"
           ? gt("This connection cannot read host files. Pair again with a new link to view it.")

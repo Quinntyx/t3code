@@ -1,20 +1,19 @@
 import { useGT } from "gt-react-native";
 import { View } from "react-native";
 
+import { AndroidHeaderIconButton } from "./AndroidScreenHeader.android";
 import { AppBar } from "./AppBar";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { Button } from "./Button";
-import { IconButton } from "./IconButton";
 import type { SheetCloseButtonProps, SheetHeaderProps } from "./SheetHeader.types";
 
 export function SheetCloseButton(props: SheetCloseButtonProps) {
   const gt = useGT();
   return (
-    <IconButton
+    <AndroidHeaderIconButton
       icon="xmark"
       accessibilityLabel={props.accessibilityLabel ?? (props.onCancel ? gt("Cancel") : gt("Close"))}
       disabled={props.disabled}
-      tintColorClassName="accent-header-foreground"
       onPress={props.onCancel ?? props.onClose}
     />
   );

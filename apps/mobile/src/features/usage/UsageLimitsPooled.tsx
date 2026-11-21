@@ -6,10 +6,12 @@ import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/prov
 import {
   collectLimitAccounts,
   collectLimitPools,
+  describeUsageAmount,
   displayLimitWindows,
   paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
+  type LimitPool,
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
 import {
@@ -30,7 +32,13 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import type { MessageResolver } from "../../i18n/messages";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { environmentPresentations } from "../../state/presentation";
-import { refillLabel, ResetCredits, resetLabels } from "./UsageLimitsSection";
+import {
+  AmountLineRow,
+  AmountText,
+  refillLabel,
+  ResetCredits,
+  resetLabels,
+} from "./UsageLimitsSection";
 import { usageProviderKind, useProviderColors } from "./usageProviders";
 
 const PACE_LABEL = {
@@ -61,8 +69,15 @@ function accountHue(email: string) {
 }
 
 // Same hashed hue as the web account chip, so an account keeps its color across clients.
-function AccountChip({ email }: { readonly email: string }) {
-  const hue = accountHue(email);
+function AccountChip({
+  email,
+  workspaceId,
+}: {
+  readonly email: string;
+  // One e-mail can hold seats in several workspaces; each seat gets its own color.
+  readonly workspaceId: string | undefined;
+}) {
+  const hue = accountHue(workspaceId ? `${email}\0${workspaceId}` : email);
   return (
     <View
       className="size-5 items-center justify-center rounded-full"
@@ -219,6 +234,11 @@ function PoolWindowCard({
               </T>
             </Text>
           </View>
+          {pool.amount ? (
+            <Text numberOfLines={1} className="text-xs tabular-nums text-foreground-muted">
+              {describeUsageAmount(pool.amount).value} {describeUsageAmount(pool.amount).qualifier}
+            </Text>
+          ) : null}
         </View>
         {pool.pace ? (
           <Text className="text-xs text-foreground-tertiary">{m(PACE_LABEL[pool.pace])}</Text>
@@ -290,7 +310,9 @@ function PoolWindowCard({
                 className="absolute inset-0 flex-row items-center justify-between gap-2 overflow-hidden rounded-md px-2"
               >
                 <View className="min-w-0 shrink flex-row items-center gap-1.5">
-                  {account.email ? <AccountChip email={account.email} /> : null}
+                  {account.email ? (
+                    <AccountChip email={account.email} workspaceId={account.workspaceId} />
+                  ) : null}
                   {account.email && !(account.displayName && inlineName) ? null : (
                     <Text
                       numberOfLines={1}
@@ -464,6 +486,50 @@ function PoolWindowCard({
   );
 }
 
+function PoolAmountsCard({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+  const m = useMessages();
+  const pooled = pool.accounts.length > 1;
+  return (
+    <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
+      {pool.amounts.map((line) => (
+        <View key={line.id} className="gap-1.5">
+          <View className="flex-row items-baseline justify-between gap-3">
+            <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+              {line.label}
+            </Text>
+            {line.total ? (
+              <AmountText
+                amount={line.total}
+                resetsIn={pooled ? null : resetLabels(line.columns[0] ?? {}, now, m)?.full}
+              />
+            ) : null}
+          </View>
+          {pooled ? (
+            <View className="gap-1.5 ps-3">
+              {line.columns.map(({ account, amount, resetsAt }) =>
+                amount ? (
+                  <View key={account.key} className="flex-row items-baseline justify-between gap-3">
+                    <Text
+                      numberOfLines={1}
+                      className="min-w-0 shrink text-xs text-foreground-muted"
+                    >
+                      {accountName(account, m)}
+                    </Text>
+                    <AmountText
+                      amount={amount}
+                      resetsIn={resetLabels({ resetsAt }, now, m)?.full}
+                    />
+                  </View>
+                ) : null,
+              )}
+            </View>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function UsageLimitsSection({
   now,
   failedLabels,
@@ -529,6 +595,7 @@ export function UsageLimitsSection({
                   />
                 );
               })}
+              {pool.amounts.length > 0 ? <PoolAmountsCard pool={pool} now={now} /> : null}
             </View>
           </Fragment>
         );
@@ -612,6 +679,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
   const reset = pool?.resets.find((candidate) => candidate.member.account.key === accountKey);
   const [revealed, setRevealed] = useState(false);
   const gt = useGT();
+  const m = useMessages();
   return (
     <SettingsScreen title={gt("Account", { $context: "screen title" })}>
       <ScrollView
@@ -681,6 +749,12 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                   </T>
                 </Text>
               ) : null}
+              {window.amount ? (
+                <Text numberOfLines={1} className="text-sm tabular-nums text-foreground-muted">
+                  {describeUsageAmount(window.amount).value}{" "}
+                  {describeUsageAmount(window.amount).qualifier}
+                </Text>
+              ) : null}
               {reset && reset.restoresPercent > 0 ? (
                 <Text className="text-sm text-foreground-muted">
                   <T>
@@ -689,6 +763,18 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                 </Text>
               ) : null}
             </View>
+            {(account.limits.amounts?.length ?? 0) > 0 ? (
+              <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
+                {(account.limits.amounts ?? []).map((line) => (
+                  <AmountLineRow
+                    key={line.id}
+                    label={line.label}
+                    amount={line.amount}
+                    resetsIn={resetLabels(line, now, m)?.full}
+                  />
+                ))}
+              </View>
+            ) : null}
             <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
               <Text className="text-sm font-t3-medium text-foreground">
                 {account.environments.length

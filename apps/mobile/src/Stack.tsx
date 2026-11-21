@@ -69,6 +69,7 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { ThreadNotebookSheet } from "./features/threads/ThreadNotebookSheet";
 import { ThreadGuestShareSheet } from "./features/threads/ThreadGuestShareSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
@@ -99,7 +100,12 @@ import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavig
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
-import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
+import { ProvidersRouteScreen } from "./features/settings/providers/ProvidersRouteScreen";
+import { ProviderDetailRouteScreen } from "./features/settings/providers/ProviderDetailRouteScreen";
+import { AddProviderRouteScreen } from "./features/settings/providers/AddProviderRouteScreen";
+import { ProviderModelsRouteScreen } from "./features/settings/providers/ProviderModelsRouteScreen";
+import { ProviderEnvironmentOptionsRouteScreen } from "./features/settings/providers/ProviderEnvironmentOptionsRouteScreen";
+import { AddChatGptAccountRouteScreen } from "./features/settings/providers/CodexSetup";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import {
@@ -175,6 +181,11 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   SettingsWorktrees: msg("Worktrees"),
   SettingsLabs: msg("Labs"),
   SettingsProviderAccounts: msg("Providers"),
+  SettingsProviderInstance: msg("Provider"),
+  SettingsProviderModels: msg("Models"),
+  SettingsProviderAdd: msg("Add provider"),
+  SettingsProviderAddChatGpt: msg("ChatGPT account"),
+  SettingsProviderEnvironmentOptions: msg("Usage and background checks"),
   SettingsEnvironmentMaintenance: msg("Maintenance"),
   SettingsNotifications: msg("Notifications"),
   SettingsThreads: msg("Threads"),
@@ -280,8 +291,33 @@ const SETTINGS_SCREENS = {
     options: settingsPage(),
   }),
   SettingsProviderAccounts: createNativeStackScreen({
-    screen: SettingsProviderAccountsRouteScreen,
+    screen: ProvidersRouteScreen,
     linking: "settings/provider-accounts",
+    options: settingsPage(),
+  }),
+  SettingsProviderInstance: createNativeStackScreen({
+    screen: ProviderDetailRouteScreen,
+    linking: "settings/providers/:environmentId/:instanceId",
+    options: settingsPage(),
+  }),
+  SettingsProviderModels: createNativeStackScreen({
+    screen: ProviderModelsRouteScreen,
+    linking: "settings/providers/:environmentId/:instanceId/models",
+    options: settingsPage(),
+  }),
+  SettingsProviderAdd: createNativeStackScreen({
+    screen: AddProviderRouteScreen,
+    linking: "settings/providers/:environmentId/new",
+    options: settingsPage(),
+  }),
+  SettingsProviderAddChatGpt: createNativeStackScreen({
+    screen: AddChatGptAccountRouteScreen,
+    linking: "settings/providers/:environmentId/new/chatgpt",
+    options: settingsPage(),
+  }),
+  SettingsProviderEnvironmentOptions: createNativeStackScreen({
+    screen: ProviderEnvironmentOptionsRouteScreen,
+    linking: "settings/providers/:environmentId/options",
     options: settingsPage(),
   }),
   SettingsEnvironmentMaintenance: createNativeStackScreen({
@@ -779,6 +815,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
     ThreadBackgroundWork: createNativeStackScreen({
       screen: ThreadBackgroundWorkSheet,
       options: sheetRoute({ detent: 0.5, androidMaxDetent: 0.9 }),
+    }),
+    ThreadNotebook: createNativeStackScreen({
+      screen: ThreadNotebookSheet,
+      // Android lays out the scroller at the largest detent, clipping its end at smaller ones.
+      options: sheetRoute({ detent: Platform.OS === "android" ? "full" : 0.65 }),
     }),
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,

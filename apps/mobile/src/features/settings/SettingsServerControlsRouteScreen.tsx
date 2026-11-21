@@ -25,6 +25,8 @@ import {
 import { SettingsScreen } from "./components/SettingsScreen";
 import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
+import { DefaultBranchRemoteSetting } from "./components/DefaultBranchRemoteSetting";
+import { BrowserRenderingSections } from "./components/BrowserRenderingSections";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -66,8 +68,10 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
   ],
   "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge"],
   worktrees: [
+    "newWorktreesBesideMain",
     "newWorktreesStartFromOrigin",
     "worktreeSubmodules",
+    "defaultBranchRemote",
     "branchNamingMode",
     "branchNamePrefix",
     "branchNameInstructions",
@@ -146,6 +150,7 @@ const AUTO_SETTLE_SETTING_KEYS: ReadonlySet<string> = new Set([
   "sidebarAutoSettleOnMerge",
   "sidebarAutoSettleAfterDays",
   "autoResumeLimitedThreads",
+  "autoResumePullRequestThreadsFirst",
   "snoozeLimitedThreads",
 ]);
 
@@ -407,6 +412,17 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                   />
                 </SettingsSection>
+                {projectSelected ? null : (
+                  <BrowserRenderingSections
+                    environmentId={
+                      targets.length === 1 ? (reference?.environment.environmentId ?? null) : null
+                    }
+                    gpu={uniform("serverBrowserGpu")}
+                    scale={uniform("serverBrowserRenderScale")}
+                    disabled={disabled}
+                    write={write}
+                  />
+                )}
                 <AutoSettleSettingsRows write={write} pending={pendingWrites > 0} />
               </>
             ) : null}
@@ -480,6 +496,19 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     disabled={disabledFor("newWorktreesStartFromOrigin")}
                     onValueChange={(value) => write({ newWorktreesStartFromOrigin: value })}
                   />
+                  <SettingsSwitchRow
+                    icon="folder"
+                    label={gt("Beside the main checkout")}
+                    subtitle={managedSubtitle(
+                      "newWorktreesBesideMain",
+                      gt(
+                        "Creates a container-layout project's new worktrees beside its main checkout instead of the worktrees location.",
+                      ),
+                    )}
+                    value={uniform("newWorktreesBesideMain")}
+                    disabled={disabledFor("newWorktreesBesideMain")}
+                    onValueChange={(value) => write({ newWorktreesBesideMain: value })}
+                  />
                 </SettingsSection>
                 <SettingsSection
                   title={gt("Worktree submodules")}
@@ -507,6 +536,12 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                   ))}
                 </SettingsSection>
+                <DefaultBranchRemoteSetting
+                  key={`remote:${targetsKey}`}
+                  value={uniform("defaultBranchRemote")}
+                  disabled={disabledFor("defaultBranchRemote")}
+                  onChange={write}
+                />
                 <BranchNamingSettings
                   key={targetsKey}
                   mode={uniform("branchNamingMode")}

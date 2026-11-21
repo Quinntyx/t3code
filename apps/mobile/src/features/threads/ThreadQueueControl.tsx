@@ -35,6 +35,7 @@ import { Menu } from "../../components/ui/Menu";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useAssetUrl } from "../../state/assets";
+import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -539,7 +540,11 @@ function QueueAttachmentThumbnail(props: {
   readonly onPress: () => void;
 }) {
   const resource = queueAttachmentResource(props.attachment);
-  const url = useAssetUrl(props.environmentId, resource);
+  const url = useCachedAssetImageUri(
+    props.environmentId,
+    resource,
+    useAssetUrl(props.environmentId, resource),
+  );
   const gt = useGT();
   return (
     // Its own press target, so tapping an image previews it instead of editing the message.
