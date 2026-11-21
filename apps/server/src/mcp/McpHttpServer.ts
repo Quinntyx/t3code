@@ -19,7 +19,6 @@ import {
   OrchestratorMcpFailure,
   PreviewAutomationError,
   ProviderInteractionMode,
-  type RegisteredMcpServersState,
   type RunId,
   RuntimeMode,
   ThreadId,
@@ -1163,9 +1162,9 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
 
     // Subscribe before the first snapshot: a server that starts or crashes while the initial
     // refresh runs would otherwise change state with no watcher to announce it.
-    const pending = yield* Queue.unbounded<RegisteredMcpServersState>();
+    const pending = yield* Queue.unbounded<void>();
     yield* externalServers.changes.pipe(
-      Stream.runForEach((state) => Queue.offer(pending, state)),
+      Stream.runForEach(() => Queue.offer(pending, undefined)),
       Effect.forkScoped({ startImmediately: true }),
     );
     yield* refresh;

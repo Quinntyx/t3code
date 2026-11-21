@@ -14,12 +14,12 @@ export interface McpConfigField {
   readonly key: string;
   readonly label: string;
   readonly description?: string | undefined;
-  readonly placeholder?: string | undefined;
   readonly type: McpConfigValueType;
   readonly required: boolean;
   readonly secret: boolean;
   readonly default?: McpConfigValue | undefined;
   readonly choices?: ReadonlyArray<string> | undefined;
+  /** An MCPB list field, such as several allowed directories. */
   readonly multiple?: boolean | undefined;
   readonly min?: number | undefined;
   readonly max?: number | undefined;
@@ -64,6 +64,8 @@ const asBoolean = (value: unknown): boolean | undefined =>
   typeof value === "boolean" ? value : undefined;
 const asNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
+const asStrings = (value: unknown): ReadonlyArray<string> =>
+  asArray(value).flatMap((item) => (typeof item === "string" ? [item] : []));
 
 const labelOf = (key: string) =>
   key
@@ -72,235 +74,167 @@ const labelOf = (key: string) =>
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 
-interface NormalizedArgument {
-  readonly type: "positional" | "named";
-  readonly name?: string | undefined;
-  readonly repeated: boolean;
-  /** A fixed value, or a template over the entry's `variables`; absent leaves it to the user. */
-  readonly value?: string | undefined;
-  /** What server.json declares about the placeholders in `value`, keyed by config key. */
-  readonly variables: Readonly<Record<string, unknown>>;
-  /** Set when the entry declares a value the user supplies instead of carrying one itself. */
-  readonly suppliedKey?: string | undefined;
-  /** That entry, which declares the field the same way a variable does. */
-  readonly supplied?: Readonly<Record<string, unknown>> | undefined;
-}
-
-// Value placeholders in either format name a config field; a missing one is substituted empty.
+// server.json value templates name their variables as `{key}`.
 const PLACEHOLDER = /\{([A-Za-z0-9_.-]+)\}/gu;
 
 const placeholderKeys = (template: string) => [
   ...new Set([...template.matchAll(PLACEHOLDER)].map((match) => match[1]!)),
 ];
 
-/**
- * Runtime argument keys carry a prefix so the two groups cannot merge; named template variables
- * keep sharing by name.
- */
-const argumentKey = (name: string | undefined, index: number, prefix: string) => {
-  const key =
-    name === undefined ? "" : name.replaceAll(/^-+/gu, "").replaceAll(/[^A-Za-z0-9_-]+/gu, "_");
-  return `${prefix}${key === "" ? `argument_${index + 1}` : key}`;
-};
-
-/** Only value metadata makes a named flag ask for a value; a positional always supplies one. */
-const declaresSuppliedValue = (entry: Readonly<Record<string, unknown>>, named: boolean) =>
-  !named ||
-  asString(entry.valueHint) !== undefined ||
-  asBoolean(entry.isRequired) === true ||
-  asBoolean(entry.isSecret) === true ||
-  asString(entry.default) !== undefined ||
-  asString(entry.format) !== undefined ||
-  asArray(entry.choices).length > 0 ||
-  asBoolean(entry.isRepeated) === true;
-
-const readArgument = (
-  raw: unknown,
-  index: number,
-  prefix: string,
-): NormalizedArgument | undefined => {
-  const entry = asRecord(raw);
-  if (entry === undefined) return undefined;
-  const named = entry.type === "named";
-  const name = named ? asString(entry.name) : undefined;
-  if (named && name === undefined) return undefined;
-  const repeated = asBoolean(entry.isRepeated) === true;
-  const base = { type: named ? ("named" as const) : ("positional" as const), name, repeated };
-  const value = asString(entry.value);
-  if (value !== undefined) {
-    return { ...base, value, variables: asRecord(entry.variables) ?? {} };
-  }
-  // Without value metadata a named argument is a bare flag; a positional always asks for a value.
-  if (!declaresSuppliedValue(entry, named)) {
-    return { ...base, variables: {} };
-  }
-  return {
-    ...base,
-    variables: {},
-    suppliedKey: argumentKey(name, index, prefix),
-    supplied: { ...entry, isRepeated: repeated },
-  };
-};
-
-const readArguments = (raw: unknown, prefix: string): ReadonlyArray<NormalizedArgument> =>
-  asArray(raw).flatMap((entry, index) => {
-    const argument = readArgument(entry, index, prefix);
-    return argument === undefined ? [] : [argument];
-  });
-
 const substitute = (template: string, values: ReadonlyMap<string, string>) =>
   template.replaceAll(PLACEHOLDER, (match, key: string) => values.get(key) ?? match);
 
-/** An environment variable and an argument variable are the same server.json input shape. */
-const readVariableField = (
+/** One server.json input: an environment variable, an argument, or a template variable. */
+const readInputField = (
   key: string,
-  variable: Readonly<Record<string, unknown>> | undefined,
-  fallback: { readonly label: string; readonly description?: string | undefined },
+  input: Readonly<Record<string, unknown>> | undefined,
+  label: string,
 ): McpConfigField => {
-  const format = variable === undefined ? undefined : asString(variable.format);
-  const choices = asArray(variable?.choices).flatMap((choice) => {
-    const value = asString(choice);
-    return value === undefined ? [] : [value];
-  });
-  const description =
-    (variable === undefined ? undefined : asString(variable.description)) ?? fallback.description;
-  const placeholder = variable === undefined ? undefined : asString(variable.placeholder);
+  const format = asString(input?.format);
+  const choices = asStrings(input?.choices);
+  const description = asString(input?.description);
+  const type: McpConfigValueType =
+    choices.length > 0
+      ? "choice"
+      : format === "number"
+        ? "number"
+        : format === "boolean"
+          ? "boolean"
+          : format === "filepath"
+            ? "path"
+            : "string";
+  // server.json writes every default as text; the form edits numbers and booleans as such.
+  const text = asString(input?.default);
+  const defaultValue =
+    text === undefined
+      ? undefined
+      : type === "number"
+        ? text.trim() !== "" && Number.isFinite(Number(text))
+          ? Number(text)
+          : undefined
+        : type === "boolean"
+          ? text === "true"
+          : text;
   return {
     key,
-    label: fallback.label,
+    label,
     ...(description === undefined ? {} : { description }),
-    ...(placeholder === undefined ? {} : { placeholder }),
-    type:
-      choices.length > 0
-        ? "choice"
-        : format === "number"
-          ? "number"
-          : format === "boolean"
-            ? "boolean"
-            : format !== undefined && /path|file|directory/iu.test(format)
-              ? "path"
-              : "string",
-    required: (variable === undefined ? undefined : asBoolean(variable.isRequired)) ?? false,
-    secret: (variable === undefined ? undefined : asBoolean(variable.isSecret)) ?? false,
-    ...(variable === undefined || asString(variable.default) === undefined
-      ? {}
-      : { default: asString(variable.default) }),
+    type,
+    required: asBoolean(input?.isRequired) ?? false,
+    secret: asBoolean(input?.isSecret) ?? false,
+    ...(defaultValue === undefined ? {} : { default: defaultValue }),
     ...(choices.length === 0 ? {} : { choices }),
   };
 };
 
-interface NormalizedEnvironmentVariable {
-  readonly name: string;
-  /** A fixed value or a template over `variables`; absent leaves the value to the user. */
-  readonly value?: string | undefined;
+/** A server.json value: fixed, a template over `variables`, or left to the user under `key`. */
+interface ServerJsonValue {
+  readonly key: string;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly template?: string | undefined;
   readonly variables: Readonly<Record<string, unknown>>;
-  /** The entry itself, which declares a value the user supplies the same way a variable does. */
-  readonly entry: Readonly<Record<string, unknown>>;
 }
 
-const readEnvironmentVariables = (raw: unknown): ReadonlyArray<NormalizedEnvironmentVariable> =>
-  asArray(raw).flatMap((raw) => {
-    const entry = asRecord(raw);
-    const name = entry === undefined ? undefined : asString(entry.name);
-    if (entry === undefined || name === undefined || name.trim() === "") return [];
-    const value = asString(entry.value);
+const valueFields = (value: ServerJsonValue, label: string): ReadonlyArray<McpConfigField> =>
+  value.template === undefined
+    ? [readInputField(value.key, value.input, label)]
+    : placeholderKeys(value.template).map((key) =>
+        readInputField(key, asRecord(value.variables[key]), labelOf(key)),
+      );
+
+const resolveValue = (value: ServerJsonValue, values: ReadonlyMap<string, string>) =>
+  value.template === undefined ? (values.get(value.key) ?? "") : substitute(value.template, values);
+
+interface ServerJsonArgument extends ServerJsonValue {
+  /** `--flag` for a named argument; absent for a positional one. */
+  readonly flag?: string | undefined;
+  /** A named argument with neither a value nor a value hint is passed as a bare flag. */
+  readonly bare: boolean;
+}
+
+const readArguments = (raw: unknown): ReadonlyArray<ServerJsonArgument> =>
+  asArray(raw).flatMap((item, index) => {
+    const input = asRecord(item);
+    if (input === undefined) return [];
+    const flag = input.type === "named" ? asString(input.name) : undefined;
+    if (input.type === "named" && flag === undefined) return [];
+    const template = asString(input.value);
+    const hint = asString(input.valueHint);
+    const key =
+      hint ?? (flag === undefined ? `argument_${index + 1}` : flag.replaceAll(/^-+/gu, ""));
     return [
       {
-        name,
-        ...(value === undefined ? {} : { value }),
-        variables: asRecord(entry.variables) ?? {},
-        entry,
+        key,
+        input,
+        template,
+        variables: asRecord(input.variables) ?? {},
+        flag,
+        bare: flag !== undefined && template === undefined && hint === undefined,
       },
     ];
   });
 
-/** A fixed value needs no field; a template asks for each variable it names. */
-const environmentVariableFields = (
-  variables: ReadonlyArray<NormalizedEnvironmentVariable>,
-): ReadonlyArray<McpConfigField> =>
-  variables.flatMap((variable) =>
-    variable.value === undefined
-      ? [readVariableField(variable.name, variable.entry, { label: variable.name })]
-      : placeholderKeys(variable.value).map((key) =>
-          readVariableField(key, asRecord(variable.variables[key]), { label: labelOf(key) }),
-        ),
-  );
+const argumentFields = (argument: ServerJsonArgument) =>
+  argument.bare ? [] : valueFields(argument, labelOf(argument.key));
 
-// Several inputs can declare one variable; a secret or required declaration in any of them wins.
-const mergeFieldsByKey = (fields: ReadonlyArray<McpConfigField>): ReadonlyArray<McpConfigField> => {
+const argumentArgs = (argument: ServerJsonArgument, values: ReadonlyMap<string, string>) => {
+  const flag = argument.flag === undefined ? [] : [argument.flag];
+  if (argument.bare) return flag;
+  const value = resolveValue(argument, values);
+  // An unset optional value drops its flag too, rather than passing a dangling one.
+  return value === "" ? [] : [...flag, value];
+};
+
+interface ServerJsonEnvironmentVariable extends ServerJsonValue {
+  readonly name: string;
+}
+
+const readEnvironmentVariables = (raw: unknown): ReadonlyArray<ServerJsonEnvironmentVariable> =>
+  asArray(raw).flatMap((item) => {
+    const input = asRecord(item);
+    const name = asString(input?.name)?.trim();
+    if (input === undefined || name === undefined || name === "") return [];
+    return [
+      {
+        name,
+        key: name,
+        input,
+        template: asString(input.value),
+        variables: asRecord(input.variables) ?? {},
+      },
+    ];
+  });
+
+/** Inputs can share a variable; the first describes it, and any secret declaration keeps it secret. */
+const dedupeFields = (fields: ReadonlyArray<McpConfigField>): ReadonlyArray<McpConfigField> => {
   const byKey = new Map<string, McpConfigField>();
   for (const field of fields) {
     const seen = byKey.get(field.key);
-    if (seen === undefined) {
-      byKey.set(field.key, field);
-      continue;
-    }
-    const merged = { ...seen } as Record<string, unknown>;
-    for (const [key, value] of Object.entries(field)) {
-      // The first declaration owns how a field is described; later ones only fill in constraints.
-      if (key === "description" || key === "placeholder") continue;
-      if (value !== undefined && !Object.hasOwn(merged, key)) merged[key] = value;
-    }
-    byKey.set(field.key, {
-      ...merged,
-      type: seen.type === "string" && field.type !== "string" ? field.type : seen.type,
-      secret: seen.secret || field.secret,
-      required: seen.required || field.required,
-    } as McpConfigField);
+    byKey.set(
+      field.key,
+      seen === undefined ? field : { ...seen, secret: seen.secret || field.secret },
+    );
   }
   return [...byKey.values()];
 };
 
-const readArgumentFields = (
-  argumentsList: ReadonlyArray<NormalizedArgument>,
-  prefix: string,
-): ReadonlyArray<McpConfigField> =>
-  argumentsList.flatMap((argument, index) => {
-    const described =
-      argument.type === "named"
-        ? `Value for ${argument.name ?? ""} (${prefix} ${index + 1}).`
-        : `Positional value ${index + 1}.`;
-    if (argument.suppliedKey !== undefined) {
-      const supplied = argument.supplied ?? {};
-      return [
-        {
-          ...readVariableField(argument.suppliedKey, supplied, {
-            label: labelOf(asString(supplied.valueHint) ?? argument.suppliedKey),
-            // The entry's own description wins over the positional or flag it belongs to.
-            description: described,
-          }),
-          ...(argument.repeated ? { multiple: true } : {}),
-        },
-      ];
-    }
-    return placeholderKeys(argument.value ?? "").map((key) => ({
-      ...readVariableField(key, asRecord(argument.variables[key]), {
-        label: labelOf(key),
-        description: described,
-      }),
-      ...(argument.repeated ? { multiple: true } : {}),
-    }));
-  });
-
-const SUPPORTED_REGISTRY_TYPES = new Set(["npm", "pypi", "oci"]);
-
-interface ParsedServerJsonPackage {
+interface ServerJsonPackage {
   readonly command: string;
+  /** The runner's own arguments; the last one is the package identifier or image. */
   readonly baseArgs: ReadonlyArray<string>;
   /** Docker passes env values through by name, so it needs `-e` for each configured one. */
   readonly container: boolean;
-  readonly runtimeArguments: ReadonlyArray<NormalizedArgument>;
-  readonly packageArguments: ReadonlyArray<NormalizedArgument>;
-  readonly environmentVariables: ReadonlyArray<NormalizedEnvironmentVariable>;
+  readonly runtimeArguments: ReadonlyArray<ServerJsonArgument>;
+  readonly packageArguments: ReadonlyArray<ServerJsonArgument>;
+  readonly environmentVariables: ReadonlyArray<ServerJsonEnvironmentVariable>;
 }
 
 const readServerJsonPackage = (
   raw: unknown,
-): { readonly ok: true; readonly value: ParsedServerJsonPackage } | McpRegistrationFailure => {
+): { readonly ok: true; readonly value: ServerJsonPackage } | McpRegistrationFailure => {
   const entry = asRecord(raw);
   if (entry === undefined) return failure("A package in server.json is not an object.");
-  const transport = asRecord(entry.transport);
-  const transportType = transport === undefined ? undefined : asString(transport.type);
+  const transportType = asString(asRecord(entry.transport)?.type);
   if (transportType !== "stdio") {
     return failure(
       "T3 Code runs MCP servers itself, so only a stdio package is supported. This package uses " +
@@ -308,94 +242,87 @@ const readServerJsonPackage = (
     );
   }
   const registryType = asString(entry.registryType);
-  if (registryType === undefined || !SUPPORTED_REGISTRY_TYPES.has(registryType)) {
-    return failure(
-      `Unsupported package registryType ${registryType ?? "(missing)"}. Supported: npm, pypi, oci.`,
-    );
-  }
-  const identifier = asString(entry.identifier);
-  if (identifier === undefined || identifier.trim() === "") {
+  const identifier = asString(entry.identifier)?.trim();
+  if (identifier === undefined || identifier === "") {
     return failure("The package has no identifier.");
   }
-  if (asString(entry.registryBaseUrl) !== undefined) {
-    return failure(
-      "registryBaseUrl is not supported; T3 uses the default registry for this package type.",
-    );
-  }
-  const runtimeArguments = readArguments(entry.runtimeArguments, "runtime_");
-  const packageArguments = readArguments(entry.packageArguments, "");
-  if (
-    [...runtimeArguments, ...packageArguments].some(
-      (argument) => argument.repeated && argument.value !== undefined,
-    )
-  ) {
-    return failure("A repeated argument with a fixed value or variables is not supported.");
-  }
-  const version = asString(entry.version);
+  const version = asString(entry.version)?.trim() ?? "";
   const runtimeHint = asString(entry.runtimeHint);
-  const pinned = version === undefined || version.trim() === "" ? "" : version;
-  const command =
-    runtimeHint ?? (registryType === "npm" ? "npx" : registryType === "pypi" ? "uvx" : "docker");
-  const baseArgs =
-    registryType === "npm"
-      ? runtimeHint === undefined
-        ? ["-y", pinned === "" ? identifier : `${identifier}@${pinned}`]
-        : [pinned === "" ? identifier : `${identifier}@${pinned}`]
-      : registryType === "pypi"
-        ? [pinned === "" ? identifier : `${identifier}==${pinned}`]
-        : ["run", "-i", "--rm", identifier];
+  let command: string;
+  let baseArgs: ReadonlyArray<string>;
+  switch (registryType) {
+    case "npm":
+      command = runtimeHint ?? "npx";
+      baseArgs = [
+        ...(runtimeHint === undefined ? ["-y"] : []),
+        version === "" ? identifier : `${identifier}@${version}`,
+      ];
+      break;
+    case "pypi":
+      command = runtimeHint ?? "uvx";
+      baseArgs = [version === "" ? identifier : `${identifier}==${version}`];
+      break;
+    case "oci":
+      command = runtimeHint ?? "docker";
+      baseArgs = ["run", "-i", "--rm", identifier];
+      break;
+    default:
+      return failure(
+        `Unsupported package registryType ${registryType ?? "(missing)"}. Supported: npm, pypi, oci.`,
+      );
+  }
   return {
     ok: true,
     value: {
       command,
       baseArgs,
       container: registryType === "oci",
-      runtimeArguments,
-      packageArguments,
+      runtimeArguments: readArguments(entry.runtimeArguments),
+      packageArguments: readArguments(entry.packageArguments),
       environmentVariables: readEnvironmentVariables(entry.environmentVariables),
     },
   };
 };
 
-const parseServerJson = (document: Readonly<Record<string, unknown>>): McpRegistrationResult => {
-  const name = asString(document.name)?.trim();
-  if (name === undefined || name === "") {
-    return failure("server.json has no name.");
-  }
-  if (asArray(document.remotes).length > 0) {
-    return failure(
-      "T3 Code runs MCP servers itself, so remote servers are not supported. Add a local stdio package instead.",
-    );
-  }
+/** The first package T3 can run, or why none can be. */
+const firstServerJsonPackage = (
+  document: Readonly<Record<string, unknown>>,
+): { readonly ok: true; readonly value: ServerJsonPackage } | McpRegistrationFailure => {
   const packages = asArray(document.packages);
   if (packages.length === 0) {
-    return failure("server.json has no packages to run.");
+    return failure(
+      "server.json has no packages to run. T3 Code runs MCP servers itself, so remote servers are not supported.",
+    );
   }
   let firstFailure: McpRegistrationFailure | undefined;
   for (const candidate of packages) {
     const parsed = readServerJsonPackage(candidate);
-    if (!parsed.ok) {
-      firstFailure ??= parsed;
-      continue;
-    }
-    const { value } = parsed;
-    const fields = mergeFieldsByKey([
-      ...environmentVariableFields(value.environmentVariables),
-      ...readArgumentFields(value.runtimeArguments, "runtime argument"),
-      ...readArgumentFields(value.packageArguments, "package argument"),
-    ]);
-    const description = asString(document.description)?.trim();
-    return {
-      ok: true,
-      registration: {
-        name,
-        ...(description === undefined || description === "" ? {} : { description }),
-        sourceKind: "server.json",
-        fields,
-      },
-    };
+    if (parsed.ok) return parsed;
+    firstFailure ??= parsed;
   }
-  return firstFailure ?? failure("server.json has no usable package.");
+  return firstFailure!;
+};
+
+const parseServerJson = (document: Readonly<Record<string, unknown>>): McpRegistrationResult => {
+  const name = asString(document.name)?.trim();
+  if (name === undefined || name === "") return failure("server.json has no name.");
+  const parsed = firstServerJsonPackage(document);
+  if (!parsed.ok) return parsed;
+  const { value } = parsed;
+  const description = asString(document.description)?.trim();
+  return {
+    ok: true,
+    registration: {
+      name,
+      ...(description === undefined || description === "" ? {} : { description }),
+      sourceKind: "server.json",
+      fields: dedupeFields([
+        ...value.environmentVariables.flatMap((variable) => valueFields(variable, variable.name)),
+        ...value.runtimeArguments.flatMap(argumentFields),
+        ...value.packageArguments.flatMap(argumentFields),
+      ]),
+    },
+  };
 };
 
 const readMcpbFields = (raw: unknown): ReadonlyArray<McpConfigField> =>
@@ -403,112 +330,49 @@ const readMcpbFields = (raw: unknown): ReadonlyArray<McpConfigField> =>
     const config = asRecord(entry);
     if (config === undefined) return [];
     const declared = asString(config.type);
-    const choices = asArray(config.choices).flatMap((choice) => {
-      const value = asString(choice);
-      return value === undefined ? [] : [value];
-    });
-    const defaultArray = asArray(config.default).flatMap((entry) => {
-      const value = asString(entry);
-      return value === undefined ? [] : [value];
-    });
-    const defaultValue =
-      defaultArray.length > 0
-        ? defaultArray
-        : (asString(config.default) ?? asNumber(config.default) ?? asBoolean(config.default));
-    const type: McpConfigValueType =
-      choices.length > 0
-        ? "choice"
-        : declared === "boolean"
-          ? "boolean"
-          : declared === "number"
-            ? "number"
-            : declared === "file" || declared === "directory"
-              ? "path"
-              : "string";
-    const label = asString(config.title) ?? labelOf(key);
     const description = asString(config.description);
-    const placeholder = asString(config.placeholder);
-    const required = asBoolean(config.required) ?? false;
-    // A secret is stored only as a string, so a sensitive field is always a secret string field.
+    const defaultValue = Array.isArray(config.default)
+      ? asStrings(config.default)
+      : (asString(config.default) ?? asNumber(config.default) ?? asBoolean(config.default));
+    const common = {
+      key,
+      label: asString(config.title) ?? labelOf(key),
+      ...(description === undefined ? {} : { description }),
+      required: asBoolean(config.required) ?? false,
+      ...(defaultValue === undefined ? {} : { default: defaultValue }),
+    };
+    // A secret is stored as one string, so a sensitive field is always a single string field.
     if (asBoolean(config.sensitive) === true) {
-      return [
-        {
-          key,
-          label,
-          ...(description === undefined ? {} : { description }),
-          ...(placeholder === undefined ? {} : { placeholder }),
-          type: "string" as const,
-          required,
-          secret: true,
-          ...(defaultValue === undefined ? {} : { default: defaultValue }),
-          ...(asBoolean(config.multiple) === true ? { multiple: true } : {}),
-        },
-      ];
+      return [{ ...common, type: "string", secret: true }];
     }
+    const min = asNumber(config.min);
+    const max = asNumber(config.max);
     return [
       {
-        key,
-        label,
-        ...(description === undefined ? {} : { description }),
-        ...(placeholder === undefined ? {} : { placeholder }),
-        type,
-        required,
+        ...common,
+        type:
+          declared === "boolean"
+            ? "boolean"
+            : declared === "number"
+              ? "number"
+              : declared === "file" || declared === "directory"
+                ? "path"
+                : "string",
         secret: false,
-        ...(defaultValue === undefined ? {} : { default: defaultValue }),
-        ...(choices.length === 0 ? {} : { choices }),
         ...(asBoolean(config.multiple) === true ? { multiple: true } : {}),
-        ...(asNumber(config.min) === undefined ? {} : { min: asNumber(config.min) }),
-        ...(asNumber(config.max) === undefined ? {} : { max: asNumber(config.max) }),
+        ...(min === undefined ? {} : { min }),
+        ...(max === undefined ? {} : { max }),
       },
     ];
   });
 
-const MCPB_USER_CONFIG_TYPES = new Set(["string", "number", "boolean", "directory", "file"]);
-
-const MCPB_KEY_CHARS = "A-Za-z0-9_/.";
-const MCPB_CONFIG_KEY = `[${MCPB_KEY_CHARS}-]+`;
-const MCPB_CONFIG_REFERENCE = new RegExp(`\\$\\{user_config(\\.(${MCPB_CONFIG_KEY}))?\\}`, "gu");
-const MCPB_SUBSTITUTION = new RegExp(`\\$\\{([${MCPB_KEY_CHARS}-]+)\\}`, "gu");
-const MCPB_ARGUMENT_PLACEHOLDER = new RegExp(`^\\$\\{user_config\\.(${MCPB_CONFIG_KEY})\\}$`, "u");
-
-const mcpbConfigReferences = (mcpConfig: Readonly<Record<string, unknown>>) =>
-  [...JSON.stringify(mcpConfig).matchAll(MCPB_CONFIG_REFERENCE)].map((match) => ({
-    bare: match[1] === undefined,
-    key: match[2],
-  }));
-
 const parseMcpb = (manifest: Readonly<Record<string, unknown>>): McpRegistrationResult => {
-  const server = asRecord(manifest.server);
-  const mcpConfig = server === undefined ? undefined : asRecord(server.mcp_config);
-  const command = mcpConfig === undefined ? undefined : asString(mcpConfig.command);
-  if (mcpConfig === undefined || command === undefined || command.trim() === "") {
-    return failure(
-      asString(server?.type) === "uv"
-        ? "MCPB uv servers are not supported without an explicit server.mcp_config command."
-        : "The MCPB manifest has no server.mcp_config command.",
-    );
+  const command = asString(asRecord(asRecord(manifest.server)?.mcp_config)?.command);
+  if (command === undefined || command.trim() === "") {
+    return failure("The MCPB manifest has no server.mcp_config command.");
   }
-  const userConfig = asRecord(manifest.user_config) ?? {};
-  for (const [key, entry] of Object.entries(userConfig)) {
-    const config = asRecord(entry);
-    const declared = config === undefined ? undefined : asString(config.type);
-    if (declared === undefined || !MCPB_USER_CONFIG_TYPES.has(declared)) {
-      return failure(`Unsupported user_config type ${declared ?? "(missing)"} for ${key}.`);
-    }
-  }
-  for (const reference of mcpbConfigReferences(mcpConfig)) {
-    if (reference.bare) {
-      return failure("Bare ${user_config} substitution is not supported; use ${user_config.KEY}.");
-    }
-    if (!Object.hasOwn(userConfig, reference.key!)) {
-      return failure(`Unknown user_config key ${reference.key} referenced by server.mcp_config.`);
-    }
-  }
-  const rawName = asString(manifest.display_name) ?? asString(manifest.name);
-  const name = rawName?.trim();
-  if (name === undefined || name === "") {
-    return failure("The MCPB manifest has no name.");
-  }
+  const name = (asString(manifest.display_name) ?? asString(manifest.name))?.trim();
+  if (name === undefined || name === "") return failure("The MCPB manifest has no name.");
   const description = asString(manifest.description)?.trim();
   return {
     ok: true,
@@ -538,42 +402,19 @@ export function parseMcpRegistration(json: unknown): McpRegistrationResult {
   return isMcpb(document) ? parseMcpb(document) : parseServerJson(document);
 }
 
-const stringifyValue = (value: McpConfigValue): string =>
-  Array.isArray(value) ? value.join(",") : String(value);
-
-/** A list-valued secret crosses the secret store as JSON so commas stay inside its elements. */
-export const encodeMcpConfigValue = (value: McpConfigValue): string =>
-  Array.isArray(value) ? JSON.stringify(value) : String(value);
-
-export const decodeMcpConfigValue = (value: string): McpConfigValue => {
-  if (!value.startsWith("[")) return value;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) && parsed.every((part) => typeof part === "string")
-      ? parsed
-      : value;
-  } catch {
-    return value;
-  }
-};
-
+/** Each field's launch text: the configured value, else its default, else empty. */
 const configuredValues = (
   fields: ReadonlyArray<McpConfigField>,
   config: Readonly<Record<string, McpConfigValue>>,
 ): { readonly ok: true; readonly values: ReadonlyMap<string, string> } | McpRegistrationFailure => {
   const values = new Map<string, string>();
   for (const field of fields) {
-    const configured = config[field.key];
-    const value = configured === undefined ? field.default : configured;
-    if (value === undefined || value === "") {
-      if (field.required) {
-        return failure(`Set ${field.label} before this MCP server can start.`);
-      }
-      // A declared but unset field substitutes empty, so its whole optional flag drops out.
-      values.set(field.key, "");
-      continue;
+    const value = config[field.key] ?? field.default;
+    const text = value === undefined ? "" : Array.isArray(value) ? value.join(",") : String(value);
+    if (text === "" && field.required) {
+      return failure(`Set ${field.label} before this MCP server can start.`);
     }
-    values.set(field.key, stringifyValue(value));
+    values.set(field.key, text);
   }
   return { ok: true, values };
 };
@@ -585,181 +426,93 @@ interface LaunchEntry {
   readonly config: Readonly<Record<string, McpConfigValue>>;
 }
 
-export interface McpLaunchOptions {
-  /** The directory `${HOME}` and its well-known children resolve to. */
-  readonly home?: string | undefined;
-  /** The host platform `platform_overrides` and `${pathSeparator}` follow. */
-  readonly platform?: string | undefined;
-}
+// MCPB templates: `${__dirname}`, `${HOME}` and its folders, and `${user_config.KEY}`.
+const MCPB_SUBSTITUTION = /\$\{([A-Za-z0-9_./-]+)\}/gu;
+const MCPB_LIST_ARGUMENT = /^\$\{user_config\.([A-Za-z0-9_./-]+)\}$/u;
 
-const mcpbSubstitutions = (
-  bundleDir: string,
-  options: McpLaunchOptions,
-): ReadonlyMap<string, string> => {
-  const home = options.home ?? "";
-  const separator = options.platform === "win32" ? "\\" : "/";
-  return new Map([
-    ["__dirname", bundleDir],
+const resolveMcpbLaunch = (
+  source: Extract<LaunchEntry["source"], { kind: "mcpb" }>,
+  fields: ReadonlyArray<McpConfigField>,
+  config: Readonly<Record<string, McpConfigValue>>,
+  values: ReadonlyMap<string, string>,
+  home: string,
+): McpLaunchResult => {
+  const mcpConfig = asRecord(asRecord(asRecord(source.manifest)?.server)?.mcp_config) ?? {};
+  const builtIns = new Map([
+    ["__dirname", source.bundleDir],
     ["HOME", home],
     ["DESKTOP", `${home}/Desktop`],
     ["DOCUMENTS", `${home}/Documents`],
     ["DOWNLOADS", `${home}/Downloads`],
-    ["pathSeparator", separator],
-    ["/", separator],
   ]);
+  const builtIn = (template: string) =>
+    template.replaceAll(MCPB_SUBSTITUTION, (match, key: string) => builtIns.get(key) ?? match);
+  const secret = new Set(fields.flatMap((field) => (field.secret ? [field.key] : [])));
+  // A default such as `${HOME}/Desktop` resolves too; a secret is passed exactly as typed.
+  const filled = new Map(
+    [...values].map(([key, value]) => [key, secret.has(key) ? value : builtIn(value)]),
+  );
+  const fill = (template: string) =>
+    template.replaceAll(MCPB_SUBSTITUTION, (match, key: string) =>
+      key.startsWith("user_config.")
+        ? (filled.get(key.slice("user_config.".length)) ?? "")
+        : (builtIns.get(key) ?? match),
+    );
+  const defaults = new Map(fields.map((field) => [field.key, field.default]));
+  const args = asStrings(mcpConfig.args).flatMap((arg) => {
+    // A list field given as a whole argument becomes one argument per item.
+    const listKey = MCPB_LIST_ARGUMENT.exec(arg)?.[1];
+    const list = listKey === undefined ? undefined : (config[listKey] ?? defaults.get(listKey));
+    return Array.isArray(list) ? list.map(builtIn) : [fill(arg)];
+  });
+  const env = Object.fromEntries(
+    Object.entries(asRecord(mcpConfig.env) ?? {}).flatMap(([key, value]) =>
+      typeof value === "string" ? [[key, fill(value)] as const] : [],
+    ),
+  );
+  return {
+    ok: true,
+    launch: { command: fill(asString(mcpConfig.command) ?? ""), args, env },
+  };
 };
 
-const substituteMcpb = (
-  template: string,
+const resolveServerJsonLaunch = (
+  document: unknown,
   values: ReadonlyMap<string, string>,
-  substitutions: ReadonlyMap<string, string>,
-) =>
-  template.replaceAll(MCPB_SUBSTITUTION, (match, key: string) =>
-    key.startsWith("user_config.")
-      ? (values.get(key.slice("user_config.".length)) ?? "")
-      : (substitutions.get(key) ?? match),
+): McpLaunchResult => {
+  const parsed = firstServerJsonPackage(asRecord(document) ?? {});
+  if (!parsed.ok) return parsed;
+  const { value } = parsed;
+  const env = Object.fromEntries(
+    value.environmentVariables.flatMap((variable) => {
+      const resolved = resolveValue(variable, values);
+      return resolved === "" ? [] : [[variable.name, resolved] as const];
+    }),
   );
-
-/**
- * The arguments one declared argument contributes. A fixed value always comes through, a
- * template whose placeholders are all unset leaves no dangling flag, and a bare flag still goes.
- */
-const argumentArgs = (
-  argument: NormalizedArgument,
-  values: ReadonlyMap<string, string>,
-  config: Readonly<Record<string, McpConfigValue>>,
-): ReadonlyArray<string> => {
-  const flag = argument.type === "named" ? [argument.name!] : [];
-  if (argument.suppliedKey !== undefined) {
-    const supplied = values.get(argument.suppliedKey);
-    const configured = config[argument.suppliedKey];
-    const parts =
-      supplied === undefined || supplied === ""
-        ? []
-        : Array.isArray(configured)
-          ? configured.map(String)
-          : [supplied];
-    return parts.flatMap((part) => [...flag, part]);
-  }
-  if (argument.value === undefined) return flag;
-  const value = substitute(argument.value, values);
-  if (value === "") return [];
-  return [...flag, value];
+  const args = [
+    ...value.baseArgs.slice(0, -1),
+    // Docker takes each variable's value from its own env, so each one needs `-e` before the image.
+    ...(value.container ? Object.keys(env).flatMap((name) => ["-e", name]) : []),
+    // Runtime arguments configure the runner, so they precede the package identifier or image.
+    ...value.runtimeArguments.flatMap((argument) => argumentArgs(argument, values)),
+    ...value.baseArgs.slice(-1),
+    ...value.packageArguments.flatMap((argument) => argumentArgs(argument, values)),
+  ];
+  return { ok: true, launch: { command: value.command, args, env } };
 };
 
 /** The process to launch for a registered server, with the user's values substituted in. */
-export function resolveMcpLaunch(
-  entry: LaunchEntry,
-  options: McpLaunchOptions = {},
-): McpLaunchResult {
+export function resolveMcpLaunch(entry: LaunchEntry, options: { readonly home: string }) {
   const parsed = parseMcpRegistration(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
   );
   if (!parsed.ok) return parsed;
-  const secretKeys = new Set(
-    parsed.registration.fields.flatMap((field) => (field.secret ? [field.key] : [])),
-  );
-  const secretListKeys = new Set(
-    parsed.registration.fields.flatMap((field) =>
-      field.secret && field.multiple === true ? [field.key] : [],
-    ),
-  );
-  const config = Object.fromEntries(
-    Object.entries(entry.config).map(([key, value]) => [
-      key,
-      typeof value === "string" && secretListKeys.has(key) ? decodeMcpConfigValue(value) : value,
-    ]),
-  ) as Record<string, McpConfigValue>;
-  const resolved = configuredValues(parsed.registration.fields, config);
+  const { fields } = parsed.registration;
+  const resolved = configuredValues(fields, entry.config);
   if (!resolved.ok) return resolved;
-  const { values } = resolved;
-
-  if (entry.source.kind === "mcpb") {
-    const manifest = asRecord(entry.source.manifest) ?? {};
-    const server = asRecord(manifest.server) ?? {};
-    const mcpConfig = asRecord(server.mcp_config) ?? {};
-    // The host passes its platform; a bare parser call gets a deterministic default.
-    const platform = options.platform ?? "linux";
-    const overrides = asRecord(asRecord(mcpConfig.platform_overrides)?.[platform]) ?? {};
-    const effective = { ...mcpConfig, ...overrides };
-    const command = asString(effective.command) ?? "";
-    if (command.trim() === "")
-      return failure("The MCPB manifest has no server.mcp_config command.");
-    const substitutions = mcpbSubstitutions(entry.source.bundleDir, options);
-    const fields = new Map(parsed.registration.fields.map((field) => [field.key, field]));
-    const resolvedValues = new Map(
-      [...values].map(([key, value]) => [
-        key,
-        secretKeys.has(key) ? value : substituteMcpb(value, values, substitutions),
-      ]),
-    );
-    const args = asArray(effective.args).flatMap((arg) => {
-      const value = asString(arg);
-      if (value === undefined) return [];
-      const placeholder = MCPB_ARGUMENT_PLACEHOLDER.exec(value);
-      if (placeholder !== null) {
-        const key = placeholder[1]!;
-        const configured = config[key] ?? fields.get(key)?.default;
-        if (Array.isArray(configured)) {
-          return configured.map((part) => substituteMcpb(part, resolvedValues, substitutions));
-        }
-      }
-      return [substituteMcpb(value, resolvedValues, substitutions)];
-    });
-    const env = Object.entries(asRecord(effective.env) ?? {}).flatMap(([key, value]) => {
-      const template = asString(value);
-      return template === undefined
-        ? []
-        : [[key, substituteMcpb(template, resolvedValues, substitutions)] as const];
-    });
-    // Checked on the manifest's own templates, so a user value containing `${` is never echoed.
-    const unsupported = [
-      command,
-      ...asArray(effective.args),
-      ...Object.values(asRecord(effective.env) ?? {}),
-    ]
-      .flatMap((template) => [...(asString(template) ?? "").matchAll(MCPB_SUBSTITUTION)])
-      .find(([, key]) => !key!.startsWith("user_config.") && !substitutions.has(key!));
-    if (unsupported !== undefined) {
-      return failure(`Unsupported MCPB substitution: ${unsupported[0]}`);
-    }
-    const launchCommand = substituteMcpb(command, resolvedValues, substitutions);
-    return {
-      ok: true,
-      launch: { command: launchCommand, args, env: Object.fromEntries(env) },
-    };
-  }
-
-  const document = asRecord(entry.source.document) ?? {};
-  const packages = asArray(document.packages);
-  for (const candidate of packages) {
-    const value = readServerJsonPackage(candidate);
-    if (!value.ok) continue;
-    // A fixed value needs no field, so it comes from the document; a template from its variables.
-    const env = Object.fromEntries(
-      value.value.environmentVariables.flatMap((variable) => {
-        if (variable.value === undefined) {
-          const configured = values.get(variable.name);
-          return configured === undefined || configured === ""
-            ? []
-            : [[variable.name, configured] as const];
-        }
-        return [[variable.name, substitute(variable.value, values)] as const];
-      }),
-    );
-    // Docker takes a variable's value from its own client env, so each configured one needs `-e`.
-    // They go before the image, which is the last of the base args.
-    const args = [
-      ...value.value.baseArgs.slice(0, -1),
-      ...(value.value.container ? Object.keys(env).flatMap((name) => ["-e", name]) : []),
-      // Runtime arguments configure the runner, so they precede the package identifier or image.
-      ...value.value.runtimeArguments.flatMap((argument) => argumentArgs(argument, values, config)),
-      ...value.value.baseArgs.slice(-1),
-      ...value.value.packageArguments.flatMap((argument) => argumentArgs(argument, values, config)),
-    ].filter((argument) => argument !== "");
-    return { ok: true, launch: { command: value.value.command, args, env } };
-  }
-  return failure("server.json has no usable stdio package.");
+  return entry.source.kind === "mcpb"
+    ? resolveMcpbLaunch(entry.source, fields, entry.config, resolved.values, options.home)
+    : resolveServerJsonLaunch(entry.source.document, resolved.values);
 }
 
 const MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;

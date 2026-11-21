@@ -7,20 +7,16 @@ import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
-  type RegisteredMcpServersState,
   type ServerSettings as ServerSettingsType,
 } from "@t3tools/contracts";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
-import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/process";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
 import * as ExternalMcpServers from "./ExternalMcpServers.ts";
@@ -62,12 +58,9 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
             { name: "FIXTURE_START_FAILURE" },
             { name: "FIXTURE_PID_FILE" },
             { name: "FIXTURE_PING_BEFORE_LIST" },
-            { name: "FIXTURE_STRING_ID_PING" },
             { name: "FIXTURE_PAGINATE" },
             { name: "FIXTURE_TOOL_NAMES" },
             { name: "FIXTURE_LABEL" },
-            { name: "FIXTURE_ERROR_DETAIL" },
-            { name: "FIXTURE_ERROR_CHUNK_SIZE" },
           ],
         },
       ],
@@ -76,33 +69,6 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
   config: {},
   ...overrides,
 });
-
-/** A server whose start failure echoes its secret config value to stderr. */
-const secretFailureEntry = (secret: string): Entry => {
-  const source = entry().source;
-  if (source.kind !== "server.json") throw new Error("unreachable");
-  const document = source.document as {
-    packages: ReadonlyArray<{
-      environmentVariables: ReadonlyArray<unknown>;
-    }>;
-  };
-  return entry({
-    config: { FIXTURE_START_FAILURE: secret },
-    source: {
-      kind: "server.json",
-      document: {
-        ...document,
-        packages: document.packages.map((pkg) => ({
-          ...pkg,
-          environmentVariables: [
-            ...pkg.environmentVariables,
-            { name: "FIXTURE_START_FAILURE", isSecret: true },
-          ],
-        })),
-      },
-    },
-  });
-};
 
 /** Settings that publish each write, as the real service does. */
 const layerTestSettings = (initial: ReadonlyArray<Entry>) =>
@@ -142,32 +108,15 @@ const layerTestSettings = (initial: ReadonlyArray<Entry>) =>
 // the layer is declared as what the tests actually consume.
 const layerTest = (
   initial: ReadonlyArray<Entry>,
-  options: {
-    /** Wraps every spawned child, so a test can hold one where it needs it. */
-    readonly wrapHandle?:
-      | ((handle: ChildProcessSpawner.ChildProcessHandle) => ChildProcessSpawner.ChildProcessHandle)
-      | undefined;
-  } = {},
 ): Layer.Layer<ExternalMcpServers.ExternalMcpServers | ServerSettings.ServerSettingsService> => {
   // One settings instance, so a test's write is the change the reconciler sees.
   const settings = layerTestSettings(initial);
-  const layerSpawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner> =
-    options.wrapHandle === undefined
-      ? NodeServices.layer
-      : Layer.effect(
-          ChildProcessSpawner.ChildProcessSpawner,
-          Effect.gen(function* () {
-            const platform = yield* ChildProcessSpawner.ChildProcessSpawner;
-            return ChildProcessSpawner.ChildProcessSpawner.of({
-              ...platform,
-              spawn: (command) => platform.spawn(command).pipe(Effect.map(options.wrapHandle!)),
-            });
-          }),
-        ).pipe(Layer.provide(NodeServices.layer));
   return Layer.merge(
-    ExternalMcpServers.layer.pipe(Layer.provide(Layer.merge(settings, layerSpawner))),
+    ExternalMcpServers.layer.pipe(Layer.provide(Layer.merge(settings, NodeServices.layer))),
     settings,
-  ).pipe(Layer.provideMerge(Layer.merge(layerSpawner, NodeCrypto.layer))) as unknown as Layer.Layer<
+  ).pipe(
+    Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+  ) as unknown as Layer.Layer<
     ExternalMcpServers.ExternalMcpServers | ServerSettings.ServerSettingsService
   >;
 };
@@ -175,6 +124,10 @@ const layerTest = (
 /** Each reconcile announces once, so this waits for the change rather than polling. */
 const watcher = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
   servers.changes.pipe(Stream.take(1), Stream.runDrain, Effect.timeout("20 seconds"));
+
+/** Subscribes before returning, so the change a following write causes cannot be missed. */
+const watch = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
+  watcher(servers).pipe(Effect.forkScoped({ startImmediately: true }));
 
 const startServers = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
   Effect.acquireRelease(Effect.forkScoped(servers.start), (fiber) =>
@@ -186,22 +139,14 @@ type Body<A, E> = (
   servers: ExternalMcpServers.ExternalMcpServers["Service"],
 ) => Effect.Effect<A, E, ServerSettings.ServerSettingsService | Scope.Scope>;
 
-/** Runs `body` with a started reconciler in one scope, so a failing body still stops it. */
-const runTestWith = <A, E>(entries: ReadonlyArray<Entry>, announces: number, body: Body<A, E>) =>
+/** Runs `body` once the first reconcile settles, in one scope, so a failing body still stops it. */
+const runTest = <A, E>(entries: ReadonlyArray<Entry>, body: Body<A, E>) =>
   Effect.gen(function* () {
     const servers = yield* ExternalMcpServers.ExternalMcpServers;
     yield* startServers(servers);
-    // Each desired server announces once, so two servers are both started before the body runs.
-    yield* servers.changes.pipe(
-      Stream.take(announces),
-      Stream.runDrain,
-      Effect.timeout("20 seconds"),
-    );
+    yield* watcher(servers);
     return yield* body(servers);
   }).pipe(Effect.scoped, Effect.provide(layerTest(entries)));
-
-const runTest = <A, E>(entries: ReadonlyArray<Entry>, body: Body<A, E>) =>
-  runTestWith(entries, 1, body);
 
 it.live("launches an enabled server and lists its tools under the configured prefix", () =>
   runTest([entry()], (servers) =>
@@ -241,26 +186,13 @@ it.live("answers a server's ping instead of taking it for a reply, and follows i
           expect.objectContaining({ name: "fixture_image" }),
           expect.objectContaining({ name: "fixture_crash-on-call" }),
         ]);
-        expect((yield* servers.states).servers).toEqual([
-          expect.objectContaining({ status: "running" }),
-        ]);
+        expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
       }),
   ),
 );
 
-it.live("answers a server ping whose id is a string", () =>
-  runTest([entry({ config: { FIXTURE_STRING_ID_PING: "1" } })], (servers) =>
-    Effect.gen(function* () {
-      expect(yield* servers.tools).toHaveLength(3);
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ status: "running" }),
-      ]);
-    }),
-  ),
-);
-
-it.live("gives a colliding tool name to the first server and reports the loser", () =>
-  runTestWith(
+it.live("gives a colliding tool name to the first server", () =>
+  runTest(
     [
       entry({
         id: "first",
@@ -275,7 +207,6 @@ it.live("gives a colliding tool name to the first server and reports the loser",
         config: { FIXTURE_TOOL_NAMES: "search,image,crash-on-call", FIXTURE_LABEL: "second" },
       }),
     ],
-    2,
     (servers) =>
       Effect.gen(function* () {
         const tools = yield* servers.tools;
@@ -283,42 +214,15 @@ it.live("gives a colliding tool name to the first server and reports the loser",
           tools.filter((tool) => tool.name === "notes_team_search").map((tool) => tool.serverId),
         ).toEqual(["first"]);
 
-        const states = (yield* servers.states).servers;
+        const states = yield* servers.states;
         expect(states[0]?.tools).toContain("notes_team_search");
         expect(states[1]?.tools).not.toContain("notes_team_search");
         expect(states[1]?.tools).toContain("notes_team_image");
-        expect(states[1]?.skippedTools).toEqual(["as notes_team_search, which another tool uses"]);
 
         const winner = tools.find((tool) => tool.name === "notes_team_search")!;
         const result = yield* servers.callTool(winner, { text: "hi" });
         expect(result.structuredContent).toEqual({ echoed: "hi", label: "first" });
       }),
-  ),
-);
-
-it.live.each([
-  {
-    label: "replacement",
-    names: ["a.b", "a_b", "crash-on-call"],
-    emitted: "fixture_a_b",
-    winner: "a.b",
-  },
-  {
-    label: "truncation",
-    names: ["x".repeat(60) + "a", "x".repeat(60) + "b", "crash-on-call"],
-    emitted: `fixture_${"x".repeat(60)}`,
-    winner: "x".repeat(60) + "a",
-  },
-])("skips one server's duplicate emitted name: $label", ({ names, emitted, winner }) =>
-  runTest([entry({ config: { FIXTURE_TOOL_NAMES: names.join(",") } })], (servers) =>
-    Effect.gen(function* () {
-      const tools = yield* servers.tools;
-      expect(tools.map((tool) => tool.name)).toEqual([emitted, "fixture_crash-on-call"]);
-      expect(tools[0]?.originalName).toBe(winner);
-      const state = (yield* servers.states).servers[0]!;
-      expect(state.tools).toEqual([emitted, "fixture_crash-on-call"]);
-      expect(state.skippedTools).toEqual([`as ${emitted}, which another tool uses`]);
-    }),
   ),
 );
 
@@ -331,203 +235,79 @@ it.live("omits a tool whose emitted name is reserved by a native tool", () =>
           "html_image",
           "html_crash-on-call",
         ]);
-        const state = (yield* servers.states).servers[0]!;
-        expect(state.tools).toEqual(["html_image", "html_crash-on-call"]);
-        expect(state.skippedTools).toEqual(["as html_render, which another tool uses"]);
+        expect((yield* servers.states)[0]?.tools).toEqual(["html_image", "html_crash-on-call"]);
       }),
   ),
 );
-
-it.live("redacts a single element of a secret list echoed by the child", () => {
-  const failure = secretFailureEntry("on");
-  if (failure.source.kind !== "server.json") throw new Error("unreachable");
-  const document = failure.source.document as { packages: ReadonlyArray<object> };
-  const withSecretList: Entry = {
-    ...failure,
-    source: {
-      kind: "server.json",
-      document: {
-        ...document,
-        packages: document.packages.map((pkg) => ({
-          ...pkg,
-          packageArguments: [{ type: "named", name: "--label", isRepeated: true, isSecret: true }],
-        })),
-      },
-    },
-    // The secret store hands a list secret back as JSON text.
-    config: { ...failure.config, label: '["alpha,one","beta"]', FIXTURE_ERROR_DETAIL: "beta" },
-  };
-  return runTest([withSecretList], (servers) =>
-    Effect.gen(function* () {
-      const state = (yield* servers.states).servers[0]!;
-      expect(state.status).toBe("failed");
-      expect(state.stderrTail).toContain("fixture cannot start");
-      expect(state.stderrTail).not.toContain("beta");
-      expect(state.stderrTail).toContain("••••••");
-    }),
-  );
-});
-
-it.live("redacts a multi-line secret split across two stderr writes", () => {
-  const secret = "line one\nline two";
-  const failure = secretFailureEntry(secret);
-  return runTest(
-    [
-      {
-        ...failure,
-        config: {
-          ...failure.config,
-          FIXTURE_ERROR_DETAIL: secret,
-          // The first write ends at the newline of "line one", which a raw tail must keep.
-          FIXTURE_ERROR_CHUNK_SIZE: "31",
-        },
-      },
-    ],
-    (servers) =>
-      Effect.gen(function* () {
-        const state = (yield* servers.states).servers[0]!;
-        expect(state.status).toBe("failed");
-        expect(state.stderrTail).toContain("fixture cannot start");
-        expect(state.stderrTail).not.toContain("line one");
-        expect(state.stderrTail).not.toContain("line two");
-        expect(state.stderrTail).toContain("••••••");
-      }),
-  );
-});
-
-it.live("redacts a secret longer than the tail when it spans stderr writes", () => {
-  const secret = "s3cret".repeat(400);
-  const failure = secretFailureEntry(secret);
-  return runTest(
-    [
-      {
-        ...failure,
-        config: {
-          ...failure.config,
-          FIXTURE_ERROR_DETAIL: secret,
-          FIXTURE_ERROR_CHUNK_SIZE: "1200",
-        },
-      },
-    ],
-    (servers) =>
-      Effect.gen(function* () {
-        const state = (yield* servers.states).servers[0]!;
-        expect(state.status).toBe("failed");
-        expect(state.stderrTail).toContain("fixture cannot start");
-        expect(state.stderrTail).not.toContain("s3cret");
-        expect(state.stderrTail).toContain("••••••");
-      }),
-  );
-});
 
 it.live("disabling a server stops its child and withdraws its tools", () =>
   runTest([entry()], (servers) =>
     Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
-      const stopped = yield* Effect.forkScoped(watcher(servers));
+      const stopped = yield* watch(servers);
       yield* settings.updateSettings({
         registeredMcpServers: { fixture: entry({ enabled: false }) },
       });
       yield* Fiber.join(stopped);
 
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ id: "fixture", status: "stopped", tools: [] }),
+      expect(yield* servers.states).toEqual([
+        expect.objectContaining({ enabled: false, running: false, tools: [] }),
       ]);
       expect(yield* servers.tools).toEqual([]);
     }),
   ),
 );
 
-it.live("records a crash with its stderr instead of restarting", () =>
+it.live("leaves a crashed server stopped until its settings change", () =>
   runTest([entry()], (servers) =>
     Effect.gen(function* () {
       const echo = (yield* servers.tools).find((tool) => tool.originalName === "crash-on-call")!;
-      // The fixture exits when asked to, which is the crash its settings page explains.
-      const crashed = yield* Effect.forkScoped(watcher(servers));
+      // The fixture exits when asked to.
+      const crashed = yield* watch(servers);
       yield* servers.callTool(echo, {}).pipe(Effect.ignore);
       yield* Fiber.join(crashed);
 
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({
-          id: "fixture",
-          status: "failed",
-          stderrTail: expect.stringContaining("fixture server crashed on purpose"),
-        }),
+      expect(yield* servers.states).toEqual([
+        expect.objectContaining({ enabled: true, running: false }),
       ]);
       // No retry on its own, so the tools stay unavailable until a toggle or settings change.
       expect(yield* servers.tools).toEqual([]);
 
       // The crash closed the child's scope, so the same server is launched again from fresh state.
       const settings = yield* ServerSettings.ServerSettingsService;
-      const restarted = yield* Effect.forkScoped(watcher(servers));
+      const restarted = yield* watch(servers);
       yield* settings.updateSettings({
         registeredMcpServers: { fixture: entry({ config: { RETRY: "1" } }) },
       });
       yield* Fiber.join(restarted);
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ id: "fixture", status: "running" }),
-      ]);
+      expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
       expect(yield* servers.tools).toHaveLength(3);
     }),
   ),
 );
-
-it.live("redacts secret launch values from the state sent to clients", () =>
-  runTest([secretFailureEntry("fixture-secret-value")], (servers) =>
-    Effect.gen(function* () {
-      const state = (yield* servers.states).servers[0]!;
-      expect(state.status).toBe("failed");
-      expect(state.stderrTail).toContain("fixture cannot start");
-      expect(state.stderrTail).not.toContain("fixture-secret-value");
-      expect(state.stderrTail).toContain("••••••");
-    }),
-  ),
-);
-
-it.live("redacts a secret that the stderr tail would cut through", () => {
-  const failure = secretFailureEntry("fixture-secret-value");
-  // 1,990 characters after the secret leave only its last 10 inside the 2,000-character tail.
-  const detail = `fixture-secret-value${"x".repeat(1_990)}`;
-  return runTest(
-    [{ ...failure, config: { ...failure.config, FIXTURE_ERROR_DETAIL: detail } }],
-    (servers) =>
-      Effect.gen(function* () {
-        const state = (yield* servers.states).servers[0]!;
-        expect(state.status).toBe("failed");
-        expect(state.stderrTail).not.toContain("cret-value");
-      }),
-  );
-});
 
 /** A child that fails while starting: present, then closed, with its state reported as failed. */
 it.live("stops a child whose startup fails and launches it again once its config changes", () =>
   runTest([entry({ config: { FIXTURE_START_FAILURE: "missing token" } })], (servers) =>
     Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({
-          status: "failed",
-          stderrTail: expect.stringContaining("fixture cannot start"),
-        }),
-      ]);
+      expect(yield* servers.states).toEqual([expect.objectContaining({ running: false })]);
 
-      // Unchanged config is not a reason to try again, and nothing changes, so nothing is announced.
+      // Unchanged config is not a reason to try again.
+      const unchanged = yield* watch(servers);
       yield* settings.updateSettings({
         registeredMcpServers: {
           fixture: entry({ config: { FIXTURE_START_FAILURE: "missing token" } }),
         },
       });
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ status: "failed" }),
-      ]);
+      yield* Fiber.join(unchanged);
+      expect(yield* servers.states).toEqual([expect.objectContaining({ running: false })]);
 
       // Supplying the value the server asked for is what a failed start waits for.
-      const started = yield* Effect.forkScoped(watcher(servers));
+      const started = yield* watch(servers);
       yield* settings.updateSettings({ registeredMcpServers: { fixture: entry() } });
       yield* Fiber.join(started);
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ id: "fixture", status: "running" }),
-      ]);
+      expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
     }),
   ),
 );
@@ -555,7 +335,7 @@ it.live("decodes image content from the child's result", () =>
   ),
 );
 
-it.live("reports a rejected document as failed without launching anything", () =>
+it.live("launches nothing for a document it cannot run", () =>
   runTest(
     [
       entry({
@@ -570,13 +350,7 @@ it.live("reports a rejected document as failed without launching anything", () =
     ],
     (servers) =>
       Effect.gen(function* () {
-        expect((yield* servers.states).servers).toEqual([
-          expect.objectContaining({
-            id: "fixture",
-            status: "failed",
-            stderrTail: expect.stringContaining("remote servers are not supported"),
-          }),
-        ]);
+        expect(yield* servers.states).toEqual([expect.objectContaining({ running: false })]);
         // A document T3 refuses to launch never produced a child, so it exposes no tools.
         expect(yield* servers.tools).toEqual([]);
       }),
@@ -596,116 +370,42 @@ it.live("records a child killed by a signal as failed instead of leaving it runn
       yield* startServers(servers);
       yield* watcher(servers);
       const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
-      const failed = yield* Effect.forkScoped(watcher(servers));
+      const failed = yield* watch(servers);
       process.kill(pid, "SIGKILL");
       yield* Fiber.join(failed);
 
-      expect((yield* servers.states).servers).toEqual([
-        expect.objectContaining({ id: "fixture", status: "failed", tools: [] }),
+      expect(yield* servers.states).toEqual([
+        expect.objectContaining({ running: false, tools: [] }),
       ]);
       expect(yield* servers.tools).toEqual([]);
     }).pipe(Effect.provide(layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })])));
   }),
 );
 
-/**
- * A crashing child's cleanup yields, and a settings change during it starts a replacement. The
- * failed write must not land on the replacement: it would report the running server failed and
- * withdraw its tools.
- */
-it.live("leaves a replacement's state alone when the crashed child's cleanup outlasts it", () =>
+/** The service scope owns every child, so teardown reaches one that is still running. */
+it.live("stops its child when the service scope closes", () =>
   Effect.gen(function* () {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-race-"));
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-teardown-"));
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
     );
     const pidFile = NodePath.join(directory, "fixture.pid");
-    // The crashing child's stop waits here, so a settings change arrives mid-cleanup.
-    const holdStop = yield* Deferred.make<void>();
-    const stopHeld = yield* Deferred.make<void>();
-    let firstChild = true;
+    const serviceScope = yield* Scope.make("sequential");
+    // The layer is built in its own scope, which is the service's: closing that is teardown.
+    const context = yield* Layer.build(
+      layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })]),
+    ).pipe(Scope.provide(serviceScope));
     yield* Effect.gen(function* () {
       const servers = yield* ExternalMcpServers.ExternalMcpServers;
-      const settings = yield* ServerSettings.ServerSettingsService;
       yield* startServers(servers);
       yield* watcher(servers);
-      const crash = (yield* servers.tools).find((tool) => tool.originalName === "crash-on-call")!;
+      expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
+    }).pipe(Effect.provide(context));
 
-      // Read from the announcement stream rather than `states`, which reconciles again and would
-      // hide a stale write behind a fresh snapshot.
-      const announced = yield* Queue.unbounded<RegisteredMcpServersState>();
-      yield* servers.changes.pipe(
-        Stream.tap((state) => Queue.offer(announced, state)),
-        Stream.runDrain,
-        Effect.forkScoped,
-      );
-
-      // The fixture exits when asked to, and the crash handler's cleanup waits on the held stop.
-      yield* servers.callTool(crash, {}).pipe(Effect.ignore);
-      yield* Deferred.await(stopHeld);
-
-      // A settings change arrives while that cleanup waits. Its reconcile may not replace the
-      // child behind the crash handler's back, so the crash's own state is what lands first.
-      yield* settings.updateSettings({
-        registeredMcpServers: { fixture: entry({ config: { RETRY: "1" } }) },
-      });
-      yield* Deferred.succeed(holdStop, undefined);
-
-      // Two announcements arrive: the reconciler's snapshot of the replacement, and the crash's.
-      // A `failed` snapshot here means the crash's write landed on the child that replaced it.
-      const first = yield* Queue.take(announced);
-      const last = yield* Queue.take(announced);
-      expect([first, last].map((state) => state.servers[0]?.status)).not.toContain("failed");
-      expect(last.servers).toEqual([expect.objectContaining({ id: "fixture", status: "running" })]);
-      expect(last.servers[0]?.tools).toHaveLength(3);
-    }).pipe(
-      Effect.provide(
-        layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })], {
-          wrapHandle: (handle) => {
-            if (!firstChild) return handle;
-            firstChild = false;
-            return {
-              ...handle,
-              kill: (options) =>
-                Deferred.succeed(stopHeld, undefined).pipe(
-                  Effect.andThen(Deferred.await(holdStop)),
-                  Effect.andThen(handle.kill(options)),
-                ),
-            };
-          },
-        }),
-      ),
-    );
+    const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
+    expect(isRunning(pid)).toBe(true);
+    // Closing waits for the child's own stop finalizer, so it has exited when this returns.
+    yield* Scope.close(serviceScope, Exit.void);
+    expect(isRunning(pid)).toBe(false);
   }),
-);
-
-/** The service scope owns every child, so teardown reaches one that is still running. */ it.live(
-  "stops its child when the service scope closes",
-  () =>
-    Effect.gen(function* () {
-      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-teardown-"));
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
-      );
-      const pidFile = NodePath.join(directory, "fixture.pid");
-      const serviceScope = yield* Scope.make("sequential");
-      // The layer is built in its own scope, which is the service's: closing that is teardown.
-      const context = yield* Layer.build(
-        layerTest([entry({ config: { FIXTURE_PID_FILE: pidFile } })]),
-      ).pipe(Scope.provide(serviceScope));
-      yield* Effect.gen(function* () {
-        const servers = yield* ExternalMcpServers.ExternalMcpServers;
-        yield* startServers(servers);
-        yield* watcher(servers);
-        expect((yield* servers.states).servers).toEqual([
-          expect.objectContaining({ status: "running" }),
-        ]);
-      }).pipe(Effect.provide(context));
-
-      const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
-      expect(isRunning(pid)).toBe(true);
-      // Closing waits for the child's own stop finalizer, so it has exited when this returns.
-      yield* Scope.close(serviceScope, Exit.void);
-      expect(isRunning(pid)).toBe(false);
-    }),
 );

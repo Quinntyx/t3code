@@ -15,7 +15,6 @@ import {
   ProviderInstanceId,
   ProviderInteractionMode,
   RuntimeMode,
-  type RegisteredMcpServersState,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -888,13 +887,13 @@ const fixtureCalls: Array<{ server: string; name: string; args: unknown }> = [];
 /** The registered MCP service, with `tools` under the test's control. */
 const layerExternalMcpStub = (options: {
   readonly tools: Effect.Effect<ReadonlyArray<ExternalMcpServers.ExternalMcpTool>>;
-  readonly changes: Stream.Stream<RegisteredMcpServersState>;
+  readonly changes: Stream.Stream<void>;
 }) =>
   Layer.succeed(
     ExternalMcpServers.ExternalMcpServers,
     ExternalMcpServers.ExternalMcpServers.of({
       start: Effect.never,
-      states: Effect.succeed({ servers: [] }),
+      states: Effect.succeed([]),
       tools: options.tools,
       callTool: (called, args) =>
         Effect.sync(() => {
@@ -966,7 +965,7 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
     Effect.gen(function* () {
       // A queue holds each change until the proxy's watcher takes it, as a PubSub would not
       // before the watcher exists.
-      const changeQueue = yield* Queue.unbounded<RegisteredMcpServersState>();
+      const changeQueue = yield* Queue.unbounded<void>();
       const activeTools = yield* Ref.make<ReadonlyArray<ExternalMcpServers.ExternalMcpTool>>([]);
       // Every refresh reads the server's tools, so a read marks one refresh reaching that point.
       const reads = yield* Queue.unbounded<void>();
@@ -975,7 +974,7 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
         Effect.forEach(Array.from({ length: count }), () => Queue.take(reads), {
           discard: true,
         });
-      const publishChange = () => Queue.offer(changeQueue, { servers: [] }).pipe(Effect.asVoid);
+      const publishChange = () => Queue.offer(changeQueue, undefined).pipe(Effect.asVoid);
       const context = yield* Layer.build(
         layerRegisteredMcpTest({
           external: layerExternalMcpStub({
@@ -1066,7 +1065,7 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
 it.effect("applies a change published while the initial refresh is in progress", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
+      const changes = yield* PubSub.unbounded<void>();
       const refreshStarted = yield* Deferred.make<void>();
       const releaseRefresh = yield* Deferred.make<void>();
       const reads = yield* Queue.unbounded<void>();
@@ -1091,7 +1090,7 @@ it.effect("applies a change published while the initial refresh is in progress",
       // The first refresh is blocked. A change published now reaches a subscriber only if the
       // proxy subscribed before it began that refresh.
       yield* Deferred.await(refreshStarted);
-      yield* PubSub.publish(changes, { servers: [] });
+      yield* PubSub.publish(changes, undefined);
       yield* Deferred.succeed(releaseRefresh, undefined);
       yield* Deferred.await(registered);
 
@@ -1109,7 +1108,7 @@ it.effect("proxies a registered MCP server's tools with its own schema", () =>
   Effect.scoped(
     Effect.gen(function* () {
       fixtureCalls.length = 0;
-      const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
+      const changes = yield* PubSub.unbounded<void>();
       // One stack, so the proxy registers onto the same MCP server the calls go through.
       const context = yield* Layer.build(
         layerRegisteredMcpTest({
@@ -1154,7 +1153,7 @@ it.effect("applies the caller's access rules to a proxied tool's annotations", (
   Effect.scoped(
     Effect.gen(function* () {
       fixtureCalls.length = 0;
-      const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
+      const changes = yield* PubSub.unbounded<void>();
       const context = yield* Layer.build(
         layerRegisteredMcpTest({
           external: layerExternalMcpStub({
