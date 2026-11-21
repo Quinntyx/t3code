@@ -42,6 +42,9 @@ const AGENT_CURSOR_ACTIVE_MS = 700;
 const AGENT_CURSOR_SVG =
   '<svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"/></svg>';
 
+type ImmediateStreamCommand = Exclude<PreviewStreamInput, { readonly type: "text" }>;
+type TextStreamCommand = Extract<PreviewStreamInput, { readonly type: "text" }>;
+
 interface Viewer {
   readonly stop: () => void;
   readonly command: (input: PreviewStreamInput, expectedInputSession?: number) => void;
@@ -59,6 +62,8 @@ export function stop() {
   activeViewer = null;
 }
 
+export function command(input: ImmediateStreamCommand): void;
+export function command(input: TextStreamCommand, expectedInputSession: number): void;
 export function command(input: PreviewStreamInput, expectedInputSession?: number) {
   activeViewer?.command(input, expectedInputSession);
 }
@@ -106,6 +111,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   let streaming = false;
   let inputSession = 0;
   let viewport: PreviewStreamViewport | null = null;
+  let postedViewport: PreviewStreamViewport | null = null;
   let size: { width: number; height: number } | null = null;
   let cap: { width: number; height: number } | null = null;
   let client: PreviewStreamClient | null = null;
@@ -177,6 +183,7 @@ export function start(configuration: PreviewStreamConfiguration) {
 
   const connect = () => {
     inputSession += 1;
+    viewport = null;
     if (client) reportStatus("connecting");
     painter.reset();
     client?.stop();
@@ -200,8 +207,9 @@ export function start(configuration: PreviewStreamConfiguration) {
         onDownload: (download) => post({ type: "download", ...download }),
         onFileChooser: (chooser) => post({ type: "fileChooser", chooser }),
         onViewport: (page) => {
-          if (viewport?.width === page.width && viewport.height === page.height) return;
           viewport = page;
+          if (postedViewport?.width === page.width && postedViewport.height === page.height) return;
+          postedViewport = page;
           post({ type: "viewport", width: page.width, height: page.height });
         },
         onProbe: (result) => {
@@ -250,6 +258,7 @@ export function start(configuration: PreviewStreamConfiguration) {
           if (!connected) {
             const hadControl = control !== null;
             inputSession += 1;
+            viewport = null;
             painter.reset();
             control = null;
             clearInput();
@@ -742,9 +751,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     command: (message, expectedInputSession) => {
       if (
         message.type === "text" &&
-        (!streaming ||
-          control?.controller !== "you" ||
-          (expectedInputSession !== undefined && expectedInputSession !== inputSession))
+        (!streaming || control?.controller !== "you" || expectedInputSession !== inputSession)
       ) {
         return;
       }

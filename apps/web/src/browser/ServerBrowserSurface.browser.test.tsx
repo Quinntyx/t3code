@@ -204,6 +204,32 @@ describe("ServerBrowserSurface stream phases", () => {
       .not.toBeInTheDocument();
     await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
     expect(input.disabled).toBe(false);
+
+    // Even after a replacement frame paints, pointer input stays gated until the reconnected stream sends a fresh viewport.
+    canvas.width = 400;
+    canvas.height = 300;
+    canvas.setPointerCapture = () => undefined;
+    const { left, top, width, height } = canvas.getBoundingClientRect();
+    const clickCenter = () =>
+      canvas.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          button: 0,
+          buttons: 1,
+          clientX: left + width / 2,
+          clientY: top + height / 2,
+          pointerType: "mouse",
+          bubbles: true,
+        }),
+      );
+    mocks.sent.length = 0;
+    clickCenter();
+    expect(mocks.sent.filter((entry) => entry.type === "mouse")).toEqual([]);
+
+    await act(() => handlers().onViewport({ width: 800, height: 600 }));
+    clickCenter();
+    expect(mocks.sent.filter((entry) => entry.type === "mouse")).toContainEqual(
+      expect.objectContaining({ type: "mouse", action: "down", x: 400, y: 300 }),
+    );
   });
 
   it("starts over at connecting when the tab changes", async () => {

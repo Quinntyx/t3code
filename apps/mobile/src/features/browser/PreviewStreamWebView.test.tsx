@@ -969,6 +969,17 @@ it("cancels pending deferred clipboard pastes across disconnect, access replacem
     expect(mocks.injected).toContain(
       'window.T3PreviewStream?.command({"type":"text","text":"fresh-paste"}, 5); true;',
     );
+
+    // 5) A queued paste firing after a disconnect message clears the ref but before React commits must not read the clipboard.
+    mocks.getClipboard.mockClear();
+    mocks.injected.length = 0;
+    await act(async () => {
+      emit({ type: "status", status: "connecting", accessGeneration: 1 });
+      streamRef.current?.paste();
+      await Promise.resolve();
+    });
+    expect(mocks.getClipboard).not.toHaveBeenCalled();
+    expect(mocks.injected).toEqual([]);
   } finally {
     cleanup();
   }

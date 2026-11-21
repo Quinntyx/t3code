@@ -392,6 +392,7 @@ export function ServerBrowserSurface(props: {
       frameTargetRef.current = targetKey;
       unauthorizedRef.current = 0;
       hasFrameRef.current = false;
+      viewportRef.current = null;
       retainedFrameTargetRef.current = null;
       setHostSetup(null);
       setCurrentFramePainted(false);
@@ -465,6 +466,7 @@ export function ServerBrowserSurface(props: {
           if (connected) return;
           painter.reset();
           hasFrameRef.current = false;
+          viewportRef.current = null;
           setCurrentFramePainted(false);
           setFileChooser(null);
           controlRef.current = null;
@@ -494,6 +496,7 @@ export function ServerBrowserSurface(props: {
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
       hasFrameRef.current = false;
+      viewportRef.current = null;
       setCurrentFramePainted(false);
       controlRef.current = null;
       setControlState(null);

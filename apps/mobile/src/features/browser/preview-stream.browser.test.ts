@@ -160,7 +160,7 @@ it.each([
   },
 );
 
-it("gates touch input during mid-session reconnect until a replacement frame paints", async () => {
+it("gates touch input during mid-session reconnect until a replacement frame and viewport arrive", async () => {
   const harness = mountMobileStream();
   try {
     const first = harness.sockets[0]!;
@@ -198,13 +198,20 @@ it("gates touch input during mid-session reconnect until a replacement frame pai
       [],
     );
 
+    // Even after the replacement frame paints, touch stays gated until a fresh viewport arrives.
     second.receiveFrame();
     await flushMicrotasks();
     expect(input.disabled).toBe(false);
     tapCanvas(canvas, 40);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+
+    second.receive({ type: "viewport", width: 600, height: 300 });
+    tapCanvas(canvas, 40);
     expect(
-      second.sent.filter((entry) => (entry as { type?: string }).type === "mouse").length,
-    ).toBeGreaterThan(0);
+      second.sent.filter((entry) => (entry as { type?: string }).type === "mouse"),
+    ).toContainEqual(expect.objectContaining({ type: "mouse", action: "down", x: 80, y: 80 }));
   } finally {
     harness.cleanup();
   }
@@ -245,6 +252,7 @@ it("ignores an in-flight JPEG decode from a dropped socket on reconnect", async 
 
     const second = harness.sockets[1]!;
     second.open();
+    second.receive({ type: "viewport", width: 300, height: 150 });
     second.receive({
       type: "control",
       canOperate: true,
@@ -303,6 +311,11 @@ it("ignores touch starts and keyboard or IME input before the first frame paints
       generation: 1,
       dialog: null,
     });
+    const activeSession = (
+      [...harness.posted].reverse().find((entry) => entry.type === "control") as {
+        inputSession: number;
+      }
+    ).inputSession;
     socket.sent.length = 0;
 
     const canvas = document.querySelector("canvas")!;
@@ -314,7 +327,7 @@ it("ignores touch starts and keyboard or IME input before the first frame paints
     input.value = "\u200bhello";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new CompositionEvent("compositionend", { data: "hi", bubbles: true }));
-    command({ type: "text", text: "pasted" });
+    command({ type: "text", text: "pasted" }, activeSession);
     command({ type: "reload" });
     expect(
       socket.sent.filter((entry) => {
@@ -421,13 +434,18 @@ it("reconnects with refreshed access via updateAccess while keeping input gated 
       generation: 2,
       dialog: null,
     });
+    const secondSession = (
+      [...harness.posted].reverse().find((entry) => entry.type === "control") as {
+        inputSession: number;
+      }
+    ).inputSession;
 
     const canvas = document.querySelector("canvas")!;
     const input = document.querySelector("textarea")!;
     second.sent.length = 0;
     expect(input.disabled).toBe(true);
     tapCanvas(canvas, 40);
-    command({ type: "text", text: "blocked" });
+    command({ type: "text", text: "blocked" }, secondSession);
     expect(
       second.sent.filter((entry) => {
         const type = (entry as { type?: string }).type;
@@ -443,7 +461,7 @@ it("reconnects with refreshed access via updateAccess while keeping input gated 
       accessGeneration: 1,
     });
     expect(input.disabled).toBe(false);
-    command({ type: "text", text: "allowed" });
+    command({ type: "text", text: "allowed" }, secondSession);
     expect(second.sent).toContainEqual({ type: "text", text: "allowed" });
   } finally {
     harness.cleanup();
@@ -514,7 +532,7 @@ it("suspends transport and input on updateAccess(null) and resumes on fresh acce
   }
 });
 
-it("drops text commands carrying a stale inputSession across reconnects and control handoffs", async () => {
+it("drops text commands carrying a missing or stale inputSession across reconnects and control handoffs", async () => {
   const harness = mountMobileStream();
   try {
     const first = harness.sockets[0]!;
@@ -576,6 +594,10 @@ it("drops text commands carrying a stale inputSession across reconnects and cont
     expect(thirdSession).toBeGreaterThan(secondSession);
 
     command({ type: "text", text: "stale-after-handoff" }, secondSession);
+    (command as unknown as (input: { type: "text"; text: string }) => void)({
+      type: "text",
+      text: "untagged-paste",
+    });
     expect(second.sent.filter((entry) => (entry as { type?: string }).type === "text")).toEqual([]);
 
     command({ type: "text", text: "current-session-paste" }, thirdSession);

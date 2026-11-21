@@ -42,7 +42,7 @@ import {
 } from "./preview-stream-document";
 
 export interface PreviewStreamRef {
-  readonly command: (input: PreviewStreamInput) => void;
+  readonly command: (input: Exclude<PreviewStreamInput, { readonly type: "text" }>) => void;
   readonly paste: () => void;
   readonly togglePictureInPicture: () => void;
 }
@@ -400,6 +400,7 @@ function PreviewStreamDocumentView({
   const accessGeneration = useRef(0);
   const pasteGeneration = useRef(0);
   const inputSession = useRef<number | undefined>(undefined);
+  const streamingRef = useRef(false);
   const bootstrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error">("connecting");
   // Survives mid-session reconnects and access outages because only a target or attempt change remounts this view.
@@ -450,30 +451,35 @@ function PreviewStreamDocumentView({
       ),
     );
   };
-  const command = (input: PreviewStreamInput, expectedInputSession?: number) =>
+  const command = (input: Exclude<PreviewStreamInput, { readonly type: "text" }>) =>
     webView.current?.injectJavaScript(
-      expectedInputSession === undefined
-        ? `window.T3PreviewStream?.command(${JSON.stringify(input)}); true;`
-        : `window.T3PreviewStream?.command(${JSON.stringify(input)}, ${JSON.stringify(expectedInputSession)}); true;`,
+      `window.T3PreviewStream?.command(${JSON.stringify(input)}); true;`,
+    );
+  const pasteText = (text: string, expectedInputSession: number) =>
+    webView.current?.injectJavaScript(
+      `window.T3PreviewStream?.command(${JSON.stringify({ type: "text", text })}, ${JSON.stringify(expectedInputSession)}); true;`,
     );
   // Reads here rather than in the screen: a tab switch during the iOS paste prompt unmounts
-  // this view and nulls its WebView ref; pasteGeneration cancels native-observed transitions and
+  // this view and nulls its WebView ref; streamingRef and inputSession reject pre-commit
+  // disconnect windows, pasteGeneration cancels native-observed transitions, and
   // expectedInputSession lets the WebView drop pastes spanning unnotified reconnects or handoffs.
   const paste = () => {
+    const session = inputSession.current;
     if (
       !active.current ||
       failed.current ||
+      !streamingRef.current ||
       status !== "streaming" ||
-      control?.controller !== "you"
+      control?.controller !== "you" ||
+      session === undefined
     ) {
       return;
     }
     const generation = pasteGeneration.current;
-    const session = inputSession.current;
     void Clipboard.getStringAsync().then(
       (text) => {
         if (!active.current || failed.current || pasteGeneration.current !== generation) return;
-        if (text) command({ type: "text", text }, session);
+        if (text) pasteText(text, session);
       },
       () => {
         if (!active.current || failed.current || pasteGeneration.current !== generation) return;
@@ -489,6 +495,7 @@ function PreviewStreamDocumentView({
   const fail = (message: string) => {
     if (!active.current || failed.current) return;
     failed.current = true;
+    streamingRef.current = false;
     pasteGeneration.current += 1;
     inputSession.current = undefined;
     clearBootstrapTimer();
@@ -510,6 +517,7 @@ function PreviewStreamDocumentView({
     onErrorChange?.(failedState);
   });
   const streamEnded = useEffectEvent(() => {
+    streamingRef.current = false;
     pasteGeneration.current += 1;
     inputSession.current = undefined;
     onStreamingChange?.(false);
@@ -740,6 +748,7 @@ function PreviewStreamDocumentView({
                   fail(message.detail ?? "Browser stream failed.");
                   return;
                 }
+                streamingRef.current = message.status === "streaming";
                 setStatus(message.status);
                 if (message.status === "streaming") setHasStreamed(true);
                 if (message.status === "connecting") {
