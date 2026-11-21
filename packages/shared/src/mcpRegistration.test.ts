@@ -595,6 +595,27 @@ describe("parseMcpRegistration", () => {
       ],
     },
     {
+      label: "MCPB config keys with hyphens",
+      source: {
+        name: "notes",
+        server: {
+          mcp_config: {
+            command: "${user_config.bin-path}",
+            args: ["index.js", "--token", "${user_config.api-key}"],
+            env: { TOKEN: "${user_config.api-key}" },
+          },
+        },
+        user_config: {
+          "bin-path": { type: "string", title: "Binary" },
+          "api-key": { type: "string", title: "API key", sensitive: true },
+        },
+      },
+      expectedFields: [
+        { key: "bin-path", label: "Binary", type: "string", required: false, secret: false },
+        { key: "api-key", label: "API key", type: "string", required: false, secret: true },
+      ],
+    },
+    {
       label: "platform overrides without changing the user config",
       source: {
         ...mcpbManifest,
@@ -893,21 +914,71 @@ describe("resolveMcpLaunch", () => {
       },
     },
     {
-      label: "a repeated argument restored as text still expands",
+      label: "a repeated secret argument restored as JSON keeps each element",
       source: {
         kind: "server.json" as const,
         document: serverJson([
           stdioPackage({
             packageArguments: [
-              { type: "named", name: "--mount", valueHint: "volume", isRepeated: true },
+              {
+                type: "named",
+                name: "--mount",
+                valueHint: "volume",
+                isRepeated: true,
+                isSecret: true,
+              },
             ],
           }),
         ]),
       },
-      config: { mount: "a,b" },
+      config: { mount: '["a","b,c"]' },
       expected: {
         command: "npx",
-        args: ["-y", "@acme/notes-mcp@1.4.2", "--mount", "a", "--mount", "b"],
+        args: ["-y", "@acme/notes-mcp@1.4.2", "--mount", "a", "--mount", "b,c"],
+        env: {},
+      },
+    },
+    {
+      label: "a repeated secret runtime argument restored as JSON repeats its flag",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            runtimeArguments: [
+              {
+                type: "named",
+                name: "--volume",
+                valueHint: "volume",
+                isRepeated: true,
+                isSecret: true,
+              },
+            ],
+          }),
+        ]),
+      },
+      config: { volume: '["one","two,three"]' },
+      expected: {
+        command: "npx",
+        args: ["-y", "--volume", "one", "--volume", "two,three", "@acme/notes-mcp@1.4.2"],
+        env: {},
+      },
+    },
+    {
+      label: "a repeated secret positional argument restored as JSON expands",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [
+              { type: "positional", valueHint: "path", isRepeated: true, isSecret: true },
+            ],
+          }),
+        ]),
+      },
+      config: { argument_1: '["/a","/b,c"]' },
+      expected: {
+        command: "npx",
+        args: ["-y", "@acme/notes-mcp@1.4.2", "/a", "/b,c"],
         env: {},
       },
     },
@@ -1030,6 +1101,65 @@ describe("resolveMcpLaunch", () => {
       config: { token: "pa${ss}word" },
       options: {},
       expected: { command: "node", args: ["index.js"], env: { TOKEN: "pa${ss}word" } },
+    },
+    {
+      label: "a sensitive MCPB list restored as JSON expands its elements",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor(
+          {
+            command: "node",
+            args: ["index.js", "${user_config.labels}"],
+            env: {},
+          },
+          { labels: { type: "string", multiple: true, sensitive: true } },
+        ),
+        bundleDir: "/bundle",
+      },
+      config: { labels: '["alpha,one","beta"]' },
+      options: {},
+      expected: { command: "node", args: ["index.js", "alpha,one", "beta"], env: {} },
+    },
+    {
+      label: "MCPB keys with hyphens substitute in every position",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor(
+          {
+            command: "${user_config.bin-path}",
+            args: ["index.js", "--token", "${user_config.api-key}", "${user_config.extra-args}"],
+            env: { TOKEN: "${user_config.api-key}" },
+          },
+          {
+            "bin-path": { type: "string", required: true },
+            "api-key": { type: "string", required: true, sensitive: true },
+            "extra-args": { type: "string", multiple: true },
+          },
+        ),
+        bundleDir: "/bundle",
+      },
+      config: {
+        "bin-path": "node",
+        "api-key": "s3cret",
+        "extra-args": ["a", "b,c"],
+      },
+      options: {},
+      expected: {
+        command: "node",
+        args: ["index.js", "--token", "s3cret", "a", "b,c"],
+        env: { TOKEN: "s3cret" },
+      },
+    },
+    {
+      label: "an unknown substitution with a hyphen is rejected",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor({ command: "node", args: ["${UNKNOWN-KEY}"], env: {} }),
+        bundleDir: "/bundle",
+      },
+      config: {},
+      options: {},
+      message: "Unsupported MCPB substitution: ${UNKNOWN-KEY}",
     },
     {
       label: "an unknown substitution is rejected instead of passed through",

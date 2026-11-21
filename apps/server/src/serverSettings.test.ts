@@ -1507,11 +1507,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
                       identifier: "@acme/notes-mcp",
                       transport: { type: "stdio" },
                       environmentVariables: [{ name: "NOTES_TOKEN", isSecret: true }],
+                      packageArguments: [
+                        { type: "named", name: "--tag", isRepeated: true, isSecret: true },
+                      ],
                     },
                   ],
                 },
               },
-              config: { NOTES_TOKEN: 123456 },
+              config: { NOTES_TOKEN: 123456, tag: ["alpha,one", "beta"] },
             },
           },
         });
@@ -1534,6 +1537,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           assert.notInclude(JSON.stringify(client), value);
           assert.notInclude(disk, value);
         }
+        const listSecretName = `registered-mcp-${Buffer.from("notes", "utf8").toString("base64url")}-${Buffer.from("tag", "utf8").toString("base64url")}`;
+        const stored = Option.getOrUndefined(yield* store.get(listSecretName));
+        assert.equal(stored && new TextDecoder().decode(stored), '["alpha,one","beta"]');
+        assert.include(JSON.stringify(saved), "alpha,one");
+        assert.notInclude(disk, "alpha,one");
         assert.include(JSON.stringify(client), "https://example.test");
         assert.include(JSON.stringify(client), "me@example.test");
         const echoed = yield* service.updateSettings({

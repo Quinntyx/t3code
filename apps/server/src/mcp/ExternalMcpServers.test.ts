@@ -62,7 +62,11 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
             { name: "FIXTURE_START_FAILURE" },
             { name: "FIXTURE_PID_FILE" },
             { name: "FIXTURE_PING_BEFORE_LIST" },
+            { name: "FIXTURE_STRING_ID_PING" },
             { name: "FIXTURE_PAGINATE" },
+            { name: "FIXTURE_TOOL_NAMES" },
+            { name: "FIXTURE_LABEL" },
+            { name: "FIXTURE_ERROR_DETAIL" },
           ],
         },
       ],
@@ -182,13 +186,21 @@ type Body<A, E> = (
 ) => Effect.Effect<A, E, ServerSettings.ServerSettingsService | Scope.Scope>;
 
 /** Runs `body` with a started reconciler in one scope, so a failing body still stops it. */
-const runTest = <A, E>(entries: ReadonlyArray<Entry>, body: Body<A, E>) =>
+const runTestWith = <A, E>(entries: ReadonlyArray<Entry>, announces: number, body: Body<A, E>) =>
   Effect.gen(function* () {
     const servers = yield* ExternalMcpServers.ExternalMcpServers;
     yield* startServers(servers);
-    yield* watcher(servers);
+    // Each desired server announces once, so two servers are both started before the body runs.
+    yield* servers.changes.pipe(
+      Stream.take(announces),
+      Stream.runDrain,
+      Effect.timeout("20 seconds"),
+    );
     return yield* body(servers);
   }).pipe(Effect.scoped, Effect.provide(layerTest(entries)));
+
+const runTest = <A, E>(entries: ReadonlyArray<Entry>, body: Body<A, E>) =>
+  runTestWith(entries, 1, body);
 
 it.live("launches an enabled server and lists its tools under the configured prefix", () =>
   runTest([entry()], (servers) =>
@@ -234,6 +246,111 @@ it.live("answers a server's ping instead of taking it for a reply, and follows i
       }),
   ),
 );
+
+it.live("answers a server ping whose id is a string", () =>
+  runTest([entry({ config: { FIXTURE_STRING_ID_PING: "1" } })], (servers) =>
+    Effect.gen(function* () {
+      expect(yield* servers.tools).toHaveLength(3);
+      expect((yield* servers.states).servers).toEqual([
+        expect.objectContaining({ status: "running" }),
+      ]);
+    }),
+  ),
+);
+
+it.live("gives a colliding tool name to the first server and reports the loser", () =>
+  runTestWith(
+    [
+      entry({
+        id: "first",
+        name: "First",
+        toolName: "notes",
+        config: { FIXTURE_TOOL_NAMES: "team_search,image,crash-on-call", FIXTURE_LABEL: "first" },
+      }),
+      entry({
+        id: "second",
+        name: "Second",
+        toolName: "notes_team",
+        config: { FIXTURE_TOOL_NAMES: "search,image,crash-on-call", FIXTURE_LABEL: "second" },
+      }),
+    ],
+    2,
+    (servers) =>
+      Effect.gen(function* () {
+        const tools = yield* servers.tools;
+        expect(
+          tools.filter((tool) => tool.name === "notes_team_search").map((tool) => tool.serverId),
+        ).toEqual(["first"]);
+
+        const states = (yield* servers.states).servers;
+        expect(states[0]?.tools).toContain("notes_team_search");
+        expect(states[1]?.tools).not.toContain("notes_team_search");
+        expect(states[1]?.tools).toContain("notes_team_image");
+        expect(states[1]?.skippedTools).toEqual(["as notes_team_search, which another tool uses"]);
+
+        const winner = tools.find((tool) => tool.name === "notes_team_search")!;
+        const result = yield* servers.callTool(winner, { text: "hi" });
+        expect(result.structuredContent).toEqual({ echoed: "hi", label: "first" });
+      }),
+  ),
+);
+
+it.live.each([
+  {
+    label: "replacement",
+    names: ["a.b", "a_b", "crash-on-call"],
+    emitted: "fixture_a_b",
+    winner: "a.b",
+  },
+  {
+    label: "truncation",
+    names: ["x".repeat(60) + "a", "x".repeat(60) + "b", "crash-on-call"],
+    emitted: `fixture_${"x".repeat(60)}`,
+    winner: "x".repeat(60) + "a",
+  },
+])("skips one server's duplicate emitted name: $label", ({ names, emitted, winner }) =>
+  runTest([entry({ config: { FIXTURE_TOOL_NAMES: names.join(",") } })], (servers) =>
+    Effect.gen(function* () {
+      const tools = yield* servers.tools;
+      expect(tools.map((tool) => tool.name)).toEqual([emitted, "fixture_crash-on-call"]);
+      expect(tools[0]?.originalName).toBe(winner);
+      const state = (yield* servers.states).servers[0]!;
+      expect(state.tools).toEqual([emitted, "fixture_crash-on-call"]);
+      expect(state.skippedTools).toEqual([`as ${emitted}, which another tool uses`]);
+    }),
+  ),
+);
+
+it.live("omits a tool whose emitted name is reserved by a native tool", () =>
+  runTest(
+    [entry({ toolName: "html", config: { FIXTURE_TOOL_NAMES: "render,image,crash-on-call" } })],
+    (servers) =>
+      Effect.gen(function* () {
+        expect((yield* servers.tools).map((tool) => tool.name)).toEqual([
+          "html_image",
+          "html_crash-on-call",
+        ]);
+        const state = (yield* servers.states).servers[0]!;
+        expect(state.tools).toEqual(["html_image", "html_crash-on-call"]);
+        expect(state.skippedTools).toEqual(["as html_render, which another tool uses"]);
+      }),
+  ),
+);
+
+it.live("redacts a single element of a secret list echoed by the child", () => {
+  const failure = secretFailureEntry('["alpha,one","beta"]');
+  return runTest(
+    [{ ...failure, config: { ...failure.config, FIXTURE_ERROR_DETAIL: "beta" } }],
+    (servers) =>
+      Effect.gen(function* () {
+        const state = (yield* servers.states).servers[0]!;
+        expect(state.status).toBe("failed");
+        expect(state.stderrTail).toContain("fixture cannot start");
+        expect(state.stderrTail).not.toContain("beta");
+        expect(state.stderrTail).toContain("••••••");
+      }),
+  );
+});
 
 it.live("disabling a server stops its child and withdraws its tools", () =>
   runTest([entry()], (servers) =>

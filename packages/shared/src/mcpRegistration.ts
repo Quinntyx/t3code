@@ -459,10 +459,17 @@ const readMcpbFields = (raw: unknown): ReadonlyArray<McpConfigField> =>
 
 const MCPB_USER_CONFIG_TYPES = new Set(["string", "number", "boolean", "directory", "file"]);
 
+const MCPB_KEY_CHARS = "A-Za-z0-9_/.";
+const MCPB_CONFIG_KEY = `[${MCPB_KEY_CHARS}-]+`;
+const MCPB_CONFIG_REFERENCE = new RegExp(`\\$\\{user_config(\\.(${MCPB_CONFIG_KEY}))?\\}`, "gu");
+const MCPB_SUBSTITUTION = new RegExp(`\\$\\{([${MCPB_KEY_CHARS}-]+)\\}`, "gu");
+const MCPB_ARGUMENT_PLACEHOLDER = new RegExp(`^\\$\\{user_config\\.(${MCPB_CONFIG_KEY})\\}$`, "u");
+
 const mcpbConfigReferences = (mcpConfig: Readonly<Record<string, unknown>>) =>
-  [...JSON.stringify(mcpConfig).matchAll(/\$\{user_config(\.([A-Za-z0-9_.-]+))?\}/gu)].map(
-    (match) => ({ bare: match[1] === undefined, key: match[2] }),
-  );
+  [...JSON.stringify(mcpConfig).matchAll(MCPB_CONFIG_REFERENCE)].map((match) => ({
+    bare: match[1] === undefined,
+    key: match[2],
+  }));
 
 const parseMcpb = (manifest: Readonly<Record<string, unknown>>): McpRegistrationResult => {
   const server = asRecord(manifest.server);
@@ -528,6 +535,22 @@ export function parseMcpRegistration(json: unknown): McpRegistrationResult {
 const stringifyValue = (value: McpConfigValue): string =>
   Array.isArray(value) ? value.join(",") : String(value);
 
+/** A list-valued secret crosses the secret store as JSON so commas stay inside its elements. */
+export const encodeMcpConfigValue = (value: McpConfigValue): string =>
+  Array.isArray(value) ? JSON.stringify(value) : String(value);
+
+export const decodeMcpConfigValue = (value: string): McpConfigValue => {
+  if (!value.startsWith("[")) return value;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((part) => typeof part === "string")
+      ? parsed
+      : value;
+  } catch {
+    return value;
+  }
+};
+
 const configuredValues = (
   fields: ReadonlyArray<McpConfigField>,
   config: Readonly<Record<string, McpConfigValue>>,
@@ -580,8 +603,6 @@ const mcpbSubstitutions = (
   ]);
 };
 
-const MCPB_SUBSTITUTION = /\$\{([A-Za-z0-9_./]+)\}/gu;
-
 const substituteMcpb = (
   template: string,
   values: ReadonlyMap<string, string>,
@@ -592,9 +613,6 @@ const substituteMcpb = (
       ? (values.get(key.slice("user_config.".length)) ?? "")
       : (substitutions.get(key) ?? match),
   );
-
-/** An argv element that is only a multi-value placeholder becomes one argument per value. */
-const MCPB_ARGUMENT_PLACEHOLDER = /^\$\{user_config\.([A-Za-z0-9_.-]+)\}$/u;
 
 /**
  * The arguments one declared argument contributes. A fixed value always comes through, a
@@ -609,15 +627,12 @@ const argumentArgs = (
   if (argument.suppliedKey !== undefined) {
     const supplied = values.get(argument.suppliedKey);
     const configured = config[argument.suppliedKey];
-    // A secret list comes back from the store as comma-joined text, so only that form is split.
     const parts =
       supplied === undefined || supplied === ""
         ? []
         : Array.isArray(configured)
           ? configured.map(String)
-          : argument.repeated
-            ? supplied.split(",")
-            : [supplied];
+          : [supplied];
     return parts.flatMap((part) => [...flag, part]);
   }
   if (argument.value === undefined) return flag;
@@ -635,7 +650,16 @@ export function resolveMcpLaunch(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
   );
   if (!parsed.ok) return parsed;
-  const resolved = configuredValues(parsed.registration.fields, entry.config);
+  const secretKeys = new Set(
+    parsed.registration.fields.flatMap((field) => (field.secret ? [field.key] : [])),
+  );
+  const config = Object.fromEntries(
+    Object.entries(entry.config).map(([key, value]) => [
+      key,
+      typeof value === "string" && secretKeys.has(key) ? decodeMcpConfigValue(value) : value,
+    ]),
+  ) as Record<string, McpConfigValue>;
+  const resolved = configuredValues(parsed.registration.fields, config);
   if (!resolved.ok) return resolved;
   const { values } = resolved;
 
@@ -651,9 +675,6 @@ export function resolveMcpLaunch(
     if (command.trim() === "")
       return failure("The MCPB manifest has no server.mcp_config command.");
     const substitutions = mcpbSubstitutions(entry.source.bundleDir, options);
-    const secretKeys = new Set(
-      parsed.registration.fields.flatMap((field) => (field.secret ? [field.key] : [])),
-    );
     const fields = new Map(parsed.registration.fields.map((field) => [field.key, field]));
     const resolvedValues = new Map(
       [...values].map(([key, value]) => [
@@ -667,7 +688,7 @@ export function resolveMcpLaunch(
       const placeholder = MCPB_ARGUMENT_PLACEHOLDER.exec(value);
       if (placeholder !== null) {
         const key = placeholder[1]!;
-        const configured = entry.config[key] ?? fields.get(key)?.default;
+        const configured = config[key] ?? fields.get(key)?.default;
         if (Array.isArray(configured)) {
           return configured.map((part) => substituteMcpb(part, resolvedValues, substitutions));
         }
@@ -721,13 +742,9 @@ export function resolveMcpLaunch(
       ...value.value.baseArgs.slice(0, -1),
       ...(value.value.container ? Object.keys(env).flatMap((name) => ["-e", name]) : []),
       // Runtime arguments configure the runner, so they precede the package identifier or image.
-      ...value.value.runtimeArguments.flatMap((argument) =>
-        argumentArgs(argument, values, entry.config),
-      ),
+      ...value.value.runtimeArguments.flatMap((argument) => argumentArgs(argument, values, config)),
       ...value.value.baseArgs.slice(-1),
-      ...value.value.packageArguments.flatMap((argument) =>
-        argumentArgs(argument, values, entry.config),
-      ),
+      ...value.value.packageArguments.flatMap((argument) => argumentArgs(argument, values, config)),
     ].filter((argument) => argument !== "");
     return { ok: true, launch: { command: value.value.command, args, env } };
   }

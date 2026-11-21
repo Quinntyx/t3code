@@ -27,7 +27,7 @@ import {
   sourceControlHostSecretName,
   writeSecretFieldValues,
 } from "./sourceControl/sourceControlHostSecrets.ts";
-import { parseMcpRegistration } from "@t3tools/shared/mcpRegistration";
+import { encodeMcpConfigValue, parseMcpRegistration } from "@t3tools/shared/mcpRegistration";
 
 export const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
 
@@ -253,11 +253,13 @@ function mapSecretFieldGroups(
   const registeredMcpServers = settings.registeredMcpServers.map((server) => {
     const fields = registeredMcpSecretFields(server);
     // A number, boolean or array the form accepted is still that field's secret, so it enters the
-    // store as the text it would launch with.
+    // store as the text it would launch with; a list keeps its element boundaries as JSON.
     const config = { ...server.config };
     for (const field of fields) {
       const value = config[field];
-      if (value !== undefined && typeof value !== "string") config[field] = String(value);
+      if (value !== undefined && typeof value !== "string") {
+        config[field] = encodeMcpConfigValue(value);
+      }
     }
     return {
       ...server,
