@@ -338,17 +338,32 @@ it.live("omits a tool whose emitted name is reserved by a native tool", () =>
 );
 
 it.live("redacts a single element of a secret list echoed by the child", () => {
-  const failure = secretFailureEntry('["alpha,one","beta"]');
-  return runTest(
-    [{ ...failure, config: { ...failure.config, FIXTURE_ERROR_DETAIL: "beta" } }],
-    (servers) =>
-      Effect.gen(function* () {
-        const state = (yield* servers.states).servers[0]!;
-        expect(state.status).toBe("failed");
-        expect(state.stderrTail).toContain("fixture cannot start");
-        expect(state.stderrTail).not.toContain("beta");
-        expect(state.stderrTail).toContain("••••••");
-      }),
+  const failure = secretFailureEntry("on");
+  if (failure.source.kind !== "server.json") throw new Error("unreachable");
+  const document = failure.source.document as { packages: ReadonlyArray<object> };
+  const withSecretList: Entry = {
+    ...failure,
+    source: {
+      kind: "server.json",
+      document: {
+        ...document,
+        packages: document.packages.map((pkg) => ({
+          ...pkg,
+          packageArguments: [{ type: "named", name: "--label", isRepeated: true, isSecret: true }],
+        })),
+      },
+    },
+    // The secret store hands a list secret back as JSON text.
+    config: { ...failure.config, label: '["alpha,one","beta"]', FIXTURE_ERROR_DETAIL: "beta" },
+  };
+  return runTest([withSecretList], (servers) =>
+    Effect.gen(function* () {
+      const state = (yield* servers.states).servers[0]!;
+      expect(state.status).toBe("failed");
+      expect(state.stderrTail).toContain("fixture cannot start");
+      expect(state.stderrTail).not.toContain("beta");
+      expect(state.stderrTail).toContain("••••••");
+    }),
   );
 });
 

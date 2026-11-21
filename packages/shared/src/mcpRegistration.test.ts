@@ -1089,18 +1089,22 @@ describe("resolveMcpLaunch", () => {
       },
     },
     {
-      label: "a secret value that looks like a substitution is passed as typed",
+      label: "secret values that look like a substitution or a list are passed as typed",
       source: {
         kind: "mcpb" as const,
         manifest: mcpbManifestFor(
-          { command: "node", args: ["index.js"], env: { TOKEN: "${user_config.token}" } },
-          { token: { type: "string", sensitive: true } },
+          {
+            command: "node",
+            args: ["index.js", "${user_config.key}"],
+            env: { TOKEN: "${user_config.token}" },
+          },
+          { token: { type: "string", sensitive: true }, key: { type: "string", sensitive: true } },
         ),
         bundleDir: "/bundle",
       },
-      config: { token: "pa${ss}word" },
+      config: { token: "pa${ss}word", key: '["x","y"]' },
       options: {},
-      expected: { command: "node", args: ["index.js"], env: { TOKEN: "pa${ss}word" } },
+      expected: { command: "node", args: ["index.js", '["x","y"]'], env: { TOKEN: "pa${ss}word" } },
     },
     {
       label: "a sensitive MCPB list restored as JSON expands its elements",
