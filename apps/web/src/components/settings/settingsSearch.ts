@@ -32,6 +32,7 @@ export type SettingsPath =
   | "/settings/browser"
   | "/settings/devices"
   | "/settings/email"
+  | "/settings/capabilities"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
@@ -108,6 +109,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
   "/settings/email": msg("Email"),
+  "/settings/capabilities": msg("General"),
   "/settings/scheduled-tasks": msg("Scheduled tasks"),
   "/settings/source-control": msg("Source control & issues"),
   "/settings/worktrees": msg("Worktrees"),
@@ -159,7 +161,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/scheduled-tasks",
     ],
   },
-  { heading: msg("Capabilities"), paths: ["/settings/email"] },
+  {
+    heading: msg("Capabilities"),
+    paths: ["/settings/capabilities", "/settings/email"],
+  },
   {
     heading: msg("Code"),
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
@@ -1180,6 +1185,27 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("device pixel ratio dpr resolution sharp hidpi retina 1x 2x")],
   },
   {
+    id: "mcp-servers",
+    title: msg("MCP servers"),
+    to: "/settings/capabilities",
+    scope: "environment",
+    searchTerms: [msg("capabilities connectors tools register stdio server.json mcpb local")],
+  },
+  {
+    id: "registered-servers",
+    title: msg("Registered MCP servers"),
+    to: "/settings/capabilities",
+    scope: "environment",
+    searchTerms: [msg("mcp servers registered enabled remove")],
+  },
+  {
+    id: "register-mcp-server",
+    title: msg("Register an MCP server"),
+    to: "/settings/capabilities",
+    scope: "environment",
+    searchTerms: [msg("mcp add register server.json mcpb manifest paste")],
+  },
+  {
     id: "email-enabled",
     title: msg("Agents can draft emails"),
     to: "/settings/email",
@@ -1638,6 +1664,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/browser": null,
   "/settings/devices": null,
   "/settings/email": "environment",
+  "/settings/capabilities": "environment",
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",

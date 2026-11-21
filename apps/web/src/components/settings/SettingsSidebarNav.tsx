@@ -30,6 +30,7 @@ import {
   ServerIcon,
   Settings2Icon,
   ShieldCheckIcon,
+  PlugIcon,
   SmartphoneIcon,
   WrenchIcon,
   XIcon,
@@ -39,6 +40,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
 
 import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import {
@@ -50,6 +52,7 @@ import {
   SidebarMenuItem,
   SidebarInput,
 } from "../ui/sidebar";
+import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -102,6 +105,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/threads": MessagesSquareIcon,
   "/settings/browser": GlobeIcon,
+  "/settings/capabilities": PlugIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/email": MailIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
@@ -136,6 +140,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const gt = useGT();
   const m = useMessages();
   const navArea = workspaceAreaProps("settings-nav", 0, gt("Settings sections"));
+  // Absent without a scope provider, as in the composition test; the nav then lists none.
+  const registeredMcpServers =
+    useOptionalSettingsScope()?.target?.settings.registeredMcpServers ?? [];
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
   const activePath = SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname;
@@ -422,6 +429,47 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                               </SidebarMenuItem>
                             );
                           })}
+                          {group.paths.includes("/settings/capabilities")
+                            ? registeredMcpServers.map((server) => {
+                                const to = `/settings/mcp/${server.id}`;
+                                const isActive = activePath === to;
+                                return (
+                                  <SidebarMenuItem key={to}>
+                                    <SidebarMenuButton
+                                      data-settings-section={to}
+                                      aria-current={isActive ? "page" : undefined}
+                                      isActive={isActive}
+                                      onClick={() =>
+                                        void navigate({
+                                          to: "/settings/mcp/$serverId",
+                                          params: { serverId: server.id },
+                                          hash: "",
+                                          replace: true,
+                                          hashScrollIntoView: false,
+                                        })
+                                      }
+                                    >
+                                      <PlugIcon />
+                                      <span
+                                        className={cn(
+                                          "min-w-0 flex-1 truncate",
+                                          !compactSearchOpen && "max-md:sr-only",
+                                        )}
+                                      >
+                                        {server.name}
+                                      </span>
+                                      <Badge
+                                        variant="outline"
+                                        size="sm"
+                                        className={cn(!compactSearchOpen && "max-md:hidden")}
+                                      >
+                                        MCP
+                                      </Badge>
+                                    </SidebarMenuButton>
+                                  </SidebarMenuItem>
+                                );
+                              })
+                            : null}
                         </SidebarMenu>
                       </div>
                     </div>

@@ -5,6 +5,7 @@ import { ProviderInstanceId } from "@t3tools/contracts";
 import { McpProviderSessions } from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import { McpServer } from "effect/ai";
 
 import { AssetSigner } from "../assets/AssetSigner.ts";
@@ -14,7 +15,9 @@ import { DeviceService } from "../device/DeviceService.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { GitManager } from "../git/GitManager.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import { ExternalMcpServers } from "../mcp/ExternalMcpServers.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import { nativeToolNames } from "../mcp/nativeToolNames.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
   CLAUDE_PROVIDER,
@@ -96,6 +99,12 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(ThreadManagementService)({}),
   Layer.mock(ThreadSearch)({}),
   Layer.mock(VcsStatusBroadcaster)({}),
+  // The proxy for registered MCP servers advertises whatever they expose, which is none here.
+  Layer.mock(ExternalMcpServers)({
+    tools: Effect.succeed([]),
+    changes: Stream.empty,
+    states: Effect.succeed([]),
+  }),
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -140,6 +149,17 @@ it.effect("only request_secret and send_to_user ask Claude Code to load them up 
       ["request_secret", { "anthropic/alwaysLoad": true }],
       ["send_to_user", { "anthropic/alwaysLoad": true }],
     ]);
+  }).pipe(Effect.provide(layerAdvertisedTools)),
+);
+
+// A registered MCP server's tool must never take a native name, which needs the list to be whole.
+it.effect("reserves every advertised tool name from registered MCP servers", () =>
+  Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const unreserved = mcp.tools.flatMap(({ tool }) =>
+      nativeToolNames.has(tool.name) ? [] : [tool.name],
+    );
+    expect(unreserved).toEqual([]);
   }).pipe(Effect.provide(layerAdvertisedTools)),
 );
 

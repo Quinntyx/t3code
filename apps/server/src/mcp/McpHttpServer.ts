@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -49,6 +50,7 @@ import {
   toolOutcome,
 } from "../telemetry/ProviderDimensions.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import * as ExternalMcpServers from "./ExternalMcpServers.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolExposure from "./McpToolExposure.ts";
@@ -1221,6 +1223,136 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Each registered MCP server's tools as native T3 tools, with its schema and annotations. */
+export const layerRegisteredMcpTools = Layer.effectDiscard(
+  Effect.gen(function* () {
+    // Required, not looked up optionally: a build-time miss would silently register nothing.
+    const externalServers = yield* ExternalMcpServers.ExternalMcpServers;
+    const server = yield* McpServer.McpServer;
+    // The access check reads the calling thread, which the request does not carry.
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    // What the enabled check reads. Each registration closes over its own tool name.
+    const enabled = new Set<string>();
+    // A proxy name can change hands (a reused toolName), so what it was registered from is kept.
+    const registered = new Map<string, { readonly serverId: string; readonly key: string }>();
+
+    // What the registration advertises: a tool whose owner or schema changed must be re-added.
+    const advertisedKey = (tool: ExternalMcpServers.ExternalMcpTool) =>
+      JSON.stringify([
+        tool.originalName,
+        tool.descriptor.description,
+        tool.descriptor.title,
+        tool.descriptor.inputSchema,
+        tool.descriptor.outputSchema,
+        tool.descriptor.annotations,
+      ]);
+
+    const add = (tool: ExternalMcpServers.ExternalMcpTool) =>
+      server.addTool({
+        tool: new McpSchema.Tool({
+          name: tool.name,
+          description: tool.descriptor.description,
+          inputSchema: tool.descriptor.inputSchema,
+          ...(tool.descriptor.outputSchema === undefined
+            ? {}
+            : { outputSchema: tool.descriptor.outputSchema }),
+          ...(tool.descriptor.title === undefined ? {} : { title: tool.descriptor.title }),
+          ...(tool.descriptor.annotations === undefined
+            ? {}
+            : { annotations: tool.descriptor.annotations }),
+        }),
+        annotations: Context.make(McpSchema.EnabledWhen, () => enabled.has(tool.name)),
+        handle: (payload) =>
+          Effect.withFiber((fiber) => {
+            const invocation = Context.getUnsafe(
+              fiber.context,
+              McpInvocationContext.McpInvocationContext,
+            );
+            // A proxied tool changes whatever its own annotations say; only a read-only hint reads.
+            return McpToolAccess.proxiedCaller(
+              tool.descriptor.annotations?.readOnlyHint !== true,
+            ).pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+              Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+              Effect.andThen(
+                externalServers.callTool(
+                  tool,
+                  (payload ?? {}) as Readonly<Record<string, unknown>>,
+                ),
+              ),
+              Effect.map(
+                (result) =>
+                  new McpSchema.CallToolResult({
+                    isError: result.isError,
+                    ...(result.structuredContent === undefined
+                      ? {}
+                      : { structuredContent: result.structuredContent }),
+                    content: [...result.content],
+                  }),
+              ),
+              Effect.catchTags({
+                OrchestratorMcpFailure: (error) =>
+                  Effect.succeed(
+                    new McpSchema.CallToolResult({
+                      isError: true,
+                      content: [{ type: "text", text: error.message }],
+                    }),
+                  ),
+                ExternalMcpServerError: (error) =>
+                  Effect.succeed(
+                    new McpSchema.CallToolResult({
+                      isError: true,
+                      content: [{ type: "text", text: error.message }],
+                    }),
+                  ),
+              }),
+            );
+          }),
+      });
+
+    // The names the last refresh advertised as enabled; a change is what agents cannot see.
+    let advertisedEnabled: ReadonlySet<string> | undefined;
+    const sameNames = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
+      left.size === right.size && [...left].every((name) => right.has(name));
+
+    const refresh = Effect.gen(function* () {
+      const tools = yield* externalServers.tools;
+      const nextEnabled = new Set(tools.map((tool) => tool.name));
+      const changed = advertisedEnabled !== undefined && !sameNames(advertisedEnabled, nextEnabled);
+      advertisedEnabled = nextEnabled;
+      enabled.clear();
+      for (const name of nextEnabled) enabled.add(name);
+      for (const tool of tools) {
+        const name = tool.name;
+        const key = advertisedKey(tool);
+        const current = registered.get(name);
+        // Re-added when the owner or what it advertises changed; `addTool` replaces by name.
+        if (current !== undefined && current.serverId === tool.serverId && current.key === key) {
+          continue;
+        }
+        registered.set(name, { serverId: tool.serverId, key });
+        yield* add(tool);
+      }
+      // Enabling or disabling changes `tools/list` without adding a tool, which is what announces
+      // one; a harness caching the list would otherwise keep the tools as they were.
+      if (changed) yield* server.notifications["notifications/tools/list_changed"]({});
+    });
+
+    // Subscribe before the first snapshot: a server that starts or crashes while the initial
+    // refresh runs would otherwise change state with no watcher to announce it.
+    const pending = yield* Queue.unbounded<void>();
+    yield* externalServers.changes.pipe(
+      Stream.runForEach(() => Queue.offer(pending, undefined)),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    yield* refresh;
+    yield* Stream.fromQueue(pending).pipe(
+      Stream.runForEach(() => refresh),
+      Effect.forkScoped,
+    );
+  }),
+);
+
 /** Each tool call gets a span named for its tool; arguments stay out, as they carry prompts and IDs. */
 const withToolSpans = Effect.fn("McpHttpServer.withToolSpans")(function* <A, E, R>(
   registration: Effect.Effect<A, E, R>,
@@ -1450,6 +1582,7 @@ export const layerTools = Layer.mergeAll(
   layerDeviceToolkit,
   layerHtmlToolkit,
   layerMessageToolkit,
+  layerRegisteredMcpTools,
 );
 
 const layerToolExposure = Layer.effect(

@@ -680,6 +680,61 @@ describe("serverSettings helpers", () => {
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
+  it("adds, edits and removes registered MCP servers so concurrent edits cannot clobber", () => {
+    const server = (id: string, name: string, enabled = true) => ({
+      id,
+      name,
+      toolName: name.toLowerCase(),
+      enabled,
+      source: {
+        kind: "server.json" as const,
+        document: { name: `acme/${name}`, packages: [] },
+      },
+      config: {},
+    });
+    const notes = server("notes", "Notes");
+    const calendar = server("calendar", "Calendar");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      registeredMcpServers: [notes, server("mail", "Mail", false)],
+    };
+
+    const added = applyServerSettingsPatch(current, {
+      registeredMcpServers: { calendar },
+    });
+    expect(added.registeredMcpServers.map((entry) => entry.id)).toEqual([
+      "notes",
+      "mail",
+      "calendar",
+    ]);
+
+    // Two edits made from the same snapshot, as a field's blur and a toggle's click are.
+    const edited = [
+      { notes: { config: { REGION: "eu", HOME: "/notes" } } },
+      { notes: { enabled: false } },
+      { notes: { config: { HOME: null } } },
+    ].reduce(
+      (settings, registeredMcpServers) =>
+        applyServerSettingsPatch(settings, { registeredMcpServers }),
+      added,
+    );
+    expect(
+      edited.registeredMcpServers.map((entry) => [entry.id, entry.enabled, entry.config]),
+    ).toEqual([
+      ["notes", false, { REGION: "eu" }],
+      ["mail", false, {}],
+      ["calendar", true, {}],
+    ]);
+
+    const removed = applyServerSettingsPatch(edited, {
+      registeredMcpServers: { mail: null, calendar: { ...calendar, toolName: "cal" } },
+    });
+    expect(removed.registeredMcpServers.map((entry) => [entry.id, entry.toolName])).toEqual([
+      ["notes", "notes"],
+      ["calendar", "cal"],
+    ]);
+  });
+
   it("upserts and removes secretProviders per entry so concurrent edits cannot clobber", () => {
     const personal = SecretProviderId.make("personal");
     const work = SecretProviderId.make("work");

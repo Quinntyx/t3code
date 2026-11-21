@@ -68,6 +68,11 @@ import {
   SpeechModelUnloadTimeout,
   SpeechPostProcessingPromptSettings,
 } from "./speech.ts";
+import {
+  registeredMcpServersDefault,
+  RegisteredMcpServerEdit,
+  RegisteredMcpServerEntry,
+} from "./registeredMcpServer.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -1590,6 +1595,8 @@ export const ServerSettings = Schema.Struct({
   emailRefreshCommand: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Local stdio MCP servers T3 launches and proxies to agents as native tools. */
+  registeredMcpServers: registeredMcpServersDefault,
   /** Clones default to `<addProjectBaseDirectory>/<host>/<owner>/<repo>`, like ghq. */
   ghqCloneLayout: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   textGenerationModelSelection: ModelSelection.pipe(
@@ -2023,6 +2030,13 @@ export const ServerSettingsPatch = Schema.Struct({
   emailNotmuchConfigFile: Schema.optionalKey(TrimmedString),
   emailInboxAccounts: Schema.optionalKey(Schema.Array(EmailInboxAccountConfig)),
   emailRefreshCommand: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  /** Per id, keeping list order: a whole entry adds or replaces, an edit merges, null removes. */
+  registeredMcpServers: Schema.optionalKey(
+    Schema.Record(
+      RegisteredMcpServerEntry.fields.id,
+      Schema.NullOr(Schema.Union([RegisteredMcpServerEntry, RegisteredMcpServerEdit])),
+    ),
+  ),
   ghqCloneLayout: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   threadTitleInstructions: Schema.optionalKey(TrimmedString),

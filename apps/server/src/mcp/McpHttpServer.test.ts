@@ -24,6 +24,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
@@ -47,6 +50,8 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 
 import * as DeviceService from "../device/DeviceService.ts";
+import * as EmailRequests from "../email/EmailRequests.ts";
+import * as MailInbox from "../email/MailInbox.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
@@ -54,6 +59,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerHttp from "../http.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import * as ExternalMcpServers from "./ExternalMcpServers.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
@@ -1025,6 +1031,346 @@ it.effect("bounds page text made of wide characters before dropping locators", (
       );
     }),
   ).pipe(Effect.provide(layerTest)),
+);
+
+/** A registered server exposes two tools: one read-only, one that changes things. */
+const fixtureTools: ReadonlyArray<ExternalMcpServers.ExternalMcpTool> = [
+  {
+    serverId: "fixture",
+    serverName: "Fixture",
+    originalName: "echo",
+    name: "fixture_echo",
+    descriptor: new McpSchema.Tool({
+      name: "fixture_echo",
+      description: "Echo the text back.",
+      inputSchema: {
+        type: "object",
+        properties: { text: { type: "string", description: "What to echo." } },
+        required: ["text"],
+      },
+      outputSchema: { type: "object", properties: { echoed: { type: "string" } } },
+      annotations: { readOnlyHint: true },
+    }),
+  },
+  {
+    serverId: "fixture",
+    serverName: "Fixture",
+    originalName: "set",
+    name: "fixture_set",
+    descriptor: new McpSchema.Tool({
+      name: "fixture_set",
+      description: "Change the fixture's state.",
+      inputSchema: { type: "object", properties: { value: { type: "string" } } },
+    }),
+  },
+];
+
+const fixtureCalls: Array<{ server: string; name: string; args: unknown }> = [];
+
+/** The registered MCP service, with `tools` under the test's control. */
+const layerExternalMcpStub = (options: {
+  readonly tools: Effect.Effect<ReadonlyArray<ExternalMcpServers.ExternalMcpTool>>;
+  readonly changes: Stream.Stream<void>;
+}) =>
+  Layer.succeed(
+    ExternalMcpServers.ExternalMcpServers,
+    ExternalMcpServers.ExternalMcpServers.of({
+      start: Effect.never,
+      states: Effect.succeed([]),
+      tools: options.tools,
+      callTool: (called, args) =>
+        Effect.sync(() => {
+          fixtureCalls.push({ server: called.serverId, name: called.originalName, args });
+          const text = String((args as { text?: unknown }).text ?? "");
+          return {
+            content: [{ type: "text" as const, text }],
+            structuredContent: { echoed: text },
+            isError: false,
+          };
+        }),
+      changes: options.changes,
+    }),
+  );
+
+const layerRegisteredMcpTest = (options: {
+  readonly external: Layer.Layer<ExternalMcpServers.ExternalMcpServers>;
+}) =>
+  Layer.mergeAll(
+    McpHttpServer.layerInProcessMcpServer,
+    options.external,
+    ServerSettings.layerTest(),
+    Layer.mock(MailInbox.MailInbox)({
+      accounts: Effect.succeed({ accounts: [], taggingEnabled: false, refreshAvailable: false }),
+    }),
+    Layer.mock(EmailRequests.EmailRequests)({}),
+    McpToolAccessTestkit.liveThreadsLayer,
+    NodeServices.layer,
+    NodeCrypto.layer,
+  );
+
+/**
+ * Runs the proxy against a built stack. `registered` completes when it has registered `count`
+ * tools, which is the milestone a test waits for instead of yielding and hoping.
+ */
+const startRegisteredMcpProxy = <Services>(context: Context.Context<Services>, count: number) =>
+  Effect.gen(function* () {
+    const server = Context.getUnsafe(context, McpServer.McpServer);
+    const registered = yield* Deferred.make<void>();
+    const notifyRegistered = () =>
+      server.tools.length >= count ? Deferred.succeed(registered, undefined) : Effect.void;
+    // Every `list_changed` the proxy sends, so a test can assert it announced a change.
+    const listChanges = yield* Queue.unbounded<void>();
+    // The proxy's own registration is what this test drives; the stub only observes it.
+    const notifying = McpServer.McpServer.of({
+      ...server,
+      addTool: (options) =>
+        // oxlint-disable-next-line t3code/no-raw-mcp-registration -- forwards to the server's own addTool
+        server.addTool(options).pipe(Effect.andThen(() => notifyRegistered())),
+      notifications: {
+        ...server.notifications,
+        "notifications/tools/list_changed": (payload) =>
+          Queue.offer(listChanges, undefined).pipe(
+            Effect.andThen(server.notifications["notifications/tools/list_changed"](payload)),
+          ),
+      },
+    });
+    yield* McpHttpServer.layerRegisteredMcpTools.pipe(
+      Layer.provide(Layer.succeedContext(Context.add(context, McpServer.McpServer, notifying))),
+      Layer.launch,
+      Effect.forkScoped,
+    );
+    return { server, registered, listChanges };
+  });
+
+/** A server enabled after startup reaches the proxy: its change watcher lives as long as the layer. */
+it.effect("exposes a server's tools when it is enabled after the layer is built", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // A queue holds each change until the proxy's watcher takes it, as a PubSub would not
+      // before the watcher exists.
+      const changeQueue = yield* Queue.unbounded<void>();
+      const activeTools = yield* Ref.make<ReadonlyArray<ExternalMcpServers.ExternalMcpTool>>([]);
+      // Every refresh reads the server's tools, so a read marks one refresh reaching that point.
+      const reads = yield* Queue.unbounded<void>();
+      const readTools = Ref.get(activeTools).pipe(Effect.tap(() => Queue.offer(reads, undefined)));
+      const awaitReads = (count: number) =>
+        Effect.forEach(Array.from({ length: count }), () => Queue.take(reads), {
+          discard: true,
+        });
+      const publishChange = () => Queue.offer(changeQueue, undefined).pipe(Effect.asVoid);
+      const context = yield* Layer.build(
+        layerRegisteredMcpTest({
+          external: layerExternalMcpStub({
+            tools: readTools,
+            changes: Stream.fromQueue(changeQueue),
+          }),
+        }),
+      );
+
+      // Nothing is running yet, so the proxy registers no tool.
+      const { server, listChanges } = yield* startRegisteredMcpProxy(context, 2);
+      yield* awaitReads(1);
+      expect(server.tools).toEqual([]);
+
+      // Enabling the server is a change; the proxy must still be listening for one.
+      yield* Ref.set(activeTools, fixtureTools);
+      yield* publishChange();
+      yield* awaitReads(1);
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_echo", "fixture_set"]);
+      // A second change is a barrier: its read happens after the first refresh finished, so the
+      // notification the first one sent is already waiting, and none waits for the second.
+      yield* publishChange();
+      yield* awaitReads(1);
+      // The enabled set changed, so a harness caching the list is told to fetch it again.
+      expect(yield* Queue.takeAll(listChanges)).toHaveLength(1);
+
+      // Disabling it hides both again, without unregistering them. The second change is taken
+      // after the first refresh finished, so the enabled check already reflects the empty set.
+      yield* Ref.set(activeTools, []);
+      yield* publishChange();
+      yield* awaitReads(1);
+      yield* publishChange();
+      yield* awaitReads(1);
+      // One notification for the disable; the refresh that changed nothing sent none.
+      expect(yield* Queue.takeAll(listChanges)).toHaveLength(1);
+      const enabledWhen = Context.getOrUndefined(
+        server.tools[0]!.annotations,
+        McpSchema.EnabledWhen,
+      );
+      expect(enabledWhen?.({ protocolVersion: "2025-06-18", capabilities: {} })).toBe(false);
+      // Disabled, not unregistered: a later change can still expose the same names again.
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_echo", "fixture_set"]);
+
+      // A name reused by another server is that server's: the registration must follow it.
+      const adopted: ExternalMcpServers.ExternalMcpTool = {
+        ...fixtureTools[0]!,
+        serverId: "other",
+        serverName: "Other",
+        descriptor: new McpSchema.Tool({
+          name: "fixture_echo",
+          description: "The other server's echo.",
+          inputSchema: { type: "object", properties: { text: { type: "string" } } },
+        }),
+      };
+      yield* Ref.set(activeTools, [adopted]);
+      yield* publishChange();
+      yield* awaitReads(1);
+      const adoptedTool = server.tools.find(({ tool }) => tool.name === "fixture_echo")!.tool;
+      expect(adoptedTool.description).toBe("The other server's echo.");
+
+      // The call follows the owner too, not the server that held the name before.
+      fixtureCalls.length = 0;
+      const result = yield* server
+        .callTool({ name: "fixture_echo", arguments: { text: "hi" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.structuredContent).toEqual({ echoed: "hi" });
+      expect(fixtureCalls).toEqual([{ server: "other", name: "echo", args: { text: "hi" } }]);
+
+      // A rename that keeps the exposed name and descriptor still forwards to the new name.
+      yield* Ref.set(activeTools, [{ ...adopted, originalName: "echo.v2" }]);
+      yield* publishChange();
+      yield* awaitReads(1);
+      fixtureCalls.length = 0;
+      yield* server
+        .callTool({ name: "fixture_echo", arguments: { text: "hi" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(fixtureCalls).toEqual([{ server: "other", name: "echo.v2", args: { text: "hi" } }]);
+    }),
+  ),
+);
+
+it.effect("applies a change published while the initial refresh is in progress", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const changes = yield* PubSub.unbounded<void>();
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      const reads = yield* Queue.unbounded<void>();
+      const first = yield* Ref.make(true);
+      const tools = Effect.gen(function* () {
+        const isFirst = yield* Ref.getAndSet(first, false);
+        yield* Queue.offer(reads, undefined);
+        if (isFirst) {
+          yield* Deferred.succeed(refreshStarted, undefined);
+          yield* Deferred.await(releaseRefresh);
+          return [];
+        }
+        return fixtureTools;
+      });
+      const context = yield* Layer.build(
+        layerRegisteredMcpTest({
+          external: layerExternalMcpStub({ tools, changes: Stream.fromPubSub(changes) }),
+        }),
+      );
+      const { server, registered } = yield* startRegisteredMcpProxy(context, 2);
+
+      // The first refresh is blocked. A change published now reaches a subscriber only if the
+      // proxy subscribed before it began that refresh.
+      yield* Deferred.await(refreshStarted);
+      yield* PubSub.publish(changes, undefined);
+      yield* Deferred.succeed(releaseRefresh, undefined);
+      yield* Deferred.await(registered);
+
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_echo", "fixture_set"]);
+      expect(yield* Queue.size(reads)).toBe(2);
+    }),
+  ),
+);
+
+/**
+ * Registered MCP servers are proxied as native tools: this stub stands in for the service, so
+ * the test covers registration, the passthrough schema, the call forwarding and its access rules.
+ */
+it.effect("proxies a registered MCP server's tools with its own schema", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      fixtureCalls.length = 0;
+      const changes = yield* PubSub.unbounded<void>();
+      // One stack, so the proxy registers onto the same MCP server the calls go through.
+      const context = yield* Layer.build(
+        layerRegisteredMcpTest({
+          external: layerExternalMcpStub({
+            tools: Effect.succeed(fixtureTools),
+            changes: Stream.fromPubSub(changes),
+          }),
+        }),
+      );
+      // Launched in this scope, and awaited on its own first registration.
+      const { server, registered } = yield* startRegisteredMcpProxy(context, 2);
+      yield* Deferred.await(registered);
+
+      const names = () => server.tools.map(({ tool }) => tool.name);
+      expect(names()).toContain("fixture_echo");
+
+      const proxied = server.tools.find(({ tool }) => tool.name === "fixture_echo")!.tool;
+      expect(proxied.description).toBe("Echo the text back.");
+      expect(proxied.inputSchema).toMatchObject({
+        properties: { text: { type: "string", description: "What to echo." } },
+      });
+      expect(proxied.outputSchema).toMatchObject({ properties: { echoed: { type: "string" } } });
+      expect(proxied.annotations).toMatchObject({ readOnlyHint: true });
+
+      const result = yield* server
+        .callTool({ name: "fixture_echo", arguments: { text: "hi" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.structuredContent).toEqual({ echoed: "hi" });
+      expect(fixtureCalls).toEqual([{ server: "fixture", name: "echo", args: { text: "hi" } }]);
+    }),
+  ),
+);
+
+/** A tool with no read-only hint changes something, so a read-only client is refused it. */
+it.effect("applies the caller's access rules to a proxied tool's annotations", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      fixtureCalls.length = 0;
+      const changes = yield* PubSub.unbounded<void>();
+      const context = yield* Layer.build(
+        layerRegisteredMcpTest({
+          external: layerExternalMcpStub({
+            tools: Effect.succeed(fixtureTools),
+            changes: Stream.fromPubSub(changes),
+          }),
+        }),
+      );
+      const { server, registered } = yield* startRegisteredMcpProxy(context, 2);
+      yield* Deferred.await(registered);
+      const readOnlyClient: McpInvocationContext.McpInvocationScope = {
+        ...invocation,
+        thread: undefined,
+        requestNamespace: "client:fixture",
+        client: { sessionId: "session-fixture", label: "Claude Code", access: "read-only" },
+      };
+      const call = (name: string, args: Record<string, unknown>, scope = readOnlyClient) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+      // The read-only tool reads, so the same client may call it.
+      expect((yield* call("fixture_echo", { text: "hi" })).structuredContent).toEqual({
+        echoed: "hi",
+      });
+      // The other acts, and the proxy refuses it before the child is asked.
+      const refused = yield* call("fixture_set", { value: "changed" });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([
+        { type: "text", text: expect.stringContaining("read-only access") },
+      ]);
+      expect(fixtureCalls).toEqual([{ server: "fixture", name: "echo", args: { text: "hi" } }]);
+    }),
+  ),
 );
 
 it.effect("terminates HTTP MCP sessions with DELETE", () =>

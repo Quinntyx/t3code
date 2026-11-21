@@ -5,6 +5,7 @@ import {
   CodexSettings,
   EasDeviceHostConfig,
   type ProviderInstanceConfig,
+  type RegisteredMcpServerEntry,
   type ServerSettings,
   type SettingsSecretValue,
   SimlockDeviceHostConfig,
@@ -26,6 +27,7 @@ import {
   sourceControlHostSecretName,
   writeSecretFieldValues,
 } from "./sourceControl/sourceControlHostSecrets.ts";
+import { parseMcpRegistration } from "@t3tools/shared/mcpRegistration";
 
 export const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
 
@@ -247,6 +249,19 @@ function mapSecretFieldGroups(
       ) as SimlockDeviceHostConfig,
   );
 
+  // A secret field is one the pasted document declares, so the keys come from it, not a schema.
+  const registeredMcpServers = settings.registeredMcpServers.map(
+    (server) =>
+      ({
+        ...server,
+        config: mapFields(
+          server.config,
+          registeredMcpSecretFields(server),
+          (field) => `registered-mcp-${encode(server.id)}-${encode(field)}`,
+        ),
+      }) as RegisteredMcpServerEntry,
+  );
+
   return {
     ...settings,
     cloudSpeechCredentials: mapFields(
@@ -260,7 +275,20 @@ function mapSecretFieldGroups(
     textGenerators,
     easDeviceHosts,
     simlockDeviceHosts,
+    registeredMcpServers,
   };
+}
+
+/** The config keys of `server` its document marks secret. */
+function registeredMcpSecretFields(
+  server: Pick<RegisteredMcpServerEntry, "source">,
+): ReadonlyArray<string> {
+  const parsed = parseMcpRegistration(
+    server.source.kind === "server.json" ? server.source.document : server.source.manifest,
+  );
+  return parsed.ok
+    ? parsed.registration.fields.flatMap((field) => (field.secret ? [field.key] : []))
+    : [];
 }
 
 /**
