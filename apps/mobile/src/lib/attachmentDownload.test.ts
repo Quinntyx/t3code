@@ -415,4 +415,16 @@ describe("downloadAttachmentToDevice", () => {
     expect(mocks.saveToDownloads).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
   });
+
+  it("removes the cached file and reports the error when the save fails", async () => {
+    mocks.saveToDownloads.mockRejectedValue(new Error("Could not write report.pdf."));
+    await expect(
+      downloadAttachmentToDevice({
+        uri: input.url,
+        attachment: input.attachment,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Could not write report.pdf.");
+    expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
 });

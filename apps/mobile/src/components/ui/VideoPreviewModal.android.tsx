@@ -136,7 +136,7 @@ function OpenVideoPreviewModal(props: {
             name={props.name}
             thumbnailKey={props.thumbnailKey}
             unavailable={playback.unavailable}
-            paused={busy}
+            paused={mediaActions.sharing}
             expanded
             autoPlay
           />

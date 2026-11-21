@@ -252,6 +252,7 @@ export async function downloadAttachmentToDevice(input: {
   readonly attachment: AttachmentFileMetadata;
   readonly signal: AbortSignal;
 }): Promise<void> {
+  // Imported on use: a static react-native import breaks the jsdom tests that import this module.
   const { saveFileToDownloads, showDownloadStarted } = await import("./saveToDevice");
   const name = downloadFileName(input.attachment.name);
   if (/^(file|content):/i.test(input.uri)) {

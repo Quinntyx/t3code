@@ -105,7 +105,8 @@ function offerDownload(download: PreviewStreamDownload) {
         cause instanceof Error ? cause.message : undefined,
       ),
     );
-  const canDownload = canSaveFileToDownloads();
+  // The save also copies local file: and content: URIs as they are; a stream download is always remote.
+  const canDownload = canSaveFileToDownloads() && /^https?:\/\//i.test(download.url);
   Dialog.alert(`Downloaded ${download.fileName}`, undefined, [
     { text: "Not now", style: "cancel" },
     ...(canDownload
