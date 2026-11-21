@@ -442,15 +442,31 @@ describe("ServerBrowserSurface stream phases", () => {
     expect(second.container.querySelector('[data-error-layout="banner"]')).toBeNull();
 
     // A mid-session ticket lookup failure surfaces in the retained-frame banner instead of looping on "Reconnecting stream…".
+    await act(() => {
+      second.handlers().onViewport({ width: 400, height: 300 });
+      second.handlers().onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 2,
+        dialog: null,
+      });
+      mocks.painted?.();
+    });
+    mocks.sent.length = 0;
     mocks.access = null;
     mocks.accessError = "HTTP 403 Forbidden";
     await second.flush("tab-2");
     const banner = second.container.querySelector('[data-error-layout="banner"]');
     expect(banner?.textContent).toContain("HTTP 403 Forbidden");
-    const hiddenStatusBar = second.container.querySelector('[aria-hidden="true"]');
-    expect(hiddenStatusBar?.querySelector(".bg-destructive")).not.toBeNull();
-    expect(hiddenStatusBar?.querySelector(".bg-success")).toBeNull();
-    expect(hiddenStatusBar?.querySelector("button")).toBeNull();
+    const statusText = second.screen.getByText("Stream disconnected").element();
+    expect(statusText.getAttribute("role")).toBeNull();
+    const statusBar = statusText.closest("div.flex.h-8");
+    expect(statusBar?.getAttribute("aria-hidden")).toBeNull();
+    expect(statusBar?.querySelector(".bg-destructive")).not.toBeNull();
+    expect(statusBar?.querySelector(".bg-success")).toBeNull();
+    expect(statusBar?.querySelector("button")).toBeNull();
+    await userEvent.click(second.container.querySelector("canvas")!);
+    expect(mocks.sent).toEqual([]);
     await expect.element(second.screen.getByRole("button", { name: "Reconnect" })).toBeEnabled();
     await userEvent.click(second.screen.getByRole("button", { name: "Reconnect" }));
     expect(mocks.refreshAccess).toHaveBeenCalledTimes(2);

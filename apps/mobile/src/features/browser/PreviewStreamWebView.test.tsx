@@ -286,6 +286,10 @@ it("announces phase transitions through one live region, suppresses duplicate ba
 
     act(() => emit({ type: "status", status: "error", detail: "Stream failed." }));
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Stream failed."]);
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-overlay"]')).toBeNull();
+    expect(container.querySelector('[data-a11y-hidden="true"]')).toBeNull();
+    expect(container.querySelector("button")?.textContent).toBe("Reconnect");
     expect(container.textContent).not.toContain("Reconnecting to remote browser…");
     expect(mocks.announce).not.toHaveBeenCalled();
     if (IS_ANDROID) {

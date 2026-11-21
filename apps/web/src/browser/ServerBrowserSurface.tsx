@@ -31,6 +31,7 @@ import {
   useEffect,
   useEffectEvent,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -385,8 +386,8 @@ export function ServerBrowserSurface(props: {
     };
   }, [followSize]);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the preview stream client and paints its frames onto the canvas while visible
-  useEffect(() => {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens and tears down the preview stream client synchronously with visibility and access changes before paint
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (frameTargetRef.current !== targetKey) {
       frameTargetRef.current = targetKey;
@@ -482,6 +483,7 @@ export function ServerBrowserSurface(props: {
             setRefusedAccess(access);
             return;
           }
+          if (refreshTimer !== null) clearTimeout(refreshTimer);
           refreshTimer = setTimeout(
             () => refreshPreviewStreamAccess(environmentId),
             refusals === 1 ? 0 : 1_000 * 2 ** (refusals - 1),
@@ -800,7 +802,8 @@ export function ServerBrowserSurface(props: {
   const hasCurrentFrame = hasRetainedFrame && currentFramePainted;
   const phase = previewStreamPhase(control, hasCurrentFrame, hasRetainedFrame);
   const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
-  const errorOverlayVisible = visible && (hostSetup !== null || hasStreamError);
+  const fullErrorOverlayVisible =
+    visible && (hostSetup !== null || (hasStreamError && !hasRetainedFrame));
   const overlaySuppressed = pdfUrl !== null || hostSetup !== null || hasStreamError;
   const dialogAnnouncement = control?.dialog
     ? control.dialog.message.trim()
@@ -815,7 +818,7 @@ export function ServerBrowserSurface(props: {
       onMouseUp={handleMouseUp}
     >
       <div
-        aria-hidden={errorOverlayVisible || undefined}
+        aria-hidden={fullErrorOverlayVisible || undefined}
         className={cn(
           "visible relative z-20 flex h-8 shrink-0 items-center justify-between gap-2 border-border/60 bg-background px-2.5",
           controlPosition === "bottom" ? "order-last border-t" : "border-b",
@@ -833,7 +836,10 @@ export function ServerBrowserSurface(props: {
                   : "bg-warning ring-2 ring-warning/30",
             )}
           />
-          <span role="status" className="truncate text-xs text-muted-foreground">
+          <span
+            role={hasStreamError || hostSetup !== null ? undefined : "status"}
+            className="truncate text-xs text-muted-foreground"
+          >
             {hasStreamError || hostSetup !== null
               ? "Stream disconnected"
               : previewStreamStatusLabel(phase, control)}

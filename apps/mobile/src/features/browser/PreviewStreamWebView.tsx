@@ -408,6 +408,7 @@ function PreviewStreamDocumentView({
   // Survives mid-session reconnects and access outages because only a target or attempt change remounts this view.
   const [hasStreamed, setHasStreamed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [frameLost, setFrameLost] = useState(false);
   const [gone, setGone] = useState(false);
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
@@ -428,7 +429,9 @@ function PreviewStreamDocumentView({
           ? accessError
           : null;
   const hasError = displayError !== null;
-  const showRetainedErrorBanner = hasError && status !== "error" && hasStreamed;
+  const showRetainedErrorBanner =
+    hasError && hasStreamed && !frameLost && !gone && hostSetup === null;
+  const fullErrorOverlayVisible = hasError && !showRetainedErrorBanner;
   const phase = previewStreamPhase(control, status === "streaming", hasStreamed);
   const statusLabel = previewStreamStatusLabel(phase, control);
   const announcement = compact ? null : hasError ? displayError : statusLabel;
@@ -494,7 +497,7 @@ function PreviewStreamDocumentView({
     clearTimeout(bootstrapTimer.current);
     bootstrapTimer.current = null;
   };
-  const fail = (message: string) => {
+  const fail = (message: string, options?: { readonly frameLost?: boolean }) => {
     if (!active.current || failed.current) return;
     failed.current = true;
     streamingRef.current = false;
@@ -506,11 +509,12 @@ function PreviewStreamDocumentView({
     setControl(null);
     setFileChooser(null);
     onControl?.(null);
+    if (options?.frameLost) setFrameLost(true);
     setError(message);
     setStatus("error");
   };
   const bootstrapTimedOut = useEffectEvent(() =>
-    fail("Browser viewer could not start. Reconnect to try again."),
+    fail("Browser viewer could not start. Reconnect to try again.", { frameLost: true }),
   );
   const reportPhase = useEffectEvent((nextPhase: PreviewStreamPhase) => {
     onPhaseChange?.(nextPhase);
@@ -588,14 +592,16 @@ function PreviewStreamDocumentView({
   }));
   const processTerminated = () => {
     if (!active.current || failed.current) return;
-    if (!onRecoverProcess()) fail("Browser viewer stopped. Reconnect to try again.");
+    if (!onRecoverProcess()) {
+      fail("Browser viewer stopped. Reconnect to try again.", { frameLost: true });
+    }
   };
   return (
     <View className="flex-1" style={{ backgroundColor: background }}>
       {!compact ? (
         <View
-          accessibilityElementsHidden={hasError}
-          importantForAccessibility={hasError ? "no-hide-descendants" : "auto"}
+          accessibilityElementsHidden={fullErrorOverlayVisible}
+          importantForAccessibility={fullErrorOverlayVisible ? "no-hide-descendants" : "auto"}
           className="min-h-16 flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2"
         >
           <View className="flex-1 flex-row items-center gap-2">
@@ -646,8 +652,12 @@ function PreviewStreamDocumentView({
           allowsPictureInPictureMediaPlayback
           mediaPlaybackRequiresUserAction={false}
           style={{ flex: 1, backgroundColor: background }}
-          onError={() => fail("Browser viewer could not load. Reconnect to try again.")}
-          onHttpError={() => fail("Browser viewer could not load. Reconnect to try again.")}
+          onError={() =>
+            fail("Browser viewer could not load. Reconnect to try again.", { frameLost: true })
+          }
+          onHttpError={() =>
+            fail("Browser viewer could not load. Reconnect to try again.", { frameLost: true })
+          }
           onContentProcessDidTerminate={processTerminated}
           onRenderProcessGone={processTerminated}
           onShouldStartLoadWithRequest={(request) =>
@@ -837,10 +847,10 @@ function PreviewStreamDocumentView({
                 {displayError}
               </AppText>
               <Button
-                label={authRefused ? "Reconnect" : "Retry"}
+                label={status === "error" || authRefused ? "Reconnect" : "Retry"}
                 tone="secondary"
-                loading={accessPending}
-                onPress={onRefreshAccess}
+                loading={status !== "error" && accessPending}
+                onPress={status === "error" ? onRetry : onRefreshAccess}
               />
             </View>
           )
