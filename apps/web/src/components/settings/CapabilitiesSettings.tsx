@@ -48,7 +48,6 @@ export function CapabilitiesSettingsPanel() {
 
       <RegisterServerForm
         existing={entries}
-        // The new entry in the list and the sidebar is the confirmation; a failed save toasts.
         onAdd={(entry) => updateSettings({ registeredMcpServers: { [entry.id]: entry } })}
       />
 

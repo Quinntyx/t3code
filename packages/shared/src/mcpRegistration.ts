@@ -164,7 +164,8 @@ interface ServerJsonArgument extends ServerJsonValue {
   readonly bare: boolean;
 }
 
-const readArguments = (raw: unknown): ReadonlyArray<ServerJsonArgument> =>
+/** `prefix` keeps an unhinted runtime argument apart from the package argument at its index. */
+const readArguments = (raw: unknown, prefix: string): ReadonlyArray<ServerJsonArgument> =>
   asArray(raw).flatMap((item, index) => {
     const input = asRecord(item);
     if (input === undefined) return [];
@@ -173,7 +174,7 @@ const readArguments = (raw: unknown): ReadonlyArray<ServerJsonArgument> =>
     const template = asString(input.value);
     const hint = asString(input.valueHint);
     const key =
-      hint ?? (flag === undefined ? `argument_${index + 1}` : flag.replaceAll(/^-+/gu, ""));
+      hint ?? (flag === undefined ? `${prefix}_${index + 1}` : flag.replaceAll(/^-+/gu, ""));
     return [
       {
         key,
@@ -185,7 +186,9 @@ const readArguments = (raw: unknown): ReadonlyArray<ServerJsonArgument> =>
           flag !== undefined &&
           [template, hint, input.default, input.format, input.choices].every(
             (described) => described === undefined,
-          ),
+          ) &&
+          input.isRequired !== true &&
+          input.isSecret !== true,
       },
     ];
   });
@@ -302,8 +305,8 @@ const readServerJsonPackage = (
       command,
       baseArgs,
       container: registryType === "oci",
-      runtimeArguments: readArguments(entry.runtimeArguments),
-      packageArguments: readArguments(entry.packageArguments),
+      runtimeArguments: readArguments(entry.runtimeArguments, "runtime_argument"),
+      packageArguments: readArguments(entry.packageArguments, "argument"),
       environmentVariables: readEnvironmentVariables(entry.environmentVariables),
     },
   };

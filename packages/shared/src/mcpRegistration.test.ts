@@ -172,6 +172,29 @@ describe("parseMcpRegistration", () => {
       ],
     },
     {
+      label: "unhinted runtime and package arguments, kept apart, and a secret flag",
+      document: serverJson([
+        stdioPackage({
+          runtimeArguments: [{ type: "positional" }],
+          packageArguments: [
+            { type: "positional" },
+            { type: "named", name: "--key", isSecret: true },
+          ],
+        }),
+      ]),
+      fields: [
+        {
+          key: "runtime_argument_1",
+          label: "Runtime Argument 1",
+          type: "string",
+          required: false,
+          secret: false,
+        },
+        { key: "argument_1", label: "Argument 1", type: "string", required: false, secret: false },
+        { key: "key", label: "Key", type: "string", required: false, secret: true },
+      ],
+    },
+    {
       label: "MCPB user_config",
       document: mcpbManifest,
       fields: [

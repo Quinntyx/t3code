@@ -1049,7 +1049,7 @@ const withToolAnalytics =
   });
 
 /** Each registered MCP server's tools as native T3 tools, with its schema and annotations. */
-const registeredMcpToolRegistration = Layer.effectDiscard(
+export const layerRegisteredMcpTools = Layer.effectDiscard(
   Effect.gen(function* () {
     // Required, not looked up optionally: a build-time miss would silently register nothing.
     const externalServers = yield* ExternalMcpServers.ExternalMcpServers;
@@ -1072,7 +1072,6 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
         tool.descriptor.annotations,
       ]);
 
-    // A registration is announced to agents, so it carries the tool's own schema and hints.
     const add = (tool: ExternalMcpServers.ExternalMcpTool) =>
       server.addTool({
         tool: new McpSchema.Tool({
@@ -1312,9 +1311,6 @@ export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandl
 
 const layerConnectorsToolkit = toolkitRegistration(ConnectorsToolkit, ConnectorsHandlers.layer);
 
-/** Exposed for tests that drive the registered MCP proxy without the whole tool set. */
-export const layerRegisteredMcpTools = registeredMcpToolRegistration;
-
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,
   WorktreeHandlers.layer,
@@ -1400,7 +1396,7 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
-  registeredMcpToolRegistration,
+  layerRegisteredMcpTools,
 );
 
 export const layer = layerMcpTransport(layerTools);

@@ -144,8 +144,9 @@ type Body<A, E> = (
 const runTest = <A, E>(entries: ReadonlyArray<Entry>, body: Body<A, E>) =>
   Effect.gen(function* () {
     const servers = yield* ExternalMcpServers.ExternalMcpServers;
+    const settled = yield* watch(servers, Math.max(1, entries.filter((e) => e.enabled).length));
     yield* startServers(servers);
-    yield* watcher(servers, Math.max(1, entries.filter((entry) => entry.enabled).length));
+    yield* Fiber.join(settled);
     return yield* body(servers);
   }).pipe(Effect.scoped, Effect.provide(layerTest(entries)));
 

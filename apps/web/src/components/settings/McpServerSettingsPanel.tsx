@@ -95,8 +95,8 @@ export function McpServerSettingsPanel() {
           description={`Agents call this server's tools as ${entry.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
           control={
             <ToolNameInput
-              // A route change to another server must not keep this one's draft.
-              key={entry.id}
+              // Another server, or a name saved elsewhere, must not keep this draft.
+              key={`${entry.id}:${entry.toolName}`}
               value={entry.toolName}
               others={settings.registeredMcpServers.filter(
                 (candidate) => candidate.id !== entry.id,
@@ -238,8 +238,8 @@ function FieldControl({
             size="sm"
             variant="ghost"
             aria-label={`Clear ${field.label}`}
-            // An empty secret is what the settings write removes; no separate call is needed.
-            onClick={() => onChange("")}
+            // Cleared, the field falls back to the document's default and the stored secret goes.
+            onClick={() => onChange(undefined)}
           >
             Clear
           </Button>
@@ -311,7 +311,8 @@ function FieldControl({
         value={typeof value === "number" ? String(value) : ""}
         onCommit={(next) => {
           const parsed = Number(next);
-          onChange(next.trim() === "" || Number.isNaN(parsed) ? undefined : parsed);
+          if (next.trim() === "" || Number.isNaN(parsed)) return onChange(undefined);
+          onChange(Math.min(field.max ?? Infinity, Math.max(field.min ?? -Infinity, parsed)));
         }}
       />
     );

@@ -54,7 +54,6 @@ interface RunningServer {
   readonly scope: Scope.Closeable;
 }
 
-/** What `external_connectors` reports for one registered server. */
 export interface ExternalMcpServerState {
   readonly name: string;
   readonly toolName: string;
@@ -130,9 +129,9 @@ const sameEntry = (left: RegisteredMcpServerEntry, right: RegisteredMcpServerEnt
 // Providers cap a tool name at 64 characters, and Claude Code spends 14 on `mcp__t3-code__`.
 const MAX_PROXIED_NAME_LENGTH = 50;
 
-/** T3 and a server both accept letters, digits, `_` and `-`; anything else in a tool name becomes `_`. */
+/** Providers accept letters, digits, `_` and `-`; anything else, in either part, becomes `_`. */
 const proxiedToolName = (prefix: string, toolName: string) =>
-  `${prefix}_${toolName.replaceAll(/[^a-zA-Z0-9_-]/gu, "_")}`.slice(0, MAX_PROXIED_NAME_LENGTH);
+  `${prefix}_${toolName}`.replaceAll(/[^a-zA-Z0-9_-]/gu, "_").slice(0, MAX_PROXIED_NAME_LENGTH);
 
 /** Decides every proxied name once: native tools first, then servers in settings order. */
 const exposeTools = (
@@ -279,6 +278,8 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
         return Effect.void;
       }),
     ),
+    // A server that closes its output can answer nothing more, even if its process lingers.
+    Effect.andThen(Deferred.succeed(exited, `${launch.command} closed its output.`)),
     Effect.forkScoped,
   );
 
@@ -418,13 +419,12 @@ const make = Effect.gen(function* () {
     if (!launch.ok) return yield* new ExternalMcpServerError({ message: launch.message });
 
     const scope = yield* Scope.fork(serviceScope, "sequential");
-    // One deadline covers the handshake and every page of the listing. The child's scope closes
-    // on every way out before the child is recorded as running.
-    const { connection, tools } = yield* Effect.gen(function* () {
+    // One deadline covers the handshake and every page of the listing. Until the child is
+    // recorded as running, any way out, an interrupting reconcile included, closes its scope.
+    const { connection, running } = yield* Effect.gen(function* () {
       const connection = yield* connect(spawner, launch.launch);
       return { connection, tools: yield* connection.listTools };
     }).pipe(
-      Effect.provideService(Scope.Scope, scope),
       Effect.timeoutOrElse({
         duration: START_TIMEOUT,
         orElse: () =>
@@ -432,21 +432,25 @@ const make = Effect.gen(function* () {
             message: `${launch.launch.command} did not start in time.`,
           }),
       }),
+      Effect.map(({ connection, tools }) => ({
+        connection,
+        running: {
+          entry,
+          tools: tools.map((descriptor) => ({
+            serverId: entry.id,
+            serverName: entry.name,
+            originalName: descriptor.name,
+            name: proxiedToolName(entry.toolName, descriptor.name),
+            descriptor,
+          })),
+          call: connection.callTool,
+          scope,
+        } satisfies RunningServer,
+      })),
+      Effect.tap(({ running }) => setState(entry.id, { running })),
+      Effect.provideService(Scope.Scope, scope),
       Effect.onError(() => Scope.close(scope, Exit.void)),
     );
-    const running: RunningServer = {
-      entry,
-      tools: tools.map((descriptor) => ({
-        serverId: entry.id,
-        serverName: entry.name,
-        originalName: descriptor.name,
-        name: proxiedToolName(entry.toolName, descriptor.name),
-        descriptor,
-      })),
-      call: connection.callTool,
-      scope,
-    };
-    yield* setState(entry.id, { running });
     yield* Effect.logInfo("started registered MCP server", {
       server: entry.name,
       tools: running.tools.length,
