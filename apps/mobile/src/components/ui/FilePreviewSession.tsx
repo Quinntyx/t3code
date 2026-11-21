@@ -7,9 +7,11 @@ import { useContext, useEffect, useEffectEvent, useState, type ComponentType } f
 import { loadLocalAttachmentPreview } from "../../lib/localAttachmentPreview";
 import {
   downloadAndShareAttachment,
+  downloadAttachmentToDevice,
   nativeViewerErrorMessage,
   shareLocalAttachment,
 } from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { usePreviewPresentation } from "../../lib/previewPresentation";
 import { m } from "../../i18n/messages";
 import { refreshAssetUrl } from "../../state/assets";
@@ -182,20 +184,37 @@ function ResolvedFilePreview(
   if (!uri) return null;
   const onOpenError = (error: unknown) => {
     if (props.onOpenError) return props.onOpenError(error);
+    const input = {
+      attachment: {
+        name: selected.name,
+        mimeType: selected.mimeType ?? "application/octet-stream",
+      },
+      signal: new AbortController().signal,
+    };
+    const canDownload = canSaveFileToDownloads();
     Dialog.alert(gt("Could not open preview"), nativeViewerErrorMessage(error), [
       { text: gt("Cancel"), style: "cancel" },
+      ...(selected.kind === "document" && canDownload
+        ? [
+            {
+              text: gt("Download"),
+              onPress: () =>
+                void downloadAttachmentToDevice({ ...input, uri }).catch((cause: unknown) =>
+                  Dialog.alert(
+                    gt("Could not download file"),
+                    cause instanceof Error ? cause.message : gt("Please try again."),
+                  ),
+                ),
+            },
+          ]
+        : []),
       ...(selected.kind === "document"
         ? [
             {
-              text: gt("Save or share"),
+              text: canDownload
+                ? gt("Share", { $context: "verb, opens the system share sheet" })
+                : gt("Save or share"),
               onPress: () => {
-                const input = {
-                  attachment: {
-                    name: selected.name,
-                    mimeType: selected.mimeType ?? "application/octet-stream",
-                  },
-                  signal: new AbortController().signal,
-                };
                 const sharing = /^(file|content):/.test(uri)
                   ? shareLocalAttachment({ ...input, uri })
                   : downloadAndShareAttachment({ ...input, url: uri });

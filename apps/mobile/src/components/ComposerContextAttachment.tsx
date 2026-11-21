@@ -9,14 +9,15 @@ import * as Dialog from "./ui/Dialog";
 import type { ComposerContextRecord, EnvironmentId } from "@t3tools/contracts";
 import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { composerAttachmentInlineUri, isFileBackedComposerAttachment } from "../lib/composerImages";
 import {
   loadLocalAttachmentPreview,
   useLocalAttachmentPreview,
 } from "../lib/localAttachmentPreview";
-import { downloadAndShareAttachment } from "../lib/attachmentDownload";
+import { downloadAndShareAttachment, downloadAttachmentToDevice } from "../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../lib/saveToDevice";
 import { assetImageSource } from "../lib/assetImageSource";
 import { useAssetUrlState, useRefreshAssetUrl } from "../state/assets";
 import { AppText as Text } from "./ui/AppText";
@@ -45,40 +46,53 @@ export function ComposerContextAttachment(props: {
   const refresh = useRefreshAssetUrl(remoteEnvironmentId, resource);
   const localPreview = useLocalAttachmentPreview(local ?? null);
   const error = localPreview.error ? gt("The local file is unavailable. Attach it again.") : null;
-  const [sharing, setSharing] = useState(false);
+  const [busy, setBusy] = useState<"share" | "download" | null>(null);
+  const task = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts an in-flight share or download when the attachment closes
+  useEffect(() => () => task.current?.abort(), []);
   const [previewOpen, setPreviewOpen] = useState(false);
   const uri = local
     ? localPreview.uri
     : (inlineUri ?? (asset._tag === "Success" ? asset.url : null));
-  const share = async () => {
-    if (sharing) return;
-    setSharing(true);
+  const run = async (kind: "share" | "download") => {
+    if (busy) return;
+    setBusy(kind);
     const controller = new AbortController();
+    task.current = controller;
+    const { signal } = controller;
     const result = await settlePromise(async () => {
       if (local) {
-        const preview = await loadLocalAttachmentPreview(local, controller.signal);
+        const preview = await loadLocalAttachmentPreview(local, signal);
         if (!preview) return;
-        const shared = await settlePromise(() =>
-          preview.share(controller.signal, shareSourceIdentifier),
+        const done = await settlePromise(() =>
+          kind === "download"
+            ? downloadAttachmentToDevice({ uri: preview.uri, attachment: record, signal })
+            : preview.share(signal, shareSourceIdentifier),
         );
         preview.dispose();
-        if (AsyncResult.isFailure(shared)) throw squashAtomCommandFailure(shared);
+        if (AsyncResult.isFailure(done)) throw squashAtomCommandFailure(done);
         return;
       }
       const url = await refresh();
       if (!url) throw new Error(gt("Reconnect to the environment and try again."));
+      if (kind === "download") {
+        await downloadAttachmentToDevice({ uri: url, attachment: record, signal });
+        return;
+      }
       await downloadAndShareAttachment({
         url,
         attachment: record,
-        signal: controller.signal,
+        signal,
         sourceIdentifier: shareSourceIdentifier,
       });
     });
-    setSharing(false);
+    if (task.current === controller) task.current = null;
+    if (signal.aborted) return;
+    setBusy(null);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
       Dialog.alert(
-        gt("Could not open attachment"),
+        kind === "download" ? gt("Could not download attachment") : gt("Could not open attachment"),
         cause instanceof Error
           ? (errorDisplayMessage(cause, m) ?? cause.message)
           : gt("Try again."),
@@ -110,14 +124,24 @@ export function ComposerContextAttachment(props: {
           {error ?? <T>Attachment unavailable. Reconnect and try again.</T>}
         </Text>
       ) : null}
+      {record.kind !== "image" && canSaveFileToDownloads() ? (
+        <Button
+          label={busy === "download" ? gt("Downloading…") : gt("Download attachment")}
+          tone="secondary"
+          disabled={busy !== null}
+          onPress={() => void run("download")}
+          fullWidth
+          loading={busy === "download"}
+        />
+      ) : null}
       <PresentationSource identifier={shareSourceIdentifier}>
         <Button
-          label={sharing ? gt("Opening attachment…") : gt("Open or share attachment")}
+          label={busy === "share" ? gt("Opening attachment…") : gt("Open or share attachment")}
           tone="secondary"
-          disabled={sharing}
-          onPress={() => void share()}
+          disabled={busy !== null}
+          onPress={() => void run("share")}
           fullWidth
-          loading={sharing}
+          loading={busy === "share"}
         />
       </PresentationSource>
       {previewOpen && record.kind === "image" && uri ? (

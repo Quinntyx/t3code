@@ -18,7 +18,11 @@ import { useEffect, useRef, useState } from "react";
 
 import type { FileBackedComposerAttachment } from "./composerImages";
 import { localAttachmentPreviewAtom, localAttachmentPreviewState } from "./localAttachmentPreview";
-import { downloadAndShareAttachment, shareLocalAttachment } from "./attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+  shareLocalAttachment,
+} from "./attachmentDownload";
 import { refreshAssetUrl, useFreshAssetUrl, useRefreshAssetUrl } from "../state/assets";
 import { attachmentDocumentPresentation } from "./attachmentDocumentPresentation";
 
@@ -100,9 +104,9 @@ export function useAttachmentDocument(input: {
   const resolve = useMessages();
   const kind = filePreviewKind(input, { richDocuments: false });
   const delimiter = filePreviewDelimiter(input);
-  const shareController = useRef<AbortController | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight attachment share download when the component unmounts
-  useEffect(() => () => shareController.current?.abort(), []);
+  const taskController = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight attachment share or download when the component unmounts
+  useEffect(() => () => taskController.current?.abort(), []);
   const resource = {
     _tag: "attachment" as const,
     attachmentId: input.attachmentId,
@@ -114,7 +118,7 @@ export function useAttachmentDocument(input: {
   const refresh = useRefreshAssetUrl(environmentId, resource);
   const [rendered, setRendered] = useState(true);
   const [revision, setRevision] = useState(0);
-  const [sharing, setSharing] = useState(false);
+  const [busy, setBusy] = useState<"share" | "download" | null>(null);
   const attachment = input.attachment;
   const localPreviewAtom = localAttachmentPreviewAtom(attachment);
   const localPreview = localAttachmentPreviewState(useAtomValue(localPreviewAtom));
@@ -154,26 +158,28 @@ export function useAttachmentDocument(input: {
       ? (Option.getOrNull(AsyncResult.error(remote))?.message ??
         resolve(msg("The attachment is unavailable.")))
       : null;
-  const share = async () => {
-    if (!uri || sharing) return;
-    setSharing(true);
+  const run = async (kind: "share" | "download") => {
+    if (!uri || busy) return;
+    setBusy(kind);
     const controller = new AbortController();
-    shareController.current = controller;
+    taskController.current = controller;
     const request = {
       attachment: { name: input.name, mimeType: input.mimeType },
       signal: controller.signal,
     };
     const result = await settlePromise(async () => {
-      if (isLocalUri(uri)) await shareLocalAttachment({ ...request, uri });
-      else await downloadAndShareAttachment({ ...request, url: (await refresh()) ?? uri });
+      const fileUri = isLocalUri(uri) ? uri : ((await refresh()) ?? uri);
+      if (kind === "download") await downloadAttachmentToDevice({ ...request, uri: fileUri });
+      else if (isLocalUri(fileUri)) await shareLocalAttachment({ ...request, uri: fileUri });
+      else await downloadAndShareAttachment({ ...request, url: fileUri });
     });
-    if (shareController.current === controller) shareController.current = null;
+    if (taskController.current === controller) taskController.current = null;
     if (controller.signal.aborted) return;
-    setSharing(false);
+    setBusy(null);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
       Dialog.alert(
-        m(msg("Could not share file")),
+        kind === "download" ? m(msg("Could not download file")) : m(msg("Could not share file")),
         errorDisplayMessage(cause, m) ?? m(msg("Please try again.")),
       );
     }
@@ -195,7 +201,9 @@ export function useAttachmentDocument(input: {
       setRevision((value) => value + 1);
       if (attachment) refreshLocalPreview();
     },
-    share,
-    sharing,
+    share: () => run("share"),
+    sharing: busy === "share",
+    download: () => run("download"),
+    downloading: busy === "download",
   };
 }

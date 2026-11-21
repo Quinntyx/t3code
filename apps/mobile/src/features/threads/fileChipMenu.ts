@@ -73,6 +73,7 @@ export function fileChipShareSource(target: FileChipTarget, threadId: ThreadId) 
 
 export function fileChipMenu(
   target: FileChipTarget,
+  canDownload: boolean,
   resolve: MessageResolver = m,
 ): MarkdownFileContextMenu {
   return {
@@ -87,12 +88,15 @@ export function fileChipMenu(
         : []),
       { id: "open-file", title: resolve(msg("Open in file viewer")) },
       ...(fileChipMetadata(target)
-        ? [
-            {
-              id: "save",
-              title: resolve(msg("Save or share")),
-            },
-          ]
+        ? canDownload
+          ? [
+              { id: "download", title: resolve(msg("Download")) },
+              {
+                id: "save",
+                title: resolve(msg("Share", { $context: "verb, opens the system share sheet" })),
+              },
+            ]
+          : [{ id: "save", title: resolve(msg("Save or share")) }]
         : []),
     ],
   };

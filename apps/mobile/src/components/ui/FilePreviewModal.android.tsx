@@ -34,6 +34,7 @@ function PdfDocumentPreview(props: {
   const gt = useGT();
   const insets = useSafeAreaInsets();
   const media = useMediaActions(props.source.actionsSource);
+  const download = media.actions.find((action) => action.id === "download");
   const save = media.actions.find((action) => action.id === "save");
   return (
     <Modal
@@ -50,19 +51,32 @@ function PdfDocumentPreview(props: {
           presentation="inline"
           title={props.source.name ?? gt("PDF")}
           onClose={props.onRequestClose}
-          actions={
-            save
+          actions={[
+            ...(download
               ? [
                   {
-                    accessibilityLabel: gt("Save or share"),
-                    icon: "square.and.arrow.up",
+                    accessibilityLabel: gt("Download"),
+                    icon: "tray.and.arrow.down" as const,
+                    disabled: download.disabled,
+                    loading: media.downloading,
+                    onPress: download.run,
+                  },
+                ]
+              : []),
+            ...(save !== undefined
+              ? [
+                  {
+                    accessibilityLabel: download
+                      ? gt("Share", { $context: "verb, opens the system share sheet" })
+                      : gt("Save or share"),
+                    icon: "square.and.arrow.up" as const,
                     disabled: save.disabled,
                     loading: media.sharing,
                     onPress: () => void save.run(),
                   },
                 ]
-              : []
-          }
+              : []),
+          ]}
         />
         <PdfPreview uri={props.source.uri} />
       </View>

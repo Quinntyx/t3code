@@ -28,7 +28,11 @@ import * as Clipboard from "expo-clipboard";
 import { AppText } from "../../components/ui/AppText";
 import { PdfPreview } from "../../components/PdfPreview";
 import { m } from "../../i18n/messages";
-import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+} from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { beginForegroundHandoff } from "../../lib/foreground-handoff";
 import { usePreviewStreamAccess } from "../../state/preview";
 import { previewPromptText } from "./previewPromptText";
@@ -95,21 +99,34 @@ async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean)
 }
 
 function offerDownload(download: PreviewStreamDownload) {
+  const input = {
+    attachment: { name: download.fileName, mimeType: "application/octet-stream" },
+    signal: new AbortController().signal,
+  };
+  const save = (task: Promise<unknown>) =>
+    void task.catch((cause: unknown) =>
+      Dialog.alert(
+        m(msg("Could not save the download")),
+        cause instanceof Error ? (errorDisplayMessage(cause, m) ?? cause.message) : undefined,
+      ),
+    );
+  // The save also copies local file: and content: URIs as they are; a stream download is always remote.
+  const canDownload = canSaveFileToDownloads() && /^https?:\/\//i.test(download.url);
   Dialog.alert(m(msg("Downloaded {fileName}", { fileName: download.fileName })), undefined, [
     { text: m(msg("Not now")), style: "cancel" },
+    ...(canDownload
+      ? [
+          {
+            text: m(msg("Save to Downloads")),
+            onPress: () => save(downloadAttachmentToDevice({ ...input, uri: download.url })),
+          },
+        ]
+      : []),
     {
-      text: m(msg("Save or share")),
-      onPress: () =>
-        void downloadAndShareAttachment({
-          url: download.url,
-          attachment: { name: download.fileName, mimeType: "application/octet-stream" },
-          signal: new AbortController().signal,
-        }).catch((cause: unknown) =>
-          Dialog.alert(
-            m(msg("Could not save the download")),
-            cause instanceof Error ? (errorDisplayMessage(cause, m) ?? cause.message) : undefined,
-          ),
-        ),
+      text: canDownload
+        ? m(msg("Share", { $context: "verb, opens the system share sheet" }))
+        : m(msg("Save or share")),
+      onPress: () => save(downloadAndShareAttachment({ ...input, url: download.url })),
     },
   ]);
 }

@@ -7,7 +7,10 @@ import { useGT } from "gt-react-native";
 import { m } from "../../i18n/messages";
 import { useEffect, useRef } from "react";
 
-import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+} from "../../lib/attachmentDownload";
 import { assetEnvironment } from "../../state/assets";
 import { usePreparedConnection } from "../../state/session";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
@@ -26,10 +29,10 @@ export function useFileChipShare(
     reportFailure: false,
   });
   const requestRef = useRef<AbortController | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight file share download when the component unmounts
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight file share or download when the component unmounts
   useEffect(() => () => requestRef.current?.abort(), []);
 
-  return (target: FileChipTarget) => {
+  return (target: FileChipTarget, kind: "share" | "download") => {
     const source = fileChipShareSource(target, threadId);
     if (!source || requestRef.current) return;
     const request = new AbortController();
@@ -45,17 +48,21 @@ export function useFileChipShare(
         result._tag === "Success" ? resolveAssetUrl(httpBaseUrl, result.value.relativeUrl) : null;
       if (url === null)
         throw new Error(gt("The file could not be loaded. Reconnect and try again."));
-      await downloadAndShareAttachment({
-        url,
-        attachment: source,
-        signal: request.signal,
-        sourceIdentifier,
-      });
+      if (kind === "download") {
+        await downloadAttachmentToDevice({ uri: url, attachment: source, signal: request.signal });
+      } else {
+        await downloadAndShareAttachment({
+          url,
+          attachment: source,
+          signal: request.signal,
+          sourceIdentifier,
+        });
+      }
     })()
       .catch((error: unknown) => {
         if (!request.signal.aborted) {
           Dialog.alert(
-            gt("Could not share file"),
+            kind === "download" ? gt("Could not download file") : gt("Could not share file"),
             errorDisplayMessage(error, m) ?? gt("Try again."),
           );
         }
