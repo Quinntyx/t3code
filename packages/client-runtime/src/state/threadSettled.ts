@@ -21,6 +21,8 @@ interface SettlementRuntimeLike {
   readonly activeTurnId?: unknown;
   readonly lastError?: unknown;
   readonly status: string;
+  /** Set while the server retries the failed run; legacy sessions never carry it. */
+  readonly stalled?: boolean;
   readonly updatedAt?: string;
 }
 
@@ -121,6 +123,8 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
 function failureEdgeAt(shell: ThreadSnoozeShell): string | null | undefined {
   const runtime = shell.runtime ?? shell.session ?? null;
   if (runtime?.status !== "error" && runtime?.status !== "failed") return undefined;
+  // A failure the server retries is not a new failure to wake for.
+  if (shell.runtime?.stalled === true) return undefined;
   const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
   if (latestRun?.status === "failed") {
     return latestRun.completedAt ?? null;

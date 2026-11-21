@@ -1,4 +1,3 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { createVoiceSession } from "@t3tools/client-runtime/voice/session";
 import {
   createNotificationFeed,
@@ -8,22 +7,19 @@ import {
 import { awaitAtomValue } from "@t3tools/client-runtime/voice/awaitAtom";
 import { createVoiceTools, type VoiceEnvironmentView } from "@t3tools/client-runtime/voice/tools";
 import { createEnvironmentRpcCommand } from "@t3tools/client-runtime/state/runtime";
+import { unloadedOlderSettledCount } from "@t3tools/client-runtime/state/threads";
 import { ORCHESTRATION_V2_WS_METHODS, ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentShell, liveShellEnvironmentIdsAtom } from "../state/shell";
-import { environmentThreads } from "../state/threads";
+import { environmentThreads, olderSettledThreads } from "../state/threads";
 import { serverEnvironment } from "../state/server";
 import { randomUUID } from "../lib/utils";
-import {
-  rightPanelHostRef,
-  useRightPanelStore,
-  type RightPanelStoreState,
-} from "../rightPanelStore";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { useRightPanelStore } from "../rightPanelStore";
 import { browserVoicePlatform } from "./browserAudio";
 import { VoiceAudio, type VoiceHandlers } from "./VoiceAudio";
 import { createVoiceStorage } from "./storage";
@@ -55,7 +51,30 @@ const viewsAtom = Atom.make((get): ReadonlyArray<VoiceEnvironmentView> => {
         id: environmentId,
         label: catalog.entries.get(environmentId)?.target.label ?? environmentId,
         projects: snapshot.projects,
-        threads: snapshot.threads,
+        olderSettledOmitted: unloadedOlderSettledCount({
+          olderSettled: () => get(olderSettledThreads.olderSettledAtom(environmentId)),
+          scopes: [{ environmentId, projectIds: null }],
+          threads: snapshot.threads.map((thread) => ({ environmentId, source: thread })),
+        }),
+        threads: snapshot.threads.map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          status: thread.status,
+          projectId: thread.projectId,
+          activeRunId: thread.activeRunId,
+          archivedAt: thread.archivedAt === null ? null : DateTime.formatIso(thread.archivedAt),
+          latestRunStartedAt:
+            thread.latestRunStartedAt === undefined || thread.latestRunStartedAt === null
+              ? null
+              : DateTime.formatIso(thread.latestRunStartedAt),
+          latestRunCompletedAt:
+            thread.latestRunCompletedAt === undefined || thread.latestRunCompletedAt === null
+              ? null
+              : DateTime.formatIso(thread.latestRunCompletedAt),
+          // What the shell already carries for every listed thread decides whether it needs the user.
+          pendingRequest: thread.pendingRuntimeRequest,
+          lastError: thread.lastError ?? null,
+        })),
         providers: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
       },
     ];
@@ -113,16 +132,8 @@ export const voiceSession = createVoiceSession({
   },
 });
 let unwatchNotifications: (() => void) | null = null;
-const showsVoice = (state: Pick<RightPanelStoreState, "byThreadKey">) =>
-  Object.values(state.byThreadKey).some((panel) =>
-    panel.surfaces.some((surface) => surface.kind === "voice"),
-  );
-let unwatchPanels: (() => void) | null = null;
-/** Starts the client session for a rendered Voice surface; it ends once no thread shows Voice. */
+/** Starts the client session for the app-wide Voice surface; it ends when Voice closes. */
 export async function openVoiceSession() {
-  unwatchPanels ??= useRightPanelStore.subscribe((state) => {
-    if (!showsVoice(state)) closeVoiceSession();
-  });
   if (!voiceSession.getSnapshot().open) await voiceSession.open();
   if (!voiceSession.getSnapshot().open || voiceSession.getSnapshot().status === "disabled") {
     unwatchNotifications?.();
@@ -136,27 +147,30 @@ export async function openVoiceSession() {
   );
 }
 function closeVoiceSession() {
-  unwatchPanels?.();
-  unwatchPanels = null;
   unwatchNotifications?.();
   unwatchNotifications = null;
   voiceSession.close();
   void voiceAudio.disconnect();
 }
-/** Shows Voice in the thread navigated to, without touching a panel that already shows it. */
-export function followVoiceInto(ref: ScopedThreadRef) {
-  const store = useRightPanelStore.getState();
-  const panel = store.byThreadKey[scopedThreadKey(rightPanelHostRef(ref))];
-  if (!(panel?.isOpen && panel.activeSurfaceId === "voice")) store.open(ref, "voice");
+/** Opens or closes the one app-wide Voice surface; the session follows that state. */
+export function setVoiceOpen(open: boolean) {
+  useRightPanelStore.getState().setVoiceOpen(open);
 }
-/** Voice is a right-panel surface of whichever thread is on screen. */
-export function toggleVoice(ref: ScopedThreadRef) {
-  const store = useRightPanelStore.getState();
-  // A side chat's panel actions land in its parent's panel, so read that panel too.
-  const panel = store.byThreadKey[scopedThreadKey(rightPanelHostRef(ref))];
-  if (panel?.isOpen && panel.activeSurfaceId === "voice") store.closeSurface(ref, "voice");
-  else store.open(ref, "voice");
+export function toggleVoice() {
+  setVoiceOpen(!useRightPanelStore.getState().voiceOpen);
 }
+/** Selecting the Voice tab brings it to the front of whichever panel is on screen. */
+export function activateVoice() {
+  const store = useRightPanelStore.getState();
+  store.setVoiceOpen(true);
+  store.setVoiceActive(true);
+}
+// Session lifetime follows the app-wide open state, whichever entry point changed it.
+useRightPanelStore.subscribe((state, previous) => {
+  if (state.voiceOpen === previous.voiceOpen) return;
+  if (state.voiceOpen) void openVoiceSession().catch(() => {});
+  else closeVoiceSession();
+});
 export async function connectVoiceMicrophone() {
   if (voiceSession.getSnapshot().status === "disabled") return;
   await voiceAudio.connect(async (nextHandlers) => {

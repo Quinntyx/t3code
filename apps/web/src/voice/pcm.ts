@@ -9,12 +9,18 @@ export function encodePcm16(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
+/** Gemini Live streams 24 kHz mono PCM16 frames that can run up to a second or more of audio. */
+const MAX_OUTPUT_FRAME_BYTES = 1_000_000;
+
 export function decodePcm16(bytes: Uint8Array): Float32Array<ArrayBuffer> {
-  if (!bytes.length || bytes.length > 32000 || bytes.length % 2 !== 0)
+  // Live chunks normally arrive byte-aligned; a stray trailing byte is dropped rather than
+  // failing the whole reply, but a frame without one whole sample is malformed.
+  const length = bytes.length & ~1;
+  if (!length || bytes.length > MAX_OUTPUT_FRAME_BYTES)
     throw new Error("Invalid PCM16LE output frame.");
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, length);
   return Float32Array.from(
-    { length: bytes.length / 2 },
+    { length: length / 2 },
     (_, index) => view.getInt16(index * 2, true) / 32768,
   );
 }

@@ -19,7 +19,7 @@ import type {
   TurnItemId,
 } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+import { runRanAfter, stalledRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { isOrchestrationV2WorkActive, latestProviderTurnForAttempt } from "@t3tools/contracts";
@@ -250,6 +250,8 @@ export function subagentResultForRun(
 
 export function delegatedTaskProgress(projection: {
   readonly runs: OrchestrationV2ThreadProjection["runs"];
+  /** The failure and Stop items that decide whether a failed run is stalled. */
+  readonly turnItems: OrchestrationV2ThreadProjection["turnItems"];
   readonly messages: ReadonlyArray<
     Pick<OrchestrationV2ConversationMessage, "runId" | "notification">
   >;
@@ -270,8 +272,14 @@ export function delegatedTaskProgress(projection: {
   const workRuns = projection.runs.filter(
     (run) => !monitorRuns.has(run.id) && run.status !== "rolled_back",
   );
+  // A run the upstream API's overload ended is still working: T3 Code retries it, and its
+  // "failed" status would otherwise hand the parent a failure between attempts.
+  const stalledRunId = stalledRun(projection.runs, projection.turnItems)?.id ?? null;
+  const stalled = (run: { readonly id: OrchestrationV2Run["id"] }) => run.id === stalledRunId;
   const active = workRuns.some(
-    (run) => !terminal(run.status) && !(run.status === "queued" && run.queueHeld === true),
+    (run) =>
+      stalled(run) ||
+      (!terminal(run.status) && !(run.status === "queued" && run.queueHeld === true)),
   );
   const children =
     projection.subagents.some(
@@ -287,7 +295,10 @@ export function delegatedTaskProgress(projection: {
       backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []),
     );
   const resultRun = workRuns
-    .filter((run) => terminal(run.status) && (run.startedAt !== null || run.ordinal === 1))
+    .filter(
+      (run) =>
+        terminal(run.status) && !stalled(run) && (run.startedAt !== null || run.ordinal === 1),
+    )
     .toSorted((a, b) => (runRanAfter(a, b) ? -1 : runRanAfter(b, a) ? 1 : 0))[0];
   return {
     state:

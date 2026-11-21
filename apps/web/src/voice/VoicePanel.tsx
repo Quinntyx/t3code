@@ -58,7 +58,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a rendered Voice surface owns the client Gemini session; closing the last one ends it.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the rendered Voice surface keeps the client Gemini session alive for the app-wide open state
   useEffect(() => {
     void openVoiceSession().catch(() => {});
   }, []);
@@ -117,7 +117,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
       <div
         role="log"
         aria-label="Voice conversation"
-        className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-6 py-8 wrap-anywhere scrollbar-gutter-both"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-5 py-6 scrollbar-gutter-both"
       >
         {session.messages.length === 0 ? (
           <div className="m-auto flex max-w-xs flex-col items-center gap-3 text-center">
@@ -142,7 +142,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
             message.role === "user" ? (
               <p
                 key={message.id}
-                className="max-w-[85%] self-end rounded-2xl bg-muted px-4 py-2.75 text-sm leading-relaxed whitespace-pre-wrap text-foreground"
+                className="max-w-[85%] self-end rounded-2xl bg-muted px-4 py-2.75 text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap text-foreground"
               >
                 <span className="sr-only">You: </span>
                 {message.text}
@@ -150,7 +150,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
             ) : (
               <p
                 key={message.id}
-                className="max-w-[540px] self-start text-base leading-7 tracking-tight whitespace-pre-wrap text-foreground/90"
+                className="max-w-[68ch] self-start text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap text-foreground/90"
               >
                 <span className="sr-only">Voice: </span>
                 {message.text}

@@ -15,11 +15,13 @@ import {
 } from "./threadWorkflows.ts";
 import { deriveThreadTurnSubagents, type ThreadTurnSubagents } from "./threadSubagents.ts";
 import {
+  deriveStallNoticeRows,
   deriveUsageLimitNoticeRows,
   presentRunStop,
+  withoutStallNoticeRows,
   withoutUsageLimitNoticeRows,
   type RunStopPresentation,
-  type UsageLimitNoticeRows,
+  type NoticeRows,
 } from "./threadExecution.ts";
 import {
   deriveThreadCheckpointSummaries,
@@ -307,7 +309,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
   // Read from the structure so streamed text does not rescan runs and turn items.
   const usageLimitNoticeRowsAtomFamily = Atom.family((key: string) => {
     let previous: EnvironmentThreadStructure | null = null;
-    let value: UsageLimitNoticeRows | null = null;
+    let value: NoticeRows | null = null;
     return Atom.make((get) => {
       const thread = get(quietThreadAtomFamily(key));
       if (thread !== previous) {
@@ -318,21 +320,48 @@ export function createEnvironmentThreadDetailAtoms<E>(
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-usage-limit-notice:${key}`));
   });
 
+  // An outage repeats its retry prompt and overload per attempt; the notice says it all.
+  const stallNoticeRowsAtomFamily = Atom.family((key: string) => {
+    let previous: EnvironmentThreadStructure | null = null;
+    let value: NoticeRows | null = null;
+    return Atom.make((get) => {
+      const thread = get(quietThreadAtomFamily(key));
+      if (thread !== previous) {
+        previous = thread;
+        value = thread === null ? null : deriveStallNoticeRows(thread.projection);
+      }
+      return value;
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-stall-notice:${key}`));
+  });
+
   // Presentation only: the projection keeps every row for other readers.
   const visibleTurnItemsAtomFamily = Atom.family((key: string) => {
     const projectQuestionHistory = createQuestionHistoryProjector();
     let previousRows: OrchestrationV2ThreadProjection["visibleTurnItems"] | null = null;
-    let previousNotice: UsageLimitNoticeRows | null = null;
+    let previousNotices: {
+      readonly usageLimit: NoticeRows | null;
+      readonly stall: NoticeRows | null;
+    } | null = null;
     let previous = EMPTY_VISIBLE_TURN_ITEMS;
     return Atom.make((get): OrchestrationV2ThreadProjection["visibleTurnItems"] => {
       const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
       if (projection === null) return EMPTY_VISIBLE_TURN_ITEMS;
       const rows = projectQuestionHistory(projection);
-      const notice = get(usageLimitNoticeRowsAtomFamily(key));
-      if (rows !== previousRows || notice !== previousNotice) {
+      const notices = {
+        usageLimit: get(usageLimitNoticeRowsAtomFamily(key)),
+        stall: get(stallNoticeRowsAtomFamily(key)),
+      };
+      if (
+        rows !== previousRows ||
+        notices.usageLimit !== previousNotices?.usageLimit ||
+        notices.stall !== previousNotices?.stall
+      ) {
         previousRows = rows;
-        previousNotice = notice;
-        previous = withoutUsageLimitNoticeRows(rows, notice);
+        previousNotices = notices;
+        previous = withoutStallNoticeRows(
+          withoutUsageLimitNoticeRows(rows, notices.usageLimit),
+          notices.stall,
+        );
       }
       return previous;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-visible-turn-items:${key}`));

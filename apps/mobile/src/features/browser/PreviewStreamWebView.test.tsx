@@ -203,6 +203,7 @@ function mountView(
       tabId="tab-1"
       interactive={!props.compact}
       background="#000"
+      audioMuted={false}
       environmentLabel="build-box"
       compact={props.compact}
       paused={paused}

@@ -161,7 +161,10 @@ import Animated, {
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
-import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+} from "../../lib/attachmentDownload";
 import { splitMarkdownDetails } from "../../lib/markdownDetails";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
@@ -287,6 +290,7 @@ import { waitForThreadShell } from "./threadForkNavigation";
 import { UNSENT_MESSAGE_ANNOUNCEMENT, unsentMessageBubbleClassName } from "./unsentMessageStyle";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { useFileChipShare } from "./useFileChipShare";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import {
@@ -660,14 +664,17 @@ function MessageAttachmentFile(props: {
     }, [props.environmentId, attachment.id, httpBaseUrl]),
   );
 
-  const shareFile = (sourceIdentifier?: string) => {
+  const shareFile = (sourceIdentifier: string, kind: "share" | "download" = "share") => {
     if (props.available === false || httpBaseUrl === null || openingRef.current) return;
     const controller = new AbortController();
     openingRef.current = controller;
     setOpening(true);
     const finish = (message: string | null) => {
       if (message !== null && !controller.signal.aborted) {
-        Dialog.alert("Could not open attachment", message);
+        Dialog.alert(
+          kind === "download" ? "Could not download attachment" : "Could not open attachment",
+          message,
+        );
       }
       if (openingRef.current === controller) {
         openingRef.current = null;
@@ -694,12 +701,14 @@ function MessageAttachmentFile(props: {
       const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
       if (url === null) return finish("The attachment could not be opened.");
       const shared = await settlePromise(() =>
-        downloadAndShareAttachment({
-          url,
-          attachment,
-          signal: controller.signal,
-          sourceIdentifier,
-        }),
+        kind === "download"
+          ? downloadAttachmentToDevice({ uri: url, attachment, signal: controller.signal })
+          : downloadAndShareAttachment({
+              url,
+              attachment,
+              signal: controller.signal,
+              sourceIdentifier,
+            }),
       );
       if (shared._tag === "Failure") {
         const error = squashAtomCommandFailure(shared);
@@ -707,6 +716,16 @@ function MessageAttachmentFile(props: {
       }
       finish(null);
     })();
+  };
+
+  const canDownload = canSaveFileToDownloads();
+  const offerFile = () => {
+    if (!canDownload) return shareFile(sourceIdentifier);
+    Dialog.alert(attachment.name, undefined, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Download", onPress: () => shareFile(sourceIdentifier, "download") },
+      { text: "Share", onPress: () => shareFile(sourceIdentifier) },
+    ]);
   };
 
   const openAttachment = () =>
@@ -753,7 +772,7 @@ function MessageAttachmentFile(props: {
           sizeBytes={attachment.sizeBytes}
           onOpen={openAttachment}
           onPlaybackStart={props.onPlaybackStart}
-          onLongPress={() => shareFile(sourceIdentifier)}
+          onLongPress={offerFile}
         />
       </PresentationSource>
     );
@@ -789,7 +808,7 @@ function MessageAttachmentFile(props: {
           accessibilityState={{ disabled, busy: opening }}
           disabled={disabled}
           className="min-w-0 flex-1 flex-row items-center gap-3 p-3 active:bg-subtle"
-          onLongPress={() => shareFile(sourceIdentifier)}
+          onLongPress={offerFile}
           onPress={openAttachment}
         >
           <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
@@ -821,7 +840,7 @@ function MessageAttachmentFile(props: {
             accessibilityState={{ disabled, busy: opening }}
             disabled={disabled}
             className="mr-1 min-h-11 w-11 items-center justify-center rounded-lg active:bg-subtle disabled:opacity-40"
-            onPress={() => shareFile(sourceIdentifier)}
+            onPress={() => shareFile(sourceIdentifier, canDownload ? "download" : "share")}
           >
             <SymbolView name="arrow.down" size={16} tintColorClassName="accent-foreground-muted" />
           </Pressable>
@@ -3234,7 +3253,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         };
       }
       const target = resolveFileChipTarget(href, props.workspaceRoot);
-      return target ? fileChipMenu(target) : undefined;
+      return target ? fileChipMenu(target, canSaveFileToDownloads()) : undefined;
     },
     onFileContextMenuAction: (href, actionId) => {
       const skill = enrichedSkillReference(href, props.skills);
@@ -3266,7 +3285,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           if (target.fullPath) handOffToNewThread(target.fullPath);
           return;
         case "save":
-          shareFileChip(target);
+          shareFileChip(target, "share");
+          return;
+        case "download":
+          shareFileChip(target, "download");
           return;
       }
     },

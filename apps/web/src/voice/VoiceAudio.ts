@@ -41,6 +41,14 @@ export interface VoiceState {
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Voice failed. Connect again explicitly.";
 
+/**
+ * Gemini Live delivers reply audio far ahead of real time — a measured 90-second reply queued
+ * ~37 seconds of audio in 1920-byte chunks. These caps are a safety net against a stuck
+ * playhead, not a playback policy; matching them to real timing would cut replies short.
+ */
+const MAX_QUEUED_SOURCES = 4096;
+const MAX_QUEUED_SECONDS = 120;
+
 export class VoiceAudio {
   private state: VoiceState = {
     phase: "disconnected",
@@ -291,8 +299,8 @@ export class VoiceAudio {
       const samples = decodePcm16(bytes);
       const start = Math.max(context.currentTime, this.nextPlay);
       const end = start + samples.length / 24000;
-      if (this.sources.size >= 32 || end - context.currentTime > 1)
-        throw new Error("Voice playback exceeded its one-second queue. Connect again explicitly.");
+      if (this.sources.size >= MAX_QUEUED_SOURCES || end - context.currentTime > MAX_QUEUED_SECONDS)
+        throw new Error("Voice playback exceeded its queue. Connect again explicitly.");
       const buffer = context.createBuffer(1, samples.length, 24000);
       buffer.copyToChannel(samples, 0);
       const source = context.createBufferSource();

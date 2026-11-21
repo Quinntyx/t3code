@@ -4191,6 +4191,7 @@ function providerFailureFromResult(
         : `api_error_${apiErrorStatus}`,
     class: failureClass,
     retryable: apiErrorStatus === 429 || apiErrorStatus === 529 ? true : null,
+    ...(isOverloadedResult(message) ? { overloaded: true } : {}),
     resetAt: resetAt ?? null,
   });
 }

@@ -197,6 +197,7 @@ function setup() {
     draftKey: null,
     maxAttachmentBytes: undefined,
     onSave: () => {},
+    onDownload: null,
     onRemove: null,
   };
   return {

@@ -35,6 +35,7 @@ import { useComposerResume } from "./chat/useComposerResume";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
+import { stallRecoveryBannerItem } from "./chat/StallRecoveryBanner";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import { resolveDraftHeroState } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
@@ -45,7 +46,6 @@ import { openMachineHandoff, useMachineHandoffRequest } from "./machineHandoffRe
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
-import { followVoiceInto } from "../voice/controller";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -121,15 +121,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
-import {
-  type SetStateAction,
-  use,
-  useEffect,
-  useEffectEvent,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { useAmbientShimmerProminence } from "~/ambient-shimmer/prominence";
 import { WorkspaceMutationIdContext } from "./chat/ChatMarkdownMedia";
@@ -173,9 +165,9 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { PopoverCreateHandle } from "./ui/popover";
 import {
   selectActiveRightPanel,
-  selectActiveRightPanelSurface,
   selectThreadPanelOpen,
   selectThreadRightPanelState,
+  threadRightPanelView,
   useRightPanelStore,
 } from "../rightPanelStore";
 import { isPreviewSupportedInRuntime, useThreadPreviewState } from "../previewStateStore";
@@ -834,8 +826,11 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
       true;
+  // A stalled thread resumes on its own, so Resume is not offered while the server retries it.
   const resumableRunId =
-    !isServerThread || serverProjection === null ? null : deriveResumableRunId(serverProjection);
+    !isServerThread || serverProjection === null || serverRuntime?.stalled === true
+      ? null
+      : deriveResumableRunId(serverProjection);
   const parentSubagentThreadId =
     activeThread?.lineage.relationshipToParent === "subagent"
       ? activeThread.lineage.parentThreadId
@@ -1013,8 +1008,11 @@ export default function ChatView(props: ChatViewProps) {
     recovery: activeThreadShell?.limitRecovery,
     snoozedUntil: activeThreadShell?.snoozedUntil,
   });
+  // A stalled thread shows the retry notice in place of its error; there is nothing to fix.
+  const stalled = activeThreadShell?.runtime?.stalled === true;
   const timelineThreadError =
-    limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
+    (limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError) ||
+    (stalled && visibleThreadError === serverRuntime?.lastError)
       ? null
       : visibleThreadError;
 
@@ -1044,10 +1042,23 @@ export default function ChatView(props: ChatViewProps) {
   if (anchorRunSettled) {
     setTimelineAnchor({ threadKey: activeThreadKey, messageId: null });
   }
-  const activeRightPanelKind = useRightPanelStore((state) =>
-    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
+  // Primitives, not a fresh object: the store compares selector results by identity.
+  const voiceOpen = useRightPanelStore((state) => state.voiceOpen);
+  const voiceActive = useRightPanelStore((state) => state.voiceActive);
+  const rightPanelState = useRightPanelStore((state) =>
+    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
-  const diffOpen = activeRightPanelKind === "diff";
+  const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
+  const rightPanelView = threadRightPanelView(rightPanelState, {
+    open: voiceOpen,
+    active: voiceActive,
+  });
+  const activeRightPanelSurface = rightPanelView.isOpen
+    ? (rightPanelView.surfaces.find((surface) => surface.id === rightPanelView.activeSurfaceId) ??
+      null)
+    : null;
+  // What the panel shows, not what the thread saved: Diff saved behind Voice is still closed.
+  const diffOpen = activeRightPanelSurface?.kind === "diff";
   const explicitDiffOpenRef = useRef<ScopedThreadRef | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resets the diff panel store to branch scope when the diff opens without an explicit request
   useLayoutEffect(() => {
@@ -1062,13 +1073,16 @@ export default function ChatView(props: ChatViewProps) {
       useDiffPanelStore.getState().selectGitScope(activeThreadRef, "branch");
     }
   }, [activeThreadRef, diffOpen]);
-  const rightPanelState = useRightPanelStore((state) =>
-    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
+  // Only the thread the main panel shows takes the panel off Voice when its own surface is
+  // selected; an embedded side chat's actions land in its parent's panel instead.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes the on-screen thread so the panel store can scope Voice changes to it
+  useLayoutEffect(() => {
+    if (!embedded) useRightPanelStore.getState().setVisibleThread(activeThreadKey);
+  }, [activeThreadKey, embedded]);
+  const threadRightPanelKind = useRightPanelStore((state) =>
+    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
   );
-  const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
-  const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
-  );
+  const activeRightPanelKind = activeRightPanelSurface?.kind ?? threadRightPanelKind;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const resolvePreviewRuntimeTabId = activeThreadRef
@@ -1084,25 +1098,12 @@ export default function ChatView(props: ChatViewProps) {
   );
   const canReuseTerminal = activeThreadKnownSessionsRaw !== null;
   const previewPanelOpen = activeRightPanelKind === "preview" && browserAvailable;
-  const rightPanelOpen = rightPanelState.isOpen;
-  const voiceVisible = rightPanelOpen && activeRightPanelSurface?.kind === "voice";
-  const voiceWasVisibleRef = useRef(false);
-  const followVoice = useEffectEvent(() => {
-    if (activeThreadRef && voiceWasVisibleRef.current) followVoiceInto(activeThreadRef);
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Voice is client-wide; it follows navigation into the next thread when it was on screen.
-  useEffect(() => {
-    if (activeThreadKey) followVoice();
-  }, [activeThreadKey]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records whether Voice was on screen, read by the navigation effect above.
-  useEffect(() => {
-    voiceWasVisibleRef.current = voiceVisible;
-  }, [voiceVisible]);
+  const rightPanelOpen = rightPanelView.isOpen;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const rightPanelPresenceValue = {
     activeSurface: activeRightPanelSurface,
-    surfaces: rightPanelState.surfaces,
+    surfaces: rightPanelView.surfaces,
   };
   const rightPanelPresence = usePanelPresence(
     rightPanelOpen && activeThreadRef !== null,
@@ -2064,6 +2065,7 @@ export default function ChatView(props: ChatViewProps) {
   } = useRightPanelSurfaceClose({
     threadRef: activeThreadRef,
     terminalLabelsById: activeTerminalLabelsById,
+    displayedSurfaces: rightPanelView.surfaces,
   });
   const closeRightPanelSurfaceStable = closeRightPanelSurface;
   const persistThreadSettingsForNextTurn = async (input: {
@@ -2595,6 +2597,25 @@ export default function ChatView(props: ChatViewProps) {
     });
     return item ? [item] : [];
   });
+  const stallRecoveryBanner =
+    stalled && activeThreadShell !== null
+      ? stallRecoveryBannerItem({
+          threadId: activeThreadShell.id,
+          nextAttemptAt: activeThreadShell.runtime?.stallNextAttemptAt ?? null,
+          requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+          timestampFormat,
+          onAction: async (action) => {
+            const result = await updateThreadMetadata({
+              environmentId,
+              input: {
+                threadId: activeThreadShell.id,
+                ...(action === "stop" ? { stallRecovery: null } : { stallRetryNow: true }),
+              },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+        })
+      : null;
   const limitRecoveryBanner =
     limitRecoveryRun !== null && activeThreadShell !== null
       ? usageLimitRecoveryBannerItem({
@@ -2664,6 +2685,7 @@ export default function ChatView(props: ChatViewProps) {
           ]
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const stallRecoveryItems = stallRecoveryBanner === null ? [] : [stallRecoveryBanner];
     const extensionStatusBanner = extensionStatusBannerItem(
       deriveProviderExtensionStatuses(serverProjection),
     );
@@ -2680,6 +2702,7 @@ export default function ChatView(props: ChatViewProps) {
         ...feedbackBannerItems,
         ...fallbackItems,
         ...limitRecoveryItems,
+        ...stallRecoveryItems,
         ...extensionStatusItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -2691,6 +2714,7 @@ export default function ChatView(props: ChatViewProps) {
       ...feedbackBannerItems,
       ...fallbackItems,
       ...limitRecoveryItems,
+      ...stallRecoveryItems,
       ...extensionStatusItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -3544,6 +3568,7 @@ export default function ChatView(props: ChatViewProps) {
                   runs={serverProjection?.runs ?? []}
                   latestRun={activeActivityRun}
                   announcedRun={announcedRun(activeActivityRun, serverProjection?.runs ?? [])}
+                  stalled={activeRuntime?.stalled === true}
                   detailBehindShell={isDetailBehindShell(
                     activeLatestRun,
                     activeThreadShell?.latestRun ?? null,

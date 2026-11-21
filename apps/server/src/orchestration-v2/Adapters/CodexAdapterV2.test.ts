@@ -3413,6 +3413,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         assert.lengthOf(starts, 1 + retries);
         assert.lengthOf(harness.terminalEvents(), 1);
+        // A capacity failure the in-adapter retries could not outlast reaches recovery as an
+        // overload; one the test interrupted is an ordinary interrupt.
+        assert.equal(
+          harness.terminalEvents()[0]?.failure?.overloaded === true,
+          outcome === "exhaust" || outcome === "start-fails",
+        );
         assert.lengthOf(
           harness.events.filter(
             (event) =>

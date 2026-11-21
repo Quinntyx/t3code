@@ -676,6 +676,7 @@ export function buildBulkUnpinContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
+    | "Stalled"
     | "PRing"
     | "Connecting"
     | "Completed"
@@ -745,6 +746,8 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
 
 /** Unopened threads' failures still count as unseen, unlike completions. */
 function hasUnseenFailure(thread: ThreadStatusInput): boolean {
+  // The server is retrying the run, so the thread is working and has not failed.
+  if (thread.runtime?.stalled === true) return false;
   if (thread.latestRun?.status !== "failed") return false;
   if (!thread.lastVisitedAt) return true;
   const completedAt = Date.parse(thread.latestRun.completedAt ?? "");
@@ -857,6 +860,7 @@ export type SidebarThreadStatus =
   | "pring"
   | "preparing"
   | "working"
+  | "stalled"
   | "waiting"
   | "failed"
   | "limited"
@@ -880,6 +884,7 @@ export function shouldRecedeSidebarThread(input: {
   if (
     input.status === "preparing" ||
     input.status === "working" ||
+    input.status === "stalled" ||
     input.status === "pring" ||
     input.status === "waiting"
   ) {
@@ -931,6 +936,10 @@ export function resolveSidebarThreadStatus(
   ) {
     return "working";
   }
+  // The server is retrying an overloaded run; the thread is still working, not failed.
+  if (thread.runtime?.stalled === true) {
+    return "stalled";
+  }
   if (thread.runtime?.status === "idle") {
     return "waiting";
   }
@@ -962,7 +971,8 @@ export function resolveSidebarFolderDot(
     (thread) => resolveSidebarThreadStatus(thread) === "ready" && hasUnseenCompletion(thread),
   );
   if (hasUnread) return "unread";
-  if (statuses.has("working") || statuses.has("preparing")) return "working";
+  if (statuses.has("working") || statuses.has("stalled") || statuses.has("preparing"))
+    return "working";
   return null;
 }
 
@@ -1221,6 +1231,17 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+    };
+  }
+
+  // Working placement, but the run itself ended: the server retries it on its own. A thread
+  // that is waiting on a timer does not pulse.
+  if (thread.runtime?.stalled === true) {
+    return {
+      label: "Stalled",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
     };
   }
 

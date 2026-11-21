@@ -246,6 +246,30 @@ export async function downloadAndShareAttachment(input: {
   }
 }
 
+/** Saves a copy in Android's Downloads folder (Android 10+). */
+export async function downloadAttachmentToDevice(input: {
+  readonly uri: string;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  // Imported on use: a static react-native import breaks the jsdom tests that import this module.
+  const { saveFileToDownloads, showDownloadStarted } = await import("./saveToDevice");
+  const name = downloadFileName(input.attachment.name);
+  if (/^(file|content):/i.test(input.uri)) {
+    await saveFileToDownloads(input.uri, name, input.signal);
+    return;
+  }
+  if (input.signal.aborted) return;
+  showDownloadStarted(name);
+  const file = await downloadAttachmentForPreview({ ...input, url: input.uri });
+  if (file === null) return;
+  try {
+    await saveFileToDownloads(file.uri, name, input.signal);
+  } finally {
+    file.dispose();
+  }
+}
+
 export async function shareLocalAttachment(input: {
   readonly uri: string;
   readonly attachment: AttachmentFileMetadata;
@@ -282,6 +306,19 @@ export async function writeGeneratedAttachmentFile(input: {
   } catch (error) {
     cached.preview.dispose();
     throw error;
+  }
+}
+
+export async function downloadGeneratedAttachment(input: {
+  readonly bytes: Uint8Array;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  const file = await writeGeneratedAttachmentFile(input);
+  try {
+    await downloadAttachmentToDevice({ ...input, uri: file.uri });
+  } finally {
+    file.dispose();
   }
 }
 

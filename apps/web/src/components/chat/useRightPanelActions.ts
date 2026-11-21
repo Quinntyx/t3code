@@ -15,7 +15,6 @@ import {
 import { useDiffPanelStore } from "../../diffPanelStore";
 import { type ThreadPanelPresentation } from "../../rightPanelLayout";
 import {
-  selectActiveRightPanel,
   selectThreadPanelOpen,
   type RightPanelSurface,
   useRightPanelStore,
@@ -36,10 +35,11 @@ import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
 import {
+  activateVoice,
   connectVoiceMicrophone,
   disconnectVoice,
   muteVoice,
-  toggleVoice,
+  setVoiceOpen,
 } from "../../voice/controller";
 interface RightPanelActionsInput {
   readonly activeThreadRef: ScopedThreadRef | null;
@@ -159,7 +159,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const addPullRequestsSurfaceStable = useStableCallback(addPullRequestsSurface);
   const addVoiceSurfaceStable = useStableCallback(() => {
-    if (activeThreadRef) useRightPanelStore.getState().open(activeThreadRef, "voice");
+    if (activeThreadRef) activateVoice();
   });
   const addDeviceSurface = () => {
     if (!activeThreadRef) return;
@@ -176,6 +176,8 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const openFileSurfaceStable = useStableCallback(openFileSurface);
   const closePreviewPanel = () => {
+    // Voice keeps every panel open while it is, so closing the panel must end it too.
+    if (useRightPanelStore.getState().voiceOpen) setVoiceOpen(false);
     if (activeThreadRef) {
       if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
         usePreviewMiniPlayerStore
@@ -210,6 +212,11 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const togglePreviewPanelStable = useStableCallback(togglePreviewPanel);
   const activateRightPanelSurface = (surface: RightPanelSurface) => {
     if (!activeThreadRef) return;
+    if (surface.kind === "voice") {
+      activateVoice();
+      return;
+    }
+    useRightPanelStore.getState().setVoiceActive(false);
     explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
       surfaceKind: surface.kind,
       diffOpen,
@@ -308,18 +315,22 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const addPullRequestSurfaceStable = useStableCallback(addPullRequestSurface);
   const onOpenTurnDiff = (runId: RunId, filePath?: string) => {
     if (!isServerThread || !activeThreadRef) return;
-    const diffOpen =
-      selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
-    explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
+    explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
+      surfaceKind: "diff",
+      diffOpen,
+      activeThreadRef,
+    });
     useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   };
   const onOpenToolDiffStable = useStableCallback((target: ToolCallDiffTarget) => {
     if (!isServerThread || !activeThreadRef) return;
-    const diffOpen =
-      selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
-    explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
+    explicitDiffOpenRef.current = resolveExplicitDiffOpenOnActivate({
+      surfaceKind: "diff",
+      diffOpen,
+      activeThreadRef,
+    });
     useDiffPanelStore.getState().selectToolCall(activeThreadRef, target);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
@@ -349,7 +360,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     "diff.toggle": () => onToggleDiff(),
     "voice.toggle": ({ event }) => {
       if (!activeThreadRef) return false;
-      if (!event.repeat) toggleVoice(activeThreadRef);
+      if (!event.repeat) setVoiceOpen(!useRightPanelStore.getState().voiceOpen);
     },
     "voice.connect": ({ event }) => {
       if (!event.repeat) void connectVoiceMicrophone().catch(() => {});

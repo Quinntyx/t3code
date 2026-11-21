@@ -30,7 +30,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { AppText as Text } from "../../components/ui/AppText";
-import { shareGeneratedAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadGeneratedAttachment,
+  shareGeneratedAttachment,
+} from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { uuidv4 } from "../../lib/uuid";
@@ -448,11 +452,16 @@ export function ThreadMcpApp(props: {
           if (bytes.byteLength > MAX_DOWNLOAD_BYTES) {
             throw new McpAppHostRefusal({ message: `${file.name} is too large to save.` });
           }
-          const shared = await shareGeneratedAttachment({
+          const generated = {
             bytes,
             attachment: { name: file.name, mimeType },
             signal: new AbortController().signal,
-          });
+          };
+          if (canSaveFileToDownloads()) {
+            await downloadGeneratedAttachment(generated);
+            continue;
+          }
+          const shared = await shareGeneratedAttachment(generated);
           if (!shared)
             throw new McpAppHostRefusal({ message: "Sharing is not available on this device." });
         }

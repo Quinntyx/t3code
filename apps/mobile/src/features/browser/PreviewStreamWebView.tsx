@@ -29,7 +29,11 @@ import * as Clipboard from "expo-clipboard";
 
 import { AppText } from "../../components/ui/AppText";
 import { PdfPreview } from "../../components/PdfPreview";
-import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
+import {
+  downloadAndShareAttachment,
+  downloadAttachmentToDevice,
+} from "../../lib/attachmentDownload";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { beginForegroundHandoff } from "../../lib/foreground-handoff";
 import { usePreviewStreamAccess } from "../../state/preview";
 import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
@@ -65,6 +69,8 @@ type NativeStreamBridge = {
   readonly onStreamingChange?: (streaming: boolean) => void;
   readonly onPhaseChange?: (phase: PreviewStreamPhase) => void;
   readonly onErrorChange?: (failed: boolean) => void;
+  /** False when this tab's page cannot encode audio, so a mute control would do nothing. */
+  readonly onAudioUnavailable?: (available: boolean) => void;
   readonly compact?: boolean;
   readonly pdfUri?: string | null;
   readonly environmentLabel?: string | undefined;
@@ -201,28 +207,42 @@ async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean)
 }
 
 function offerDownload(download: PreviewStreamDownload) {
+  const input = {
+    attachment: { name: download.fileName, mimeType: "application/octet-stream" },
+    signal: new AbortController().signal,
+  };
+  const save = (task: Promise<unknown>) =>
+    void task.catch((cause: unknown) =>
+      Dialog.alert(
+        "Could not save the download",
+        cause instanceof Error ? cause.message : undefined,
+      ),
+    );
+  // The save also copies local file: and content: URIs as they are; a stream download is always remote.
+  const canDownload = canSaveFileToDownloads() && /^https?:\/\//i.test(download.url);
   Dialog.alert(`Downloaded ${download.fileName}`, undefined, [
     { text: "Not now", style: "cancel" },
+    ...(canDownload
+      ? [
+          {
+            text: "Save to Downloads",
+            onPress: () => save(downloadAttachmentToDevice({ ...input, uri: download.url })),
+          },
+        ]
+      : []),
     {
-      text: "Save or share",
-      onPress: () =>
-        void downloadAndShareAttachment({
-          url: download.url,
-          attachment: { name: download.fileName, mimeType: "application/octet-stream" },
-          signal: new AbortController().signal,
-        }).catch((cause: unknown) =>
-          Dialog.alert(
-            "Could not save the download",
-            cause instanceof Error ? cause.message : undefined,
-          ),
-        ),
+      text: canDownload ? "Share" : "Save or share",
+      onPress: () => save(downloadAndShareAttachment({ ...input, url: download.url })),
     },
   ]);
 }
 
 const MAX_REFUSALS = 3;
 
-type NativeStreamConfiguration = Omit<PreviewStreamConfiguration, "reuseNearbyTouchProbe">;
+type NativeStreamConfiguration = Omit<PreviewStreamConfiguration, "reuseNearbyTouchProbe"> & {
+  /** The muted tab still streams; the viewer only turns its own gain down. */
+  readonly audioMuted: boolean;
+};
 
 export function PreviewStreamWebView(
   props: Omit<NativeStreamConfiguration, "access"> &
@@ -241,6 +261,7 @@ export function PreviewStreamWebView(
     interactive: props.interactive,
     background: props.background,
     reuseNearbyTouchProbe: Platform.OS === "ios",
+    ...(props.audio === false ? { audio: false } : {}),
   });
   const [seededKey, setSeededKey] = useState<string | null>(() =>
     access && !props.paused ? targetKey : null,
@@ -303,6 +324,9 @@ function AuthorizedPreviewStream({
   const bootAccess = authRefused ? null : access;
   const processRetried = useRef(false);
   const unauthorized = useRef(0);
+  // Mute is not part of the document's identity: toggling it must not remount the WebView and
+  // reset its control, dialogs, input and picture in picture. Whether this surface plays audio
+  // at all is, and never changes while it is mounted.
   const initialConfiguration = JSON.stringify({
     access: bootAccess,
     accessGeneration: 0,
@@ -311,6 +335,7 @@ function AuthorizedPreviewStream({
     interactive: props.interactive,
     background: props.background,
     reuseNearbyTouchProbe: Platform.OS === "ios",
+    ...(props.audio === false ? { audio: false } : {}),
   } satisfies PreviewStreamConfiguration);
   return (
     <PreviewStreamDocumentView
@@ -364,6 +389,7 @@ function PreviewStreamDocumentView({
   accessPending,
   authRefused,
   initialConfiguration,
+  audioMuted,
   background,
   compact,
   pdfUri,
@@ -377,6 +403,7 @@ function PreviewStreamDocumentView({
   onStreamingChange,
   onPhaseChange,
   onErrorChange,
+  onAudioUnavailable,
   onRetry,
   onStreaming,
   onRecoverProcess,
@@ -387,6 +414,8 @@ function PreviewStreamDocumentView({
   readonly accessPending: boolean;
   readonly authRefused: boolean;
   readonly initialConfiguration: string;
+  /** The live tab mute; it reaches the page through the bridge, never through the document. */
+  readonly audioMuted: boolean;
   readonly background: string;
   readonly onUnauthorized: () => boolean;
   readonly onRefreshAccess: () => void;
@@ -584,8 +613,20 @@ function PreviewStreamDocumentView({
     lastDialogAnnouncement.current = dialogAnnouncement;
     if (dialogAnnouncement !== null) announcePolitelyOnIos(dialogAnnouncement);
   }, [dialogAnnouncement]);
+  const muted = useRef<boolean | null>(audioMuted);
+  // The one path a mute takes to the page: the document key omits it, so a toggle never
+  // remounts the WebView, and the first render's value is already in the document it seeded.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the audio player lives in the WebView, outside React
+  useEffect(() => {
+    if (muted.current === audioMuted) return;
+    muted.current = audioMuted;
+    webView.current?.injectJavaScript(
+      `window.T3PreviewStream?.setMuted(${audioMuted ? "true" : "false"}); true;`,
+    );
+  }, [audioMuted]);
+  // The document is built once; a tab reopened while muted seeds the page before it starts.
   const [source] = useState(() => ({
-    html: previewStreamDocument(initialConfiguration, previewStreamScript),
+    html: previewStreamDocument(initialConfiguration, previewStreamScript, audioMuted),
     baseUrl: Platform.OS === "android" ? "https://localhost/" : "file:///",
   }));
   useImperativeHandle(ref, () => ({
@@ -750,6 +791,9 @@ function PreviewStreamDocumentView({
                 return;
               case "viewport":
                 onViewport?.(message);
+                return;
+              case "audio":
+                onAudioUnavailable?.(message.available);
                 return;
               case "clipboard":
                 void Clipboard.setStringAsync(message.text).catch(() => undefined);

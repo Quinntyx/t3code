@@ -133,6 +133,8 @@ import IconTypography from "@tabler/icons-react-native/IconTypography";
 import IconDownload from "@tabler/icons-react-native/IconDownload";
 import IconSitemap from "@tabler/icons-react-native/IconSitemap";
 import IconUpload from "@tabler/icons-react-native/IconUpload";
+import IconVolumeOff from "@tabler/icons-react-native/IconVolumeOff";
+import IconVolume2 from "@tabler/icons-react-native/IconVolume2";
 import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
 import IconUserCheck from "@tabler/icons-react-native/IconUserCheck";
 import IconUserX from "@tabler/icons-react-native/IconUserX";
@@ -343,6 +345,8 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   smartphone: IconDeviceMobile,
   terminal: IconTerminal2,
   visibility: IconEye,
+  volume_up: IconVolume2,
+  volume_off: IconVolumeOff,
 } satisfies Partial<Record<AndroidSymbol, Icon>>;
 
 export type { SFSymbol } from "expo-symbols";

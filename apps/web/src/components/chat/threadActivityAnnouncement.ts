@@ -9,6 +9,7 @@ export const THREAD_STATUS_TEXT = {
   input: "Needs your input",
   done: "Done",
   failed: "Failed",
+  stalled: "Stalled",
   stopped: "Stopped",
 } as const;
 
@@ -18,6 +19,8 @@ export interface ThreadActivitySnapshot {
   readonly requestId: string | null;
   readonly runId: RunId | null;
   readonly runStatus: OrchestrationV2RunStatus | null;
+  /** The run failed on an upstream overload the server retries, so the thread is still working. */
+  readonly stalled?: boolean | undefined;
 }
 
 export interface ThreadAnnouncementMemory {
@@ -100,7 +103,9 @@ export function nextThreadAnnouncement(
   previous: ThreadAnnouncementMemory | null,
   next: ThreadActivitySnapshot,
 ): { readonly memory: ThreadAnnouncementMemory; readonly announcement: string | null } {
-  const idle = next.status === "idle";
+  // A turn the server retries after an overload is still the same turn, and says so once.
+  const stalled = next.stalled === true && next.status === "idle";
+  const idle = next.status === "idle" && !stalled;
   // A run still starting up while the thread looks idle (a queued message,
   // a resume) is the next turn's, not a leftover from the last one.
   const idleRunId =
@@ -145,7 +150,11 @@ export function nextThreadAnnouncement(
             : THREAD_STATUS_TEXT.input
           : turnStarted
             ? "Working"
-            : null;
+            : stalled
+              ? previous.snapshot.stalled === true
+                ? null
+                : THREAD_STATUS_TEXT.stalled
+              : null;
     return { memory: { ...memory, turnRunId: nextTurnRunId }, announcement };
   }
 

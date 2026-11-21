@@ -15,9 +15,11 @@ function setup(
   visible = true,
   failInitialSend = false,
   toolResult: unknown = { ok: true },
+  onAudio?: (data: string) => void,
 ) {
   const responses: unknown[] = [];
   const content: unknown[] = [];
+  const audio: string[] = [];
   let receive: (message: LiveServerMessage) => void = () => {};
   let remoteClose = () => {};
   let disconnected = 0;
@@ -53,6 +55,10 @@ function setup(
     onDisconnect: () => {
       disconnected++;
     },
+    onAudio: (data) => {
+      audio.push(data);
+      onAudio?.(data);
+    },
     tools: { declarations: [], execute: async () => toolResult },
   });
   return {
@@ -61,6 +67,7 @@ function setup(
     responses,
     content,
     seen,
+    audio,
     receive: (message: Partial<LiveServerMessage>) =>
       receive(Object.assign(new LiveServerMessage(), message)),
     remoteClose: () => remoteClose(),
@@ -80,6 +87,197 @@ const notice = (id: string, urgency: "interrupt" | "when_idle" | "silent" = "whe
 });
 
 describe("client Voice", () => {
+  it("merges streamed transcription fragments into one readable message per turn", async () => {
+    const state = setup();
+    await state.session.open();
+    state.receive({ serverContent: { turnComplete: true } });
+    // Measured Live output fragments carry their own leading spaces and arrive a few words at a
+    // time; one message per fragment renders as a column of two-word paragraphs.
+    for (const text of ["Event sourcing", " lets", " you replay", " events."])
+      state.receive({ serverContent: { outputTranscription: { text } } });
+    expect(state.session.getSnapshot().messages).toMatchObject([
+      { role: "voice", text: "Event sourcing lets you replay events." },
+    ]);
+    state.receive({ serverContent: { outputTranscription: { text: " Then inspect them." } } });
+    expect(state.session.getSnapshot().messages).toHaveLength(1);
+    expect(state.session.getSnapshot().messages[0]?.text).toBe(
+      "Event sourcing lets you replay events. Then inspect them.",
+    );
+    state.receive({ serverContent: { turnComplete: true } });
+    state.receive({ serverContent: { outputTranscription: { text: "A new turn." } } });
+    expect(state.session.getSnapshot().messages).toMatchObject([
+      { role: "voice", text: "Event sourcing lets you replay events. Then inspect them." },
+      { role: "voice", text: "A new turn." },
+    ]);
+    state.session.close();
+  });
+
+  it("keeps user speech, voice turns and typed text as separate messages", async () => {
+    const state = setup();
+    await state.session.open();
+    state.receive({ serverContent: { turnComplete: true } });
+    await state.session.sendText("how are my threads doing");
+    state.receive({ serverContent: { inputTranscription: { text: " and then" } } });
+    state.receive({ serverContent: { inputTranscription: { text: " the diff", finished: true } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Two" } } });
+    state.receive({ serverContent: { outputTranscription: { text: " running." } } });
+    state.receive({ serverContent: { inputTranscription: { text: "Thanks", finished: true } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Anytime." } } });
+    // Input and output transcription interleave, so each role keeps its own message: the reply's
+    // next fragment still belongs to the reply, not to the speech that landed between them.
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "how are my threads doing"],
+      ["user", "and then the diff"],
+      ["voice", "Two running.Anytime."],
+      ["user", "Thanks"],
+    ]);
+    state.receive({ serverContent: { interrupted: true } });
+    state.receive({ serverContent: { outputTranscription: { text: "Cut off." } } });
+    expect(state.session.getSnapshot().messages.at(-1)).toMatchObject({
+      role: "voice",
+      text: "Cut off.",
+    });
+    state.session.close();
+  });
+
+  it("starts a new message when a transcription stream reports it finished", async () => {
+    const state = setup();
+    await state.session.open();
+    state.receive({ serverContent: { turnComplete: true } });
+    state.receive({ serverContent: { outputTranscription: { text: "First reply." } } });
+    state.receive({ serverContent: { outputTranscription: { text: "", finished: true } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Second reply." } } });
+    state.receive({ serverContent: { inputTranscription: { text: "Next question." } } });
+    state.receive({ serverContent: { inputTranscription: { text: "", finished: true } } });
+    state.receive({ serverContent: { inputTranscription: { text: "One more." } } });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["voice", "First reply."],
+      ["voice", "Second reply."],
+      ["user", "Next question."],
+      ["user", "One more."],
+    ]);
+    state.session.close();
+  });
+
+  it("hides the reply to the internal monitor setup without swallowing the next real turn", async () => {
+    const state = setup();
+    await state.session.open();
+    // The setup turn's model reply is dropped from the transcript and never spoken.
+    state.receive({
+      serverContent: { outputTranscription: { text: " Right, monitoring." } },
+    });
+    state.receive({
+      serverContent: {
+        modelTurn: {
+          parts: [{ inlineData: { data: "AAA", mimeType: "audio/pcm;rate=24000" } }],
+        },
+      },
+    });
+    expect(state.session.getSnapshot().messages).toEqual([]);
+    expect(state.audio).toEqual([]);
+    state.receive({ serverContent: { turnComplete: true } });
+    // The next turn is a real answer.
+    state.receive({ serverContent: { inputTranscription: { text: "What needs me?" } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Two threads." } } });
+    state.receive({
+      serverContent: {
+        modelTurn: {
+          parts: [{ inlineData: { data: "BBB", mimeType: "audio/pcm;rate=24000" } }],
+        },
+      },
+    });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "What needs me?"],
+      ["voice", "Two threads."],
+    ]);
+    expect(state.audio).toEqual(["BBB"]);
+    state.session.close();
+  });
+
+  it("ends a user utterance only on its own boundary, not the model's", async () => {
+    const state = setup();
+    await state.session.open();
+    state.receive({ serverContent: { turnComplete: true } });
+    // The previous reply finishes generating while the user is mid-sentence.
+    state.receive({ serverContent: { inputTranscription: { text: "How are" } } });
+    state.receive({ serverContent: { generationComplete: true } });
+    state.receive({ serverContent: { inputTranscription: { text: " my threads?" } } });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "How are my threads?"],
+    ]);
+    // A reply starting after that speech closes the utterance even without `finished`.
+    state.receive({ serverContent: { outputTranscription: { text: "Two running." } } });
+    state.receive({ serverContent: { turnComplete: true } });
+    state.receive({ serverContent: { inputTranscription: { text: "Thanks" } } });
+    state.receive({ serverContent: { outputTranscription: { text: "Anytime." } } });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "How are my threads?"],
+      ["voice", "Two running."],
+      ["user", "Thanks"],
+      ["voice", "Anytime."],
+    ]);
+    state.session.close();
+  });
+
+  it("shows an answer the user asked for while the setup reply is still arriving", async () => {
+    const state = setup();
+    await state.session.open();
+    // Setup turn still pending; the user types before hearing an answer.
+    state.receive({ serverContent: { outputTranscription: { text: "Monitori" } } });
+    expect(state.session.getSnapshot().messages).toEqual([]);
+    await state.session.sendText("what is running?");
+    // Their message shows at once, but the setup reply's remainder stays hidden and the text waits.
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "what is running?"],
+    ]);
+    state.receive({ serverContent: { outputTranscription: { text: " is fine." } } });
+    state.receive({ serverContent: { turnComplete: true } });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "what is running?"],
+    ]);
+    // The setup turn's boundary releases the text, and its answer is shown.
+    expect(state.content).toHaveLength(2);
+    state.receive({ serverContent: { outputTranscription: { text: "Two threads." } } });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "what is running?"],
+      ["voice", "Two threads."],
+    ]);
+    state.session.close();
+  });
+
+  it("keeps a setup reply hidden until its own turn ends, even if the user speaks", async () => {
+    const state = setup();
+    await state.session.open();
+    state.receive({ serverContent: { outputTranscription: { text: "Monitoring now." } } });
+    state.receive({ serverContent: { inputTranscription: { text: "What needs me?" } } });
+    state.receive({
+      serverContent: {
+        modelTurn: {
+          parts: [{ inlineData: { data: "AAA", mimeType: "audio/pcm;rate=24000" } }],
+        },
+      },
+    });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "What needs me?"],
+    ]);
+    expect(state.audio).toEqual([]);
+    state.receive({ serverContent: { turnComplete: true } });
+    state.receive({ serverContent: { outputTranscription: { text: "Two threads." } } });
+    state.receive({
+      serverContent: {
+        modelTurn: {
+          parts: [{ inlineData: { data: "BBB", mimeType: "audio/pcm;rate=24000" } }],
+        },
+      },
+    });
+    expect(state.session.getSnapshot().messages.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "What needs me?"],
+      ["voice", "Two threads."],
+    ]);
+    expect(state.audio).toEqual(["BBB"]);
+    state.session.close();
+  });
+
   it("records bounded tool progress and the created thread target without retaining tool results", async () => {
     const state = setup("fake-key", true, false, {
       threadId: "created",

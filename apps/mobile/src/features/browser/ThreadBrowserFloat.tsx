@@ -142,6 +142,10 @@ function FloatingBrowserPlayer(props: {
             pdfUri={pdfUri}
             interactive={false}
             background={background}
+            // The floating preview peeks at a tab; its sound belongs to the full viewer, so it
+            // asks for no packets.
+            audio={false}
+            audioMuted
             compact
             paused={!props.live}
             onPhaseChange={setStreamPhase}

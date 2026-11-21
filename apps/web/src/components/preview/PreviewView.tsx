@@ -52,6 +52,7 @@ import {
   usePrimaryEnvironmentId,
 } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
+import { useOwnsPreviewAudio, usePreviewAudioMuted } from "~/previewAudioMuteStore";
 import { usePreviewStreamAccess } from "~/state/previewStream";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
@@ -200,6 +201,14 @@ export function PreviewView({
   const nativeServerTab = useRendersServerTabNatively(threadRef.environmentId, snapshot);
   const isServerTab = snapshot?.runtime === "server" && !nativeServerTab;
   const serverOwnsRendering = snapshot?.runtime === "server";
+  // Only a streamed tab plays its sound here, so only then does this client own its mute.
+  const isServerAudioMuted = usePreviewAudioMuted(tabId && isServerTab ? tabId : "");
+  // The panel only sounds while no other surface (a popped-out window) has taken the tab.
+  const ownsServerAudio = useOwnsPreviewAudio(
+    tabId ?? "",
+    "panel",
+    Boolean(tabId && isServerTab && visible),
+  );
   const serverSurfaceRef = useRef<ServerBrowserHandle | null>(null);
   const [serverAspectRatioLocked, setServerAspectRatioLocked] = useState(false);
   const [serverToolbarWidth, setServerToolbarWidth] = useState(0);
@@ -1044,6 +1053,8 @@ export function PreviewView({
                 }
                 visible={visible}
                 environmentLabel={environmentLabel}
+                audioMuted={isServerAudioMuted}
+                audioPaused={!ownsServerAudio}
                 onControl={(control) =>
                   setServerControlledTab((current) =>
                     control === null && current !== null && current.tabId !== runtimeTabId
