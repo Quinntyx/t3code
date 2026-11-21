@@ -498,7 +498,11 @@ function PreviewStreamDocumentView({
     bootstrapTimer.current = null;
   };
   const fail = (message: string, options?: { readonly frameLost?: boolean }) => {
-    if (!active.current || failed.current) return;
+    if (!active.current) return;
+    if (failed.current) {
+      if (options?.frameLost) setFrameLost(true);
+      return;
+    }
     failed.current = true;
     streamingRef.current = false;
     pasteGeneration.current += 1;
@@ -591,7 +595,11 @@ function PreviewStreamDocumentView({
       webView.current?.injectJavaScript("window.T3PreviewStream?.pictureInPicture(); true;"),
   }));
   const processTerminated = () => {
-    if (!active.current || failed.current) return;
+    if (!active.current) return;
+    if (failed.current) {
+      setFrameLost(true);
+      return;
+    }
     if (!onRecoverProcess()) {
       fail("Browser viewer stopped. Reconnect to try again.", { frameLost: true });
     }

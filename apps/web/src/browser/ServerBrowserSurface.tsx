@@ -207,6 +207,8 @@ export function ServerBrowserSurface(props: {
     );
   };
   const unauthorizedRef = useRef(0);
+  const [goneTargetKey, setGoneTargetKey] = useState<string | null>(null);
+  const gone = goneTargetKey === targetKey;
   const [refusedAccess, setRefusedAccess] =
     useState<ReturnType<typeof usePreviewStreamAccessState>["access"]>(null);
   const {
@@ -214,7 +216,7 @@ export function ServerBrowserSurface(props: {
     error: accessError,
     isPending: accessPending,
   } = usePreviewStreamAccessState(environmentId, {
-    retry: visible && refusedAccess === null,
+    retry: visible && !gone && refusedAccess === null,
   });
   if (refusedAccess !== null && access !== refusedAccess) {
     setRefusedAccess(null);
@@ -400,7 +402,7 @@ export function ServerBrowserSurface(props: {
       setRetainedFrameTargetKey(null);
       canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     }
-    if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
+    if (!visible || gone || accessDenied || hostSetup || !access || !cap || !canvas) return;
     hasFrameRef.current = false;
     setCurrentFramePainted(false);
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -475,6 +477,21 @@ export function ServerBrowserSurface(props: {
           controlChanged(null);
           clearInput();
         },
+        onGone: () => {
+          painter.reset();
+          hasFrameRef.current = false;
+          viewportRef.current = null;
+          retainedFrameTargetRef.current = null;
+          setCurrentFramePainted(false);
+          setRetainedFrameTargetKey(null);
+          setFileChooser(null);
+          controlRef.current = null;
+          setControlState(null);
+          controlChanged(null);
+          clearInput();
+          canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+          setGoneTargetKey(targetKey);
+        },
         onHostSetup: setHostSetup,
         onUnauthorized: () => {
           const refusals = ++unauthorizedRef.current;
@@ -512,6 +529,7 @@ export function ServerBrowserSurface(props: {
     clearInput,
     environmentId,
     followSize,
+    gone,
     hostSetup,
     tabId,
     targetKey,
@@ -792,7 +810,11 @@ export function ServerBrowserSurface(props: {
     resetInput(textarea);
   };
 
-  const streamError = accessDenied ? "Browser connection was refused." : accessError;
+  const streamError = gone
+    ? "This tab was closed."
+    : accessDenied
+      ? "Browser connection was refused."
+      : accessError;
   const hasStreamError = streamError !== null;
   const control =
     !hasStreamError && hostSetup === null && controlState?.targetKey === targetKey
@@ -1072,17 +1094,19 @@ export function ServerBrowserSurface(props: {
           <p role="alert" className="text-xs text-muted-foreground">
             {streamError}
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={accessPending}
-            onClick={() => {
-              unauthorizedRef.current = 0;
-              refreshPreviewStreamAccess(environmentId);
-            }}
-          >
-            {accessPending ? "Reconnecting…" : "Reconnect"}
-          </Button>
+          {!gone ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={accessPending}
+              onClick={() => {
+                unauthorizedRef.current = 0;
+                refreshPreviewStreamAccess(environmentId);
+              }}
+            >
+              {accessPending ? "Reconnecting…" : "Reconnect"}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>

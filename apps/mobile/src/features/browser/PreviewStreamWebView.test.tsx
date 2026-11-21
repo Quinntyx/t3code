@@ -1068,3 +1068,31 @@ it("boots with null access if the WebView remounts after authorization refusals 
     cleanup();
   }
 });
+
+it("promotes a mid-session error banner to a full overlay if the WebView process terminates afterward", () => {
+  const { container, cleanup } = mountView();
+  try {
+    act(() => {
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "unclaimed",
+        generation: 1,
+        dialog: null,
+      });
+      emit({ type: "status", status: "streaming" });
+    });
+
+    act(() => {
+      emit({ type: "status", status: "error", detail: "Stream failed." });
+    });
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-overlay"]')).toBeNull();
+
+    act(() => mocks.onProcessTerminated?.());
+    expect(container.querySelector('[data-testid="stream-error-overlay"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-error-banner"]')).toBeNull();
+  } finally {
+    cleanup();
+  }
+});

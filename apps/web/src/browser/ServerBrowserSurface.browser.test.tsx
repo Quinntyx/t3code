@@ -503,6 +503,40 @@ describe("ServerBrowserSurface stream phases", () => {
     await rerender("tab-one");
     expect(handleRef.current?.canvas()).toBeNull();
   });
+
+  it("treats onGone as a terminal closed-tab state and clears the retained canvas", async () => {
+    setup();
+    const { screen, container, handleRef, handlers } = await renderStream("tab-closed");
+    await using _screen = screen;
+    const canvas = container.querySelector("canvas")!;
+
+    await act(() => {
+      handlers().onViewport({ width: 400, height: 300 });
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+      });
+      mocks.painted?.();
+    });
+    expect(handleRef.current?.canvas()).toBe(canvas);
+    const clientCalls = mocks.createClient.mock.calls.length;
+
+    await act(() => {
+      handlers().onConnectedChange?.(false);
+      handlers().onGone?.();
+    });
+
+    expect(handleRef.current?.canvas()).toBeNull();
+    const overlay = container.querySelector('[data-error-layout="overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.textContent).toContain("This tab was closed.");
+    expect(container.querySelector('[data-error-layout="banner"]')).toBeNull();
+    await expect.element(screen.getByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+    await expect.element(screen.getByText("Reconnecting stream…")).not.toBeInTheDocument();
+    expect(mocks.createClient).toHaveBeenCalledTimes(clientCalls);
+  });
 });
 
 describe("ServerBrowserSurface clipboard commands", () => {
