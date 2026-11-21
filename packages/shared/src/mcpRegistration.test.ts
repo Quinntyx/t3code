@@ -63,7 +63,7 @@ const mcpbManifest = {
     retries: { type: "number", title: "Retries", default: 3, min: 0, max: 10 },
     verbose: { type: "boolean", title: "Verbose logging" },
     labels: { type: "string", title: "Labels", multiple: true },
-    quota: { type: "number", title: "Quota", sensitive: true },
+    quota: { type: "number", title: "Quota", sensitive: true, default: 50 },
   },
 };
 
@@ -154,6 +154,7 @@ describe("parseMcpRegistration", () => {
           type: "string",
           required: false,
           secret: true,
+          default: 50,
         },
       ],
     },
@@ -673,6 +674,7 @@ describe("parseMcpRegistration", () => {
           type: "string",
           required: false,
           secret: true,
+          default: 50,
         },
       ],
     },

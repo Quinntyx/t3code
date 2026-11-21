@@ -63,7 +63,6 @@ interface RunningServer {
     toolName: string,
     args: Readonly<Record<string, unknown>>,
   ) => Effect.Effect<McpSchema.CallToolResult, ExternalMcpServerError>;
-  readonly redact: (text: string) => string;
   readonly scope: Scope.Closeable;
 }
 
@@ -132,13 +131,13 @@ const redactorFor = (entry: RegisteredMcpServerEntry) => {
     secrets.reduce((redacted, secret) => redacted.replaceAll(secret, SECRET_REDACTED), text);
 };
 
-const causeText = (cause: Cause.Cause<unknown>): string => {
+const causeText = (cause: Cause.Cause<unknown>, redact: (text: string) => string): string => {
   const error = Cause.squash(cause);
   return isExternalMcpServerError(error)
-    ? error.message
+    ? redact(error.message)
     : error instanceof Error
-      ? error.message
-      : stderrTailOf(Cause.pretty(cause));
+      ? redact(error.message)
+      : stderrTailOf(redact(Cause.pretty(cause)));
 };
 
 const launchOf = (entry: RegisteredMcpServerEntry, home: string, platform: string) =>
@@ -324,7 +323,10 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   // Keep the end of stderr for a crash report.
   yield* child.stderr.pipe(
     Stream.decodeText(),
-    Stream.runForEach((chunk) => Ref.update(stderrTail, (text) => stderrTailOf(`${text}${chunk}`))),
+    // Redacted before the cut, so the cut never leaves a secret's unrecognizable remainder.
+    Stream.runForEach((chunk) =>
+      Ref.update(stderrTail, (text) => stderrTailOf(redact(`${text}${chunk}`))),
+    ),
     Effect.forkScoped,
   );
 
@@ -339,7 +341,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   yield* child.exitCode.pipe(
     Effect.matchCauseEffect({
       onSuccess: (code) => recordExit(`exited (${code})`),
-      onFailure: (cause) => recordExit(`stopped (${causeText(cause)})`),
+      onFailure: (cause) => recordExit(`stopped (${causeText(cause, redact)})`),
     }),
     Effect.forkScoped,
   );
@@ -375,7 +377,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     Effect.mapError((cause) =>
       isExternalMcpServerError(cause)
         ? cause
-        : new ExternalMcpServerError({ message: causeText(cause) }),
+        : new ExternalMcpServerError({ message: causeText(cause, redact) }),
     ),
   );
   yield* write({ jsonrpc: "2.0", method: "notifications/initialized" });
@@ -406,7 +408,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
       Effect.mapError((cause) =>
         isExternalMcpServerError(cause)
           ? cause
-          : new ExternalMcpServerError({ message: causeText(cause) }),
+          : new ExternalMcpServerError({ message: causeText(cause, redact) }),
       ),
     );
 
@@ -437,7 +439,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
       Effect.mapError((cause) =>
         isExternalMcpServerError(cause)
           ? cause
-          : new ExternalMcpServerError({ message: causeText(cause) }),
+          : new ExternalMcpServerError({ message: causeText(cause, redact) }),
       ),
     );
 
@@ -527,7 +529,6 @@ const make = Effect.gen(function* () {
         descriptor,
       })),
       call: connection.callTool,
-      redact,
       scope,
     };
     yield* setState(entry.id, { status: "running", running });
@@ -623,7 +624,7 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           setState(entry.id, {
             status: "failed",
-            stderrTail: redactorFor(entry)(causeText(cause)),
+            stderrTail: causeText(cause, redactorFor(entry)),
             failedEntry: entry,
           }).pipe(Effect.andThen(announce)),
         ),
