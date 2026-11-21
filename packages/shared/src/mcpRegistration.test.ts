@@ -74,9 +74,13 @@ const mcpbManifest = {
         "--data",
         "${user_config.data_dir}",
         "${user_config.dirs}",
+        "--verbose=${user_config.verbose}",
       ],
       env: { ACME_TOKEN: "${user_config.token}", ACME_HOME: "${HOME}" },
-      platform_overrides: { linux: { command: "/usr/bin/node" }, win32: { command: "node.exe" } },
+      platform_overrides: {
+        linux: { command: "/usr/bin/node", env: { LD_LIBRARY_PATH: "./lib" } },
+        win32: { command: "node.exe" },
+      },
     },
   },
   user_config: {
@@ -402,8 +406,16 @@ describe("resolveMcpLaunch", () => {
       launch: {
         command: "/usr/bin/node",
         // The list default expands to one argument per item, with `${HOME}` resolved.
-        args: ["/bundles/notes/dist/index.js", "--data", "/home/me/notes", "/home/me/Desktop"],
-        env: { ACME_TOKEN: "${HOME}-token", ACME_HOME: "/home/me" },
+        // An unset switch launches as off, as the form shows it.
+        args: [
+          "/bundles/notes/dist/index.js",
+          "--data",
+          "/home/me/notes",
+          "/home/me/Desktop",
+          "--verbose=false",
+        ],
+        // The platform's env adds to the base env rather than replacing it.
+        env: { ACME_TOKEN: "${HOME}-token", ACME_HOME: "/home/me", LD_LIBRARY_PATH: "./lib" },
         cwd: "/bundles/notes",
       },
     });

@@ -1,5 +1,6 @@
 import { resolveMcpLaunch, type McpConfigValue } from "@t3tools/shared/mcpRegistration";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { type RegisteredMcpServerEntry } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -59,6 +60,7 @@ export interface ExternalMcpServerState {
   readonly toolName: string;
   readonly enabled: boolean;
   readonly running: boolean;
+  readonly starting: boolean;
   /** The proxied names agents call, in the server's own order. */
   readonly tools: ReadonlyArray<string>;
 }
@@ -177,9 +179,15 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     readonly cwd?: string | undefined;
   },
 ) {
+  // Windows npm shims such as `npx.cmd` need shell dispatch, as for every other spawned tool.
+  const resolved = yield* resolveSpawnCommand(launch.command, launch.args, {
+    env: launch.env,
+    extendEnv: true,
+  });
   const child = yield* spawner
     .spawn(
-      ChildProcess.make(launch.command, [...launch.args], {
+      ChildProcess.make(resolved.command, [...resolved.args], {
+        shell: resolved.shell,
         env: launch.env,
         extendEnv: true,
         ...(launch.cwd === undefined ? {} : { cwd: launch.cwd }),
@@ -293,7 +301,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     Effect.forkScoped,
   );
 
-  // Stopping closes stdin first, which ends a well-behaved server, then kills the handle.
+  // Stopping ends stdin and sends SIGTERM at once, then SIGKILL a second later.
   yield* Effect.addFinalizer(() =>
     Queue.end(input).pipe(
       Effect.andThen(child.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) })),
@@ -398,6 +406,7 @@ const make = Effect.gen(function* () {
       toolName: entry.toolName,
       enabled: entry.enabled,
       running: runtime.get(entry.id)?.running !== undefined,
+      starting: runtime.get(entry.id)?.starting !== undefined,
       tools: exposed.flatMap((tool) => (tool.serverId === entry.id ? [tool.name] : [])),
     }));
   });

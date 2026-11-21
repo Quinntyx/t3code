@@ -444,7 +444,9 @@ const configuredValues = (
   const text = new Map<string, string>();
   const lists = new Map<string, ReadonlyArray<string>>();
   for (const field of fields) {
-    const value = config[field.key] ?? field.default;
+    // A switch left unset shows off, so it launches as off rather than as an empty value.
+    const value =
+      config[field.key] ?? field.default ?? (field.type === "boolean" ? false : undefined);
     if (Array.isArray(value)) lists.set(field.key, value);
     const joined =
       value === undefined ? "" : Array.isArray(value) ? value.join(",") : String(value);
@@ -475,8 +477,13 @@ const resolveMcpbLaunch = (
   { home, platform }: LaunchOptions,
 ): McpLaunchResult => {
   const base = asRecord(asRecord(asRecord(source.manifest)?.server)?.mcp_config) ?? {};
-  // A bundle can replace any of its launch fields for one platform, such as a binary's path.
-  const mcpConfig = { ...base, ...asRecord(asRecord(base.platform_overrides)?.[platform]) };
+  // A bundle can replace a launch field for one platform, such as a binary's path; env merges.
+  const override = asRecord(asRecord(base.platform_overrides)?.[platform]);
+  const mcpConfig: Readonly<Record<string, unknown>> = {
+    ...base,
+    ...override,
+    env: { ...asRecord(base.env), ...asRecord(override?.env) },
+  };
   const builtIns = new Map([
     ["__dirname", source.bundleDir],
     ["HOME", home],

@@ -14,9 +14,11 @@ const EMAIL_OFF =
 const mcpServerNote = (server: ExternalMcpServers.ExternalMcpServerState) =>
   server.running
     ? `Registered MCP server ${server.name}; call its tools directly.`
-    : server.enabled
-      ? `${server.name} is not running. Its user can turn it off and on again in Settings → Capabilities.`
-      : `${server.name} is disabled. Its user can enable it in Settings → Capabilities.`;
+    : server.starting
+      ? `${server.name} is still starting, which can take a while the first time; check again shortly.`
+      : server.enabled
+        ? `${server.name} is not running. Its user can turn it off and on again in Settings → Capabilities.`
+        : `${server.name} is disabled. Its user can enable it in Settings → Capabilities.`;
 const inboxFailure = (error: EmailInboxError) =>
   new OrchestratorMcpFailure({
     code:

@@ -325,7 +325,7 @@ it.live("stops a server while another is still starting", () =>
 
       expect(yield* servers.states).toEqual([
         expect.objectContaining({ name: "Fixture", running: false }),
-        expect.objectContaining({ name: "Slow", running: false }),
+        expect.objectContaining({ name: "Slow", running: false, starting: true }),
       ]);
       expect(yield* servers.tools).toEqual([]);
     }),
