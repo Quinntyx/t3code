@@ -89,3 +89,29 @@ export function useRendersServerTabNatively(
 ): boolean {
   return rendersServerTabNatively(environmentId, useAtomValue(primaryEnvironmentIdAtom), snapshot);
 }
+
+/**
+ * Whether this client plays a server tab's sound itself. A tab rendered as a stream owns its
+ * audio here, whichever host owns the page: `headless` says the server runs it, not whether
+ * this client has a webview to mute, so a CLI-hosted or remote-desktop tab is streamed too.
+ */
+export function useStreamsServerTabAudio(
+  environmentId: EnvironmentId,
+  snapshot: Pick<PreviewSessionSnapshot, "runtime" | "headless"> | null | undefined,
+): boolean {
+  const rendersNatively = useRendersServerTabNatively(environmentId, snapshot);
+  return snapshot?.runtime === "server" && !rendersNatively;
+}
+
+/** The non-hook form the tab bar and its context menu need for a list of tabs. */
+export function streamsServerTabAudio(
+  environmentId: EnvironmentId | null,
+  snapshot: Pick<PreviewSessionSnapshot, "runtime" | "headless"> | null | undefined,
+): boolean {
+  if (snapshot?.runtime !== "server" || environmentId === null) return false;
+  return !rendersServerTabNatively(
+    environmentId,
+    appAtomRegistry.get(primaryEnvironmentIdAtom),
+    snapshot,
+  );
+}

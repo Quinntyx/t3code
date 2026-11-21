@@ -125,6 +125,8 @@ const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 // A viewer still is best-effort; a capture Chromium never answers must not hold the capture lock.
 const VIEWER_STILL_TIMEOUT_MS = 2_000;
 const VIEWER_OUTPUT_LIMIT = 64;
+// Half a second of Opus at 20 ms a packet: enough to absorb jitter, short enough to stay live.
+const AUDIO_OUTPUT_LIMIT = 25;
 const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
 const RECORDING_BINARY_EXPORT_MIN_BYTES = 8 * 1024 * 1024;
 const RECORDING_DOWNLOAD_TIMEOUT_MS = 5_000;
@@ -227,7 +229,10 @@ export type ServerBrowserViewerOutput =
       readonly data: Uint8Array | Effect.Effect<Uint8Array | null>;
       readonly ack: Effect.Effect<void>;
     }
+  /** One Opus packet at 48 kHz mono; only viewers that asked for audio receive it. */
   | { readonly _tag: "viewport"; readonly width: number; readonly height: number }
+  /** Whether this tab can play sound at all, so a viewer can say why a mute does nothing. */
+  | { readonly _tag: "audio"; readonly available: boolean }
   | {
       readonly _tag: "control";
       readonly canOperate: boolean;
@@ -272,6 +277,11 @@ export type ServerBrowserViewerOutput =
 
 export interface ServerBrowserViewer {
   readonly output: Queue.Dequeue<ServerBrowserViewerOutput>;
+  /**
+   * Audio packets, kept out of `output` so 50 a second never crowd video frames out of a
+   * 64-slot queue. Only a viewer that opted in has a dequeue here.
+   */
+  readonly audio: Queue.Dequeue<ServerBrowserAudioPacket> | null;
   readonly input: (message: unknown) => Effect.Effect<void>;
   /** Read-only viewers decode video too, so this is not gated on control. */
   readonly requestKeyFrame: Effect.Effect<void>;
@@ -291,6 +301,8 @@ export class ServerBrowser extends Context.Service<
       readonly canOperate: boolean;
       /** Codecs the viewer decodes, preferred first; empty keeps JPEG frames. */
       readonly videoCodecs?: ReadonlyArray<string>;
+      /** The viewer plays Opus audio, so capture and encode it while it is attached. */
+      readonly audio?: boolean;
     }) => Effect.Effect<
       ServerBrowserViewer,
       ServerBrowserTabNotFoundError | ServerBrowserLaunchError,
@@ -325,6 +337,8 @@ export class ServerBrowser extends Context.Service<
 interface ViewerState {
   readonly id: string;
   readonly canOperate: boolean;
+  /** Set only for a viewer that asked for audio; the capture forwards packets to these. */
+  readonly pushAudio: ((packet: ServerBrowserAudioPacket) => void) | null;
   readonly pressedKeys: Map<string, { key: string; code: string }>;
   readonly pressedButtons: Map<"left" | "middle" | "right", { x: number; y: number }>;
   readonly push: (output: ServerBrowserViewerOutput) => void;
@@ -351,6 +365,17 @@ interface Recording {
   readonly startedAt: string;
   readonly framesInFlight: Set<Promise<void>>;
 }
+
+/** Audio capture and its binding, alive only while one viewer that opted in is attached. */
+interface AudioCapture {
+  viewers: number;
+  readonly stop: () => Promise<void>;
+}
+
+type ServerBrowserAudioPacket = ServerBrowserPage.AudioPacket & {
+  readonly generation: number;
+  readonly sequence: number;
+};
 
 interface ServerTab {
   readonly threadId: ThreadId;
@@ -410,6 +435,13 @@ interface ServerTab {
   crashedUrl: string | undefined;
   closing: boolean;
   recording: Recording | null;
+  audio: AudioCapture | null;
+  /** The tail of the serialized audio acquisition and release queue. */
+  audioPending: Promise<void>;
+  /** Bumped whenever a document's capture replaces the run viewers were following. */
+  audioGeneration: number;
+  /** Set while the tab's document cannot encode; a new navigation may clear it. */
+  audioUnavailable: boolean;
   initialNavigation: Promise<void> | null;
   pendingInitialRequestUrl: string | null;
   navigationGeneration: number;
@@ -1076,6 +1108,8 @@ const make = Effect.gen(function* () {
       if (tab.isolatedContext) void closed.then(() => page.context().close()).catch(constVoid);
     }
     void tab.recording?.encoder.close().catch(constVoid);
+    void tab.audio?.stop().catch(constVoid);
+    tab.audio = null;
     void NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }).catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
@@ -1181,6 +1215,9 @@ const make = Effect.gen(function* () {
     // precedes this override, so its Sec-CH-UA brands still name HeadlessChrome.
     if (!desktop) await presentAsChrome(cdp, host);
     if (!desktop) await recordCopies(cdp);
+    // Installed with the tab rather than with a viewer, so a graph or a media element that
+    // started before anyone asked for sound is still known when capture turns on.
+    if (!desktop) await installAudioTracker(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
@@ -1240,6 +1277,10 @@ const make = Effect.gen(function* () {
       crashedUrl,
       closing: false,
       recording: null,
+      audio: null,
+      audioPending: Promise.resolve(),
+      audioGeneration: 0,
+      audioUnavailable: false,
       recordingStart: null,
       initialNavigation: null,
       pendingInitialRequestUrl: null,
@@ -1326,6 +1367,7 @@ const make = Effect.gen(function* () {
       // Same-document navigations (SPA routes) fire no load event.
       if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
       if (!desktop) void recordFrameCopies(tab, frame);
+      if (frame === page.mainFrame() && !desktop) restartAudioForDocument(tab);
     });
     // An adopted popup's frames may have loaded before the tab listened.
     if (adopted) for (const frame of page.frames()) void recordFrameCopies(tab, frame);
@@ -1684,6 +1726,42 @@ const make = Effect.gen(function* () {
       worldName: CLIPBOARD_WORLD,
       runImmediately: true,
     });
+  };
+
+  /**
+   * Installs `source` in every document of the tab, the current one included, and returns its
+   * id. The page scripts themselves return immediately outside the top frame, so a tab with
+   * iframes still captures only its own page.
+   */
+  const addTabScript = async (tab: ServerTab, source: string) =>
+    (
+      await tab.cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+        source,
+        runImmediately: true,
+      })
+    ).identifier;
+
+  /**
+   * Installed with the tab so nothing the page did before a viewer asked for sound is lost. It
+   * only records, and is never removed, so a capture that stops and starts again still finds
+   * the graphs and media that predate it.
+   */
+  const installAudioTracker = (cdp: CDPSession) =>
+    cdp
+      .send("Page.enable")
+      .then(() =>
+        cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+          source: ServerBrowserPage.audioTrackerScript,
+          runImmediately: true,
+        }),
+      )
+      .then(constVoid, constVoid);
+
+  /** Stops the tab's capture. Capture runs only in the main document, so this is the whole tab. */
+  const stopTabAudio = async (tab: ServerTab) => {
+    await tab.cdp
+      .send("Runtime.evaluate", { expression: "globalThis.__t3AudioTap?.stop?.(); true" })
+      .catch(constVoid);
   };
 
   /** Out-of-process frames need their own copy-recording session until target closure. */
@@ -2296,6 +2374,142 @@ const make = Effect.gen(function* () {
     } catch {}
     await page.close().catch(constVoid);
     return null;
+  };
+
+  /**
+   * Joins or starts `tab`'s audio capture for one viewer. Serialized through `audioPending`, so
+   * a viewer arriving during another's setup shares that capture instead of starting a rival
+   * one, and the last viewer to leave stops it.
+   */
+  const acquireAudio = (tab: ServerTab): Promise<AudioCapture | null> => {
+    const pending = tab.audioPending.catch(constVoid).then(() => startAudioCapture(tab));
+    tab.audioPending = pending.then(constVoid, constVoid);
+    return pending;
+  };
+
+  /** Tells every viewer whether this tab can play sound at all. */
+  const reportAudioAvailability = (tab: ServerTab) => {
+    for (const viewer of tab.viewers)
+      if (viewer.pushAudio) viewer.push({ _tag: "audio", available: !tab.audioUnavailable });
+  };
+
+  const startAudioCapture = async (tab: ServerTab): Promise<AudioCapture | null> => {
+    const existing = tab.audio;
+    if (existing) {
+      existing.viewers += 1;
+      reportAudioAvailability(tab);
+      return existing;
+    }
+    if (tab.closing) return null;
+    // A desktop renders this tab itself and has no tracker to capture from.
+    if (tab.desktop) {
+      tab.audioUnavailable = true;
+      reportAudioAvailability(tab);
+      return null;
+    }
+    const suffix = NodeCrypto.randomUUID().replaceAll("-", "");
+    const binding = `__t3AudioChunk_${suffix}`;
+    /**
+     * The run whose packets viewers may follow. A player resets its decoder, clock and scheduled
+     * audio when this changes, so it follows the page's encoder timeline rather than this
+     * capture's setup: a navigation restarts the page's clock and must restart theirs too.
+     */
+    let generation = 0;
+    let run: string | null = null;
+    let sequence = 0;
+    const onMessage = (event: { readonly name: string; readonly payload: string }) => {
+      if (event.name !== binding) return;
+      const message = ServerBrowserPage.parseAudioTapMessage(event.payload);
+      // Each document's capture announces itself before it sends anything, and its answer about
+      // this document decides what viewers are told.
+      if (message.run !== null && message.available !== null) {
+        if (message.run !== run) {
+          run = message.run;
+          sequence = 0;
+          generation = ++tab.audioGeneration;
+        }
+        if (tab.audioUnavailable !== !message.available) {
+          tab.audioUnavailable = !message.available;
+          reportAudioAvailability(tab);
+        }
+        return;
+      }
+      if (message.chunk === null) return;
+      // A packet from a document that has since been replaced is obsolete, never forwarded.
+      if (message.run !== run) return;
+      const packet = { ...message.chunk, generation, sequence: sequence++ };
+      for (const viewer of tab.viewers) viewer.pushAudio?.(packet);
+    };
+    tab.cdp.on("Runtime.bindingCalled", onMessage);
+    const identifiers: Array<string> = [];
+    try {
+      // Chromium replays these scripts only while Page is on, and exposes the binding to a new
+      // document only while Runtime is, so a navigation keeps capture working.
+      await tab.cdp.send("Page.enable");
+      await tab.cdp.send("Runtime.enable");
+      await tab.cdp.send("Runtime.addBinding", { name: binding });
+      identifiers.push(await addTabScript(tab, ServerBrowserPage.audioCaptureScript(binding)));
+    } catch {
+      tab.cdp.off("Runtime.bindingCalled", onMessage);
+      for (const script of identifiers)
+        await tab.cdp
+          .send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script })
+          .catch(constVoid);
+      await tab.cdp.send("Runtime.removeBinding", { name: binding }).catch(constVoid);
+      return null;
+    }
+    const capture: AudioCapture = {
+      viewers: 1,
+      stop: async () => {
+        tab.cdp.off("Runtime.bindingCalled", onMessage);
+        // Stop before the binding goes, or the page's next packet calls a removed function.
+        await stopTabAudio(tab);
+        for (const script of identifiers)
+          await tab.cdp
+            .send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script })
+            .catch(constVoid);
+        await tab.cdp.send("Runtime.removeBinding", { name: binding }).catch(constVoid);
+      },
+    };
+    tab.audio = capture;
+    return capture;
+  };
+
+  /**
+   * A capture needs WebCodecs, which an insecure origin lacks. The server asks the document
+   * rather than inferring it, so a new document's answer arrives with the new document.
+   */
+  const probeAudioSupport = (tab: ServerTab) => {
+    void tab.cdp
+      .send("Runtime.evaluate", {
+        expression:
+          'typeof AudioEncoder !== "undefined" && typeof MediaStreamTrackProcessor !== "undefined"',
+        returnByValue: true,
+      })
+      .then(({ result }) => {
+        const available = result.value === true;
+        if (tab.audioUnavailable === !available) return;
+        tab.audioUnavailable = !available;
+        reportAudioAvailability(tab);
+      }, constVoid);
+  };
+
+  /**
+   * A new main document may be able to encode where the last could not, so its own answer is
+   * asked for even with no viewer attached: a tab that navigates while everyone is away must
+   * not keep the last document's answer. A running capture also announces itself in the new
+   * document and restarts the run there.
+   */
+  const restartAudioForDocument = (tab: ServerTab) => {
+    probeAudioSupport(tab);
+  };
+
+  const releaseAudio = (tab: ServerTab, capture: AudioCapture): Promise<void> | undefined => {
+    capture.viewers -= 1;
+    if (capture.viewers > 0 || tab.audio !== capture) return undefined;
+    tab.audio = null;
+    // A release that races a new acquisition stops only its own capture.
+    return capture.stop();
   };
 
   const startRecording = (tab: ServerTab): Promise<Recording> => {
@@ -3265,6 +3479,14 @@ const make = Effect.gen(function* () {
       capacity: VIEWER_OUTPUT_LIMIT,
       strategy: "dropping",
     });
+    // Audio drops its oldest packet under backpressure: sound that arrives late is worse
+    // than a gap, and a shared queue would let packets crowd frames out.
+    const audioOutput = input.audio
+      ? yield* Queue.make<ServerBrowserAudioPacket>({
+          capacity: AUDIO_OUTPUT_LIMIT,
+          strategy: "sliding",
+        })
+      : null;
     const session = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: () => tab.page.context().newCDPSession(tab.page),
@@ -3288,6 +3510,23 @@ const make = Effect.gen(function* () {
           )
         : null;
     let videoEncoder = video;
+    // Audio is encoded once per tab by its own capture, so this only joins or leaves it.
+    if (input.audio) {
+      yield* Effect.acquireRelease(
+        Effect.promise(() => acquireAudio(tab)),
+        (capture) =>
+          Effect.promise(async () => {
+            if (!capture) return;
+            // Sharing the queue keeps a release from crossing a new acquisition's setup.
+            const pending = tab.audioPending.catch(constVoid).then(async () => {
+              const stopping = releaseAudio(tab, capture);
+              if (stopping) await stopping;
+            });
+            tab.audioPending = pending.then(constVoid, constVoid);
+            await pending;
+          }),
+      );
+    }
     const encodeFrame = async (jpeg: string) => {
       const current = videoEncoder;
       if (!current) return Buffer.from(jpeg, "base64");
@@ -3343,6 +3582,8 @@ const make = Effect.gen(function* () {
     const viewer: ViewerState = {
       id: NodeCrypto.randomUUID(),
       canOperate: input.canOperate,
+      // Only a viewer that asked for audio gets packets.
+      pushAudio: audioOutput === null ? null : (data) => void Queue.offerUnsafe(audioOutput, data),
       pressedKeys: new Map(),
       pressedButtons: new Map(),
       push: (next) => {
@@ -3397,6 +3638,7 @@ const make = Effect.gen(function* () {
       yield* Effect.promise(() => tab.control.take(viewer.id));
     }
     broadcastControl(tab);
+    if (viewer.pushAudio) viewer.push({ _tag: "audio", available: !tab.audioUnavailable });
     pushFileChooser(tab);
     const pushStill = async () => {
       const data = await withCaptureLock(tab, async () => {
@@ -3501,6 +3743,7 @@ const make = Effect.gen(function* () {
     if (!screencastStarted) yield* Effect.forkScoped(Effect.promise(pushStill));
     return {
       output,
+      audio: audioOutput,
       requestKeyFrame: Effect.promise(async () => {
         await videoEncoder?.page
           .evaluate(() =>

@@ -20,6 +20,8 @@ export interface PreviewStreamConfiguration {
     readonly pictureInPictureNotReady: string;
     readonly pictureInPictureUnavailable: string;
   };
+  /** A surface that can never play audio asks for no packets at all. */
+  readonly audio?: boolean;
 }
 
 export type PreviewStreamMessage =
@@ -35,6 +37,7 @@ export type PreviewStreamMessage =
   | { readonly type: "viewport"; readonly width: number; readonly height: number }
   /** The direction a drag scrolls the page, sent every few dozen pixels of it. */
   | { readonly type: "scroll"; readonly direction: "up" | "down" }
+  | { readonly type: "audio"; readonly available: boolean }
   | { readonly type: "clipboard"; readonly text: string }
   | ({ readonly type: "download" } & PreviewStreamDownload)
   | { readonly type: "fileChooser"; readonly chooser: PreviewStreamFileChooser | null }
@@ -49,11 +52,14 @@ export function previewStreamDocument(
   configuration: string,
   script: string,
   stoppedDetail: string,
+  muted = false,
 ) {
   const safeConfiguration = configuration.replace(/</g, "\\u003c");
   const safeScript = script.replace(/<\/script/gi, "<\\/script");
   const safeStoppedDetail = JSON.stringify(stoppedDetail).replace(/</g, "\\u003c");
   const failure = `window.ReactNativeWebView.postMessage(JSON.stringify({type:"status",status:"error",detail:${safeStoppedDetail}}));`;
+  // The bundle runs before anything uses it: it is what defines T3PreviewStream, so the muted
+  // tab is seeded and the viewer started only after it.
   // oxlint-disable-next-line t3code/no-untranslated-copy -- WebView document markup
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
@@ -84,7 +90,7 @@ export function previewStreamDocument(
     padding: 0; margin: -1px; border: 0; overflow: hidden;
     clip: rect(0, 0, 0, 0); white-space: nowrap; font-size: 16px;
   }
-</style></head><body><script>window.addEventListener("error",function(){${failure}});window.addEventListener("unhandledrejection",function(){${failure}});\n${safeScript}\ntry{T3PreviewStream.start(${safeConfiguration});}catch{${failure}}</script></body></html>`;
+</style></head><body><script>window.addEventListener("error",function(){${failure}});window.addEventListener("unhandledrejection",function(){${failure}});\n${safeScript}\ntry{T3PreviewStream.muted=${muted ? "true" : "false"};T3PreviewStream.start(${safeConfiguration});}catch{${failure}}</script></body></html>`;
 }
 
 export function previewStreamMessage(data: string): PreviewStreamMessage | null {

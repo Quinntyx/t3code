@@ -113,6 +113,11 @@ import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import {
+  usePreviewAudioAvailabilityStore,
+  usePreviewAudioMuteStore,
+} from "~/previewAudioMuteStore";
+import { streamsServerTabAudio } from "~/browser/previewRuntime";
 import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
 
 export interface RightPanelTabsProps {
@@ -243,30 +248,27 @@ function previewTabIdOf(
   return sessions[surface.resourceId]?.tabId ?? null;
 }
 
-/**
- * Stays disabled until desktop overlay state arrives: a server session id can
- * resolve while the preview manager's createTab is still in flight, and muting
- * then fails with a PreviewTabNotFoundError nothing surfaces to the user.
- */
-function tabMuteMenuItem(
-  input: {
-    overlay: DesktopPreviewOverlay | null;
-    canResolveRuntimeTabId: boolean;
-  },
-  resolve: MessageResolver = m,
-): { label: string; disabled: boolean } {
-  const muted = input.overlay?.audioMuted ?? false;
-  return {
-    label: muted ? resolve(msg("Unmute tab")) : resolve(msg("Mute tab")),
-    disabled: input.overlay === null || !input.canResolveRuntimeTabId,
-  };
-}
-
 type TabAudioState = "none" | "audible" | "muted";
 
 function tabAudioState(overlay: DesktopPreviewOverlay | null): TabAudioState {
   if (!overlay?.audible) return "none";
   return overlay.audioMuted ? "muted" : "audible";
+}
+
+/**
+ * A streamed tab always has the mute control: its audio plays here, and the page's own state is
+ * the only sign it is playing. A tab rendered natively keeps the desktop's own audible state.
+ */
+function tabMuteControl(input: {
+  streamed: boolean;
+  overlay: DesktopPreviewOverlay | null;
+  muted: boolean;
+}): { readonly state: TabAudioState; readonly silent: boolean } | null {
+  if (input.streamed) {
+    return { state: input.muted ? "muted" : "audible", silent: input.muted };
+  }
+  const state = tabAudioState(input.overlay);
+  return state === "none" ? null : { state, silent: state === "muted" };
 }
 
 type SurfaceShortcutEvent = Pick<
@@ -962,7 +964,13 @@ function RightPanelTab(
     pending: boolean;
     title: string;
     audio: TabAudioState;
+    /** The mute glyph shows for a headless tab even while it is silent. */
+    audioSilent: boolean;
     audioRuntimeTabId: string | null;
+    /** Set for a headless tab, whose audio this client plays and mutes itself. */
+    audioSessionTabId: string | null;
+    /** Set when the tab's page cannot encode audio, so muting it would do nothing. */
+    audioUnavailable: boolean;
     previewUrl: string | null;
     previewCapturedUrl: string | null;
     theme: "light" | "dark";
@@ -978,7 +986,10 @@ function RightPanelTab(
   const {
     surface,
     audio,
+    audioSilent,
     audioRuntimeTabId,
+    audioSessionTabId,
+    audioUnavailable,
     onActivate,
     onClose,
     onAuxClick,
@@ -986,6 +997,12 @@ function RightPanelTab(
     onStartRename,
     onFinishRename,
   } = props;
+  const toggleMute = usePreviewAudioMuteStore((state) => state.toggle);
+  const muteAudio = () => {
+    if (audioSessionTabId) toggleMute(audioSessionTabId);
+    else if (audioRuntimeTabId)
+      void previewBridge?.setAudioMuted(audioRuntimeTabId, !audioSilent).catch(() => undefined);
+  };
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: surface.id,
     disabled: props.dragDisabled,
@@ -1015,26 +1032,27 @@ function RightPanelTab(
           />
         ) : null}
       </PanelTabCloseButton>
-      {audio === "none" || !audioRuntimeTabId ? null : (
+      {audio === "none" ? null : (
         <Tooltip>
           <TooltipTrigger
             render={
               <button
                 type="button"
-                className="cursor-pointer flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted"
+                className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm hover:bg-muted disabled:cursor-default disabled:opacity-50"
                 aria-label={
-                  audio === "muted"
-                    ? gt("Unmute {title}", { title })
-                    : gt("Mute {title}", { title })
+                  audioUnavailable
+                    ? gt("Audio unavailable for this page")
+                    : audio === "muted"
+                      ? gt("Unmute {title}", { title })
+                      : gt("Mute {title}", { title })
                 }
+                disabled={audioUnavailable}
                 onClick={(event) => {
                   event.stopPropagation();
-                  void previewBridge
-                    ?.setAudioMuted(audioRuntimeTabId, audio !== "muted")
-                    .catch(() => undefined);
+                  muteAudio();
                 }}
               >
-                {audio === "muted" ? (
+                {audio === "muted" || audioUnavailable ? (
                   <VolumeOffIcon className="size-3" />
                 ) : (
                   <Volume2Icon className="size-3" />
@@ -1042,7 +1060,13 @@ function RightPanelTab(
               </button>
             }
           />
-          <TooltipPopup>{audio === "muted" ? gt("Unmute tab") : gt("Mute tab")}</TooltipPopup>
+          <TooltipPopup>
+            {audioUnavailable
+              ? gt("Audio unavailable for this page")
+              : audio === "muted"
+                ? gt("Unmute tab")
+                : gt("Mute tab")}
+          </TooltipPopup>
         </Tooltip>
       )}
       {props.renaming ? (
@@ -1139,6 +1163,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
+  const mutedSessionTabIds = usePreviewAudioMuteStore((state) => state.muted);
+  const toggleMute = usePreviewAudioMuteStore((state) => state.toggle);
+  const unavailableAudioTabIds = usePreviewAudioAvailabilityStore((state) => state.unavailable);
   const [tabScrollState, setTabScrollState] = useState({
     hasOverflow: false,
     canScrollLeft: false,
@@ -1312,18 +1339,28 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       items.push({ id: "copy-path", label: gt("Copy path") });
     }
     const menuPreviewTabId = previewTabIdOf(surface, props.previewSessions);
+    const menuSession = menuPreviewTabId ? props.previewSessions[menuPreviewTabId] : undefined;
+    // The same ownership the tab bar uses: a tab this client streams is muted here.
+    const menuStreamedTabId = streamsServerTabAudio(props.environmentId, menuSession)
+      ? menuPreviewTabId
+      : null;
     const menuOverlay = menuPreviewTabId ? (props.desktopByTabId[menuPreviewTabId] ?? null) : null;
-    const menuMuted = menuOverlay?.audioMuted ?? false;
+    const menuMuted = menuStreamedTabId
+      ? mutedSessionTabIds.has(menuStreamedTabId)
+      : (menuOverlay?.audioMuted ?? false);
     if (surface.kind === "preview") {
+      const unavailable = unavailableAudioTabIds.has(menuStreamedTabId ?? "");
       items.push({
         id: "toggle-mute",
-        ...tabMuteMenuItem(
-          {
-            overlay: menuOverlay,
-            canResolveRuntimeTabId: props.previewRuntimeTabId !== undefined,
-          },
-          messages,
-        ),
+        label: unavailable
+          ? gt("Audio unavailable for this page")
+          : menuMuted
+            ? gt("Unmute tab")
+            : gt("Mute tab"),
+        disabled:
+          unavailable ||
+          (menuStreamedTabId === null &&
+            (menuOverlay === null || props.previewRuntimeTabId === undefined)),
       });
     }
     items.push(
@@ -1356,6 +1393,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }
         break;
       case "toggle-mute": {
+        if (menuStreamedTabId) {
+          toggleMute(menuStreamedTabId);
+          break;
+        }
         const runtimeTabId =
           menuPreviewTabId && menuOverlay
             ? (props.previewRuntimeTabId?.(menuPreviewTabId) ?? null)
@@ -1504,6 +1545,27 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   props.previewSessions,
                   props.desktopByTabId,
                 );
+                const session = previewTabId ? props.previewSessions[previewTabId] : undefined;
+                // The tab's sound plays in this client exactly when this client streams it, so
+                // a streamed tab's session id is its mute key. `headless` would say the wrong
+                // thing for a CLI-hosted or remote-desktop tab.
+                const streamedTabId = streamsServerTabAudio(props.environmentId, session)
+                  ? previewTabId
+                  : null;
+                // A tab this client renders natively is muted by the desktop, not from here.
+                const audioRuntimeTabId = streamedTabId
+                  ? null
+                  : previewTabId
+                    ? (props.previewRuntimeTabId?.(previewTabId) ?? null)
+                    : null;
+                const mute =
+                  streamedTabId === null && audioRuntimeTabId === null
+                    ? null
+                    : tabMuteControl({
+                        streamed: streamedTabId !== null,
+                        overlay: previewTabId ? (props.desktopByTabId[previewTabId] ?? null) : null,
+                        muted: streamedTabId !== null && mutedSessionTabIds.has(streamedTabId),
+                      });
                 return (
                   <RightPanelTab
                     key={surface.id}
@@ -1517,12 +1579,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       props.terminalLabelsById,
                       messages,
                     )}
-                    audio={tabAudioState(
-                      previewTabId ? (props.desktopByTabId[previewTabId] ?? null) : null,
-                    )}
+                    audio={mute?.state ?? "none"}
+                    audioSilent={mute?.silent ?? false}
                     audioRuntimeTabId={
                       previewTabId ? (props.previewRuntimeTabId?.(previewTabId) ?? null) : null
                     }
+                    audioSessionTabId={streamedTabId}
+                    audioUnavailable={unavailableAudioTabIds.has(streamedTabId ?? "")}
                     previewUrl={favicon.url}
                     previewCapturedUrl={favicon.capturedUrl}
                     theme={resolvedTheme}

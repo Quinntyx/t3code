@@ -2,9 +2,11 @@ import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequ
 import {
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  PREVIEW_STREAM_AUDIO_CODECS,
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
   PREVIEW_STREAM_VIDEO_CODECS,
   PreviewStreamHostSetup,
+  encodePreviewStreamAudioFrame,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -37,6 +39,9 @@ const MAX_SOCKET_BUFFER_BYTES = 8 * 1024 * 1024;
 // A frame this large still travels alone, keeping replies from queueing behind images.
 const MAX_FRAMES_IN_FLIGHT = 6;
 const MAX_BYTES_IN_FLIGHT = 128 * 1024;
+// A socket backlog this deep is already tens of seconds of audio at 32 kb/s; adding more only
+// makes the sound arrive later than the picture.
+const MAX_AUDIO_BACKLOG_BYTES = 64 * 1024;
 const textDecoder = new TextDecoder();
 
 const intParam = (params: URLSearchParams, name: string, fallback: number, max: number) => {
@@ -54,6 +59,12 @@ const videoCodecsParam = (params: URLSearchParams) => {
   return requested.filter((codec): codec is (typeof PREVIEW_STREAM_VIDEO_CODECS)[number] =>
     PREVIEW_STREAM_VIDEO_CODECS.some((supported) => supported === codec),
   );
+};
+
+/** Viewers opt in explicitly, so a client that cannot play Opus never pays for its packets. */
+const wantsAudio = (params: URLSearchParams) => {
+  const requested = params.get("audio")?.split(",") ?? [];
+  return PREVIEW_STREAM_AUDIO_CODECS.some((codec) => requested.includes(codec));
 };
 
 const parseMessage = (chunk: Uint8Array | string): unknown => {
@@ -104,6 +115,7 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
           maxHeight: intParam(params, "maxHeight", 800, 4320),
           quality: intParam(params, "quality", DEFAULT_QUALITY, 100),
           videoCodecs: videoCodecsParam(params),
+          audio: wantsAudio(params),
         })
         .pipe(
           Effect.map((viewer) => ({ _tag: "attached" as const, viewer })),
@@ -202,6 +214,7 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
               return superseded ? Effect.forkScoped(superseded.ack) : Effect.void;
             }
             case "viewport":
+            case "audio":
             case "control":
             case "clipboard":
             case "download":
@@ -239,12 +252,32 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
         if (slot) yield* Effect.forkScoped(slot.ack);
         return yield* sendPending;
       });
+      // Audio has its own queue: a packet is ~80 bytes and a minute of speech is thousands
+      // of them, so it skips the frame window rather than starving video of room. What is
+      // already waiting in the socket is latency, so audio past the bound is dropped whole
+      // instead of queueing behind video the viewer has not received.
+      const audio = viewer.audio;
+      const sendAudio =
+        audio === null
+          ? Effect.never
+          : Effect.forever(
+              Queue.take(audio).pipe(
+                Effect.flatMap((packet) =>
+                  transport.writableLength > MAX_AUDIO_BACKLOG_BYTES
+                    ? Effect.void
+                    : write(encodePreviewStreamAudioFrame(packet)),
+                ),
+              ),
+            );
       const receiveInput = reader.pull.pipe(
         Effect.flatMap((chunks) => Effect.forEach(chunks, receive, { discard: true })),
       );
       return yield* Effect.raceFirst(
         Effect.forever(sendOutput),
-        Effect.raceFirst(Effect.forever(receiveInput), Effect.forever(sendFrames)),
+        Effect.raceFirst(
+          Effect.forever(receiveInput),
+          Effect.raceFirst(Effect.forever(sendFrames), sendAudio),
+        ),
       ).pipe(Effect.onInterrupt(() => Effect.sync(() => transport.destroy())));
     }),
   ).pipe(

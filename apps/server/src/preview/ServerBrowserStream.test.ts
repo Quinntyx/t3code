@@ -112,6 +112,7 @@ it.effect.each([
           attachments.push(input);
           return {
             output,
+            audio: null,
             input: (message) => Effect.sync(() => void inputs.push(message)),
             requestKeyFrame: Effect.sync(() => keyFrameRequested.resolve()),
           };
@@ -167,6 +168,7 @@ it.effect.each([
         quality: 70,
         canOperate,
         videoCodecs: ["vp8"],
+        audio: false,
       },
     ]);
     expect(auth.requests).toEqual([resource]);
@@ -175,6 +177,12 @@ it.effect.each([
 
 const openFrameStream = Effect.fnUntraced(function* (
   output: Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>,
+  audio: Queue.Queue<{
+    data: Uint8Array;
+    timestampMicros: number;
+    generation: number;
+    sequence: number;
+  }> | null,
   awaitInvalidation?: SessionStore.SessionStore["Service"]["awaitInvalidation"],
 ) {
   const browser = ServerBrowser.ServerBrowser.of({
@@ -184,7 +192,7 @@ const openFrameStream = Effect.fnUntraced(function* (
     openDownload: () => Effect.succeedNone,
     answerFileChooser: () => Effect.succeed(false),
     attachViewer: () =>
-      Effect.succeed({ output, input: () => Effect.void, requestKeyFrame: Effect.void }),
+      Effect.succeed({ output, audio, input: () => Effect.void, requestKeyFrame: Effect.void }),
   });
   const services = yield* Layer.build(
     HttpRouter.serve(
@@ -245,7 +253,7 @@ it.effect("sends replies ahead of a large frame and only the newest frame after 
       data[0] = id;
       return { _tag: "frame", data, ack: Effect.sync(() => void released.push(id)) };
     };
-    const stream = yield* openFrameStream(output, () => Deferred.await(invalidated));
+    const stream = yield* openFrameStream(output, null, () => Deferred.await(invalidated));
 
     yield* Queue.offer(output, frame(1));
     yield* stream.receivedCount(1);
@@ -285,7 +293,7 @@ it.effect("keeps several small frames in flight and encodes waiting frames only 
       }),
       ack: Effect.sync(() => void released.push(id)),
     });
-    const stream = yield* openFrameStream(output);
+    const stream = yield* openFrameStream(output, null);
 
     // A distant viewer gets more than one frame per round trip.
     yield* Queue.offerAll(output, [1, 2, 3, 4, 5, 6].map(frame));
@@ -351,6 +359,101 @@ it.effect.each([
     expect(response.status).toBe(testCase.status);
     expect(attachments).toBe(0);
   }),
+);
+
+it.effect("writes audio packets beside video and only for a viewer that opted in", () =>
+  Effect.gen(function* () {
+    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+    const audio = yield* Queue.make<{
+      data: Uint8Array;
+      timestampMicros: number;
+      generation: number;
+      sequence: number;
+    }>();
+    const stream = yield* openFrameStream(output, audio);
+
+    yield* Queue.offerAll(audio, [
+      { data: new Uint8Array([0x4f, 0x70]), timestampMicros: 20_000, generation: 1, sequence: 2 },
+      { data: new Uint8Array([0x75]), timestampMicros: 40_000, generation: 1, sequence: 3 },
+    ]);
+    yield* Queue.offer(output, {
+      _tag: "frame",
+      data: new Uint8Array([0xff, 0xd8]),
+      ack: Effect.void,
+    });
+    yield* stream.receivedCount(3);
+    // The leading tag tells the client which messages are audio, not frames. The two
+    // streams are independent, so only each one's own order is promised.
+    expect(stream.received).toEqual(expect.arrayContaining([3, 3, 0xff]));
+    expect(stream.received.filter((type) => type === 0xff)).toHaveLength(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("leaves a viewer without audio on its frame stream alone", () =>
+  Effect.gen(function* () {
+    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+    const stream = yield* openFrameStream(output, null);
+
+    yield* Queue.offer(output, {
+      _tag: "frame",
+      data: new Uint8Array([0xff, 0xd8]),
+      ack: Effect.void,
+    });
+    yield* stream.receivedCount(1);
+    expect(stream.received).toEqual([0xff]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("attaches without audio unless the viewer asks for it", () =>
+  Effect.gen(function* () {
+    const attachments: Array<
+      Parameters<ServerBrowser.ServerBrowser["Service"]["attachViewer"]>[0]
+    > = [];
+    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+    const attached = Promise.withResolvers<void>();
+    const browser = ServerBrowser.ServerBrowser.of({
+      clearProfile: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
+      listGpus: Effect.succeed({ gpus: [] }),
+      openDownload: () => Effect.succeedNone,
+      answerFileChooser: () => Effect.succeed(false),
+      attachViewer: (input) =>
+        Effect.sync(() => {
+          attachments.push(input);
+          if (attachments.length === 2) attached.resolve();
+          return { output, audio: null, input: () => Effect.void, requestKeyFrame: Effect.void };
+        }),
+    });
+    const services = yield* Layer.build(
+      HttpRouter.serve(
+        routeLayer.pipe(
+          Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
+          Layer.provide(platformLayer),
+        ),
+        { disableListenLog: true },
+      ).pipe(
+        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
+      ),
+    );
+    const server = Context.get(services, HttpServer.HttpServer);
+    const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
+    const connect = (query: string) =>
+      Effect.acquireRelease(
+        Effect.sync(
+          () =>
+            new WebSocket(
+              `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket${query}`,
+            ),
+        ),
+        (socket) => Effect.sync(() => socket.close()),
+      );
+
+    yield* connect("");
+    yield* connect("&audio=opus");
+    yield* Effect.promise(() => attached.promise);
+    expect(attachments.map((input) => input.audio)).toEqual([false, true]);
+  }).pipe(Effect.scoped),
 );
 
 it.effect("serves a tab's download only to an authorized session", () =>

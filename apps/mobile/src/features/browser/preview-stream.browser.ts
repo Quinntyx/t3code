@@ -1,7 +1,9 @@
 import {
+  createPreviewAudioPlayer,
   createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamModifiers,
+  type PreviewAudioPlayer,
   type PreviewStreamClient,
   type PreviewStreamControl,
   type PreviewStreamInput,
@@ -47,6 +49,7 @@ interface Viewer {
   readonly stop: () => void;
   readonly command: (input: PreviewStreamInput) => void;
   readonly togglePictureInPicture: () => void;
+  readonly setMuted: (muted: boolean) => void;
 }
 
 let activeViewer: Viewer | null = null;
@@ -62,6 +65,10 @@ export function command(input: PreviewStreamInput) {
 
 export function pictureInPicture() {
   activeViewer?.togglePictureInPicture();
+}
+
+export function setMuted(muted: boolean) {
+  activeViewer?.setMuted(muted);
 }
 
 export function start(configuration: PreviewStreamConfiguration) {
@@ -144,6 +151,20 @@ export function start(configuration: PreviewStreamConfiguration) {
     },
     () => client?.requestKeyFrame(),
   );
+  /**
+   * The wrapper seeds this before the viewer starts, so a tab reopened while muted never plays
+   * a first packet. Mute is this page's own gain: it never changes what the stream sends, so
+   * toggling it neither reconnects nor touches control, dialogs or input.
+   */
+  const viewerState = window as unknown as { T3PreviewStream?: { muted?: boolean } };
+  const audioMuted = () => viewerState.T3PreviewStream?.muted === true;
+  let audio: PreviewAudioPlayer | null = null;
+  const audioPlayer = () => {
+    if (audio) return audio;
+    audio = createPreviewAudioPlayer();
+    audio.setMuted(audioMuted());
+    return audio;
+  };
   const send = (message: PreviewStreamInput) => client?.send(message) ?? false;
   const clearInput = () => {
     if (wheelFrame !== null) cancelAnimationFrame(wheelFrame);
@@ -173,9 +194,13 @@ export function start(configuration: PreviewStreamConfiguration) {
         maxWidth: cap.width,
         maxHeight: cap.height,
         interactive,
+        // A silent peek never asks for packets, so the server captures nothing for it.
+        ...(configuration.audio === false ? { audio: false } : {}),
       },
       {
         onFrame: (frame) => painter.paint(frame),
+        onAudio: (frame) => audioPlayer().push(frame),
+        onAudioAvailable: (available) => post({ type: "audio", available }),
         onPointer: showAgentCursor,
         onClipboard: (text) => post({ type: "clipboard", text }),
         onDownload: (download) => post({ type: "download", ...download }),
@@ -697,6 +722,8 @@ export function start(configuration: PreviewStreamConfiguration) {
       if (mouseFrame !== null) cancelAnimationFrame(mouseFrame);
       if (agentCursorTimer !== null) clearTimeout(agentCursorTimer);
       painter.stop();
+      audio?.stop();
+      audio = null;
       client?.stop();
       client = null;
       track?.stop();
@@ -706,6 +733,10 @@ export function start(configuration: PreviewStreamConfiguration) {
       send(message);
     },
     togglePictureInPicture,
+    setMuted: (next) => {
+      viewerState.T3PreviewStream!.muted = next;
+      audio?.setMuted(next);
+    },
   };
   window.addEventListener("pagehide", stop, { once: true });
   reportStatus("connecting");
