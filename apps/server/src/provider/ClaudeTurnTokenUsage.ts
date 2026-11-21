@@ -163,14 +163,17 @@ function inclusiveCounts(counts: TokenCounts): TokenCounts {
 
 /**
  * Growth less usage already billed from frames of a window that settled without a result. The
- * kept baseline means the growth holds all of that window's work, of which frames saw a floor.
+ * kept baseline means a later growth holds all of that window's work, of which frames saw a
+ * floor; a message still running reaches the ledger only in a later result, so what this growth
+ * does not cover stays billed for the next one.
  */
 export function deductClaudeLedgerUsage(
   growth: ClaudeModelLedger,
   billed: ReadonlyArray<TurnModelTokenUsage>,
   canonicalModel: (model: string) => string = (model) => model,
-): ClaudeModelLedger {
+): { readonly growth: ClaudeModelLedger; readonly unbilled: TurnModelTokenUsage[] } {
   const remaining = new Map([...growth].map(([model, usage]) => [model, disjointCounts(usage)]));
+  const unbilled: TurnModelTokenUsage[] = [];
   for (const row of billed) {
     const model = canonicalModel(row.model);
     const unclaimed = disjointCounts(row);
@@ -183,17 +186,23 @@ export function deductClaudeLedgerUsage(
         unclaimed[field] -= count;
       }
     }
+    if (TOKEN_FIELDS.some((field) => unclaimed[field] > 0)) {
+      unbilled.push(turnModelUsage(row.model, inclusiveCounts(unclaimed), false));
+    }
   }
-  return new Map(
-    [...growth].map(([model, usage]) => [
-      model,
-      turnModelUsage(
-        usage.model,
-        inclusiveCounts(remaining.get(model)!),
-        usage.reasoningTokens !== undefined,
-      ),
-    ]),
-  );
+  return {
+    growth: new Map(
+      [...growth].map(([model, usage]) => [
+        model,
+        turnModelUsage(
+          usage.model,
+          inclusiveCounts(remaining.get(model)!),
+          usage.reasoningTokens !== undefined,
+        ),
+      ]),
+    ),
+    unbilled,
+  };
 }
 
 /**

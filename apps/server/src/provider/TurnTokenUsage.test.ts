@@ -488,36 +488,40 @@ describe("billable native turn usage", () => {
       cachedInputTokens: 0,
       cacheCreationTokens: 0,
     });
-    // Billed rows spread across aliases of their model and clip at zero; unmatched rows drop.
-    expect([
-      ...deductClaudeLedgerUsage(
-        new Map([
-          ["claude-haiku-4-5-20251001", usage("claude-haiku-4-5", 30, 5)],
-          ["haiku-alias", usage("claude-haiku-4-5", 20, 3)],
-          ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
-        ]),
-        [
-          usage("claude-haiku-4-5", 40, 6),
-          usage("claude-opus-5-5", 10, 1),
-          usage("claude-sonnet-4-6", 150, 10),
-        ],
-      ),
-    ]).toEqual([
+    // Billed rows spread across aliases of their model and clip at zero; what the growth does
+    // not cover stays billed for a later result.
+    const deducted = deductClaudeLedgerUsage(
+      new Map([
+        ["claude-haiku-4-5-20251001", usage("claude-haiku-4-5", 30, 5)],
+        ["haiku-alias", usage("claude-haiku-4-5", 20, 3)],
+        ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
+      ]),
+      [
+        usage("claude-haiku-4-5", 40, 6),
+        usage("claude-opus-5-5", 10, 1),
+        usage("claude-sonnet-4-6", 150, 10),
+      ],
+    );
+    expect([...deducted.growth]).toEqual([
       ["claude-haiku-4-5-20251001", usage("claude-haiku-4-5", 0, 0)],
       ["haiku-alias", usage("claude-haiku-4-5", 10, 2)],
       ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 0, 10)],
     ]);
+    expect(deducted.unbilled).toEqual([
+      usage("claude-opus-5-5", 10, 1),
+      usage("claude-sonnet-4-6", 50, 0),
+    ]);
     // Uncached billed input cannot use up cache reads the growth recorded.
-    expect([
-      ...deductClaudeLedgerUsage(
-        new Map([
-          ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 5), cachedInputTokens: 100 }],
-        ]),
-        [usage("claude-haiku-4-5", 100, 5)],
-      ),
-    ]).toEqual([
+    const cached = deductClaudeLedgerUsage(
+      new Map([
+        ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 5), cachedInputTokens: 100 }],
+      ]),
+      [usage("claude-haiku-4-5", 100, 5)],
+    );
+    expect([...cached.growth]).toEqual([
       ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 0), cachedInputTokens: 100 }],
     ]);
+    expect(cached.unbilled).toEqual([usage("claude-haiku-4-5", 100, 0)]);
   });
 
   it("adds Claude steering segments to the final measured result once", () => {

@@ -12554,13 +12554,40 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               cache_creation_input_tokens: 0,
               cache_read_input_tokens: 0,
             },
+            // The child's message has not ended, so this ledger does not bill it yet.
+            modelUsage: { "claude-sonnet-4-6": billedModelUsage(400, 50) },
+          }),
+        );
+        yield* harness.awaitTerminal(2);
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-after-child-ends"),
+            text: "Continue.",
+            attachments: [],
+            providerTurnOrdinal: 3,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000794",
+            result: "Continued.",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 20,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
             modelUsage: {
-              "claude-sonnet-4-6": billedModelUsage(400, 50),
+              "claude-sonnet-4-6": billedModelUsage(500, 70),
               "claude-haiku-4-5": billedModelUsage(30, 7),
             },
           }),
         );
-        yield* harness.awaitTerminal(2);
+        yield* harness.awaitTerminal(3);
         assert.strictEqual(harness.getOpenedOptions(), openedOptions);
         assert.deepEqual(
           harness.events.flatMap((event) =>
@@ -12590,6 +12617,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 },
               ],
             },
+            { input: 100, output: 20, subagentUsage: undefined },
             {
               input: 100,
               output: 20,

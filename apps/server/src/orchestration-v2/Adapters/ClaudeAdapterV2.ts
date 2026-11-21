@@ -4002,7 +4002,9 @@ function terminalStatusFromResult(
   return "failed";
 }
 
-function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
+function isClaudeActiveSteeringAbortResult(
+  message: SDKResultMessage,
+): message is SDKResultMessage & { terminal_reason: "aborted_streaming" | "aborted_tools" } {
   return (
     message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
   );
@@ -5557,10 +5559,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             result,
             ledgerGrowth: result === undefined ? undefined : resultLedgerUsage.get(result),
             abortedBy:
-              result !== undefined &&
-              isClaudeActiveSteeringAbortResult(result) &&
-              (result.terminal_reason === "aborted_streaming" ||
-                result.terminal_reason === "aborted_tools")
+              result !== undefined && isClaudeActiveSteeringAbortResult(result)
                 ? result.terminal_reason
                 : undefined,
             unfinishedMessageIds,
@@ -11365,17 +11364,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   if (message.type === "result") {
                     const ledger = claudeModelLedger(message.modelUsage);
                     const growth = claudeLedgerDelta(context.modelLedger, ledger);
-                    if (growth !== undefined) {
-                      resultLedgerUsage.set(
-                        message,
-                        context.liveBilledUsage.length === 0
-                          ? growth
-                          : deductClaudeLedgerUsage(growth, context.liveBilledUsage, (model) =>
-                              canonicalClaudeSubagentModel(modelCatalog, model),
-                            ),
+                    if (growth === undefined || context.liveBilledUsage.length === 0) {
+                      if (growth !== undefined) resultLedgerUsage.set(message, growth);
+                      context.liveBilledUsage = [];
+                    } else {
+                      const deducted = deductClaudeLedgerUsage(
+                        growth,
+                        context.liveBilledUsage,
+                        (model) => canonicalClaudeSubagentModel(modelCatalog, model),
                       );
+                      resultLedgerUsage.set(message, deducted.growth);
+                      context.liveBilledUsage = deducted.unbilled;
                     }
-                    context.liveBilledUsage = [];
                     for (const [model, usage] of ledger ?? []) {
                       context.ledgerModelNames.set(model, usage.model);
                     }
