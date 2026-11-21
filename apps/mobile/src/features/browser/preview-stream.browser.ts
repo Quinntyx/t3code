@@ -44,9 +44,16 @@ const AGENT_CURSOR_ACTIVE_MS = 700;
 const AGENT_CURSOR_SVG =
   '<svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"/></svg>';
 
+type ImmediateStreamCommand = Exclude<PreviewStreamInput, { readonly type: "text" }>;
+type TextStreamCommand = Extract<PreviewStreamInput, { readonly type: "text" }>;
+
 interface Viewer {
   readonly stop: () => void;
-  readonly command: (input: PreviewStreamInput) => void;
+  readonly command: (input: PreviewStreamInput, expectedInputSession?: number) => void;
+  readonly updateAccess: (
+    access: PreviewStreamConfiguration["access"] | null,
+    generation?: number,
+  ) => void;
   readonly togglePictureInPicture: () => void;
   readonly setMuted: (muted: boolean) => void;
 }
@@ -58,8 +65,17 @@ export function stop() {
   activeViewer = null;
 }
 
-export function command(input: PreviewStreamInput) {
-  activeViewer?.command(input);
+export function command(input: ImmediateStreamCommand): void;
+export function command(input: TextStreamCommand, expectedInputSession: number): void;
+export function command(input: PreviewStreamInput, expectedInputSession?: number) {
+  activeViewer?.command(input, expectedInputSession);
+}
+
+export function updateAccess(
+  access: PreviewStreamConfiguration["access"] | null,
+  generation?: number,
+) {
+  activeViewer?.updateAccess(access, generation);
 }
 
 export function pictureInPicture() {
@@ -72,11 +88,13 @@ export function setMuted(muted: boolean) {
 
 export function start(configuration: PreviewStreamConfiguration) {
   stop();
+  let accessGeneration = configuration.accessGeneration ?? 0;
   const post = (message: PreviewStreamMessage) => {
     // oxlint-disable-next-line unicorn/require-post-message-target-origin -- The native WebView bridge takes one string.
-    window.ReactNativeWebView.postMessage(JSON.stringify(message));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ ...message, accessGeneration }));
   };
   const { interactive } = configuration;
+  let access: PreviewStreamConfiguration["access"] | null = configuration.access;
   document.body.style.background = configuration.background;
   const container = document.createElement("div");
   const canvas = document.createElement("canvas");
@@ -98,7 +116,9 @@ export function start(configuration: PreviewStreamConfiguration) {
 
   let stopped = false;
   let streaming = false;
+  let inputSession = 0;
   let viewport: PreviewStreamViewport | null = null;
+  let postedViewport: PreviewStreamViewport | null = null;
   let size: { width: number; height: number } | null = null;
   let cap: { width: number; height: number } | null = null;
   let client: PreviewStreamClient | null = null;
@@ -145,7 +165,10 @@ export function start(configuration: PreviewStreamConfiguration) {
   const painter = createPreviewFramePainter(
     canvas,
     () => {
-      if (!streaming && !stopped) reportStatus("streaming");
+      if (!streaming && !stopped) {
+        reportStatus("streaming");
+        if (control?.controller === "you") input.disabled = !interactive;
+      }
       sendPictureInPictureFrame();
     },
     () => client?.requestKeyFrame(),
@@ -180,14 +203,18 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const connect = () => {
+    inputSession += 1;
+    viewport = null;
     if (client) reportStatus("connecting");
+    painter.reset();
     client?.stop();
+    client = null;
     control = null;
     clearInput();
-    if (!cap || stopped) return;
+    if (!cap || !access || stopped) return;
     const next = createPreviewStreamClient(
       {
-        access: configuration.access,
+        access,
         threadId: configuration.threadId,
         tabId: configuration.tabId,
         maxWidth: cap.width,
@@ -205,8 +232,9 @@ export function start(configuration: PreviewStreamConfiguration) {
         onDownload: (download) => post({ type: "download", ...download }),
         onFileChooser: (chooser) => post({ type: "fileChooser", chooser }),
         onViewport: (page) => {
-          if (viewport?.width === page.width && viewport.height === page.height) return;
           viewport = page;
+          if (postedViewport?.width === page.width && postedViewport.height === page.height) return;
+          postedViewport = page;
           post({ type: "viewport", width: page.width, height: page.height });
         },
         onProbe: (result) => {
@@ -235,20 +263,31 @@ export function start(configuration: PreviewStreamConfiguration) {
         onControl: (nextControl) => {
           const previous = control;
           control = nextControl;
-          post({ type: "control", ...nextControl });
+          if (
+            nextControl.controller !== "you" ||
+            previous?.controller !== "you" ||
+            previous.generation !== nextControl.generation
+          ) {
+            inputSession += 1;
+          }
+          post({ type: "control", ...nextControl, inputSession });
           if (nextControl.controller === "you") agentCursor.style.opacity = "0";
           if (nextControl.controller !== "you") clearInput();
           else {
-            input.disabled = !interactive;
+            input.disabled = !(interactive && streaming);
             if (interactive && size && previous?.controller !== "you")
               next.send({ type: "resize", ...size });
           }
         },
         onConnectedChange: (connected) => {
           if (!connected) {
+            const hadControl = control !== null;
+            inputSession += 1;
+            viewport = null;
+            painter.reset();
             control = null;
             clearInput();
-            if (streaming) reportStatus("connecting");
+            if (streaming || hadControl) reportStatus("connecting");
             return;
           }
         },
@@ -319,7 +358,13 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const pagePoint = (clientX: number, clientY: number, clamp: boolean) => {
-    if (!viewport || canvas.width === 0 || canvas.height === 0 || control?.controller !== "you")
+    if (
+      !streaming ||
+      !viewport ||
+      canvas.width === 0 ||
+      canvas.height === 0 ||
+      control?.controller !== "you"
+    )
       return null;
     const rect = canvas.getBoundingClientRect();
     const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
@@ -409,12 +454,13 @@ export function start(configuration: PreviewStreamConfiguration) {
       send(mouseInput(event, point, "down", button));
       return;
     }
-    touch = { start: event, last: event, panning: false };
     const point = pagePoint(event.clientX, event.clientY, false);
     if (!point) {
+      touch = null;
       probe = null;
       return;
     }
+    touch = { start: event, last: event, panning: false };
     const cached = probeCache;
     const reuse =
       cached !== null &&
@@ -537,7 +583,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   const preventDefault = (event: Event) => event.preventDefault();
 
   const onKey = (action: "down" | "up", event: KeyboardEvent) => {
-    if (control?.controller !== "you") return;
+    if (!streaming || control?.controller !== "you") return;
     if (
       event.isComposing ||
       event.keyCode === 229 ||
@@ -583,6 +629,10 @@ export function start(configuration: PreviewStreamConfiguration) {
     }
   };
   const onInput = (event: Event) => {
+    if (!streaming || control?.controller !== "you") {
+      resetInput();
+      return;
+    }
     if (event instanceof InputEvent && event.isComposing) return;
     const inputType = event instanceof InputEvent ? event.inputType : "";
     if (keySent) keySent = false;
@@ -596,6 +646,10 @@ export function start(configuration: PreviewStreamConfiguration) {
     resetInput();
   };
   const onCompositionEnd = (event: CompositionEvent) => {
+    if (!streaming || control?.controller !== "you") {
+      resetInput();
+      return;
+    }
     const text = event.data.startsWith(SENTINEL) ? event.data.slice(SENTINEL.length) : event.data;
     if (text) send({ type: "text", text });
     resetInput();
@@ -705,6 +759,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   activeViewer = {
     stop: () => {
       stopped = true;
+      inputSession += 1;
       observer.disconnect();
       visualViewport?.removeEventListener("resize", followVisualViewport);
       visualViewport?.removeEventListener("scroll", followVisualViewport);
@@ -720,8 +775,20 @@ export function start(configuration: PreviewStreamConfiguration) {
       track?.stop();
       if (video) video.srcObject = null;
     },
-    command: (message) => {
+    command: (message, expectedInputSession) => {
+      if (
+        message.type === "text" &&
+        (!streaming || control?.controller !== "you" || expectedInputSession !== inputSession)
+      ) {
+        return;
+      }
       send(message);
+    },
+    updateAccess: (nextAccess, nextGeneration) => {
+      access = nextAccess;
+      if (nextGeneration !== undefined) accessGeneration = nextGeneration;
+      if (stopped) return;
+      connect();
     },
     togglePictureInPicture,
     setMuted: (next) => {

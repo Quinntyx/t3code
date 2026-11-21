@@ -41,6 +41,7 @@ export interface PreviewMoreMenuActions {
 
 interface Props {
   enabled: boolean;
+  hardReloadDisabled?: boolean;
   actions: PreviewMoreMenuActions;
   zoomFactor: number;
   colorScheme: DesktopPreviewColorScheme;
@@ -68,6 +69,7 @@ const MenuTriggerButton = () => (
 
 export function PreviewMoreMenu({
   enabled,
+  hardReloadDisabled = false,
   actions,
   zoomFactor,
   colorScheme,
@@ -83,7 +85,7 @@ export function PreviewMoreMenu({
     <Menu>
       <MenuTriggerButton />
       <MenuPopup align="end" sideOffset={6}>
-        <MenuItem onClick={actions.hardReload} disabled={disabled}>
+        <MenuItem onClick={actions.hardReload} disabled={disabled || hardReloadDisabled}>
           Hard reload
         </MenuItem>
         {actions.openDevTools ? (

@@ -15,9 +15,15 @@ import "~/index.css";
 import { act, render } from "../../../test/render";
 
 import type { PreviewableServer } from "./useDiscoveredLocalServers";
+import type {
+  PreviewStreamControl,
+  PreviewStreamEvents,
+} from "@t3tools/client-runtime/preview/server-browser-stream";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
+  refresh: vi.fn(async (_tabId: string): Promise<void> => undefined),
+  hardReload: vi.fn(async (_tabId: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
   readEnvironmentScope: vi.fn((_environmentId?: unknown, _scope?: unknown) => true),
@@ -32,6 +38,12 @@ const mocks = vi.hoisted(() => ({
   showEmptyState: false,
   loading: false,
   nativeServerTab: false,
+  serverTab: false,
+  navStatus: null as unknown,
+  streamAccess: { url: "ws://preview.test", token: "test" },
+  streamHandlers: null as PreviewStreamEvents | null,
+  streamHandlersByTabId: new Map<string, PreviewStreamEvents>(),
+  streamSend: vi.fn(() => false),
   serverEpoch: null as string | null,
   servers: [] as PreviewableServer[],
   recordingTabIds: new Set<string>(),
@@ -57,10 +69,10 @@ vi.mock(import("./previewBridge"), async (original) => ({
     annotationVoice: { onEvent: () => () => {}, update: async () => {} },
     setAnnotationSendEnabled: mocks.setAnnotationSendEnabled,
     cancelPickElement: mocks.cancelPickElement,
-    refresh: vi.fn(async () => undefined),
+    refresh: mocks.refresh,
     goBack: vi.fn(async () => undefined),
     goForward: vi.fn(async () => undefined),
-    hardReload: vi.fn(async () => undefined),
+    hardReload: mocks.hardReload,
     openDevTools: vi.fn(async () => undefined),
     setColorScheme: vi.fn(async () => undefined),
     zoomIn: vi.fn(async () => undefined),
@@ -116,8 +128,17 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
           "tab-1": {
             threadId: "thread-1",
             tabId: "tab-1",
-            runtime: mocks.nativeServerTab ? "server" : "desktop",
-            navStatus: { _tag: "Success", url: "http://example.com/", title: "Example" },
+            runtime: mocks.serverTab || mocks.nativeServerTab ? "server" : "desktop",
+            navStatus: mocks.navStatus,
+            canGoBack: false,
+            canGoForward: false,
+            updatedAt: "2026-07-13T00:00:00.000Z",
+          },
+          "tab-2": {
+            threadId: "thread-1",
+            tabId: "tab-2",
+            runtime: mocks.serverTab || mocks.nativeServerTab ? "server" : "desktop",
+            navStatus: mocks.navStatus,
             canGoBack: false,
             canGoForward: false,
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -150,6 +171,34 @@ vi.mock(import("~/browser/previewRuntime"), async (original) => ({
   useRendersServerTabNatively: () => mocks.nativeServerTab,
 }));
 
+vi.mock(import("~/state/previewStream"), async (original) => ({
+  ...(await original()),
+  usePreviewStreamAccess: () => mocks.streamAccess as never,
+  usePreviewStreamAccessState: () => ({
+    access: mocks.streamAccess as never,
+    error: null,
+    isPending: false,
+  }),
+}));
+
+vi.mock(import("@t3tools/client-runtime/preview/server-browser-stream"), async (original) => ({
+  ...(await original()),
+  createPreviewStreamClient: (target: { tabId: string }, handlers: PreviewStreamEvents) => {
+    mocks.streamHandlers = handlers;
+    mocks.streamHandlersByTabId.set(target.tabId, handlers);
+    return {
+      send: mocks.streamSend,
+      requestKeyFrame: () => undefined,
+      stop: () => undefined,
+    };
+  },
+  createPreviewFramePainter: () => ({
+    paint: () => undefined,
+    reset: () => undefined,
+    stop: () => undefined,
+  }),
+}));
+
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
 
 import { useComposerDraftStore } from "~/composerDraftStore";
@@ -166,11 +215,14 @@ const TEST_THREAD_REF = {
 } as const;
 const TEST_RUNTIME_TAB_ID = previewRuntimeTabId(TEST_THREAD_REF, null, "tab-1");
 
-function view(onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"]) {
+function view(
+  onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"],
+  tabId = "tab-1",
+) {
   return (
     <PreviewView
       threadRef={TEST_THREAD_REF}
-      tabId="tab-1"
+      tabId={tabId}
       visible
       {...(onSendAnnotation ? { onSendAnnotation } : {})}
     />
@@ -203,6 +255,11 @@ function setup() {
   mocks.showEmptyState = false;
   mocks.loading = false;
   mocks.nativeServerTab = false;
+  mocks.serverTab = false;
+  mocks.navStatus = { _tag: "Success", url: "http://example.com/", title: "Example" };
+  mocks.streamHandlers = null;
+  mocks.streamHandlersByTabId.clear();
+  mocks.streamSend.mockReset().mockReturnValue(false);
   mocks.serverEpoch = null;
   mocks.servers = [];
   mocks.recordingTabIds = new Set();
@@ -215,7 +272,193 @@ function setup() {
   useBrowserPointerStore.setState({ byTabId: {} });
 }
 
+async function renderServerPreview() {
+  mocks.serverTab = true;
+  const container = document.createElement("div");
+  container.style.cssText = "width: 800px; height: 600px; display: flex;";
+  await using stack = new AsyncDisposableStack();
+  const screen = stack.use(await render(view(), { container }));
+  await vi.waitFor(() => expect(mocks.streamHandlers).not.toBeNull());
+  stack.move();
+  return screen;
+}
+
+function loadingProgress(screen: { readonly container: HTMLElement }): HTMLElement {
+  return screen.container.querySelector(".preview-loading-progress")!;
+}
+
+async function setStreamControl(
+  controller: PreviewStreamControl["controller"],
+  canOperate = true,
+): Promise<void> {
+  await act(() =>
+    mocks.streamHandlers?.onControl?.({ canOperate, controller, generation: 1, dialog: null }),
+  );
+}
+
+function tooltipText(): string | null | undefined {
+  return document.querySelector('[data-slot="tooltip-popup"]')?.textContent;
+}
+
 describe("PreviewView", () => {
+  it("does not spin or progress the chrome while a remote stream connects", async () => {
+    setup();
+    await using screen = await renderServerPreview();
+    await expect.element(page.getByText("Connecting to remote browser")).toBeVisible();
+    expect(loadingProgress(screen).getAttribute("data-loading")).toBe("false");
+  });
+
+  it("shows the page's own loading state independently of the stream", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Loading", url: "http://example.com/", title: "Example" };
+    await using screen = await renderServerPreview();
+    await vi.waitFor(() =>
+      expect(loadingProgress(screen).getAttribute("data-loading")).toBe("true"),
+    );
+    // Clicking reloads while loading, so the control never renames itself Stop.
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).toBeVisible();
+    expect(document.querySelector('button[aria-label="Stop"]')).toBeNull();
+    // Disabled reason takes precedence over "Loading…" while this viewer cannot drive the stream.
+    await userEvent.hover(refresh);
+    await vi.waitFor(() => expect(tooltipText()).toBe("Waiting for remote browser"));
+  });
+
+  it("says why refresh is unavailable via keyboard focus and hover while this viewer cannot drive the stream", async () => {
+    setup();
+    await using _screen = await renderServerPreview();
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).toHaveAttribute("aria-disabled", "true");
+    await expect.element(refresh).toHaveAttribute("aria-description", "Waiting for remote browser");
+
+    // Keyboard focus reveals the disabled reason tooltip and activation remains a no-op.
+    await act(() => (refresh.element() as HTMLButtonElement).focus());
+    await vi.waitFor(() => expect(tooltipText()).toBe("Waiting for remote browser"));
+    await userEvent.keyboard("{Enter}");
+    expect(mocks.streamSend).not.toHaveBeenCalled();
+    await act(() => (refresh.element() as HTMLButtonElement).blur());
+
+    await userEvent.hover(refresh);
+    await vi.waitFor(() => expect(tooltipText()).toBe("Waiting for remote browser"));
+    await setStreamControl("unclaimed", false);
+    await expect.element(refresh).toHaveAttribute("aria-disabled", "true");
+    await vi.waitFor(() => expect(tooltipText()).toBe("Read-only preview"));
+    await setStreamControl("another-viewer");
+    await vi.waitFor(() => expect(tooltipText()).toBe("Another viewer has control"));
+    await setStreamControl("unclaimed");
+    await vi.waitFor(() => expect(tooltipText()).toBe("Take control to refresh"));
+    await userEvent.click(refresh, { force: true });
+    expect(mocks.streamSend).not.toHaveBeenCalled();
+    await setStreamControl("you");
+    await expect.element(refresh).not.toHaveAttribute("aria-disabled");
+    await userEvent.unhover(refresh);
+    await userEvent.hover(refresh);
+    await vi.waitFor(() => expect(tooltipText()).toBe("Refresh"));
+  });
+
+  it("ignores stale null control cleanup from a previous tab after the next tab gains control", async () => {
+    setup();
+    await using screen = await renderServerPreview();
+    const tabOneHandlers = mocks.streamHandlersByTabId.get("tab-1")!;
+    await setStreamControl("you");
+
+    await screen.rerender(view(undefined, "tab-2"));
+    await vi.waitFor(() => expect(mocks.streamHandlersByTabId.has("tab-2")).toBe(true));
+
+    await act(() =>
+      mocks.streamHandlersByTabId.get("tab-2")?.onControl?.({
+        canOperate: true,
+        controller: "you",
+        generation: 1,
+        dialog: null,
+      }),
+    );
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).not.toHaveAttribute("aria-disabled");
+
+    // Simulate a late disconnect/cleanup from tab-1 arriving after tab-2 already reported control.
+    await act(() => tabOneHandlers.onConnectedChange?.(false));
+    await expect.element(refresh).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("does not show a waiting or take-control refresh tooltip on an idle server tab", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Idle" };
+    await using _screen = await renderServerPreview();
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect.element(refresh).toBeDisabled();
+    await expect.element(refresh).not.toHaveAttribute("aria-description");
+
+    await setStreamControl("unclaimed");
+    await expect.element(refresh).toBeDisabled();
+    await expect.element(refresh).not.toHaveAttribute("aria-description");
+  });
+
+  it("gates hard reload in the preview menu on stream control and sends it over the stream", async () => {
+    setup();
+    await using _screen = await renderServerPreview();
+    const menuTrigger = page.getByRole("button", { name: "Preview menu" });
+
+    await setStreamControl("unclaimed");
+    mocks.streamSend.mockClear();
+    await act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.streamSend).not.toHaveBeenCalled();
+    await userEvent.click(menuTrigger);
+    const hardReload = page.getByRole("menuitem", { name: "Hard reload" });
+    await expect.element(hardReload).toHaveAttribute("aria-disabled", "true");
+    await userEvent.keyboard("{Escape}");
+
+    await setStreamControl("you");
+    mocks.streamSend.mockClear();
+    await userEvent.click(menuTrigger);
+    await expect.element(hardReload).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(hardReload);
+    expect(mocks.streamSend).toHaveBeenCalledWith({ type: "reload", ignoreCache: true });
+  });
+
+  it("disables hard reload in the preview menu on an idle server tab even with control", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Idle" };
+    await using _screen = await renderServerPreview();
+    await setStreamControl("you");
+    mocks.streamSend.mockClear();
+    await act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.streamSend).not.toHaveBeenCalled();
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    await expect
+      .element(page.getByRole("menuitem", { name: "Hard reload" }))
+      .toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("disables and explains the unreachable page Reload button when the viewer cannot drive the stream", async () => {
+    setup();
+    mocks.navStatus = {
+      _tag: "LoadFailed",
+      url: "http://localhost:3000/",
+      title: "",
+      code: -102,
+      description: "ERR_CONNECTION_REFUSED",
+    };
+    await using _screen = await renderServerPreview();
+    const reload = page.getByRole("button", { name: "Reload" });
+    await expect.element(reload).toHaveAttribute("aria-disabled", "true");
+    await expect.element(reload).toHaveAttribute("aria-description", "Waiting for remote browser");
+    await userEvent.click(reload, { force: true });
+    expect(mocks.streamSend).not.toHaveBeenCalled();
+
+    await setStreamControl("another-viewer");
+    await expect.element(reload).toHaveAttribute("aria-disabled", "true");
+    await expect.element(reload).toHaveAttribute("aria-description", "Another viewer has control");
+    await userEvent.unhover(reload);
+    await userEvent.hover(reload);
+    await vi.waitFor(() => expect(tooltipText()).toBe("Another viewer has control"));
+
+    await setStreamControl("you");
+    await expect.element(reload).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(reload);
+    expect(mocks.streamSend).toHaveBeenCalledWith({ type: "reload" });
+  });
+
   it.each(["mailto:alice@example.com", "http://"])(
     "reports rejected address %s without navigating or recording it",
     async (address) => {
@@ -342,5 +585,36 @@ describe("PreviewView", () => {
     await expect.element(address).not.toHaveFocus();
     act(() => dispatchPreviewAction("focus-url"));
     await expect.element(address).toHaveFocus();
+  });
+
+  it("guards refresh shortcuts and Hard reload on idle native desktop tabs", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Idle" };
+    await using screen = await render(view());
+
+    await expect.element(page.getByRole("button", { name: "Refresh" })).toBeDisabled();
+    act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.refresh).not.toHaveBeenCalled();
+
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    const idleHardReload = page.getByRole("menuitem", { name: "Hard reload" });
+    await expect.element(idleHardReload).toBeVisible();
+    expect(idleHardReload.element().getAttribute("aria-disabled")).toBe("true");
+    await userEvent.click(idleHardReload, { force: true });
+    expect(mocks.hardReload).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+
+    mocks.navStatus = { _tag: "Success", url: "http://127.0.0.1:3000/", title: "Local" };
+    await screen.rerender(view());
+
+    await expect.element(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.refresh).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
+
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    const activeHardReload = page.getByRole("menuitem", { name: "Hard reload" });
+    await expect.element(activeHardReload).toBeVisible();
+    await userEvent.click(activeHardReload);
+    expect(mocks.hardReload).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
   });
 });

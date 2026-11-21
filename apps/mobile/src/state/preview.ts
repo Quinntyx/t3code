@@ -172,6 +172,7 @@ export function usePreviewStreamAccess(environmentId: EnvironmentId) {
   return {
     access,
     error: query.error,
+    isPending: query.isPending,
     refresh: query.refresh,
     retryAfter: (delayMs: number) => retryPreviewStreamAccess(environmentId, delayMs),
   };

@@ -26,6 +26,7 @@ interface Props {
   canGoBack: boolean;
   canGoForward: boolean;
   refreshDisabled: boolean;
+  refreshDisabledReason?: string | undefined;
   inputDisabled?: boolean | undefined;
   /** Owned by the caller so its shortcut handler can focus the address bar directly. */
   urlInputRef: RefObject<HTMLInputElement | null>;
@@ -56,6 +57,7 @@ export function PreviewChromeRow({
   canGoBack,
   canGoForward,
   refreshDisabled,
+  refreshDisabledReason,
   inputDisabled,
   urlInputRef: inputRef,
   onBack,
@@ -136,15 +138,25 @@ export function PreviewChromeRow({
                   variant="ghost"
                   size="icon-xs"
                   onClick={refreshDisabled ? NOOP : onRefresh}
-                  disabled={refreshDisabled}
-                  aria-label={loading ? "Stop" : "Refresh"}
+                  disabled={refreshDisabled && !refreshDisabledReason}
+                  aria-disabled={refreshDisabled || undefined}
+                  aria-description={
+                    refreshDisabled && refreshDisabledReason ? refreshDisabledReason : undefined
+                  }
+                  aria-label="Refresh"
                   type="button"
                 />
               }
             >
               <RefreshIcon refreshing={loading} />
             </TooltipTrigger>
-            <TooltipPopup>{loading ? "Loading…" : "Refresh"}</TooltipPopup>
+            <TooltipPopup>
+              {refreshDisabled && refreshDisabledReason
+                ? refreshDisabledReason
+                : loading
+                  ? "Loading…"
+                  : "Refresh"}
+            </TooltipPopup>
           </Tooltip>
         </div>
 
