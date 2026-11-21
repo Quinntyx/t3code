@@ -46,6 +46,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type Ref,
   type SyntheticEvent,
 } from "react";
 import {
@@ -1880,31 +1881,69 @@ function TurnFoldChevron({ expanded }: { expanded: boolean }) {
   );
 }
 
-function useFittedInlineContent() {
+function TurnFoldMeasurement({
+  row,
+  compactSegments,
+  ref,
+}: {
+  row: Extract<TimelineRow, { kind: "turn-fold" }>;
+  compactSegments: boolean;
+  ref: Ref<HTMLSpanElement>;
+}) {
+  return (
+    <span
+      ref={ref}
+      className="inline-flex w-max items-center gap-x-1 whitespace-nowrap text-sm leading-relaxed text-muted-foreground tabular-nums"
+    >
+      <span className="inline-flex items-center px-1">
+        <TurnFoldLabel row={row} compact={false} />
+      </span>
+      <AgentTrajectorySegments summary={row.trajectory} compact={compactSegments} measurement />
+      <span className="inline-flex items-center px-1">
+        <TurnFoldChevron expanded={row.expanded} />
+      </span>
+    </span>
+  );
+}
+
+type TurnFoldFit = "full" | "compact-segments" | "compact";
+
+function useFittedTurnFold() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLSpanElement>(null);
-  const [fits, setFits] = useState(false);
+  const fullRef = useRef<HTMLSpanElement>(null);
+  const compactSegmentsRef = useRef<HTMLSpanElement>(null);
+  const [fit, setFit] = useState<TurnFoldFit>("compact");
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Resize observations keep the trajectory label fitted to its DOM container.
   useLayoutEffect(() => {
     const container = containerRef.current;
-    const content = contentRef.current;
-    if (!container || !content) return;
-    const measure = () => setFits(content.scrollWidth <= container.clientWidth);
+    const full = fullRef.current;
+    const compactSegments = compactSegmentsRef.current;
+    if (!container || !full || !compactSegments) return;
+    const measure = () => {
+      const width = container.clientWidth;
+      setFit(
+        full.scrollWidth <= width
+          ? "full"
+          : compactSegments.scrollWidth <= width
+            ? "compact-segments"
+            : "compact",
+      );
+    };
     measure();
-    return observeResize([container, content], measure);
+    return observeResize([container, full, compactSegments], measure);
   }, []);
 
-  return { containerRef, contentRef, fits };
+  return { containerRef, fullRef, compactSegmentsRef, fit };
 }
 
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
-  const { containerRef, contentRef, fits } = useFittedInlineContent();
+  const { containerRef, fullRef, compactSegmentsRef, fit } = useFittedTurnFold();
   const { loading, error, toggle } = useDeferredWorkLoading(row, () =>
     ctx.onToggleTurnFold(row.runId),
   );
-  const compact = !fits;
+  const compact = fit === "compact";
 
   return (
     <div className="group/timeline-row relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
@@ -1916,18 +1955,8 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
           aria-hidden="true"
           className="pointer-events-none invisible absolute left-0 top-0 h-0 w-0 overflow-hidden"
         >
-          <span
-            ref={contentRef}
-            className="inline-flex w-max items-center gap-x-1 whitespace-nowrap text-sm leading-relaxed text-muted-foreground tabular-nums"
-          >
-            <span className="inline-flex items-center px-1">
-              <TurnFoldLabel row={row} compact={false} />
-            </span>
-            <AgentTrajectorySegments summary={row.trajectory} measurement />
-            <span className="inline-flex items-center px-1">
-              <TurnFoldChevron expanded={row.expanded} />
-            </span>
-          </span>
+          <TurnFoldMeasurement row={row} compactSegments={false} ref={fullRef} />
+          <TurnFoldMeasurement row={row} compactSegments ref={compactSegmentsRef} />
         </span>
         <Tooltip>
           <TooltipTrigger
@@ -1960,7 +1989,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
             )}
           </TooltipPopup>
         </Tooltip>
-        <AgentTrajectorySegments summary={row.trajectory} compact={compact} />
+        <AgentTrajectorySegments summary={row.trajectory} compact={fit !== "full"} />
         <button
           type="button"
           aria-hidden="true"
@@ -1974,7 +2003,8 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
       <TimelineRowTimestamp
         createdAt={row.createdAt}
         timestampFormat={ctx.timestampFormat}
-        className="ms-auto"
+        // Keep the hidden timestamp's width so hovering cannot flip the fitted label.
+        className="static ms-auto"
       />
       {loading ? <WorkHistorySkeleton /> : null}
     </div>

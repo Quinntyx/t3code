@@ -444,6 +444,58 @@ it.effect("drops unmounted thread usage so reconnects only refetch the open thre
   }),
 );
 
+it.effect("drops unmounted thread usage so reconnects only refetch the open thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(undefined, undefined, 60_000);
+      const closedId = ThreadId.make("closed-thread");
+      const openId = ThreadId.make("open-thread");
+      const closedUsage = harness.threadUsage(closedId);
+      const openUsage = harness.threadUsage(openId);
+
+      const unmountOpen = harness.registry.mount(openUsage);
+      yield* waitForThreadCost(harness.registry, openUsage, null);
+      const baselineNodes = harness.registry.getNodes().size;
+
+      const unmountClosed = harness.registry.mount(closedUsage);
+      yield* waitForThreadCost(harness.registry, closedUsage, null);
+      expect(harness.registry.getNodes().size).toBeGreaterThan(baselineNodes);
+
+      const closedEvicted = yield* Deferred.make<void>();
+      harness.registry.onNodeRemoved = () => {
+        if (harness.registry.getNodes().size <= baselineNodes) {
+          Deferred.doneUnsafe(closedEvicted, Exit.void);
+        }
+      };
+      unmountClosed();
+      yield* Deferred.await(closedEvicted);
+      expect(harness.registry.getNodes().has(closedUsage)).toBe(false);
+      expect(harness.registry.getNodes().size).toBe(baselineNodes);
+
+      yield* harness.updateSettings({
+        ...DEFAULT_SERVER_SETTINGS,
+        usagePriceOverrides: {
+          "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+        },
+      });
+      yield* waitForThreadCost(harness.registry, openUsage, 5);
+      yield* Queue.clear(harness.threadUsageRequested);
+
+      yield* harness.reconnect();
+      expect(yield* Queue.take(harness.threadUsageRequested)).toBe(openId);
+      expect(harness.threadUsageRequestIds().filter((id) => id === closedId)).toHaveLength(1);
+
+      // Re-mounting the evicted thread after price changes fetches once, not twice.
+      const remountClosed = harness.registry.mount(closedUsage);
+      yield* waitForThreadCost(harness.registry, closedUsage, 5);
+      expect(harness.threadUsageRequestIds().filter((id) => id === closedId)).toHaveLength(2);
+      expect(harness.threadUsageRequestIds().filter((id) => id === openId)).toHaveLength(3);
+      remountClosed();
+      unmountOpen();
+    }),
+  ),
+);
+
 it.effect("keeps the cached usage summary when the awaited refresh fails", () =>
   Effect.gen(function* () {
     const harness = yield* makeRefreshingHarness(
