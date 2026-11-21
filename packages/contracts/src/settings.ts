@@ -1987,8 +1987,10 @@ export const ServerSettingsPatch = Schema.Struct({
   emailNotmuchConfigFile: Schema.optionalKey(TrimmedString),
   emailInboxAccounts: Schema.optionalKey(Schema.Array(EmailInboxAccountConfig)),
   emailRefreshCommand: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  /** Replaces the whole list; removals are expressed by leaving an entry out. */
-  registeredMcpServers: Schema.optionalKey(Schema.Array(RegisteredMcpServerEntry)),
+  /** Merge per id, keeping list order; null removes an entry. */
+  registeredMcpServers: Schema.optionalKey(
+    Schema.Record(RegisteredMcpServerEntry.fields.id, Schema.NullOr(RegisteredMcpServerEntry)),
+  ),
   ghqCloneLayout: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   threadTitleInstructions: Schema.optionalKey(TrimmedString),

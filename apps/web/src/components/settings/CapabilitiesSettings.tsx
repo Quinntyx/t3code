@@ -38,13 +38,7 @@ export function CapabilitiesSettingsPanel() {
   const states: RegisteredMcpServersState = data ?? { servers: [] };
   const stateOf = (id: string) => states.servers.find((server) => server.id === id);
 
-  // Each save replaces the whole list, so it starts from the last one sent, not the last echoed.
-  const [draft, setDraft] = useState<ReadonlyArray<RegisteredMcpServerEntry> | null>(null);
-  const entries = draft ?? settings.registeredMcpServers;
-  const save = (next: ReadonlyArray<RegisteredMcpServerEntry>) => {
-    setDraft(next);
-    updateSettings({ registeredMcpServers: [...next] }, { onFailed: () => setDraft(null) });
-  };
+  const entries = settings.registeredMcpServers;
 
   // A server runs on the machine that registered it, so its list is that machine's alone.
   if (scope.kind !== "environment" || environment === null) {
@@ -81,7 +75,7 @@ export function CapabilitiesSettingsPanel() {
       <RegisterServerForm
         existing={entries}
         onAdd={(entry) => {
-          save([...entries, entry]);
+          updateSettings({ registeredMcpServers: { [entry.id]: entry } });
           toastManager.add({ type: "success", title: `${entry.name} registered` });
         }}
       />
@@ -121,11 +115,9 @@ export function CapabilitiesSettingsPanel() {
                   <EnableSwitch
                     checked={entry.enabled}
                     onChange={(enabled) =>
-                      save(
-                        entries.map((candidate) =>
-                          candidate.id === entry.id ? { ...candidate, enabled } : candidate,
-                        ),
-                      )
+                      updateSettings({
+                        registeredMcpServers: { [entry.id]: { ...entry, enabled } },
+                      })
                     }
                   />
                 }
@@ -134,7 +126,7 @@ export function CapabilitiesSettingsPanel() {
                     size="icon-xs"
                     variant="ghost-destructive"
                     aria-label={`Remove ${entry.name}`}
-                    onClick={() => save(entries.filter((candidate) => candidate.id !== entry.id))}
+                    onClick={() => updateSettings({ registeredMcpServers: { [entry.id]: null } })}
                   >
                     <Trash2Icon className="size-3.5" />
                   </Button>

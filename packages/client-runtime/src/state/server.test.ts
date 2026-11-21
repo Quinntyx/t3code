@@ -1474,7 +1474,13 @@ describe("registered MCP server state", () => {
       const saved = yield* Effect.promise(() =>
         atoms.updateSettings.run(registry, {
           environmentId: TARGET.environmentId,
-          input: { patch: { registeredMcpServers: settings.registeredMcpServers } },
+          input: {
+            patch: {
+              registeredMcpServers: Object.fromEntries(
+                settings.registeredMcpServers.map((server) => [server.id, server]),
+              ),
+            },
+          },
         }),
       );
       expect(saved._tag).toBe("Success");

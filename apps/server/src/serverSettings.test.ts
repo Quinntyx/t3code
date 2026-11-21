@@ -1491,8 +1491,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
             },
           ],
           // A declared secret is one whatever the form sent: a number reaches the store as text.
-          registeredMcpServers: [
-            {
+          registeredMcpServers: {
+            notes: {
               id: "notes",
               name: "Notes",
               toolName: "notes",
@@ -1513,7 +1513,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
               },
               config: { NOTES_TOKEN: 123456 },
             },
-          ],
+          },
         });
         const values = [
           "config-secret",
@@ -1541,7 +1541,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           sourceControlHosts: client.sourceControlHosts,
           usageLimitSources: client.usageLimitSources,
           easDeviceHosts: client.easDeviceHosts,
-          registeredMcpServers: client.registeredMcpServers,
+          registeredMcpServers: Object.fromEntries(
+            client.registeredMcpServers.map((server) => [server.id, server]),
+          ),
         });
         for (const value of values) assert.include(JSON.stringify(echoed), value);
         const renamed = yield* service.updateProviderInstance({
@@ -1626,7 +1628,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
             gitcafe: { token: "" },
           },
           usageLimitSources: { [UsageLimitSourceId.make("hub")]: null },
-          registeredMcpServers: [],
+          registeredMcpServers: { notes: null },
         });
         for (const name of secretNames) {
           assert.isTrue(Option.isNone(yield* store.get(name)));

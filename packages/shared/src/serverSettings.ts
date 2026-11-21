@@ -248,6 +248,27 @@ function mergeSettingsEntries<Value>(
   return Object.fromEntries(next);
 }
 
+function mergeSettingsEntriesInOrder<Value extends { readonly id: string }>(
+  current: ReadonlyArray<Value>,
+  patch: Readonly<Record<string, Value | null>>,
+): Array<Value> {
+  const next: Array<Value> = [];
+  const patchedIds = new Set<string>();
+  for (const entry of current) {
+    if (!Object.hasOwn(patch, entry.id)) {
+      next.push(entry);
+      continue;
+    }
+    patchedIds.add(entry.id);
+    const patched = patch[entry.id]!;
+    if (patched !== null) next.push(patched);
+  }
+  for (const [id, entry] of Object.entries(patch)) {
+    if (entry !== null && !patchedIds.has(id)) next.push(entry);
+  }
+  return next;
+}
+
 // Secret persistence keys tokens by trimmed, lowercased host, so merge on the same key.
 const byHost = (tokens: unknown) =>
   Object.fromEntries(
@@ -403,6 +424,7 @@ export function applyServerSettingsPatch(
     usageLimitSources: usageLimitSourcesPatch,
     textGenerators: textGeneratorsPatch,
     secretProviders: secretProvidersPatch,
+    registeredMcpServers: registeredMcpServersPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
@@ -653,6 +675,14 @@ export function applyServerSettingsPatch(
       : {}),
     ...(secretProvidersPatch !== undefined
       ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
+      : {}),
+    ...(registeredMcpServersPatch !== undefined
+      ? {
+          registeredMcpServers: mergeSettingsEntriesInOrder(
+            current.registeredMcpServers,
+            registeredMcpServersPatch,
+          ),
+        }
       : {}),
     ...(usagePriceOverridesPatch !== undefined
       ? {
