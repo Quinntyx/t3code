@@ -8487,6 +8487,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           {
             usageScope: "main_agent",
             usageStatus: queryExits ? "partial" : "complete",
+            otherUsageStatus: "partial",
             hasSubagents: false,
             inputTokens: queryExits ? 3100 : 603 + 2847 + 11455,
             outputTokens: queryExits ? 40 : 46,
@@ -8772,7 +8773,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminal.failure.class,
         apiErrorStatus === 429 ? "usage_limit" : "provider_error",
       );
-      assert.equal(terminal.failure.overloaded === true, input.overloaded === true);
+      assert.equal(
+        terminal.failure.overloaded === true,
+        "overloaded" in input && input.overloaded === true,
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

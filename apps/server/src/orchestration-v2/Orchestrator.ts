@@ -17584,8 +17584,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const child = yield* projectionStore
           .getThreadRecords(
             command.threadId,
-            ["runs", "messages", "subagents", "providerThreads"],
-            { messageRoles: ["user"] },
+            ["runs", "messages", "subagents", "providerThreads", "turnItems"],
+            { messageRoles: ["user"], turnItemTypes: ["error", "run_interrupt_request"] },
           )
           .pipe(mapDispatchError(command));
         const followUpRun = child.runs
@@ -17597,6 +17597,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               child.thread.forkedFrom.nodeId === input.taskId &&
               progressAfterTurn(child).state !== "result_available"
             : delegatedTaskTerminalStatus(runOutcome(followUpRun)) === null ||
+              stalledRun(child.runs, child.turnItems)?.id === followUpRun.id ||
               delegatedTaskAwaitsWork(delegatedTaskRuns(child, input.taskId), child);
         yield* threadDispatch.withLock(
           command.threadId,
@@ -17610,8 +17611,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             const child = yield* projectionStore
               .getThreadRecords(
                 command.threadId,
-                ["runs", "messages", "subagents", "providerThreads"],
-                { messageRoles: ["user"] },
+                ["runs", "messages", "subagents", "providerThreads", "turnItems"],
+                { messageRoles: ["user"], turnItemTypes: ["error", "run_interrupt_request"] },
               )
               .pipe(mapDispatchError(command));
             const followUpRun = child.runs
