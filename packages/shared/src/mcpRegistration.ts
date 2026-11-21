@@ -93,25 +93,32 @@ const placeholderKeys = (template: string) => [
   ...new Set([...template.matchAll(PLACEHOLDER)].map((match) => match[1]!)),
 ];
 
-/** A named flag's `--token` becomes the config key `token`; a positional gets its position. */
-const argumentKey = (name: string | undefined, index: number) => {
+/**
+ * Runtime argument keys carry a prefix so the two groups cannot merge; named template variables
+ * keep sharing by name.
+ */
+const argumentKey = (name: string | undefined, index: number, prefix: string) => {
   const key =
     name === undefined ? "" : name.replaceAll(/^-+/gu, "").replaceAll(/[^A-Za-z0-9_-]+/gu, "_");
-  return key === "" ? `argument_${index + 1}` : key;
+  return `${prefix}${key === "" ? `argument_${index + 1}` : key}`;
 };
 
-/** These declarations mean the entry asks the user for a value rather than carrying one. */
-const declaresSuppliedValue = (entry: Readonly<Record<string, unknown>>) =>
+/** Only value metadata makes a named flag ask for a value; a positional always supplies one. */
+const declaresSuppliedValue = (entry: Readonly<Record<string, unknown>>, named: boolean) =>
+  !named ||
   asString(entry.valueHint) !== undefined ||
-  asBoolean(entry.isRequired) !== undefined ||
-  asBoolean(entry.isSecret) !== undefined ||
-  asBoolean(entry.isRepeated) === true ||
-  asString(entry.description) !== undefined ||
+  asBoolean(entry.isRequired) === true ||
+  asBoolean(entry.isSecret) === true ||
   asString(entry.default) !== undefined ||
   asString(entry.format) !== undefined ||
-  asArray(entry.choices).length > 0;
+  asArray(entry.choices).length > 0 ||
+  asBoolean(entry.isRepeated) === true;
 
-const readArgument = (raw: unknown, index: number): NormalizedArgument | undefined => {
+const readArgument = (
+  raw: unknown,
+  index: number,
+  prefix: string,
+): NormalizedArgument | undefined => {
   const entry = asRecord(raw);
   if (entry === undefined) return undefined;
   const named = entry.type === "named";
@@ -123,22 +130,21 @@ const readArgument = (raw: unknown, index: number): NormalizedArgument | undefin
   if (value !== undefined) {
     return { ...base, value, variables: asRecord(entry.variables) ?? {} };
   }
-  // Without a value a named argument is a bare flag; a positional one adds nothing.
-  if (!declaresSuppliedValue(entry)) {
-    return named ? { ...base, variables: {} } : undefined;
+  // Without value metadata a named argument is a bare flag; a positional always asks for a value.
+  if (!declaresSuppliedValue(entry, named)) {
+    return { ...base, variables: {} };
   }
-  const key = argumentKey(name, index);
   return {
     ...base,
     variables: {},
-    suppliedKey: key,
+    suppliedKey: argumentKey(name, index, prefix),
     supplied: { ...entry, isRepeated: repeated },
   };
 };
 
-const readArguments = (raw: unknown): ReadonlyArray<NormalizedArgument> =>
+const readArguments = (raw: unknown, prefix: string): ReadonlyArray<NormalizedArgument> =>
   asArray(raw).flatMap((entry, index) => {
-    const argument = readArgument(entry, index);
+    const argument = readArgument(entry, index, prefix);
     return argument === undefined ? [] : [argument];
   });
 
@@ -316,8 +322,8 @@ const readServerJsonPackage = (
       "registryBaseUrl is not supported; T3 uses the default registry for this package type.",
     );
   }
-  const runtimeArguments = readArguments(entry.runtimeArguments);
-  const packageArguments = readArguments(entry.packageArguments);
+  const runtimeArguments = readArguments(entry.runtimeArguments, "runtime_");
+  const packageArguments = readArguments(entry.packageArguments, "");
   if (
     [...runtimeArguments, ...packageArguments].some(
       (argument) => argument.repeated && argument.value !== undefined,

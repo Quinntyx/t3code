@@ -67,6 +67,7 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
             { name: "FIXTURE_TOOL_NAMES" },
             { name: "FIXTURE_LABEL" },
             { name: "FIXTURE_ERROR_DETAIL" },
+            { name: "FIXTURE_ERROR_CHUNK_SIZE" },
           ],
         },
       ],
@@ -364,6 +365,58 @@ it.live("redacts a single element of a secret list echoed by the child", () => {
       expect(state.stderrTail).not.toContain("beta");
       expect(state.stderrTail).toContain("••••••");
     }),
+  );
+});
+
+it.live("redacts a multi-line secret split across two stderr writes", () => {
+  const secret = "line one\nline two";
+  const failure = secretFailureEntry(secret);
+  return runTest(
+    [
+      {
+        ...failure,
+        config: {
+          ...failure.config,
+          FIXTURE_ERROR_DETAIL: secret,
+          // The first write ends at the newline of "line one", which a raw tail must keep.
+          FIXTURE_ERROR_CHUNK_SIZE: "31",
+        },
+      },
+    ],
+    (servers) =>
+      Effect.gen(function* () {
+        const state = (yield* servers.states).servers[0]!;
+        expect(state.status).toBe("failed");
+        expect(state.stderrTail).toContain("fixture cannot start");
+        expect(state.stderrTail).not.toContain("line one");
+        expect(state.stderrTail).not.toContain("line two");
+        expect(state.stderrTail).toContain("••••••");
+      }),
+  );
+});
+
+it.live("redacts a secret longer than the tail when it spans stderr writes", () => {
+  const secret = "s3cret".repeat(400);
+  const failure = secretFailureEntry(secret);
+  return runTest(
+    [
+      {
+        ...failure,
+        config: {
+          ...failure.config,
+          FIXTURE_ERROR_DETAIL: secret,
+          FIXTURE_ERROR_CHUNK_SIZE: "1200",
+        },
+      },
+    ],
+    (servers) =>
+      Effect.gen(function* () {
+        const state = (yield* servers.states).servers[0]!;
+        expect(state.status).toBe("failed");
+        expect(state.stderrTail).toContain("fixture cannot start");
+        expect(state.stderrTail).not.toContain("s3cret");
+        expect(state.stderrTail).toContain("••••••");
+      }),
   );
 });
 

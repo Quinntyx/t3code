@@ -5,7 +5,13 @@ import { userEvent } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   registeredMcpServers: [] as ReadonlyArray<RegisteredMcpServerEntry>,
-  updateSettings: vi.fn<(patch: unknown) => void>(),
+  updateSettings:
+    vi.fn<
+      (
+        patch: unknown,
+        options?: { readonly onFailed?: () => void; readonly onSettled?: () => void },
+      ) => void
+    >(),
 }));
 
 vi.mock(import("@tanstack/react-router"), async (original) => ({
@@ -62,7 +68,7 @@ vi.mock(import("./McpServerStatusBadge"), async (original) => ({
 }));
 
 import { McpServerSettingsPanel } from "./McpServerSettingsPanel";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const entry: RegisteredMcpServerEntry = {
   id: "notes",
@@ -130,6 +136,68 @@ describe("registered MCP server settings", () => {
       enabled: false,
       config: { workspace: "acme", region: "eu" },
     });
+  });
+
+  it("drops the draft after a save is acknowledged so later edits use the server's value", async () => {
+    await using screen = await setup();
+    let acknowledge: () => void = () => {};
+    state.updateSettings.mockReset().mockImplementation((_patch, options) => {
+      acknowledge = () => options?.onSettled?.();
+    });
+
+    await userEvent.fill(screen.getByRole("textbox", { name: "Workspace" }), "stale");
+    await userEvent.tab();
+    expect(state.updateSettings).toHaveBeenCalledTimes(1);
+
+    // Another client changes the server's settings while the save is still in flight.
+    state.registeredMcpServers = [{ ...entry, toolName: "other" }];
+    await act(() => acknowledge());
+
+    await act(() => {
+      (
+        screen.getByRole("switch", { name: "Run this MCP server" }).element() as HTMLElement
+      ).click();
+    });
+    expect(state.updateSettings).toHaveBeenCalledTimes(2);
+    const [last] = state.updateSettings.mock.lastCall as [
+      { registeredMcpServers: Record<string, RegisteredMcpServerEntry | null> },
+    ];
+    expect(last.registeredMcpServers["notes"]).toMatchObject({
+      enabled: false,
+      toolName: "other",
+      config: {},
+    });
+  });
+
+  it("uses the secret control for secret list and number fields", async () => {
+    const source = entry.source;
+    if (source.kind !== "mcpb") throw new Error("unreachable");
+    state.registeredMcpServers = [
+      {
+        ...entry,
+        source: {
+          ...source,
+          manifest: {
+            manifest_version: "0.2",
+            name: "acme-notes",
+            server: { mcp_config: { command: "node", args: [], env: {} } },
+            user_config: {
+              labels: { type: "string", title: "Labels", sensitive: true, multiple: true },
+              quota: { type: "number", title: "Quota", sensitive: true },
+            },
+          },
+        },
+        config: { labels: "saved-label", quota: "42" },
+      },
+    ];
+    state.updateSettings.mockReset();
+    await using screen = await render(<McpServerSettingsPanel />);
+
+    expect(screen.container.querySelectorAll('input[type="password"]')).toHaveLength(2);
+    expect(screen.container.querySelector('input[type="number"]')).toBeNull();
+    expect(screen.container.querySelector("textarea")).toBeNull();
+    expect(screen.getByRole("button", { name: "Clear Labels" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Clear Quota" })).toBeDefined();
   });
 
   it("commits a number field on blur instead of every keystroke", async () => {

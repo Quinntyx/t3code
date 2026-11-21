@@ -1063,6 +1063,44 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
   ),
 );
 
+it.effect("applies a change published while the initial refresh is in progress", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const changes = yield* PubSub.unbounded<RegisteredMcpServersState>();
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      const reads = yield* Queue.unbounded<void>();
+      const first = yield* Ref.make(true);
+      const tools = Effect.gen(function* () {
+        const isFirst = yield* Ref.getAndSet(first, false);
+        yield* Queue.offer(reads, undefined);
+        if (isFirst) {
+          yield* Deferred.succeed(refreshStarted, undefined);
+          yield* Deferred.await(releaseRefresh);
+          return [];
+        }
+        return fixtureTools;
+      });
+      const context = yield* Layer.build(
+        layerRegisteredMcpTest({
+          external: layerExternalMcpStub({ tools, changes: Stream.fromPubSub(changes) }),
+        }),
+      );
+      const { server, registered } = yield* startRegisteredMcpProxy(context, 2);
+
+      // The first refresh is blocked. A change published now reaches a subscriber only if the
+      // proxy subscribed before it began that refresh.
+      yield* Deferred.await(refreshStarted);
+      yield* PubSub.publish(changes, { servers: [] });
+      yield* Deferred.succeed(releaseRefresh, undefined);
+      yield* Deferred.await(registered);
+
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture_echo", "fixture_set"]);
+      expect(yield* Queue.size(reads)).toBe(2);
+    }),
+  ),
+);
+
 /**
  * Registered MCP servers are proxied as native tools: this stub stands in for the service, so
  * the test covers registration, the passthrough schema, the call forwarding and its access rules.

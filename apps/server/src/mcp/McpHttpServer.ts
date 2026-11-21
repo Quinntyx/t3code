@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -18,6 +19,7 @@ import {
   OrchestratorMcpFailure,
   PreviewAutomationError,
   ProviderInteractionMode,
+  type RegisteredMcpServersState,
   type RunId,
   RuntimeMode,
   ThreadId,
@@ -1159,8 +1161,15 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
       if (changed) yield* server.notifications["notifications/tools/list_changed"]({});
     });
 
-    yield* refresh;
+    // Subscribe before the first snapshot: a server that starts or crashes while the initial
+    // refresh runs would otherwise change state with no watcher to announce it.
+    const pending = yield* Queue.unbounded<RegisteredMcpServersState>();
     yield* externalServers.changes.pipe(
+      Stream.runForEach((state) => Queue.offer(pending, state)),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    yield* refresh;
+    yield* Stream.fromQueue(pending).pipe(
       Stream.runForEach(() => refresh),
       Effect.forkScoped,
     );
