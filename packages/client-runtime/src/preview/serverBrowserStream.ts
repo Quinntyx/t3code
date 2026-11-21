@@ -35,23 +35,89 @@ export interface PreviewStreamControl {
   };
 }
 
-export const previewStreamControlLabel = (
+export type PreviewStreamPhase = "connecting" | "awaiting-frame" | "live" | "reconnecting";
+
+export const previewStreamPhase = (
   control: PreviewStreamControl | null,
+  hasCurrentFrame: boolean,
+  hasRetainedFrame = hasCurrentFrame,
+): PreviewStreamPhase =>
+  hasCurrentFrame
+    ? control !== null
+      ? "live"
+      : "reconnecting"
+    : hasRetainedFrame
+      ? "reconnecting"
+      : control !== null
+        ? "awaiting-frame"
+        : "connecting";
+
+const previewStreamControlLabel = (
+  control: PreviewStreamControl,
   resolve: MFunctionType = mFallback,
 ): string =>
-  !control
-    ? resolve(msg("Connecting..."))
-    : !control.canOperate
-      ? resolve(msg("Read-only"))
-      : control.controller === "you"
-        ? resolve(msg("You have control"))
-        : control.controller === "agent"
-          ? resolve(msg("Agent has control"))
-          : control.controller === "another-viewer"
-            ? resolve(msg("Another viewer has control"))
-            : resolve(
-                msg("Watching", { $context: "preview stream status, viewing without control" }),
-              );
+  !control.canOperate
+    ? resolve(msg("Read-only"))
+    : control.controller === "you"
+      ? resolve(msg("You have control"))
+      : control.controller === "agent"
+        ? resolve(msg("Agent has control"))
+        : control.controller === "another-viewer"
+          ? resolve(msg("Another viewer has control"))
+          : resolve(
+              msg("Watching", { $context: "preview stream status, viewing without control" }),
+            );
+
+export const previewStreamStatusLabel = (
+  phase: PreviewStreamPhase,
+  control: PreviewStreamControl | null,
+  resolve: MFunctionType = mFallback,
+): string => {
+  switch (phase) {
+    case "connecting":
+      return resolve(msg("Connecting to remote stream…"));
+    case "awaiting-frame":
+      return control
+        ? resolve(
+            msg("Waiting for video frame · {control}", {
+              control: previewStreamControlLabel(control, resolve),
+            }),
+          )
+        : resolve(msg("Waiting for video frame…"));
+    case "reconnecting":
+      return control
+        ? resolve(
+            msg("Reconnecting stream · {control}", {
+              control: previewStreamControlLabel(control, resolve),
+            }),
+          )
+        : resolve(msg("Reconnecting stream…"));
+    case "live":
+      return control
+        ? previewStreamControlLabel(control, resolve)
+        : resolve(msg("Connecting to remote stream…"));
+  }
+};
+
+export const previewStreamOverlayDetail = (
+  phase: PreviewStreamPhase,
+  environmentLabel?: string,
+  resolve: MFunctionType = mFallback,
+): string => {
+  switch (phase) {
+    case "awaiting-frame":
+      return resolve(msg("Waiting for first frame…"));
+    case "reconnecting":
+      return resolve(msg("Reconnecting to remote browser…"));
+    case "connecting":
+    case "live": {
+      const label = environmentLabel?.trim();
+      return label
+        ? resolve(msg("Starting video stream from {environment}…", { environment: label }))
+        : resolve(msg("Starting video stream…"));
+    }
+  }
+};
 
 const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["dialog"] =>
   value === null ||
@@ -489,6 +555,7 @@ export function createPreviewStreamClient(
 
 export interface PreviewFramePainter {
   readonly paint: (frame: ArrayBuffer) => void;
+  readonly reset: () => void;
   readonly stop: () => void;
 }
 
@@ -504,13 +571,28 @@ export function createPreviewFramePainter(
 ): PreviewFramePainter {
   const context = canvas.getContext("2d");
   let stopped = false;
+  let generation = 0;
   let sequence = 0;
   let painted = -1;
   let decoding = false;
-  let waiting: { readonly order: number; readonly jpeg: Uint8Array } | null = null;
+  let waiting: {
+    readonly generation: number;
+    readonly order: number;
+    readonly jpeg: Uint8Array;
+  } | null = null;
   let decoder: VideoDecoder | null = null;
-  const show = (order: number, image: CanvasImageSource, width: number, height: number) => {
-    if (stopped || !context || order < painted) return;
+  const closeDecoder = () => {
+    if (decoder && decoder.state !== "closed") decoder.close();
+    decoder = null;
+  };
+  const show = (
+    frameGeneration: number,
+    order: number,
+    image: CanvasImageSource,
+    width: number,
+    height: number,
+  ) => {
+    if (stopped || !context || frameGeneration !== generation || order < painted) return;
     painted = order;
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
@@ -519,48 +601,60 @@ export function createPreviewFramePainter(
     context.drawImage(image, 0, 0);
     onPainted?.();
   };
-  const drawJpeg = (order: number, jpeg: Uint8Array) => {
+  const drawJpeg = (frameGeneration: number, order: number, jpeg: Uint8Array) => {
     decoding = true;
     void createImageBitmap(new Blob([jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }))
       .then((bitmap) => {
-        show(order, bitmap, bitmap.width, bitmap.height);
+        show(frameGeneration, order, bitmap, bitmap.width, bitmap.height);
         bitmap.close();
       })
       .catch(() => undefined)
       .finally(() => {
+        if (frameGeneration !== generation) return;
         decoding = false;
         const next = waiting;
         waiting = null;
-        if (next && !stopped) drawJpeg(next.order, next.jpeg);
+        if (next && !stopped && next.generation === generation) {
+          drawJpeg(next.generation, next.order, next.jpeg);
+        }
       });
   };
-  const openDecoder = () =>
+  const openDecoder = (decoderGeneration: number) =>
     new VideoDecoder({
       output: (frame) => {
-        show(frame.timestamp, frame, frame.displayWidth, frame.displayHeight);
+        show(decoderGeneration, frame.timestamp, frame, frame.displayWidth, frame.displayHeight);
         frame.close();
       },
-      error: () => resetDecoder(),
+      error: () => {
+        if (decoderGeneration !== generation) return;
+        resetDecoder();
+      },
     });
   const resetDecoder = () => {
-    if (decoder && decoder.state !== "closed") decoder.close();
-    decoder = null;
+    closeDecoder();
     if (!stopped) onKeyFrameNeeded?.();
+  };
+  const reset = () => {
+    generation += 1;
+    decoding = false;
+    waiting = null;
+    closeDecoder();
   };
   return {
     paint: (data) => {
       const frame = decodePreviewStreamFrame(new Uint8Array(data));
       // Audio reaches the player through `onAudio`; a painter only sees video.
       if (stopped || !frame || frame.type === "audio") return;
+      const frameGeneration = generation;
       const order = sequence++;
       if (frame.type === "jpeg") {
-        if (decoding) waiting = { order, jpeg: frame.data };
-        else drawJpeg(order, frame.data);
+        if (decoding) waiting = { generation: frameGeneration, order, jpeg: frame.data };
+        else drawJpeg(frameGeneration, order, frame.data);
         return;
       }
       try {
         if (frame.type === "key") {
-          decoder ??= openDecoder();
+          decoder ??= openDecoder(frameGeneration);
           decoder.configure({
             codec: frame.codec,
             codedWidth: frame.width,
@@ -568,7 +662,7 @@ export function createPreviewFramePainter(
             optimizeForLatency: true,
           });
         }
-        // Deltas are useless until the key frame after a decoder failure.
+        // Deltas are useless until the key frame after a decoder failure or reset.
         if (!decoder) return;
         decoder.decode(
           new EncodedVideoChunk({ type: frame.type, timestamp: order, data: frame.data }),
@@ -577,11 +671,10 @@ export function createPreviewFramePainter(
         resetDecoder();
       }
     },
+    reset,
     stop: () => {
       stopped = true;
-      waiting = null;
-      if (decoder && decoder.state !== "closed") decoder.close();
-      decoder = null;
+      reset();
     },
   };
 }

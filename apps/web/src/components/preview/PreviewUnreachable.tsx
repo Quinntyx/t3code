@@ -2,14 +2,19 @@ import { T, useGT, useMessages, Var } from "gt-react";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 
 import { describePreviewError } from "./errorCodeMessages";
+
+const NOOP = () => undefined;
 
 interface Props {
   url: string;
   code: number;
   description: string;
   onReload: () => void;
+  reloadDisabled?: boolean;
+  reloadDisabledReason?: string | undefined;
   move?: { readonly label: string; readonly onMove: () => void };
 }
 
@@ -56,7 +61,15 @@ export function PreviewFileNotShown({
   );
 }
 
-export function PreviewUnreachable({ url, code, description, onReload, move }: Props) {
+export function PreviewUnreachable({
+  url,
+  code,
+  description,
+  onReload,
+  reloadDisabled = false,
+  reloadDisabledReason,
+  move,
+}: Props) {
   const gt = useGT();
   const m = useMessages();
   const [showDetails, setShowDetails] = useState(false);
@@ -123,9 +136,28 @@ export function PreviewUnreachable({ url, code, description, onReload, move }: P
               {move.label}
             </Button>
           ) : null}
-          <Button type="button" size="sm" onClick={onReload}>
-            <T>Reload</T>
-          </Button>
+          {reloadDisabled && reloadDisabledReason ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={NOOP}
+                    aria-disabled
+                    aria-description={reloadDisabledReason}
+                  />
+                }
+              >
+                <T>Reload</T>
+              </TooltipTrigger>
+              <TooltipPopup>{reloadDisabledReason}</TooltipPopup>
+            </Tooltip>
+          ) : (
+            <Button type="button" size="sm" disabled={reloadDisabled} onClick={onReload}>
+              <T>Reload</T>
+            </Button>
+          )}
         </div>
       </div>
     </div>

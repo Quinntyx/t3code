@@ -1,3 +1,4 @@
+import type { PreviewStreamPhase } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { useIsFocused } from "@react-navigation/native";
 import type { EnvironmentId, PreviewSessionSnapshot, ThreadId } from "@t3tools/contracts";
 import { previewPdfAssetUrl } from "@t3tools/shared/preview";
@@ -64,6 +65,7 @@ export function ThreadBrowserFloat(props: {
   if (!tab || !focused) return null;
   return (
     <FloatingBrowserPlayer
+      key={tab.tabId}
       environmentId={props.environmentId}
       threadId={props.threadId}
       tab={tab}
@@ -90,10 +92,34 @@ function FloatingBrowserPlayer(props: {
   const prepared = usePreparedConnection(props.environmentId);
   const httpBaseUrl = Option.isSome(prepared) ? prepared.value.httpBaseUrl : null;
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
+  const [streamPhase, setStreamPhase] = useState<PreviewStreamPhase>("connecting");
+  const [streamError, setStreamError] = useState(false);
+  const pdfUri =
+    props.tab.navStatus._tag === "Success"
+      ? previewPdfAssetUrl(props.tab.navStatus.url, httpBaseUrl)
+      : null;
   const aspect = Math.min(Math.max(viewport ? viewport.width / viewport.height : 16 / 10, 0.5), 2);
   const width = aspect >= 1 ? PLAYER_LONG_SIDE : Math.round(PLAYER_LONG_SIDE * aspect);
   const height = Math.round(width / aspect);
   const background = themeVariables["--color-sheet-solid"];
+  const title = browserTabTitle(props.tab, resolveMessage);
+  const effectiveState = streamError
+    ? "error"
+    : pdfUri !== null
+      ? "live"
+      : streamPhase === "live"
+        ? "live"
+        : streamPhase === "reconnecting"
+          ? "reconnecting"
+          : "connecting";
+  const accessibilityLabel =
+    effectiveState === "live"
+      ? gt("Open browser, {title}", { title })
+      : effectiveState === "error"
+        ? gt("Open browser, {title}, unavailable", { title })
+        : effectiveState === "reconnecting"
+          ? gt("Open browser, {title}, reconnecting", { title })
+          : gt("Open browser, {title}, connecting", { title });
   return (
     <Animated.View
       entering={PLAYER_ENTERING}
@@ -103,9 +129,10 @@ function FloatingBrowserPlayer(props: {
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={gt("Open browser, {title}", {
-          title: browserTabTitle(props.tab, resolveMessage),
-        })}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{
+          busy: effectiveState === "connecting" || effectiveState === "reconnecting",
+        }}
         accessibilityHint={gt("Opens the browser tab full screen")}
         onPress={props.onOpen}
         className="flex-1"
@@ -115,11 +142,7 @@ function FloatingBrowserPlayer(props: {
             environmentId={props.environmentId}
             threadId={props.threadId}
             tabId={props.tab.tabId}
-            pdfUri={
-              props.tab.navStatus._tag === "Success"
-                ? previewPdfAssetUrl(props.tab.navStatus.url, httpBaseUrl)
-                : null
-            }
+            pdfUri={pdfUri}
             interactive={false}
             background={background}
             // The floating preview peeks at a tab; its sound belongs to the full viewer, so it
@@ -128,6 +151,8 @@ function FloatingBrowserPlayer(props: {
             audioMuted
             compact
             paused={!props.live}
+            onPhaseChange={setStreamPhase}
+            onErrorChange={setStreamError}
             onViewport={setViewport}
             onGone={props.onClose}
           />

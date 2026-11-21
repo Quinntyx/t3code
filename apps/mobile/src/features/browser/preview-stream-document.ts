@@ -7,7 +7,8 @@ import type {
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 
 export interface PreviewStreamConfiguration {
-  readonly access: DeviceHubAccess;
+  readonly access: DeviceHubAccess | null;
+  readonly accessGeneration?: number;
   readonly threadId: string;
   readonly tabId: string;
   readonly interactive: boolean;
@@ -24,8 +25,8 @@ export interface PreviewStreamConfiguration {
   readonly audio?: boolean;
 }
 
-export type PreviewStreamMessage =
-  | ({ readonly type: "control" } & PreviewStreamControl)
+export type PreviewStreamMessage = (
+  | ({ readonly type: "control"; readonly inputSession?: number } & PreviewStreamControl)
   | {
       readonly type: "status";
       readonly status: "connecting" | "streaming" | "error";
@@ -46,7 +47,8 @@ export type PreviewStreamMessage =
       readonly supported: boolean;
       readonly active: boolean;
       readonly detail?: string;
-    };
+    }
+) & { readonly accessGeneration?: number };
 
 export function previewStreamDocument(
   configuration: string,

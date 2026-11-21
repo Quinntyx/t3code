@@ -1,67 +1,139 @@
 import { expect, it, vi } from "vite-plus/test";
 
-import { start, stop } from "./preview-stream.browser";
+import { command, start, stop, updateAccess } from "./preview-stream.browser";
+
+const JPEG_FRAME = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
+
+class TestSocket extends EventTarget {
+  static OPEN = 1;
+  readyState = TestSocket.OPEN;
+  sent: Array<unknown> = [];
+  readonly url: string;
+  constructor(sockets: TestSocket[], url: string) {
+    super();
+    this.url = url;
+    sockets.push(this);
+  }
+  closed = false;
+  send(data: string) {
+    this.sent.push(JSON.parse(data));
+  }
+  close() {
+    this.closed = true;
+  }
+  open() {
+    this.dispatchEvent(new Event("open"));
+  }
+  disconnect() {
+    this.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+  }
+  receive(message: object) {
+    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
+  }
+  receiveFrame() {
+    this.dispatchEvent(new MessageEvent("message", { data: JPEG_FRAME }));
+  }
+}
+
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function mountMobileStream(reuseNearbyTouchProbe = false) {
+  const sockets: TestSocket[] = [];
+  const posted: Array<Record<string, unknown>> = [];
+  class BoundSocket extends TestSocket {
+    constructor(url: string) {
+      super(sockets, url);
+    }
+  }
+  vi.useFakeTimers();
+  const rectSpy = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockReturnValue(new DOMRect(0, 0, 300, 150));
+  const contextSpy = vi
+    .spyOn(HTMLCanvasElement.prototype, "getContext")
+    .mockReturnValue({ drawImage() {} } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("WebSocket", BoundSocket);
+  vi.stubGlobal("createImageBitmap", async () => ({
+    width: 300,
+    height: 150,
+    close() {},
+  }));
+  vi.stubGlobal("ReactNativeWebView", {
+    postMessage(raw: string) {
+      posted.push(JSON.parse(raw) as Record<string, unknown>);
+    },
+  });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private readonly notify: () => void) {}
+      observe() {
+        this.notify();
+      }
+      disconnect() {}
+    },
+  );
+  start({
+    interactive: true,
+    reuseNearbyTouchProbe,
+    threadId: "thread",
+    tabId: "tab",
+    background: "black",
+    access: {
+      httpBase: "https://environment.test/api/preview",
+      wsBase: "wss://environment.test/api/preview",
+      credentials: false,
+      query: {},
+    },
+    labels: {
+      page: "Browser page",
+      pageInput: "Browser page input",
+      pictureInPictureNotReady: "Not ready",
+      pictureInPictureUnavailable: "Unavailable",
+    },
+  });
+  vi.runOnlyPendingTimers();
+  return {
+    sockets,
+    posted,
+    cleanup() {
+      stop();
+      rectSpy.mockRestore();
+      contextSpy.mockRestore();
+      document.body.replaceChildren();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    },
+  };
+}
+
+function tapCanvas(canvas: HTMLCanvasElement, x: number) {
+  for (const type of ["pointerdown", "pointerup"]) {
+    canvas.dispatchEvent(
+      new PointerEvent(type, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: x,
+        clientY: 40,
+      }),
+    );
+  }
+}
 
 it.each([
   { platform: "android", reuseNearbyTouchProbe: false },
   { platform: "ios", reuseNearbyTouchProbe: true },
 ])(
   "uses nearby probe answers for touch keyboard focus only on iOS ($platform)",
-  ({ reuseNearbyTouchProbe }) => {
-    const sockets: TestSocket[] = [];
-    class TestSocket extends EventTarget {
-      static OPEN = 1;
-      readyState = TestSocket.OPEN;
-      constructor() {
-        super();
-        sockets.push(this);
-      }
-      send() {}
-      close() {}
-      receive(message: object) {
-        this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
-      }
-    }
-    vi.useFakeTimers();
-    using _rect = vi
-      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-      .mockReturnValue(new DOMRect(0, 0, 300, 150));
-    using _context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-    vi.stubGlobal("WebSocket", TestSocket);
-    vi.stubGlobal("ReactNativeWebView", { postMessage() {} });
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(private readonly notify: () => void) {}
-        observe() {
-          this.notify();
-        }
-        disconnect() {}
-      },
-    );
+  async ({ reuseNearbyTouchProbe }) => {
+    const harness = mountMobileStream(reuseNearbyTouchProbe);
     try {
-      const configuration = {
-        interactive: true,
-        reuseNearbyTouchProbe,
-        threadId: "thread",
-        tabId: "tab",
-        background: "black",
-        access: {
-          httpBase: "https://environment.test/api/preview",
-          wsBase: "wss://environment.test/api/preview",
-          credentials: false,
-          query: {},
-        },
-        labels: {
-          page: "Browser page",
-          pageInput: "Browser page input",
-          pictureInPictureNotReady: "Not ready",
-          pictureInPictureUnavailable: "Unavailable",
-        },
-      };
-      start(configuration);
-      vi.runOnlyPendingTimers();
-      const socket = sockets[0]!;
+      const socket = harness.sockets[0]!;
+      socket.open();
       socket.receive({ type: "viewport", width: 300, height: 150 });
       socket.receive({
         type: "control",
@@ -70,40 +142,473 @@ it.each([
         generation: 1,
         dialog: null,
       });
+      socket.receiveFrame();
+      await flushMicrotasks();
 
       const canvas = document.querySelector("canvas")!;
       const input = document.querySelector("textarea")!;
-      const tap = (x: number) => {
-        for (const type of ["pointerdown", "pointerup"]) {
-          canvas.dispatchEvent(
-            new PointerEvent(type, {
-              pointerType: "touch",
-              pointerId: 1,
-              isPrimary: true,
-              clientX: x,
-              clientY: 40,
-            }),
-          );
-        }
-      };
 
       expect(document.activeElement).not.toBe(input);
       // The first tap hits a text field. Its response comes after pointerup.
-      tap(40);
+      tapCanvas(canvas, 40);
       socket.receive({ type: "probe", x: 40, y: 40, editable: true });
       expect(document.activeElement).toBe(input);
       input.blur();
 
       // The next tap hits a button close enough to reuse the previous answer on iOS.
-      tap(56);
+      tapCanvas(canvas, 56);
       expect(document.activeElement === input).toBe(reuseNearbyTouchProbe);
       socket.receive({ type: "probe", x: 56, y: 40, editable: false });
       expect(document.activeElement).not.toBe(input);
     } finally {
-      stop();
-      document.body.replaceChildren();
-      vi.unstubAllGlobals();
-      vi.useRealTimers();
+      harness.cleanup();
     }
   },
 );
+
+it("gates touch input during mid-session reconnect until a replacement frame and viewport arrive", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    // Drop the live socket and reconnect.
+    first.disconnect();
+    vi.runOnlyPendingTimers();
+    const second = harness.sockets[1]!;
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    second.sent.length = 0;
+    expect(input.disabled).toBe(true);
+    tapCanvas(canvas, 40);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+
+    // Even after the replacement frame paints, touch stays gated until a fresh viewport arrives.
+    second.receiveFrame();
+    await flushMicrotasks();
+    expect(input.disabled).toBe(false);
+    tapCanvas(canvas, 40);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+
+    second.receive({ type: "viewport", width: 600, height: 300 });
+    tapCanvas(canvas, 40);
+    expect(
+      second.sent.filter((entry) => (entry as { type?: string }).type === "mouse"),
+    ).toContainEqual(expect.objectContaining({ type: "mouse", action: "down", x: 80, y: 80 }));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("ignores an in-flight JPEG decode from a dropped socket on reconnect", async () => {
+  const harness = mountMobileStream();
+  try {
+    const decodes: Array<(bitmap: { width: number; height: number; close(): void }) => void> = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      () =>
+        new Promise((resolve) => {
+          decodes.push(resolve);
+        }),
+    );
+    const makeBitmap = () => ({ width: 300, height: 150, close: vi.fn() });
+
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    decodes.shift()!(makeBitmap());
+    await flushMicrotasks();
+
+    // Start decoding a second frame on the first socket, then drop the socket before it resolves.
+    first.receiveFrame();
+    expect(decodes).toHaveLength(1);
+    first.disconnect();
+    vi.runOnlyPendingTimers();
+
+    const second = harness.sockets[1]!;
+    second.open();
+    second.receive({ type: "viewport", width: 300, height: 150 });
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    harness.posted.length = 0;
+    second.sent.length = 0;
+
+    // Resolving the stale decode must not post streaming or unlock input.
+    const staleBitmap = makeBitmap();
+    decodes.shift()!(staleBitmap);
+    await flushMicrotasks();
+    expect(staleBitmap.close).toHaveBeenCalledOnce();
+    expect(harness.posted).not.toContainEqual(
+      expect.objectContaining({ type: "status", status: "streaming" }),
+    );
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    expect(input.disabled).toBe(true);
+    tapCanvas(canvas, 40);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+
+    // Only a replacement frame from the new socket restores streaming and input.
+    second.receiveFrame();
+    decodes.shift()!(makeBitmap());
+    await flushMicrotasks();
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "streaming",
+      accessGeneration: 0,
+    });
+    expect(input.disabled).toBe(false);
+    tapCanvas(canvas, 40);
+    expect(
+      second.sent.filter((entry) => (entry as { type?: string }).type === "mouse").length,
+    ).toBeGreaterThan(0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("ignores touch starts and keyboard or IME input before the first frame paints", async () => {
+  const harness = mountMobileStream();
+  try {
+    const socket = harness.sockets[0]!;
+    socket.open();
+    socket.receive({ type: "viewport", width: 300, height: 150 });
+    socket.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    const activeSession = (
+      [...harness.posted].reverse().find((entry) => entry.type === "control") as {
+        inputSession: number;
+      }
+    ).inputSession;
+    socket.sent.length = 0;
+
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    expect(input.disabled).toBe(true);
+
+    // Synthetic key, input, composition, and async paste commands while not streaming must send no text/keys.
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    input.value = "\u200bhello";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new CompositionEvent("compositionend", { data: "hi", bubbles: true }));
+    command({ type: "text", text: "pasted" }, activeSession);
+    command({ type: "reload" });
+    expect(
+      socket.sent.filter((entry) => {
+        const type = (entry as { type?: string }).type;
+        return type === "key" || type === "text";
+      }),
+    ).toEqual([]);
+    expect(socket.sent).toContainEqual({ type: "reload" });
+
+    // A touch pointerdown before the frame paints must not turn into a tap after the frame arrives.
+    canvas.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 40,
+        clientY: 40,
+      }),
+    );
+    socket.receiveFrame();
+    await flushMicrotasks();
+    socket.sent.length = 0;
+    canvas.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 40,
+        clientY: 40,
+      }),
+    );
+    expect(socket.sent.filter((entry) => (entry as { type?: string }).type === "mouse")).toEqual(
+      [],
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("reports connecting on disconnect when control arrived before the first frame", () => {
+  const harness = mountMobileStream();
+  try {
+    const socket = harness.sockets[0]!;
+    socket.open();
+    socket.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    harness.posted.length = 0;
+
+    socket.disconnect();
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "connecting",
+      accessGeneration: 0,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("reconnects with refreshed access via updateAccess while keeping input gated until a replacement frame paints", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    harness.posted.length = 0;
+    updateAccess(
+      {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "fresh-ticket" },
+      },
+      1,
+    );
+
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "connecting",
+      accessGeneration: 1,
+    });
+    const second = harness.sockets[1]!;
+    expect(second.url).toContain("wsTicket=fresh-ticket");
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    const secondSession = (
+      [...harness.posted].reverse().find((entry) => entry.type === "control") as {
+        inputSession: number;
+      }
+    ).inputSession;
+
+    const canvas = document.querySelector("canvas")!;
+    const input = document.querySelector("textarea")!;
+    second.sent.length = 0;
+    expect(input.disabled).toBe(true);
+    tapCanvas(canvas, 40);
+    command({ type: "text", text: "blocked" }, secondSession);
+    expect(
+      second.sent.filter((entry) => {
+        const type = (entry as { type?: string }).type;
+        return type === "mouse" || type === "text";
+      }),
+    ).toEqual([]);
+
+    second.receiveFrame();
+    await flushMicrotasks();
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "streaming",
+      accessGeneration: 1,
+    });
+    expect(input.disabled).toBe(false);
+    command({ type: "text", text: "allowed" }, secondSession);
+    expect(second.sent).toContainEqual({ type: "text", text: "allowed" });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("suspends transport and input on updateAccess(null) and resumes on fresh access", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    harness.posted.length = 0;
+    updateAccess(null, 1);
+
+    expect(first.closed).toBe(true);
+    expect(harness.sockets).toHaveLength(1);
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "connecting",
+      accessGeneration: 1,
+    });
+    const input = document.querySelector("textarea")!;
+    expect(input.disabled).toBe(true);
+
+    updateAccess(
+      {
+        httpBase: "https://environment.test/api/preview",
+        wsBase: "wss://environment.test/api/preview",
+        credentials: false,
+        query: { wsTicket: "resumed-ticket" },
+      },
+      2,
+    );
+    expect(harness.sockets).toHaveLength(2);
+    const second = harness.sockets[1]!;
+    expect(second.url).toContain("wsTicket=resumed-ticket");
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    expect(input.disabled).toBe(true);
+
+    second.receiveFrame();
+    await flushMicrotasks();
+    expect(harness.posted).toContainEqual({
+      type: "status",
+      status: "streaming",
+      accessGeneration: 2,
+    });
+    expect(input.disabled).toBe(false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+it("drops text commands carrying a missing or stale inputSession across reconnects and control handoffs", async () => {
+  const harness = mountMobileStream();
+  try {
+    const first = harness.sockets[0]!;
+    first.open();
+    first.receive({ type: "viewport", width: 300, height: 150 });
+    first.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 1,
+      dialog: null,
+    });
+    first.receiveFrame();
+    await flushMicrotasks();
+
+    const firstControl = [...harness.posted].reverse().find((entry) => entry.type === "control") as
+      | { inputSession?: number }
+      | undefined;
+    expect(typeof firstControl?.inputSession).toBe("number");
+    const firstSession = firstControl!.inputSession!;
+
+    // Reconnect and immediately regain control and paint a fresh frame before native processes the disconnect.
+    first.disconnect();
+    vi.runOnlyPendingTimers();
+    const second = harness.sockets[1]!;
+    second.open();
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 2,
+      dialog: null,
+    });
+    second.receiveFrame();
+    await flushMicrotasks();
+
+    const secondControl = [...harness.posted]
+      .reverse()
+      .find((entry) => entry.type === "control") as { inputSession?: number } | undefined;
+    const secondSession = secondControl!.inputSession!;
+    expect(secondSession).toBeGreaterThan(firstSession);
+
+    second.sent.length = 0;
+    command({ type: "text", text: "stale-after-reconnect" }, firstSession);
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "text")).toEqual([]);
+
+    // Control handoff (generation bump) also invalidates the previous inputSession.
+    second.receive({
+      type: "control",
+      canOperate: true,
+      controller: "you",
+      generation: 3,
+      dialog: null,
+    });
+    const thirdControl = [...harness.posted].reverse().find((entry) => entry.type === "control") as
+      | { inputSession?: number }
+      | undefined;
+    const thirdSession = thirdControl!.inputSession!;
+    expect(thirdSession).toBeGreaterThan(secondSession);
+
+    command({ type: "text", text: "stale-after-handoff" }, secondSession);
+    (command as unknown as (input: { type: "text"; text: string }) => void)({
+      type: "text",
+      text: "untagged-paste",
+    });
+    expect(second.sent.filter((entry) => (entry as { type?: string }).type === "text")).toEqual([]);
+
+    command({ type: "text", text: "current-session-paste" }, thirdSession);
+    expect(second.sent).toContainEqual({ type: "text", text: "current-session-paste" });
+  } finally {
+    harness.cleanup();
+  }
+});

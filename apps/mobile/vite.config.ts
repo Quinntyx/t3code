@@ -60,6 +60,7 @@ const reactTests = [
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/connection/LinkedEnvironmentsSection.test.tsx",
   "src/features/browser/preview-stream.browser.test.ts",
+  "src/features/browser/PreviewStreamWebView.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/browser/preview-stream-document.browser.test.ts",
   "src/features/keyboard/keyboardControllerState.test.tsx",
@@ -146,6 +147,16 @@ export default defineConfig({
       {
         extends: true,
         plugins: [
+          {
+            name: "mobile-preview-stream-stub",
+            resolveId(id) {
+              if (id === "@t3tools/mobile-preview-stream")
+                return "\0@t3tools/mobile-preview-stream";
+            },
+            load(id) {
+              if (id === "\0@t3tools/mobile-preview-stream") return 'export default "";';
+            },
+          },
           {
             name: `mobile-release-react-compiler-${testPlatform}`,
             enforce: "pre",

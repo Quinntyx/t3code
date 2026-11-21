@@ -56,14 +56,16 @@ export function BrowserTabMenu({
   environmentId,
   tab,
   streaming,
+  onHardReload,
   onPaste,
   onReleaseControl,
 }: {
   readonly environmentId: EnvironmentId;
   readonly tab: PreviewSessionSnapshot;
   readonly streaming: boolean;
-  readonly onPaste?: () => void;
-  readonly onReleaseControl?: () => void;
+  readonly onHardReload?: (() => void) | undefined;
+  readonly onPaste?: (() => void) | undefined;
+  readonly onReleaseControl?: (() => void) | undefined;
 }) {
   const openLocalPreview = useOpenLocalPreview();
   const tunnelOff = useEnvironmentPreviewTunnelOff(environmentId);
@@ -99,6 +101,12 @@ export function BrowserTabMenu({
   const openOnDevice: MenuAction[] = deviceUrl
     ? [{ id: "open-on-device", title: gt("Open on this device"), image: "iphone" }]
     : [];
+  const hardReloadAction: MenuAction = {
+    id: "hard-reload",
+    title: gt("Hard reload"),
+    image: "arrow.clockwise.circle",
+    attributes: { disabled: !onHardReload },
+  };
   const actions: MenuAction[] = [
     ...openOnDevice,
     ...(onPaste
@@ -107,7 +115,7 @@ export function BrowserTabMenu({
     ...(onReleaseControl
       ? [{ id: "release-control", title: gt("Release control"), image: "hand.raised" }]
       : []),
-    { id: "hard-reload", title: gt("Hard reload"), image: "arrow.clockwise.circle" },
+    hardReloadAction,
     {
       id: "appearance",
       title: gt("Appearance"),
@@ -167,7 +175,7 @@ export function BrowserTabMenu({
     }
     if (id === "paste") return onPaste?.();
     if (id === "release-control") return onReleaseControl?.();
-    if (id === "hard-reload") return void run({ hardReload: true });
+    if (id === "hard-reload") return onHardReload?.();
     if (id === "zoom:in") return void run({ zoomFactor: zoomTo(1) });
     if (id === "zoom:out") return void run({ zoomFactor: zoomTo(-1) });
     if (id === "zoom:reset") return void run({ zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR });
@@ -189,15 +197,16 @@ export function BrowserTabMenu({
     }
   };
 
+  const idleActions = [...openOnDevice, ...(onHardReload ? [hardReloadAction] : []), closeAction];
+
   return (
     <Menu
-      // Remount when streaming changes, so an open menu never keeps offering
-      // the other state's actions.
-      key={streaming ? "streaming" : "idle"}
+      // Remount when stream or control actions change so an open menu never keeps stale items.
+      key={`${streaming ? "streaming" : "idle"}:${onHardReload ? "reload" : "no-reload"}:${onPaste ? "paste" : "no-paste"}:${onReleaseControl ? "release" : "no-release"}`}
       accessible
       accessibilityLabel={gt("Browser tab options")}
       accessibilityRole="button"
-      actions={streaming ? actions : [...openOnDevice, closeAction]}
+      actions={streaming ? actions : idleActions}
       onPressAction={({ nativeEvent }) => onAction(nativeEvent.event)}
     >
       <ControlPill icon="ellipsis" accessibilityLabel={gt("Browser tab options")} />

@@ -4,7 +4,10 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopPreviewAnnotationVoiceConfig } from "@t3tools/contracts";
-import { previewStreamDownloadUrl } from "@t3tools/client-runtime/preview/server-browser-stream";
+import {
+  type PreviewStreamControl,
+  previewStreamDownloadUrl,
+} from "@t3tools/client-runtime/preview/server-browser-stream";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -253,9 +256,13 @@ export function PreviewView({
       setServerToolbarWidth(Math.max(1, Math.round(entry?.contentRect.width ?? 0))),
     );
   }, [serverToolbarShown]);
-  const [serverControlledTabId, setServerControlledTabId] = useState<string | null>(null);
-  const serverInputDisabled = isServerTab && serverControlledTabId !== runtimeTabId;
-  const [serverStreamSettledTabId, setServerStreamSettledTabId] = useState<string | null>(null);
+  const [serverControlledTab, setServerControlledTab] = useState<{
+    readonly tabId: string;
+    readonly control: PreviewStreamControl | null;
+  } | null>(null);
+  // A cleanup from the previous tab reports null after the next tab already reported control.
+  const serverControl =
+    serverControlledTab?.tabId === runtimeTabId ? serverControlledTab.control : null;
   // A desktop page that mounted before its tab went headless leaves its stale state here.
   const desktopOverlay =
     tabId && !isServerTab ? (previewState.desktopByTabId[tabId] ?? null) : null;
@@ -271,10 +278,21 @@ export function PreviewView({
   const canGoBack = desktopOverlay?.canGoBack ?? snapshot?.canGoBack ?? false;
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
+  const serverInputDisabled = isServerTab && serverControl?.controller !== "you";
+  const refreshDisabledReason =
+    !isServerTab || refreshDisabled
+      ? undefined
+      : serverControl === null
+        ? gt("Waiting for remote browser")
+        : !serverControl.canOperate
+          ? gt("Read-only preview")
+          : serverControl.controller === "another-viewer"
+            ? gt("Another viewer has control")
+            : serverControl.controller !== "you"
+              ? gt("Take control to refresh")
+              : undefined;
   const isUnreachable = navStatus._tag === "LoadFailed";
   const showEmptyState = navStatus._tag === "Idle";
-  const serverStreamPending =
-    isServerTab && !showEmptyState && !isUnreachable && serverStreamSettledTabId !== runtimeTabId;
   const controller = desktopOverlay?.controller ?? "none";
   const viewport = snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT;
   const browserDefaults = useBrowserDefaults();
@@ -357,8 +375,13 @@ export function PreviewView({
   };
 
   const handleRefresh = () => {
-    if (isServerTab) serverSurfaceRef.current?.reload();
-    else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
+    if (refreshDisabled) return;
+    if (isServerTab) {
+      if (serverInputDisabled) return;
+      serverSurfaceRef.current?.reload();
+      return;
+    }
+    if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   };
 
   const handleStopLoading = () => {
@@ -532,7 +555,15 @@ export function PreviewView({
   };
   const moreMenuActions: PreviewMoreMenuActions | null = serverOwnsRendering
     ? {
-        hardReload: () => void adjustServerTab({ hardReload: true }),
+        hardReload: () => {
+          if (refreshDisabled) return;
+          if (isServerTab) {
+            if (serverInputDisabled) return;
+            serverSurfaceRef.current?.reload({ ignoreCache: true });
+            return;
+          }
+          void adjustServerTab({ hardReload: true });
+        },
         setColorScheme: (colorScheme) => void adjustServerTab({ colorScheme }),
         zoomIn: handleZoomIn,
         zoomOut: handleZoomOut,
@@ -549,7 +580,10 @@ export function PreviewView({
       }
     : previewBridge
       ? {
-          hardReload: desktopCall(previewBridge.hardReload),
+          hardReload: () => {
+            if (refreshDisabled) return;
+            if (runtimeTabId) void previewBridge?.hardReload(runtimeTabId).catch(() => undefined);
+          },
           setColorScheme: (colorScheme) => {
             if (runtimeTabId)
               void previewBridge?.setColorScheme(runtimeTabId, colorScheme).catch(() => undefined);
@@ -1016,10 +1050,11 @@ export function PreviewView({
       ) : null}
       <PreviewChromeRow
         url={url}
-        loading={loading || serverStreamPending}
+        loading={loading}
         canGoBack={canGoBack && !serverInputDisabled}
         canGoForward={canGoForward && !serverInputDisabled}
         refreshDisabled={refreshDisabled || serverInputDisabled}
+        refreshDisabledReason={refreshDisabledReason}
         inputDisabled={serverInputDisabled}
         urlInputRef={urlInputRef}
         onBack={handleBack}
@@ -1063,6 +1098,7 @@ export function PreviewView({
                 runtimeTabId !== null &&
                 (serverOwnsRendering || (desktopOverlay?.hasWebContents ?? false))
               }
+              hardReloadDisabled={refreshDisabled || serverInputDisabled}
               actions={moreMenuActions}
               {...(moveTarget
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }
@@ -1126,12 +1162,15 @@ export function PreviewView({
                     : null
                 }
                 visible={visible}
+                environmentLabel={environmentLabel ?? undefined}
                 audioMuted={isServerAudioMuted}
                 audioPaused={!ownsServerAudio}
-                onFirstFrame={() => setServerStreamSettledTabId(runtimeTabId)}
-                onNoFrames={() => setServerStreamSettledTabId(runtimeTabId)}
                 onControl={(control) =>
-                  setServerControlledTabId(control?.controller === "you" ? runtimeTabId : null)
+                  setServerControlledTab((current) =>
+                    control === null && current !== null && current.tabId !== runtimeTabId
+                      ? current
+                      : { tabId: runtimeTabId, control },
+                  )
                 }
                 onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "panel")}
                 // Stays connected under the empty state so a URL picked there reaches the page.
@@ -1203,6 +1242,8 @@ export function PreviewView({
               code={navStatus.code}
               description={navStatus.description}
               onReload={handleRefresh}
+              reloadDisabled={refreshDisabled || serverInputDisabled}
+              reloadDisabledReason={refreshDisabledReason}
               {...(moveTarget === "server"
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }
                 : {})}

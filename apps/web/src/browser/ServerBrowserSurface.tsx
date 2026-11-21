@@ -2,8 +2,10 @@ import {
   createPreviewAudioPlayer,
   createPreviewFramePainter,
   createPreviewStreamClient,
-  previewStreamControlLabel,
   previewStreamModifiers,
+  previewStreamOverlayDetail,
+  previewStreamPhase,
+  previewStreamStatusLabel,
   type PreviewAudioPlayer,
   type PreviewStreamClient,
   type PreviewStreamControl,
@@ -31,10 +33,12 @@ import {
   useEffect,
   useEffectEvent,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import { msg, T, useGT, useMessages } from "gt-react";
+import { Monitor } from "lucide-react";
 
 import { AgentCursorMark } from "~/components/preview/AgentBrowserCursor";
 import { CommandBlock } from "~/components/CommandBlock";
@@ -44,7 +48,7 @@ import { toastManager } from "~/components/ui/toast";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
-import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
+import { refreshPreviewStreamAccess, usePreviewStreamAccessState } from "~/state/previewStream";
 import { usePreviewAudioAvailabilityStore } from "~/previewAudioMuteStore";
 import { observeResize } from "~/lib/observeResize";
 
@@ -155,11 +159,11 @@ export function ServerBrowserSurface(props: {
   readonly visible: boolean;
   readonly followSize?: boolean;
   readonly controlPosition?: "top" | "bottom";
-  readonly onFirstFrame?: () => void;
-  readonly onNoFrames?: () => void;
+  readonly environmentLabel?: string | undefined;
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
   readonly onPopup?: (tabId: string) => void;
+  readonly onNoFrames?: () => void;
   readonly className?: string;
   readonly pdfUrl?: string | null;
   readonly audioMuted?: boolean;
@@ -174,11 +178,11 @@ export function ServerBrowserSurface(props: {
     visible,
     followSize = true,
     controlPosition = "top",
-    onFirstFrame,
-    onNoFrames,
+    environmentLabel,
     onViewport,
     onControl,
     onPopup,
+    onNoFrames,
     className,
     pdfUrl = null,
     audioMuted = false,
@@ -194,9 +198,17 @@ export function ServerBrowserSurface(props: {
   const audioRef = useRef<PreviewAudioPlayer | null>(null);
   const viewportRef = useRef<PreviewStreamViewport | null>(null);
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
+  const targetKey = `${environmentId}:${threadId}:${tabId}`;
   const hasFrameRef = useRef(false);
+  const frameTargetRef = useRef<string | null>(null);
+  const retainedFrameTargetRef = useRef<string | null>(null);
+  const [retainedFrameTargetKey, setRetainedFrameTargetKey] = useState<string | null>(null);
+  const [currentFramePainted, setCurrentFramePainted] = useState(false);
   const controlRef = useRef<PreviewStreamControl | null>(null);
-  const [control, setControl] = useState<PreviewStreamControl | null>(null);
+  const [controlState, setControlState] = useState<{
+    readonly targetKey: string;
+    readonly control: PreviewStreamControl | null;
+  } | null>(null);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
@@ -214,8 +226,21 @@ export function ServerBrowserSurface(props: {
     );
   };
   const unauthorizedRef = useRef(0);
-  const [accessDenied, setAccessDenied] = useState(false);
-  const access = usePreviewStreamAccess(environmentId, { retry: visible && !accessDenied });
+  const [goneTargetKey, setGoneTargetKey] = useState<string | null>(null);
+  const gone = goneTargetKey === targetKey;
+  const [refusedAccess, setRefusedAccess] =
+    useState<ReturnType<typeof usePreviewStreamAccessState>["access"]>(null);
+  const {
+    access,
+    error: accessError,
+    isPending: accessPending,
+  } = usePreviewStreamAccessState(environmentId, {
+    retry: visible && !gone && refusedAccess === null,
+  });
+  if (refusedAccess !== null && access !== refusedAccess) {
+    setRefusedAccess(null);
+  }
+  const accessDenied = refusedAccess !== null;
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const pendingMoveRef = useRef<MouseInput | null>(null);
   const pendingWheelRef = useRef<WheelInput | null>(null);
@@ -232,14 +257,13 @@ export function ServerBrowserSurface(props: {
   const touchRef = useRef<TouchGesture | null>(null);
   const probeRef = useRef<TouchProbe | null>(null);
   const lastProbeRef = useRef<{ x: number; y: number; editable: boolean; at: number } | null>(null);
-  const firstFrame = useEffectEvent(() => onFirstFrame?.());
-  const noFrames = useEffectEvent(() => onNoFrames?.());
   const [framesStalled, setFramesStalled] = useState(false);
   const viewportChanged = useEffectEvent((viewport: PreviewStreamViewport) =>
     onViewport?.(viewport),
   );
   const controlChanged = useEffectEvent((next: PreviewStreamControl | null) => onControl?.(next));
   const popupOpened = useEffectEvent((popupTabId: string) => onPopup?.(popupTabId));
+  const noFramesChanged = useEffectEvent(() => onNoFrames?.());
   const setAudioUnavailable = usePreviewAudioAvailabilityStore((state) => state.setUnavailable);
   // Read at connect time: mute only changes the player's gain, so it must not reconnect.
   const mutedAtConnect = useEffectEvent(() => audioMuted || audioPaused);
@@ -337,9 +361,10 @@ export function ServerBrowserSurface(props: {
         send({ type: "reload", ...(options?.ignoreCache ? { ignoreCache: true } : {}) }),
       stopLoading: () => send({ type: "stopLoading" }),
       viewport: (setting) => send({ type: "viewport", setting }),
-      canvas: () => (!pdfUrl && hasFrameRef.current ? canvasRef.current : null),
+      canvas: () =>
+        !pdfUrl && retainedFrameTargetRef.current === targetKey ? canvasRef.current : null,
     }),
-    [pdfUrl, send],
+    [pdfUrl, send, targetKey],
   );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the canvas container's size, sends resizes to the stream and grows the frame cap
@@ -388,10 +413,24 @@ export function ServerBrowserSurface(props: {
     };
   }, [followSize]);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the preview stream client and paints its frames onto the canvas while visible
-  useEffect(() => {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens and tears down the preview stream client synchronously with visibility and access changes before paint
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
-    if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
+    if (frameTargetRef.current !== targetKey) {
+      frameTargetRef.current = targetKey;
+      unauthorizedRef.current = 0;
+      hasFrameRef.current = false;
+      viewportRef.current = null;
+      retainedFrameTargetRef.current = null;
+      setHostSetup(null);
+      setFramesStalled(false);
+      setCurrentFramePainted(false);
+      setRetainedFrameTargetKey(null);
+      canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    if (!visible || gone || accessDenied || hostSetup || !access || !cap || !canvas) return;
+    hasFrameRef.current = false;
+    setCurrentFramePainted(false);
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let noFrameTimer: ReturnType<typeof setTimeout> | null = null;
     const clearNoFrameTimer = () => {
@@ -405,7 +444,9 @@ export function ServerBrowserSurface(props: {
         hasFrameRef.current = true;
         clearNoFrameTimer();
         setFramesStalled(false);
-        firstFrame();
+        retainedFrameTargetRef.current = targetKey;
+        setCurrentFramePainted(true);
+        setRetainedFrameTargetKey(targetKey);
       },
       () => client.requestKeyFrame(),
     );
@@ -459,7 +500,7 @@ export function ServerBrowserSurface(props: {
         onControl: (next) => {
           const previous = controlRef.current;
           controlRef.current = next;
-          setControl(next);
+          setControlState({ targetKey, control: next });
           controlChanged(next);
           if (
             next.dialog?.message !== previous?.dialog?.message ||
@@ -479,24 +520,45 @@ export function ServerBrowserSurface(props: {
             if (!hasFrameRef.current)
               noFrameTimer = setTimeout(() => {
                 setFramesStalled(true);
-                noFrames();
+                noFramesChanged();
               }, NO_FRAME_TIMEOUT_MS);
             return;
           }
+          setFramesStalled(false);
+          painter.reset();
+          hasFrameRef.current = false;
+          viewportRef.current = null;
+          setCurrentFramePainted(false);
           setFileChooser(null);
           controlRef.current = null;
-          setControl(null);
+          setControlState(null);
           controlChanged(null);
           clearInput();
+        },
+        onGone: () => {
+          painter.reset();
+          hasFrameRef.current = false;
+          viewportRef.current = null;
+          retainedFrameTargetRef.current = null;
+          setCurrentFramePainted(false);
+          setRetainedFrameTargetKey(null);
+          setFileChooser(null);
+          controlRef.current = null;
+          setControlState(null);
+          controlChanged(null);
+          clearInput();
+          canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+          setGoneTargetKey(targetKey);
         },
         onHostSetup: setHostSetup,
         onUnauthorized: () => {
           const refusals = ++unauthorizedRef.current;
           if (refusals >= MAX_UNAUTHORIZED_REFUSALS) {
             inputRef.current?.blur();
-            setAccessDenied(true);
+            setRefusedAccess(access);
             return;
           }
+          if (refreshTimer !== null) clearTimeout(refreshTimer);
           refreshTimer = setTimeout(
             () => refreshPreviewStreamAccess(environmentId),
             refusals === 1 ? 0 : 1_000 * 2 ** (refusals - 1),
@@ -513,8 +575,11 @@ export function ServerBrowserSurface(props: {
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
+      hasFrameRef.current = false;
+      viewportRef.current = null;
+      setCurrentFramePainted(false);
       controlRef.current = null;
-      setControl(null);
+      setControlState(null);
       controlChanged(null);
       clearInput();
     };
@@ -528,9 +593,11 @@ export function ServerBrowserSurface(props: {
     clearInput,
     environmentId,
     followSize,
+    gone,
     hostSetup,
     setAudioUnavailable,
     tabId,
+    targetKey,
     threadId,
     visible,
   ]);
@@ -586,7 +653,7 @@ export function ServerBrowserSurface(props: {
     if (event.pointerType === "touch" && !cancelled) {
       const point = pagePoint(clientX, clientY, type === "pointermove");
       if (type === "pointerdown") {
-        if (!event.isPrimary) return;
+        if (!event.isPrimary || !point) return;
         touchRef.current = {
           pointerId,
           startX: clientX,
@@ -597,20 +664,17 @@ export function ServerBrowserSurface(props: {
         };
         const last = lastProbeRef.current;
         const reusable =
-          point &&
           last &&
           performance.now() - last.at < PROBE_REUSE_MS &&
           Math.hypot(point.x - last.x, point.y - last.y) < PROBE_REUSE_PX;
-        probeRef.current = point
-          ? {
-              x: point.x,
-              y: point.y,
-              editable: reusable ? last.editable : null,
-              answered: false,
-              tapped: false,
-            }
-          : null;
-        if (point) send({ type: "probe", x: point.x, y: point.y });
+        probeRef.current = {
+          x: point.x,
+          y: point.y,
+          editable: reusable ? last.editable : null,
+          answered: false,
+          tapped: false,
+        };
+        send({ type: "probe", x: point.x, y: point.y });
         return;
       }
       if (!touch || touch.pointerId !== pointerId) return;
@@ -740,13 +804,13 @@ export function ServerBrowserSurface(props: {
   const handleClipboard = (key: typeof COPY | typeof CUT, event: ClipboardEvent) => {
     // Keep the sentinel off the clipboard.
     event.preventDefault();
-    if (controlRef.current?.controller !== "you") return;
+    if (!hasFrameRef.current || controlRef.current?.controller !== "you") return;
     sendKeyPress(key, CTRL);
   };
 
   const handleKey = (action: "down" | "up", event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (action === "down") audioRef.current?.resume();
-    if (controlRef.current?.controller !== "you") return;
+    if (!hasFrameRef.current || controlRef.current?.controller !== "you") return;
     keySentRef.current = false;
     if (
       event.nativeEvent.isComposing ||
@@ -802,9 +866,13 @@ export function ServerBrowserSurface(props: {
   };
 
   const handleInput = (event: FormEvent<HTMLTextAreaElement>) => {
+    const textarea = event.currentTarget;
+    if (!hasFrameRef.current || controlRef.current?.controller !== "you") {
+      resetInput(textarea);
+      return;
+    }
     const native = event.nativeEvent;
     if (native instanceof InputEvent && native.isComposing) return;
-    const textarea = event.currentTarget;
     const inputType = native instanceof InputEvent ? native.inputType : "";
     if (keySentRef.current) keySentRef.current = false;
     else if (inputType === "deleteContentBackward") sendKeyPress(BACKSPACE);
@@ -816,6 +884,30 @@ export function ServerBrowserSurface(props: {
     resetInput(textarea);
   };
 
+  const streamError = gone
+    ? gt("This tab was closed.")
+    : accessDenied
+      ? gt("Browser connection was refused.")
+      : accessError;
+  const hasStreamError = streamError !== null;
+  const control =
+    !hasStreamError && hostSetup === null && controlState?.targetKey === targetKey
+      ? controlState.control
+      : null;
+  const hasRetainedFrame = retainedFrameTargetKey === targetKey;
+  const hasCurrentFrame = hasRetainedFrame && currentFramePainted;
+  const phase = previewStreamPhase(control, hasCurrentFrame, hasRetainedFrame);
+  const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
+  const fullErrorOverlayVisible =
+    visible && (hostSetup !== null || (hasStreamError && !hasRetainedFrame));
+  const overlaySuppressed =
+    pdfUrl !== null || hostSetup !== null || hasStreamError || framesStalled;
+  const dialogAnnouncement = control?.dialog
+    ? control.dialog.message.trim()
+      ? gt("Browser dialog: {message}", { message: control.dialog.message.trim() })
+      : gt("Browser dialog opened.")
+    : "";
+
   return (
     <div
       className={cn("relative flex flex-col overflow-hidden", className)}
@@ -823,14 +915,33 @@ export function ServerBrowserSurface(props: {
       onMouseUp={handleMouseUp}
     >
       <div
+        aria-hidden={fullErrorOverlayVisible || undefined}
         className={cn(
-          "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
+          "visible relative z-20 flex h-8 shrink-0 items-center justify-between gap-2 border-border/60 bg-background px-2.5",
           controlPosition === "bottom" ? "order-last border-t" : "border-b",
         )}
       >
-        <span role="status" className="text-xs text-muted-foreground">
-          {previewStreamControlLabel(control, resolve)}
-        </span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            aria-hidden
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              hasStreamError || hostSetup !== null
+                ? "bg-destructive"
+                : phase === "live"
+                  ? "bg-success"
+                  : "bg-warning ring-2 ring-warning/30",
+            )}
+          />
+          <span
+            role={hasStreamError || hostSetup !== null ? undefined : "status"}
+            className="truncate text-xs text-muted-foreground"
+          >
+            {hasStreamError || hostSetup !== null
+              ? gt("Stream disconnected")
+              : previewStreamStatusLabel(phase, control, resolve)}
+          </span>
+        </div>
         {control?.canOperate ? (
           <Button
             variant="outline"
@@ -842,9 +953,16 @@ export function ServerBrowserSurface(props: {
           >
             {control.controller === "you" ? <T>Release control</T> : <T>Take control</T>}
           </Button>
+        ) : phase !== "live" && trimmedEnvironmentLabel ? (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+            {trimmedEnvironmentLabel}
+          </span>
         ) : null}
       </div>
       <div className="relative min-h-0 flex-1">
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {dialogAnnouncement}
+        </div>
         {pdfUrl ? (
           <embed
             src={pdfUrl}
@@ -863,6 +981,61 @@ export function ServerBrowserSurface(props: {
           onMouseDown={(event) => event.preventDefault()}
           onContextMenu={(event) => event.preventDefault()}
         />
+        {!overlaySuppressed && (phase === "connecting" || phase === "awaiting-frame") ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/35 p-4 text-center"
+          >
+            <div className="relative flex size-10 items-center justify-center rounded-full bg-background/80">
+              <Monitor aria-hidden className="size-5 text-muted-foreground" />
+              <span
+                aria-hidden
+                className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-warning ring-2 ring-warning/30"
+              />
+            </div>
+            <p className="text-sm font-medium">
+              <T>Connecting to remote browser</T>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {previewStreamOverlayDetail(phase, trimmedEnvironmentLabel, resolve)}
+            </p>
+          </div>
+        ) : null}
+        {!overlaySuppressed && phase === "reconnecting" ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-2 transition-opacity delay-300 duration-150 motion-reduce:transition-none starting:opacity-0"
+          >
+            <span className="flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
+              <span
+                aria-hidden
+                className="size-2 shrink-0 rounded-full bg-warning ring-2 ring-warning/30"
+              />
+              {previewStreamOverlayDetail(phase, trimmedEnvironmentLabel, resolve)}
+            </span>
+          </div>
+        ) : null}
+        {visible && hostSetup === null && hasStreamError && hasRetainedFrame ? (
+          <div
+            data-error-layout="banner"
+            className="visible absolute inset-x-3 bottom-3 z-20 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-sm"
+          >
+            <p role="alert" className="text-xs text-muted-foreground">
+              {streamError}
+            </p>
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={accessPending}
+              onClick={() => {
+                unauthorizedRef.current = 0;
+                refreshPreviewStreamAccess(environmentId);
+              }}
+            >
+              {accessPending ? gt("Reconnecting…") : gt("Reconnect")}
+            </Button>
+          </div>
+        ) : null}
         {!pdfUrl && agentCursor && control?.controller !== "you" ? (
           <AgentCursorMark
             {...agentCursor}
@@ -878,7 +1051,7 @@ export function ServerBrowserSurface(props: {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          disabled={pdfUrl !== null || control?.controller !== "you"}
+          disabled={pdfUrl !== null || phase !== "live" || control?.controller !== "you"}
           defaultValue={INPUT_SENTINEL}
           onFocus={(event) => resetInput(event.currentTarget)}
           className="sr-only top-0 left-0 text-base"
@@ -886,6 +1059,10 @@ export function ServerBrowserSurface(props: {
           onKeyUp={(event) => handleKey("up", event)}
           onInput={handleInput}
           onCompositionEnd={(event) => {
+            if (!hasFrameRef.current || controlRef.current?.controller !== "you") {
+              resetInput(event.currentTarget);
+              return;
+            }
             const text = event.data.replace(/^\u200b/, "");
             if (text) send({ type: "text", text });
             resetInput(event.currentTarget);
@@ -894,6 +1071,7 @@ export function ServerBrowserSurface(props: {
           onCut={(event) => handleClipboard(CUT, event)}
           onPaste={(event) => {
             event.preventDefault();
+            if (!hasFrameRef.current || controlRef.current?.controller !== "you") return;
             const text = event.clipboardData.getData("text/plain");
             if (text) send({ type: "text", text });
           }}
@@ -990,7 +1168,7 @@ export function ServerBrowserSurface(props: {
         ) : null}
       </div>
       {visible && hostSetup ? (
-        <div className="visible absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background p-4 text-center">
+        <div className="visible absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background p-4 text-center">
           <p role="alert" className="max-w-sm text-sm text-muted-foreground">
             {previewStreamHostSetupMessage(hostSetup, resolve)}
           </p>
@@ -1000,23 +1178,28 @@ export function ServerBrowserSurface(props: {
           </Button>
         </div>
       ) : null}
-      {visible && accessDenied ? (
+      {visible && hostSetup === null && hasStreamError && !hasRetainedFrame ? (
         // The page can be invisible beneath an empty or unreachable state; reconnect must remain reachable.
-        <div className="visible absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center">
+        <div
+          data-error-layout="overlay"
+          className="visible absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-background p-3 text-center"
+        >
           <p role="alert" className="text-xs text-muted-foreground">
-            <T>Browser connection was refused.</T>
+            {streamError}
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              unauthorizedRef.current = 0;
-              setAccessDenied(false);
-              refreshPreviewStreamAccess(environmentId);
-            }}
-          >
-            <T>Reconnect</T>
-          </Button>
+          {!gone ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={accessPending}
+              onClick={() => {
+                unauthorizedRef.current = 0;
+                refreshPreviewStreamAccess(environmentId);
+              }}
+            >
+              {accessPending ? gt("Reconnecting…") : gt("Reconnect")}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>

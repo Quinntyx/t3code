@@ -2,7 +2,7 @@ import { SheetHeader } from "../../components/ui/SheetHeader";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
 import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { normalizePreviewUrl, previewPdfAssetUrl } from "@t3tools/shared/preview";
@@ -18,9 +18,11 @@ import { useContentTopInset } from "../../components/ui/useBarInset";
 import { m } from "../../i18n/messages";
 import { useAppForeground } from "../../lib/appState";
 
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
 import { useThreadServerBrowserTabs } from "../../state/preview";
+import { useEnvironmentPresentation } from "../../state/presentation";
 import { usePreparedConnection } from "../../state/session";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { BrowserChrome } from "./BrowserBar";
 import { BrowserTabMenu } from "./BrowserTabMenu";
@@ -99,11 +101,12 @@ function BrowserPreviewScreen({
 
   const streamRef = useRef<PreviewStreamRef>(null);
   const { tabs, loaded } = useThreadServerBrowserTabs({ environmentId, threadId, enabled: true });
+  const environment = useEnvironmentPresentation(environmentId);
   // Mute belongs to the tab, not the screen: switching tabs must not carry it over.
   const preferences = useAtomValue(mobilePreferencesAtom);
   const mutedTabIds =
     (AsyncResult.isSuccess(preferences) ? preferences.value.mutedPreviewTabIds : null) ?? [];
-  const setMutedTabs = useAtomSet(updateMobilePreferencesAtom);
+  const setMutedTabs = useAtomCommand(saveMobilePreferences, { reportFailure: false });
   const tab = tabs.find((entry) => entry.tabId === selectedTabId) ?? latestBrowserTab(tabs);
   const pdfUri =
     tab?.navStatus._tag === "Success" ? previewPdfAssetUrl(tab.navStatus.url, httpBaseUrl) : null;
@@ -134,6 +137,8 @@ function BrowserPreviewScreen({
   };
   if (tabId !== null && tabId !== selectedTabId) {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
+    setStreaming(false);
+    setCanControl(false);
     setSelectedTabId(tabId);
   }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the focused route through the navigator once the thread has no browser tabs left
@@ -146,6 +151,8 @@ function BrowserPreviewScreen({
   };
   const selectTab = (next: string) => {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
+    setStreaming(false);
+    setCanControl(false);
     setSelectedTabId(next);
   };
   const live = (focused && foreground) || pictureInPicture.active;
@@ -233,6 +240,11 @@ function BrowserPreviewScreen({
                   environmentId={environmentId}
                   tab={tab}
                   streaming={streaming}
+                  onHardReload={
+                    canControl && tab.navStatus._tag !== "Idle"
+                      ? () => command({ type: "reload", ignoreCache: true })
+                      : undefined
+                  }
                   onPaste={ready ? () => streamRef.current?.paste() : undefined}
                   onReleaseControl={ready ? () => command({ type: "releaseControl" }) : undefined}
                 />
@@ -250,6 +262,7 @@ function BrowserPreviewScreen({
                 threadId={threadId}
                 tabId={tab.tabId}
                 pdfUri={pdfUri}
+                environmentLabel={environment.presentation?.entry.target.label}
                 ref={streamRef}
                 interactive
                 background={themeVariables["--color-sheet-solid"]}
