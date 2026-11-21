@@ -9,13 +9,13 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -66,6 +66,7 @@ export interface ExternalMcpServerState {
 
 interface ServerRuntimeState {
   readonly running?: RunningServer | undefined;
+  readonly starting?: RegisteredMcpServerEntry | undefined;
   /** What last failed, so an edited entry starts again and an unchanged one does not. */
   readonly failedEntry?: RegisteredMcpServerEntry | undefined;
 }
@@ -106,10 +107,13 @@ const causeText = (cause: Cause.Cause<unknown>): string => {
     : Cause.pretty(cause);
 };
 
-const launchOf = (entry: RegisteredMcpServerEntry, home: string) =>
+const launchOf = (
+  entry: RegisteredMcpServerEntry,
+  host: { readonly home: string; readonly platform: string },
+) =>
   resolveMcpLaunch(
     { source: entry.source, config: entry.config as Readonly<Record<string, McpConfigValue>> },
-    { home },
+    host,
   );
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -123,9 +127,12 @@ const sameEntry = (left: RegisteredMcpServerEntry, right: RegisteredMcpServerEnt
   sameJson(left.config, right.config) &&
   sameJson(left.source, right.source);
 
+// Providers cap a tool name at 64 characters, and Claude Code spends 14 on `mcp__t3-code__`.
+const MAX_PROXIED_NAME_LENGTH = 50;
+
 /** T3 and a server both accept letters, digits, `_` and `-`; anything else in a tool name becomes `_`. */
 const proxiedToolName = (prefix: string, toolName: string) =>
-  `${prefix}_${toolName.replaceAll(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 60)}`;
+  `${prefix}_${toolName.replaceAll(/[^a-zA-Z0-9_-]/gu, "_")}`.slice(0, MAX_PROXIED_NAME_LENGTH);
 
 /** Decides every proxied name once: native tools first, then servers in settings order. */
 const exposeTools = (
@@ -185,7 +192,8 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
       Effect.mapError(
         (cause) =>
           new ExternalMcpServerError({
-            message: `Could not start ${launch.command}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            // The error's message quotes the command line, so only its reason (NotFound…) is kept.
+            message: `Could not start ${launch.command} (${"reason" in cause ? String(cause.reason) : "unknown"}).`,
           }),
       ),
     );
@@ -274,12 +282,12 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     Effect.forkScoped,
   );
 
-  // Any exit is the crash signal; a signal termination fails `exitCode`, so both count.
+  // Any exit is the crash signal; a signal termination fails `exitCode`, so both count. That
+  // failure quotes the whole command line, which can carry a secret, so it is not passed on.
   yield* child.exitCode.pipe(
-    Effect.matchCauseEffect({
+    Effect.matchEffect({
       onSuccess: (code) => Deferred.succeed(exited, `${launch.command} exited (${code}).`),
-      onFailure: (cause) =>
-        Deferred.succeed(exited, `${launch.command} stopped (${causeText(cause)}).`),
+      onFailure: () => Deferred.succeed(exited, `${launch.command} was killed by a signal.`),
     }),
     Effect.forkScoped,
   );
@@ -361,14 +369,16 @@ const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   // A Reference: reading it falls back to its default, so nothing has to provide it.
-  const home = (yield* HostProcess.HomeDirectory) || HostProcess.HomeDirectory.defaultValue();
+  const host = {
+    home: (yield* HostProcess.HomeDirectory) || HostProcess.HomeDirectory.defaultValue(),
+    platform: yield* HostProcess.Platform,
+  };
   // Every child scope hangs off this one, so service teardown stops children that never stopped.
   const serviceScope = yield* Effect.scope;
 
   const runtimeStates = yield* Ref.make<ReadonlyMap<string, ServerRuntimeState>>(new Map());
   const changes = yield* PubSub.unbounded<void>();
-  // One reconcile at a time: a settings change and a crash must not start or stop the same child.
-  const reconcileLock = yield* Semaphore.make(1);
+  const starts = yield* FiberMap.make<string>();
 
   const setState = (id: string, state: ServerRuntimeState) =>
     Ref.update(runtimeStates, (current) => new Map(current).set(id, state));
@@ -404,13 +414,12 @@ const make = Effect.gen(function* () {
   });
 
   const start = Effect.fn("ExternalMcpServers.start")(function* (entry: RegisteredMcpServerEntry) {
-    const launch = launchOf(entry, home);
+    const launch = launchOf(entry, host);
     if (!launch.ok) return yield* new ExternalMcpServerError({ message: launch.message });
 
     const scope = yield* Scope.fork(serviceScope, "sequential");
-    // One deadline covers the handshake and every page of the listing, so a server that never
-    // finishes either fails instead of holding the reconcile. The child's scope closes on every
-    // way out before the child is recorded as running.
+    // One deadline covers the handshake and every page of the listing. The child's scope closes
+    // on every way out before the child is recorded as running.
     const { connection, tools } = yield* Effect.gen(function* () {
       const connection = yield* connect(spawner, launch.launch);
       return { connection, tools: yield* connection.listTools };
@@ -471,72 +480,80 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const reconcile = Effect.gen(function* () {
-    const next = yield* settings.getSettings.pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("could not read settings for registered MCP servers", { cause }).pipe(
-          Effect.as(undefined),
+  // A start runs on its own fiber, so a slow first download never delays stopping another server.
+  const forkStart = (entry: RegisteredMcpServerEntry) =>
+    setState(entry.id, { starting: entry }).pipe(
+      Effect.andThen(
+        FiberMap.run(
+          starts,
+          entry.id,
+          start(entry).pipe(
+            // A start interrupted by a later reconcile is not a failure; that reconcile replaced it.
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) =>
+                setState(entry.id, { failedEntry: entry }).pipe(
+                  Effect.andThen(
+                    Effect.logWarning("registered MCP server failed to start", {
+                      server: entry.name,
+                      detail: causeText(cause),
+                    }),
+                  ),
+                ),
+            ),
+            Effect.ensuring(announce),
+          ),
         ),
       ),
     );
-    if (next === undefined) return;
-    const desired = next.registeredMcpServers;
-    const desiredById = new Map(desired.map((entry) => [entry.id, entry]));
 
+  /** Each settings value in turn, so an off-and-on pair is seen as such and retries a failure. */
+  const reconcile = Effect.fn("ExternalMcpServers.reconcile")(function* (next: {
+    readonly registeredMcpServers: ReadonlyArray<RegisteredMcpServerEntry>;
+  }) {
+    const desiredById = new Map(next.registeredMcpServers.map((entry) => [entry.id, entry]));
+    let stopped = false;
     for (const [id, state] of yield* Ref.get(runtimeStates)) {
       const entry = desiredById.get(id);
-      if (entry === undefined || !entry.enabled) {
-        yield* stop(id);
-        yield* Ref.update(runtimeStates, (states) => {
-          const remaining = new Map(states);
-          remaining.delete(id);
-          return remaining;
-        });
-      } else if (state.running !== undefined && !sameEntry(entry, state.running.entry)) {
-        yield* stop(id);
-      }
+      const current = state.running?.entry ?? state.starting;
+      const removed = entry === undefined || !entry.enabled;
+      if (!removed && (current === undefined || sameEntry(entry, current))) continue;
+      yield* FiberMap.remove(starts, id);
+      yield* stop(id);
+      yield* Ref.update(runtimeStates, (states) => {
+        const remaining = new Map(states);
+        remaining.delete(id);
+        return remaining;
+      });
+      stopped = true;
     }
 
     const states = yield* Ref.get(runtimeStates);
-    const toStart = desired.filter((entry) => {
+    const toStart = next.registeredMcpServers.filter((entry) => {
       const state = states.get(entry.id);
       // A failed server retries only once its entry changes, or after it is turned off and on.
       return (
         entry.enabled &&
         state?.running === undefined &&
+        state?.starting === undefined &&
         (state?.failedEntry === undefined || !sameEntry(state.failedEntry, entry))
       );
     });
-    // Started together, so one slow first download does not hold up the others.
-    yield* Effect.forEach(
-      toStart,
-      (entry) =>
-        start(entry).pipe(
-          Effect.catchCause((cause) =>
-            setState(entry.id, { failedEntry: entry }).pipe(
-              Effect.andThen(
-                Effect.logWarning("registered MCP server failed to start", {
-                  server: entry.name,
-                  detail: causeText(cause),
-                }),
-              ),
-            ),
-          ),
-        ),
-      { concurrency: "unbounded", discard: true },
-    );
-    yield* announce;
-  }).pipe(reconcileLock.withPermits(1));
+    yield* Effect.forEach(toStart, forkStart, { discard: true });
+    // Each start announces itself when it settles.
+    if (stopped || toStart.length === 0) yield* announce;
+  });
 
   return ExternalMcpServers.of({
     start: Effect.scoped(
       Effect.gen(function* () {
         const settingsChanges = yield* settings.subscribeChanges;
-        yield* reconcile;
-        yield* settingsChanges.pipe(
-          Stream.tap(() => reconcile),
-          Stream.runDrain,
+        yield* reconcile(
+          yield* configuredEntries.pipe(
+            Effect.map((entries) => ({ registeredMcpServers: entries })),
+          ),
         );
+        yield* settingsChanges.pipe(Stream.tap(reconcile), Stream.runDrain);
         return yield* Effect.never;
       }),
     ).pipe(Effect.orDie),

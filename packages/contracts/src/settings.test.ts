@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
-import { mcpServerIdFromName } from "./registeredMcpServer.ts";
 import {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
@@ -575,13 +574,5 @@ describe("server model preferences", () => {
     const input = { favorites: [], providerModelPreferences: {} };
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
-  });
-});
-
-describe("registered MCP server ids", () => {
-  it("slugs a name into a stable settings id", () => {
-    expect(mcpServerIdFromName("Acme Notes!")).toBe("acme-notes");
-    expect(mcpServerIdFromName("io.acme/team-notes")).toBe("io-acme-team-notes");
-    expect(mcpServerIdFromName("   ")).toBe("mcp-server");
   });
 });

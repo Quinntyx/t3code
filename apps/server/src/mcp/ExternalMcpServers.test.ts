@@ -61,6 +61,7 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
             { name: "FIXTURE_PAGINATE" },
             { name: "FIXTURE_TOOL_NAMES" },
             { name: "FIXTURE_LABEL" },
+            { name: "FIXTURE_SILENT" },
           ],
         },
       ],
@@ -121,13 +122,13 @@ const layerTest = (
   >;
 };
 
-/** Each reconcile announces once, so this waits for the change rather than polling. */
-const watcher = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
-  servers.changes.pipe(Stream.take(1), Stream.runDrain);
+/** A reconcile that stops or starts nothing announces once, and each start once as it settles. */
+const watcher = (servers: ExternalMcpServers.ExternalMcpServers["Service"], changes = 1) =>
+  servers.changes.pipe(Stream.take(changes), Stream.runDrain);
 
 /** Subscribes before returning, so the change a following write causes cannot be missed. */
-const watch = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
-  watcher(servers).pipe(Effect.forkScoped({ startImmediately: true }));
+const watch = (servers: ExternalMcpServers.ExternalMcpServers["Service"], changes = 1) =>
+  watcher(servers, changes).pipe(Effect.forkScoped({ startImmediately: true }));
 
 const startServers = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
   Effect.acquireRelease(Effect.forkScoped(servers.start), (fiber) =>
@@ -144,7 +145,7 @@ const runTest = <A, E>(entries: ReadonlyArray<Entry>, body: Body<A, E>) =>
   Effect.gen(function* () {
     const servers = yield* ExternalMcpServers.ExternalMcpServers;
     yield* startServers(servers);
-    yield* watcher(servers);
+    yield* watcher(servers, Math.max(1, entries.filter((entry) => entry.enabled).length));
     return yield* body(servers);
   }).pipe(Effect.scoped, Effect.provide(layerTest(entries)));
 
@@ -246,6 +247,17 @@ it.live("omits a tool whose emitted name is reserved by a native tool", () =>
   ),
 );
 
+it.live("cuts an exposed name to what providers accept", () =>
+  runTest(
+    [entry({ config: { FIXTURE_TOOL_NAMES: `${"x".repeat(70)},image,crash-on-call` } })],
+    (servers) =>
+      Effect.gen(function* () {
+        // 64 characters, less the 14 of Claude Code's `mcp__t3-code__`.
+        expect((yield* servers.tools)[0]?.name).toBe(`fixture_${"x".repeat(42)}`);
+      }),
+  ),
+);
+
 it.live("disabling a server stops its child and withdraws its tools", () =>
   runTest([entry()], (servers) =>
     Effect.gen(function* () {
@@ -279,15 +291,42 @@ it.live("leaves a crashed server stopped until its settings change", () =>
       // No retry on its own, so the tools stay unavailable until a toggle or settings change.
       expect(yield* servers.tools).toEqual([]);
 
-      // The crash closed the child's scope, so the same server is launched again from fresh state.
+      // Turning it off and on, even back to back, launches it again from fresh state.
       const settings = yield* ServerSettings.ServerSettingsService;
-      const restarted = yield* watch(servers);
-      yield* settings.updateSettings({
-        registeredMcpServers: { fixture: entry({ config: { RETRY: "1" } }) },
-      });
+      const restarted = yield* watch(servers, 2);
+      yield* settings.updateSettings({ registeredMcpServers: { fixture: { enabled: false } } });
+      yield* settings.updateSettings({ registeredMcpServers: { fixture: { enabled: true } } });
       yield* Fiber.join(restarted);
       expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
       expect(yield* servers.tools).toHaveLength(3);
+    }),
+  ),
+);
+
+it.live("stops a server while another is still starting", () =>
+  runTest([entry()], (servers) =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      // This one never answers initialize, so its start stays pending for the whole test.
+      yield* settings.updateSettings({
+        registeredMcpServers: {
+          slow: entry({
+            id: "slow",
+            name: "Slow",
+            toolName: "slow",
+            config: { FIXTURE_SILENT: "1" },
+          }),
+        },
+      });
+      const stopped = yield* watch(servers);
+      yield* settings.updateSettings({ registeredMcpServers: { fixture: { enabled: false } } });
+      yield* Fiber.join(stopped);
+
+      expect(yield* servers.states).toEqual([
+        expect.objectContaining({ name: "Fixture", running: false }),
+        expect.objectContaining({ name: "Slow", running: false }),
+      ]);
+      expect(yield* servers.tools).toEqual([]);
     }),
   ),
 );

@@ -1,3 +1,4 @@
+import { maxMcpToolPrefixLength } from "@t3tools/contracts";
 import * as Predicate from "effect/Predicate";
 
 /**
@@ -126,6 +127,7 @@ const readInputField = (
     secret: asBoolean(input?.isSecret) ?? false,
     ...(defaultValue === undefined ? {} : { default: defaultValue }),
     ...(choices.length === 0 ? {} : { choices }),
+    ...(asBoolean(input?.isRepeated) === true ? { multiple: true } : {}),
   };
 };
 
@@ -191,10 +193,13 @@ const readArguments = (raw: unknown): ReadonlyArray<ServerJsonArgument> =>
 const argumentFields = (argument: ServerJsonArgument) =>
   argument.bare ? [] : valueFields(argument, labelOf(argument.key));
 
-const argumentArgs = (argument: ServerJsonArgument, values: ReadonlyMap<string, string>) => {
+const argumentArgs = (argument: ServerJsonArgument, values: ConfiguredValues) => {
   const flag = argument.flag === undefined ? [] : [argument.flag];
   if (argument.bare) return flag;
-  const value = resolveValue(argument, values);
+  // A repeated argument passes each item, with its flag before every one.
+  const items = argument.template === undefined ? values.lists.get(argument.key) : undefined;
+  if (items !== undefined) return items.flatMap((item) => [...flag, item]);
+  const value = resolveValue(argument, values.text);
   // An unset optional value drops its flag too, rather than passing a dangling one.
   return value === "" ? [] : [...flag, value];
 };
@@ -219,14 +224,20 @@ const readEnvironmentVariables = (raw: unknown): ReadonlyArray<ServerJsonEnviron
     ];
   });
 
-/** Inputs can share a variable; the first describes it, and any secret declaration keeps it secret. */
+/** Inputs can share a variable; the first describes it, and any secret or required one keeps it so. */
 const dedupeFields = (fields: ReadonlyArray<McpConfigField>): ReadonlyArray<McpConfigField> => {
   const byKey = new Map<string, McpConfigField>();
   for (const field of fields) {
     const seen = byKey.get(field.key);
     byKey.set(
       field.key,
-      seen === undefined ? field : { ...seen, secret: seen.secret || field.secret },
+      seen === undefined
+        ? field
+        : {
+            ...seen,
+            secret: seen.secret || field.secret,
+            required: seen.required || field.required,
+          },
     );
   }
   return [...byKey.values()];
@@ -416,21 +427,30 @@ export function parseMcpRegistration(json: unknown): McpRegistrationResult {
   return isMcpb(document) ? parseMcpb(document) : parseServerJson(document);
 }
 
+interface ConfiguredValues {
+  readonly text: ReadonlyMap<string, string>;
+  /** The list-valued fields, for a launch that passes each item separately. */
+  readonly lists: ReadonlyMap<string, ReadonlyArray<string>>;
+}
+
 /** Each field's launch text: the configured value, else its default, else empty. */
 const configuredValues = (
   fields: ReadonlyArray<McpConfigField>,
   config: Readonly<Record<string, McpConfigValue>>,
-): { readonly ok: true; readonly values: ReadonlyMap<string, string> } | McpRegistrationFailure => {
-  const values = new Map<string, string>();
+): ({ readonly ok: true } & ConfiguredValues) | McpRegistrationFailure => {
+  const text = new Map<string, string>();
+  const lists = new Map<string, ReadonlyArray<string>>();
   for (const field of fields) {
     const value = config[field.key] ?? field.default;
-    const text = value === undefined ? "" : Array.isArray(value) ? value.join(",") : String(value);
-    if (text === "" && field.required) {
+    if (Array.isArray(value)) lists.set(field.key, value);
+    const joined =
+      value === undefined ? "" : Array.isArray(value) ? value.join(",") : String(value);
+    if (joined === "" && field.required) {
       return failure(`Set ${field.label} before this MCP server can start.`);
     }
-    values.set(field.key, text);
+    text.set(field.key, joined);
   }
-  return { ok: true, values };
+  return { ok: true, text, lists };
 };
 
 interface LaunchEntry {
@@ -449,9 +469,11 @@ const resolveMcpbLaunch = (
   fields: ReadonlyArray<McpConfigField>,
   config: Readonly<Record<string, McpConfigValue>>,
   values: ReadonlyMap<string, string>,
-  home: string,
+  { home, platform }: LaunchOptions,
 ): McpLaunchResult => {
-  const mcpConfig = asRecord(asRecord(asRecord(source.manifest)?.server)?.mcp_config) ?? {};
+  const base = asRecord(asRecord(asRecord(source.manifest)?.server)?.mcp_config) ?? {};
+  // A bundle can replace any of its launch fields for one platform, such as a binary's path.
+  const mcpConfig = { ...base, ...asRecord(asRecord(base.platform_overrides)?.[platform]) };
   const builtIns = new Map([
     ["__dirname", source.bundleDir],
     ["HOME", home],
@@ -495,16 +517,13 @@ const resolveMcpbLaunch = (
   };
 };
 
-const resolveServerJsonLaunch = (
-  document: unknown,
-  values: ReadonlyMap<string, string>,
-): McpLaunchResult => {
+const resolveServerJsonLaunch = (document: unknown, values: ConfiguredValues): McpLaunchResult => {
   const parsed = firstServerJsonPackage(asRecord(document) ?? {});
   if (!parsed.ok) return parsed;
   const { value } = parsed;
   const env = Object.fromEntries(
     value.environmentVariables.flatMap((variable) => {
-      const resolved = resolveValue(variable, values);
+      const resolved = resolveValue(variable, values.text);
       return resolved === "" ? [] : [[variable.name, resolved] as const];
     }),
   );
@@ -520,8 +539,14 @@ const resolveServerJsonLaunch = (
   return { ok: true, launch: { command: value.command, args, env } };
 };
 
+interface LaunchOptions {
+  readonly home: string;
+  /** `process.platform`, which picks an MCPB bundle's `platform_overrides` entry. */
+  readonly platform: string;
+}
+
 /** The process to launch for a registered server, with the user's values substituted in. */
-export function resolveMcpLaunch(entry: LaunchEntry, options: { readonly home: string }) {
+export function resolveMcpLaunch(entry: LaunchEntry, options: LaunchOptions) {
   const parsed = parseMcpRegistration(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
   );
@@ -530,10 +555,10 @@ export function resolveMcpLaunch(entry: LaunchEntry, options: { readonly home: s
   const resolved = configuredValues(fields, entry.config);
   if (!resolved.ok) return resolved;
   return entry.source.kind === "mcpb"
-    ? resolveMcpbLaunch(entry.source, fields, entry.config, resolved.values, options.home)
-    : resolveServerJsonLaunch(entry.source.document, resolved.values);
+    ? resolveMcpbLaunch(entry.source, fields, entry.config, resolved.text, options)
+    : resolveServerJsonLaunch(entry.source.document, resolved);
 }
 
 const MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 export const isValidMcpToolName = (value: string) =>
-  MCP_TOOL_NAME_PATTERN.test(value) && value.length <= 40;
+  MCP_TOOL_NAME_PATTERN.test(value) && value.length <= maxMcpToolPrefixLength;

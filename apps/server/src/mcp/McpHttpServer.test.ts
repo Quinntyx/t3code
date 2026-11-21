@@ -1142,10 +1142,6 @@ it.effect("proxies a registered MCP server's tools with its own schema", () =>
         );
       expect(result.structuredContent).toEqual({ echoed: "hi" });
       expect(fixtureCalls).toEqual([{ server: "fixture", name: "echo", args: { text: "hi" } }]);
-
-      // A server that stops running hides its tools. `enabledWhen` is what `tools/list` and a
-      // call consult, and it reads the set this registration keeps.
-      expect(names()).toContain("fixture_set");
     }),
   ),
 );

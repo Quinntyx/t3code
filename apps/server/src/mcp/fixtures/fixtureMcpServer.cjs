@@ -82,6 +82,8 @@ readline
       if (!answered) process.exit(1);
       return rest.length > 0 ? askNext(message.id, cursor, rest) : answerList(message.id, cursor);
     }
+    // A test sets this to stand in for a server stuck in a first download.
+    if (message.method === "initialize" && process.env.FIXTURE_SILENT === "1") return;
     if (message.method === "initialize") {
       return reply(message.id, {
         protocolVersion: "2025-06-18",

@@ -7,7 +7,6 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
-import { toastManager } from "../ui/toast";
 import { defaultToolName, validateEntry } from "./CapabilitiesSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
@@ -49,10 +48,8 @@ export function CapabilitiesSettingsPanel() {
 
       <RegisterServerForm
         existing={entries}
-        onAdd={(entry) => {
-          updateSettings({ registeredMcpServers: { [entry.id]: entry } });
-          toastManager.add({ type: "success", title: `${entry.name} registered` });
-        }}
+        // The new entry in the list and the sidebar is the confirmation; a failed save toasts.
+        onAdd={(entry) => updateSettings({ registeredMcpServers: { [entry.id]: entry } })}
       />
 
       <SettingsSection id="registered-servers" title="Registered servers">

@@ -1,4 +1,8 @@
-import { mcpServerIdFromName, type RegisteredMcpServerEntry } from "@t3tools/contracts";
+import {
+  maxMcpToolPrefixLength,
+  mcpServerIdFromName,
+  type RegisteredMcpServerEntry,
+} from "@t3tools/contracts";
 import { isValidMcpToolName } from "@t3tools/shared/mcpRegistration";
 
 /**
@@ -6,7 +10,10 @@ import { isValidMcpToolName } from "@t3tools/shared/mcpRegistration";
  * namespace, which would spend most of a tool name's length (`io.github.acme/notes` is `notes`).
  */
 export const defaultToolName = (name: string) => {
-  const slug = mcpServerIdFromName(name.slice(name.lastIndexOf("/") + 1)).replaceAll("-", "_");
+  const slug = mcpServerIdFromName(name.slice(name.lastIndexOf("/") + 1))
+    .replaceAll("-", "_")
+    .slice(0, maxMcpToolPrefixLength)
+    .replace(/_+$/u, "");
   return isValidMcpToolName(slug) ? slug : "mcp";
 };
 

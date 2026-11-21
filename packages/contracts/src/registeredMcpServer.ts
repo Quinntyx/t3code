@@ -50,7 +50,7 @@ export const RegisteredMcpServerEdit = Schema.Struct({
 });
 export type RegisteredMcpServerEdit = typeof RegisteredMcpServerEdit.Type;
 
-export const maxMcpToolPrefixLength = 40;
+export const maxMcpToolPrefixLength = 20;
 
 /** `name` as a stable settings id: lowercase letters, digits and single dashes. */
 export function mcpServerIdFromName(name: string): string {

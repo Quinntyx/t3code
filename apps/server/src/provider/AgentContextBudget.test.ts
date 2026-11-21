@@ -16,6 +16,7 @@ import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ExternalMcpServers } from "../mcp/ExternalMcpServers.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import { nativeToolNames } from "../mcp/nativeToolNames.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
   CLAUDE_PROVIDER,
@@ -135,6 +136,17 @@ it.effect("only request_secret asks Claude Code to load it up front", () =>
       .filter(({ tool }) => tool._meta?.["anthropic/alwaysLoad"] !== undefined)
       .map(({ tool }) => [tool.name, tool._meta]);
     expect(alwaysLoad).toEqual([["request_secret", { "anthropic/alwaysLoad": true }]]);
+  }).pipe(Effect.provide(layerAdvertisedTools)),
+);
+
+// A registered MCP server's tool must never take a native name, which needs the list to be whole.
+it.effect("reserves every advertised tool name from registered MCP servers", () =>
+  Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const unreserved = mcp.tools.flatMap(({ tool }) =>
+      nativeToolNames.has(tool.name) ? [] : [tool.name],
+    );
+    expect(unreserved).toEqual([]);
   }).pipe(Effect.provide(layerAdvertisedTools)),
 );
 

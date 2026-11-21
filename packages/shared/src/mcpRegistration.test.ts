@@ -38,6 +38,10 @@ const npmPackage = stdioPackage({
 });
 
 const argumentsPackage = stdioPackage({
+  // Declared optional here and required by `--auth` below: the shared field must be required.
+  environmentVariables: [
+    { name: "NOTES_KEY", value: "{api_key}", variables: { api_key: { description: "API key." } } },
+  ],
   packageArguments: [
     { type: "positional", valueHint: "workspace", isRequired: true },
     // No valueHint, but a format and a default: it takes a value, unlike a bare flag.
@@ -53,6 +57,7 @@ const argumentsPackage = stdioPackage({
       variables: { api_key: { description: "API key." } },
     },
     { type: "named", name: "--debug", valueHint: "debug", format: "boolean", default: "true" },
+    { type: "named", name: "--allow", valueHint: "dir", isRepeated: true },
   ],
 });
 
@@ -71,6 +76,7 @@ const mcpbManifest = {
         "${user_config.dirs}",
       ],
       env: { ACME_TOKEN: "${user_config.token}", ACME_HOME: "${HOME}" },
+      platform_overrides: { linux: { command: "/usr/bin/node" }, win32: { command: "node.exe" } },
     },
   },
   user_config: {
@@ -130,6 +136,14 @@ describe("parseMcpRegistration", () => {
       label: "server.json arguments, with typed defaults and no field for a bare flag",
       document: serverJson([argumentsPackage]),
       fields: [
+        {
+          key: "api_key",
+          label: "Api Key",
+          description: "API key.",
+          type: "string",
+          required: true,
+          secret: true,
+        },
         { key: "workspace", label: "Workspace", type: "string", required: true, secret: false },
         {
           key: "port",
@@ -140,20 +154,20 @@ describe("parseMcpRegistration", () => {
           default: 8080,
         },
         {
-          key: "api_key",
-          label: "Api Key",
-          description: "API key.",
-          type: "string",
-          required: true,
-          secret: true,
-        },
-        {
           key: "debug",
           label: "Debug",
           type: "boolean",
           required: false,
           secret: false,
           default: true,
+        },
+        {
+          key: "dir",
+          label: "Dir",
+          type: "string",
+          required: false,
+          secret: false,
+          multiple: true,
         },
       ],
     },
@@ -254,7 +268,10 @@ describe("parseMcpRegistration", () => {
 
 describe("resolveMcpLaunch", () => {
   const launch = (document: unknown, config: Record<string, McpConfigValue> = {}) =>
-    resolveMcpLaunch({ source: { kind: "server.json", document }, config }, { home: "/home/me" });
+    resolveMcpLaunch(
+      { source: { kind: "server.json", document }, config },
+      { home: "/home/me", platform: "linux" },
+    );
 
   it.each([
     {
@@ -278,9 +295,9 @@ describe("resolveMcpLaunch", () => {
       },
     },
     {
-      label: "positional, named, bare and template arguments",
+      label: "positional, named, bare, template and repeated arguments",
       document: serverJson([argumentsPackage]),
-      config: { workspace: "team", api_key: "k" },
+      config: { workspace: "team", api_key: "k", dir: ["/a", "/b"] },
       expected: {
         command: "npx",
         args: [
@@ -294,8 +311,12 @@ describe("resolveMcpLaunch", () => {
           "Bearer k",
           "--debug",
           "true",
+          "--allow",
+          "/a",
+          "--allow",
+          "/b",
         ],
-        env: {},
+        env: { NOTES_KEY: "k" },
       },
     },
     {
@@ -351,12 +372,12 @@ describe("resolveMcpLaunch", () => {
           // A secret is passed exactly as typed, even when it looks like a substitution.
           config: { data_dir: "${HOME}/notes", token: "${HOME}-token" },
         },
-        { home: "/home/me" },
+        { home: "/home/me", platform: "linux" },
       ),
     ).toEqual({
       ok: true,
       launch: {
-        command: "node",
+        command: "/usr/bin/node",
         // The list default expands to one argument per item, with `${HOME}` resolved.
         args: ["/bundles/notes/dist/index.js", "--data", "/home/me/notes", "/home/me/Desktop"],
         env: { ACME_TOKEN: "${HOME}-token", ACME_HOME: "/home/me" },
@@ -380,7 +401,7 @@ describe("isValidMcpToolName", () => {
     { name: "Notes", valid: false },
     { name: "2notes", valid: false },
     { name: "notes.v2", valid: false },
-    { name: "n".repeat(41), valid: false },
+    { name: "n".repeat(21), valid: false },
   ])("$name is valid: $valid", ({ name, valid }) => {
     expect(isValidMcpToolName(name)).toBe(valid);
   });

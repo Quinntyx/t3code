@@ -1134,7 +1134,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Registered MCP servers",
     to: "/settings/capabilities",
     scope: "environment",
-    searchTerms: ["mcp servers registered enabled running stopped failed remove"],
+    searchTerms: ["mcp servers registered enabled remove"],
   },
   {
     id: "register-mcp-server",
