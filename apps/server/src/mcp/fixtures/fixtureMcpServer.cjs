@@ -33,10 +33,8 @@ const tools = defaultTools.map((tool, index) => ({ ...tool, name: toolNames[inde
 const defaultNameOf = new Map(tools.map((tool, index) => [tool.name, defaultTools[index].name]));
 const label = process.env.FIXTURE_LABEL;
 
-// A test sets these to make startup fail after the child exists, as a broken server does.
+// A test sets this to make startup fail after the child exists, as a broken server does.
 const failingTool = process.env.FIXTURE_START_FAILURE;
-// A test splits the failure into timed writes so a secret can straddle a stderr chunk boundary.
-const errorChunkSize = Number(process.env.FIXTURE_ERROR_CHUNK_SIZE ?? 0);
 // A test sets this to learn the child it should see stopped when the service scope closes.
 if (process.env.FIXTURE_PID_FILE !== undefined) {
   require("node:fs").writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid));
@@ -46,30 +44,15 @@ const reply = (id, result) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 
 if (failingTool !== undefined) {
-  const detail = `fixture cannot start: ${process.env.FIXTURE_ERROR_DETAIL ?? failingTool}\n`;
-  if (errorChunkSize > 0 && Number.isFinite(errorChunkSize)) {
-    let offset = 0;
-    const writeNext = () => {
-      if (offset >= detail.length) return process.exit(1);
-      process.stderr.write(detail.slice(offset, offset + errorChunkSize));
-      offset += errorChunkSize;
-      setTimeout(writeNext, 15);
-    };
-    writeNext();
-    return;
-  } else {
-    process.stderr.write(detail);
-    process.exit(1);
-  }
+  process.stderr.write(`fixture cannot start: ${failingTool}\n`);
+  process.exit(1);
 }
 
 // A test sets these to exercise the protocol around listing: a server request mid-request and pages.
 const pingBeforeList = process.env.FIXTURE_PING_BEFORE_LIST === "1";
-const stringIdPing = process.env.FIXTURE_STRING_ID_PING === "1";
 const paginate = process.env.FIXTURE_PAGINATE === "1";
 /** Our ping id to the tools/list request waiting on it, which can use a different id. */
 const awaitingPing = new Map();
-let sentStringPing = false;
 
 const answerList = (id, cursor) => {
   if (!paginate) return reply(id, { tools });
@@ -102,13 +85,6 @@ readline
         awaitingPing.set(message.id, { listId: message.id, cursor: message.params?.cursor });
         return process.stdout.write(
           `${JSON.stringify({ jsonrpc: "2.0", id: message.id, method: "ping" })}\n`,
-        );
-      }
-      if (stringIdPing && !sentStringPing) {
-        sentStringPing = true;
-        awaitingPing.set("health-1", { listId: message.id, cursor: message.params?.cursor });
-        return process.stdout.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: "health-1", method: "ping" })}\n`,
         );
       }
       return answerList(message.id, message.params?.cursor);

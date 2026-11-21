@@ -122,7 +122,6 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
-import * as ExternalMcpServers from "./mcp/ExternalMcpServers.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as MachineHandoffService from "./orchestration-v2/MachineHandoffService.ts";
@@ -1462,8 +1461,6 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const emailRequests = yield* EmailRequests.EmailRequests;
       const mailer = yield* Mailer.Mailer;
-      // Absent on a host that launched no registered MCP servers, such as the CLI.
-      const externalMcpServers = yield* Effect.serviceOption(ExternalMcpServers.ExternalMcpServers);
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestStacks = yield* PullRequestStackService.PullRequestStackService;
@@ -2428,10 +2425,6 @@ export const layerWsRpc = (
             Effect.andThen(emailRequests.answer(input)),
           ),
         [WS_METHODS.emailListAccounts]: () => mailer.report,
-        [WS_METHODS.registeredMcpServersState]: () =>
-          Option.isNone(externalMcpServers)
-            ? Effect.succeed({ servers: [] })
-            : externalMcpServers.value.states,
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),

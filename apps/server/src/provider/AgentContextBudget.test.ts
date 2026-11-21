@@ -92,7 +92,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(ExternalMcpServers)({
     tools: Effect.succeed([]),
     changes: Stream.empty,
-    states: Effect.succeed({ servers: [] }),
+    states: Effect.succeed([]),
   }),
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 

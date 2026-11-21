@@ -1147,35 +1147,6 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:usage-model-filter:${environmentId}`),
     ),
   );
-  // Registered MCP servers are machine-local, and their runtime state follows their entries: a
-  // register, toggle, removal or config change is what the settings pages save.
-  const registeredMcpServersAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get) => get(settingsValueAtom(environmentId))?.registeredMcpServers ?? []).pipe(
-      Atom.withEquality((a, b) => JSON.stringify(a) === JSON.stringify(b)),
-      Atom.withLabel(`environment-data:server:registered-mcp-servers:${environmentId}`),
-    ),
-  );
-  // A save can replace a saved secret, which reaches the client as the same redacted settings, so
-  // what was saved counts too. A successful save of these entries is when their state refetches.
-  const registeredMcpServerSavesAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(0).pipe(
-      Atom.withLabel(`environment-data:server:registered-mcp-server-saves:${environmentId}`),
-    ),
-  );
-  const registeredMcpServersRefreshAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get) => ({
-      entries: get(registeredMcpServersAtom(environmentId)),
-      saves: get(registeredMcpServerSavesAtom(environmentId)),
-    })).pipe(
-      Atom.withEquality(
-        (
-          left: { readonly entries: unknown; readonly saves: number },
-          right: { readonly entries: unknown; readonly saves: number },
-        ) => left.saves === right.saves && left.entries === right.entries,
-      ),
-      Atom.withLabel(`environment-data:server:registered-mcp-servers-refresh:${environmentId}`),
-    ),
-  );
   const providersValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.providers ?? null).pipe(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
@@ -1235,13 +1206,6 @@ export function createServerEnvironmentAtoms<R, E>(
     tag: WS_METHODS.serverUpdateSettings,
     scheduler: configScheduler,
     concurrency: configConcurrency,
-    // Replacing a saved secret saves the same redacted entries, so the save itself is the signal.
-    onSuccess: ({ environmentId, input }, registry) =>
-      input.patch.registeredMcpServers === undefined
-        ? Effect.void
-        : Effect.sync(() =>
-            registry.update(registeredMcpServerSavesAtom(environmentId), (saves) => saves + 1),
-          ),
   });
 
   return {
@@ -1351,11 +1315,6 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:email:accounts",
       tag: WS_METHODS.emailListAccounts,
       refreshTrigger: ({ environmentId }) => emailAccountsFileAtom(environmentId),
-    }),
-    registeredMcpServersState: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:mcp-servers:state",
-      tag: WS_METHODS.registeredMcpServersState,
-      refreshTrigger: ({ environmentId }) => registeredMcpServersRefreshAtom(environmentId),
     }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",

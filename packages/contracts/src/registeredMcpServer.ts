@@ -39,34 +39,6 @@ export const RegisteredMcpServerEntry = Schema.Struct({
 });
 export type RegisteredMcpServerEntry = typeof RegisteredMcpServerEntry.Type;
 
-export const RegisteredMcpServerStatus = Schema.Literals([
-  "stopped",
-  "starting",
-  "running",
-  "failed",
-]);
-export type RegisteredMcpServerStatus = typeof RegisteredMcpServerStatus.Type;
-
-export const RegisteredMcpServerState = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  toolName: Schema.String,
-  enabled: Schema.Boolean,
-  status: RegisteredMcpServerStatus,
-  /** The end of the child's stderr when it failed to start or crashed. */
-  stderrTail: Schema.optionalKey(Schema.String),
-  /** The server's own tool names, in its order. */
-  tools: Schema.Array(Schema.String),
-  /** Tools T3 could not expose because another tool already answers to their name. */
-  skippedTools: Schema.optionalKey(Schema.Array(Schema.String)),
-});
-export type RegisteredMcpServerState = typeof RegisteredMcpServerState.Type;
-
-export const RegisteredMcpServersState = Schema.Struct({
-  servers: Schema.Array(RegisteredMcpServerState),
-});
-export type RegisteredMcpServersState = typeof RegisteredMcpServersState.Type;
-
 export const maxMcpToolPrefixLength = 40;
 
 /** `name` as a stable settings id: lowercase letters, digits and single dashes. */

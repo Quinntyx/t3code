@@ -1,8 +1,4 @@
-import {
-  OrchestratorMcpFailure,
-  type EmailInboxError,
-  type RegisteredMcpServerState,
-} from "@t3tools/contracts";
+import { OrchestratorMcpFailure, type EmailInboxError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -15,25 +11,12 @@ import { ConnectorsToolkit } from "./tools.ts";
 
 const EMAIL_OFF =
   "Email drafts are off. Turn them on in Settings → Email. Do not fall back to direct mail commands.";
-const CAPABILITIES = "Settings → Capabilities";
-const mcpServerNote = (server: RegisteredMcpServerState) => {
-  const skipped =
-    server.skippedTools === undefined || server.skippedTools.length === 0
-      ? ""
-      : ` Its ${server.skippedTools.join(", ")} cannot be exposed.`;
-  switch (server.status) {
-    case "running":
-      return `Registered MCP server ${server.name}; call its tools directly.${skipped}`;
-    case "failed":
-      return `${server.name} failed to start. Its user can see the error and restart it in ${CAPABILITIES}.`;
-    case "starting":
-      return `${server.name} is starting; its tools are not callable yet.`;
-    case "stopped":
-      return server.enabled
-        ? `${server.name} is not running. Its user can restart it in ${CAPABILITIES}.`
-        : `${server.name} is disabled. Its user can enable it in ${CAPABILITIES}.`;
-  }
-};
+const mcpServerNote = (server: ExternalMcpServers.ExternalMcpServerState) =>
+  server.running
+    ? `Registered MCP server ${server.name}; call its tools directly.`
+    : server.enabled
+      ? `${server.name} is not running. Its user can turn it off and on again in Settings → Capabilities.`
+      : `${server.name} is disabled. Its user can enable it in Settings → Capabilities.`;
 const inboxFailure = (error: EmailInboxError) =>
   new OrchestratorMcpFailure({
     code:
@@ -57,9 +40,7 @@ export const layer = McpToolAccess.toLayer(ConnectorsToolkit, {
         ...(inbox && scope.emailTagging === true ? ["email_tag"] : []),
       ];
       const servers = yield* Effect.serviceOption(ExternalMcpServers.ExternalMcpServers);
-      const registered = Option.isNone(servers)
-        ? { servers: [] }
-        : yield* servers.value.states.pipe(Effect.orElseSucceed(() => ({ servers: [] })));
+      const registered = Option.isNone(servers) ? [] : yield* servers.value.states;
       return {
         connectors: [
           {
@@ -76,9 +57,9 @@ export const layer = McpToolAccess.toLayer(ConnectorsToolkit, {
                 : "Inbox access is off or unavailable to this client. Enable it in Settings → Email; never use direct mailbox commands.",
             ].join(" "),
           },
-          ...registered.servers.map((server) => ({
+          ...registered.map((server) => ({
             name: server.toolName,
-            enabled: server.status === "running",
+            enabled: server.running,
             tool: server.tools[0] ?? "",
             tools: [...server.tools],
             note: mcpServerNote(server),

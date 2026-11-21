@@ -1,23 +1,14 @@
-import {
-  AuthSettingsWriteScope,
-  mcpServerIdFromName,
-  type RegisteredMcpServerEntry,
-  type RegisteredMcpServersState,
-} from "@t3tools/contracts";
+import { mcpServerIdFromName, type RegisteredMcpServerEntry } from "@t3tools/contracts";
 import { parseMcpRegistration, type ParsedMcpRegistration } from "@t3tools/shared/mcpRegistration";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
-import { useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { defaultToolName, validateEntry } from "./CapabilitiesSettings.logic";
-import { McpServerStatusBadge } from "./McpServerStatusBadge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -28,15 +19,6 @@ export function CapabilitiesSettingsPanel() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { environment, scope } = useSettingsScope();
-  const environmentId = environment?.environmentId ?? null;
-  const canRead = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  const { data } = useEnvironmentQuery(
-    environmentId === null
-      ? null
-      : serverEnvironment.registeredMcpServersState({ environmentId, input: {} }),
-  );
-  const states: RegisteredMcpServersState = data ?? { servers: [] };
-  const stateOf = (id: string) => states.servers.find((server) => server.id === id);
 
   const entries = settings.registeredMcpServers;
 
@@ -62,13 +44,6 @@ export function CapabilitiesSettingsPanel() {
           {...searchableSetting("mcp-servers")}
           title="Local MCP servers"
           description="T3 Code starts each enabled server on this machine and gives its tools to agents as native tools. Only servers it can launch itself (stdio) are supported."
-          status={
-            entries.length === 0 ? undefined : (
-              <span className="text-muted-foreground">
-                {entries.filter((entry) => entry.enabled).length} enabled
-              </span>
-            )
-          }
         />
       </SettingsSection>
 
@@ -81,59 +56,40 @@ export function CapabilitiesSettingsPanel() {
       />
 
       <SettingsSection id="registered-servers" title="Registered servers">
-        {!canRead ? (
-          <SettingsRow
-            {...searchableSetting("registered-servers")}
-            description="You need settings access on this environment to see its MCP servers."
-          />
-        ) : entries.length === 0 ? (
+        {entries.length === 0 ? (
           <SettingsRow
             {...searchableSetting("registered-servers")}
             description="No MCP servers are registered yet."
           />
         ) : (
-          entries.map((entry) => {
-            const runtime = stateOf(entry.id);
-            return (
-              <SettingsRow
-                key={entry.id}
-                id={`mcp-server-${entry.id}`}
-                title={entry.name}
-                description={
-                  runtime?.status === "failed" && runtime.stderrTail
-                    ? runtime.stderrTail
-                    : `${entry.toolName}_ prefix · ${
-                        runtime?.tools.length ? `${runtime.tools.length} tools` : "no tools"
-                      }${
-                        runtime?.skippedTools?.length
-                          ? ` · ${runtime.skippedTools.length} name clash`
-                          : ""
-                      }`
-                }
-                status={<McpServerStatusBadge status={runtime?.status ?? "stopped"} />}
-                control={
-                  <EnableSwitch
-                    checked={entry.enabled}
-                    onChange={(enabled) =>
-                      updateSettings({
-                        registeredMcpServers: { [entry.id]: { ...entry, enabled } },
-                      })
-                    }
-                  />
-                }
-                resetAction={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost-destructive"
-                    aria-label={`Remove ${entry.name}`}
-                    onClick={() => updateSettings({ registeredMcpServers: { [entry.id]: null } })}
-                  >
-                    <Trash2Icon className="size-3.5" />
-                  </Button>
-                }
-              />
-            );
-          })
+          entries.map((entry) => (
+            <SettingsRow
+              key={entry.id}
+              id={`mcp-server-${entry.id}`}
+              title={entry.name}
+              description={`Agents call its tools as ${entry.toolName}_<tool>.`}
+              control={
+                <EnableSwitch
+                  checked={entry.enabled}
+                  onChange={(enabled) =>
+                    updateSettings({
+                      registeredMcpServers: { [entry.id]: { ...entry, enabled } },
+                    })
+                  }
+                />
+              }
+              resetAction={
+                <Button
+                  size="icon-xs"
+                  variant="ghost-destructive"
+                  aria-label={`Remove ${entry.name}`}
+                  onClick={() => updateSettings({ registeredMcpServers: { [entry.id]: null } })}
+                >
+                  <Trash2Icon className="size-3.5" />
+                </Button>
+              }
+            />
+          ))
         )}
       </SettingsSection>
     </SettingsPageContainer>
@@ -167,7 +123,6 @@ function RegisterServerForm({
   const [bundleDir, setBundleDir] = useState("");
   const [parsed, setParsed] = useState<ParsedMcpRegistration | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState("");
   const [toolName, setToolName] = useState("");
 
   const readDocument = (next: string) => {
@@ -192,7 +147,6 @@ function RegisterServerForm({
       return;
     }
     setParsed(result.registration);
-    setName(result.registration.name);
     setToolName(defaultToolName(result.registration.name));
   };
 
@@ -205,10 +159,9 @@ function RegisterServerForm({
       setError("That is not valid JSON.");
       return;
     }
-    const trimmedName = name.trim() || parsed.name;
     const candidate: RegisteredMcpServerEntry = {
-      id: mcpServerIdFromName(trimmedName),
-      name: trimmedName,
+      id: mcpServerIdFromName(parsed.name),
+      name: parsed.name,
       toolName: toolName.trim(),
       enabled: true,
       source:
@@ -234,7 +187,6 @@ function RegisterServerForm({
     setDocument("");
     setBundleDir("");
     setParsed(null);
-    setName("");
     setToolName("");
     setError(null);
   };
@@ -268,27 +220,16 @@ function RegisterServerForm({
             />
           ) : null}
           {parsed === null ? null : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Input
-                aria-label="Server name"
-                placeholder={parsed.name}
-                value={name}
-                onChange={(event) => {
-                  setName(event.currentTarget.value);
-                  setError(null);
-                }}
-              />
-              <Input
-                aria-label="Tool name prefix"
-                spellCheck={false}
-                placeholder={defaultToolName(name || parsed.name)}
-                value={toolName}
-                onChange={(event) => {
-                  setToolName(event.currentTarget.value);
-                  setError(null);
-                }}
-              />
-            </div>
+            <Input
+              aria-label="Tool name prefix"
+              spellCheck={false}
+              placeholder={defaultToolName(parsed.name)}
+              value={toolName}
+              onChange={(event) => {
+                setToolName(event.currentTarget.value);
+                setError(null);
+              }}
+            />
           )}
           {error === null ? null : <p className="text-xs text-destructive-foreground">{error}</p>}
           <div className="flex items-center justify-end">

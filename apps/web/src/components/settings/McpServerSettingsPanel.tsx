@@ -6,11 +6,8 @@ import {
   type McpConfigValue,
 } from "@t3tools/shared/mcpRegistration";
 import { useParams } from "@tanstack/react-router";
-import { useRef, useState, type ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
 
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
@@ -18,7 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
-import { McpServerStatusBadge } from "./McpServerStatusBadge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -26,14 +22,6 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 
 const valueOf = (config: Readonly<Record<string, McpConfigValue>>, field: McpConfigField) =>
   config[field.key] ?? field.default;
-
-/** This entry's edited fields, kept until the server-backed entry for another id replaces it. */
-interface McpEntryDraft {
-  readonly id: string;
-  readonly enabled: boolean;
-  readonly toolName: string;
-  readonly config: Readonly<Record<string, McpConfigValue>>;
-}
 
 /**
  * A server's own settings form, generated from what its document declares. Values live in the
@@ -44,18 +32,7 @@ export function McpServerSettingsPanel() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { environment, scope } = useSettingsScope();
-  const environmentId = environment?.environmentId ?? null;
-  const { data } = useEnvironmentQuery(
-    environmentId === null
-      ? null
-      : serverEnvironment.registeredMcpServersState({ environmentId, input: {} }),
-  );
-  const runtime = data?.servers.find((server) => server.id === serverId);
   const entry = settings.registeredMcpServers.find((server) => server.id === serverId);
-  // A save is built from the last server-backed settings, so edits made before it round-trips
-  // would revert each other. The draft holds this entry's fields and every save starts from it.
-  const [draft, setDraft] = useState<McpEntryDraft | null>(null);
-  const savesInFlight = useRef(0);
 
   // The server runs on the machine that registered it, so these settings are that machine's.
   if (scope.kind !== "environment" || environment === null) {
@@ -83,39 +60,8 @@ export function McpServerSettingsPanel() {
     );
   }
 
-  // A draft belongs to one entry, so another server's page starts from that entry's own settings.
-  if (draft !== null && draft.id !== entry.id) setDraft(null);
-  const current: McpEntryDraft = draft ?? {
-    id: entry.id,
-    enabled: entry.enabled,
-    toolName: entry.toolName,
-    config: entry.config,
-  };
-  const shownEntry = { ...entry, toolName: current.toolName, config: current.config };
-  const save = (edit: Partial<Omit<McpEntryDraft, "id">>) => {
-    const next: McpEntryDraft = { ...current, ...edit };
-    setDraft(next);
-    savesInFlight.current += 1;
-    updateSettings(
-      {
-        registeredMcpServers: {
-          [entry.id]: {
-            ...entry,
-            enabled: next.enabled,
-            toolName: next.toolName,
-            config: next.config,
-          },
-        },
-      },
-      {
-        onFailed: () => setDraft(null),
-        onSettled: () => {
-          savesInFlight.current -= 1;
-          if (savesInFlight.current === 0) setDraft(null);
-        },
-      },
-    );
-  };
+  const save = (edit: Partial<Pick<RegisteredMcpServerEntry, "enabled" | "toolName" | "config">>) =>
+    updateSettings({ registeredMcpServers: { [entry.id]: { ...entry, ...edit } } });
 
   const parsed = parseMcpRegistration(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
@@ -130,14 +76,9 @@ export function McpServerSettingsPanel() {
           settingKeys={["registeredMcpServers"]}
           title="Enabled"
           description="While on, T3 Code runs this server and its tools are available to agents."
-          status={
-            <McpServerStatusBadge
-              status={runtime?.status ?? (current.enabled ? "starting" : "stopped")}
-            />
-          }
           control={
             <Switch
-              checked={current.enabled}
+              checked={entry.enabled}
               onCheckedChange={(next) => save({ enabled: Boolean(next) })}
               aria-label="Run this MCP server"
             />
@@ -147,12 +88,12 @@ export function McpServerSettingsPanel() {
           serverScoped
           settingKeys={["registeredMcpServers"]}
           title="Tool name"
-          description={`Agents call this server's tools as ${current.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
+          description={`Agents call this server's tools as ${entry.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
           control={
             <ToolNameInput
               // A route change to another server must not keep this one's draft.
               key={entry.id}
-              value={current.toolName}
+              value={entry.toolName}
               others={settings.registeredMcpServers.filter(
                 (candidate) => candidate.id !== entry.id,
               )}
@@ -160,32 +101,6 @@ export function McpServerSettingsPanel() {
             />
           }
         />
-        {runtime?.status === "failed" && runtime.stderrTail ? (
-          <SettingsRow
-            title="Last failure"
-            description={
-              <span className="block max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">
-                {runtime.stderrTail}
-              </span>
-            }
-          />
-        ) : null}
-        {data === null ? null : runtime === undefined ? null : (
-          <SettingsRow
-            title="Tools"
-            description={
-              runtime.tools.length === 0
-                ? "No tools are available while the server is not running."
-                : runtime.tools.join(", ")
-            }
-          />
-        )}
-        {runtime?.skippedTools === undefined || runtime.skippedTools.length === 0 ? null : (
-          <SettingsRow
-            title="Not exposed"
-            description={`${runtime.skippedTools.join(", ")}: another tool already answers to the name. Change this server's Tool name.`}
-          />
-        )}
       </SettingsSection>
 
       {fields.length === 0 ? null : (
@@ -195,23 +110,18 @@ export function McpServerSettingsPanel() {
               key={field.key}
               title={field.label}
               description={field.description ?? field.key}
-              status={
-                field.secret && configuredSecret(shownEntry, field.key) ? (
-                  <Badge variant="outline">Saved</Badge>
-                ) : undefined
-              }
               control={
                 <FieldControl
                   field={field}
-                  entry={shownEntry}
+                  entry={entry}
                   onChange={(value) =>
                     save({
                       config:
                         value === undefined
                           ? Object.fromEntries(
-                              Object.entries(current.config).filter(([key]) => key !== field.key),
+                              Object.entries(entry.config).filter(([key]) => key !== field.key),
                             )
-                          : { ...current.config, [field.key]: value },
+                          : { ...entry.config, [field.key]: value },
                     })
                   }
                 />
@@ -312,7 +222,6 @@ function FieldControl({
 
   if (field.secret) {
     // A saved secret is shown only as "saved"; typing replaces it, and clearing removes it.
-    // A list secret is stored as one string through this control and expands once at launch.
     return (
       <div className="flex w-full max-w-72 items-center gap-2">
         <DraftInput
@@ -361,7 +270,7 @@ function FieldControl({
         spellCheck={false}
         className="w-full max-w-72"
         aria-label={field.label}
-        placeholder={field.placeholder ?? (field.required ? "Required" : "One value per line")}
+        placeholder={field.required ? "Required" : "One value per line"}
         value={Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : ""}
         onCommit={(next) => {
           const values = next
@@ -418,7 +327,7 @@ function FieldControl({
       className="w-full max-w-72"
       spellCheck={field.type !== "path"}
       aria-label={field.label}
-      placeholder={field.placeholder ?? (field.required ? "Required" : "Optional")}
+      placeholder={field.required ? "Required" : "Optional"}
       value={typeof value === "string" ? value : ""}
       onCommit={(next) => onChange(next === "" ? undefined : next)}
     />
