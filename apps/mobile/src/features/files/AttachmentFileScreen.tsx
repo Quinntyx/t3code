@@ -14,6 +14,7 @@ import { useAttachmentDocument } from "../../lib/attachmentDocument";
 import { nativeViewerErrorMessage } from "../../lib/attachmentDownload";
 import { isFileBackedComposerAttachment } from "../../lib/composerImages";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { removeComposerDraftAttachment, useComposerDraft } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { useRefreshAssetUrl } from "../../state/assets";
@@ -62,9 +63,9 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   });
   const [nativeOpen, setNativeOpen] = useState(false);
   const nativeKind = nativeViewerKind(document.kind);
-  const [nativeViewer, setNativeViewer] = useState<"pending" | "open" | "unavailable" | null>(
-    nativeKind ? "pending" : null,
-  );
+  const [nativeViewer, setNativeViewer] = useState<
+    "pending" | "open" | "closed" | "unavailable" | null
+  >(nativeKind ? "pending" : null);
   const [nativeError, setNativeError] = useState<string | null>(null);
   const pendingNativeError = useRef<string | null>(null);
   const handleBack = () => {
@@ -100,7 +101,9 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
       setNativeViewer("unavailable");
       return;
     }
-    handleBack();
+    // External Android document apps have no save, so the screen stays to offer Download.
+    if (nativeKind === "document" && canSaveFileToDownloads()) setNativeViewer("closed");
+    else handleBack();
   };
   const removeFromDraft = () => {
     if (!draftKey) return;
@@ -109,6 +112,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   };
 
   const { content, renderedMode, activeMode, setRendered, share, sharing } = document;
+  const canDownload = uri !== null && canSaveFileToDownloads();
   const modeToggle = renderedMode
     ? renderedToggleAction({
         rendered: activeMode !== "source",
@@ -136,10 +140,18 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
             onPress: () => copyTextWithHaptic(content.text),
           }
         : null,
+      canDownload
+        ? {
+            id: "download",
+            title: document.downloading ? "Downloading…" : "Download",
+            icon: "tray.and.arrow.down",
+            onPress: () => void document.download(),
+          }
+        : null,
       uri
         ? {
             id: "share",
-            title: sharing ? "Opening share sheet…" : "Save or share",
+            title: sharing ? "Opening share sheet…" : canDownload ? "Share" : "Save or share",
             icon: "square.and.arrow.up",
             onPress: () => void share(),
           }
@@ -197,6 +209,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
             : undefined
         }
         onSave={() => void share()}
+        onDownload={canDownload ? () => void document.download() : null}
         onRemove={draftKey ? removeFromDraft : null}
       />
     );

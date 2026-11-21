@@ -12,6 +12,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.text.format.DateFormat
 import android.view.PixelCopy
+import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
@@ -114,9 +115,36 @@ class T3NativeControlsModule : Module() {
     AsyncFunction("saveImageToLibrary") { uri: String, mimeType: String, name: String ->
       val context = appContext.reactContext ?: error("The app is not active.")
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        saveImageToPictures(context, Uri.parse(uri), mimeType, name)
+        saveToMediaStore(
+          context,
+          MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+          "${Environment.DIRECTORY_PICTURES}/T3 Code",
+          Uri.parse(uri),
+          mimeType,
+          name
+        )
       } else {
         error("Saving images needs Android 10 or later.")
+      }
+    }
+
+    AsyncFunction("saveFileToDownloads") { uri: String, name: String ->
+      val context = appContext.reactContext ?: error("The app is not active.")
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // MediaStore appends the extension of a MIME type that disagrees with the name.
+        val mimeType = MimeTypeMap.getSingleton()
+          .getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
+          ?: "application/octet-stream"
+        saveToMediaStore(
+          context,
+          MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+          Environment.DIRECTORY_DOWNLOADS,
+          Uri.parse(uri),
+          mimeType,
+          name
+        )
+      } else {
+        error("Downloading files needs Android 10 or later.")
       }
     }
 
@@ -161,31 +189,41 @@ class T3NativeControlsModule : Module() {
   }
 }
 
-// Android 10+ lets apps add their own media without a storage permission.
+// Android 10+ lets apps add their own media and downloads without a storage permission.
+// Returns the saved name: MediaStore renames a file whose name the folder already has.
 @RequiresApi(Build.VERSION_CODES.Q)
-private fun saveImageToPictures(context: Context, source: Uri, mimeType: String, name: String) {
+private fun saveToMediaStore(
+  context: Context,
+  collection: Uri,
+  relativePath: String,
+  source: Uri,
+  mimeType: String,
+  name: String
+): String {
   val resolver = context.contentResolver
   val values = ContentValues().apply {
-    put(MediaStore.Images.Media.DISPLAY_NAME, name)
-    put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/T3 Code")
-    put(MediaStore.Images.Media.IS_PENDING, 1)
+    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+    put(MediaStore.MediaColumns.IS_PENDING, 1)
   }
-  val target = resolver.insert(
-    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-    values
-  ) ?: error("Could not create the image in Pictures.")
+  val target = resolver.insert(collection, values) ?: error("Could not create $name.")
   runCatching {
-    val input = resolver.openInputStream(source) ?: error("The image is no longer available.")
+    val input = resolver.openInputStream(source) ?: error("The file is no longer available.")
     input.use { from ->
-      val output = resolver.openOutputStream(target) ?: error("Could not write the image.")
+      val output = resolver.openOutputStream(target) ?: error("Could not write $name.")
       output.use { from.copyTo(it) }
     }
-    resolver.update(
+    val published = resolver.update(
       target,
-      ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+      ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
       null,
       null
     )
+    check(published == 1) { "Could not finish saving $name." }
   }.onFailure { resolver.delete(target, null, null) }.getOrThrow()
+  return runCatching {
+    resolver.query(target, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
+      ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+  }.getOrNull() ?: name
 }

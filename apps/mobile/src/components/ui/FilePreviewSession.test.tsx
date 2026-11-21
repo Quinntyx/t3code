@@ -23,6 +23,7 @@ vi.mock("../../lib/attachmentDownload", () => ({
   nativeViewerErrorMessage: () => "",
   shareLocalAttachment: vi.fn(),
 }));
+vi.mock("../../lib/saveToDevice", () => ({ canSaveFileToDownloads: () => false }));
 vi.mock("../../lib/previewPresentation", () => ({ usePreviewPresentation: () => {} }));
 vi.mock("./Dialog", () => ({ alert: harness.alert }));
 
