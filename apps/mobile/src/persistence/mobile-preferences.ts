@@ -140,6 +140,8 @@ export interface Preferences {
   readonly foldContextCompactions?: boolean;
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
+  /** Server-hosted browser tabs this device keeps muted, by session tab id. */
+  readonly mutedPreviewTabIds?: readonly string[];
   readonly lastThreadProject?: typeof ThreadProject.Type;
   readonly debugShakeEnabled?: boolean;
   readonly debugShakeProject?: typeof ThreadProject.Type;
@@ -242,6 +244,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     foldContextCompactions?: boolean;
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
+    mutedPreviewTabIds?: readonly string[];
     lastThreadProject?: typeof ThreadProject.Type;
     debugShakeEnabled?: boolean;
     debugShakeProject?: typeof ThreadProject.Type;
@@ -413,6 +416,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;
+  }
+  if (Array.isArray(parsed.mutedPreviewTabIds)) {
+    preferences.mutedPreviewTabIds = parsed.mutedPreviewTabIds.filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    );
   }
   if (typeof parsed.useLastProjectForNewThreads === "boolean") {
     preferences.useLastProjectForNewThreads = parsed.useLastProjectForNewThreads;

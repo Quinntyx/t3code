@@ -2,8 +2,13 @@
 import { type DeviceHubAccess, withDeviceHubQuery } from "../device/hubAccess.ts";
 import {
   decodePreviewStreamFrame,
+  PREVIEW_STREAM_AUDIO_CHANNELS,
+  PREVIEW_STREAM_AUDIO_FRAME_TAG,
+  PREVIEW_STREAM_AUDIO_CODECS,
+  PREVIEW_STREAM_AUDIO_SAMPLE_RATE,
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
   PREVIEW_STREAM_VIDEO_CODECS,
+  type PreviewStreamAudioFrame,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
@@ -182,11 +187,20 @@ export interface PreviewStreamTarget {
   readonly maxHeight: number;
   /** Passive viewers reduce their own access, including automatic control grants. */
   readonly interactive?: boolean;
+  /**
+   * Never ask for audio, even with a decoder. A permanently silent surface would otherwise
+   * make the server capture and encode packets it discards.
+   */
+  readonly audio?: boolean;
 }
 
 export interface PreviewStreamEvents {
   /** A JPEG or video frame; pass it to a `PreviewFramePainter`. */
   readonly onFrame: (frame: ArrayBuffer) => void;
+  /** One audio packet for `PreviewAudioPlayer.push`. */
+  readonly onAudio?: (frame: PreviewStreamAudioFrame) => void;
+  /** Whether this tab can play sound at all; false means a mute control would do nothing. */
+  readonly onAudioAvailable?: (available: boolean) => void;
   readonly onViewport: (viewport: PreviewStreamViewport) => void;
   readonly onProbe?: (probe: PreviewStreamProbe) => void;
   readonly onPointer?: (pointer: PreviewStreamPointer) => void;
@@ -220,6 +234,21 @@ const videoCodecs = () =>
     ),
   ).then((supported) => supported.flat()));
 
+let decodableAudioCodecs: Promise<ReadonlyArray<string>> | null = null;
+const audioCodecs = () =>
+  (decodableAudioCodecs ??= Promise.all(
+    PREVIEW_STREAM_AUDIO_CODECS.map((codec) =>
+      AudioDecoder.isConfigSupported({
+        codec,
+        sampleRate: PREVIEW_STREAM_AUDIO_SAMPLE_RATE,
+        numberOfChannels: PREVIEW_STREAM_AUDIO_CHANNELS,
+      }).then(
+        (support) => (support.supported ? [codec] : []),
+        () => [],
+      ),
+    ),
+  ).then((supported) => supported.flat()));
+
 const ACK_MESSAGE = JSON.stringify({ type: "ack" });
 const KEY_FRAME_MESSAGE = JSON.stringify({ type: "keyFrame" });
 export function createPreviewStreamClient(
@@ -233,6 +262,7 @@ export function createPreviewStreamClient(
     maxHeight: String(Math.max(1, Math.round(target.maxHeight))),
   });
   if (target.interactive === false) query.set("interactive", "false");
+  const wantsAudio = target.audio !== false;
   let url = "";
   let stopped = false;
   let socket: WebSocket | null = null;
@@ -263,6 +293,14 @@ export function createPreviewStreamClient(
       if (socket !== ws) return;
       if (event.data instanceof ArrayBuffer) {
         failures = 0;
+        // Audio and video share the binary channel; only the tag tells them apart. Only a
+        // frame is acked, since the server's ack queue matches its frame queue.
+        if (new Uint8Array(event.data)[0] === PREVIEW_STREAM_AUDIO_FRAME_TAG) {
+          const frame = decodePreviewStreamFrame(new Uint8Array(event.data));
+          // An audio message too short to carry its header is skipped, not played.
+          if (frame?.type === "audio") events.onAudio?.(frame);
+          return;
+        }
         ws.send(ACK_MESSAGE);
         events.onFrame(event.data);
         return;
@@ -295,6 +333,7 @@ export function createPreviewStreamClient(
         phase,
         sequence,
         tabId,
+        available,
       } = message as Record<string, unknown>;
       if (
         type === "fileChooser" &&
@@ -336,6 +375,8 @@ export function createPreviewStreamClient(
           sizeBytes,
           url: previewStreamDownloadUrl(target, id),
         });
+      } else if (type === "audio" && typeof available === "boolean") {
+        events.onAudioAvailable?.(available);
       } else if (type === "viewport" && typeof width === "number" && typeof height === "number") {
         failures = 0;
         events.onViewport({ width, height });
@@ -394,14 +435,26 @@ export function createPreviewStreamClient(
     ws.addEventListener("error", () => ws.close());
   };
 
-  const open = (codecs: ReadonlyArray<string>) => {
+  const open = (codecs: ReadonlyArray<string>, audio: boolean) => {
     if (codecs.length > 0) query.set("codecs", codecs.join(","));
+    if (audio) query.set("audio", PREVIEW_STREAM_AUDIO_CODECS.join(","));
     url = withDeviceHubQuery(`${target.access.wsBase}/ws?${query.toString()}`, target.access);
     connect();
   };
-  // WebCodecs is missing in insecure contexts and older WebViews, which keep JPEG frames.
-  if (typeof VideoDecoder === "undefined") open([]);
-  else void videoCodecs().then(open);
+  // WebCodecs is missing in insecure contexts and older WebViews, which keep JPEG frames and
+  // never ask for audio. A viewer that would play audio reports that itself: the server only
+  // tells viewers that asked for audio whether it is available.
+  const playsAudio = wantsAudio && events.onAudio !== undefined;
+  const openWith = (codecs: ReadonlyArray<string>, audio: ReadonlyArray<string>) => {
+    if (playsAudio && audio.length === 0) events.onAudioAvailable?.(false);
+    open(codecs, audio.length > 0);
+  };
+  if (typeof VideoDecoder === "undefined") openWith([], []);
+  else
+    void Promise.all([
+      videoCodecs(),
+      playsAudio && typeof AudioDecoder !== "undefined" ? audioCodecs() : [],
+    ]).then(([codecs, audio]) => openWith(codecs, audio));
 
   return {
     send: (input) => {
@@ -489,7 +542,8 @@ export function createPreviewFramePainter(
   return {
     paint: (data) => {
       const frame = decodePreviewStreamFrame(new Uint8Array(data));
-      if (stopped || !frame) return;
+      // Audio reaches the player through `onAudio`; a painter only sees video.
+      if (stopped || !frame || frame.type === "audio") return;
       const order = sequence++;
       if (frame.type === "jpeg") {
         if (decoding) waiting = { order, jpeg: frame.data };
@@ -520,6 +574,215 @@ export function createPreviewFramePainter(
       waiting = null;
       if (decoder && decoder.state !== "closed") decoder.close();
       decoder = null;
+    },
+  };
+}
+
+export interface PreviewAudioPlayer {
+  /** One packet from the stream, already stripped of its frame header. */
+  readonly push: (frame: PreviewStreamAudioFrame) => void;
+  readonly setMuted: (muted: boolean) => void;
+  /** Browsers start audio suspended until a gesture; call this from one. */
+  readonly resume: () => void;
+  readonly stop: () => void;
+}
+
+/**
+ * How far ahead of the audio clock a packet may be scheduled, which absorbs jitter without
+ * adding a noticeable delay. A packet whose moment has passed is dropped rather than played
+ * late: the page already played it, and playing it late would drag everything after it.
+ */
+const AUDIO_START_DELAY_SECONDS = 0.06;
+const AUDIO_MAX_LEAD_SECONDS = 0.25;
+
+/**
+ * Plays the stream's Opus packets through Web Audio, scheduled from each packet's source
+ * timestamp so the page's own pauses stay pauses. A packet that can no longer be placed is
+ * dropped, and a generation change resets decoder, clock and scheduled audio together. Mute is
+ * one gain on this output, so it never resets the run.
+ */
+export function createPreviewAudioPlayer(options?: {
+  readonly onBlocked?: () => void;
+}): PreviewAudioPlayer {
+  let context: AudioContext | null = null;
+  /** Everything the player schedules rides this gain, so mute never touches the run itself. */
+  let output: GainNode | null = null;
+  let decoder: AudioDecoder | null = null;
+  let muted = false;
+  let stopped = false;
+  let generation: number | null = null;
+  let lastSequence = -1;
+  /** Bumped on every reset, so a replaced decoder's late answer cannot take a placement. */
+  let run = 0;
+  /**
+   * The run's pin: a source time and the context time it plays at. Every later packet is
+   * placed by its own source time relative to this, so the page's own pauses stay pauses.
+   */
+  let pinnedSourceMicros = 0;
+  let pinnedContext = 0;
+  /** Where the audio already queued ends, so nothing is scheduled on top of it. */
+  let scheduledEnd = 0;
+  /** Where each decoded packet plays, by the timestamp its decoded frame comes back with. */
+  const placements = new Map<number, number>();
+  const scheduled = new Set<AudioBufferSourceNode>();
+
+  const open = () => {
+    if (context !== null) return;
+    context = new AudioContext({ latencyHint: "interactive" });
+    // Everything scheduled rides this one gain, so mute is a value change and nothing more.
+    output = context.createGain();
+    output.gain.value = muted ? 0 : 1;
+    output.connect(context.destination);
+    context.onstatechange = () => {
+      if (context?.state === "suspended") options?.onBlocked?.();
+    };
+  };
+
+  /** Drops everything the current capture produced, keeping the context the browser granted. */
+  const reset = () => {
+    run += 1;
+    if (decoder && decoder.state !== "closed") decoder.close();
+    decoder = null;
+    lastSequence = -1;
+    pinnedContext = 0;
+    scheduledEnd = 0;
+    placements.clear();
+    for (const source of scheduled) {
+      try {
+        source.stop();
+      } catch {}
+    }
+    scheduled.clear();
+  };
+
+  const close = () => {
+    reset();
+    generation = null;
+    output = null;
+    const current = context;
+    context = null;
+    void current?.close().catch(() => undefined);
+  };
+
+  const pin = (sourceMicros: number, at: number) => {
+    pinnedSourceMicros = sourceMicros;
+    pinnedContext = at;
+  };
+
+  /**
+   * Where this packet's audio goes on the context clock, or null when it can no longer be
+   * placed. A packet behind the clock is dropped, never shifted forward: a stalled link then
+   * produces a gap instead of replaying what the page played while it was stalled.
+   */
+  const placement = (frame: PreviewStreamAudioFrame, now: number): number | null => {
+    if (pinnedContext === 0) {
+      pin(frame.timestampMicros, now + AUDIO_START_DELAY_SECONDS);
+      return now + AUDIO_START_DELAY_SECONDS;
+    }
+    const at = pinnedContext + (frame.timestampMicros - pinnedSourceMicros) / 1_000_000;
+    if (at < now) return null;
+    if (at > now + AUDIO_MAX_LEAD_SECONDS) {
+      // The page's own clock ran ahead (a long pause), so a fresh run starts just ahead of
+      // now rather than scheduling sound far into the future.
+      pin(frame.timestampMicros, now + AUDIO_START_DELAY_SECONDS);
+      return now + AUDIO_START_DELAY_SECONDS;
+    }
+    return at;
+  };
+
+  const playFor = (opened: number) => (data: AudioData) => {
+    // A decoder kept from an earlier run can still answer after its reset; its placement is gone.
+    if (opened !== run) {
+      data.close();
+      return;
+    }
+    const owner = context;
+    const at = placements.get(data.timestamp);
+    placements.delete(data.timestamp);
+    if (owner === null || owner.state !== "running" || stopped || at === undefined) {
+      data.close();
+      return;
+    }
+    const now = owner.currentTime;
+    // Non-overlap is decided here, where the decoded length is known: a packet that cannot be
+    // placed on its own source time without stacking on queued audio is dropped, not shifted.
+    const start = Math.max(at, scheduledEnd);
+    if (start < now || start > now + AUDIO_MAX_LEAD_SECONDS) {
+      data.close();
+      return;
+    }
+    const buffer = owner.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
+    const samples = new Float32Array(data.numberOfFrames);
+    for (let channel = 0; channel < data.numberOfChannels; channel += 1) {
+      data.copyTo(samples, { planeIndex: channel, format: "f32-planar" });
+      buffer.copyToChannel(samples, channel);
+    }
+    data.close();
+    const source = owner.createBufferSource();
+    source.buffer = buffer;
+    source.connect(output ?? owner.destination);
+    source.onended = () => scheduled.delete(source);
+    scheduled.add(source);
+    source.start(start);
+    scheduledEnd = start + buffer.duration;
+  };
+
+  return {
+    push: (frame) => {
+      if (stopped) return;
+      if (generation !== frame.generation) {
+        // The server replaced the capture: its clock, sequence and Opus state are unrelated
+        // to what is queued, so all of it goes together.
+        generation = frame.generation;
+        reset();
+      }
+      if (frame.sequence <= lastSequence) return;
+      // Muting only turns the gain down, so packets keep decoding and the clock keeps its pin;
+      // unmuting then resumes the same run rather than anchoring a stale backlog to now.
+      open();
+      const owner = context!;
+      if (owner.state === "closed") return;
+      if (owner.state !== "running") {
+        // Autoplay policy holds the clock until a gesture; the owner retries on one.
+        void owner.resume().catch(() => options?.onBlocked?.());
+        return;
+      }
+      const start = placement(frame, owner.currentTime);
+      if (start === null) return;
+      try {
+        decoder ??= new AudioDecoder({ output: playFor(run), error: close });
+        // Configuring again per packet drops Opus state and attenuates the stream.
+        if (decoder.state === "unconfigured")
+          decoder.configure({
+            codec: "opus",
+            sampleRate: PREVIEW_STREAM_AUDIO_SAMPLE_RATE,
+            numberOfChannels: PREVIEW_STREAM_AUDIO_CHANNELS,
+          });
+        lastSequence = frame.sequence;
+        placements.set(frame.timestampMicros, start);
+        scheduledEnd = Math.max(scheduledEnd, start);
+        decoder.decode(
+          new EncodedAudioChunk({
+            type: "key",
+            timestamp: frame.timestampMicros,
+            data: frame.data as Uint8Array<ArrayBuffer>,
+          }),
+        );
+      } catch {
+        close();
+      }
+    },
+    setMuted: (next) => {
+      muted = next;
+      // Mute is this gain alone: decoder, clock pin, generation and queued audio all survive it.
+      if (output) output.gain.value = next ? 0 : 1;
+    },
+    resume: () => {
+      void context?.resume().catch(() => undefined);
+    },
+    stop: () => {
+      stopped = true;
+      close();
     },
   };
 }

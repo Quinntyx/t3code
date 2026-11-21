@@ -50,6 +50,7 @@ const reactTests = [
   "src/features/layout/workspace/useSearchScrollRestoration.test.tsx",
   "src/features/browser/preview-stream.browser.test.ts",
   "src/features/devices/device-stream.browser.test.ts",
+  "src/features/browser/preview-stream-document.browser.test.ts",
   "src/features/keyboard/keyboardControllerState.test.tsx",
 ];
 
