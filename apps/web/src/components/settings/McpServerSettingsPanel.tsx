@@ -99,8 +99,8 @@ export function McpServerSettingsPanel() {
           settingKeys={["registeredMcpServers"]}
           title={gt("Tool name")}
           description={gt(
-            "Agents call this server's tools as {toolName}_<tool>. Lowercase letters, digits, _ and - only.",
-            { toolName: entry.toolName },
+            "Agents call this server's tools as {pattern}. Lowercase letters, digits, _ and - only.",
+            { pattern: `${entry.toolName}_<tool>` },
           )}
           control={
             <ToolNameInput

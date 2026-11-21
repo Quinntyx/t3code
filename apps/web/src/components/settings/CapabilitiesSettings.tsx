@@ -68,8 +68,8 @@ export function CapabilitiesSettingsPanel() {
               key={entry.id}
               id={`mcp-server-${entry.id}`}
               title={entry.name}
-              description={gt("Agents call its tools as {toolName}_<tool>.", {
-                toolName: entry.toolName,
+              description={gt("Agents call its tools as {pattern}.", {
+                pattern: `${entry.toolName}_<tool>`,
               })}
               control={
                 <EnableSwitch
