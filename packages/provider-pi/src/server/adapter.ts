@@ -1,7 +1,12 @@
+import { PycellsLauncher } from "@t3tools/shared/pycells";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeUtil from "node:util";
 import { AgentScope } from "@t3tools/shared/AgentScope";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  fastVariantDispatchModel,
+  getModelSelectionStringOptionValue,
+  readCustomModelEntries,
+} from "@t3tools/shared/model";
 import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import * as Predicate from "effect/Predicate";
@@ -21,6 +26,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  type TurnTokenUsage,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
   type MessageId,
@@ -76,11 +82,14 @@ import {
 } from "./rpc.ts";
 import {
   buildPiRpcLaunch,
+  materializePiT3DiscoverExtension,
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { withHubModelsEnvironment } from "./discoverExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
+import { piFailureClassification } from "./usageLimits.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -359,6 +368,77 @@ function compactionTitle(status: PiCompactionStatus): string {
   }
 }
 
+interface PiMessageUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly reasoningTokens?: number;
+}
+
+function piMessageUsage(usage: unknown): PiMessageUsage | null {
+  const input = recordNumber(usage, "input");
+  const output = recordNumber(usage, "output");
+  const cacheRead = recordNumber(usage, "cacheRead");
+  const cacheWrite = recordNumber(usage, "cacheWrite");
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined ||
+    ![input, output, cacheRead, cacheWrite].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    )
+  )
+    return null;
+  const reasoning = recordNumber(usage, "reasoning");
+  return {
+    // Pi reports disjoint input/cache counters; T3 input includes both cache categories.
+    inputTokens: input + cacheRead + cacheWrite,
+    outputTokens: output,
+    cachedInputTokens: cacheRead,
+    cacheCreationTokens: cacheWrite,
+    ...(reasoning !== undefined && Number.isSafeInteger(reasoning) && reasoning >= 0
+      ? { reasoningTokens: Math.min(output, reasoning) }
+      : {}),
+  };
+}
+
+function addPiMessageUsage(left: PiMessageUsage, right: PiMessageUsage): PiMessageUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    cacheCreationTokens: left.cacheCreationTokens + right.cacheCreationTokens,
+    ...(left.reasoningTokens === undefined && right.reasoningTokens === undefined
+      ? {}
+      : { reasoningTokens: (left.reasoningTokens ?? 0) + (right.reasoningTokens ?? 0) }),
+  };
+}
+
+function piTurnTokenUsage(turn: ActivePiTurn, completed = false): TurnTokenUsage {
+  const usage =
+    turn.pendingUsage === null
+      ? turn.completedUsage
+      : turn.completedUsage === null
+        ? turn.pendingUsage
+        : addPiMessageUsage(turn.completedUsage, turn.pendingUsage);
+  if (usage === null) {
+    return {
+      usageScope: "main_agent",
+      hasSubagents: turn.hasSubagents,
+      usageStatus: "unavailable",
+    };
+  }
+  return {
+    usageScope: "main_agent",
+    hasSubagents: turn.hasSubagents,
+    usageStatus:
+      completed && turn.usageComplete && turn.pendingUsage === null ? "complete" : "partial",
+    ...usage,
+  };
+}
+
 interface ActivePiTurn {
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly providerTurn: OrchestrationV2ProviderTurn;
@@ -377,6 +457,10 @@ interface ActivePiTurn {
   promptMayBeCommandOnly: boolean;
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
+  completedUsage: PiMessageUsage | null;
+  pendingUsage: PiMessageUsage | null;
+  usageComplete: boolean;
+  hasSubagents: boolean;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
@@ -463,6 +547,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
+  const pycellsLauncher = yield* PycellsLauncher;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -508,10 +593,26 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const extensionPath = yield* provideCacheFs(
         materializePiT3McpExtension(host.paths.providerStatusCacheDir),
       );
+      const discoverExtensionPath = yield* provideCacheFs(
+        materializePiT3DiscoverExtension(host.paths.providerStatusCacheDir),
+      );
       const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      const notebookEnvironment = yield* pycellsLauncher
+        .prepare(host.paths.stateDir, input.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: PI_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          ),
+        );
+      const hubModels = yield* host.hubModels ?? Effect.succeed([]);
       // A workspace handoff restarts Pi in a new cwd, but the session header still names the old one.
       const sessionHeaderNamesCwd = Effect.fnUntraced(function* (sessionFile: string) {
         const header = yield* fileSystem.stream(sessionFile).pipe(
@@ -539,9 +640,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const launch = buildPiRpcLaunch({
             launchArgs: resolvedLaunchArgs.args,
             // PortScanner.AGENT_THREAD_ENV, as a literal because this package cannot reach apps/server.
-            environment: { ...options.environment, T3CODE_THREAD_ID: input.threadId },
+            environment: withHubModelsEnvironment(
+              { ...options.environment, T3CODE_THREAD_ID: input.threadId, ...notebookEnvironment },
+              hubModels,
+            ),
             mcpSession,
             extensionPath,
+            discoverExtensionPath,
             sessionPath,
             runtimeMode: input.runtimePolicy.runtimeMode,
           });
@@ -699,6 +804,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       let contextWindow: number | null = null;
       const modelContextWindows = new Map<string, number>();
       let discoveredModels: ReadonlyArray<unknown> | null = null;
+      // Pi's own inventory plus T3 custom models; null trusts a Fast choice before discovery.
+      let availableModels: Set<string> | null = null;
       let nextPromptId = 0;
       const pendingPromptResponses: Array<PiPromptSend & { readonly id: string }> = [];
       const pendingCompactResponses: Array<{
@@ -1029,17 +1136,25 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const reportLiveUsage =
         /* Provider events include streaming deltas; avoid a span for each update. */
         Effect.fnUntraced(function* (turn: ActivePiTurn, usage: unknown) {
+          const messageUsage = piMessageUsage(usage);
+          const consumptionChanged =
+            messageUsage !== null &&
+            (turn.pendingUsage === null ||
+              messageUsage.inputTokens !== turn.pendingUsage.inputTokens ||
+              messageUsage.outputTokens !== turn.pendingUsage.outputTokens ||
+              messageUsage.cachedInputTokens !== turn.pendingUsage.cachedInputTokens ||
+              messageUsage.cacheCreationTokens !== turn.pendingUsage.cacheCreationTokens ||
+              messageUsage.reasoningTokens !== turn.pendingUsage.reasoningTokens);
+          if (messageUsage !== null) turn.pendingUsage = messageUsage;
           const usedTokens = nonNegativeInteger(usage, "totalTokens");
-          if (
-            usedTokens === undefined ||
-            usedTokens === 0 ||
-            usedTokens === turn.lastLiveUsedTokens ||
-            contextWindow === null ||
-            contextWindow === 0
-          ) {
-            return;
-          }
-          turn.lastLiveUsedTokens = usedTokens;
+          const contextChanged =
+            usedTokens !== undefined &&
+            usedTokens > 0 &&
+            usedTokens !== turn.lastLiveUsedTokens &&
+            contextWindow !== null &&
+            contextWindow > 0;
+          if (!consumptionChanged && !contextChanged) return;
+          if (contextChanged) turn.lastLiveUsedTokens = usedTokens;
           const inputTokens = nonNegativeInteger(usage, "input");
           const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
           const outputTokens = nonNegativeInteger(usage, "output");
@@ -1050,14 +1165,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             threadId: turn.turnInput.threadId,
             providerTurn: {
               ...turn.providerTurn,
-              tokenUsage: {
-                usedTokens,
-                maxTokens: contextWindow,
-                ...(inputTokens === undefined ? {} : { inputTokens }),
-                ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-                ...(outputTokens === undefined ? {} : { outputTokens }),
-                updatedAt: DateTime.formatIso(updatedAt),
-              },
+              turnTokenUsage: piTurnTokenUsage(turn),
+              ...(contextChanged
+                ? {
+                    tokenUsage: {
+                      usedTokens,
+                      maxTokens: contextWindow,
+                      ...(inputTokens === undefined ? {} : { inputTokens }),
+                      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+                      ...(outputTokens === undefined ? {} : { outputTokens }),
+                      updatedAt: DateTime.formatIso(updatedAt),
+                    },
+                  }
+                : {}),
             },
           });
         });
@@ -2090,6 +2210,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
+            turnTokenUsage: piTurnTokenUsage(turn, !interrupted && failure === null),
             ...(turn.reportedModel === undefined ? {} : { model: turn.reportedModel }),
           },
         });
@@ -2309,6 +2430,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn !== null && role === "assistant") {
               turn.sawAgentActivity = true;
               turn.messageOrdinal += 1;
+              if (turn.pendingUsage !== null) {
+                turn.completedUsage =
+                  turn.completedUsage === null
+                    ? turn.pendingUsage
+                    : addPiMessageUsage(turn.completedUsage, turn.pendingUsage);
+                turn.pendingUsage = null;
+                turn.usageComplete = false;
+              }
             }
             const readSteer = role === "user" ? turn?.unreadSteers.shift() : undefined;
             if (turn !== null && readSteer !== undefined) {
@@ -2364,16 +2493,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
+            const finalUsage = piMessageUsage(recordField(message, "usage"));
+            const usage = finalUsage ?? turn.pendingUsage;
+            if (usage !== null)
+              turn.completedUsage =
+                turn.completedUsage === null
+                  ? usage
+                  : addPiMessageUsage(turn.completedUsage, usage);
+            turn.pendingUsage = null;
+            const stopReason = recordString(message, "stopReason");
+            if (finalUsage === null || stopReason === "error" || stopReason === "aborted") {
+              turn.usageComplete = false;
+            }
             yield* completeOpenStreamItems(turn);
             const reportedProvider = recordString(message, "provider");
             const reportedModelId = recordString(message, "model");
             if (reportedProvider && reportedModelId) {
               turn.reportedModel = `${reportedProvider}/${reportedModelId}`;
             }
-            if (recordString(message, "stopReason") === "error" && turn.failure === null) {
+            if (stopReason === "error" && turn.failure === null) {
+              const errorMessage =
+                recordString(message, "errorMessage") ?? "Pi reported a model error.";
               turn.failure = makeProviderFailure({
-                message: recordString(message, "errorMessage") ?? "Pi reported a model error.",
-                class: "provider_error",
+                message: errorMessage,
+                ...piFailureClassification(errorMessage, yield* DateTime.now),
               });
             }
             return;
@@ -2381,6 +2524,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           case "tool_execution_start":
             if (turn !== null) {
               turn.sawAgentActivity = true;
+              if (recordString(event, "toolName") === "subagent") turn.hasSubagents = true;
               yield* emitToolItem(turn, event, "start");
             }
             return;
@@ -2468,9 +2612,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               Math.trunc(recordNumber(event, "maxAttempts") ?? attempt),
             );
             const retryDelayMs = Math.max(0, Math.trunc(recordNumber(event, "delayMs") ?? 0));
+            const errorMessage =
+              recordString(event, "errorMessage") ?? "Pi provider request failed.";
             const failure = makeProviderFailure({
-              message: recordString(event, "errorMessage") ?? "Pi provider request failed.",
-              class: "provider_error",
+              message: errorMessage,
+              ...piFailureClassification(errorMessage, emittedAt),
               retryable: true,
             });
             const current = turn.activeProviderRetry;
@@ -2508,9 +2654,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               turn.failure = null;
               return;
             }
+            const finalError = recordString(event, "finalError") ?? "Pi auto-retry failed.";
             const failure = makeProviderFailure({
-              message: recordString(event, "finalError") ?? "Pi auto-retry failed.",
-              class: "provider_error",
+              message: finalError,
+              ...piFailureClassification(finalError, emittedAt),
               retryable: false,
             });
             const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
@@ -2599,9 +2746,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 return;
               }
               if (!compactTurn.compactionCancelled) {
+                const errorMessage = recordString(event, "error") ?? "Pi compact failed.";
                 compactTurn.failure = makeProviderFailure({
-                  message: recordString(event, "error") ?? "Pi compact failed.",
-                  class: "provider_error",
+                  message: errorMessage,
+                  ...piFailureClassification(errorMessage, yield* DateTime.now),
                 });
                 if (state !== null) yield* finalizeTurn(state);
                 return;
@@ -2696,9 +2844,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   ? turn
                   : null;
             if (failedTurn !== null) {
+              const error = recordString(event, "error") ?? "Pi rejected the prompt.";
               const failure = makeProviderFailure({
-                message: recordString(event, "error") ?? "Pi rejected the prompt.",
-                class: "provider_error",
+                message: error,
+                ...piFailureClassification(error, yield* DateTime.now),
               });
               if (failedTurn.adoptedWake && command === "prompt") {
                 failedTurn.rejectedPromptFailure = failure;
@@ -2901,7 +3050,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         );
         const models = recordField(modelsData, "models");
         if (Array.isArray(models)) {
-          for (const model of models) rememberModelContextWindow(model);
+          availableModels = new Set(
+            readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
+          );
+          for (const model of models) {
+            rememberModelContextWindow(model);
+            const provider = recordString(model, "provider");
+            const id = recordString(model, "id");
+            if (provider !== undefined && id !== undefined) {
+              availableModels.add(`${provider}/${id}`);
+            }
+          }
           discoveredModels = models;
         }
       });
@@ -2912,10 +3071,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         sourceFile: string,
         boundary: PiForkBoundary,
         providerThreadCreatedAt: DateTime.Utc,
+        targetThreadId: string = input.threadId,
       ) {
+        const forkNotebookEnvironment = yield* pycellsLauncher
+          .prepare(host.paths.stateDir, targetThreadId)
+          .pipe(Effect.mapError((cause) => protocolError(cause.message)));
         const forkLaunch = buildPiRpcLaunch({
           launchArgs: resolvedLaunchArgs.args,
-          environment: options.environment,
+          environment: {
+            ...options.environment,
+            ...forkNotebookEnvironment,
+          },
           mcpSession: undefined,
           extensionPath: undefined,
           shortLived: true,
@@ -3207,10 +3373,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        // Fast on a paired catalog model runs its exact `:fast` sibling slug.
+        const model = fastVariantDispatchModel(
+          modelSelection,
+          (slug) => availableModels?.has(slug) ?? true,
+        );
         // pi.setModel and /preset can change the model without an RPC event.
         // Confirm cached selections against Pi before skipping them.
         const modelCached =
-          modelSelection.model !== PI_INHERIT_MODEL_SLUG && modelSelection.model === appliedModel;
+          modelSelection.model !== PI_INHERIT_MODEL_SLUG && model === appliedModel;
         let modelDrifted = false;
         if (modelCached || (thinking !== undefined && thinking === appliedThinking)) {
           const state = yield* request({ type: "get_state" });
@@ -3241,15 +3412,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* request({ type: "set_thinking_level", level: baselineThinking });
             appliedThinking = baselineThinking;
           }
-        } else if (modelDrifted || modelSelection.model !== appliedModel) {
+        } else if (modelDrifted || model !== appliedModel) {
           // Extensions and models.json edits can add providers after the first discovery.
-          if (findReportedPiModel(modelSelection.model, discoveredModels) === undefined) {
+          if (findReportedPiModel(model, discoveredModels) === undefined) {
             yield* discoverModels();
           }
-          const parsed = resolvePiModelSlug(modelSelection.model, discoveredModels);
+          const resolvedModel = fastVariantDispatchModel(
+            modelSelection,
+            (slug) => availableModels?.has(slug) ?? true,
+          );
+          const parsed = resolvePiModelSlug(resolvedModel, discoveredModels);
           if (parsed === null) {
             return yield* protocolError(
-              `Pi model '${modelSelection.model}' must use provider/model format`,
+              `Pi model '${resolvedModel}' must use provider/model format`,
             );
           }
           const selectedModel = yield* request({
@@ -3260,9 +3435,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           // Pi resets thinking to the target model's configured default on set_model.
           appliedThinking = null;
           contextWindow = rememberModelContextWindow(selectedModel);
-          appliedModel = modelSelection.model;
+          appliedModel = resolvedModel;
           const updatedAt = yield* DateTime.now;
-          sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
+          sessionEntity = { ...sessionEntity, model: resolvedModel, updatedAt };
           yield* emit({
             type: "provider_session.updated",
             driver: PI_PROVIDER,
@@ -3344,7 +3519,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               ? baselineModel === null
                 ? undefined
                 : `${baselineModel.provider}/${baselineModel.modelId}`
-              : selection.model;
+              : fastVariantDispatchModel(selection, (s) => availableModels?.has(s) ?? true);
           return slug === undefined ? undefined : modelContextWindows.get(slug);
         },
         ensureThread: (threadInput) =>
@@ -3470,6 +3645,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
+              completedUsage: null,
+              pendingUsage: null,
+              usageComplete: true,
+              hasSubagents: false,
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               compactionCancelled: false,
@@ -4026,7 +4205,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const boundaryFile =
               boundary.type === "nothing" ? undefined : boundary.turn.nativeThreadRef?.nativeId;
             const sourceFile = targetFile ?? boundaryFile ?? currentFile;
-            const nativeId = yield* forkSessionIntoCwd(sourceFile, boundary, source.createdAt).pipe(
+            const nativeId = yield* forkSessionIntoCwd(
+              sourceFile,
+              boundary,
+              source.createdAt,
+              forkInput.targetThreadId,
+            ).pipe(
               Effect.catchTags({
                 PiRpcError: (error) => {
                   if (
@@ -4041,7 +4225,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     Effect.flatMap((file) =>
                       file === undefined
                         ? Effect.fail(error)
-                        : forkSessionIntoCwd(file, boundary, source.createdAt),
+                        : forkSessionIntoCwd(
+                            file,
+                            boundary,
+                            source.createdAt,
+                            forkInput.targetThreadId,
+                          ),
                     ),
                   );
                 },

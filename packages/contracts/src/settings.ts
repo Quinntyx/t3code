@@ -1,4 +1,5 @@
 import { EasDeviceHostConfigs, SimlockDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
+import { EmailInboxAccountConfig } from "./emailInbox.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthAccessWriteScope,
@@ -43,10 +44,14 @@ import {
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
+  DEFAULT_SERVER_BROWSER_GPU,
+  DEFAULT_SERVER_BROWSER_RENDER_SCALE,
   FILL_PREVIEW_VIEWPORT,
   PreviewAppearancePreference,
   PreviewViewportSetting,
   PreviewZoomFactor,
+  ServerBrowserGpu,
+  ServerBrowserRenderScale,
 } from "./preview.ts";
 import {
   ProviderInstanceConfig,
@@ -349,6 +354,19 @@ export type ChatWidth = typeof ChatWidth.Type;
 export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
+/**
+ * The animated companion drawn above the app. `none` disables it, a bare id names
+ * a bundled character, and `<source>/<id>` names one from a downloaded source.
+ */
+export const Buddy = Schema.String;
+export type Buddy = typeof Buddy.Type;
+
+/** A git repository laid out as one folder per buddy, each holding `buddy.json`. */
+export const BuddySource = Schema.Struct({
+  repositoryUrl: TrimmedNonEmptyString,
+});
+export type BuddySource = typeof BuddySource.Type;
+
 export const ToolCallVisibility = Schema.Literals(["showAll", "hideSuccessful", "hideAll", "zen"]);
 export type ToolCallVisibility = typeof ToolCallVisibility.Type;
 
@@ -366,6 +384,8 @@ export const ProviderModelPreferences = Schema.Record(
   Schema.Struct({
     hiddenModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+    newModelsEnabled: Schema.optionalKey(Schema.Boolean),
+    enabledModels: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 export type ModelPreferences = {
@@ -472,6 +492,8 @@ export const ClientSettingsSchema = Schema.Struct({
   confirmTerminalClose: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadUnpin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Desktop window chrome; frames are created per launch, so changes apply on restart.
+  hideWindowControls: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
@@ -534,6 +556,7 @@ export const ClientSettingsSchema = Schema.Struct({
   toolCallVisibility: ToolCallVisibility.pipe(
     Schema.withDecodingDefault(Effect.succeed("showAll" as const)),
   ),
+  foldContextCompactions: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   screenReaderAnnouncements: ScreenReaderAnnouncements.pipe(
     Schema.withDecodingDefault(Effect.succeed("status" as const)),
   ),
@@ -600,6 +623,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  buddy: Buddy.pipe(Schema.withDecodingDefault(Effect.succeed("none"))),
+  // Repositories cloned on demand by the server; every one is pulled on load.
+  buddySources: Schema.Array(BuddySource).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1175,7 +1201,9 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultModelSelection",
   "defaultRuntimeMode",
   "defaultThreadEnvMode",
+  "newWorktreesBesideMain",
   "newWorktreesStartFromOrigin",
+  "defaultBranchRemote",
   "worktreeSubmodules",
   "defaultAutoPull",
   "defaultProjectScripts",
@@ -1213,7 +1241,9 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
+  newWorktreesBesideMain: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultBranchRemote: Schema.optionalKey(TrimmedString),
   worktreeSubmodules: ForwardCompatibleOptional(WorktreeSubmodules),
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
   defaultProjectScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
@@ -1396,6 +1426,12 @@ export const ServerSettings = Schema.Struct({
   ),
 
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  serverBrowserGpu: ServerBrowserGpu.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SERVER_BROWSER_GPU)),
+  ),
+  serverBrowserRenderScale: ServerBrowserRenderScale.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SERVER_BROWSER_RENDER_SCALE)),
+  ),
   /** Lets clients reach this machine's loopback ports over `/api/preview/tunnel`. */
   enablePreviewTunnel: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   cloudSpeechCredentials: CloudSpeechCredentials.pipe(
@@ -1462,6 +1498,10 @@ export const ServerSettings = Schema.Struct({
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Resume limited threads that have a linked pull request before the rest. */
+  autoResumePullRequestThreadsFirst: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
@@ -1526,14 +1566,30 @@ export const ServerSettings = Schema.Struct({
   ),
   /** Null inherits t3.json, then local; omit it on the wire for older clients requiring a literal. */
   defaultThreadEnvMode: OmittedWhenNull(ThreadEnvMode),
+  newWorktreesBesideMain: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  /** Branch pickers list this remote with local branches; others sit behind "Other remotes". */
+  defaultBranchRemote: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("origin"))),
   /** Null inherits t3.json, then recursive; unknown values decode to null for older clients. */
   worktreeSubmodules: ForwardCompatibleNullable(WorktreeSubmodules).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** Off hides `compose_email` from agents and refuses new drafts. */
+  emailEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** aerc accounts.conf that agent email sends with. Empty: aerc's default location. */
+  emailAccountsFile: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  emailInboxEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  emailTaggingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  emailNotmuchConfigFile: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  emailInboxAccounts: Schema.Array(EmailInboxAccountConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  emailRefreshCommand: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   /** Clones default to `<addProjectBaseDirectory>/<host>/<owner>/<repo>`, like ghq. */
   ghqCloneLayout: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   textGenerationModelSelection: ModelSelection.pipe(
@@ -1818,6 +1874,13 @@ export const ServerSettingsPatch = Schema.Struct({
   setProviderModelOrder: Schema.optionalKey(
     Schema.Struct({ provider: ProviderInstanceId, modelOrder: Schema.Array(TrimmedString) }),
   ),
+  setProviderNewModelsEnabled: Schema.optionalKey(
+    Schema.Struct({
+      provider: ProviderInstanceId,
+      enabled: Schema.Boolean,
+      models: Schema.Array(TrimmedNonEmptyString),
+    }),
+  ),
   favorites: Schema.optionalKey(ModelFavorites),
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   // Applied under the settings service's write lock, only while still unset.
@@ -1865,6 +1928,8 @@ export const ServerSettingsPatch = Schema.Struct({
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
   requireConnectDeviceApproval: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  serverBrowserGpu: Schema.optionalKey(ServerBrowserGpu),
+  serverBrowserRenderScale: Schema.optionalKey(ServerBrowserRenderScale),
   enablePreviewTunnel: Schema.optionalKey(Schema.Boolean),
   cloudSpeechCredentials: Schema.optionalKey(
     Schema.Struct({
@@ -1919,6 +1984,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  autoResumePullRequestThreadsFirst: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -1945,9 +2011,18 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultStyleSetAt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
   environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
+  newWorktreesBesideMain: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultBranchRemote: Schema.optionalKey(TrimmedString),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
+  emailEnabled: Schema.optionalKey(Schema.Boolean),
+  emailAccountsFile: Schema.optionalKey(TrimmedString),
+  emailInboxEnabled: Schema.optionalKey(Schema.Boolean),
+  emailTaggingEnabled: Schema.optionalKey(Schema.Boolean),
+  emailNotmuchConfigFile: Schema.optionalKey(TrimmedString),
+  emailInboxAccounts: Schema.optionalKey(Schema.Array(EmailInboxAccountConfig)),
+  emailRefreshCommand: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   ghqCloneLayout: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   threadTitleInstructions: Schema.optionalKey(TrimmedString),
@@ -2090,6 +2165,7 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmTerminalClose: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   confirmThreadUnpin: Schema.optionalKey(Schema.Boolean),
+  hideWindowControls: Schema.optionalKey(Schema.Boolean),
   diffFilesCollapsed: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
@@ -2120,6 +2196,7 @@ export const ClientSettingsPatch = Schema.Struct({
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
   toolCallVisibility: Schema.optionalKey(ToolCallVisibility),
+  foldContextCompactions: Schema.optionalKey(Schema.Boolean),
   screenReaderAnnouncements: Schema.optionalKey(ScreenReaderAnnouncements),
   screenReaderWindowTitle: Schema.optionalKey(Schema.Boolean),
   threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),
@@ -2153,5 +2230,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
+  buddy: Schema.optionalKey(Buddy),
+  buddySources: Schema.optionalKey(Schema.Array(BuddySource)),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

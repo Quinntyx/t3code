@@ -1,3 +1,4 @@
+import { ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { applyUsageLimitsUpdate, resolveUsageLimitsAfterProbe } from "./usageLimits.ts";
@@ -89,6 +90,28 @@ describe("applyUsageLimitsUpdate", () => {
     ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });
   });
 
+  it("keeps the account identity a window update does not carry", () => {
+    const account = {
+      ...published,
+      credentialFingerprint: "shared-go-key",
+      ownerDriver: ProviderDriverKind.make("opencode"),
+      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
+    };
+    const next = applyUsageLimitsUpdate({
+      previous: account,
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      update: { windows: [{ ...session, usedPercent: 55 }] },
+    });
+
+    expect(next).toEqual({
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      windows: [{ ...session, usedPercent: 55 }, weekly],
+      credentialFingerprint: "shared-go-key",
+      ownerDriver: "opencode",
+      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
+    });
+  });
+
   it("preserves reset credits and a $0 cap when a streamed window update changes usage", () => {
     const resetCredits = { availableCount: 2, nextExpiresAt: "2026-10-01T00:00:00.000Z" };
     const next = applyUsageLimitsUpdate({
@@ -104,26 +127,54 @@ describe("applyUsageLimitsUpdate", () => {
       zeroSpendCap: true,
     });
   });
+
+  it("keeps a window's money and the account's money lines through a percent-only update", () => {
+    const amount = { currency: "eur", used: 8, limit: 20, remaining: 12 };
+    const amounts = [{ id: "key", label: "Key spend", amount: { currency: "usd", used: 3.5 } }];
+    const next = applyUsageLimitsUpdate({
+      previous: { ...published, windows: [{ ...session, amount }, weekly], amounts },
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      update: {
+        windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 55 }],
+      },
+    });
+
+    expect(next).toEqual({
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      windows: [{ ...session, usedPercent: 55, amount }, weekly],
+      amounts,
+    });
+  });
 });
 
 describe("resolveUsageLimitsAfterProbe", () => {
   it("uses read order for windows while taking metadata from the successful probe", () => {
+    const staleAmount = { currency: "usd", used: 8, limit: 20, remaining: 12 };
+    const freshAmount = { currency: "usd", used: 10, limit: 20, remaining: 10 };
+    const line = (used: number) => ({
+      id: "key",
+      label: "Key spend",
+      amount: { currency: "usd", used },
+    });
     const live = {
       checkedAt: "2026-09-03T12:00:05.000Z",
       windows: [
-        { ...session, usedPercent: 95 },
-        { ...weekly, usedPercent: 70 },
+        { ...session, usedPercent: 95, amount: staleAmount },
+        { ...weekly, usedPercent: 70, amount: staleAmount },
       ],
+      amounts: [line(1)],
       resetCredits: { availableCount: 2 },
       externalUsage: { label: "Old dashboard", url: "https://example.com/old" },
     };
     const probed = {
       ...published,
-      windows: [{ ...session, usedPercent: 0 }],
+      windows: [{ ...session, usedPercent: 0, amount: freshAmount }],
+      amounts: [line(2)],
       resetCredits: { availableCount: 1 },
       externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
     };
 
+    // Money lines are probe-only, so the probe's win; a window keeps the money beside its percent.
     expect(resolveUsageLimitsAfterProbe({ published: live, probed })).toEqual({
       ...probed,
       checkedAt: live.checkedAt,

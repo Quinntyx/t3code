@@ -407,7 +407,7 @@ describe("provider projection", () => {
         },
       ],
     });
-    expect(projected.startsWith("Compare with [Thread: Old title; ref=thread_abc]")).toBe(true);
+    expect(projected.startsWith("Compare with [Thread: Old title; threadId=abc]")).toBe(true);
     expect(projected).toContain('<context kind="thread" id="thread_abc">');
     expect(projected).toContain("threadId: abc");
     expect(projected).toContain("environmentId: env-1");

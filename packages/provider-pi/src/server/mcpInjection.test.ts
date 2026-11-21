@@ -16,9 +16,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   buildPiRpcLaunch,
   materializePiT3McpExtension,
+  materializePiT3DiscoverExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 import { PI_T3_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import { PI_T3_DISCOVER_EXTENSION_SOURCE } from "./discoverExtensionSource.ts";
 
 const threadId = ThreadId.make("thread-pi-t3-mcp");
 
@@ -157,7 +159,73 @@ describe("pi T3 MCP injection", () => {
   });
 });
 
-describe("materializePiT3McpExtension", () => {
+describe("pi discovered service injection", () => {
+  it("adds the discover extension beside the permission bridge", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: { PATH: "/usr/bin" },
+      mcpSession: undefined,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      discoverExtensionPath: "/tmp/cache/pi-t3-discover-extension.ts",
+    });
+    assert.deepEqual(launch.args, [
+      "--mode",
+      "rpc",
+      "--extension",
+      "/tmp/cache/pi-t3-mcp-extension.ts",
+      "--extension",
+      "/tmp/cache/pi-t3-discover-extension.ts",
+    ]);
+  });
+
+  it("omits the discover extension when extensions are disabled", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: {},
+      mcpSession: undefined,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      discoverExtensionPath: "/tmp/cache/pi-t3-discover-extension.ts",
+      disableExtensions: true,
+    });
+    assert.notInclude(launch.args, "--extension");
+    assert.include(launch.args, "--no-extensions");
+  });
+});
+
+describe("pi discovered service status probe", () => {
+  it("loads the discover extension without the permission bridge", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: {},
+      mcpSession: undefined,
+      extensionPath: undefined,
+      discoverExtensionPath: "/tmp/cache/pi-t3-discover-extension.ts",
+      ephemeral: true,
+    });
+    assert.deepEqual(launch.args, [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--extension",
+      "/tmp/cache/pi-t3-discover-extension.ts",
+    ]);
+  });
+});
+
+describe.each([
+  {
+    name: "MCP",
+    filename: "pi-t3-mcp-extension.ts",
+    source: PI_T3_MCP_EXTENSION_SOURCE,
+    materialize: materializePiT3McpExtension,
+  },
+  {
+    name: "discovery",
+    filename: "pi-t3-discover-extension.ts",
+    source: PI_T3_DISCOVER_EXTENSION_SOURCE,
+    materialize: materializePiT3DiscoverExtension,
+  },
+])("materialize $name extension", ({ filename, source, materialize }) => {
   // A pi launch concurrent with the materialize reads the extension file from
   // disk; a truncate-then-write exposes an empty or partial file mid-write and
   // the launch loads a broken extension.
@@ -171,13 +239,10 @@ describe("materializePiT3McpExtension", () => {
       const writer = yield* Effect.forkChild(
         Effect.gen(function* () {
           for (let index = 0; index < stopAfter; index += 1) {
-            yield* fs
-              .remove(path.join(directory, "pi-t3-mcp-extension.ts"), { force: true })
-              .pipe(Effect.ignore);
-            yield* Effect.all(
-              [materializePiT3McpExtension(directory), materializePiT3McpExtension(directory)],
-              { concurrency: "unbounded" },
-            );
+            yield* fs.remove(path.join(directory, filename), { force: true }).pipe(Effect.ignore);
+            yield* Effect.all([materialize(directory), materialize(directory)], {
+              concurrency: "unbounded",
+            });
           }
         }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
       );
@@ -185,17 +250,15 @@ describe("materializePiT3McpExtension", () => {
         Effect.forever(
           Effect.gen(function* () {
             const text = yield* fs
-              .readFileString(path.join(directory, "pi-t3-mcp-extension.ts"))
+              .readFileString(path.join(directory, filename))
               .pipe(Effect.option);
             if (Option.isNone(text)) return; // Missing between writes: legitimate.
             // A read that SUCCEEDS must return the full extension: an empty or
             // partial read means the writer truncated the file mid-write.
             if (text.value.length === 0) {
               anomalies.push("empty: truncated mid-write");
-            } else if (text.value.length !== PI_T3_MCP_EXTENSION_SOURCE.length) {
-              anomalies.push(
-                `partial: ${text.value.length} of ${PI_T3_MCP_EXTENSION_SOURCE.length} chars`,
-              );
+            } else if (text.value !== source) {
+              anomalies.push(`partial: ${text.value.length} of ${source.length} chars`);
             }
           }),
         ),

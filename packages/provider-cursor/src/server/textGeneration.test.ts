@@ -255,7 +255,8 @@ describe("CursorTextGeneration", () => {
       );
 
       expect(failure.operation).toBe("generateCommitMessage");
-      expect(failure.detail).toBe("Cursor SDK returned invalid structured output.");
+      expect(failure.detail).toContain("Cursor SDK returned invalid structured output:");
+      expect(failure.detail).toContain('["body"]');
       expect(Schema.isSchemaError(failure.cause)).toBe(true);
       expect(cursorSdkMock.prompt).toHaveBeenCalledTimes(2);
     }).pipe(Effect.provide(layerTest)),

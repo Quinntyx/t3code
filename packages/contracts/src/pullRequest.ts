@@ -684,6 +684,8 @@ export const PullRequestDetail = Schema.Struct({
   /** Absent where the host has no merge queue or does not report one. */
   mergeQueueRemoval: Schema.optional(PullRequestMergeQueueRemoval),
   maintainerCanModify: Schema.optional(Schema.Boolean),
+  /** Null when the host says the pull request is in no stack; absent when the read did not ask. */
+  stack: Schema.optional(Schema.NullOr(PullRequestStackMembership)),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -844,8 +846,26 @@ export const PullRequestActionInput = Schema.Struct({
   updateMethod: Schema.optional(PullRequestUpdateMethod),
   /** Opt-in, because older clients decode the action's success as void and reject a summary. */
   replyWithSummary: Schema.optional(Schema.Literal(true)),
+  /**
+   * After a merge, open pull requests based on the merged branch are always retargeted to its
+   * base; this also rebases their threads' branches onto it.
+   */
+  restackDependents: Schema.optional(Schema.Boolean),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
+
+/** Merges the open pull requests this one is stacked on, bottom first, then this one. */
+export const PullRequestMergeStackInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  mergeMethod: Schema.optional(PullRequestMergeMethod),
+});
+export type PullRequestMergeStackInput = typeof PullRequestMergeStackInput.Type;
+
+export const PullRequestMergeStackResult = Schema.Struct({
+  /** Bottom to top; the last is the requested pull request. */
+  merged: Schema.Array(PositiveInt),
+});
+export type PullRequestMergeStackResult = typeof PullRequestMergeStackResult.Type;
 
 // Preserve whitespace because it affects Markdown formatting.
 const CommentBody = Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536));

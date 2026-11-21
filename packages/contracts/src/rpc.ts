@@ -5,6 +5,7 @@ import {
   OrchestrationV2SearchThreadsInput,
   OrchestrationV2SearchThreadsResult,
 } from "./orchestrationV2.ts";
+import { PycellsNotebookInput, PycellsNotebookSnapshot, PycellsNotebookError } from "./pycells.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   McpAppCallToolInput,
@@ -16,6 +17,7 @@ import {
   McpAppToolInfoInput,
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
+import { DiscoverError, DiscoverHostConfiguration, DiscoverHostStatus } from "./discover.ts";
 import {
   PeerLink,
   PeerLinkCreateInput,
@@ -34,6 +36,13 @@ import {
   ChatGptHandoffState,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import {
+  MachineHandoffExportInput,
+  MachineHandoffSnapshot,
+  MachineHandoffImportInput,
+  MachineHandoffImportResult,
+  MachineHandoffError,
+} from "./machineHandoff.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -139,6 +148,9 @@ import {
   VcsListRefsResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
+  GitRestackError,
+  GitRestackThreadsInput,
+  GitRestackThreadsResult,
   GitPreparePullRequestThreadResult,
   VcsPullInput,
   GitPullRequestRefInput,
@@ -203,6 +215,8 @@ import {
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
   PullRequestActionInput,
+  PullRequestMergeStackInput,
+  PullRequestMergeStackResult,
   PullRequestActivity,
   PullRequestChangeBreakdown,
   PullRequestCommentInput,
@@ -307,6 +321,7 @@ import {
   PreviewEvent,
   PreviewListInput,
   PreviewListResult,
+  ServerBrowserGpuList,
   PreviewClearProfileError,
   PreviewClearProfileInput,
   PreviewReportProfilesInput,
@@ -382,7 +397,15 @@ import {
   ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
-import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  ThreadUsage,
+  ThreadUsageError,
+  ThreadUsageInput,
+  UsagePricing,
+  UsageReadError,
+  UsageSummary,
+  UsageSummaryInput,
+} from "./usage.ts";
 import {
   StorageCleanupReport,
   DatabaseReclaimError,
@@ -412,6 +435,7 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
+import { EmailAccountsReport, EmailRequestAnswerInput, EmailRequestError } from "./emailRequest.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -497,6 +521,7 @@ export const WS_METHODS = {
   gitRunStackedAction: "git.runStackedAction",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
+  gitRestackThreads: "git.restackThreads",
 
   reviewGetBranchCommits: "review.getBranchCommits",
   reviewGetDiffPreview: "review.getDiffPreview",
@@ -516,6 +541,7 @@ export const WS_METHODS = {
   previewClose: "preview.close",
   previewList: "preview.list",
   previewClearProfile: "preview.clearProfile",
+  previewListGpus: "preview.listGpus",
   previewReportProfiles: "preview.reportProfiles",
   previewReportStatus: "preview.reportStatus",
   previewStopLocalServer: "preview.stopLocalServer",
@@ -544,6 +570,9 @@ export const WS_METHODS = {
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
+  discoverStatus: "discover.status",
+  discoverConfigure: "discover.configure",
+  discoverRevoke: "discover.revoke",
   serverReclaimDatabaseSpace: "server.reclaimDatabaseSpace",
   peerLinksList: "peerLinks.list",
   peerLinksLink: "peerLinks.link",
@@ -576,6 +605,8 @@ export const WS_METHODS = {
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
   serverGetUsageSummary: "server.getUsageSummary",
+  serverGetThreadUsage: "server.getThreadUsage",
+  threadsGetNotebook: "threads.getNotebook",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
@@ -585,6 +616,8 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
+  emailAnswerRequest: "email.answerRequest",
+  emailListAccounts: "email.listAccounts",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -612,6 +645,7 @@ export const WS_METHODS = {
   pullRequestsChangeBreakdown: "pullRequests.changeBreakdown",
   pullRequestsSetFilesViewed: "pullRequests.setFilesViewed",
   pullRequestsRunAction: "pullRequests.runAction",
+  pullRequestsMergeStack: "pullRequests.mergeStack",
   pullRequestsUpdate: "pullRequests.update",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsUpdateComment: "pullRequests.updateComment",
@@ -879,6 +913,22 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
   error: EnvironmentAuthorizationError,
 });
 
+const WsDiscoverStatusRpc = Rpc.make(WS_METHODS.discoverStatus, {
+  payload: Schema.Struct({}),
+  success: DiscoverHostStatus,
+  error: Schema.Union([DiscoverError, EnvironmentAuthorizationError]),
+});
+const WsDiscoverConfigureRpc = Rpc.make(WS_METHODS.discoverConfigure, {
+  payload: DiscoverHostConfiguration,
+  success: DiscoverHostStatus,
+  error: Schema.Union([DiscoverError, EnvironmentAuthorizationError]),
+});
+const WsDiscoverRevokeRpc = Rpc.make(WS_METHODS.discoverRevoke, {
+  payload: Schema.Struct({}),
+  success: DiscoverHostStatus,
+  error: Schema.Union([DiscoverError, EnvironmentAuthorizationError]),
+});
+
 const WsServerReclaimDatabaseSpaceRpc = Rpc.make(WS_METHODS.serverReclaimDatabaseSpace, {
   payload: Schema.Struct({}),
   error: Schema.Union([DatabaseReclaimError, EnvironmentAuthorizationError]),
@@ -1070,6 +1120,18 @@ const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
 });
 
+const WsThreadsGetNotebookRpc = Rpc.make(WS_METHODS.threadsGetNotebook, {
+  payload: PycellsNotebookInput,
+  success: PycellsNotebookSnapshot,
+  error: Schema.Union([EnvironmentAuthorizationError, PycellsNotebookError]),
+});
+
+const WsServerGetThreadUsageRpc = Rpc.make(WS_METHODS.serverGetThreadUsage, {
+  payload: ThreadUsageInput,
+  success: ThreadUsage,
+  error: Schema.Union([EnvironmentAuthorizationError, ThreadUsageError]),
+});
+
 const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates, {
   payload: Schema.Struct({}),
   success: UsagePricing,
@@ -1225,6 +1287,12 @@ const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
   payload: PullRequestActionInput,
   // Undefined unless asked for with replyWithSummary, or when the host's reply lacked it.
   success: Schema.UndefinedOr(PullRequestSummary),
+  error: PullRequestRpcError,
+});
+
+const WsPullRequestsMergeStackRpc = Rpc.make(WS_METHODS.pullRequestsMergeStack, {
+  payload: PullRequestMergeStackInput,
+  success: PullRequestMergeStackResult,
   error: PullRequestRpcError,
 });
 
@@ -1729,6 +1797,12 @@ const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullReque
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsGitRestackThreadsRpc = Rpc.make(WS_METHODS.gitRestackThreads, {
+  payload: GitRestackThreadsInput,
+  success: GitRestackThreadsResult,
+  error: Schema.Union([GitRestackError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
@@ -1848,6 +1922,12 @@ const WsPreviewCloseRpc = Rpc.make(WS_METHODS.previewClose, {
 const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
   payload: PreviewListInput,
   success: PreviewListResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsPreviewListGpusRpc = Rpc.make(WS_METHODS.previewListGpus, {
+  payload: Schema.Struct({}),
+  success: ServerBrowserGpuList,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2010,6 +2090,15 @@ const WsOrchestrationV2GetThreadFamilyRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS
   error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationV2ListPreviousAgentsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.listPreviousAgents,
+  {
+    payload: OrchestrationV2RpcSchemas.listPreviousAgents.input,
+    success: OrchestrationV2RpcSchemas.listPreviousAgents.output,
+    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetThreadTitlesRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadTitles, {
   payload: OrchestrationV2RpcSchemas.getThreadTitles.input,
   success: OrchestrationV2RpcSchemas.getThreadTitles.output,
@@ -2086,6 +2175,17 @@ const WsOrchestrationV2GetTurnItemRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
   payload: OrchestrationV2RpcSchemas.getTurnItem.input,
   success: OrchestrationV2RpcSchemas.getTurnItem.output,
   error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+});
+
+const WsExportMachineHandoffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff, {
+  payload: MachineHandoffExportInput,
+  success: MachineHandoffSnapshot,
+  error: Schema.Union([MachineHandoffError, EnvironmentAuthorizationError]),
+});
+const WsImportMachineHandoffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.importMachineHandoff, {
+  payload: MachineHandoffImportInput,
+  success: MachineHandoffImportResult,
+  error: Schema.Union([MachineHandoffError, EnvironmentAuthorizationError]),
 });
 
 const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.launchThread, {
@@ -2217,6 +2317,17 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsEmailAnswerRequestRpc = Rpc.make(WS_METHODS.emailAnswerRequest, {
+  payload: EmailRequestAnswerInput,
+  error: Schema.Union([EmailRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsEmailListAccountsRpc = Rpc.make(WS_METHODS.emailListAccounts, {
+  payload: Schema.Struct({}),
+  success: EmailAccountsReport,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2255,6 +2366,8 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const WsRpcGroup = RpcGroup.make(
+  WsExportMachineHandoffRpc,
+  WsImportMachineHandoffRpc,
   WsIssuesListRpc,
   WsIssuesDetailRpc,
   WsIssuesCommentsRpc,
@@ -2301,6 +2414,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerReclaimDatabaseSpaceRpc,
   WsServerUpdateSettingsRpc,
+  WsDiscoverStatusRpc,
+  WsDiscoverConfigureRpc,
+  WsDiscoverRevokeRpc,
   WsPeerLinksListRpc,
   WsPeerLinksLinkRpc,
   WsPeerLinksUnlinkRpc,
@@ -2328,6 +2444,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerListTextGeneratorModelsRpc,
   WsServerPrepareTriageRpc,
   WsServerGetUsageSummaryRpc,
+  WsServerGetThreadUsageRpc,
+  WsThreadsGetNotebookRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
   WsScheduledTasksSubscribeRpc,
@@ -2337,6 +2455,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  WsEmailAnswerRequestRpc,
+  WsEmailListAccountsRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
@@ -2362,6 +2482,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsChangeBreakdownRpc,
   WsPullRequestsSetFilesViewedRpc,
   WsPullRequestsRunActionRpc,
+  WsPullRequestsMergeStackRpc,
   WsPullRequestsUpdateRpc,
   WsPullRequestsCommentRpc,
   WsPullRequestsUpdateCommentRpc,
@@ -2424,6 +2545,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsGitRestackThreadsRpc,
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
@@ -2446,6 +2568,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAdjustRpc,
   WsPreviewCloseRpc,
   WsPreviewListRpc,
+  WsPreviewListGpusRpc,
   WsPreviewClearProfileRpc,
   WsPreviewReportProfilesRpc,
   WsPreviewReportStatusRpc,
@@ -2481,6 +2604,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadFamilyRpc,
   WsOrchestrationV2GetThreadTitlesRpc,
+  WsOrchestrationV2ListPreviousAgentsRpc,
   WsOrchestrationV2GetThreadLinkMetadataRpc,
   WsOrchestrationV2GetWorktreeThreadIdsRpc,
   WsOrchestrationV2GetOlderSettledThreadsRpc,

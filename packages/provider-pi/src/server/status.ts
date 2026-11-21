@@ -4,10 +4,13 @@ import {
   type CustomModelSetting,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerProviderUsageRoute,
 } from "@t3tools/contracts";
 import type { PiSettings } from "../settings.ts";
+import { pairFastModelVariants } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   brokenVersionDetail,
   noCompatibilityPolicy,
@@ -80,6 +83,7 @@ const PI_DEFAULT_MODEL: ServerProviderModel = {
 
 interface PiDiscovery extends PiDiscoveredCommands {
   readonly models: ReadonlyArray<ServerProviderModel>;
+  readonly usageRoutes: ReadonlyArray<ServerProviderUsageRoute>;
   readonly authenticated: boolean;
   /** Pi's active model when Pi lists no model of its provider, so it cannot start a turn. */
   readonly unavailableActiveModel: { readonly provider: string; readonly id: string } | undefined;
@@ -91,17 +95,42 @@ function piModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discovered: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(
-    [PI_DEFAULT_MODEL, ...discovered],
-    customModels ?? [],
-    EMPTY_PI_MODEL_CAPABILITIES,
+  return pairFastModelVariants(
+    providerModelsFromSettings(
+      [PI_DEFAULT_MODEL, ...discovered],
+      customModels ?? [],
+      EMPTY_PI_MODEL_CAPABILITIES,
+    ),
   );
+}
+
+function usageOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function piUsageDriver(provider: string, api: string | undefined): ProviderDriverKind | null {
+  if (provider === "openai-codex") return ProviderDriverKind.make("codex");
+  if (provider === "cliproxyapi" || provider.startsWith("cliproxyapi-")) {
+    return ProviderDriverKind.make(api === "anthropic-messages" ? "claudeAgent" : "codex");
+  }
+  return null;
 }
 
 function parseDiscoveredModels(
   data: unknown,
   state: unknown,
-): Result.Result<ReadonlyArray<ServerProviderModel>, PiRpcError> {
+): Result.Result<
+  {
+    readonly models: ReadonlyArray<ServerProviderModel>;
+    readonly usageRoutes: ReadonlyArray<ServerProviderUsageRoute>;
+  },
+  PiRpcError
+> {
   const models = recordField(data, "models");
   if (!Array.isArray(models)) {
     return Result.fail(
@@ -113,6 +142,8 @@ function parseDiscoveredModels(
   const activeModelId = recordString(activeModel, "id");
   const seen = new Set<string>();
   const parsed: Array<ServerProviderModel> = [];
+  const usageRoutes: Array<ServerProviderUsageRoute> = [];
+  const routeKeys = new Set<string>();
   for (const model of models) {
     const provider = recordString(model, "provider");
     const id = recordString(model, "id");
@@ -120,6 +151,16 @@ function parseDiscoveredModels(
       return Result.fail(
         new PiRpcError({ operation: "get_available_models", detail: "Invalid model identity" }),
       );
+    }
+    const usageDriver = piUsageDriver(provider, recordString(model, "api"));
+    const baseUrl = recordString(model, "baseUrl");
+    if (usageDriver && baseUrl) {
+      const origin = usageOrigin(baseUrl);
+      const key = origin ? `${usageDriver}:${origin}` : null;
+      if (origin && key && !routeKeys.has(key)) {
+        routeKeys.add(key);
+        usageRoutes.push({ driver: usageDriver, origin });
+      }
     }
     const slug = `${provider}/${id}`;
     if (seen.has(slug)) continue;
@@ -137,7 +178,7 @@ function parseDiscoveredModels(
       ),
     });
   }
-  return Result.succeed(parsed);
+  return Result.succeed({ models: parsed, usageRoutes });
 }
 
 const makePiDiscoveryConnection = Effect.fnUntraced(function* (
@@ -146,12 +187,14 @@ const makePiDiscoveryConnection = Effect.fnUntraced(function* (
   launchArgs: ReadonlyArray<string>,
   cwd?: string,
   textGenerationLaunch = false,
+  discoverExtensionPath?: string,
 ) {
   const launch = buildPiRpcLaunch({
     launchArgs,
     environment,
     mcpSession: undefined,
     extensionPath: undefined,
+    ...(discoverExtensionPath === undefined ? {} : { discoverExtensionPath }),
     ephemeral: true,
     disableExtensions: textGenerationLaunch,
     disableTools: textGenerationLaunch,
@@ -191,8 +234,16 @@ const readPiInventory = Effect.fn("PiProviderStatus.readPiInventory")(function* 
   launchArgs: ReadonlyArray<string>,
   timeoutMs: number,
   cwd?: string,
+  discoverExtensionPath?: string,
 ) {
-  const connection = yield* makePiDiscoveryConnection(piSettings, environment, launchArgs, cwd);
+  const connection = yield* makePiDiscoveryConnection(
+    piSettings,
+    environment,
+    launchArgs,
+    cwd,
+    false,
+    discoverExtensionPath,
+  );
   const stateData = yield* connection.request({ type: "get_state" }, timeoutMs);
   const modelsData = yield* connection.request({ type: "get_available_models" }, timeoutMs);
   const commandsData = yield* connection
@@ -219,8 +270,8 @@ const discoverPiTextGenerationModelSlugs = Effect.fn(
     true,
   );
   const modelsData = yield* connection.request({ type: "get_available_models" });
-  const models = yield* Effect.fromResult(parseDiscoveredModels(modelsData, undefined));
-  return new Set(models.map((model) => model.slug));
+  const discovered = yield* Effect.fromResult(parseDiscoveredModels(modelsData, undefined));
+  return new Set(discovered.models.map((model) => model.slug));
 }, Effect.scoped);
 
 const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function* (
@@ -228,6 +279,7 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
   environment: NodeJS.ProcessEnv,
   launchArgs: ReadonlyArray<string>,
   cwd?: string,
+  discoverExtensionPath?: string,
 ) {
   const timeoutMs = resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment);
   // This optional probe must finish before the normal discovery deadline so
@@ -257,6 +309,7 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
     launchArgs,
     timeoutMs,
     cwd,
+    discoverExtensionPath,
   ).pipe(
     // Pi's RPC mode reads stdin only after session_start, so a startup dialog (an MCP adapter asking
     // to approve a project server) can never be answered and Pi exits. Retry declining project trust
@@ -267,10 +320,17 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
         (error.operation === "read" || error.operation === "exit") &&
         !launchArgs.some((arg) => PI_PROJECT_TRUST_ARGUMENTS.has(arg)),
       () =>
-        readPiInventory(piSettings, environment, [...launchArgs, "--no-approve"], timeoutMs, cwd),
+        readPiInventory(
+          piSettings,
+          environment,
+          [...launchArgs, "--no-approve"],
+          timeoutMs,
+          cwd,
+          discoverExtensionPath,
+        ),
     ),
   );
-  const discoveredModels = yield* Effect.fromResult(parseDiscoveredModels(modelsData, stateData));
+  const discovered = yield* Effect.fromResult(parseDiscoveredModels(modelsData, stateData));
   const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
   const textGenerationModelSlugs = yield* Fiber.join(textGenerationModelSlugsFiber);
   // Pi lists only models of providers it holds credentials for, including extension, virtual and
@@ -281,19 +341,20 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
   return {
     models:
       textGenerationModelSlugs === undefined
-        ? discoveredModels
-        : discoveredModels.map((model) =>
+        ? discovered.models
+        : discovered.models.map((model) =>
             textGenerationModelSlugs.has(model.slug)
               ? model
               : { ...model, supportsTextGeneration: false },
           ),
+    usageRoutes: discovered.usageRoutes,
     slashCommands: withPiBuiltinSlashCommands(slashCommands),
     skills,
-    authenticated: discoveredModels.length > 0,
+    authenticated: discovered.models.length > 0,
     unavailableActiveModel:
       activeProvider !== undefined &&
       activeModelId !== undefined &&
-      !discoveredModels.some((model) => model.subProvider === activeProvider)
+      !discovered.models.some((model) => model.subProvider === activeProvider)
         ? { provider: activeProvider, id: activeModelId }
         : undefined,
     textGenerationUnavailable: textGenerationModelSlugs?.size === 0,
@@ -434,10 +495,13 @@ export const buildInitialPiProviderSnapshot = Effect.fn(
 
 export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function* (
   piSettings: PiSettings,
-  environment: NodeJS.ProcessEnv = process.env,
+  environmentOverride?: NodeJS.ProcessEnv,
   cwd?: string,
   compatibility: ProviderCompatibilityLookup = noCompatibilityPolicy,
+  /** Registers discovered services so their models reach the picker, not just a live session. */
+  discoverExtensionPath?: string,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
+  const environment = environmentOverride ?? (yield* HostProcess.Environment);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = piModelsFromSettings(piSettings.customModels);
 
@@ -580,6 +644,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     probeEnvironment,
     resolvedLaunchArgs.args,
     cwd,
+    discoverExtensionPath,
   ).pipe(
     Effect.timeoutOption(
       resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment),
@@ -644,6 +709,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       enabled: piSettings.enabled,
       checkedAt,
       models,
+      usageRoutes: discovery.usageRoutes,
       slashCommands: discovery.slashCommands,
       skills: discovery.skills,
       probe: {

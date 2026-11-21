@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./pycells": {
+      "types": "./src/pycells.ts",
+      "import": "./src/pycells.ts"
+    },
     "./png": {
       "types": "./src/png.ts",
       "import": "./src/png.ts"

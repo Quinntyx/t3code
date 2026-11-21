@@ -1,4 +1,4 @@
-export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
+export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill" | "thread";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -43,7 +43,7 @@ function isWhitespace(char: string): boolean {
 }
 
 /** A second slash or backslash makes the whole word a path, even when the caret precedes it. */
-export function isPathWord(
+function isPathWord(
   text: string,
   wordStart: number,
   cursor: number,
@@ -61,11 +61,11 @@ export function isPathWord(
  * token regexes already refuse to render as skills, plus the punctuation prose puts after
  * one (`$10k.`, `($5)`).
  */
-export function isCurrencyAmountQuery(query: string): boolean {
+function isCurrencyAmountQuery(query: string): boolean {
   return /^\.?[0-9][0-9,._]*(?:[kKmMbBtT]|[eE][0-9]+)?[.,;:!?)]*$/.test(query);
 }
 
-export function detectComposerPullRequestTrigger(token: string, cursor: number) {
+function detectComposerPullRequestTrigger(token: string, cursor: number) {
   if (/^[@\p{Sc}]/u.test(token)) return null;
   const match = /(?:^|\p{Ps})#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
   if (!match) return null;
@@ -103,6 +103,16 @@ export function detectComposerTrigger(
   }
   const pullRequestTrigger = detectComposerPullRequestTrigger(token, cursor);
   if (pullRequestTrigger) return pullRequestTrigger;
+  // A second `%` makes the word text, such as `%APPDATA%`.
+  const threadMatch = /^%([^%]*)$/u.exec(token);
+  if (threadMatch) {
+    return {
+      kind: "thread",
+      query: threadMatch[1] ?? "",
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
   const skillPrefix = /^\p{Sc}/u.exec(token);
   if (skillPrefix) {
     if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;

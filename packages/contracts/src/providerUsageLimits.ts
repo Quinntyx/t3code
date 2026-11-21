@@ -9,6 +9,24 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 
+/** Money in major units of one lowercase ISO 4217 currency, such as `usd` or `eur`. */
+export const ServerProviderUsageAmount = Schema.Struct({
+  currency: TrimmedNonEmptyString,
+  used: Schema.optional(Schema.Number),
+  limit: Schema.optional(Schema.Number),
+  remaining: Schema.optional(Schema.Number),
+});
+export type ServerProviderUsageAmount = typeof ServerProviderUsageAmount.Type;
+
+/** Money the provider reports without an allowance, so it is a line rather than a bar. */
+export const ServerProviderUsageAmountLine = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  amount: ServerProviderUsageAmount,
+  resetsAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderUsageAmountLine = typeof ServerProviderUsageAmountLine.Type;
+
 /** Stable per-provider ids let sparse updates merge with full probes. */
 export const ServerProviderUsageWindow = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -20,6 +38,7 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  amount: Schema.optional(ServerProviderUsageAmount),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
@@ -47,9 +66,12 @@ export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 export const ServerProviderUsageLimits = Schema.Struct({
   checkedAt: IsoDateTime,
   windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+  amounts: Schema.optional(ForwardCompatibleArray(ServerProviderUsageAmountLine)),
   /** A $0 monthly spend cap has no percentage, so it cannot be a window. */
   zeroSpendCap: Schema.optional(Schema.Boolean),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
+  /** The provider whose login these limits read, when it is not the reporting provider. */
+  ownerDriver: Schema.optional(ProviderDriverKind),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(
     Schema.Struct({
@@ -72,10 +94,30 @@ export const ProviderUsageLimitsUpdate = Schema.Struct({
 });
 export type ProviderUsageLimitsUpdate = typeof ProviderUsageLimitsUpdate.Type;
 
-export const UsageLimitSourceAccount = Schema.Struct({
+export const ServerProviderUsageRoute = Schema.Struct({
+  driver: ProviderDriverKind,
+  origin: TrimmedNonEmptyString,
+});
+export type ServerProviderUsageRoute = typeof ServerProviderUsageRoute.Type;
+
+/** A quota the provider reads from one of its own logins, beside its primary limits. */
+export const ServerProviderUsageSource = Schema.Struct({
   id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
   driver: ProviderDriverKind,
   email: Schema.optional(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(TrimmedNonEmptyString),
+  limits: ServerProviderUsageLimits,
+});
+export type ServerProviderUsageSource = typeof ServerProviderUsageSource.Type;
+
+export const UsageLimitSourceAccount = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  /** A hub provider's own id when no T3 driver reads it, e.g. `mistral`. */
+  driver: ProviderDriverKind,
+  email: Schema.optional(TrimmedNonEmptyString),
+  /** Hub display name for an account without an e-mail. */
+  label: Schema.optional(TrimmedNonEmptyString),
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
   usageLimits: ServerProviderUsageLimits,

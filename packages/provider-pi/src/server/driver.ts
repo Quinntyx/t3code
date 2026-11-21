@@ -1,6 +1,7 @@
 // User-wide ~/.pi/agent state makes continuation identity use default instance grouping.
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { PiSettings } from "../settings.ts";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -10,6 +11,10 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { readPiCodexUsageLimits } from "./codexUsageLimits.ts";
+import { withHubModelsEnvironment } from "./discoverExtensionSource.ts";
+import { readPiOpenCodeGoUsageLimits } from "./goUsageLimits.ts";
+import { materializePiT3DiscoverExtension } from "./mcpInjection.ts";
 import { piUsageReader } from "./usage.ts";
 import { makePiTextGeneration } from "./textGeneration.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./adapter.ts";
@@ -47,12 +52,14 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
   npmPackageName: "@earendil-works/pi-coding-agent",
   mise: { tool: "pi" },
   nativeUpdate: { args: ["update", "--self"] },
+  extensionUpdateArgs: ["update", "--extensions"],
 });
 
 export type PiDriverEnv =
   | PiAdapterV2DriverEnv
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -92,6 +99,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     config,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const digest = yield* Digest.Digest;
     const fileSystem = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
@@ -146,16 +154,65 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       host.compatibility,
     );
 
-    const checkProvider = fileSystem
-      .makeDirectory(probeCwd, { recursive: true })
-      .pipe(
-        Effect.ignore,
-        Effect.andThen(
-          checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility),
+    const discoverExtensionPath = yield* materializePiT3DiscoverExtension(
+      host.paths.providerStatusCacheDir,
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const checkProvider = fileSystem.makeDirectory(probeCwd, { recursive: true }).pipe(
+      Effect.ignore,
+      Effect.andThen(
+        Effect.all(
+          {
+            provider: (host.hubModels ?? Effect.succeed([])).pipe(
+              Effect.flatMap((hubModels) =>
+                checkPiProviderStatus(
+                  effectiveConfig,
+                  withHubModelsEnvironment(processEnv, hubModels),
+                  probeCwd,
+                  host.compatibility,
+                  discoverExtensionPath,
+                ),
+              ),
+            ),
+            usageLimits: readPiOpenCodeGoUsageLimits({
+              enabled,
+              settings: effectiveConfig,
+              environment: processEnv,
+            }),
+            codexUsage: readPiCodexUsageLimits({
+              enabled,
+              settings: effectiveConfig,
+              environment: processEnv,
+            }),
+          },
+          { concurrency: "unbounded" },
         ),
-        Effect.map(stampIdentity),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      );
+      ),
+      Effect.map(({ provider, usageLimits, codexUsage }) => ({
+        ...provider,
+        usageLimits,
+        ...(codexUsage.limits.unavailable || codexUsage.limits.windows.length === 0
+          ? {}
+          : {
+              usageSources: [
+                {
+                  id: "chatgpt",
+                  label: "ChatGPT",
+                  driver: ProviderDriverKind.make("codex"),
+                  ...(codexUsage.email ? { email: codexUsage.email } : {}),
+                  ...(codexUsage.workspaceId ? { workspaceId: codexUsage.workspaceId } : {}),
+                  limits: codexUsage.limits,
+                },
+              ],
+            }),
+      })),
+      Effect.map(stampIdentity),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(Digest.Digest, digest),
+    );
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<PiSettings>>({

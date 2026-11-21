@@ -9,6 +9,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { withMessageSenderNote } from "@t3tools/contracts";
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 
 import * as Config from "effect/Config";
 
@@ -138,7 +139,15 @@ export function historicalMessage(
   let text: string;
   switch (item.type) {
     case "user_message":
-      text = withMessageSenderNote(item, item.text);
+      // Replay what the live turn showed. A canonical context link carries a composer context id,
+      // which an agent reads as a thread id and cannot resolve.
+      text = withMessageSenderNote(
+        item,
+        projectComposerContextForProvider({
+          text: item.text,
+          records: item.context?.records ?? [],
+        }),
+      );
       break;
     case "assistant_message":
       text = item.text;

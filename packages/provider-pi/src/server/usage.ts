@@ -5,8 +5,8 @@ import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
+  normalizeUsageTokens,
   parseTimestampMs,
-  tokenCount,
   totalTokens,
   type ProviderUsageReader,
   type TranscriptUsageFormat,
@@ -71,15 +71,16 @@ function parseRecord(parsed: unknown, state: typeof PiScanState.Type): readonly 
         : source.model
       : undefined;
   const model = "provider" in source ? `${source.provider}/${rateModel}` : "Tools/summaries";
-  const outputTokens = tokenCount(usage.output);
-  const totals = {
-    // Pi's input/cache counters are already disjoint.
-    uncachedInputTokens: tokenCount(usage.input),
-    cachedInputTokens: tokenCount(usage.cacheRead),
-    cacheCreationTokens: tokenCount(usage.cacheWrite),
-    outputTokens,
-    reasoningTokens: Math.min(outputTokens, tokenCount(usage.reasoning)),
-  };
+  const totals = normalizeUsageTokens(
+    {
+      inputTokens: usage.input,
+      cachedInputTokens: usage.cacheRead,
+      cacheCreationTokens: usage.cacheWrite,
+      outputTokens: usage.output,
+      reasoningTokens: usage.reasoning,
+    },
+    "uncached",
+  );
   const cost = usage.cost?.total;
   // Omitted Pi rates default to zero; use shared estimates without positive transcript cost.
   const reportedCostUsd =

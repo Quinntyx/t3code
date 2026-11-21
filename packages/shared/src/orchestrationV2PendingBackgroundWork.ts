@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2ThreadShell,
+  OrchestrationV2ThreadWatch,
   OrchestrationV2TurnItem,
   ThreadId,
   ThreadPullRequestLink,
@@ -70,15 +71,12 @@ export function deriveBlockedOnThreadWait(input: {
     ) {
       continue;
     }
-    if (item.type !== "dynamic_tool") return false;
-    const tool = resolveT3McpToolId(item.toolName);
+    // A thread wait is a short call that becomes a watch, so only a blocking delegate holds here.
     if (
-      tool !== "t3_thread_wait" &&
-      !(
-        tool === "delegate_task" &&
-        Predicate.isObject(item.input) &&
-        Reflect.get(item.input, "mode") === "wait"
-      )
+      item.type !== "dynamic_tool" ||
+      resolveT3McpToolId(item.toolName) !== "delegate_task" ||
+      !Predicate.isObject(item.input) ||
+      Reflect.get(item.input, "mode") !== "wait"
     ) {
       return false;
     }
@@ -104,6 +102,19 @@ export function backgroundWorkHoldsCompletion(
 ): boolean {
   return tasks.some(
     (task) => task.awaited === true || backgroundWorkKindHoldsCompletion(task.kind),
+  );
+}
+
+/** Waiting on agents (subagents, workflows, delegates) is work in progress, unlike a CI watch. */
+export function waitingOnAgents(thread: {
+  readonly blockedOnThreadWait?: boolean | undefined;
+  readonly pendingBackgroundTasks?:
+    | ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind">>
+    | undefined;
+}): boolean {
+  return (
+    thread.blockedOnThreadWait === true ||
+    (thread.pendingBackgroundTasks ?? []).some((task) => task.kind === "subagent")
   );
 }
 
@@ -267,6 +278,8 @@ export function derivePendingBackgroundWork(input: {
   /** Excludes rolled-back runs; optional only when the caller already filtered them, as SQL shell reads do. */
   readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
   readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
+  readonly awaitedScheduledTaskIds?: ReadonlyArray<string> | undefined;
+  readonly threadWatches?: ReadonlyArray<OrchestrationV2ThreadWatch> | undefined;
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const hasActiveRun =
     input.hasActiveRun ??
@@ -277,8 +290,21 @@ export function derivePendingBackgroundWork(input: {
   if (hasActiveRun) {
     return [];
   }
+  const scheduledTasks: Array<PendingBackgroundWorkTask> = (
+    input.awaitedScheduledTaskIds ?? []
+  ).map((taskId) => ({
+    taskId,
+    description: "Scheduled follow-up",
+    kind: "monitor",
+    awaited: true,
+  }));
+  const watchTasks = [
+    ...pullRequestWatchTasks(input.pullRequests),
+    ...scheduledTasks,
+    ...(input.threadWatches ?? []).map(threadWatchTask),
+  ];
   if (input.latestRun == null) {
-    return pullRequestWatchTasks(input.pullRequests);
+    return watchTasks;
   }
   if (!isLatestRunSettledForBackgroundWait(input.latestRun)) {
     return [];
@@ -317,7 +343,7 @@ export function derivePendingBackgroundWork(input: {
     byTaskId.set(taskId, pendingTaskFromTurnItem(taskId, item));
   }
 
-  for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
+  for (const task of watchTasks) byTaskId.set(task.taskId, task);
 
   // Follow-up tasks can share a child thread; the pending list counts agents, not messages.
   const childThreadIds = new Set<ThreadId>();
@@ -329,28 +355,63 @@ export function derivePendingBackgroundWork(input: {
   });
 }
 
+type WatchStateFields = Pick<ThreadPullRequestLink, "source" | "watch">;
+
+type PullRequestWatchLink = Pick<ThreadPullRequestLink, "host" | "repository" | "number"> &
+  WatchStateFields;
+
+const isWatchedLink = (link: WatchStateFields) =>
+  link.watch !== undefined && link.source !== "stack-dismissed";
+
+// Links store their normalized identity, and this id only has to be unique within the
+// thread, so it reads those fields instead of parsing the URL.
+const pullRequestWatchTaskId = (link: PullRequestWatchLink) =>
+  `${PULL_REQUEST_WATCH_TASK_ID}${link.host.toLowerCase()}/${link.repository.toLowerCase()}#${link.number}`;
+
+/** Maps a PR-watch monitor's task id back to the linked PR it watches. */
+export function findPullRequestForWatchTask<Link extends PullRequestWatchLink>(
+  taskId: string,
+  pullRequests: ReadonlyArray<Link> | undefined,
+): Link | undefined {
+  return pullRequests?.find(
+    (link) => isWatchedLink(link) && pullRequestWatchTaskId(link) === taskId,
+  );
+}
+
 function pullRequestWatchTasks(
   pullRequests: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined,
 ): Array<PendingBackgroundWorkTask> {
   return (pullRequests ?? []).flatMap((link) =>
-    link.watch === undefined || link.source === "stack-dismissed"
+    !isWatchedLink(link)
       ? []
       : [
           {
-            // Links store their normalized identity, and this id only has to be unique within the
-            // thread, so it reads those fields instead of parsing the URL.
-            taskId: `${PULL_REQUEST_WATCH_TASK_ID}${link.host.toLowerCase()}/${link.repository.toLowerCase()}#${link.number}`,
+            taskId: pullRequestWatchTaskId(link),
             description: `Watching pull request #${link.number}`,
             kind: "monitor" as const,
             // Once every check finished, a person moves the PR next: the watch stays on but holds
             // nothing, unless the agent said it acts on the PR itself. A merged PR's watch holds
             // until its read wakes the agent, so settling on merge waits.
-            ...(link.watch.checksPending === false &&
-            link.watch.until !== "merged" &&
+            ...(link.watch!.checksPending === false &&
+            link.watch!.until !== "merged" &&
             link.snapshot?.state !== "merged"
               ? {}
               : { awaited: true as const }),
           },
         ],
   );
+}
+
+/** Unique within the watching thread: it watches each thread at most once. */
+const threadWatchTaskId = (watch: Pick<OrchestrationV2ThreadWatch, "environmentId" | "threadId">) =>
+  `thread-watch:${watch.environmentId ?? "here"}/${watch.threadId}`;
+
+function threadWatchTask(watch: OrchestrationV2ThreadWatch): PendingBackgroundWorkTask {
+  return {
+    taskId: threadWatchTaskId(watch),
+    description: watch.title ?? "Another thread",
+    kind: "monitor",
+    awaited: true,
+    ...(watch.environmentId === undefined ? { watchedThreadId: watch.threadId } : {}),
+  };
 }

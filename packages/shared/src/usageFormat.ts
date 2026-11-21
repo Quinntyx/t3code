@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off -- Usage windows are calendar days in the viewer's zone, derived from wall-clock "now" via Intl.
 import {
   UsageDay,
+  type ThreadUsageModel,
   type UsageResolution,
   type UsageSource,
   type UsageSummaryInput,
@@ -12,6 +13,30 @@ const CURRENCY = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+
+const moneyFormatters = new Map<string, Intl.NumberFormat | null>();
+
+/** Major units of any ISO 4217 code; the runtime rejects unknown codes, so fall back to a suffix. */
+export function formatMoney(value: number, currency: string): string {
+  const code = currency.trim();
+  const key = code.toUpperCase();
+  let formatter = moneyFormatters.get(key);
+  if (formatter === undefined) {
+    try {
+      formatter = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: key,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      formatter = null;
+    }
+    if (moneyFormatters.size >= 16) moneyFormatters.clear();
+    moneyFormatters.set(key, formatter);
+  }
+  return formatter === null ? `${value.toFixed(2)} ${key}` : formatter.format(value);
+}
 
 const INTEGER = new Intl.NumberFormat("en-US");
 
@@ -83,6 +108,17 @@ export function usageSourceMessages(
 
 export function formatUsd(value: number, locale?: string): string {
   return numberFormatter(formatLocale(locale), true).format(value);
+}
+
+/** Unpriced models or unmeasured usage leave the sum short, so it reads as a floor. */
+export function formatThreadUsageCost(
+  models: ReadonlyArray<Pick<ThreadUsageModel, "costUsd">>,
+  incomplete = false,
+): string | null {
+  const priced = models.filter((model) => model.costUsd !== null);
+  if (priced.length === 0) return null;
+  const total = formatUsd(priced.reduce((sum, model) => sum + (model.costUsd ?? 0), 0));
+  return incomplete || priced.length < models.length ? `${total}+` : total;
 }
 
 export function formatCount(value: number, locale?: string): string {

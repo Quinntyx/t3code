@@ -41,9 +41,12 @@ export type T3McpToolSummaryAction =
   | "question-read"
   | "question-respond"
   | "secret-request"
+  | "connectors"
+  | "email-request"
   | "worktree-handoff"
   | "worktree-list"
   | "worktree-status"
+  | "worktree-restack"
   | "project-list"
   | "project-read"
   | "project-create"
@@ -226,6 +229,8 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "schedule-delete",
   ),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
+  external_connectors: tool(["List", "Listing", "Listed", "external connectors"], "connectors"),
+  compose_email: tool(["Draft", "Drafting", "Drafted", "an email"], "email-request"),
   create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),
   t3_thread_start: tool(["Start", "Starting", "Started", "a T3 thread"], "thread-create"),
   t3_thread_list: tool(["List", "Listing", "Listed", "T3 threads"], "thread-list"),
@@ -249,6 +254,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "worktree-handoff",
   ),
   t3_worktree_status: tool(["Get", "Getting", "Got", "thread worktree status"], "worktree-status"),
+  t3_worktree_restack: tool(
+    ["Restack", "Restacking", "Restacked", "stacked threads"],
+    "worktree-restack",
+  ),
   preview_status: tool(["Get", "Getting", "Got", "preview browser status"], "browser", "browser"),
   preview_open: tool(
     ["Open", "Opening", "Opened", "a page in the preview browser"],

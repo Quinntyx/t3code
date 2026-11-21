@@ -71,6 +71,14 @@ export function latestExecutedRun(
   return latest;
 }
 
+/** A failed or interrupted latest executed run can be continued where it left off. */
+export function resumableContinuationRun(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): OrchestrationV2Run | null {
+  const executed = latestExecutedRun(runs);
+  return executed?.status === "failed" || executed?.status === "interrupted" ? executed : null;
+}
+
 /**
  * Work started now would run in the project checkout, not the worktree the thread asked for. A
  * failed or interrupted setup leaves the request standing until a worktree exists or later work

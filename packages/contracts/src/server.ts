@@ -27,7 +27,12 @@ import { ManagedPolicySummary } from "./managedPolicy.ts";
 import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
+import {
+  ServerProviderUsageLimits,
+  ServerProviderUsageRoute,
+  ServerProviderUsageSource,
+  UsageLimitSourceSnapshots,
+} from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
@@ -294,9 +299,14 @@ export const ServerProvider = Schema.Struct({
    */
   workspaceRescannedAt: Schema.optionalKey(IsoDateTime),
   usageLimits: Schema.optional(ServerProviderUsageLimits),
+  /** Endpoints whose usage hubs report accounts this instance can route to. */
+  usageRoutes: Schema.optionalKey(ForwardCompatibleArray(ServerProviderUsageRoute)),
+  /** Quotas read from this instance's own logins, beyond its primary limits. */
+  usageSources: Schema.optionalKey(ForwardCompatibleArray(ServerProviderUsageSource)),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
   updateState: Schema.optionalKey(ServerProviderUpdateState),
+  canUpdateExtensions: Schema.optionalKey(Schema.Boolean),
   /**
    * Stands for the machine slash commands and skills, which are then left out. Sent to clients
    * that ask for catalog digests; they load both lists with their next cwd snapshot.
@@ -673,6 +683,9 @@ export const ThemeSettingBoolean = Schema.Struct({
 });
 export type ThemeSettingBoolean = typeof ThemeSettingBoolean.Type;
 
+export const ThemeSettingNumberUnit = Schema.Literals(["px", "%", "rem", "em", "ms", "s", "deg"]);
+export type ThemeSettingNumberUnit = typeof ThemeSettingNumberUnit.Type;
+
 export const ThemeSettingNumber = Schema.Struct({
   type: Schema.Literal("number"),
   ...themeSettingBaseFields,
@@ -680,7 +693,7 @@ export const ThemeSettingNumber = Schema.Struct({
   min: Schema.Finite,
   max: Schema.Finite,
   step: Schema.optional(Schema.Finite),
-  unit: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(12))),
+  unit: Schema.optional(ThemeSettingNumberUnit),
 });
 export type ThemeSettingNumber = typeof ThemeSettingNumber.Type;
 
@@ -1099,6 +1112,8 @@ export const ServerConfig = Schema.Struct({
   secretRequestReferences: Schema.optionalKey(Schema.Boolean),
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
   newProjectsRoot: Schema.optionalKey(TrimmedNonEmptyString),
+  /** `projects.createNew` honors `parentDirectory` and `layout`; send them only when advertised. */
+  newProjectPlacement: Schema.optionalKey(Schema.Boolean),
   /**
    * The latest stall long enough to notice, sent only for a few minutes after
    * it. A client that reconnects reads it to say why the host stopped
@@ -1342,6 +1357,7 @@ export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,
   targetVersion: Schema.optionalKey(TrimmedNonEmptyString),
   instanceId: Schema.optionalKey(ProviderInstanceId),
+  extensionsOnly: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 

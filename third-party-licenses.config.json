@@ -153,6 +153,14 @@
       ]
     },
     {
+      "bundles": ["android", "assets", "ios", "mobile"],
+      "license": "OFL-1.1",
+      "name": "FiraCode Nerd Font",
+      "noticeFile": "apps/mobile/assets/fonts/LICENSE.FiraCodeNerdFont",
+      "sourceUrl": "https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.5.1",
+      "version": "3.5.1"
+    },
+    {
       "bundles": ["android", "assets", "mobile"],
       "license": "Apache-2.0",
       "name": "MesloLGS NF",
@@ -868,6 +876,15 @@
       "name": "iobuffer",
       "license": "MIT",
       "sourceUrl": "https://github.com/image-js/iobuffer"
+    },
+    {
+      "name": "data-uri-to-buffer",
+      "version": "4.0.1",
+      "sourceUrl": "https://github.com/TooTallNate/node-data-uri-to-buffer",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net>"]
+      }
     }
   ]
 }

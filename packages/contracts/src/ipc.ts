@@ -31,6 +31,11 @@ export interface ContextMenuItem<T extends string = string> {
   icon?: string;
   separatorBefore?: boolean;
   checked?: boolean;
+  /**
+   * A menu the app draws relabels the item and stays open on the first click, so the choice
+   * is never one click away. Native menus cannot update in place and ignore it.
+   */
+  confirmLabel?: string;
   children?: readonly ContextMenuItem<T>[];
 }
 
@@ -48,6 +53,7 @@ export interface ContextMenuItemSchemaType {
   readonly icon?: string;
   readonly separatorBefore?: boolean;
   readonly checked?: boolean;
+  readonly confirmLabel?: string;
   readonly children?: readonly ContextMenuItemSchemaType[];
 }
 
@@ -61,6 +67,7 @@ export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Sc
   icon: Schema.optionalKey(Schema.String),
   separatorBefore: Schema.optionalKey(Schema.Boolean),
   checked: Schema.optionalKey(Schema.Boolean),
+  confirmLabel: Schema.optionalKey(Schema.String),
   children: Schema.optionalKey(
     Schema.Array(
       Schema.suspend((): Schema.Codec<ContextMenuItemSchemaType> => ContextMenuItemSchema),
@@ -1118,8 +1125,11 @@ export interface DesktopBridge {
   /** The environment ID recorded in this app's T3 home, such as its own machine's background service. */
   getHostEnvironmentId?: () => Promise<string | null>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
+  encryptVoiceKey: (key: string) => Promise<string>;
+  decryptVoiceKey: (encrypted: string) => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
+  getLegacyVisualSettings?: () => Promise<Record<string, unknown> | null>;
   getConnectionCatalog: () => Promise<string | null>;
   setConnectionCatalog: (catalog: string) => Promise<boolean>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
@@ -1411,6 +1421,8 @@ export interface LocalApi {
     openSystemSettings: (pane: SystemSettingsPane) => Promise<void>;
   };
   contextMenu: {
+    /** False where the OS draws the menu, which cannot relabel an item in place. */
+    readonly supportsInPlaceConfirm: boolean;
     show: <T extends string>(
       items: readonly ContextMenuItem<T>[],
       position?: { x: number; y: number },

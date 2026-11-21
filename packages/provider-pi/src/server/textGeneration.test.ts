@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -16,16 +17,18 @@ const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unk
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const makeFakePi = (
-  reply: string,
+  replies: string | ReadonlyArray<string>,
   setModelError?: string,
   turnEvents: ReadonlyArray<Record<string, unknown>> = [],
   models?: ReadonlyArray<Record<string, unknown>>,
   version = "0.84.3",
   thinkingError?: string,
-) =>
-  Effect.gen(function* () {
+) => {
+  const answers = typeof replies === "string" ? [replies] : replies;
+  return Effect.gen(function* () {
     const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
     const received: Array<Record<string, unknown>> = [];
+    let textIndex = 0;
     const emit = (record: Record<string, unknown>) =>
       Queue.offer(stdout, new TextEncoder().encode(`${encodeJsonLine(record)}\n`));
     let buffered = "";
@@ -43,6 +46,7 @@ const makeFakePi = (
             for (const event of turnEvents) yield* emit(event);
             yield* emit({ type: "agent_settled" });
           } else if (record["type"] === "get_last_assistant_text") {
+            const reply = answers[textIndex++] ?? answers.at(-1) ?? "";
             yield* emit({ ...response, success: true, data: { text: reply } });
           } else if (record["type"] === "get_available_models" && models !== undefined) {
             yield* emit({ ...response, success: true, data: { models } });
@@ -79,19 +83,28 @@ const makeFakePi = (
     });
     return { spawner, received };
   });
+};
 
 it.effect("runs Pi offline, since the process is stopped as soon as it answers", () =>
   Effect.gen(function* () {
     const pi = yield* makeFakePi(JSON.stringify({ subject: "Update README", body: "" }));
     const launches: Array<ReadonlyArray<string>> = [];
     const spawner = ChildProcessSpawner.make((command) => {
-      if (ChildProcess.isStandardCommand(command)) launches.push(command.args.map(String));
+      if (ChildProcess.isStandardCommand(command)) {
+        launches.push(command.args.map(String));
+        assert.equal(command.options.env?.["T3_TEST_PI_ENV"], "injected");
+      }
       return pi.spawner.spawn(command);
     });
-    const textGeneration = yield* makePiTextGeneration(
-      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
-      {},
-    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+    const textGeneration = yield* makePiTextGeneration({
+      enabled: true,
+      binaryPath: "pi",
+      launchArgs: "",
+      customModels: [],
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HostProcess.Environment, { T3_TEST_PI_ENV: "injected" }),
+    );
 
     const result = yield* textGeneration.generateCommitMessage({
       cwd: process.cwd(),
@@ -132,6 +145,68 @@ it.effect("names the model and the disabled extensions when Pi cannot load it", 
     assert.include(error.detail, "Model not found: demo/demo-model");
     assert.include(error.detail, "--no-extensions");
     assert.isUndefined(pi.received.find((record) => record["type"] === "prompt"));
+  }),
+);
+
+it.effect("asks Pi to repair a reply that has no JSON object", () =>
+  Effect.gen(function* () {
+    const pi = yield* makeFakePi([
+      "I could not inspect the diff.",
+      '{"title":"Fix the empty reply","body":"Handles a reply with no JSON."}',
+    ]);
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+    const result = yield* textGeneration.generatePrContent({
+      cwd: process.cwd(),
+      baseBranch: "main",
+      headBranch: "fix/demo",
+      commitSummary: "fix: handle an empty reply",
+      diffSummary: "1 file changed",
+      diffPatch: "diff --git a/README.md b/README.md",
+      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+    });
+
+    assert.equal(result.title, "Fix the empty reply");
+    const prompts = pi.received.filter((record) => record["type"] === "prompt");
+    assert.lengthOf(prompts, 2);
+    const repairPrompt = String(prompts[1]?.["message"]);
+    assert.include(repairPrompt, "the reply contained no JSON object");
+    assert.include(repairPrompt, "JSON Schema");
+  }),
+);
+
+it.effect("reports why the repaired reply also failed", () =>
+  Effect.gen(function* () {
+    const pi = yield* makeFakePi(["I could not inspect the diff.", "Still not JSON."]);
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+    const error = yield* textGeneration
+      .generatePrContent({
+        cwd: process.cwd(),
+        baseBranch: "main",
+        headBranch: "fix/demo",
+        commitSummary: "fix: handle an empty reply",
+        diffSummary: "1 file changed",
+        diffPatch: "diff --git a/README.md b/README.md",
+        modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+      })
+      .pipe(Effect.flip);
+
+    assert.equal(error._tag, "TextGenerationError");
+    assert.include(
+      error.detail,
+      "Pi returned invalid structured output: the reply contained no JSON object (after one repair attempt).",
+    );
+    assert.lengthOf(
+      pi.received.filter((record) => record["type"] === "prompt"),
+      2,
+    );
   }),
 );
 

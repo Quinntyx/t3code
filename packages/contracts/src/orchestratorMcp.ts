@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { AuthMcpClientAccess } from "./auth.ts";
+import { EmailMessageRef } from "./emailInbox.ts";
 import {
   ContextTransferId,
   EnvironmentId,
@@ -177,9 +178,9 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
   isolation: Schema.optional(
-    Schema.Literals(["shared", "worktree"]).annotate({
+    Schema.Literals(["shared", "worktree", "stack"]).annotate({
       description:
-        "'shared' (default): parent checkout. 'worktree': new prepared checkout from the parent commit, for a separate checkout or PR per child. Uncommitted edits stay out.",
+        "'shared' (default): parent checkout. 'worktree': new prepared checkout from the parent commit, for a separate checkout or PR per child. Uncommitted edits stay out. 'stack': same, from your branch; its PR targets your branch. Commit first.",
     }),
   ),
   mode: Schema.optional(
@@ -207,6 +208,10 @@ export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
   "Completion wakes this thread. Do not wait on it or poll it. Continue other work, and end your turn when none is left.";
 // A string, not a literal: linked environments on other versions send their own wording.
 const OrchestratorMcpRunningTaskNext = Schema.String;
+
+// Set on an agent's wait that timed out on a thread it does not own: T3 now watches it.
+export const ORCHESTRATOR_MCP_THREAD_WATCH_NEXT =
+  "T3 watches this thread and wakes you when its run ends, so end your turn. Do not wait on it or poll it.";
 
 // Optional: linked environments on older versions omit it.
 const OrchestratorMcpExecutedModel = Schema.NullOr(Schema.String).annotate({
@@ -442,6 +447,21 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   total: NonNegativeInt,
 });
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
+
+/** A list item plus the search fields that say why the thread matched. */
+export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
+  ...OrchestratorMcpThreadListItem.fields,
+  source: Schema.Literals(["title", "user", "assistant"]),
+  snippet: Schema.optional(Schema.String.check(Schema.isMaxLength(240))),
+  messageCreatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+});
+export type OrchestratorMcpThreadSearchMatch = typeof OrchestratorMcpThreadSearchMatch.Type;
+
+export const OrchestratorMcpThreadSearchResult = Schema.Struct({
+  currentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
+});
+export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
@@ -857,6 +877,68 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
   }),
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
+
+const OrchestratorMcpEmailAddresses = Schema.Array(TrimmedNonEmptyString);
+
+export const OrchestratorMcpComposeEmailInput = Schema.Struct({
+  replyTo: Schema.optional(EmailMessageRef).annotate({
+    description:
+      "Original message from the native inbox. Derives the sender account and threading headers; empty to uses Reply-To/From. The user still reviews and sends the draft.",
+  }),
+  to: OrchestratorMcpEmailAddresses.annotate({
+    description: "Addresses, e.g. 'Ada <ada@example.com>'. May be empty for the user to fill in.",
+  }),
+  cc: Schema.optional(OrchestratorMcpEmailAddresses),
+  bcc: Schema.optional(OrchestratorMcpEmailAddresses),
+  subject: Schema.String,
+  body: Schema.String.annotate({ description: "Plain text, with the signoff." }),
+  from: Schema.optional(TrimmedNonEmptyString).annotate({
+    description: "Account name or address to send from. Default: the first account.",
+  }),
+  timeoutMs: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
+  ).annotate({ description: "Default 10 min." }),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
+    description: "Retry key for this draft. New key after a timeout or cancel.",
+  }),
+});
+export type OrchestratorMcpComposeEmailInput = typeof OrchestratorMcpComposeEmailInput.Type;
+
+export const OrchestratorMcpComposeEmailResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("sent"),
+    message: Schema.String,
+    from: Schema.String,
+    to: OrchestratorMcpEmailAddresses,
+    cc: OrchestratorMcpEmailAddresses,
+    bcc: OrchestratorMcpEmailAddresses,
+    subject: Schema.String,
+    edited: Schema.Array(Schema.Literals(["from", "to", "cc", "bcc", "subject", "body"])).annotate({
+      description: "Fields the user changed from your draft before sending.",
+    }),
+  }),
+  Schema.Struct({
+    status: Schema.Literals(["discarded", "cancelled", "timed_out"]).annotate({
+      description:
+        "discarded: user chose not to send. cancelled: ended with the run. timed_out: not sent in time. Do not retry unless the user asks.",
+    }),
+  }),
+]);
+export type OrchestratorMcpComposeEmailResult = typeof OrchestratorMcpComposeEmailResult.Type;
+
+export const OrchestratorMcpExternalConnectorsResult = Schema.Struct({
+  connectors: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      enabled: Schema.Boolean,
+      tool: Schema.String,
+      tools: Schema.optional(Schema.Array(Schema.String)),
+      note: Schema.String,
+    }),
+  ),
+});
+export type OrchestratorMcpExternalConnectorsResult =
+  typeof OrchestratorMcpExternalConnectorsResult.Type;
 
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({

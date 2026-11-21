@@ -60,6 +60,7 @@ export interface ProviderInstance {
   readonly afterUpdate?: Effect.Effect<void, ProviderDriverError>;
   readonly consumeResetCredit?: (
     creditId: string | undefined,
+    onConsumed?: (outcome: ProviderConsumeResetCreditOutcome) => Effect.Effect<void>,
   ) => Effect.Effect<ProviderConsumeResetCreditOutcome, ProviderDriverError>;
   readonly orchestrationAdapter: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly textGeneration: ProviderTextGeneration;
