@@ -10,7 +10,6 @@ import { AsyncResult } from "effect/reactivity";
 
 import {
   canOneClickUpdateProviderCandidate,
-  collectProviderMaintenanceCandidates,
   getProviderUpdateRunToastView,
   getProviderUpdateSidebarPillView,
   hasOneClickUpdateProviderCandidate,
@@ -72,41 +71,6 @@ function updateCandidate(input: Parameters<typeof provider>[0]): ProviderUpdateC
 }
 
 describe("provider update launch notification logic", () => {
-  it("includes current extensions for every instance without repeating shared CLI updates", () => {
-    const pi = {
-      ...provider({ driver: driver("pi"), advisoryStatus: "current" }),
-      canUpdateExtensions: true,
-    };
-    const claude = { ...provider({ driver: driver("claudeAgent") }), canUpdateExtensions: true };
-    const candidates = collectProviderMaintenanceCandidates([
-      pi,
-      { ...pi, instanceId: instanceId("pi-work") },
-      { ...pi, instanceId: instanceId("disabled"), enabled: false },
-      { ...pi, instanceId: instanceId("missing"), installed: false },
-      {
-        ...pi,
-        instanceId: instanceId("running"),
-        updateState: {
-          status: "running",
-          startedAt: checkedAt,
-          finishedAt: null,
-          message: "Updating",
-          output: null,
-        },
-      },
-      claude,
-      { ...claude, instanceId: instanceId("claude-work") },
-      provider({ driver: driver("codex"), advisoryStatus: "current" }),
-    ]);
-    expect(
-      candidates.map(({ instanceId, extensionsOnly }) => [instanceId, extensionsOnly]),
-    ).toEqual([
-      [instanceId("claudeAgent"), false],
-      [instanceId("pi"), true],
-      [instanceId("pi-work"), true],
-      [instanceId("claude-work"), true],
-    ]);
-  });
   it("disables one-click updates when provider instances disagree on the update command", () => {
     const candidate = updateCandidate({
       driver: driver("claudeAgent"),
@@ -352,6 +316,41 @@ describe("getProviderUpdateRunToastView", () => {
     driver: driver(providerDriver),
     instanceId: instanceId(providerDriver),
     result,
+  });
+
+  it("preserves the local server restart instruction after a successful update", () => {
+    const message =
+      "OpenCode CLI updated. Restart the configured local OpenCode server to use the new version.";
+    const updated = {
+      ...provider({
+        driver: driver("opencode"),
+        version: "2.1.2",
+        advisoryStatus: "current",
+        updateState: updateState("succeeded", message),
+      }),
+      installedVersion: "2.2.5",
+    };
+    expect(
+      getProviderUpdateRunToastView([
+        run("Linux", "opencode", AsyncResult.success({ providers: [updated] })),
+        run("Laptop", "opencode", AsyncResult.success({ providers: [updated] })),
+      ]),
+    ).toMatchObject({
+      type: "success",
+      description: `Linux · OpenCode: ${message}\nLaptop · OpenCode: ${message}`,
+    });
+    expect(
+      getProviderUpdateSidebarPillView([updated], {
+        visibleAfterIso: sessionStartedAt,
+      }),
+    ).toMatchObject({ title: "OpenCode updated: v2.2.5", description: message });
+
+    const restarted = { ...updated, version: "2.2.5" };
+    expect(
+      getProviderUpdateRunToastView([
+        run("Linux", "opencode", AsyncResult.success({ providers: [restarted] })),
+      ]),
+    ).toMatchObject({ description: "New sessions will use the updated provider." });
   });
 
   it("lists every failed update and ignores interrupted ones", () => {

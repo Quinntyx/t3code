@@ -1,12 +1,14 @@
+import { useGT } from "gt-react-native";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 
 /** The guest's name above their message, where "Sent by T3 Code" sits for server messages. */
 export function GuestMessageName(props: { readonly name: string }) {
+  const gt = useGT();
   return (
     <Text
-      accessibilityLabel={`${props.name} (guest)`}
+      accessibilityLabel={gt("{name} (guest)", { name: props.name })}
       className="mb-1 pr-1 font-t3-medium text-2xs text-adaptive-fuchsia-600-300"
       numberOfLines={1}
     >
@@ -26,7 +28,5 @@ export function GuestBubbleTint() {
 }
 
 /** A pending guest bubble has a dashed edge and no fill. */
-export const GUEST_PENDING_EDGE_CLASS_NAME =
-  "border border-dashed border-adaptive-fuchsia-500-a50-300-a40 bg-transparent";
-
-export const GUEST_PENDING_BUBBLE_CLASS_NAME = `min-w-0 rounded-[20px] ${GUEST_PENDING_EDGE_CLASS_NAME} px-3.5 py-2.5`;
+export const GUEST_PENDING_BUBBLE_CLASS_NAME =
+  "min-w-0 rounded-[20px] border border-dashed border-adaptive-fuchsia-500-a50-300-a40 bg-transparent px-3.5 py-2.5";

@@ -5,7 +5,6 @@ import {
   resolveDeviceHubAccess,
 } from "@t3tools/client-runtime/state/deviceHubAccess";
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -15,19 +14,6 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSession } from "./session";
 
 const ACCESS_RETRY_INTERVAL_MS = 10_000;
-
-export interface PreviewStreamAccessState {
-  readonly access: DeviceHubAccess | null;
-  readonly error: string | null;
-  readonly isPending: boolean;
-}
-
-function formatAccessError(cause: Cause.Cause<unknown>): string {
-  const error = Cause.squash(cause);
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "Could not connect to the remote browser.";
-}
 
 const previewStreamAccessAtom = Atom.family((environmentId: EnvironmentId) =>
   connectionAtomRuntime
@@ -55,27 +41,16 @@ const retryingPreviewStreamAccessAtom = Atom.family((environmentId: EnvironmentI
   }),
 );
 
-export function usePreviewStreamAccessState(
+export function usePreviewStreamAccess(
   environmentId: EnvironmentId,
   options?: { readonly retry: boolean },
-): PreviewStreamAccessState {
+): DeviceHubAccess | null {
   const result = useAtomValue(
     options?.retry
       ? retryingPreviewStreamAccessAtom(environmentId)
       : previewStreamAccessAtom(environmentId),
   );
-  return {
-    access: AsyncResult.isSuccess(result) ? result.value : null,
-    error: AsyncResult.isFailure(result) ? formatAccessError(result.cause) : null,
-    isPending: result.waiting,
-  };
-}
-
-export function usePreviewStreamAccess(
-  environmentId: EnvironmentId,
-  options?: { readonly retry: boolean },
-): DeviceHubAccess | null {
-  return usePreviewStreamAccessState(environmentId, options).access;
+  return AsyncResult.isSuccess(result) ? result.value : null;
 }
 
 export function refreshPreviewStreamAccess(environmentId: EnvironmentId): void {

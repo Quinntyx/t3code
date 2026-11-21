@@ -3,7 +3,6 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
-  NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ProviderThread,
@@ -17,14 +16,12 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -32,6 +29,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -40,6 +38,11 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+import {
+  ThreadWorktreeRestore,
+  WorktreeRecreateError,
+} from "../workspace/restoreMissingWorktree.ts";
 
 it("stamps authoritative provenance on commands that create threads or messages", () => {
   const command: OrchestrationV2Command = {
@@ -65,6 +68,12 @@ it("stamps authoritative provenance on commands that create threads or messages"
       threadId: ThreadId.make("thread:elsewhere"),
       title: "Somewhere else",
     },
+    // A client's message goes through intake; only the server folds one into the creation.
+    initialMessage: {
+      messageId: MessageId.make("message:thread-management:forged"),
+      text: "Forged",
+      attachments: [],
+    },
   };
 
   const stamped = ThreadManagementService.withCreationProvenance(command, {
@@ -77,32 +86,7 @@ it("stamps authoritative provenance on commands that create threads or messages"
   });
   expect(stamped).not.toHaveProperty("linkOrigin");
   expect(stamped).not.toHaveProperty("delegatedFrom");
-});
-
-it("keeps a caller from starting a goal review on a settled run", () => {
-  const command: OrchestrationV2Command = {
-    type: "delegated_task.request",
-    createdBy: "agent",
-    creationSource: "mcp",
-    commandId: CommandId.make("command:thread-management:goal-review"),
-    parentThreadId: ThreadId.make("thread:thread-management:goal-review"),
-    parentRunId: RunId.make("run:thread-management:goal-review"),
-    parentNodeId: NodeId.make("node:thread-management:goal-review"),
-    task: "Review the goal",
-    modelSelection: {
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5-codex",
-    },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    purpose: "goal_review",
-  };
-
-  const stamped = ThreadManagementService.withCreationProvenance(command, {
-    createdBy: "agent",
-    creationSource: "mcp",
-  });
-  expect(stamped).not.toHaveProperty("purpose");
+  expect(stamped).not.toHaveProperty("initialMessage");
 });
 
 const layerReceiptsTest = CommandReceiptStore.layer.pipe(
@@ -228,146 +212,97 @@ it.effect(
 );
 
 it.effect.each([
-  { name: "local delegation", kind: "local", block: true, hidden: true, rejected: true },
-  { name: "linked delegation", kind: "remote", block: true, hidden: true, rejected: true },
-  { name: "an enabled model", kind: "local", block: true, hidden: false, rejected: false },
-  { name: "blocking switched off", kind: "local", block: false, hidden: true, rejected: false },
-  { name: "blocking unset", kind: "local", hidden: true, rejected: false },
-  { name: "another provider instance", kind: "other", block: true, hidden: true, rejected: false },
-  { name: "a direct user launch", kind: "user", block: true, hidden: true, rejected: false },
-  { name: "a normal message", kind: "message", block: true, hidden: true, rejected: false },
-  { name: "an accepted replay", kind: "replay", block: true, hidden: true, rejected: false },
-  {
-    name: "new models disabled",
-    kind: "local",
-    block: true,
-    hidden: false,
-    newModelsEnabled: false,
-    rejected: true,
-  },
-  {
-    name: "an explicitly enabled model",
-    kind: "local",
-    block: true,
-    hidden: false,
-    newModelsEnabled: false,
-    enabledModels: ["test"],
-    rejected: false,
-  },
-  {
-    name: "a custom model",
-    kind: "local",
-    block: true,
-    hidden: false,
-    newModelsEnabled: false,
-    custom: true,
-    rejected: false,
-  },
-] as const)("delegation model policy handles $name", (scenario) => {
-  const instanceId = ProviderInstanceId.make("codex_work");
-  const commandId = CommandId.make(`command:delegation-model-policy:${scenario.name}`);
-  const threadId = ThreadId.make("thread:delegation-model-policy");
-  const projectId = ProjectId.make("project:thread-management:chokepoint");
-  const modelSelection = {
-    instanceId: scenario.kind === "other" ? ProviderInstanceId.make("codex_other") : instanceId,
-    model: "test",
-  };
-  const command: OrchestrationV2Command =
-    scenario.kind === "message"
-      ? {
-          type: "message.dispatch",
-          commandId,
-          threadId,
-          messageId: MessageId.make("message:delegation-model-policy"),
-          text: "Continue",
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "user",
-          creationSource: "web",
-        }
-      : scenario.kind === "remote" || scenario.kind === "user"
-        ? {
-            type: "thread.create",
-            commandId,
-            threadId,
-            projectId,
-            title: "Delegation model policy",
-            modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            ...(scenario.kind === "remote"
-              ? {
-                  delegatedFrom: {
-                    environmentId: EnvironmentId.make("environment:parent"),
-                    threadId: ThreadId.make("thread:parent"),
-                    title: "Parent",
-                  },
-                }
-              : {}),
-            createdBy: "agent",
-            creationSource: "mcp",
-          }
-        : {
-            type: "delegated_task.request",
-            commandId,
-            parentThreadId: threadId,
-            parentRunId: RunId.make("run:delegation-model-policy"),
-            parentNodeId: NodeId.make("node:delegation-model-policy"),
-            task: "Do not start a disabled model",
-            modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            createdBy: "agent",
-            creationSource: "mcp",
-          };
+  { label: "fails a send that starts a turn", running: false },
+  { label: "still steers a running turn", running: true },
+])("sendToThread with a missing worktree that cannot be recreated $label", ({ running }) => {
+  const projectId = ProjectId.make("project:thread-management:worktree-gone");
+  const threadId = ThreadId.make("thread:thread-management:worktree-gone");
   const dispatched: Array<string> = [];
-  const layerTest = layerDispatchChokepointTest(
-    ServerSettings.layerTest({
-      providerInstances: {
-        [instanceId]: {
-          driver: "codex",
-          enabled: true,
-          ...("block" in scenario ? { blockDelegationForDisabledModels: scenario.block } : {}),
-          ...("custom" in scenario ? { config: { customModels: ["test"] } } : {}),
-        },
-        [ProviderInstanceId.make("codex_other")]: { driver: "codex", enabled: true },
-      },
-      providerModelPreferences: {
-        [instanceId]: {
-          hiddenModels: scenario.hidden ? ["test"] : [],
-          modelOrder: [],
-          newModelsEnabled: "newModelsEnabled" in scenario ? scenario.newModelsEnabled : true,
-          enabledModels: "enabledModels" in scenario ? scenario.enabledModels : [],
-        },
-      },
-    }),
-  )(dispatched);
+  const layerTest = ThreadManagementService.layerWithLegacyImporter.pipe(
+    Layer.provide(
+      Layer.succeed(ThreadWorktreeRestore, {
+        restore: () =>
+          Effect.fail(
+            new WorktreeRecreateError({
+              worktreePath: "/worktrees/gone",
+              branch: "t3/gone",
+              cause: new Error("branch_checked_out_in_worktree"),
+            }),
+          ),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
+        ensureTranscript: () => Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
+      }),
+    ),
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: {
+              id: threadId,
+              projectId,
+              deletedAt: null,
+              archivedAt: null,
+              worktreePath: "/worktrees/gone",
+              branch: "t3/gone",
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+            },
+            runs: running
+              ? [
+                  {
+                    id: RunId.make("run:thread-management:worktree-gone"),
+                    status: "running",
+                    activeAttemptId: "attempt:thread-management:worktree-gone",
+                  },
+                ]
+              : [],
+            providerTurns: running
+              ? [
+                  {
+                    runAttemptId: "attempt:thread-management:worktree-gone",
+                    status: "running",
+                  },
+                ]
+              : [],
+            messages: [],
+            turnItems: [],
+          } as unknown as OrchestrationV2ThreadProjection),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command.type);
+            return { sequence: 1, storedEvents: [] } as never;
+          }),
+      }),
+    ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provideMerge(layerReceiptsTest),
+  );
+
   return Effect.gen(function* () {
-    if (scenario.kind === "replay") {
-      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
-      yield* receipts.insertIfAbsent({
-        commandId,
-        threadId,
-        commandType: command.type,
-        acceptedAt: yield* DateTime.now,
-        resultSequence: 1,
-        status: "accepted",
-        error: null,
-      });
-    }
     const threads = yield* ThreadManagementService.ThreadManagementService;
-    const result = yield* Effect.exit(threads.dispatch(command));
-    expect(Exit.isFailure(result)).toBe(scenario.rejected);
-    if (Exit.isFailure(result)) {
-      expect(Cause.squash(result.cause)).toMatchObject({
-        _tag: "ThreadManagementDelegationModelDisabledError",
-        instanceId,
-        model: "test",
-      });
-    }
-    expect(dispatched).toEqual(scenario.rejected ? [] : [command.type]);
+    const error = yield* Effect.flip(
+      threads.sendToThread({
+        projectId,
+        threadId,
+        commandId: CommandId.make("command:thread-management:worktree-gone"),
+        messageId: MessageId.make("message:thread-management:worktree-gone"),
+        text: "Reply with ok.",
+        attachments: [],
+        mode: "auto",
+        createdBy: "agent",
+        creationSource: "mcp",
+      }),
+    );
+    // The mock records no message, so a dispatched send ends in the projection read.
+    expect(error._tag).toBe(
+      running
+        ? "ThreadManagementDurableRunProjectionError"
+        : "ThreadManagementWorktreeRestoreError",
+    );
+    expect(dispatched).toEqual(running ? ["message.dispatch"] : []);
   }).pipe(Effect.provide(layerTest));
 });
 
@@ -438,306 +373,6 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
     expect(result).toMatchObject({
       timedOut: false,
       run: { id: continuationId, status: "completed" },
-    });
-  }),
-);
-
-it.effect("waitForThread follows a stall retry instead of the failed run it continues", () =>
-  Effect.gen(function* () {
-    const projectId = ProjectId.make("project:thread-management:wait-stall");
-    const threadId = ThreadId.make("thread:thread-management:wait-stall");
-    const runId = RunId.make("run:thread-management:wait-stall");
-    const retryId = RunId.make("run:thread-management:wait-stall:retry");
-    const subscribed = yield* Deferred.make<void>();
-    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-    const overload = (run: RunId) => ({
-      type: "error" as const,
-      status: "failed" as const,
-      runId: run,
-      nodeId: NodeId.make("node-root"),
-      failure: { class: "provider_error", message: "Overloaded.", overloaded: true },
-    });
-    let runs: Array<OrchestrationV2Run> = [
-      { id: runId, status: "failed", rootNodeId: NodeId.make("node-root") } as OrchestrationV2Run,
-    ];
-    // No retry record is armed: the failure alone is what makes the run stalled.
-    let turnItems: Array<ReturnType<typeof overload>> = [overload(runId)];
-    let deleted = false;
-    const stored = (sequence: number, event: object) =>
-      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
-    const layerTest = ThreadManagementService.layer.pipe(
-      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
-      Layer.provide(
-        Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
-          restartContinuationPending: () => Effect.succeed(false),
-          awaitRestartContinuation: () => Effect.never,
-          streamStoredEventsFrom: (input) =>
-            input?.eventType === "run.created"
-              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
-                  Stream.drain,
-                  Stream.concat(Stream.fromQueue(events)),
-                )
-              : Stream.never,
-          getThreadRecords: () =>
-            Effect.sync(
-              () =>
-                ({
-                  thread: {
-                    id: threadId,
-                    projectId,
-                    deletedAt: deleted ? DateTime.makeUnsafe(1) : null,
-                  },
-                  runs,
-                  turnItems,
-                }) as unknown as OrchestrationV2ThreadProjection,
-            ),
-        }),
-      ),
-      Layer.provide(ServerSettings.layerTest()),
-      Layer.provide(layerReceiptsTest),
-    );
-    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-      Effect.provide(layerTest),
-    );
-    // The failed run is not the answer while its retry is still coming, even unarmed.
-    expect(
-      yield* service.waitForThread({ projectId, threadId, runId, timeoutMs: 0 }),
-    ).toMatchObject({ timedOut: true, run: { id: runId, status: "failed" } });
-    const fiber = yield* service
-      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(subscribed);
-    const retry = {
-      id: retryId,
-      ordinal: 2,
-      stallContinuationOfRunId: runId,
-    } as OrchestrationV2Run;
-    runs = [...runs, { ...retry, status: "running" }];
-    yield* Queue.offer(events, stored(1, { type: "run.created", payload: retry }));
-    // The retry stalls too, and the wait follows the new run.
-    runs = [runs[0]!, { ...retry, status: "failed", completedAt: DateTime.makeUnsafe(0) }];
-    turnItems = [overload(runId), overload(retryId)];
-    yield* Queue.offer(events, stored(2, { type: "run.updated", payload: runs[1]! }));
-    // It ends without another overload, and that ending is the wait's answer.
-    runs = [runs[0]!, { ...runs[1]!, status: "completed", completedAt: DateTime.makeUnsafe(1) }];
-    yield* Queue.offer(events, stored(3, { type: "run.updated", payload: runs[1]! }));
-    const result = yield* Fiber.join(fiber);
-
-    expect(result).toMatchObject({
-      timedOut: false,
-      run: { id: retryId, status: "completed" },
-    });
-  }),
-);
-
-it.effect(
-  "waitForThread follows a retry that already exists when it waits on the run before it",
-  () =>
-    Effect.gen(function* () {
-      const projectId = ProjectId.make("project:thread-management:wait-stall-existing");
-      const threadId = ThreadId.make("thread:thread-management:wait-stall-existing");
-      const runId = RunId.make("run:thread-management:wait-stall-existing");
-      const retryId = RunId.make("run:thread-management:wait-stall-existing:retry");
-      const at = (seconds: number) => DateTime.makeUnsafe(seconds * 1_000);
-      let runs = [
-        { id: runId, ordinal: 1, status: "failed", completedAt: at(1) },
-        { id: retryId, ordinal: 2, status: "running", stallContinuationOfRunId: runId },
-      ] as unknown as Array<OrchestrationV2Run>;
-      let turnItems = [
-        {
-          type: "error",
-          status: "failed",
-          runId,
-          nodeId: NodeId.make("node-root"),
-          failure: { class: "provider_error", message: "Overloaded.", overloaded: true },
-        },
-      ];
-      const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-      const subscribed = yield* Deferred.make<void>();
-      const stored = (sequence: number, event: object) =>
-        ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
-      const layerTest = ThreadManagementService.layer.pipe(
-        Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
-        Layer.provide(
-          Layer.mock(Orchestrator.OrchestratorV2)({
-            getThreadEventSequence: () => Effect.succeed(0),
-            restartContinuationPending: () => Effect.succeed(false),
-            awaitRestartContinuation: () => Effect.never,
-            streamStoredEventsFrom: (input) =>
-              input?.eventType === "run.updated"
-                ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
-                    Stream.drain,
-                    Stream.concat(Stream.fromQueue(events)),
-                  )
-                : Stream.never,
-            getThreadRecords: () =>
-              Effect.sync(
-                () =>
-                  ({
-                    thread: { id: threadId, projectId, deletedAt: null },
-                    runs,
-                    turnItems,
-                  }) as unknown as OrchestrationV2ThreadProjection,
-              ),
-          }),
-        ),
-        Layer.provide(ServerSettings.layerTest()),
-        Layer.provide(layerReceiptsTest),
-      );
-      const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-        Effect.provide(layerTest),
-      );
-      const fiber = yield* service
-        .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
-        .pipe(Effect.forkChild);
-      yield* Deferred.await(subscribed);
-      runs = [runs[0]!, { ...runs[1]!, status: "completed", completedAt: at(2) }];
-      yield* Queue.offer(events, stored(1, { type: "run.updated", payload: runs[1]! }));
-      const result = yield* Fiber.join(fiber);
-
-      // The retry the wait never asked for is still its answer.
-      expect(result).toMatchObject({
-        timedOut: false,
-        run: { id: retryId, status: "completed" },
-      });
-    }),
-);
-
-it.effect("waitForThread fails at once when the thread is deleted", () =>
-  Effect.gen(function* () {
-    const projectId = ProjectId.make("project:thread-management:wait-deleted");
-    const threadId = ThreadId.make("thread:thread-management:wait-deleted");
-    const runId = RunId.make("run:thread-management:wait-deleted");
-    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-    const subscribed = yield* Deferred.make<void>();
-    let deleted = false;
-    const stored = (sequence: number, event: object) =>
-      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
-    const layerTest = ThreadManagementService.layer.pipe(
-      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
-      Layer.provide(
-        Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
-          restartContinuationPending: () => Effect.succeed(false),
-          awaitRestartContinuation: () => Effect.never,
-          streamStoredEventsFrom: (input) =>
-            input?.eventType === "thread.deleted"
-              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
-                  Stream.drain,
-                  Stream.concat(Stream.fromQueue(events)),
-                )
-              : Stream.never,
-          getThreadRecords: () =>
-            Effect.sync(
-              () =>
-                ({
-                  thread: {
-                    id: threadId,
-                    projectId,
-                    deletedAt: deleted ? DateTime.makeUnsafe(1) : null,
-                  },
-                  runs: [{ id: runId, status: "running" }],
-                  turnItems: [],
-                }) as unknown as OrchestrationV2ThreadProjection,
-            ),
-        }),
-      ),
-      Layer.provide(ServerSettings.layerTest()),
-      Layer.provide(layerReceiptsTest),
-    );
-    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-      Effect.provide(layerTest),
-    );
-    const fiber = yield* service
-      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(subscribed);
-    deleted = true;
-    yield* Queue.offer(events, stored(1, { type: "thread.deleted" }));
-    const exit = yield* Fiber.await(fiber);
-
-    expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
-      _tag: "ThreadManagementThreadNotFoundError",
-    });
-  }),
-);
-
-it.effect("waitForThread ends a wait on a stalled run when a new run supersedes it", () =>
-  Effect.gen(function* () {
-    const projectId = ProjectId.make("project:thread-management:wait-superseded");
-    const threadId = ThreadId.make("thread:thread-management:wait-superseded");
-    const stalledId = RunId.make("run:thread-management:wait-superseded:stalled");
-    const laterId = RunId.make("run:thread-management:wait-superseded:later");
-    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-    const subscribed = yield* Deferred.make<void>();
-    const rootNodeId = "node:wait-superseded:root";
-    const stalled = {
-      id: stalledId,
-      ordinal: 1,
-      status: "failed",
-      rootNodeId,
-      startedAt: DateTime.makeUnsafe(1_000),
-      completedAt: DateTime.makeUnsafe(2_000),
-    };
-    const later = { id: laterId, ordinal: 2, status: "running", rootNodeId, completedAt: null };
-    let superseded = false;
-    const layerTest = ThreadManagementService.layer.pipe(
-      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
-      Layer.provide(
-        Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
-          restartContinuationPending: () => Effect.succeed(false),
-          awaitRestartContinuation: () => Effect.never,
-          streamStoredEventsFrom: (input) =>
-            input?.eventType === "run.created"
-              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
-                  Stream.drain,
-                  Stream.concat(Stream.fromQueue(events)),
-                )
-              : Stream.never,
-          getThreadRecords: () =>
-            Effect.sync(
-              () =>
-                ({
-                  thread: { id: threadId, projectId, deletedAt: null },
-                  runs: superseded ? [stalled, later] : [stalled],
-                  turnItems: [
-                    {
-                      id: "item:wait-superseded:overload",
-                      type: "error",
-                      status: "failed",
-                      runId: stalledId,
-                      nodeId: rootNodeId,
-                      ordinal: 1,
-                      updatedAt: DateTime.makeUnsafe(2_000),
-                      failure: { class: "provider_error", overloaded: true },
-                    },
-                  ],
-                }) as unknown as OrchestrationV2ThreadProjection,
-            ),
-        }),
-      ),
-      Layer.provide(ServerSettings.layerTest()),
-      Layer.provide(layerReceiptsTest),
-    );
-    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-      Effect.provide(layerTest),
-    );
-    const fiber = yield* service
-      .waitForThread({ projectId, threadId, runId: stalledId, timeoutMs: 60 * 60 * 1_000 })
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(subscribed);
-    superseded = true;
-    // The new run is no continuation of the stalled one, so only the projection can tell.
-    yield* Queue.offer(events, {
-      sequence: 1,
-      event: { threadId, type: "run.created", payload: later },
-    } as unknown as OrchestrationV2StoredEvent);
-
-    expect(yield* Fiber.join(fiber)).toMatchObject({
-      timedOut: false,
-      run: { id: stalledId, status: "failed" },
     });
   }),
 );
@@ -934,7 +569,13 @@ it.effect("waitForThread returns the cut run once its continuation is declined",
   }),
 );
 
-it.effect.each(["live", "no-session", "unsupported-runtime"] as const)(
+it.effect.each([
+  "live",
+  "no-match",
+  "no-match-clear",
+  "no-session",
+  "unsupported-runtime",
+] as const)(
   "marks background work awaited on the thread's active provider thread with state %s",
   (state) =>
     Effect.gen(function* () {
@@ -1010,7 +651,11 @@ it.effect.each(["live", "no-session", "unsupported-runtime"] as const)(
       const result = yield* Effect.gen(function* () {
         const service = yield* ThreadManagementService.ThreadManagementService;
         return yield* service
-          .awaitBackgroundTasks({ threadId, taskIds: ["tests", "finished"], awaited: true })
+          .awaitBackgroundTasks({
+            threadId,
+            taskIds: state.startsWith("no-match") ? ["finished"] : ["tests", "finished"],
+            awaited: state !== "no-match-clear",
+          })
           .pipe(Effect.result);
       }).pipe(Effect.provide(Layer.merge(layerTest, ThreadCommandExecutor.layer)));
 
@@ -1019,6 +664,14 @@ it.effect.each(["live", "no-session", "unsupported-runtime"] as const)(
           success: { matched: ["tests"], unmatched: ["finished"] },
         });
         expect(calls).toEqual([{ providerThreadId, awaited: true }]);
+      } else if (state === "no-match") {
+        expect(result).toMatchObject({
+          failure: { _tag: "ThreadManagementBackgroundWaitError", reason: "unmatched" },
+        });
+        expect(calls).toEqual([{ providerThreadId, awaited: true }]);
+      } else if (state === "no-match-clear") {
+        expect(result).toMatchObject({ success: { matched: [], unmatched: ["finished"] } });
+        expect(calls).toEqual([{ providerThreadId, awaited: false }]);
       } else {
         expect(result).toMatchObject({
           failure: {
@@ -1042,6 +695,11 @@ it.effect.each([
   { status: "completed" as const, followUp: "held-notification", settles: true },
   { status: "completed" as const, followUp: "user", settles: false },
   { status: "completed" as const, followUp: "steered-notification", settles: false },
+  // Send now cancels the queued run; its message joins the run that asked to settle.
+  { status: "completed" as const, followUp: "promoted-to-steer", settles: true },
+  // A delegated-completion wake cancelled unstarted because the turn already took the result.
+  { status: "completed" as const, followUp: "cancelled-delegated", settles: true },
+  { status: "completed" as const, followUp: "stopped-delegated", settles: false },
 ])("settleAfterRun handles $status with $followUp follow-up", ({ status, followUp, settles }) =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:settle-after-run");
@@ -1060,6 +718,7 @@ it.effect.each([
       ordinal: 2,
       status: "running" as OrchestrationV2Run["status"],
       userMessageId: MessageId.make("follow-up"),
+      startedAt: followUp === "stopped-delegated" ? "2026-01-01T00:00:00.000Z" : null,
     };
     const dispatched: Array<string> = [];
     // The notification starts after the completed run was observed, before settlement commits.
@@ -1085,15 +744,14 @@ it.effect.each([
                 ({
                   thread: { id: threadId, projectId, deletedAt: null },
                   runs: raced ? [...runs, nextRun] : runs,
-                  turnItems: [],
                   messages: [
                     { id: MessageId.make("original"), runId, role: "user" as const },
                     {
                       id: nextRun.userMessageId,
-                      runId: followUpId,
+                      runId: followUp === "promoted-to-steer" ? runId : followUpId,
                       role: "user" as const,
                       ...(followUp.endsWith("notification") ? { notification: {} } : {}),
-                      ...(followUp === "delegated" ? { delegatedCompletion: {} } : {}),
+                      ...(followUp.endsWith("delegated") ? { delegatedCompletion: {} } : {}),
                     },
                     { id: MessageId.make("reply"), runId: followUpId, role: "assistant" as const },
                     ...(followUp === "steered-notification"
@@ -1157,7 +815,9 @@ it.effect.each([
           ? "failed"
           : followUp === "held-notification"
             ? "queued"
-            : "completed";
+            : followUp === "promoted-to-steer" || followUp.endsWith("ed-delegated")
+              ? "cancelled"
+              : "completed";
       yield* Queue.offer(events, {
         sequence: 1,
         event: { type: "run.updated", threadId, payload: nextRun },
@@ -1346,4 +1006,78 @@ it.effect("Force stop refuses once a newer run has started, before killing anyth
     expect(error.reason).toBe("superseded");
     expect(killed).toBe(false);
   }),
+);
+
+it.effect(
+  "admits two transcript exports at a time and frees a slot on failure or interruption",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Queue.unbounded<string>();
+      const gates = new Map(
+        ["a", "b", "c", "d", "e", "f"].map((id) => [
+          id,
+          Deferred.makeUnsafe<void, Orchestrator.OrchestratorV2Error>(),
+        ]),
+      );
+      const layerTest = ThreadManagementService.layer.pipe(
+        Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+        Layer.provide(
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getTranscriptByteFloor: () => Effect.succeed(0),
+            getThreadSnapshot: (threadId) =>
+              Queue.offer(started, threadId).pipe(
+                Effect.andThen(Deferred.await(gates.get(threadId)!)),
+                Effect.as({
+                  schemaVersion: 1,
+                  snapshotSequence: 1,
+                  projection: {
+                    thread: { id: threadId, title: threadId },
+                    updatedAt: DateTime.makeUnsafe(0),
+                    visibleTurnItems: [],
+                  } as unknown as OrchestrationV2ThreadProjection,
+                }),
+              ),
+          }),
+        ),
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(layerReceiptsTest),
+      );
+
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const exportThread = (id: string) =>
+          threads.getThreadTranscript(ThreadId.make(id)).pipe(
+            Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
+              getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:export")),
+            }),
+            Effect.forkChild({ startImmediately: true }),
+          );
+        const a = yield* exportThread("a");
+        const b = yield* exportThread("b");
+        const c = yield* exportThread("c");
+        const d = yield* exportThread("d");
+        const e = yield* exportThread("e");
+        const f = yield* exportThread("f");
+        expect(yield* Queue.takeAll(started)).toEqual(["a", "b"]);
+
+        yield* Fiber.interrupt(c);
+        yield* Deferred.fail(
+          gates.get("a")!,
+          new Orchestrator.OrchestratorProjectionError({ threadId: ThreadId.make("a"), cause: "" }),
+        );
+        expect(yield* Queue.take(started)).toBe("d");
+        yield* Fiber.interrupt(b);
+        expect(yield* Queue.take(started)).toBe("e");
+        yield* Deferred.succeed(gates.get("d")!, undefined);
+        expect(yield* Queue.take(started)).toBe("f");
+        yield* Deferred.succeed(gates.get("e")!, undefined);
+        yield* Deferred.succeed(gates.get("f")!, undefined);
+
+        expect((yield* Fiber.await(a))._tag).toBe("Failure");
+        expect((yield* Fiber.join(d)).threadId).toBe("d");
+        expect((yield* Fiber.join(e)).threadId).toBe("e");
+        expect((yield* Fiber.join(f)).threadId).toBe("f");
+        expect(yield* Queue.size(started)).toBe(0);
+      }).pipe(Effect.provide(layerTest));
+    }),
 );

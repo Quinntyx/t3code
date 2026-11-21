@@ -3,7 +3,7 @@ import {
   ScheduledTaskId,
   ScheduledTask,
   OrchestrationSearchThreadsInput,
-  OrchestratorMcpThreadSearchResult,
+  OrchestrationThreadSearchMatch,
   OrchestrationV2ThreadForkSourcePoint,
   OrchestrationV2ContextTransfer,
   TrimmedNonEmptyString,
@@ -19,6 +19,7 @@ import {
   RunId,
   NonNegativeInt,
   ProjectId,
+  clampedPositiveInt,
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
@@ -99,7 +100,7 @@ const QueueTool = Tool.make("t3_queue", {
     beforeRunId: Schema.optional(Schema.NullOr(RunId)),
     targetRunId: Schema.optional(RunId),
     cursor: Schema.optional(NonNegativeInt),
-    limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+    limit: Schema.optional(clampedPositiveInt(100)),
   }),
   success: Schema.Union([
     Schema.Struct({ items: Schema.Array(queueEntry), nextCursor: Schema.NullOr(NonNegativeInt) }),
@@ -117,6 +118,7 @@ const question = Schema.Struct({
       label: Schema.String,
       description: Schema.String,
       value: Schema.optional(Schema.String),
+      preview: Schema.optional(Schema.String),
     }),
   ),
   multiSelect: Schema.optional(Schema.Boolean),
@@ -143,18 +145,6 @@ const PendingRequestTool = Tool.make("t3_pending_request", {
 })
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
-
-const GoalTool = Tool.make("t3_goal", {
-  ...commandTool,
-  description:
-    "Report a thread's goal outcome. The review that runs after each goal turn marks it `complete` when the goal is met; the agent working on the goal marks it `blocked` when it cannot finish. The agent working on a goal cannot mark it complete.",
-  parameters: Schema.Struct({
-    environmentId: OrchestratorMcpEnvironmentTarget,
-    threadId: Schema.optional(ThreadId),
-    action: Schema.Literals(["complete", "blocked"]),
-  }),
-  success: OrchestrationV2DispatchCommandResult,
-});
 
 const threadConfiguration = Schema.Struct({
   threadId: ThreadId,
@@ -204,13 +194,26 @@ const ThreadTransferTool = Tool.make("t3_thread_transfer", {
 const ThreadSearchTool = Tool.make("t3_thread_search", {
   ...commandTool,
   description:
-    "Search active threads by title, branch, PR, project, then message text. Each match carries the same thread fields as `t3_thread_list`, plus `source`, `snippet`, and `messageCreatedAt`. Skips subagent threads. `projectId`: one project, else yours, else all outside a thread. Not exhaustive.",
+    "Search active threads by title, branch, PR, project, then message text. Skips subagent threads. `projectId`: one project, else yours, else all outside a thread. Not exhaustive.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     ...OrchestrationSearchThreadsInput.fields,
     projectId: Schema.optional(ProjectId),
   }),
-  success: OrchestratorMcpThreadSearchResult,
+  success: Schema.Struct({
+    currentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+    matches: Schema.Array(
+      Schema.Struct({
+        threadId: OrchestrationThreadSearchMatch.fields.threadId,
+        projectId: OrchestrationThreadSearchMatch.fields.projectId,
+        title: Schema.String,
+        link: Schema.optional(Schema.String),
+        source: Schema.Literals(["title", "user", "assistant"]),
+        snippet: Schema.optional(OrchestrationThreadSearchMatch.fields.snippet),
+        messageCreatedAt: Schema.optional(OrchestrationThreadSearchMatch.fields.messageCreatedAt),
+      }),
+    ),
+  }),
   dependencies: [...commandTool.dependencies, ThreadSearch.ThreadSearch],
 })
   .annotate(Tool.Readonly, true)
@@ -229,6 +232,7 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
     threadId: ScheduledTask.fields.threadId,
     link: Schema.optional(Schema.String),
     lastRunStatus: ScheduledTask.fields.lastRunStatus,
+    lastRunError: ScheduledTask.fields.lastRunError,
     runCount: NonNegativeInt,
     nextRunAt: ScheduledTask.fields.nextRunAt,
   }),
@@ -237,28 +241,8 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
-const NotifyVoiceTool = Tool.make("notify_voice", {
-  description:
-    "Record a visible notification in this thread for client-side Voice assistants. Recording does not mean anyone heard it. Use interrupt for urgent decisions, when_idle for normal updates, silent for background context.",
-  parameters: Schema.Struct({
-    message: TrimmedNonEmptyString.check(Schema.isMaxLength(16000)),
-    urgency: Schema.Literals(["interrupt", "when_idle", "silent"]),
-  }),
-  success: Schema.Struct({ recorded: Schema.Literal(true) }),
-  failure: OrchestratorMcpFailure,
-  dependencies: [
-    ThreadManagementService.ThreadManagementService,
-    McpInvocationContext.McpInvocationContext,
-    SecureRandom.SecureRandom,
-  ],
-})
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, false);
-
 export const ThreadToolkit = Toolkit.make(
-  NotifyVoiceTool,
   ScheduledTaskRunTool,
-  GoalTool,
   ThreadSearchTool,
   ThreadConfigureTool,
   ThreadTransferTool,

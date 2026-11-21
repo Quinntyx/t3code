@@ -1,7 +1,6 @@
 import { RNHostView, TopAppBar } from "@expo/ui/jetpack-compose";
 import { fillMaxWidth, height } from "@expo/ui/jetpack-compose/modifiers";
 import type { ReactElement } from "react";
-import type { ColorValue } from "react-native";
 import { NativeThemeHost } from "./NativeThemeHost.android";
 import { useControlTheme } from "./useControlTheme";
 import { useToolbarLayout } from "./useToolbarLayout";
@@ -13,7 +12,6 @@ export function NativeAppBar(props: {
   readonly actions?: ReactElement;
   /** Compose nodes laid out by the bar itself, so they never wait on a React Native measure. */
   readonly nativeActions?: ReactElement;
-  readonly containerColor?: ColorValue;
 }) {
   const { colors } = useControlTheme();
   const layout = useToolbarLayout();
@@ -26,7 +24,7 @@ export function NativeAppBar(props: {
         // Every header shares the list toolbar's height, so titles line up across panes.
         modifiers={[fillMaxWidth(), height(layout.height)]}
         colors={{
-          containerColor: props.containerColor ?? colors["--color-header"],
+          containerColor: colors["--color-header"],
           titleContentColor: colors["--color-header-foreground"],
           navigationIconContentColor: colors["--color-header-foreground"],
           actionIconContentColor: colors["--color-header-foreground"],

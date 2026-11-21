@@ -3,11 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
 import {
-  decodePreviewStreamFrame,
-  encodePreviewStreamAudioFrame,
-  encodePreviewStreamVideoFrame,
-} from "./preview.ts";
-import {
   PreviewAutomationHost,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationStatus,
@@ -51,91 +46,6 @@ describe("PreviewAutomationStatus", () => {
         viewport: { width: 412, height: 915 },
       }).viewport,
     ).toEqual({ width: 412, height: 915 });
-  });
-});
-
-describe("preview stream frames", () => {
-  it("tells JPEG frames from video frames, which old servers never send", () => {
-    const data = new Uint8Array([9, 8, 7]);
-    const key = encodePreviewStreamVideoFrame({
-      type: "key",
-      codec: "avc1.42E034",
-      width: 1650,
-      height: 1500,
-      data,
-    });
-    expect(decodePreviewStreamFrame(key)).toEqual({
-      type: "key",
-      codec: "avc1.42E034",
-      width: 1650,
-      height: 1500,
-      data,
-    });
-    expect(
-      decodePreviewStreamFrame(encodePreviewStreamVideoFrame({ type: "delta", data })),
-    ).toEqual({
-      type: "delta",
-      data,
-    });
-    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
-    expect(decodePreviewStreamFrame(jpeg)).toEqual({ type: "jpeg", data: jpeg });
-    expect(decodePreviewStreamFrame(new Uint8Array([7]))).toBeNull();
-  });
-
-  it("tags audio apart from video so a viewer routes it before decoding", () => {
-    const packet = new Uint8Array([0x4f, 0x70, 0x75, 0x73]);
-    const frame = encodePreviewStreamAudioFrame({
-      generation: 2,
-      sequence: 7,
-      timestampMicros: 120_000,
-      data: packet,
-    });
-    expect(frame[0]).toBe(3);
-    expect(decodePreviewStreamFrame(frame)).toEqual({
-      type: "audio",
-      generation: 2,
-      sequence: 7,
-      timestampMicros: 120_000,
-      data: packet,
-    });
-    // An empty packet is still an audio message, not a malformed video frame.
-    expect(
-      decodePreviewStreamFrame(
-        encodePreviewStreamAudioFrame({
-          generation: 0,
-          sequence: 0,
-          timestampMicros: 0,
-          data: new Uint8Array(0),
-        }),
-      ),
-    ).toEqual({
-      type: "audio",
-      generation: 0,
-      sequence: 0,
-      timestampMicros: 0,
-      data: new Uint8Array(0),
-    });
-  });
-
-  it("keeps a gap in the source clock across packets", () => {
-    const read = (timestampMicros: number) =>
-      decodePreviewStreamFrame(
-        encodePreviewStreamAudioFrame({
-          generation: 1,
-          sequence: 1,
-          timestampMicros,
-          data: new Uint8Array([1]),
-        }),
-      );
-    // A page that stops for a second must not read as back-to-back packets.
-    expect(read(0)).toMatchObject({ timestampMicros: 0 });
-    expect(read(1_020_000)).toMatchObject({ timestampMicros: 1_020_000 });
-    // A new capture's sequence restarting at 0 is still a different packet.
-    expect(read(1_040_000)).toMatchObject({ sequence: 1, timestampMicros: 1_040_000 });
-  });
-
-  it("refuses an audio message too short to carry its header", () => {
-    expect(decodePreviewStreamFrame(new Uint8Array([3, 0, 0]))).toBeNull();
   });
 });
 

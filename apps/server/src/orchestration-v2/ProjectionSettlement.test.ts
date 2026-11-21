@@ -12,7 +12,6 @@ import {
   ProviderThreadId,
   RunId,
   RuntimeRequestId,
-  ScheduledTaskId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -318,57 +317,6 @@ it.effect(
           pendingBackgroundTasks: [{ taskId: "running-task", kind: "subagent" }],
         },
       });
-      yield* createRun(
-        yield* createThread("active-goal", {
-          goal: { objective: "Finish the work", status: "active" },
-        }),
-      );
-      yield* createRun(
-        yield* createThread("awaited-automation", {
-          awaitedScheduledTaskIds: [ScheduledTaskId.make("task:recurring")],
-        }),
-      );
-      for (const type of ["secret_request", "email_request"] as const) {
-        const threadId = yield* createThread(type);
-        const runId = yield* createRun(threadId, "waiting");
-        yield* store.apply({
-          id: EventId.make(`event:settlement:${type}`),
-          type: "turn-item.updated",
-          threadId,
-          occurredAt: old,
-          payload: {
-            id: TurnItemId.make(`item:${type}`),
-            threadId,
-            runId,
-            nodeId: NodeId.make(`node:${type}`),
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            status: "waiting",
-            title: null,
-            startedAt: old,
-            completedAt: null,
-            updatedAt: old,
-            ...(type === "secret_request"
-              ? { type, label: "Token", reason: "Sign in", secretStatus: "pending" }
-              : {
-                  type,
-                  accounts: [],
-                  emailStatus: "pending",
-                  draft: {
-                    account: "work",
-                    to: ["user@example.com"],
-                    cc: [],
-                    bcc: [],
-                    subject: "Review",
-                    body: "Draft",
-                  },
-                }),
-          },
-        });
-      }
       const candidates = yield* store.getSettlementCandidates();
       const shell = yield* store.getShellSnapshot({ location: "active" });
       const eligible = candidates.filter((thread) =>
@@ -528,5 +476,47 @@ it.effect("sql: an unsettled-only shell read skips settled threads", () =>
     assert.equal(shell.archivedThreads.length, 0);
     const all = yield* store.getShellSnapshot({ location: "active" });
     assert.equal(all.threads.length, 4);
+  }).pipe(Effect.provide(layerSql)),
+);
+
+it.effect("sql: a subagent thread becomes a candidate once its parent is done", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const parent = yield* createThread("subagent-parent");
+    const child = yield* createThread("subagent-child", {
+      lineage: { parentThreadId: parent, relationshipToParent: "subagent", rootThreadId: parent },
+    });
+    const ids = () =>
+      store.getSettlementCandidates().pipe(Effect.map((rows) => rows.map((row) => row.id)));
+    assert.deepEqual(yield* ids(), [parent]);
+
+    const parentThread = yield* store.getThread(parent);
+    for (const [type, overrides] of [
+      ["thread.settled", { settledOverride: "settled", settledAt: now }],
+      ["thread.archived", { archivedAt: now }],
+      ["thread.deleted", { deletedAt: now }],
+    ] satisfies ReadonlyArray<
+      readonly [
+        "thread.settled" | "thread.archived" | "thread.deleted",
+        Partial<OrchestrationV2AppThread>,
+      ]
+    >) {
+      yield* store.apply({
+        id: EventId.make(`event:settlement:subagent-parent:${type}`),
+        type,
+        threadId: parent,
+        occurredAt: now,
+        payload: { ...parentThread, ...overrides, updatedAt: now },
+      });
+      assert.deepEqual(yield* ids(), [child]);
+    }
+    const orphan = yield* createThread("orphan", {
+      lineage: {
+        parentThreadId: ThreadId.make("missing-parent"),
+        relationshipToParent: "subagent",
+        rootThreadId: parent,
+      },
+    });
+    assert.deepEqual(new Set(yield* ids()), new Set([child, orphan]));
   }).pipe(Effect.provide(layerSql)),
 );

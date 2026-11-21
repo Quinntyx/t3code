@@ -1,14 +1,15 @@
 import {
   isCompactionCommandMessage,
-  type OrchestrationV2Run,
-  type OrchestrationV2RunStatus,
   type ThreadGuestMessage,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
-import type { ThreadFeedEntry } from "../../lib/threadActivity";
+import { LIVE_ACTIVITY_ROW_ID, type ThreadFeedEntry } from "../../lib/threadActivity";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { threadHasCaughtUpTo } from "@t3tools/client-runtime/state/threads";
 import { resolveUserMessageGrouping } from "@t3tools/client-runtime/user-message";
+import { msg } from "gt-react-native";
+
+import { m, type MessageResolver } from "../../i18n/messages";
 import type {
   AcknowledgedThreadMessage,
   QueuedThreadMessage,
@@ -33,16 +34,6 @@ export type PendingThreadFeedEntry = ThreadFeedEntry & {
 
 // An acknowledged row stops being pending once the thread catches up to it,
 // even when the feed hides that message (a rolled-back or cancelled run).
-// A bounded reload drops historic messages from projection.messages, so a
-// settled run that consumed the message is delivery proof on its own too.
-const SETTLED_RUN_STATUSES: ReadonlySet<OrchestrationV2RunStatus> = new Set([
-  "completed",
-  "interrupted",
-  "failed",
-  "cancelled",
-  "rolled_back",
-]);
-
 export function selectPendingAcknowledgedMessages(
   acknowledged: ReadonlyArray<AcknowledgedThreadMessage>,
   thread: {
@@ -50,18 +41,11 @@ export function selectPendingAcknowledgedMessages(
     readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
     readonly sequence: number;
     readonly projectedMessages: ReadonlyArray<{ readonly id: string }> | undefined;
-    readonly runs?: ReadonlyArray<Pick<OrchestrationV2Run, "userMessageId" | "status">> | undefined;
   },
 ): ReadonlyArray<AcknowledgedThreadMessage> {
-  const settledUserMessageIds = new Set(
-    (thread.runs ?? [])
-      .filter((run) => SETTLED_RUN_STATUSES.has(run.status))
-      .map((run) => run.userMessageId),
-  );
   return acknowledged.filter(
     (message) =>
       scopedThreadKey(message.environmentId, message.threadId) === thread.threadKey &&
-      !settledUserMessageIds.has(message.messageId) &&
       !thread.queuedMessages.some((queued) => queued.messageId === message.messageId) &&
       !threadHasCaughtUpTo(message, {
         sequence: thread.sequence,
@@ -70,8 +54,19 @@ export function selectPendingAcknowledgedMessages(
   );
 }
 
+/**
+ * Holds the turn's fold slot while a sent message waits for its run, so the live "Working for"
+ * row replaces it in place instead of being inserted.
+ */
+export interface PendingFoldFeedEntry {
+  readonly type: "pending-fold";
+  readonly id: string;
+  readonly createdAt: string;
+  readonly messageId: string;
+}
+
 /** A row of the thread feed's list. */
-export type ThreadFeedRow = PendingThreadFeedEntry | GuestPendingFeedEntry;
+export type ThreadFeedRow = PendingThreadFeedEntry | GuestPendingFeedEntry | PendingFoldFeedEntry;
 
 export type GroupedThreadFeedRow = ThreadFeedRow & {
   readonly userMessageGrouping: ReturnType<typeof resolveUserMessageGrouping>;
@@ -119,12 +114,13 @@ export function createThreadFeedGrouping() {
 
 /** Waiting guest messages go after the transcript, oldest first. */
 export function appendGuestPendingMessages(
-  presentedFeed: ReadonlyArray<PendingThreadFeedEntry>,
+  presentedFeed: ReadonlyArray<PendingThreadFeedEntry | PendingFoldFeedEntry>,
   share: ThreadGuestShare | null,
+  resolve: MessageResolver = m,
 ): ReadonlyArray<ThreadFeedRow> {
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];
   if (share === null || pending.length === 0) return presentedFeed;
-  const guestName = share.guestName ?? "Guest";
+  const guestName = share.guestName ?? resolve(msg("Guest"));
   return [
     ...presentedFeed,
     ...pending.map((message): GuestPendingFeedEntry => ({
@@ -175,6 +171,74 @@ export function appendPendingThreadMessages(
         },
       })),
   ];
+}
+
+/**
+ * Messages the server accepted but has not projected yet. A new thread's first message stays
+ * anchored until the server's copy loads, and keeps its local attachments so its media does
+ * not drop out of the feed in between.
+ */
+export function appendAcceptedThreadMessages(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  acknowledged: ReadonlyArray<QueuedThreadMessage>,
+  creation: QueuedThreadMessage | null,
+): ReadonlyArray<PendingThreadFeedEntry> {
+  const accepted = creation === null ? acknowledged : [...acknowledged, creation];
+  if (accepted.length === 0) return feed;
+  return appendPendingThreadMessages(feed, feed, accepted).map((entry) =>
+    entry.pendingMessage ? { ...entry, acknowledged: true } : entry,
+  );
+}
+
+/**
+ * Ends the feed with the rows a starting run will fill, while its last row is a sent message no
+ * run has picked up: the fold slot and the live activity row, under the activity row's own key.
+ * The run's rows then replace them in place instead of being inserted.
+ */
+export function createPendingTurnAppender() {
+  let fold: PendingFoldFeedEntry | null = null;
+  let activity: Extract<ThreadFeedEntry, { readonly type: "thinking" }> | null = null;
+  return (
+    feed: ReadonlyArray<PendingThreadFeedEntry>,
+    options: { readonly zen: boolean },
+    resolve: MessageResolver = m,
+  ): ReadonlyArray<PendingThreadFeedEntry | PendingFoldFeedEntry> => {
+    const last = feed.at(-1);
+    if (
+      last?.type !== "message" ||
+      last.message.role !== "user" ||
+      last.pendingMessage === undefined ||
+      last.pendingMessage.creation !== undefined ||
+      isCompactionCommandMessage(last.message) ||
+      feed.some(
+        (entry) =>
+          (entry.type === "run-fold" && entry.workingSince !== undefined) ||
+          entry.type === "thinking",
+      )
+    ) {
+      return feed;
+    }
+    const label = last.acknowledged ? resolve(msg("Starting…")) : resolve(msg("Sending…"));
+    if (activity?.createdAt !== last.createdAt || activity.label !== label) {
+      activity = {
+        type: "thinking",
+        id: LIVE_ACTIVITY_ROW_ID,
+        createdAt: last.createdAt,
+        runId: null,
+        label,
+      };
+    }
+    if (options.zen) return [...feed, activity];
+    if (fold?.messageId !== last.id) {
+      fold = {
+        type: "pending-fold",
+        id: `pending-fold:${last.id}`,
+        createdAt: last.createdAt,
+        messageId: last.id,
+      };
+    }
+    return [...feed, fold, activity];
+  };
 }
 
 export function isCompactionCommandFeedEntry(entry: PendingThreadFeedEntry): boolean {

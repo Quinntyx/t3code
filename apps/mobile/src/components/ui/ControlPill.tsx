@@ -16,7 +16,6 @@ export function ControlPill(props: {
   readonly activateOnPressIn?: boolean;
   readonly variant?: "circle" | "pill" | "primary" | "danger";
   readonly disabled?: boolean;
-  readonly busy?: boolean;
   readonly className?: string;
 }) {
   const variant = props.variant ?? "circle";
@@ -113,7 +112,6 @@ export function ControlPill(props: {
         icon={props.icon}
         onPress={props.onPress}
         disabled={props.disabled}
-        busy={props.busy}
         variant={variant === "primary" ? "primary" : variant === "danger" ? "danger" : "tonal"}
       />
     );
@@ -123,10 +121,6 @@ export function ControlPill(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
-      accessibilityState={{
-        disabled: Boolean(props.disabled),
-        ...(props.busy !== undefined ? { busy: props.busy } : {}),
-      }}
       onPress={props.activateOnPressIn ? handlePress : props.onPress}
       onPressIn={props.activateOnPressIn ? handlePressIn : undefined}
       onPressOut={props.activateOnPressIn ? handlePressOut : undefined}

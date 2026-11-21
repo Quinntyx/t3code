@@ -12,7 +12,6 @@ import {
   reorderProjects,
   resolveProjectExpanded,
   setProjectExpanded,
-  setThreadHidden,
   type UiState,
 } from "./uiStateStore";
 
@@ -22,30 +21,14 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     sidebarProjectScopeKeys: [],
     threadLastVisitedAtById: {},
-    hiddenThreadKeys: [],
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
-    newProjectLayout: "standard",
-    newProjectPublishHost: null,
     ...overrides,
   };
 }
 
 describe("uiStateStore pure functions", () => {
-  it("hides and restores only the scoped thread on this client", () => {
-    const initial = makeUiState({ hiddenThreadKeys: ["other-environment:thread-1"] });
-    const hidden = setThreadHidden(initial, "environment:thread-1", true);
-
-    expect(hidden.hiddenThreadKeys).toEqual(["other-environment:thread-1", "environment:thread-1"]);
-    expect(initial.hiddenThreadKeys).toEqual(["other-environment:thread-1"]);
-    expect(hidden.threadLastVisitedAtById).toBe(initial.threadLastVisitedAtById);
-    expect(setThreadHidden(hidden, "environment:thread-1", true)).toBe(hidden);
-    expect(setThreadHidden(hidden, "environment:thread-1", false)).toEqual(initial);
-    expect(setThreadHidden(initial, "environment:thread-1", false)).toBe(initial);
-    expect(makeUiState().hiddenThreadKeys).toEqual([]);
-  });
-
   it("stores server timestamps without moving visit state backwards", () => {
     const threadId = ThreadId.make("thread-1");
     const initialState = makeUiState();
@@ -112,15 +95,6 @@ describe("uiStateStore pure functions", () => {
 });
 
 describe("parsePersistedState", () => {
-  it("defaults older clients to no hidden threads and sanitizes stored keys", () => {
-    expect(parsePersistedState({}).hiddenThreadKeys).toEqual([]);
-    expect(
-      parsePersistedState({
-        hiddenThreadKeys: ["environment:thread-1", "", "environment:thread-1"],
-      }).hiddenThreadKeys,
-    ).toEqual(["environment:thread-1"]);
-  });
-
   it("hydrates raw UI-owned state without server entities", () => {
     const parsed = parsePersistedState({
       projectExpandedById: {
@@ -152,10 +126,7 @@ describe("parsePersistedState", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
-      hiddenThreadKeys: [],
       pullRequestMergeMethod: "merge",
-      newProjectLayout: "standard",
-      newProjectPublishHost: null,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -163,6 +134,12 @@ describe("parsePersistedState", () => {
         },
       },
     });
+  });
+
+  it("keeps a persisted fast-forward merge method", () => {
+    expect(
+      parsePersistedState({ pullRequestMergeMethod: "fast-forward" }).pullRequestMergeMethod,
+    ).toBe("fast-forward");
   });
 
   it.each([undefined, 1])("ignores changed-file expansion version %s", (version) => {
@@ -176,21 +153,6 @@ describe("parsePersistedState", () => {
     });
 
     expect(parsed.threadChangedFilesExpandedById).toEqual({});
-  });
-
-  it("keeps a remembered new-project layout and publish host only when they parse", () => {
-    expect(
-      parsePersistedState({
-        newProjectLayout: "worktree-container",
-        newProjectPublishHost: "github",
-      }),
-    ).toMatchObject({ newProjectLayout: "worktree-container", newProjectPublishHost: "github" });
-    expect(
-      parsePersistedState({
-        newProjectLayout: "sideways" as unknown as "standard",
-        newProjectPublishHost: "",
-      }),
-    ).toMatchObject({ newProjectLayout: "standard", newProjectPublishHost: null });
   });
 
   it("migrates legacy CWD project preferences into local alias keys", () => {
@@ -276,7 +238,6 @@ describe("uiStateStore persistence", () => {
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
       sidebarProjectScopeKey: null,
-      hiddenThreadKeys: [],
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -285,27 +246,10 @@ describe("uiStateStore persistence", () => {
         },
       },
       pullRequestMergeMethod: "merge",
-      newProjectLayout: "standard",
-      newProjectPublishHost: null,
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,
     });
-  });
-
-  it("restores hidden threads from this client's storage across reloads", () => {
-    const hidden = setThreadHidden(makeUiState(), "environment:thread-1", true);
-    persistState(hidden);
-    const persisted = JSON.parse(
-      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
-    ) as PersistedUiState;
-    expect(parsePersistedState(persisted).hiddenThreadKeys).toEqual(["environment:thread-1"]);
-
-    persistState(setThreadHidden(hidden, "environment:thread-1", false));
-    expect(
-      parsePersistedState(JSON.parse(localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}"))
-        .hiddenThreadKeys,
-    ).toEqual([]);
   });
 
   it("restores the sidebar project scope across reloads", () => {
@@ -327,6 +271,21 @@ describe("uiStateStore persistence", () => {
     ) as PersistedUiState;
 
     expect(persisted.sidebarProjectScopeKey).toBe("github.com/pingdotgg/t3code");
+  });
+
+  it("keeps legacy projects omitted from the expanded list collapsed across a save and reload", () => {
+    const projectAKey = legacyProjectCwdPreferenceKey("/repo/a");
+    const projectBKey = legacyProjectCwdPreferenceKey("/repo/b");
+    const migrated = parsePersistedState({ expandedProjectCwds: ["/repo/a"] });
+    expect(resolveProjectExpanded(migrated.projectExpandedById, [projectBKey])).toBe(false);
+
+    persistState({ ...migrated, pullRequestMergeMethod: "squash" });
+    const reloaded = parsePersistedState(
+      JSON.parse(localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}") as PersistedUiState,
+    );
+
+    expect(resolveProjectExpanded(reloaded.projectExpandedById, [projectAKey])).toBe(true);
+    expect(resolveProjectExpanded(reloaded.projectExpandedById, [projectBKey])).toBe(false);
   });
 
   it("restores a single-project scope saved before multi-project filtering", () => {

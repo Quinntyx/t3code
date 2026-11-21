@@ -1,8 +1,6 @@
 import {
-  createPreviewAudioPlayer,
   createPreviewFramePainter,
   createPreviewStreamClient,
-  type PreviewAudioPlayer,
   type PreviewStreamClient,
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -11,13 +9,9 @@ import { previewPdfAssetUrl } from "@t3tools/shared/preview";
 import { useSyncExternalStore } from "react";
 
 import { readPreviewStreamAccess } from "~/state/previewStream";
+import { readPreparedConnection } from "~/state/session";
 import { previewStateAtom, type ThreadPreviewState } from "~/previewStateStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import {
-  claimPreviewAudio,
-  releasePreviewAudio,
-  usePreviewAudioMuteStore,
-} from "~/previewAudioMuteStore";
 
 interface WebKitVideo {
   webkitSetPresentationMode?: (mode: string) => void;
@@ -96,17 +90,8 @@ export async function openServerPictureInPicture(input: {
     "position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none";
   document.body.append(video);
 
+  const painter = createPreviewFramePainter(canvas);
   let client: PreviewStreamClient | null = null;
-  // The window outlives the React surface that opened it, so it owns playback while it exists.
-  const audio: PreviewAudioPlayer = createPreviewAudioPlayer();
-  const owner = `picture-in-picture:${serverPictureInPictureKey(input.threadId, input.tabId)}`;
-  claimPreviewAudio(input.tabId, owner, true);
-  audio.setMuted(usePreviewAudioMuteStore.getState().muted.has(input.tabId));
-  // The mute is the tab's and may be toggled from the panel while this window is open.
-  const stopFollowingMute = usePreviewAudioMuteStore.subscribe((state) =>
-    audio.setMuted(state.muted.has(input.tabId)),
-  );
-  const painter = createPreviewFramePainter(canvas, undefined, () => client?.requestKeyFrame());
   let stopped = false;
   let refusals = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -131,15 +116,12 @@ export async function openServerPictureInPicture(input: {
         interactive: false,
       },
       {
-        onFrame: (frame) => {
+        onFrame: (jpeg) => {
           refusals = 0;
-          painter.paint(frame);
+          painter.paint(jpeg);
         },
-        onAudio: (frame) => audio.push(frame),
         onViewport: () => undefined,
-        onConnectedChange: (connected) => {
-          if (!connected) painter.reset();
-        },
+        onConnectedChange: () => undefined,
         onUnauthorized: () => {
           if (stopped) return;
           if (refusals >= 5) {
@@ -161,12 +143,9 @@ export async function openServerPictureInPicture(input: {
     stop: () => {
       stopped = true;
       stopWatchingPreview();
-      stopFollowingMute();
-      releasePreviewAudio(input.tabId, owner);
       if (retryTimer !== null) clearTimeout(retryTimer);
       client?.stop();
       painter.stop();
-      audio.stop();
       video.removeEventListener("leavepictureinpicture", onLeave);
       video.removeEventListener("webkitpresentationmodechanged", onPresentationMode);
       if (document.pictureInPictureElement === video) {
@@ -197,6 +176,7 @@ export async function openServerPictureInPicture(input: {
       video.webkitSetPresentationMode?.("picture-in-picture");
     }
   } catch (error) {
+    if (stopped) return;
     onLeave();
     throw error;
   }
@@ -206,7 +186,11 @@ export async function openServerPictureInPicture(input: {
       const navigation = state.sessions[input.tabId]?.navStatus;
       if (
         navigation?._tag === "Success" &&
-        previewPdfAssetUrl(navigation.url, navigation.url) !== null
+        // The base the client loads asset PDFs through now; a connection can change route.
+        previewPdfAssetUrl(
+          navigation.url,
+          readPreparedConnection(input.environmentId)?.httpBaseUrl ?? null,
+        ) !== null
       ) {
         onLeave();
       }

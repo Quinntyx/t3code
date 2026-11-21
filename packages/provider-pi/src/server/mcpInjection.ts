@@ -4,10 +4,6 @@ import * as FileSystem from "effect/FileSystem";
 
 import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
 import {
-  PI_T3_DISCOVER_EXTENSION_FILENAME,
-  PI_T3_DISCOVER_EXTENSION_SOURCE,
-} from "./discoverExtensionSource.ts";
-import {
   PI_T3_MCP_EXTENSION_FILENAME,
   PI_T3_MCP_EXTENSION_SOURCE,
   T3_MCP_BEARER_ENV,
@@ -224,23 +220,25 @@ function withoutToolSelectionArgs(args: ReadonlyArray<string>): ReadonlyArray<st
   return filtered;
 }
 
-const materializePiExtension = Effect.fn("materializePiExtension")(function* (
+function piT3McpExtensionDestPath(cacheDir: string): string {
+  return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
+}
+
+export const materializePiT3McpExtension = Effect.fn("materializePiT3McpExtension")(function* (
   cacheDir: string,
-  filename: string,
-  source: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(cacheDir, { recursive: true });
-  const dest = `${cacheDir.replace(/\\/g, "/")}/${filename}`;
+  const dest = piT3McpExtensionDestPath(cacheDir);
   const existing = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
-  if (existing !== source) {
+  if (existing !== PI_T3_MCP_EXTENSION_SOURCE) {
     // Concurrent pi launches read this file: stage it in a per-call directory
     // and rename so readers and other writers never see a partial file.
     yield* Effect.scoped(
       Effect.gen(function* () {
         const stagingDir = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
-        const staging = `${stagingDir.replace(/\\/g, "/")}/${filename}`;
-        yield* fs.writeFileString(staging, source);
+        const staging = `${stagingDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
+        yield* fs.writeFileString(staging, PI_T3_MCP_EXTENSION_SOURCE);
         yield* fs.rename(staging, dest).pipe(Effect.retry({ times: 3 }));
       }),
     );
@@ -248,26 +246,11 @@ const materializePiExtension = Effect.fn("materializePiExtension")(function* (
   return dest;
 });
 
-export const materializePiT3McpExtension = Effect.fn("materializePiT3McpExtension")(
-  (cacheDir: string) =>
-    materializePiExtension(cacheDir, PI_T3_MCP_EXTENSION_FILENAME, PI_T3_MCP_EXTENSION_SOURCE),
-);
-
-export const materializePiT3DiscoverExtension = Effect.fn("materializePiT3DiscoverExtension")(
-  (cacheDir: string) =>
-    materializePiExtension(
-      cacheDir,
-      PI_T3_DISCOVER_EXTENSION_FILENAME,
-      PI_T3_DISCOVER_EXTENSION_SOURCE,
-    ),
-);
-
 export function buildPiRpcLaunch(input: {
   readonly launchArgs: ReadonlyArray<string>;
   readonly environment: NodeJS.ProcessEnv;
   readonly mcpSession: McpProviderSessionConfig | undefined;
   readonly extensionPath: string | undefined;
-  readonly discoverExtensionPath?: string | undefined;
   readonly sessionPath?: string | undefined;
   readonly ephemeral?: boolean;
   // T3 stops these processes as soon as they answer. They run --offline because Pi's startup
@@ -308,15 +291,6 @@ export function buildPiRpcLaunch(input: {
     !hasExplicitExtension(args, input.extensionPath)
   ) {
     args.push("--extension", input.extensionPath);
-  }
-  // The discover extension carries its own configuration, so status probes load it without the
-  // permission bridge; only an explicit extension ban suppresses it.
-  if (
-    input.disableExtensions !== true &&
-    input.discoverExtensionPath !== undefined &&
-    !hasExplicitExtension(args, input.discoverExtensionPath)
-  ) {
-    args.push("--extension", input.discoverExtensionPath);
   }
   const environment = { ...input.environment };
   // MCP credentials belong to this T3 session; discard inherited server/parent credentials.

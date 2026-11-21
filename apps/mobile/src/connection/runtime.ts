@@ -1,5 +1,4 @@
 import { Connection } from "@t3tools/client-runtime/connection";
-import { DirectoryDiscovery } from "@t3tools/client-runtime/discover";
 import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import { PullRequestDiffLoader } from "@t3tools/client-runtime/state/pull-requests";
 import {
@@ -41,6 +40,8 @@ const layerProvidedClientConnection = layerSnapshotLoader.pipe(
       usageLimitSources: true,
       usageLimitsCommand: true,
       providerCatalogsOnDemand: true,
+      providerCatalogDigests: true,
+      providerStatusDeltas: true,
     }),
   ),
   Layer.provideMerge(
@@ -57,7 +58,7 @@ const layerConnection = BackgroundActivity.layerReporter.pipe(
 );
 
 export const connectionAtomRuntime: Atom.AtomRuntime<
-  Layer.Success<ConnectionLayerSource> | DirectoryDiscovery,
+  Layer.Success<ConnectionLayerSource>,
   Layer.Error<ConnectionLayerSource>
 > = hotSwappableAtomRuntime({
   id: "t3.mobile.connection-runtime",

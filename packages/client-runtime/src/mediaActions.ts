@@ -10,7 +10,6 @@ export type MediaActionId =
   | "copy-relative-path"
   | "copy-url"
   | "open-file"
-  | "download"
   | "save"
   | "save-image"
   | "copy-image";

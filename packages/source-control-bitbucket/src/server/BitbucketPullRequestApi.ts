@@ -235,7 +235,6 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly number: number;
       readonly title?: string | undefined;
       readonly body?: string | undefined;
-      readonly destinationBranch?: string | undefined;
     }) => Effect.Effect<void, BitbucketPullRequestApiError>;
 
     readonly comment: (input: {
@@ -774,9 +773,6 @@ export const make = Effect.gen(function* () {
             body: JSON.stringify({
               ...(input.title === undefined ? {} : { title: input.title }),
               ...(input.body === undefined ? {} : { description: input.body }),
-              ...(input.destinationBranch === undefined
-                ? {}
-                : { destination: { branch: { name: input.destinationBranch } } }),
             }),
           })
           .pipe(Effect.asVoid),

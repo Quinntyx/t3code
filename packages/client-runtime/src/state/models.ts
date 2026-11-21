@@ -1,17 +1,13 @@
-import {
-  backgroundWorkHoldsCompletion,
-  waitingOnAgents,
-} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "../threadPullRequests.ts";
 import type {
   ThreadLinkedPullRequest,
   EnvironmentId,
   MessageId,
   OrchestrationProjectShell,
-  OrchestrationV2Goal,
+  OrchestrationV2ProviderGoal,
   OrchestrationV2RunStatus,
   OrchestrationV2ProviderFailureClass,
-  OrchestrationV2StallRecovery,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   PlanId,
@@ -21,6 +17,8 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
 
@@ -93,39 +91,18 @@ export interface ThreadRunSummary {
    * generating while the server settles it.
    */
   readonly turnEnded?: boolean;
+  /**
+   * Set while the run is open but its provider has not started a turn, so the
+   * provider is still launching and nothing is generating. Clients show it
+   * instead of "Thinking".
+   */
+  readonly providerStartingLabel?: string;
+  /** `providerStartingLabel` as a `msg()` string; display sites resolve this one. */
+  readonly providerStartingLabelMsg?: string;
   readonly sourcePlanRef?: {
     readonly threadId: ThreadId;
     readonly planId: PlanId;
   };
-}
-
-/** The stall fields a runtime summary carries; empty unless the thread is stalled right now. */
-export interface ThreadStallFields {
-  readonly stalled?: true;
-  readonly stallNextAttemptAt?: string;
-}
-
-/**
- * The stall a runtime summary shows. The retry record is only a schedule, so its time is shown
- * just while it names the stalled run; before the server arms it, or beside an older one, the
- * thread is stalled with no time yet.
- */
-export function presentThreadStall(input: {
-  readonly stalled: boolean;
-  readonly runId: RunId | null | undefined;
-  readonly recovery: OrchestrationV2StallRecovery | null | undefined;
-}): ThreadStallFields {
-  if (!input.stalled) return {};
-  return input.recovery != null && input.recovery.runId === input.runId
-    ? { stalled: true, stallNextAttemptAt: input.recovery.nextAttemptAt }
-    : { stalled: true };
-}
-
-/** A thread whose failure the server retries is working, so a failure notice for it is wrong. */
-export function threadFailureIsRetried(
-  runtime: Pick<ThreadRuntimeSummary, "stalled"> | null | undefined,
-): boolean {
-  return runtime?.stalled === true;
 }
 
 export interface ThreadRuntimeSummary {
@@ -137,14 +114,9 @@ export interface ThreadRuntimeSummary {
   readonly lastError: string | null;
   readonly lastErrorClass?: OrchestrationV2ProviderFailureClass | null;
   readonly lastErrorCode?: string | null;
+  /** The record `lastError` came from, with its change time so a repeated failure differs. */
+  readonly lastErrorSource?: string | null;
   readonly usageLimitResetAt?: string | null;
-  /**
-   * The latest run ended on an upstream overload, so the server keeps retrying it. Clients place
-   * the thread with the working ones and show no failure. Absent on older servers.
-   */
-  readonly stalled?: boolean;
-  /** When the next automatic retry goes out while `stalled`. */
-  readonly stallNextAttemptAt?: string | null;
   readonly updatedAt: string;
 }
 
@@ -185,8 +157,6 @@ export interface EnvironmentThreadShell {
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
   readonly worktreePath: string | null;
-  /** The branch the thread's worktree started from. */
-  readonly baseBranch?: string | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly linkOrigin: OrchestrationV2ThreadShell["linkOrigin"] | null;
@@ -209,7 +179,7 @@ export interface EnvironmentThreadShell {
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
   >;
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
-  readonly goal: OrchestrationV2Goal | null;
+  readonly goal: OrchestrationV2ProviderGoal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -221,10 +191,6 @@ export interface EnvironmentThreadShell {
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
-  /** The server's retry of an overloaded run, when one is armed. */
-  readonly stallRecovery?: OrchestrationV2StallRecovery | null;
-  readonly consumptionCap?: import("@t3tools/contracts").ThreadConsumptionCap | null;
-  readonly consumptionCapHit?: import("@t3tools/contracts").ThreadConsumptionCapHit | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   readonly pinOrderKey: string | null;
@@ -232,6 +198,8 @@ export interface EnvironmentThreadShell {
   readonly pullRequests: ReadonlyArray<import("@t3tools/contracts").ThreadPullRequestLink>;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   readonly branchPullRequest?: ThreadLinkedPullRequest | null;
+  /** Absent from rows built before issue linking; the server sends an empty list. */
+  readonly issues?: ReadonlyArray<import("@t3tools/contracts").ThreadIssueLink>;
   /**
    * Server-tracked visited watermark. `undefined` means the environment's
    * server predates visited tracking and clients should fall back to any
@@ -268,28 +236,13 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
 // server suppresses the roster while an interruptible activity run exists, so a
 // remaining roster is stronger than checkpoint-oriented waiting.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
-  const pendingBackgroundTasks = thread.pendingBackgroundTasks ?? [];
   const parkAtIdle =
-    waitingOnAgents({ pendingBackgroundTasks }) ||
-    (backgroundWorkHoldsCompletion(pendingBackgroundTasks) && thread.status !== "failed");
-  if (
-    thread.latestRunId === null &&
-    thread.activeProviderThreadId === null &&
-    !parkAtIdle &&
-    thread.consumptionCapHit == null
-  ) {
+    backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
+    thread.status !== "failed";
+  if (thread.latestRunId === null && !parkAtIdle) {
     return null;
   }
-  const capHit = thread.consumptionCapHit ?? null;
-  const status =
-    capHit !== null ? "failed" : parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
-  // The server decides this. A cancelled queued message can be the run the shell presents
-  // instead of the stalled one, and then the retry time is left out.
-  const stalled = presentThreadStall({
-    stalled: capHit === null && thread.stalled === true,
-    runId: thread.latestRunId,
-    recovery: thread.stallRecovery,
-  });
+  const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
   return {
     status,
     activeRunId: thread.activeRunId,
@@ -299,11 +252,10 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
         : nullableIso(thread.activityRunStartedAt),
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
-    lastError: capHit?.reason ?? thread.lastError ?? null,
-    lastErrorClass: capHit === null ? (thread.lastErrorClass ?? null) : "usage_limit",
-    lastErrorCode: capHit === null ? (thread.lastErrorCode ?? null) : "consumption_cap",
-    usageLimitResetAt: capHit === null ? (thread.usageLimitResetAt ?? null) : null,
-    ...stalled,
+    lastError: thread.lastError ?? null,
+    lastErrorClass: thread.lastErrorClass ?? null,
+    lastErrorCode: thread.lastErrorCode ?? null,
+    usageLimitResetAt: thread.usageLimitResetAt ?? null,
     updatedAt: iso(thread.updatedAt),
   };
 }
@@ -354,10 +306,10 @@ export function presentThreadShell(
     interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
-    baseBranch: thread.baseBranch ?? null,
     pullRequests: threadPullRequestsOf(thread),
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,
+    issues: thread.issues ?? [],
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     linkOrigin: thread.linkOrigin ?? null,
@@ -397,9 +349,6 @@ export function presentThreadShell(
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     limitRecovery: thread.limitRecovery ?? null,
-    stallRecovery: thread.stallRecovery ?? null,
-    consumptionCap: thread.consumptionCap ?? null,
-    consumptionCapHit: thread.consumptionCapHit ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,
@@ -458,10 +407,15 @@ export function resolveThreadWorkingStartedAt(input: {
   return null;
 }
 
-export function formatWorkingDurationLabel(elapsedMs: number): string {
+export function formatWorkingDurationLabel(
+  elapsedMs: number,
+  resolve: MFunctionType = mFallback,
+): string {
   const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1000)) : 0;
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return resolve(msg("{count}s", { count: seconds }));
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  if (minutes < 60) return resolve(msg("{count}m", { count: minutes }));
+  return resolve(
+    msg("{hours}h {minutes}m", { hours: Math.floor(minutes / 60), minutes: minutes % 60 }),
+  );
 }

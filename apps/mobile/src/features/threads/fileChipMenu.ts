@@ -1,10 +1,12 @@
-import { isHandoffFile } from "@t3tools/client-runtime/handoff";
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { fileBasename } from "@t3tools/shared/path";
 import type { ThreadId } from "@t3tools/contracts";
 import { resolveMarkdownLinkPresentation } from "../../lib/markdownLinks";
 import type { MarkdownFileContextMenu } from "../../native/SelectableMarkdownText.types";
 import { hostPreviewMimeTypeFromExtension } from "@t3tools/shared/filePreview";
+import { msg } from "gt-react-native";
+
+import { m, type MessageResolver } from "../../i18n/messages";
 
 import {
   isAbsolutePath,
@@ -70,24 +72,23 @@ export function fileChipShareSource(target: FileChipTarget, threadId: ThreadId) 
 
 export function fileChipMenu(
   target: FileChipTarget,
-  canDownload: boolean,
+  resolve: MessageResolver = m,
 ): MarkdownFileContextMenu {
   return {
     title: target.fullPath ?? target.relativePath ?? "",
     actions: [
-      ...(target.fullPath && isHandoffFile(target.fullPath)
-        ? [{ id: "hand-off", title: "Hand off to new thread" }]
+      ...(target.fullPath ? [{ id: "copy-full-path", title: resolve(msg("Copy full path")) }] : []),
+      ...(target.relativePath
+        ? [{ id: "copy-relative-path", title: resolve(msg("Copy relative path")) }]
         : []),
-      ...(target.fullPath ? [{ id: "copy-full-path", title: "Copy full path" }] : []),
-      ...(target.relativePath ? [{ id: "copy-relative-path", title: "Copy relative path" }] : []),
-      { id: "open-file", title: "Open in file viewer" },
+      { id: "open-file", title: resolve(msg("Open in file viewer")) },
       ...(fileChipMetadata(target)
-        ? canDownload
-          ? [
-              { id: "download", title: "Download" },
-              { id: "save", title: "Share" },
-            ]
-          : [{ id: "save", title: "Save or share" }]
+        ? [
+            {
+              id: "save",
+              title: resolve(msg("Save or share")),
+            },
+          ]
         : []),
     ],
   };

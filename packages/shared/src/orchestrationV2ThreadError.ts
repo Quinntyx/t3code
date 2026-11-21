@@ -3,7 +3,6 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
-import { isUpstreamOverloadFailure } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 type ErrorTurnItem = Extract<OrchestrationV2TurnItem, { type: "error" }>;
@@ -11,16 +10,18 @@ type ErrorTurnItem = Extract<OrchestrationV2TurnItem, { type: "error" }>;
 type FailureScanTurnItem =
   | ErrorTurnItem
   | { readonly type: Exclude<OrchestrationV2TurnItem["type"], "error"> };
-/** Error items and the Stop marks on runs; other items may be stripped. */
-type StallScanTurnItem =
-  | ErrorTurnItem
-  | Pick<Extract<OrchestrationV2TurnItem, { type: "run_interrupt_request" }>, "type" | "runId">
-  | { readonly type: Exclude<OrchestrationV2TurnItem["type"], "error" | "run_interrupt_request"> };
 
 export function latestRootProviderFailure(
   run: OrchestrationV2Run | null,
   turnItems: ReadonlyArray<FailureScanTurnItem>,
 ): OrchestrationV2ProviderFailure | null {
+  return latestRootProviderFailureItem(run, turnItems)?.failure ?? null;
+}
+
+export function latestRootProviderFailureItem(
+  run: OrchestrationV2Run | null,
+  turnItems: ReadonlyArray<FailureScanTurnItem>,
+): ErrorTurnItem | null {
   if (run?.status !== "failed") return null;
   let latest: ErrorTurnItem | null = null;
   for (const item of turnItems) {
@@ -40,7 +41,7 @@ export function latestRootProviderFailure(
       latest = item;
     }
   }
-  return latest?.failure ?? null;
+  return latest;
 }
 
 export function threadErrorSummary(
@@ -70,12 +71,23 @@ export function latestExecutedRun(
   return latest;
 }
 
-/** A failed or interrupted latest executed run can be continued where it left off. */
-export function resumableContinuationRun(
+/**
+ * Work started now would run in the project checkout, not the worktree the thread asked for. A
+ * failed or interrupted setup leaves the request standing until a worktree exists or later work
+ * has run past it.
+ */
+export function orchestrationV2WorktreePending(
+  worktreePath: string | null,
   runs: ReadonlyArray<OrchestrationV2Run>,
-): OrchestrationV2Run | null {
-  const executed = latestExecutedRun(runs);
-  return executed?.status === "failed" || executed?.status === "interrupted" ? executed : null;
+): boolean {
+  const latest = latestExecutedRun(runs);
+  return (
+    worktreePath === null &&
+    (latest?.status === "preparing" ||
+      latest?.status === "failed" ||
+      latest?.status === "interrupted") &&
+    latest.workspacePreparation?.type === "worktree"
+  );
 }
 
 /** Held queues can execute out of ordinal order; unfinished runs count as latest. */
@@ -101,43 +113,6 @@ export function usageLimitBlockedRun(
   return summary.lastErrorClass === "usage_limit" ? executed : null;
 }
 
-/** The run the newest upstream API overload ended, whose retry a thread recovery drives. */
-export function overloadedRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
-  turnItems: ReadonlyArray<FailureScanTurnItem>,
-): OrchestrationV2Run | null {
-  const executed = latestExecutedRun(runs);
-  if (executed?.status !== "failed") return null;
-  return isUpstreamOverloadFailure(latestRootProviderFailure(executed, turnItems))
-    ? executed
-    : null;
-}
-
-/** Whether the server retries a failed run: an upstream overload ended it and no Stop reached it. */
-export function failedRunIsStalled(
-  failure: OrchestrationV2ProviderFailure | null,
-  stopRequested: boolean,
-): boolean {
-  return isUpstreamOverloadFailure(failure) && !stopRequested;
-}
-
-/**
- * The run the server is retrying, and the only definition of a stalled thread: the latest executed
- * run, when an upstream overload ended it and no Stop reached it. It holds from the moment the
- * failure commits, so no reader depends on the sweep having armed `thread.stallRecovery`.
- */
-export function stalledRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
-  turnItems: ReadonlyArray<StallScanTurnItem>,
-): OrchestrationV2Run | null {
-  const run = overloadedRun(runs, turnItems);
-  if (run === null) return null;
-  const stopRequested = turnItems.some(
-    (item) => item.type === "run_interrupt_request" && item.runId === run.id,
-  );
-  return stopRequested ? null : run;
-}
-
 /** Retains a limited run's outcome when higher-ordinal runs never started. */
 export function usageLimitRunPresentedAsLatest(
   runs: ReadonlyArray<OrchestrationV2Run>,
@@ -154,7 +129,24 @@ export function latestUnheldRun(
   let latest: OrchestrationV2Run | null = null;
   for (const run of runs) {
     if (run.status === "queued" && run.queueHeld === true) continue;
+    if (outlivedBeforeStart(run, runs)) continue;
     if (latest === null || run.ordinal > latest.ordinal) latest = run;
   }
   return latest;
+}
+
+// Steering a queued message cancels its run before it starts and hands the message to the
+// earlier run, which outlives the cancellation; that earlier run then presents as latest.
+function outlivedBeforeStart(
+  run: OrchestrationV2Run,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): boolean {
+  if (run.status !== "cancelled" || run.startedAt !== null || !run.completedAt) return false;
+  const cancelledAt = DateTime.toEpochMillis(run.completedAt);
+  return runs.some(
+    (earlier) =>
+      earlier.ordinal < run.ordinal &&
+      earlier.status !== "queued" &&
+      (!earlier.completedAt || DateTime.toEpochMillis(earlier.completedAt) >= cancelledAt),
+  );
 }

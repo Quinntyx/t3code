@@ -12,15 +12,16 @@ import {
 
 import {
   buildModelOptions,
-  buildMachineHandoffModelOptions,
   describeUnavailableModelSelection,
   groupByProvider,
   isModelSelectionUnavailable,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
+  withStoredThreadModelOptions,
   type ModelOption,
 } from "./modelOptions";
+import { groupModelsBySubProvider } from "@t3tools/client-runtime/providerSubProviders";
 
 describe("mobile model options", () => {
   it("distinguishes same-name OpenCode models without changing their routing", () => {
@@ -69,6 +70,49 @@ describe("mobile model options", () => {
     );
     expect(groupByProvider(options)).toEqual([
       { providerKey: "opencode_work", providerLabel: "OpenCode Work", models: options },
+    ]);
+  });
+
+  it("groups fx's models under its backends, keeping a signed-out backend", () => {
+    const subProviders = [
+      { name: "Codex subscription" },
+      { name: "Grok subscription", unavailableReason: "Signed out." },
+    ];
+    const config = {
+      providers: [
+        {
+          instanceId: "fx",
+          driver: "fx",
+          displayName: "fx",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          subProviders,
+          models: [
+            { slug: "default", name: "Default (gpt-5.5)", isCustom: false, capabilities: null },
+            {
+              slug: "codex:gpt-5.5",
+              name: "gpt-5.5",
+              subProvider: "Codex subscription",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    const [group] = groupByProvider(buildModelOptions(config, null, undefined, null));
+    expect(group?.subProviders).toEqual(subProviders);
+    const { ungrouped, groups } = groupModelsBySubProvider(
+      group?.models ?? [],
+      group?.subProviders ?? [],
+      (option) => option.subtitle,
+    );
+    expect(ungrouped.map((option) => option.key)).toEqual(["fx:default"]);
+    expect(groups.map(({ subProvider, models }) => [subProvider.name, models.length])).toEqual([
+      ["Codex subscription", 1],
+      ["Grok subscription", 0],
     ]);
   });
 
@@ -143,6 +187,27 @@ describe("mobile model options", () => {
       null,
     );
     expect(explicitOption?.selection.options).toEqual([{ id: "serviceTier", value: "priority" }]);
+  });
+
+  it("carries a thread's stored options onto an optionless pick of its own model", () => {
+    const claude = ProviderInstanceId.make("claudeAgent");
+    const stored: ModelSelection = {
+      instanceId: claude,
+      model: "claude-opus-5-5",
+      options: [{ id: "effort", value: "high" }],
+    };
+    expect(
+      withStoredThreadModelOptions({ instanceId: claude, model: stored.model }, stored),
+    ).toEqual(stored);
+    const remembered: ModelSelection = { ...stored, options: [{ id: "effort", value: "low" }] };
+    expect(withStoredThreadModelOptions(remembered, stored)).toBe(remembered);
+    const otherInstance: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claude_work"),
+      model: stored.model,
+    };
+    expect(withStoredThreadModelOptions(otherInstance, stored)).toBe(otherInstance);
+    const otherModel: ModelSelection = { instanceId: claude, model: "claude-sonnet-5-5" };
+    expect(withStoredThreadModelOptions(otherModel, stored)).toBe(otherModel);
   });
 
   it("limits existing threads to their provider while new tasks keep every provider", () => {
@@ -358,29 +423,6 @@ describe("mobile model options", () => {
     expect(isModelSelectionUnavailable(config, disabled, null)).toBe(true);
     expect(isModelSelectionUnavailable(config, removed, null)).toBe(false);
     expect(resolveSelectableModelSelection(null, disabled, null)).toBe(disabled);
-    const handoffConfig = {
-      ...config,
-      providers: config.providers.map((provider) => ({
-        ...provider,
-        status: "ready" as const,
-        models: [{ slug: usable.model, name: "Test", isCustom: false, capabilities: null }],
-      })),
-    };
-    expect(buildMachineHandoffModelOptions(handoffConfig, usable, null)).toHaveLength(1);
-    expect(
-      buildMachineHandoffModelOptions(
-        {
-          ...handoffConfig,
-          providers: handoffConfig.providers.map((provider) => ({
-            ...provider,
-            status: "error" as const,
-            auth: { status: "unknown" as const },
-          })),
-        },
-        usable,
-        null,
-      ),
-    ).toEqual([]);
   });
 
   describe("Antigravity selections", () => {
@@ -780,45 +822,6 @@ describe("synchronized mobile model visibility", () => {
         .filter((option) => option.providerKey === other)
         .map((option) => option.selection.model),
     ).toEqual(["hidden", "first", "second", "custom"]);
-  });
-
-  it("hides newly discovered models without resurrecting them through the saved selection", () => {
-    const optedOut = {
-      ...config,
-      settings: {
-        ...config.settings,
-        providerModelPreferences: {
-          [provider]: {
-            hiddenModels: ["hidden", "custom"],
-            modelOrder: ["second", "first"],
-            newModelsEnabled: false,
-            enabledModels: ["first"],
-          },
-        },
-      },
-    };
-    expect(
-      buildModelOptions(optedOut, { instanceId: provider, model: "second" }, provider, null).map(
-        (option) => option.selection.model,
-      ),
-    ).toEqual(["first", "custom"]);
-    for (const model of ["second", "missing", "hidden"]) {
-      const saved = { instanceId: provider, model };
-      expect(resolveSelectableModelSelection(optedOut, saved, null)).toBeNull();
-      expect(resolveDefaultableModelSelection(optedOut, saved, null)).toBeNull();
-    }
-    for (const model of ["first", "custom"]) {
-      const saved = { instanceId: provider, model };
-      expect(resolveDefaultableModelSelection(optedOut, saved, null)).toBe(saved);
-    }
-    const management = buildModelOptions(optedOut, null, provider, null, true);
-    expect(management.find((option) => option.selection.model === "second")?.isHidden).toBe(true);
-    expect(management.find((option) => option.selection.model === "custom")?.isHidden).toBe(false);
-    expect(
-      buildModelOptions(optedOut, { instanceId: provider, model: "missing" }, provider, null).map(
-        (option) => option.selection.model,
-      ),
-    ).not.toContain("missing");
   });
 
   it("exposes hidden built-ins for management without offering custom visibility controls", () => {

@@ -5,20 +5,36 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
-import { resolveClaudeHomePath } from "./ClaudeConfigDir.ts";
-
-export { resolveClaudeHomePath };
 
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+
+export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  environment?: NodeJS.ProcessEnv,
+): Effect.fn.Return<string, never, Path.Path> {
+  const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
+  const homePath = config.homePath.trim();
+  if (homePath.length > 0) {
+    return path.resolve(expandHomePath(homePath, home));
+  }
+  // Inherited env vars are not shell-expanded, so a literal `~` stays literal.
+  const inherited = environment?.CLAUDE_CONFIG_DIR?.trim() ?? "";
+  if (inherited.length > 0) {
+    return path.resolve(inherited);
+  }
+  return path.resolve(path.join(home, ".claude"));
+});
 
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   baseEnv?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
-  const resolvedBaseEnv = baseEnv ?? (yield* HostProcess.Environment);
+  const resolvedBaseEnv = baseEnv ?? process.env;
   const homePath = config.homePath.trim();
   if (homePath.length === 0) return resolvedBaseEnv;
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
@@ -84,6 +100,49 @@ export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(
   return yield* fileSystem.exists(managedMcpConfigPath).pipe(Effect.orElseSucceed(() => false));
 });
 
+// A worktree's .git file points at <main>/.git/worktrees/<name>, whose commondir leads back to
+// <main>/.git. A bare repository has no main checkout, so its worktree keeps its own file.
+// Untraced because claudeLocalSettingsDirectory already owns the span.
+const mainCheckoutRoot = Effect.fnUntraced(function* (checkout: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* fileSystem.readFileString(path.join(checkout, ".git")).pipe(
+    Effect.flatMap((pointer) => {
+      const gitDir = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
+      if (gitDir === undefined) return Effect.succeed(checkout);
+      const worktreeGitDir = path.resolve(checkout, gitDir);
+      return fileSystem.readFileString(path.join(worktreeGitDir, "commondir")).pipe(
+        Effect.map((commonDir) => {
+          const common = path.resolve(worktreeGitDir, commonDir.trim());
+          return path.basename(common) === ".git" ? path.dirname(common) : checkout;
+        }),
+      );
+    }),
+    Effect.orElseSucceed(() => checkout),
+  );
+});
+
+// Claude Code keeps .claude/settings.local.json at the repository root, or in cwd outside a
+// repository, on Windows, or when the root is home. Its owner check is skipped, so callers must
+// stay safe when Claude Code ignores the root file.
+export const claudeLocalSettingsDirectory = Effect.fn("claudeLocalSettingsDirectory")(function* (
+  cwd: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if ((yield* HostProcess.Platform) === "win32") return cwd;
+  for (let directory = cwd; ; directory = path.dirname(directory)) {
+    const isCheckout = yield* fileSystem
+      .exists(path.join(directory, ".git"))
+      .pipe(Effect.orElseSucceed(() => false));
+    if (isCheckout) {
+      const root = yield* mainCheckoutRoot(directory);
+      return root === (yield* HostProcess.HomeDirectory) ? cwd : root;
+    }
+    if (path.dirname(directory) === directory) return cwd;
+  }
+});
+
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
   function* (
     config: Pick<ClaudeSettings, "homePath">,
@@ -100,7 +159,7 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
     cwd?: string,
     environment?: NodeJS.ProcessEnv,
   ): Effect.fn.Return<string, never, Path.Path> {
-    const resolvedHomePath = yield* resolveClaudeHomePath(config, environment, cwd);
+    const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
     return `${config.binaryPath}\0${resolvedHomePath}\0${cwd ?? ""}`;
   },
 );

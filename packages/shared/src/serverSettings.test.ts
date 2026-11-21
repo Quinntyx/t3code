@@ -38,6 +38,25 @@ describe("fallbackTextGenerationModelSelection", () => {
     expect(
       fallbackTextGenerationModelSelection({}, (instanceId) => instanceId === "opencode"),
     ).toEqual({ instanceId: "opencode", model: "opencode/big-pickle" });
+    const threadDefault = {
+      instanceId: ProviderInstanceId.make("opencode"),
+      model: "opencode-go/glm-5.3",
+    };
+    const providerInstances = {
+      [threadDefault.instanceId]: {
+        driver: ProviderDriverKind.make("opencode"),
+        config: { customModels: [threadDefault.model] },
+      },
+    };
+    // An exhausted Go quota leaves the custom model unusable but Big Pickle still works.
+    expect(
+      fallbackTextGenerationModelSelection(
+        providerInstances,
+        (instanceId, _driver, model) =>
+          instanceId === "opencode" && !model.startsWith("opencode-go/"),
+        { defaultModelSelection: threadDefault },
+      ),
+    ).toEqual({ instanceId: "opencode", model: "opencode/big-pickle" });
   });
 
   it("replaces and clears the fallback without carrying model options", () => {
@@ -58,8 +77,7 @@ describe("fallbackTextGenerationModelSelection", () => {
       applyServerSettingsPatch(settings, { fallbackModelSelection: null }).fallbackModelSelection,
     ).toBeNull();
   });
-
-  it("falls back to a configured instance when no default instance is enabled", () => {
+  it("falls back to a configured non-default instance", () => {
     const configured = ProviderInstanceId.make("codex_work");
     const providerInstances = {
       [configured]: { driver: ProviderDriverKind.make("codex"), config: {} },
@@ -69,15 +87,6 @@ describe("fallbackTextGenerationModelSelection", () => {
       (instanceId) => instanceId === configured,
     );
     expect(fallback?.instanceId).toBe(configured);
-  });
-
-  it("prefers an enabled default instance over a configured one", () => {
-    const configured = ProviderInstanceId.make("codex_work");
-    const providerInstances = {
-      [configured]: { driver: ProviderDriverKind.make("codex"), config: {} },
-    };
-    const fallback = fallbackTextGenerationModelSelection(providerInstances, () => true);
-    expect(fallback?.instanceId).toBe("codex");
   });
 });
 
@@ -368,6 +377,23 @@ describe("serverSettings helpers", () => {
     expect(settings.sourceControlWriterModelSelection).toBe(sourceControlWriterModelSelection);
   });
 
+  it("falls back from a removed instance whose id matches an inherited object key", () => {
+    for (const id of ["constructor", "toString", "valueOf"]) {
+      const speechPostProcessingModelSelection = createModelSelection(
+        ProviderInstanceId.make(id),
+        "gpt-5.4-mini",
+      );
+      const settings = { ...DEFAULT_SERVER_SETTINGS, speechPostProcessingModelSelection };
+
+      expect(isModelSelectionProviderEnabled(settings, speechPostProcessingModelSelection)).toBe(
+        false,
+      );
+      expect(resolveSpeechPostProcessingModelSelection(settings)).toBe(
+        settings.textGenerationModelSelection,
+      );
+    }
+  });
+
   it("falls back from a writer provider that cannot generate application text", () => {
     const instanceId = ProviderInstanceId.make("acp_writer");
     const sourceControlWriterModelSelection = createModelSelection(instanceId, "default");
@@ -652,61 +678,6 @@ describe("serverSettings helpers", () => {
 
     const removed = applyServerSettingsPatch(added, { usageLimitSources: { [hubA]: null } });
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
-  });
-
-  it("adds, edits and removes registered MCP servers so concurrent edits cannot clobber", () => {
-    const server = (id: string, name: string, enabled = true) => ({
-      id,
-      name,
-      toolName: name.toLowerCase(),
-      enabled,
-      source: {
-        kind: "server.json" as const,
-        document: { name: `acme/${name}`, packages: [] },
-      },
-      config: {},
-    });
-    const notes = server("notes", "Notes");
-    const calendar = server("calendar", "Calendar");
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
-      registeredMcpServers: [notes, server("mail", "Mail", false)],
-    };
-
-    const added = applyServerSettingsPatch(current, {
-      registeredMcpServers: { calendar },
-    });
-    expect(added.registeredMcpServers.map((entry) => entry.id)).toEqual([
-      "notes",
-      "mail",
-      "calendar",
-    ]);
-
-    // Two edits made from the same snapshot, as a field's blur and a toggle's click are.
-    const edited = [
-      { notes: { config: { REGION: "eu", HOME: "/notes" } } },
-      { notes: { enabled: false } },
-      { notes: { config: { HOME: null } } },
-    ].reduce(
-      (settings, registeredMcpServers) =>
-        applyServerSettingsPatch(settings, { registeredMcpServers }),
-      added,
-    );
-    expect(
-      edited.registeredMcpServers.map((entry) => [entry.id, entry.enabled, entry.config]),
-    ).toEqual([
-      ["notes", false, { REGION: "eu" }],
-      ["mail", false, {}],
-      ["calendar", true, {}],
-    ]);
-
-    const removed = applyServerSettingsPatch(edited, {
-      registeredMcpServers: { mail: null, calendar: { ...calendar, toolName: "cal" } },
-    });
-    expect(removed.registeredMcpServers.map((entry) => [entry.id, entry.toolName])).toEqual([
-      ["notes", "notes"],
-      ["calendar", "cal"],
-    ]);
   });
 
   it("upserts and removes secretProviders per entry so concurrent edits cannot clobber", () => {
@@ -1005,37 +976,6 @@ describe("synchronized model preferences", () => {
         setProviderModelOrder: { provider, modelOrder: [] },
       }).providerModelPreferences?.[provider],
     ).toEqual({ hiddenModels: ["luna", "sol"], modelOrder: [] });
-  });
-
-  it("preserves existing visibility while changing the default for newly discovered models", () => {
-    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, legacy);
-    const optedOut = applyServerSettingsPatch(initial, {
-      setProviderNewModelsEnabled: { provider, enabled: false, models: ["sol", "astra"] },
-    });
-    expect(optedOut.providerModelPreferences?.[provider]).toEqual({
-      hiddenModels: ["astra"],
-      modelOrder: ["sol"],
-      newModelsEnabled: false,
-      enabledModels: ["sol"],
-    });
-    const enabled = applyServerSettingsPatch(optedOut, {
-      setModelsHidden: [{ provider, model: "luna", hidden: false }],
-    });
-    expect(enabled.providerModelPreferences?.[provider]?.enabledModels).toEqual(["sol", "luna"]);
-    const optedIn = applyServerSettingsPatch(enabled, {
-      setProviderNewModelsEnabled: {
-        provider,
-        enabled: true,
-        models: ["sol", "astra", "luna", "new-model"],
-      },
-    });
-    expect(optedIn.providerModelPreferences?.[provider]?.hiddenModels).toEqual([
-      "astra",
-      "new-model",
-    ]);
-    expect(optedIn.providerModelPreferences?.[provider]?.newModelsEnabled).toBe(true);
-    expect(optedOut.providerModelPreferences?.[provider]?.enabledModels).toEqual(["sol"]);
-    expect(optedIn.favorites).toEqual(initial.favorites);
   });
 
   it("migrates saved lists independently without claiming empty legacy lists", () => {

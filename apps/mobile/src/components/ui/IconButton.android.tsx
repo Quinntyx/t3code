@@ -42,11 +42,7 @@ export function IconButton(props: IconButtonProps) {
       accessible
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{
-        disabled: Boolean(props.disabled),
-        selected: props.selected,
-        ...(props.busy !== undefined ? { busy: props.busy } : {}),
-      }}
+      accessibilityState={{ disabled: Boolean(props.disabled), selected: props.selected }}
       accessibilityActions={[{ name: "activate" }]}
       onAccessibilityAction={() => {
         if (!props.disabled) props.onPress?.();

@@ -1,5 +1,9 @@
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
+import type { ContextMenuSource } from "@t3tools/contracts";
+import { contextMenuSourceOf } from "../../contextMenuSource";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { T, useGT } from "gt-react";
 import { SquarePenIcon, XIcon } from "lucide-react";
 import {
   memo,
@@ -17,7 +21,6 @@ import {
   composerDraftHasUserContent,
   DraftId,
   useComposerDraftStore,
-  useComposerThreadDraft,
   type ComposerThreadDraftState,
   type DraftSessionState,
 } from "../../composerDraftStore";
@@ -28,17 +31,21 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   composer: ComposerThreadDraftState;
   project: ProjectFaviconProject | null;
   projectDisplayName: string | null;
-  /** Stacked under its parent thread, which already names the project. */
-  hideProject?: boolean;
-  navigationParent?: string;
   isActive: boolean;
   onNavigate: (draftId: DraftId) => void;
   onDiscard: (draftId: DraftId) => void;
-  onContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
+  onContextMenu: (
+    draftId: DraftId,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
 }) {
   const { composer, draftId, onContextMenu, onDiscard, onNavigate } = props;
+  const gt = useGT();
   const promptPreview =
-    replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label)
+    assistantCitationsToPlainText(
+      replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label),
+    )
       .trim()
       .split("\n", 1)[0] ?? "";
   // images mirrors persistedAttachments once rehydration finishes; before
@@ -52,12 +59,12 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   const preview =
     promptPreview.length > 0
       ? promptPreview
-      : attachmentCount === 0
-        ? "New thread"
-        : `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`;
+      : gt("{count, plural, one {{count} attachment} other {{count} attachments}}", {
+          count: attachmentCount,
+        });
   const accessibility = resolveSidebarRowAccessibility({
     title: preview,
-    statusLabel: "Unsent draft",
+    statusLabel: gt("Unsent draft"),
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
   });
@@ -70,7 +77,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
       event.preventDefault();
       const rect = event.currentTarget.getBoundingClientRect();
-      onContextMenu(draftId, { x: rect.left, y: rect.bottom });
+      onContextMenu(draftId, { x: rect.left, y: rect.bottom }, "keyboard");
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onNavigate(draftId);
@@ -78,7 +85,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   };
   const handleContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
-    onContextMenu(draftId, { x: event.clientX, y: event.clientY });
+    onContextMenu(draftId, { x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));
   };
   const handleDiscard = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -91,7 +98,6 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         role="button"
         tabIndex={0}
         data-sidebar-row={`draft:${draftId}`}
-        data-sidebar-parent={props.navigationParent}
         aria-label={accessibility.label}
         aria-current={accessibility.current}
         data-testid="sidebar-draft-row"
@@ -103,39 +109,22 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         onContextMenu={handleContextMenu}
         onKeyDown={handleKeyDown}
       >
-        <span className="sr-only">{preview}</span>
-        <div
-          className={cn(
-            "relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
-            props.hideProject ? "h-auto" : "h-[4.875rem]",
-          )}
-        >
+        <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
             <SquarePenIcon aria-hidden className={draftPenClassName} />
-            {props.hideProject ? (
-              <span
-                aria-hidden
-                className="min-w-0 flex-1 truncate text-sm font-medium text-foreground/90"
-              >
-                {preview}
-              </span>
-            ) : (
-              <>
-                {props.project ? (
-                  <ProjectFavicon project={props.project} className="size-4 shrink-0" />
-                ) : null}
-                <span className="min-w-0 flex-1 truncate text-xs font-medium text-secondary-label">
-                  {props.projectDisplayName}
-                </span>
-              </>
-            )}
+            {props.project ? (
+              <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+            ) : null}
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-secondary-label">
+              {props.projectDisplayName}
+            </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <button
                       type="button"
-                      aria-label="Discard draft"
+                      aria-label={gt("Discard draft")}
                       onClick={handleDiscard}
                       className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
                     >
@@ -143,15 +132,13 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                     </button>
                   }
                 />
-                <TooltipPopup side="top">Discard draft</TooltipPopup>
+                <TooltipPopup side="top">
+                  <T>Discard draft</T>
+                </TooltipPopup>
               </Tooltip>
             </span>
           </div>
-          {props.hideProject ? null : (
-            <div aria-hidden className="mt-0.5 truncate text-sm font-medium text-foreground/90">
-              {preview}
-            </div>
-          )}
+          <div className="mt-0.5 truncate text-sm font-medium text-foreground/90">{preview}</div>
         </div>
       </div>
     </li>
@@ -164,40 +151,17 @@ interface SidebarDraftRowData {
   composer: ComposerThreadDraftState;
 }
 
-/** An unsent draft stacked on the branch of the thread it sits under. */
-export const StackedSidebarDraftRow = memo(function StackedSidebarDraftRow(props: {
-  draftId: DraftId;
-  isActive: boolean;
-  navigationParent: string;
-  onNavigate: (draftId: DraftId) => void;
-  onContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
-}) {
-  const composer = useComposerThreadDraft(props.draftId);
-  return (
-    <SidebarDraftRow
-      draftId={props.draftId}
-      composer={composer}
-      project={null}
-      projectDisplayName={null}
-      hideProject
-      navigationParent={props.navigationParent}
-      isActive={props.isActive}
-      onNavigate={props.onNavigate}
-      onDiscard={discardComposerDraft}
-      onContextMenu={props.onContextMenu}
-    />
-  );
-});
-
 export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
-  /** Drafts listed under their stack instead, one id per line. */
-  stackedDraftIds: string;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
-  onDraftContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
+  onDraftContextMenu: (
+    draftId: DraftId,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
 }) {
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftsByThreadKey = useComposerDraftStore(
@@ -226,11 +190,10 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     }
     setFrozenActive({ routeDraftId: props.routeDraftId, row });
   }
-  const stackedDraftIds = new Set(props.stackedDraftIds.split("\n"));
   const drafts = (() => {
     const rows: SidebarDraftRowData[] = [];
     for (const [draftKey, session] of Object.entries(draftThreadsByThreadKey)) {
-      if (session.promotedTo != null || stackedDraftIds.has(draftKey)) {
+      if (session.promotedTo != null) {
         continue;
       }
       if (

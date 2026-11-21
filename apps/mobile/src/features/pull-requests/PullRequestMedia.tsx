@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { createContext, useContext, useState } from "react";
 import {
   pullRequestMediaSource,
@@ -10,7 +11,6 @@ import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
 import { AppText } from "../../components/ui/AppText";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
-import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
 import { VideoAttachmentTile } from "../../components/VideoAttachmentTile";
@@ -30,18 +30,12 @@ export function usePullRequestMediaUrl(url: string) {
   const context = useContext(PullRequestMediaContext);
   const source = pullRequestMediaSource(url, context);
   const resource = "resource" in source ? (source.resource ?? null) : null;
-  const environmentId = context?.environmentId ?? null;
-  const asset = useAssetUrlState(environmentId, resource);
-  const refresh = useRefreshAssetUrl(environmentId, resource);
-  const uri = useCachedAssetImageUri(
-    environmentId,
-    resource,
-    asset._tag === "Success" ? asset.url : resource ? null : url,
-  );
+  const asset = useAssetUrlState(context?.environmentId ?? null, resource);
+  const refresh = useRefreshAssetUrl(context?.environmentId ?? null, resource);
   return {
-    uri,
+    uri: asset._tag === "Success" ? asset.url : resource ? null : url,
     cacheKey: context && resource ? assetImageCacheKey(context.environmentId, resource) : undefined,
-    unavailable: resource !== null && asset._tag === "Failure" && uri === null,
+    unavailable: resource !== null && asset._tag === "Failure",
     source,
     resolvePlaybackUri: resource ? async () => (await refresh()) ?? null : undefined,
   };
@@ -54,12 +48,13 @@ export function PullRequestMedia(props: {
   readonly compact?: boolean;
 }) {
   const media = usePullRequestMediaUrl(props.url);
+  const gt = useGT();
   const visible = useContext(PullRequestMediaVisibleContext);
   const context = useContext(PullRequestMediaContext);
   const withGallery = useFilePreviewGallery();
   const [image, setImage] = useState<FilePreviewSource | null>(null);
   const [video, setVideo] = useState<VideoPreviewSource | null>(null);
-  const name = props.caption || new URL(props.url).pathname.split("/").pop() || "Attachment";
+  const name = props.caption || new URL(props.url).pathname.split("/").pop() || gt("Attachment");
   if (props.kind === "image")
     return (
       <>
@@ -124,12 +119,13 @@ export function PullRequestImageAttachment(props: {
   readonly gallery: readonly FilePreviewItem[];
 }) {
   const media = usePullRequestMediaUrl(props.url);
+  const gt = useGT();
   const [preview, setPreview] = useState<FilePreviewSource | null>(null);
   return (
     <>
       <Pressable
         accessibilityRole="imagebutton"
-        accessibilityLabel={`View attachment: ${props.caption}`}
+        accessibilityLabel={gt("View attachment: {caption}", { caption: props.caption })}
         onPress={() => setPreview({ ...props.source, gallery: props.gallery })}
         className="gap-2 active:opacity-70"
         style={{ width: 176 }}

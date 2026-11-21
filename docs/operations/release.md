@@ -2,90 +2,7 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-## Quinntyx's Forgejo fork
-
-The authoritative source is [Forgejo](https://git.quinntyx.dev/quinntyx/t3code).
-Forgejo's server-side push mirror keeps `Quinntyx/t3code` on GitHub available for
-existing package sources; GitHub Actions is disabled on that mirror. Existing
-GitHub releases remain there, but new fork builds are Forgejo artifacts and
-packages, not GitHub releases.
-
-`.forgejo/workflows/ci.yml` runs changed-file checks and builds Linux x64 AppImages
-and Intel macOS DMGs on the local `ubuntu-latest` runner. Successful pushes to `main` publish the stable
-update feed at
-`https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-desktop/stable/`.
-The runner needs an isolated Linux job container with root access for native build
-dependencies. `PACKAGES_TOKEN` is a Forgejo Actions secret scoped to `write:package`.
-Branch and pull-request builds upload artifacts but never advance the feed.
-Versions are `year.month.run-number`, independently of upstream versions.
-
-Download the first AppImage from Forgejo Actions, place it in a **user-writable**
-directory, make it executable, and launch that copy. Keep the stable update channel
-selected. The existing pacman-owned `/opt` installation cannot replace itself:
-keep it as a fallback, but do not point the updater at package-managed files.
-Subsequent AppImage updates use the normal in-app update controls. Both checks and
-downloads require Tailscale; the HTTPS endpoint is served only on the tailnet.
-
-The macOS build is packaged on Linux, so it is unsigned and has no passkey support.
-Download `t3code-mac-x64` from Forgejo Actions and drag the app into Applications.
-macOS blocks its first launch: choose **Open Anyway** in System Settings → Privacy &
-Security, or run `xattr -dr com.apple.quarantine "/Applications/T3 Code (Beta).app"`
-before opening it. Updates then arrive through the same
-in-app controls and feed as the AppImage. Squirrel.Mac refuses unsigned apps, so this
-build unpacks the downloaded zip and replaces its own bundle when it restarts; that
-needs the app in a folder you can write to, which a mounted disk image is not. The
-job downloads Apple's macOS SDK from a third-party mirror pinned by checksum. See
-[macOS DMGs from Linux](./development.md#macos-dmgs-from-linux).
-
-`.forgejo/workflows/mobile.yml` exports Android and iOS updates with Expo's native
-fingerprint and publishes them to tailnet-only Forgejo package feeds on `main`.
-These feeds require a **new fork-native installation**; an upstream or existing
-EAS binary still points to Expo's original update service. JavaScript-only changes
-can update in-app; native dependency/config changes require a new native binary.
-Fork CI builds a standalone ARM64 **T3 Code Preview** APK by default. Manual
-dispatches can set `build_android=false` to skip it. The APK retains package
-`com.t3tools.t3code.preview` and the original Preview debug signing key, so install
-it over the existing Preview app without uninstalling or losing its settings.
-CI verifies the package, display name, and signing certificate before uploading
-`t3code-preview-android-arm64`. Expo OTA updates are disabled for this APK;
-update it by installing a newer Preview APK, not through the production feed.
-
-For a separate native client using those OTA feeds, set `APP_VARIANT=production`,
-`T3CODE_MOBILE_APP_ID=dev.quinntyx.t3code`, and `T3CODE_MOBILE_UPDATE_URL` to
-`https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-mobile/<android-or-ios>/manifest.json`.
-Use the exported manifest's `runtimeVersion` as
-`T3CODE_MOBILE_RUNTIME_VERSION` when building the matching native client. Existing
-production APKs use the separate `t3code` signing key backed up privately in
-`~/.local/share/t3code-fork/`; preserve that backup for production app upgrades.
-The mobile workflow is called by Fork CI after its quality gate, not independently.
-Publication is serialized, and an obsolete main revision cannot advance a feed.
-The Linux runner can export iOS JavaScript, but an installable iOS binary still
-requires a Mac runner and Apple signing/provisioning. Signed macOS builds, Windows builds
-and upstream npm/AUR publishing are not enabled by the fork workflows.
-
-### Tailnet update endpoint
-
-The adapter in `.forgejo/hosting/` shares the existing `forgejo_default` Docker
-network without changing the Forgejo installation. It adds Expo's required response
-headers and selects the manifest using the client's `expo-runtime-version` header.
-Different native runtimes retain separate package versions and cannot overwrite
-each other's updates. Assets use immutable SHA-256 names.
-
-Deploy only the adapter's two files to a durable directory, not a temporary worktree:
-
-```sh
-mkdir -p ~/.local/share/t3code-fork/hosting
-cp .forgejo/hosting/docker-compose.yml .forgejo/hosting/nginx.conf ~/.local/share/t3code-fork/hosting/
-docker compose -p t3code-updates -f ~/.local/share/t3code-fork/hosting/docker-compose.yml up -d
-tailscale serve --bg --https=8443 http://127.0.0.1:3081
-```
-
-This leaves the existing HTTPS service on port 443 alone. The adapter listens on
-loopback only; Tailscale terminates HTTPS with the machine's trusted tailnet certificate.
-
-## Upstream release checklist
-
-The remaining sections describe upstream's unified stable and nightly releases.
+This document covers the unified release workflow for stable and nightly desktop releases.
 
 Beta is the product label, not a release channel or version suffix. Release channels
 remain stable and nightly. To ship 0.1.0 Beta, use `channel=stable` and
@@ -102,7 +19,7 @@ the version.
   - push tag matching `v*.*.*` for a stable release of an explicit commit
   - scheduled nightly check every 30 minutes
   - manual `workflow_dispatch` with `channel=nightly`
-  - manual `workflow_dispatch` with `channel=preview`, the maintainers' test train. It exercises the whole release flow (build, sign, notarize, smoke, publish) for a commit that end users must never receive, which is how an unmerged branch or a risky change gets a real release run before it lands. It builds the triggering commit with nightly's versioning under the `preview` prerelease identifier (`0.0.41-preview.<date>.<run>`) and publishes a GitHub prerelease plus the npm packages under the `preview` dist-tag. Preview is not on the schedule, no default npm dist-tag points at it, its desktop builds carry no update feed, and no updater manifest (`latest*.yml`, `nightly*.yml`, blockmaps) is attached, so a stable or nightly install cannot be offered one. The only ways onto it are downloading the release by hand, `npx t3@preview`, `T3CODE_CHANNEL=preview` for the install scripts, or `t3 update --channel preview` from a terminal; each prints a warning, and the CLI asks for confirmation when the running build is not itself a preview. The release itself is named as a maintainer test build and its body is a warning rather than generated notes: a changelog of unmerged branch history is not a changelog, and nightly and stable notes are unaffected because each series resolves its previous tag within its own channel. The hosted web app, AUR, and Discord announcements are skipped. Keep it; it costs nothing when idle.
+  - manual `workflow_dispatch` with `channel=preview`, the maintainers' test train. It exercises the release flow up to a draft release (build, sign, notarize, smoke) for a commit that end users must never receive, which is how an unmerged branch or a risky change gets a real release run before it lands. It builds the triggering commit with nightly's versioning under the `preview` prerelease identifier (`0.0.41-preview.<date>.<run>`) and leaves its GitHub prerelease as a draft. It publishes nothing to npm. It stays a draft because a draft has no git tag, and published preview tags hide nightlies from the updater (see [Update feed](#update-feed)). Do not publish a preview draft by hand. Preview is not on the schedule, its desktop builds carry no update feed, and no updater manifest (`latest*.yml`, `nightly*.yml`, blockmaps) is attached, so a stable or nightly install cannot be offered one. The only ways onto a new preview are by hand: the draft release, which maintainers can open, and the run's Actions artifacts. A draft's files are not public, so `T3CODE_CHANNEL=preview` and `t3 update --channel preview` see only previews published before this rule, and a fresh `npx t3@preview` fails while npm's `preview` dist-tag names a draft. Rebase a branch onto `main` before dispatching a preview from it. The run uses the branch's own `release.yml`, and an older copy publishes the preview with a tag. The release itself is named as a maintainer test build and its body is a warning rather than generated notes: a changelog of unmerged branch history is not a changelog, and nightly and stable notes are unaffected because each series resolves its previous tag within its own channel. The hosted web app, AUR, and Discord announcements are skipped. Keep it; it costs nothing when idle.
 - A manual stable release builds the commit of the latest published nightly, not `main` HEAD.
   Nightly is the release candidate: verify the nightly, then promote it. Merges to `main` keep
   landing while you verify and never leak into the stable build.
@@ -135,7 +52,7 @@ the version.
 - After the GitHub Release is published, publishes the `t3` npm package with OIDC trusted publishing from the same workflow file. It is only a launcher (`scripts/npm-launcher/t3.mjs`): on first run it downloads its exact version's CLI archive from the GitHub Release, verifies it against `SHA256SUMS`, and unpacks it into `<T3 home>/runtime/versions/<version>`, the layout the install scripts and `t3 update` share. The executables are not on npm. They used to be, as `@t3code/t3-<platform>-<arch>` optional dependencies, but npm's publish-time scanning held those 80-250 MB packages back for up to an hour after the launcher was live, and every install in that window got a launcher with no executable. Those packages stay on npm at their old versions and get no new ones. Because the launcher reads from the release, `publish_cli` runs after `release`, never before.
   - stable releases publish npm dist-tag `latest`
   - nightly releases publish npm dist-tag `nightly`
-  - preview releases publish npm dist-tag `preview`, which nothing resolves unless asked for by name
+  - preview releases publish nothing to npm
   - one-time setup: package `t3` needs a trusted publisher registered for this workflow file (see below).
 - Builds the hosted web app on Vercel while the desktop jobs run, and makes it live only after a release is published:
   - stable releases are aliased to the `latest` hosted app channel
@@ -497,6 +414,7 @@ One-time Vercel dashboard setup:
   - scheduled check every 30 minutes
   - manual `workflow_dispatch` with `channel=nightly`
 - Automatic nightlies require new commits and at least six hours since the last nightly was published, including manual nightlies.
+- To pause automatic nightlies, run `gh variable set PAUSE_NIGHTLY -b true -R pingdotgg/t3code`. Scheduled runs then skip. Stable, preview, and manual nightly runs are unaffected. Resume with `gh variable delete PAUSE_NIGHTLY -R pingdotgg/t3code`.
 - Manual nightlies bypass the time and change checks. Nightly runs remain serialized. Scheduled runs wait for an active nightly to finish, then check the publication gap before building.
 - Runs the same desktop quality gates and artifact matrix as the tagged release flow.
 - Publishes a GitHub prerelease only:
@@ -518,13 +436,13 @@ release archives, and then its npm launcher, available before users can receive 
 
 The workflow enforces this ordering:
 
-1. `release` publishes the GitHub Release with the CLI archives and `SHA256SUMS`. Every channel
-   uploads to a draft and publishes only after all assets are attached, so a new version in the
+1. `release` publishes the GitHub Release with the CLI archives and `SHA256SUMS`. Stable and
+   nightly upload to a draft and publish only after all assets are attached, so a new version in the
    desktop update feed already has its archives. **Update everything** relies on this to update
    background-service hosts before npm has the version. Rerunning `release` after publication
    replaces assets in a public release, so service updates can fail until the upload finishes.
-2. `publish_cli` publishes the `t3@<version>` launcher, which downloads from that release, on every
-   channel.
+2. `publish_cli` publishes the `t3@<version>` launcher, which downloads from that release, on
+   stable and nightly. A preview stays a draft and publishes no launcher.
 3. `deploy_web` depends on both before moving the hosted channel to the new client.
    `build_web` builds that client earlier with `vercel deploy --prod --skip-domain`, which
    leaves the custom domains alone but moves the project's own `*.vercel.app` production
@@ -546,6 +464,44 @@ restart the previous server. If the installed launcher does not support the targ
 verify that the update stops before restart and run `npx t3@<version> service update` once on the
 server machine. Also test the manual or desktop-managed guidance when those environments are
 available.
+
+## Update feed
+
+A nightly install finds the newest nightly in up to three places.
+
+- `releases.atom` lists the 10 newest git tags in the repository, of any kind, and a day's
+  `preview` tags can sort above its `nightly` ones. Every install reads it first and takes its first
+  nightly entry. Nightlies before `0.1.10-nightly.20261112.4603`, and stable `0.1.9` and older
+  switched to the nightly channel, read nothing else. Ten other tags in a row hide every nightly
+  from them.
+- `releases/download/update-feed/nightly.json` names the newest nightly. Installs that know the
+  pointer read it after the feed and take the newer of the two, so their updates do not depend on
+  tag order. The `update-feed` release holds that file. Never delete it.
+- The GitHub REST API, without auth, at 60 requests per hour per IP. Installs from `4603` on scan
+  it when the feed has no nightly. Installs that know the pointer do so only when the pointer also
+  offers nothing new.
+
+The release workflow's `Check the update feed` job runs on every scheduled tick, unless
+`PAUSE_NIGHTLY` is set, and after every nightly. It waits in the same queue as nightlies and
+previews. It rewrites a missing or outdated pointer. Its last step fails when the first nightly
+in the feed is not the newest one. The feed can lag a release published seconds earlier, so the
+job first reads it up to three more times, 30 seconds apart. A feed it could not read is only a
+warning: that says nothing about the tags, and the next tick reads it again.
+
+When that step fails, installs that read only the feed cannot reach the newest nightly. If the
+feed still names an older nightly first, installs from `4603` up to the first build with the
+pointer miss it too, because their API scan runs only when the feed has no nightly at all. The job
+log lists the tags in the feed. The usual cause is a preview dispatched from a branch that was not
+rebased onto `main`. Delete the tags nothing needs with `git push origin :refs/tags/<tag>`.
+Converting a release to a draft keeps its tag, so it does not help. To keep this from happening,
+anything users should not be offered stays a draft or uses one rolling tag, like `desktop-preview`.
+
+To pull a bad nightly, delete its release and tag, then run
+`gh release delete-asset update-feed nightly.json`. Installs fall back to the feed until the next
+unpaused tick or manual nightly rewrites the pointer. Without that command, installs that know the
+pointer report an update error until then. If npm's `nightly` dist-tag still names the pulled
+build, also move it to the last good one with `npm dist-tag add t3@<version> nightly`. The channel
+switch in Settings reads that tag and refuses an older desktop build.
 
 ## Desktop auto-update notes
 
@@ -633,7 +589,7 @@ Checklist:
 3. Ensure npm account and org policies allow trusted publishing for the package.
 4. Create release tag `vX.Y.Z` and push; the workflow publishes the GitHub Release and then the
    launcher with npm dist-tag `latest`.
-5. Nightly runs publish with npm dist-tag `nightly`; preview runs with `preview`.
+5. Nightly runs publish with npm dist-tag `nightly`; preview runs do not publish.
 
 ## 1) Release validation and unsigned builds
 

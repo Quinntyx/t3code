@@ -1,14 +1,18 @@
-import type { ConfirmDialogOptions, ContextMenuItem, LocalApi } from "@t3tools/contracts";
+import type {
+  ConfirmDialogOptions,
+  ContextMenuItem,
+  ContextMenuSource,
+  LocalApi,
+} from "@t3tools/contracts";
+import { msg } from "gt-react";
 
+import { isWebUrl } from "./browser/webUrl";
 import { requestConfirmDialog } from "./confirmDialog";
 import { dismissContextMenu, showContextMenuFallback } from "./contextMenuFallback";
 import { readBrowserClientSettings, writeBrowserClientSettings } from "./clientPersistenceStorage";
+import { m } from "./i18n/messages";
 
 let cachedApi: LocalApi | undefined;
-
-// macOS menus already match the app; GTK and Win32 menus are flat, full-width, and opaque.
-const nativeContextMenuBridge = () =>
-  window.desktopBridge?.getClientPlatform() === "darwin" ? window.desktopBridge : undefined;
 
 export function createLocalApi(): LocalApi {
   return {
@@ -26,41 +30,38 @@ export function createLocalApi(): LocalApi {
         if (window.desktopBridge) {
           const opened = await window.desktopBridge.openExternal(url);
           if (!opened) {
-            throw new Error("Unable to open link.");
+            throw new Error(m(msg("Unable to open link.")));
           }
           return;
         }
 
+        if (!isWebUrl(url)) throw new Error(m(msg("Unable to open link.")));
         window.open(url, "_blank", "noopener,noreferrer");
       },
       openSystemSettings: async (pane) => {
         if (!window.desktopBridge) {
-          throw new Error("Unable to open System Settings.");
+          throw new Error(m(msg("Unable to open System Settings.")));
         }
         const opened = await window.desktopBridge.openSystemSettings(pane);
         if (!opened) {
-          throw new Error("Unable to open System Settings.");
+          throw new Error(m(msg("Unable to open System Settings.")));
         }
       },
     },
     contextMenu: {
-      // Read per use: the bridge is exposed by the preload script, not this module.
-      get supportsInPlaceConfirm() {
-        return nativeContextMenuBridge() === undefined;
-      },
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },
+        source?: ContextMenuSource,
       ): Promise<T | null> => {
-        const nativeMenu = nativeContextMenuBridge();
-        if (nativeMenu) {
-          return nativeMenu.showContextMenu(items, position) as Promise<T | null>;
+        if (window.desktopBridge) {
+          return window.desktopBridge.showContextMenu(items, position, source) as Promise<T | null>;
         }
         return showContextMenuFallback(items, position);
       },
       // Unlike native menus, the DOM fallback needs dismissal when underlying state disappears.
       close: async () => {
-        if (!nativeContextMenuBridge()) {
+        if (!window.desktopBridge) {
           dismissContextMenu();
         }
       },

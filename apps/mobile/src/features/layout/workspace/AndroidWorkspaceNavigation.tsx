@@ -2,7 +2,6 @@ export function AndroidWorkspaceNavigation(_props: {
   readonly onNewThread: () => void;
   readonly rail?: boolean;
   readonly floating?: boolean;
-  readonly glass?: boolean;
   readonly fillWidth?: boolean;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;
@@ -15,7 +14,6 @@ export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
 
 export function FloatingWorkspaceTabs(_props: {
   readonly fillWidth?: boolean;
-  readonly glass?: boolean;
   readonly onNewThread: () => void;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;

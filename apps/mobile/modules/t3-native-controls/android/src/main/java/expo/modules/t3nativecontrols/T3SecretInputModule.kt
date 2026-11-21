@@ -7,6 +7,7 @@ import android.os.Build
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.text.method.PasswordTransformationMethod
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -79,7 +80,14 @@ class T3SecretInputView(context: Context, appContext: AppContext) : ExpoView(con
       input.importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
     }
     input.imeOptions = EditorInfo.IME_ACTION_DONE
-    setRevealed(false)
+    // Not setSingleLine(): that swaps out the password transformation. The password variation is
+    // already single line, and the keyboard keeps typed text out of suggestions.
+    input.inputType =
+      InputType.TYPE_CLASS_TEXT or
+      InputType.TYPE_TEXT_VARIATION_PASSWORD or
+      InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+    // The password variation switches the typeface to monospace.
+    input.typeface = Typeface.DEFAULT
     input.setTextColor(Color.BLACK)
     input.setHintTextColor(Color.GRAY)
     input.addTextChangedListener(
@@ -127,22 +135,16 @@ class T3SecretInputView(context: Context, appContext: AppContext) : ExpoView(con
     applyingValue = false
   }
 
+  /** Swapping the transformation re-sets the text, so it neither echoes to JS nor moves the caret. */
   fun setRevealed(revealed: Boolean) {
-    val selectionStart = input.selectionStart
-    val selectionEnd = input.selectionEnd
-    // Not setSingleLine(): that swaps out the password transformation. Both password variations
-    // are already single line, and the keyboard keeps typed text out of suggestions.
-    input.inputType =
-      InputType.TYPE_CLASS_TEXT or
-      (if (revealed) {
-        InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-      } else {
-        InputType.TYPE_TEXT_VARIATION_PASSWORD
-      }) or
-      InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-    // The password variations switch the typeface to monospace.
-    input.typeface = Typeface.DEFAULT
-    if (selectionStart >= 0) input.setSelection(selectionStart, selectionEnd)
+    val method = if (revealed) null else PasswordTransformationMethod.getInstance()
+    if (input.transformationMethod == method) return
+    val start = input.selectionStart
+    val end = input.selectionEnd
+    applyingValue = true
+    input.transformationMethod = method
+    if (start >= 0 && end >= 0) input.setSelection(start, end)
+    applyingValue = false
   }
 
   fun setCursorColor(color: Int) {

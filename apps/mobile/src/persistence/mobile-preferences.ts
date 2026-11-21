@@ -5,22 +5,23 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import { SavedViewIdentity } from "@t3tools/client-runtime/saved-views";
 import {
   EnvironmentId,
+  IssueInvolvement,
+  IssueListSort,
+  IssueListState,
   PullRequestInvolvement,
   PullRequestListFilters,
   PullRequestListState,
-  type ProjectCloneLayout,
   type ProviderInstanceId,
-  type PullRequestMergeMethod,
+  PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
-  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { ToolCallVisibility } from "@t3tools/contracts/settings";
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
-import { isLiquidGlassValue } from "../lib/liquidGlass";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
@@ -40,6 +41,29 @@ export const PullRequestListControls = Schema.Struct({
   sort: Schema.Literals(["updated", "created", "oldest"]),
 });
 export type PullRequestListControls = typeof PullRequestListControls.Type;
+
+export const PullRequestSavedView = Schema.Struct({
+  ...SavedViewIdentity.fields,
+  environmentId: Schema.NullOr(Schema.String),
+  controls: PullRequestListControls,
+  query: Schema.String,
+});
+export type PullRequestSavedView = typeof PullRequestSavedView.Type;
+const isPullRequestSavedView = Schema.is(PullRequestSavedView);
+
+export const IssueSavedView = Schema.Struct({
+  ...SavedViewIdentity.fields,
+  query: Schema.String,
+  state: IssueListState,
+  involvement: IssueInvolvement,
+  sort: IssueListSort,
+  labels: Schema.Array(Schema.String),
+  assignee: Schema.NullOr(
+    Schema.Struct({ login: Schema.String, name: Schema.NullOr(Schema.String) }),
+  ),
+});
+export type IssueSavedView = typeof IssueSavedView.Type;
+const isIssueSavedView = Schema.is(IssueSavedView);
 
 const ThreadListFilters = Schema.Struct({
   environmentId: Schema.NullOr(EnvironmentId),
@@ -75,6 +99,17 @@ const WorkspaceSelections = Schema.Struct({
       key: Schema.optional(Schema.String),
     }),
   ),
+  issues: Schema.optional(
+    Schema.Struct({
+      environmentId: Schema.String,
+      projectId: Schema.String,
+      tracker: Schema.String,
+      host: Schema.optional(Schema.String),
+      scope: Schema.String,
+      issueKey: Schema.String,
+      key: Schema.optional(Schema.String),
+    }),
+  ),
   settings: Schema.optional(Schema.String),
   settingsKey: Schema.optional(Schema.String),
   /** A draft the threads tab showed after its last chat; only meaningful in its session. */
@@ -82,14 +117,14 @@ const WorkspaceSelections = Schema.Struct({
 });
 export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 
-const NotebookView = Schema.Struct({
-  selectedKernelId: Schema.optional(Schema.String),
-  collapsed: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+const PullRequestActivityVisibility = Schema.Struct({
+  bots: Schema.Boolean,
+  resolved: Schema.Boolean,
 });
-export type NotebookView = typeof NotebookView.Type;
-const isNotebookViews = Schema.is(Schema.Record(Schema.String, NotebookView));
+export type PullRequestActivityVisibility = typeof PullRequestActivityVisibility.Type;
 
 const isThreadListFilters = Schema.is(ThreadListFilters);
+const isPullRequestActivityVisibility = Schema.is(PullRequestActivityVisibility);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
 const ThreadProject = Schema.Struct({
@@ -101,8 +136,11 @@ const isThreadProject = Schema.is(ThreadProject);
 export interface Preferences {
   readonly navigationTabOrder?: readonly string[];
   readonly hiddenNavigationTabs?: readonly string[];
-  readonly hiddenThreadKeys?: readonly string[];
+  /** Whether pull requests or issues last held the tab bar slot they share. */
+  readonly sharedSlotTab?: "pullRequests" | "issues";
   readonly pullRequestHideTestFiles?: boolean;
+  /** Which hidden-by-default PR activity is shown: bot comments and resolved or dismissed ones. */
+  readonly pullRequestActivityVisibility?: PullRequestActivityVisibility;
   readonly pullRequestMergeMethod?: PullRequestMergeMethod;
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
@@ -115,16 +153,7 @@ export interface Preferences {
   readonly markdownFontSize?: number;
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
-  readonly uiFontId?: string | null;
-  readonly codeFontId?: string | null;
-  readonly terminalFontId?: string | null;
   readonly mathRenderingEnabled?: boolean;
-  readonly liquidGlassEnabled?: boolean;
-  readonly glassOpacity?: number;
-  readonly liquidGlassBlur?: number;
-  readonly liquidGlassSaturation?: number;
-  readonly liquidGlassRefraction?: number;
-  readonly liquidGlassDispersion?: number;
   /** Unset means on: crash reports are sent unless the user turns them off. */
   readonly crashReportsEnabled?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
@@ -133,18 +162,15 @@ export interface Preferences {
   /** Hardware-keyboard Return behavior in the composer. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   readonly followUpBehavior?: FollowUpBehavior;
+  /** The client `language` setting: a locale code or "system". Unset means English. */
+  readonly language?: string;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   readonly toolCallVisibility?: ToolCallVisibility;
-  readonly foldContextCompactions?: boolean;
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
-  /** Server-hosted browser tabs this device keeps muted, by session tab id. */
-  readonly mutedPreviewTabIds?: readonly string[];
   readonly lastThreadProject?: typeof ThreadProject.Type;
-  readonly debugShakeEnabled?: boolean;
-  readonly debugShakeProject?: typeof ThreadProject.Type;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -155,10 +181,8 @@ export interface Preferences {
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
-  readonly notebookViews?: Readonly<Record<string, NotebookView>>;
-  /** The checkout layout and publishing host a new project last used. */
-  readonly newProjectLayout?: ProjectCloneLayout;
-  readonly newProjectPublishHost?: SourceControlProviderKind;
+  readonly pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
+  readonly issueSavedViews?: ReadonlyArray<IssueSavedView>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -201,14 +225,15 @@ export class MobilePreferencesStore extends Context.Service<
 >()("@t3tools/mobile/persistence/mobile-preferences/MobilePreferencesStore") {}
 
 const isToolCallVisibility = Schema.is(ToolCallVisibility);
-const isSourceControlProviderKind = Schema.is(SourceControlProviderKind);
+const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     navigationTabOrder?: readonly string[];
     hiddenNavigationTabs?: readonly string[];
-    hiddenThreadKeys?: readonly string[];
+    sharedSlotTab?: "pullRequests" | "issues";
     pullRequestHideTestFiles?: boolean;
+    pullRequestActivityVisibility?: PullRequestActivityVisibility;
     pullRequestMergeMethod?: PullRequestMergeMethod;
     liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
@@ -221,33 +246,21 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     markdownFontSize?: number;
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
-    uiFontId?: string | null;
-    codeFontId?: string | null;
-    terminalFontId?: string | null;
     mathRenderingEnabled?: boolean;
-    liquidGlassEnabled?: boolean;
-    glassOpacity?: number;
-    liquidGlassBlur?: number;
-    liquidGlassSaturation?: number;
-    liquidGlassRefraction?: number;
-    liquidGlassDispersion?: number;
     crashReportsEnabled?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     dismissedDatabaseStorageNotices?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
+    language?: string;
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
     toolCallVisibility?: ToolCallVisibility;
-    foldContextCompactions?: boolean;
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
-    mutedPreviewTabIds?: readonly string[];
     lastThreadProject?: typeof ThreadProject.Type;
-    debugShakeEnabled?: boolean;
-    debugShakeProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -255,9 +268,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
-    notebookViews?: Readonly<Record<string, NotebookView>>;
-    newProjectLayout?: ProjectCloneLayout;
-    newProjectPublishHost?: SourceControlProviderKind;
+    pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
+    issueSavedViews?: ReadonlyArray<IssueSavedView>;
   } = {};
 
   if (Array.isArray(parsed.hiddenNavigationTabs)) {
@@ -266,31 +278,25 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     );
   }
 
-  if (Array.isArray(parsed.hiddenThreadKeys)) {
-    preferences.hiddenThreadKeys = [
-      ...new Set(
-        parsed.hiddenThreadKeys.filter(
-          (key): key is string => typeof key === "string" && key.length > 0,
-        ),
-      ),
-    ];
-  }
-
   if (Array.isArray(parsed.navigationTabOrder)) {
     preferences.navigationTabOrder = parsed.navigationTabOrder.filter(
       (tab): tab is string => typeof tab === "string",
     );
   }
 
+  if (parsed.sharedSlotTab === "pullRequests" || parsed.sharedSlotTab === "issues") {
+    preferences.sharedSlotTab = parsed.sharedSlotTab;
+  }
+
   if (typeof parsed.pullRequestHideTestFiles === "boolean") {
     preferences.pullRequestHideTestFiles = parsed.pullRequestHideTestFiles;
   }
 
-  if (
-    parsed.pullRequestMergeMethod === "squash" ||
-    parsed.pullRequestMergeMethod === "merge" ||
-    parsed.pullRequestMergeMethod === "rebase"
-  ) {
+  if (isPullRequestActivityVisibility(parsed.pullRequestActivityVisibility)) {
+    preferences.pullRequestActivityVisibility = parsed.pullRequestActivityVisibility;
+  }
+
+  if (isPullRequestMergeMethod(parsed.pullRequestMergeMethod)) {
     preferences.pullRequestMergeMethod = parsed.pullRequestMergeMethod;
   }
 
@@ -336,35 +342,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.codeFontSize = parsed.codeFontSize;
   }
   if (typeof parsed.codeWordBreak === "boolean") preferences.codeWordBreak = parsed.codeWordBreak;
-  if (typeof parsed.uiFontId === "string" || parsed.uiFontId === null) {
-    preferences.uiFontId = parsed.uiFontId;
-  }
-  if (typeof parsed.codeFontId === "string" || parsed.codeFontId === null) {
-    preferences.codeFontId = parsed.codeFontId;
-  }
-  if (typeof parsed.terminalFontId === "string" || parsed.terminalFontId === null) {
-    preferences.terminalFontId = parsed.terminalFontId;
-  }
   if (typeof parsed.mathRenderingEnabled === "boolean")
     preferences.mathRenderingEnabled = parsed.mathRenderingEnabled;
-  if (typeof parsed.liquidGlassEnabled === "boolean") {
-    preferences.liquidGlassEnabled = parsed.liquidGlassEnabled;
-  }
-  if (isLiquidGlassValue("glassOpacity", parsed.glassOpacity)) {
-    preferences.glassOpacity = parsed.glassOpacity;
-  }
-  if (isLiquidGlassValue("blur", parsed.liquidGlassBlur)) {
-    preferences.liquidGlassBlur = parsed.liquidGlassBlur;
-  }
-  if (isLiquidGlassValue("saturation", parsed.liquidGlassSaturation)) {
-    preferences.liquidGlassSaturation = parsed.liquidGlassSaturation;
-  }
-  if (isLiquidGlassValue("refraction", parsed.liquidGlassRefraction)) {
-    preferences.liquidGlassRefraction = parsed.liquidGlassRefraction;
-  }
-  if (isLiquidGlassValue("dispersion", parsed.liquidGlassDispersion)) {
-    preferences.liquidGlassDispersion = parsed.liquidGlassDispersion;
-  }
   if (typeof parsed.crashReportsEnabled === "boolean") {
     preferences.crashReportsEnabled = parsed.crashReportsEnabled;
   }
@@ -389,6 +368,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (parsed.followUpBehavior === "queue" || parsed.followUpBehavior === "steer") {
     preferences.followUpBehavior = parsed.followUpBehavior;
   }
+  if (typeof parsed.language === "string") preferences.language = parsed.language;
   if (Array.isArray(parsed.microphones)) {
     preferences.microphones = parsed.microphones.flatMap((entry): MicrophoneEntry[] => {
       if (typeof entry !== "object" || entry === null || !isMicrophoneKind(entry.kind)) return [];
@@ -411,28 +391,14 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (isToolCallVisibility(parsed.toolCallVisibility)) {
     preferences.toolCallVisibility = parsed.toolCallVisibility;
   }
-  if (typeof parsed.foldContextCompactions === "boolean") {
-    preferences.foldContextCompactions = parsed.foldContextCompactions;
-  }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;
-  }
-  if (Array.isArray(parsed.mutedPreviewTabIds)) {
-    preferences.mutedPreviewTabIds = parsed.mutedPreviewTabIds.filter(
-      (entry): entry is string => typeof entry === "string" && entry.length > 0,
-    );
   }
   if (typeof parsed.useLastProjectForNewThreads === "boolean") {
     preferences.useLastProjectForNewThreads = parsed.useLastProjectForNewThreads;
   }
   if (isThreadProject(parsed.lastThreadProject)) {
     preferences.lastThreadProject = parsed.lastThreadProject;
-  }
-  if (typeof parsed.debugShakeEnabled === "boolean") {
-    preferences.debugShakeEnabled = parsed.debugShakeEnabled;
-  }
-  if (isThreadProject(parsed.debugShakeProject)) {
-    preferences.debugShakeProject = parsed.debugShakeProject;
   }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(
@@ -463,14 +429,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (isWorkspaceSelections(parsed.workspaceSelections)) {
     preferences.workspaceSelections = parsed.workspaceSelections;
   }
-  if (isNotebookViews(parsed.notebookViews)) {
-    preferences.notebookViews = parsed.notebookViews;
+  if (Array.isArray(parsed.pullRequestSavedViews)) {
+    preferences.pullRequestSavedViews = parsed.pullRequestSavedViews.filter(isPullRequestSavedView);
   }
-  if (parsed.newProjectLayout === "standard" || parsed.newProjectLayout === "worktree-container") {
-    preferences.newProjectLayout = parsed.newProjectLayout;
-  }
-  if (isSourceControlProviderKind(parsed.newProjectPublishHost)) {
-    preferences.newProjectPublishHost = parsed.newProjectPublishHost;
+  if (Array.isArray(parsed.issueSavedViews)) {
+    preferences.issueSavedViews = parsed.issueSavedViews.filter(isIssueSavedView);
   }
   return preferences;
 }

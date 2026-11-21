@@ -1,9 +1,4 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import {
-  projectScriptCwd,
-  projectScriptRuntimeEnv,
-  projectScriptTerminalInput,
-} from "@t3tools/shared/projectScripts";
 import { useState } from "react";
 
 interface TerminalLocationLike {
@@ -42,27 +37,6 @@ export function stagePendingTerminalLaunch(input: {
     initialInput: input.launch.initialInput,
     stopOnSettle: input.launch.stopOnSettle,
   });
-}
-
-export function stageCommandTerminalLaunch(input: {
-  readonly target: PendingTerminalLaunchTarget;
-  readonly workspaceRoot: string;
-  readonly threadShellWorktreePath: string | null;
-  readonly threadDetailWorktreePath: string | null;
-  readonly command: string;
-  readonly stopOnSettle?: boolean;
-}) {
-  const worktreePath = resolvePreferredThreadWorktreePath(input);
-  const project = { cwd: input.workspaceRoot };
-  const launch = {
-    cwd: projectScriptCwd({ project, worktreePath }),
-    worktreePath,
-    env: projectScriptRuntimeEnv({ project, worktreePath }),
-    initialInput: projectScriptTerminalInput(input.command),
-    stopOnSettle: input.stopOnSettle,
-  };
-  stagePendingTerminalLaunch({ target: input.target, launch });
-  return launch;
 }
 
 export function takePendingTerminalLaunch(

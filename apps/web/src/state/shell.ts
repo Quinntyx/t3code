@@ -5,7 +5,6 @@ import {
 import {
   createEnvironmentShellAtoms,
   createEnvironmentSnapshotAtom,
-  createLiveShellEnvironmentIdsAtom,
   createShellEnvironmentAtoms,
   type EnvironmentShellState,
   type EnvironmentShellStatus,
@@ -51,10 +50,22 @@ export function useEnvironmentShellHasSnapshot(environmentId: EnvironmentId | nu
   );
 }
 
-export const liveShellEnvironmentIdsAtom = createLiveShellEnvironmentIdsAtom({
-  catalogValueAtom: environmentCatalog.catalogValueAtom,
-  statusAtom: environmentShell.statusAtom,
-});
+let previousLiveEnvironmentIds: ReadonlySet<EnvironmentId> = new Set();
+/** Environments whose threads reflect the server now, not a cache or a resync in flight. */
+export const liveShellEnvironmentIdsAtom = Atom.make((get) => {
+  const next = new Set<EnvironmentId>();
+  for (const environmentId of enabledEnvironmentIds(get(environmentCatalog.catalogValueAtom))) {
+    if (get(environmentShell.statusAtom(environmentId)) === "live") next.add(environmentId);
+  }
+  if (
+    next.size === previousLiveEnvironmentIds.size &&
+    [...next].every((environmentId) => previousLiveEnvironmentIds.has(environmentId))
+  ) {
+    return previousLiveEnvironmentIds;
+  }
+  previousLiveEnvironmentIds = next;
+  return next;
+}).pipe(Atom.withLabel("web-live-shell-environment-ids"));
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));

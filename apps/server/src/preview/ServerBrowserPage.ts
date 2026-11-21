@@ -14,6 +14,8 @@ import {
   type PreviewAutomationSelectInput,
   type PreviewAutomationSelectResult,
   type PreviewAutomationSnapshot,
+  type PreviewAutomationSnapshotMetadata,
+  type PreviewAutomationSnapshotStage,
   type PreviewAutomationTypeInput,
   type PreviewAutomationUploadInput,
   type PreviewAutomationWaitForInput,
@@ -22,6 +24,7 @@ import { constVoid } from "effect/Function";
 import * as Schema from "effect/Schema";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import * as NodeCrypto from "node:crypto";
+import * as NodeUtil from "node:util";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const isBrowserControlInterrupted = Schema.is(BrowserControlInterrupted);
@@ -29,6 +32,8 @@ const isBrowserControlInterrupted = Schema.is(BrowserControlInterrupted);
 const MAX_EVALUATION_BYTES = 64_000;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_SCREENSHOT_WIDTH = 1280;
+// Two attempts must fit in a snapshot's 10-second deadline.
+const SCREENSHOT_TIMEOUT_MS = 3_000;
 const WAIT_POLL_MS = 100;
 export const DIAGNOSTIC_BUFFER_LIMIT = 200;
 
@@ -60,13 +65,11 @@ export const toOperationError = (
   if (cause instanceof Error && cause.name === "TimeoutError") {
     return new ServerBrowserOperationError({
       tag: "PreviewAutomationTimeoutError",
-      message: firstLine,
+      message: withActionabilityReason(firstLine, cause),
       detail: timeoutMs === undefined ? undefined : { timeoutMs },
     });
   }
-  if (
-    /while parsing selector|Unknown engine|Unexpected token|strict mode violation/i.test(message)
-  ) {
+  if (/while parsing selector|Unknown engine|Unexpected token/i.test(message)) {
     return new ServerBrowserOperationError({
       tag: "PreviewAutomationInvalidSelectorError",
       message: firstLine,
@@ -82,6 +85,17 @@ export const toOperationError = (
     tag: "PreviewAutomationExecutionError",
     message: firstLine,
   });
+};
+
+/** Playwright puts why an element was not actionable in its call log, below the first line. */
+const withActionabilityReason = (message: string, cause: Error) => {
+  // Playwright dims call-log lines with ANSI escapes when colour is on.
+  const reason = NodeUtil.stripVTControlCharacters(cause.message)
+    .split("\n")
+    .map((line) => line.trim())
+    .findLast((line) => line.startsWith("- element is "))
+    ?.slice(2);
+  return reason === undefined ? message : `${message} Playwright last saw: ${reason}.`;
 };
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -147,15 +161,32 @@ export type PointerReporter = (
 ) => Promise<void>;
 const noPointer: PointerReporter = async () => {};
 
+// Locator.scrollIntoViewIfNeeded resolves its node once and fails when the page replaces it; the
+// input actions after it re-resolve, so the scroll does too, within the same timeout.
+const DETACHED = /^locator\.scrollIntoViewIfNeeded: Element is not attached to the DOM(?:\n|$)/;
+
+const scrollIntoView = async (locator: Locator, timeout: number) => {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    try {
+      return await locator.scrollIntoViewIfNeeded({ timeout: Math.max(1, deadline - Date.now()) });
+    } catch (cause) {
+      if (!(cause instanceof Error && DETACHED.test(cause.message)) || Date.now() >= deadline) {
+        throw cause;
+      }
+    }
+  }
+};
+
 const targetPoint = async (
   page: Page,
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
-  timeout: number,
+  timeout: () => number,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
-  await locator.scrollIntoViewIfNeeded({ timeout });
-  const box = await locator.boundingBox({ timeout });
+  await scrollIntoView(locator, timeout());
+  const box = await locator.boundingBox({ timeout: timeout() });
   if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const viewport = page.viewportSize();
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
@@ -248,12 +279,35 @@ const pageChanged = () =>
     message: "The page changed while capturing its snapshot. Take another snapshot.",
   });
 
-const tooBusy = () =>
+type SnapshotStage = typeof PreviewAutomationSnapshotStage.Type;
+
+/**
+ * Running stages are counted, since a retry can overlap the previous attempt's unanswered
+ * screenshot. A stage whose own timeout fired has stopped running but is still the cause.
+ */
+interface SnapshotStages {
+  readonly running: Map<SnapshotStage, number>;
+  readonly timedOut: Set<SnapshotStage>;
+}
+
+const snapshotTimedOut = (stages?: SnapshotStages) =>
   new ServerBrowserOperationError({
     tag: "PreviewAutomationTimeoutError",
-    message:
-      "The page was too busy to capture a snapshot in time. Wait for it to settle and take another snapshot.",
+    message: `Snapshot capture timed out after ${SNAPSHOT_TIMEOUT_MS}ms. Try the snapshot again.`,
+    detail: {
+      timeoutMs: SNAPSHOT_TIMEOUT_MS,
+      pendingStages: stages ? [...new Set([...stages.timedOut, ...stages.running.keys()])] : [],
+    },
   });
+
+const frameUnanswered = () =>
+  new ServerBrowserOperationError({
+    tag: "PreviewAutomationTimeoutError",
+    message: `A frame on the page didn't answer within ${FRAME_ANSWER_MS}ms, so its content couldn't be checked for hidden values. Try the snapshot again.`,
+    detail: { timeoutMs: FRAME_ANSWER_MS, pendingStages: ["frames"] },
+  });
+
+const isTimeout = (cause: unknown) => cause instanceof Error && cause.name === "TimeoutError";
 
 const VALUE_TOO_LONG = "A password field holds a value too long to hide, so no snapshot was taken.";
 
@@ -430,6 +484,37 @@ const pngSize = (base64: string) => {
   return { width: header.readUInt32BE(16), height: header.readUInt32BE(20) };
 };
 
+export const jpegSize = (base64: string) => {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length < 4 || bytes.readUInt16BE(0) !== 0xffd8)
+    throw new Error("Invalid JPEG screenshot.");
+  let offset = 2;
+  while (offset < bytes.length) {
+    if (bytes[offset++] !== 0xff) throw new Error("Invalid JPEG screenshot.");
+    while (bytes[offset] === 0xff) offset++;
+    const marker = bytes[offset++];
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) break;
+    const length = bytes.readUInt16BE(offset);
+    if (length < 2 || offset + length > bytes.length) break;
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      if (length < 7) break;
+      const height = bytes.readUInt16BE(offset + 3);
+      const width = bytes.readUInt16BE(offset + 5);
+      if (width && height) return { width, height };
+      break;
+    }
+    offset += length;
+  }
+  throw new Error("Invalid JPEG screenshot.");
+};
+
+const scaledSize = (size: { readonly width: number; readonly height: number }, scale: number) =>
+  scale < 1
+    ? { width: Math.round(size.width * scale), height: Math.round(size.height * scale) }
+    : size;
+
 /**
  * A page's display ratio and CSS viewport, read in an isolated world since page script can
  * reassign `devicePixelRatio`, `innerWidth`, and `innerHeight` in its own, and its page zoom.
@@ -470,12 +555,47 @@ export const captureViewport = async (
   cdp: CDPSession,
   options: { readonly format: "png" | "jpeg"; readonly quality?: number },
 ) => {
-  const { data } = await cdp.send("Page.captureScreenshot", {
+  const capture = cdp.send("Page.captureScreenshot", {
     format: options.format,
     ...(options.quality === undefined ? {} : { quality: options.quality }),
   });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new ServerBrowserOperationError({
+            tag: "PreviewAutomationExecutionError",
+            message:
+              "The browser is not producing screenshot frames. For a desktop tab, show or restore the T3 Code window and try again.",
+          }),
+        ),
+      SCREENSHOT_TIMEOUT_MS,
+    );
+  });
+  // Hidden native guests can leave CDP captures pending forever. This deadline also
+  // releases a viewer's still-capture lock, which an agent snapshot may be waiting for.
+  const { data } = await Promise.race([capture, expired]).finally(() => clearTimeout(timer));
   return data;
 };
+
+export const captureFinalRecordingFrame = (cdp: CDPSession, quality: number) =>
+  answered(
+    cdp
+      .send("Runtime.evaluate", {
+        // Capture the destination of finite transitions, not their initially transparent frame.
+        expression: `(async () => {
+          const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          await paint();
+          await Promise.allSettled(document.getAnimations()
+            .filter(animation => animation.playState === "running" && animation.effect?.getComputedTiming().iterations !== Infinity)
+            .map(animation => animation.finished));
+          await paint();
+        })()`,
+        awaitPromise: true,
+      })
+      .then(() => captureViewport(cdp, { format: "jpeg", quality })),
+  );
 
 /** Runs in the page's own isolated world, as the server has no image library. */
 const SHRINK_PNG = `async function (png, width, height) {
@@ -545,41 +665,73 @@ const renderingOf = async (input: SnapshotInput) => {
 const capture = async (
   input: SnapshotInput,
   deadline: number,
-): Promise<PreviewAutomationSnapshot> => {
-  const { renderScale, viewport } = await renderingOf(input);
+  stages: SnapshotStages,
+  metadataOnly: boolean,
+) => {
+  const { running } = stages;
+  const track = async <A>(stage: SnapshotStage, operation: () => Promise<A>) => {
+    running.set(stage, (running.get(stage) ?? 0) + 1);
+    try {
+      const result = await operation();
+      stages.timedOut.delete(stage);
+      return result;
+    } catch (cause) {
+      if (isTimeout(cause)) stages.timedOut.add(stage);
+      throw cause;
+    } finally {
+      const count = (running.get(stage) ?? 1) - 1;
+      if (count === 0) running.delete(stage);
+      else running.set(stage, count);
+    }
+  };
+  const { renderScale, viewport } = await track("metrics", () => renderingOf(input));
   // A late metrics reply must not begin a capture after viewers have resumed.
-  if (Date.now() >= deadline) throw tooBusy();
+  if (Date.now() >= deadline) throw snapshotTimedOut();
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
   const state = refsFor(input.page);
   invalidateRefs(input.page);
   const generation = state.generation;
-  const { readers, read } = await openReaders(input.page, input.cdp);
-  const before = await read();
+  const { readers, read } = await track("frames", () => openReaders(input.page, input.cdp));
+  const before = await track("frames", () => read());
   // Bracket the tree with value reads to detect changes; await tree completion before retrying failed captures.
   const pageAndScreenshot = Promise.all([
-    input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
-      Pick<
-        PreviewAutomationSnapshot,
-        "url" | "title" | "loading" | "visibleText" | "interactiveElements"
-      >
-    >,
-    captureViewport(input.cdp, { format: "png" }).then(async (full) =>
-      scale < 1
-        ? {
-            data: await shrinkPng(input.cdp, full, scale),
-            full: input.fullScreenshot ? full : undefined,
-          }
-        : { data: full, full: undefined },
+    track(
+      "page state",
+      () =>
+        input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
+          Pick<
+            PreviewAutomationSnapshot,
+            "url" | "title" | "loading" | "visibleText" | "interactiveElements"
+          >
+        >,
+    ),
+    // A cheap real frame still sizes the screenshot; computing it from metrics drifted from the PNG.
+    track("screenshot", () =>
+      metadataOnly
+        ? captureViewport(input.cdp, { format: "jpeg", quality: 10 }).then((data) => ({
+            data,
+            full: undefined,
+          }))
+        : captureViewport(input.cdp, { format: "png" }).then(async (full) =>
+            scale < 1
+              ? {
+                  data: await shrinkPng(input.cdp, full, scale),
+                  full: input.fullScreenshot ? full : undefined,
+                }
+              : { data: full, full: undefined },
+          ),
     ),
   ]);
   void pageAndScreenshot.catch(constVoid);
   // Leaves time for the second read; a frame that never loads holds the tree until then.
-  const tree = await input.page.ariaSnapshot({
-    mode: "ai",
-    boxes: true,
-    timeout: Math.max(1, deadline - Date.now() - 2_000),
-  });
-  const after = await read(before);
+  const tree = await track("accessibility tree", () =>
+    input.page.ariaSnapshot({
+      mode: "ai",
+      boxes: true,
+      timeout: Math.max(1, deadline - Date.now() - 2_000),
+    }),
+  );
+  const after = await track("frames", () => read(before));
   // A value that changed meanwhile may be in the tree under neither reading.
   if (after.some((values, i) => values && JSON.stringify(values) !== JSON.stringify(before[i])))
     throw pageChanged();
@@ -588,11 +740,13 @@ const capture = async (
   const unread = readers.flatMap((reader, i) => (after[i] ? [] : reader.frames));
   const filled = /^\s*- iframe (?:\[active\] )?\[ref=(\S+?)\].*:$/gm;
   for (const [, ref] of unread.length ? tree.matchAll(filled) : []) {
-    const iframe = await input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 });
+    const iframe = await track("frames", () =>
+      input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 }),
+    );
     if (!iframe) throw pageChanged();
-    const frame = await iframe.contentFrame();
+    const frame = await track("frames", () => iframe.contentFrame());
     void iframe.dispose().catch(constVoid);
-    if (frame && unread.includes(frame)) throw tooBusy();
+    if (frame && unread.includes(frame)) throw frameUnanswered();
   }
   const [page, { full, data }] = await pageAndScreenshot;
   if (state.generation !== generation) throw pageChanged();
@@ -616,11 +770,10 @@ const capture = async (
     consoleEntries: [...input.consoleEntries],
     networkEntries: [...input.networkEntries],
     actionTimeline: [...input.actionTimeline],
-    screenshot: {
-      mimeType: "image/png",
-      data,
-      ...pngSize(data),
-    },
+    // Reports the size the PNG path would have shrunk to.
+    screenshot: metadataOnly
+      ? scaledSize(jpegSize(data), scale)
+      : { mimeType: "image/png" as const, data, ...pngSize(data) },
     ...(full !== undefined ? { fullScreenshot: { data: full, ...pngSize(full) } } : {}),
   };
 };
@@ -628,30 +781,37 @@ const capture = async (
 /** Snapshots begun per page; observers' snapshots aren't queued, so two can overlap. */
 const snapshotTurns = new WeakMap<Page, number>();
 
-export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationSnapshot> => {
+const runSnapshot = async (input: SnapshotInput, metadataOnly: boolean) => {
   const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
+  const stages: SnapshotStages = { running: new Map(), timedOut: new Set() };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(tooBusy()), SNAPSHOT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(snapshotTimedOut(stages)), SNAPSHOT_TIMEOUT_MS);
   });
   const turn = (snapshotTurns.get(input.page) ?? 0) + 1;
   snapshotTurns.set(input.page, turn);
   // Retry only before the deadline and the next snapshot, whose refs a later retry would revoke.
-  const captured = capture(input, deadline).catch((cause: unknown) =>
+  const captured = capture(input, deadline, stages, metadataOnly).catch((cause: unknown) =>
     Date.now() < deadline &&
     snapshotTurns.get(input.page) === turn &&
     !(cause instanceof Error && cause.message === VALUE_TOO_LONG)
-      ? capture(input, deadline)
+      ? capture(input, deadline, stages, metadataOnly)
       : Promise.reject(cause),
   );
   try {
     return await Promise.race([captured, expired]);
   } catch (cause) {
-    throw cause instanceof Error && cause.name === "TimeoutError" ? tooBusy() : cause;
+    throw isTimeout(cause) ? snapshotTimedOut(stages) : cause;
   } finally {
     clearTimeout(timer);
   }
 };
+
+export const snapshot = (input: SnapshotInput) =>
+  runSnapshot(input, false) as Promise<PreviewAutomationSnapshot>;
+
+export const snapshotMetadata = (input: SnapshotInput) =>
+  runSnapshot(input, true) as Promise<PreviewAutomationSnapshotMetadata>;
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
 export const click = async (
@@ -659,10 +819,12 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
 ): Promise<{ readonly x: number; readonly y: number }> => {
-  const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // One deadline across steps keeps the reply inside the broker's grace; Playwright reads 0 as none.
+  const deadline = Date.now() + (input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const remaining = () => Math.max(1, deadline - Date.now());
   const locator = targetLocator(page, input);
   try {
-    return await clickTarget(page, locator, input, timeout, pointer);
+    return await clickTarget(page, locator, input, remaining, pointer);
   } catch (cause) {
     throw locator === null ? cause : await namedTargetTimeout(locator, input, cause);
   }
@@ -698,10 +860,11 @@ const namedTargetTimeout = async (
       : matches === 0
         ? `The click may have happened and removed its target or navigated; check the page before retrying. No element matches ${target} after the timeout; take a fresh snapshot and use its locator.`
         : `The click may have happened; check the page before retrying. ${target} still matches an element after the timeout.`;
+  const message = withActionabilityReason(reason, cause);
   return new ServerBrowserOperationError({
     tag: "PreviewAutomationTimeoutError",
-    message: reason,
-    detail: { reason },
+    message,
+    detail: { reason: message },
     cause,
   });
 };
@@ -710,7 +873,7 @@ const clickTarget = async (
   page: Page,
   locator: Locator | null,
   input: PreviewAutomationClickInput,
-  timeout: number,
+  timeout: () => number,
   pointer: PointerReporter,
 ) => {
   const point = await targetPoint(page, locator, input, timeout);
@@ -719,7 +882,7 @@ const clickTarget = async (
   const clicked =
     locator === null
       ? page.mouse.click(point.x, point.y, options)
-      : locator.click({ ...options, timeout });
+      : locator.click({ ...options, timeout: timeout() });
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -733,6 +896,76 @@ const clickTarget = async (
   return point;
 };
 
+type FocusCandidate = {
+  readonly tagName: string;
+  readonly type?: string;
+  readonly disabled?: boolean;
+  readonly readOnly?: boolean;
+  readonly isContentEditable?: boolean;
+  readonly shadowRoot?: { readonly activeElement: FocusCandidate | null } | null;
+  readonly focus?: () => void;
+  getRootNode(): { readonly activeElement?: FocusCandidate | null };
+  contains(other: FocusCandidate): boolean;
+};
+
+// Serialized into the page's main world, so it must not reference module scope.
+const focusTextTarget = (target: FocusCandidate | null) => {
+  let element =
+    target ??
+    (globalThis as unknown as { document: { activeElement: FocusCandidate | null } }).document
+      .activeElement;
+  if (target === null) {
+    while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+    // Focus inside a frame cannot be checked from here, and an editable frame would pass as contentEditable.
+    if (element && ["IFRAME", "FRAME", "FENCEDFRAME", "OBJECT", "EMBED"].includes(element.tagName))
+      return false;
+  }
+  if (element == null) return false;
+  // Require an enabled, focused text target to avoid losing input or sending it to the previous field.
+  const nonText = [
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit",
+  ];
+  const textControl =
+    element.tagName === "TEXTAREA" ||
+    (element.tagName === "INPUT" && !nonText.includes(element.type ?? "text"));
+  if (!(textControl || element.isContentEditable) || element.disabled || element.readOnly) {
+    return false;
+  }
+  element.focus?.();
+  const active = element.getRootNode().activeElement;
+  return active != null && (active === element || element.contains(active));
+};
+
+// A `*:focus` locator needs Playwright's utility world, which some desktop tabs never get.
+const focusedTextField = async (page: Page, timeout: number) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new ServerBrowserOperationError({
+            tag: "PreviewAutomationTimeoutError",
+            message: `The page did not report its focused element within ${timeout}ms, so no text was typed.`,
+            detail: { timeoutMs: timeout },
+          }),
+        ),
+      timeout,
+    );
+  });
+  return await Promise.race([page.evaluate(focusTextTarget, null), expired]).finally(() =>
+    clearTimeout(timer),
+  );
+};
+
 export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
@@ -740,46 +973,10 @@ export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
     await locator.fill(input.text, { timeout });
     return;
   }
-  // A shadow host also matches :focus; use its innermost focused descendant.
-  const target = locator ?? page.locator("*:focus").last();
   const focused =
-    (locator !== null || (await target.count()) > 0) &&
-    (await target.evaluate(
-      (element) => {
-        // Require an enabled, focused text target to avoid losing input or sending it to the previous field.
-        const control = element as unknown as {
-          readonly type?: string;
-          readonly disabled?: boolean;
-          readonly readOnly?: boolean;
-          readonly isContentEditable?: boolean;
-          readonly focus?: () => void;
-        };
-        const nonText = [
-          "button",
-          "checkbox",
-          "color",
-          "file",
-          "hidden",
-          "image",
-          "radio",
-          "range",
-          "reset",
-          "submit",
-        ];
-        const textControl =
-          element.tagName === "TEXTAREA" ||
-          (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
-        if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
-          return false;
-        }
-        control.focus?.();
-        const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
-        const active = root.activeElement;
-        return active != null && (active === element || element.contains(active));
-      },
-      undefined,
-      { timeout },
-    ));
+    locator === null
+      ? await focusedTextField(page, timeout)
+      : await locator.evaluate(focusTextTarget, undefined, { timeout });
   if (focused !== true) {
     throw new ServerBrowserOperationError({
       tag: "PreviewAutomationTargetNotEditableError",
@@ -798,14 +995,15 @@ export const hover = async (
   input: PreviewAutomationHoverInput,
   pointer: PointerReporter = noPointer,
 ) => {
-  const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + (input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const remaining = () => Math.max(1, deadline - Date.now());
   const locator = targetLocator(page, input);
-  await pointer(await targetPoint(page, locator, input, timeout), "move");
+  await pointer(await targetPoint(page, locator, input, remaining), "move");
   if (locator === null) {
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await locator.hover({ timeout });
+  await locator.hover({ timeout: remaining() });
 };
 
 export const select = async (
@@ -848,16 +1046,18 @@ export const drag = async (
   input: PreviewAutomationDragInput,
   pointer: PointerReporter = noPointer,
 ) => {
-  const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + (input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const remaining = () => Math.max(1, deadline - Date.now());
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
-  await pointer(await targetPoint(page, source, {}, timeout), "move");
+  await pointer(await targetPoint(page, source, {}, remaining), "move");
   // Observe drag rejection immediately; an unhandled rejection during cursor movement exits the server.
-  const dragFailure = source.dragTo(target, { timeout }).then(
+  // Chromium delivers a single move before dragstart; steps give the page mousemoves during the drag.
+  const dragFailure = source.dragTo(target, { timeout: remaining(), steps: 5 }).then(
     () => null,
     (error: unknown) => ({ error }),
   );
-  const end = await target.boundingBox({ timeout }).catch(() => null);
+  const end = await target.boundingBox({ timeout: remaining() }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   const failure = await dragFailure;
   if (failure) throw failure.error;
@@ -885,6 +1085,26 @@ export const scroll = async (page: Page, input: PreviewAutomationScrollInput) =>
   await locator.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
 };
 
+const UNRESPONSIVE_SCRIPT_PROBE_MS = 1_000;
+
+/**
+ * A same-site navigation reuses the renderer, so it never commits while a page script holds it.
+ * Call before starting the navigation: Chrome does not deliver a terminate once one is pending.
+ */
+export const stopUnresponsiveScript = async (cdp: CDPSession, budgetMs = Infinity) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const answered = cdp.send("Runtime.evaluate", { expression: "0" }).then(
+    () => true,
+    () => true,
+  );
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), Math.min(budgetMs, UNRESPONSIVE_SCRIPT_PROBE_MS));
+  });
+  const responsive = await Promise.race([answered, expired]).finally(() => clearTimeout(timer));
+  // Not awaited: a renderer blocked on something other than script may never acknowledge it.
+  if (!responsive) void cdp.send("Runtime.terminateExecution").catch(constVoid);
+};
+
 /** Terminate expired page scripts so a hung expression cannot block the tab's control queue. */
 export const evaluate = async (
   cdp: CDPSession,
@@ -909,7 +1129,7 @@ export const evaluate = async (
   const params = {
     expression: input.expression,
     awaitPromise: input.awaitPromise ?? true,
-    returnByValue: input.returnByValue ?? true,
+    returnByValue: true,
   };
   // The devtools console's replMode allows top-level await but returns a trailing promise unawaited,
   // so it only retries what the page's parser rejected. A parse error has a scriptId but no stack and
@@ -947,7 +1167,6 @@ export const evaluate = async (
 
 export const waitFor = async (page: Page, input: PreviewAutomationWaitForInput) => {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
   const locator = targetLocator(page, input);
   const { text, urlIncludes } = input;
   const checks: Array<() => Promise<boolean>> = [];
@@ -962,16 +1181,28 @@ export const waitFor = async (page: Page, input: PreviewAutomationWaitForInput) 
     );
   }
   if (urlIncludes !== undefined) checks.push(async () => page.url().includes(urlIncludes));
-  for (;;) {
-    const results = await Promise.all(checks.map((check) => check()));
-    if (results.every(Boolean)) return;
-    if (Date.now() >= deadline) {
-      throw new ServerBrowserOperationError({
-        tag: "PreviewAutomationTimeoutError",
-        message: `Waited ${timeoutMs}ms without every condition holding.`,
-      });
+  // `count()` and `evaluate()` take no timeout; a stalled check would hold the tab's control queue.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new ServerBrowserOperationError({
+            tag: "PreviewAutomationTimeoutError",
+            message: `Waited ${timeoutMs}ms without every condition holding.`,
+          }),
+        ),
+      timeoutMs,
+    );
+  });
+  try {
+    for (;;) {
+      const results = await Promise.race([Promise.all(checks.map((check) => check())), expired]);
+      if (results.every(Boolean)) return;
+      await Promise.race([new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS)), expired]);
     }
-    await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+  } finally {
+    clearTimeout(timer);
   }
 };
 
@@ -993,89 +1224,6 @@ export const parseNetError = (errorText: string) => {
   const description = /ERR_[A-Z\d_]+/.exec(errorText)?.[0] ?? errorText;
   return { description, code: NET_ERROR_CODES[description] ?? -2 };
 };
-
-export interface VideoEncoderWindow {
-  __t3Video: {
-    pick(codecs: ReadonlyArray<string>): Promise<string | null>;
-    requestKeyFrame(): void;
-    encode(jpeg: string): Promise<{
-      key: boolean;
-      data: string;
-      width: number;
-      height: number;
-    } | null>;
-  };
-}
-
-// WebCodecs only exists in secure contexts, and a scratch page starts on about:blank.
-export const VIDEO_ENCODER_URL = "https://video-encoder.t3.invalid/";
-
-/** Re-encodes a viewer's JPEG screencast as video; resolves null when rate control drops a frame. */
-export const videoEncoderScript = `(() => {
-  let encoder = null;
-  let size = null;
-  let key = true;
-  let sink = null;
-  let codec = null;
-  const configFor = (codec, width, height) => ({
-    codec,
-    width,
-    height,
-    bitrate: Math.round(Math.min(12e6, Math.max(2e6, width * height * 2))),
-    framerate: 30,
-    latencyMode: "realtime",
-    ...(codec.startsWith("avc1") ? { avc: { format: "annexb" } } : {}),
-  });
-  window.__t3Video = {
-    async pick(codecs) {
-      for (const candidate of codecs) {
-        const support = await VideoEncoder.isConfigSupported(configFor(candidate, 1280, 720)).catch(() => null);
-        if (support && support.supported) return (codec = candidate);
-      }
-      return null;
-    },
-    requestKeyFrame() {
-      key = true;
-    },
-    async encode(jpeg) {
-      const decoder = new ImageDecoder({ data: Uint8Array.fromBase64(jpeg), type: "image/jpeg" });
-      const { image } = await decoder.decode().finally(() => decoder.close());
-      // 4:2:0 video needs even dimensions; the odd edge pixel is dropped.
-      const width = image.displayWidth & ~1;
-      const height = image.displayHeight & ~1;
-      try {
-        if (!encoder || encoder.state === "closed" || size.width !== width || size.height !== height) {
-          if (encoder && encoder.state !== "closed") encoder.close();
-          encoder = new VideoEncoder({ output: (chunk) => sink && sink.push(chunk), error: () => {} });
-          encoder.configure(configFor(codec, width, height));
-          size = { width, height };
-          key = true;
-        }
-        const chunks = [];
-        sink = chunks;
-        const frame = new VideoFrame(image, {
-          timestamp: Math.round(performance.now() * 1000),
-          visibleRect: { x: 0, y: 0, width, height },
-        });
-        encoder.encode(frame, { keyFrame: key });
-        frame.close();
-        await encoder.flush();
-        sink = null;
-        if (chunks.length === 0) return null;
-        key = false;
-        const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
-        let offset = 0;
-        for (const chunk of chunks) {
-          chunk.copyTo(bytes.subarray(offset));
-          offset += chunk.byteLength;
-        }
-        return { key: chunks[0].type === "key", data: bytes.toBase64(), width, height };
-      } finally {
-        image.close();
-      }
-    },
-  };
-})()`;
 
 export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => `(() => {
   const canvas = document.createElement("canvas");
@@ -1139,7 +1287,8 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
   window.__t3Recorder = {
     async frame(base64, cssWidth) {
       if (tooLarge) return false;
-      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      // A per-character atob copy costs ~30 ms on a 3200x1800 frame and throttles recordings.
+      const bytes = Uint8Array.fromBase64(base64);
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
       if (tooLarge) { bitmap.close(); return false; }
       if (!recorder) {
@@ -1221,465 +1370,18 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
     },
     async chunk(index) {
       const bytes = new Uint8Array(await chunks[index].arrayBuffer());
+      if (typeof bytes.toBase64 === "function") return bytes.toBase64();
       let binary = "";
       for (let offset = 0; offset < bytes.length; offset += 0x8000) {
         binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
       }
       return btoa(binary);
     },
-  };
-})()`;
-
-/**
- * Installed with every tab, before page scripts run, and never removed: a graph or a media
- * element that started before a viewer asked for sound is still known when capture turns on.
- * It only records, and only weakly, so a page that builds and drops graphs is not retained.
- */
-export const audioTrackerScript = `(() => {
-  if (window !== window.top) return;
-  if (window.__t3AudioTrack) return;
-  const edges = new WeakMap();
-  const traced = new Set();
-  const tracedSeen = new WeakSet();
-  const routed = new WeakSet();
-  const mediaSeen = new WeakSet();
-  const mediaListened = new WeakSet();
-  const media = new Set();
-  let listeners = [];
-  const notify = (change) => {
-    for (const listener of listeners) {
-      try { listener(change); } catch {}
-    }
-  };
-  const outputsOf = (node) => {
-    let outputs = edges.get(node);
-    if (!outputs) edges.set(node, (outputs = new Set()));
-    return outputs;
-  };
-  const remember = (node) => {
-    if (tracedSeen.has(node)) return;
-    tracedSeen.add(node);
-    traced.add(new WeakRef(node));
-  };
-  const connect = AudioNode.prototype.connect;
-  AudioNode.prototype.connect = function (...args) {
-    // Recorded only after the native call accepts the edge.
-    const result = connect.apply(this, args);
-    if (args[0] instanceof AudioDestinationNode) {
-      outputsOf(this).add(typeof args[1] === "number" ? args[1] : 0);
-      remember(this);
-      notify({ type: "destination", node: this });
-    }
-    return result;
-  };
-  const disconnect = AudioNode.prototype.disconnect;
-  AudioNode.prototype.disconnect = function (...args) {
-    // The native call throws for a bad target, so a failed removal records nothing.
-    const result = disconnect.apply(this, args);
-    const outputs = edges.get(this);
-    if (outputs) {
-      const target = args[0];
-      if (target === undefined) outputs.clear();
-      else if (target instanceof AudioDestinationNode) {
-        if (typeof args[1] === "number") outputs.delete(args[1]);
-        else outputs.clear();
-      } else if (typeof target === "number") outputs.delete(target);
-      if (outputs.size === 0) edges.delete(this);
-    }
-    notify({ type: "destination", node: this });
-    return result;
-  };
-  const createMediaElementSource = AudioContext.prototype.createMediaElementSource;
-  AudioContext.prototype.createMediaElementSource = function (element) {
-    // A media element has one media source for its whole life. Once the page's own call has
-    // taken it, a capture must let go rather than hold it.
-    const node = createMediaElementSource.call(this, element);
-    if (element instanceof HTMLMediaElement) {
-      routed.add(element);
-      notify({ type: "routed", element });
-    }
-    return node;
-  };
-  const forget = (element) => {
-    if (!mediaSeen.delete(element)) return;
-    notify({ type: "media", element, gone: true });
-  };
-  const heard = (element) => {
-    if (!(element instanceof HTMLMediaElement)) return;
-    if (!mediaListened.has(element)) {
-      mediaListened.add(element);
-      // A finished or reset element is not playing until it starts again. Its own playing
-      // event finds it then, since a detached element's events never reach the document.
-      element.addEventListener("playing", () => heard(element));
-      element.addEventListener("ended", () => forget(element));
-      element.addEventListener("emptied", () => forget(element));
-    }
-    if (mediaSeen.has(element)) return;
-    mediaSeen.add(element);
-    media.add(new WeakRef(element));
-    notify({ type: "media", element });
-  };
-  const play = HTMLMediaElement.prototype.play;
-  HTMLMediaElement.prototype.play = function (...args) {
-    // A detached new Audio() never reaches the DOM, so a playing event alone cannot find it.
-    // It also arrives here before playback has given it a track; a capture then waits for one.
-    heard(this);
-    return play.apply(this, args);
-  };
-  document.addEventListener("playing", (event) => heard(event.target), true);
-  for (const element of document.querySelectorAll("audio,video")) {
-    if (!element.paused) heard(element);
-  }
-  window.__t3AudioTrack = {
-    isRouted: (element) => routed.has(element),
-    destinationEdges: (node) => edges.get(node) ?? new Set(),
-    nodes: () => {
-      const live = [];
-      for (const ref of traced) {
-        const node = ref.deref();
-        // A node with no destination edges is pruned so it can register again if reconnected.
-        if (!node || !edges.get(node)?.size) { traced.delete(ref); if (node) tracedSeen.delete(node); continue; }
-        live.push(node);
-      }
-      return live;
+    download() {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
+      link.download = "recording";
+      link.click();
     },
-    media: () => {
-      const live = [];
-      for (const ref of media) {
-        const element = ref.deref();
-        // An element heard again after it reset may hold a second ref here.
-        if (!element || !mediaSeen.has(element) || live.includes(element)) { media.delete(ref); continue; }
-        live.push(element);
-      }
-      return live;
-    },
-    subscribe: (listener) => { listeners.push(listener); },
-    unsubscribe: (listener) => { listeners = listeners.filter((each) => each !== listener); },
   };
-})()`;
-
-/** One Opus packet, tagged with the source clock it was captured at. */
-export interface AudioPacket {
-  readonly data: Uint8Array;
-  readonly timestampMicros: number;
-}
-
-export interface ParsedAudioTapMessage {
-  readonly chunk: AudioPacket | null;
-  /** Set when a document's capture announces itself: its identity and whether it can encode. */
-  readonly run: string | null;
-  readonly available: boolean | null;
-}
-
-const NO_AUDIO_TAP_MESSAGE: ParsedAudioTapMessage = {
-  chunk: null,
-  run: null,
-  available: null,
-};
-
-/** Reads one tap message from `Runtime.bindingCalled`; anything else is a page's own binding. */
-export const parseAudioTapMessage = (payload: string): ParsedAudioTapMessage => {
-  let message: unknown;
-  try {
-    message = JSON.parse(payload);
-  } catch {
-    return NO_AUDIO_TAP_MESSAGE;
-  }
-  if (typeof message !== "object" || message === null) return NO_AUDIO_TAP_MESSAGE;
-  const { type, data, timestamp, available, run } = message as {
-    readonly type?: unknown;
-    readonly data?: unknown;
-    readonly timestamp?: unknown;
-    readonly available?: unknown;
-    readonly run?: unknown;
-  };
-  // Each document's capture announces itself, so the server can tell one document's packets
-  // from the last one's and restart the timeline when the encoder does.
-  if (type === "capture" && typeof run === "string")
-    return { chunk: null, run, available: available === true };
-  if (type !== "chunk" || typeof data !== "string" || typeof timestamp !== "number")
-    return NO_AUDIO_TAP_MESSAGE;
-  try {
-    return {
-      chunk: { data: new Uint8Array(Buffer.from(data, "base64")), timestampMicros: timestamp },
-      run: typeof run === "string" ? run : null,
-      available: null,
-    };
-  } catch {
-    return NO_AUDIO_TAP_MESSAGE;
-  }
-};
-
-/**
- * Feeds one Opus encoder while a viewer listens. Both kinds of source reach one 48 kHz mono
- * destination, so the encoder sees a real downmix and one timeline. The mixer lives no longer
- * than the capture: a document with no listener pays nothing.
- */
-export const audioCaptureScript = (binding: string) => `(() => {
-  if (window !== window.top) return;
-  const tracker = window.__t3AudioTrack;
-  const send = window[${JSON.stringify(binding)}];
-  if (!tracker || typeof send !== "function") return;
-  // A capture from before this run outlived its binding; its stop can only scratch.
-  try { window.__t3AudioTap?.stop(); } catch {}
-  // Insecure origins (plain http on a LAN host) have no WebCodecs, so nothing can encode here.
-  const encoderAvailable =
-    typeof AudioEncoder !== "undefined" && typeof MediaStreamTrackProcessor !== "undefined";
-  // This document's own identity: a new document restarts the encoder clock, so its packets
-  // must reach viewers under a new run rather than continuing the last document's timeline.
-  const run = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  try { send(JSON.stringify({ type: "capture", run, available: encoderAvailable })); } catch {}
-  if (!encoderAvailable) return;
-  const FRAME = 960;
-  const GESTURES = ["click", "pointerdown", "keydown", "pointerup", "touchend"];
-  let stopped = false;
-  let encoder = null;
-  let pending = new Float32Array(0);
-  let pendingFrom = 0;
-  let buffered = false;
-  const readers = new Set();
-  const taps = new Map();
-  const awaiting = new Map();
-  const graphs = new Map();
-  const context = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
-  const mix = context.createMediaStreamDestination();
-  // A real mono downmix, or a right-only source would be dropped with the left channel.
-  mix.channelCount = 1;
-  mix.channelCountMode = "explicit";
-  let gestures = false;
-  const release = () => {
-    if (!gestures) return;
-    gestures = false;
-    for (const type of GESTURES) removeEventListener(type, resume, { capture: true });
-  };
-  const resume = () => {
-    void context.resume().then(
-      () => { if (context.state === "running") release(); },
-      () => {},
-    );
-  };
-  context.onstatechange = () => { if (context.state === "running") release(); };
-  // A document with sticky activation allows this immediately; one without waits for a gesture.
-  resume();
-  if (context.state !== "running") {
-    gestures = true;
-    for (const type of GESTURES) addEventListener(type, resume, { capture: true, passive: true });
-  }
-  const sendChunk = (packet) => {
-    const bytes = new Uint8Array(packet.byteLength);
-    packet.copyTo(bytes);
-    let binary = "";
-    for (let offset = 0; offset < bytes.length; offset += 0x8000)
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-    try {
-      send(JSON.stringify({ type: "chunk", run, data: btoa(binary), timestamp: Math.round(packet.timestamp) }));
-    } catch {}
-  };
-  /*
-   * Silence costs a packet a viewer would only skip, so it is not encoded; its timestamp still
-   * moves the clock on. Leaving it out means the encoder's delayed frames would stay buffered
-   * until more audio arrived, so the first silent frame flushes instead.
-   */
-  const flush = (pcm) => {
-    const merged = new Float32Array(pending.length + pcm.length);
-    merged.set(pending);
-    merged.set(pcm, pending.length);
-    pending = merged;
-    while (pending.length >= FRAME) {
-      const frame = pending.slice(0, FRAME);
-      pending = pending.slice(FRAME);
-      // The source clock at this frame's first sample, before its own samples advance it.
-      const timestamp = Math.round((pendingFrom / 48000) * 1e6);
-      pendingFrom += FRAME;
-      let peak = 0;
-      for (const sample of frame) peak = Math.max(peak, Math.abs(sample));
-      if (peak === 0) {
-        if (buffered) {
-          buffered = false;
-          void encoder?.flush().catch(() => stop());
-        }
-        continue;
-      }
-      const data = new AudioData({
-        format: "f32-planar", sampleRate: 48000, numberOfFrames: FRAME,
-        numberOfChannels: 1, timestamp, data: frame,
-      });
-      buffered = true;
-      encoder.encode(data);
-      data.close();
-    }
-  };
-  const pump = async (track) => {
-    const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
-    readers.add(reader);
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done || stopped) { value?.close(); return; }
-        const pcm = new Float32Array(value.numberOfFrames);
-        value.copyTo(pcm, { planeIndex: 0, format: "f32-planar" });
-        value.close();
-        flush(pcm);
-      }
-    } catch {}
-  };
-  const include = (stream) => {
-    if (stopped) return;
-    try { context.createMediaStreamSource(stream).connect(mix); } catch {}
-  };
-  /*
-   * A page graph is captured by mirroring each node's destination edges onto one tap belonging
-   * to that graph, so the page's own gain, mute and volume apply and a node it disconnects from
-   * its speakers stops playing into the tap too.
-   */
-  const tapGraph = (graphContext) => {
-    if (stopped || graphs.has(graphContext)) return;
-    let tap;
-    try { tap = graphContext.createMediaStreamDestination(); } catch { return; }
-    const injected = new Map();
-    const mirror = (node) => {
-      if (stopped || node.context !== graphContext) return;
-      const outputs = tracker.destinationEdges(node);
-      const held = injected.get(node) ?? new Set();
-      for (const output of [...held]) {
-        if (outputs.has(output)) continue;
-        try { node.disconnect(tap, output); } catch {}
-        held.delete(output);
-      }
-      for (const output of outputs) {
-        if (held.has(output)) continue;
-        try { node.connect(tap, output); held.add(output); } catch {}
-      }
-      if (held.size === 0) injected.delete(node);
-      else injected.set(node, held);
-    };
-    const onChange = (change) => {
-      if (change?.node?.context === graphContext) mirror(change.node);
-    };
-    for (const node of tracker.nodes()) mirror(node);
-    tracker.subscribe(onChange);
-    include(tap.stream);
-    graphs.set(graphContext, () => {
-      tracker.unsubscribe(onChange);
-      for (const node of injected.keys()) {
-        try { node.disconnect(tap); } catch {}
-      }
-      for (const track of tap.stream.getTracks()) track.stop();
-    });
-  };
-  /*
-   * A media element is captured from its own stream rather than from its media source: that
-   * source is the page's to take once, and capture must not consume it. The element's muted and
-   * volume do not reach a captured track, so a gain applies them and follows volumechange.
-   */
-  const untap = (element) => {
-    untrack(element);
-    const tap = taps.get(element);
-    if (!tap) return;
-    taps.delete(element);
-    element.removeEventListener("volumechange", tap.apply);
-    element.removeEventListener("playing", tap.retap);
-    element.removeEventListener("loadstart", tap.retap);
-    try { tap.source.disconnect(); } catch {}
-    try { tap.gain.disconnect(); } catch {}
-    for (const track of tap.stream.getTracks()) track.stop();
-  };
-  /*
-   * A play() hook sees an element before playback has given its stream an audio track, and the
-   * tracker reports each element only once. Chromium adds the track to that same stream later,
-   * so the capture waits on the stream rather than asking an event that may precede it.
-   */
-  const awaitTrack = (element, stream) => {
-    if (awaiting.has(element)) return;
-    const onAddTrack = () => {
-      const [track] = stream.getAudioTracks();
-      if (!track) return;
-      untrack(element);
-      tapTrack(element, stream, track);
-    };
-    // A new src replaces the stream this wait belongs to, so the next one is asked for instead.
-    const replace = () => {
-      untrack(element);
-      tapElement(element);
-    };
-    stream.addEventListener("addtrack", onAddTrack);
-    element.addEventListener("loadstart", replace);
-    awaiting.set(element, { stream, onAddTrack, replace });
-  };
-  const untrack = (element) => {
-    const waited = awaiting.get(element);
-    if (!waited) return;
-    awaiting.delete(element);
-    waited.stream.removeEventListener("addtrack", waited.onAddTrack);
-    element.removeEventListener("loadstart", waited.replace);
-  };
-  const tapTrack = (element, stream, track) => {
-    const source = context.createMediaStreamSource(new MediaStream([track]));
-    const gain = context.createGain();
-    const apply = () => { gain.gain.value = element.muted ? 0 : element.volume; };
-    apply();
-    const retap = () => tapElement(element);
-    element.addEventListener("volumechange", apply);
-    // A new src or a finished stream ends the captured track; the next playback taps again.
-    element.addEventListener("playing", retap);
-    element.addEventListener("loadstart", retap);
-    source.connect(gain);
-    gain.connect(mix);
-    taps.set(element, { stream, source, gain, apply, retap, track });
-  };
-  const tapElement = (element) => {
-    if (stopped || tracker.isRouted(element) || typeof element.captureStream !== "function") {
-      untrack(element);
-      return;
-    }
-    const held = taps.get(element);
-    // A captured track follows its element until the element's source is replaced.
-    if (held && held.track.readyState === "live") { untrack(element); return; }
-    if (held) untap(element);
-    if (awaiting.has(element)) return;
-    let stream;
-    try { stream = element.captureStream(); } catch { return; }
-    const [track] = stream.getAudioTracks();
-    if (!track) { awaitTrack(element, stream); return; }
-    untrack(element);
-    tapTrack(element, stream, track);
-  };
-  const onChange = (change) => {
-    if (change?.type === "media") {
-      if (!(change.element instanceof HTMLMediaElement)) return;
-      if (change.gone) untap(change.element);
-      else tapElement(change.element);
-      return;
-    }
-    // A routed element's own source would be a second copy of the sound the page's graph
-    // already carries, so its tap is dropped as soon as that graph takes it.
-    if (change?.type === "routed") {
-      if (change.element instanceof HTMLMediaElement) untap(change.element);
-      return;
-    }
-    if (change?.node?.context instanceof AudioContext) tapGraph(change.node.context);
-  };
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    tracker.unsubscribe(onChange);
-    for (const stopGraph of graphs.values()) stopGraph();
-    graphs.clear();
-    for (const element of [...taps.keys()]) untap(element);
-    for (const element of [...awaiting.keys()]) untrack(element);
-    for (const reader of readers) void reader.cancel().catch(() => {});
-    release();
-    try { encoder?.close(); } catch {}
-    encoder = null;
-    for (const track of mix.stream.getTracks()) track.stop();
-    void context.close().catch(() => {});
-    if (window.__t3AudioTap?.stop === stop) window.__t3AudioTap = undefined;
-  };
-  encoder = new AudioEncoder({ output: sendChunk, error: () => stop() });
-  encoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1, bitrate: 32000 });
-  tracker.subscribe(onChange);
-  void pump(mix.stream.getAudioTracks()[0]);
-  for (const node of tracker.nodes()) tapGraph(node.context);
-  for (const element of tracker.media()) tapElement(element);
-  window.__t3AudioTap = { stop };
 })()`;

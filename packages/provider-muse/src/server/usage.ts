@@ -5,8 +5,9 @@ import * as Schema from "effect/Schema";
 
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { providerProbeEnvironment } from "@t3tools/provider-core/server/snapshotProbe";
 import {
-  normalizeUsageTokens,
+  tokenCount,
   totalTokens,
   type ProviderUsageReader,
   type TranscriptUsageFormat,
@@ -55,17 +56,24 @@ function parseRecord(parsed: unknown): readonly UsageRecord[] {
   if (!Number.isSafeInteger(entry.recorded_at) || entry.recorded_at < 0) return [];
   const { event } = entry.payload;
   const { usage } = event;
-  const totals = normalizeUsageTokens(
-    {
-      inputTokens: usage.input_tokens,
-      cachedInputTokens:
-        usage.cache_read_tokens ?? usage.cached_input_tokens ?? usage.cached_tokens,
-      cacheCreationTokens: usage.cache_write_tokens,
-      outputTokens: usage.output_tokens,
-      reasoningTokens: usage.reasoning_tokens,
-    },
-    "inclusive",
+  const input = tokenCount(usage.input_tokens);
+  const cachedInputTokens = Math.min(
+    input,
+    tokenCount(usage.cache_read_tokens ?? usage.cached_input_tokens ?? usage.cached_tokens),
   );
+  const cacheCreationTokens = Math.min(
+    input - cachedInputTokens,
+    tokenCount(usage.cache_write_tokens),
+  );
+  const outputTokens = tokenCount(usage.output_tokens);
+  const totals = {
+    // Muse's cache counters are subsets of input; reasoning is a subset of output.
+    uncachedInputTokens: input - cachedInputTokens - cacheCreationTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, tokenCount(usage.reasoning_tokens)),
+  };
   if (totalTokens(totals) === 0) return [];
   return [
     {
@@ -114,7 +122,10 @@ export const museUsageReader: ProviderUsageReader<
   kind: "transcripts",
   provider: "muse",
   format: museUsageFormat,
-  directories: Effect.fn("museUsageReader.directories")(function* ({ config, environment }) {
+  directories: Effect.fn("museUsageReader.directories")(function* (
+    { config, environment },
+    { awaitRefresh },
+  ) {
     const path = yield* Path.Path;
     const home = yield* HostProcess.HomeDirectory;
     const usageHome = yield* MuseUsageHome.MuseUsageHome;
@@ -124,10 +135,15 @@ export const museUsageReader: ProviderUsageReader<
       ),
       yield* HostProcess.Environment,
     );
+    const binaryPath = expandHomePath(config?.binaryPath ?? "muse", home);
     const museHome = yield* usageHome.resolve({
-      binaryPath: expandHomePath(config?.binaryPath ?? "muse", home),
-      environment: makeMuseEnvironment(processEnvironment),
+      binaryPath,
+      environment: providerProbeEnvironment(makeMuseEnvironment(processEnvironment)),
+      awaitRefresh,
     });
-    return museHome ? [{ dir: path.join(museHome, "sessions"), fileName: "session.jsonl" }] : [];
+    if (Option.isNone(museHome)) return [{ dir: binaryPath, refreshing: true }];
+    return museHome.value
+      ? [{ dir: path.join(museHome.value, "sessions"), fileName: "session.jsonl" }]
+      : [];
   }),
 };

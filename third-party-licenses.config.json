@@ -1,6 +1,18 @@
 {
   "customNotices": [
     {
+      "bundles": ["desktop", "mobile", "web"],
+      "license": "MIT",
+      "name": "GitHub gemoji alias data",
+      "sourceUrl": "https://github.com/github/gemoji/blob/fadaeaf1f1a9be82b321316a6c5502e43138b2f6/db/emoji.json",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2019 GitHub, Inc."]
+        }
+      ]
+    },
+    {
       "name": "opencode Office viewers",
       "bundles": ["web"],
       "license": "MIT",
@@ -141,14 +153,6 @@
       ]
     },
     {
-      "bundles": ["android", "assets", "ios", "mobile"],
-      "license": "OFL-1.1",
-      "name": "FiraCode Nerd Font",
-      "noticeFile": "apps/mobile/assets/fonts/LICENSE.FiraCodeNerdFont",
-      "sourceUrl": "https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.5.1",
-      "version": "3.5.1"
-    },
-    {
       "bundles": ["android", "assets", "mobile"],
       "license": "Apache-2.0",
       "name": "MesloLGS NF",
@@ -269,7 +273,7 @@
     },
     {
       "name": "@betteroffice/xlsx",
-      "version": "0.3.0",
+      "version": "0.5.1",
       "license": "Apache-2.0",
       "sourceUrl": "https://github.com/openooxml/betteroffice",
       "generatedNotice": {
@@ -278,7 +282,7 @@
     },
     {
       "name": "@betteroffice/pptx",
-      "version": "0.2.0",
+      "version": "0.5.1",
       "license": "Apache-2.0",
       "sourceUrl": "https://github.com/openooxml/betteroffice",
       "generatedNotice": {
@@ -287,7 +291,7 @@
     },
     {
       "name": "@betteroffice/docx",
-      "version": "0.4.3",
+      "version": "0.5.1",
       "license": "Apache-2.0",
       "sourceUrl": "https://github.com/openooxml/betteroffice",
       "generatedNotice": {
@@ -334,6 +338,21 @@
           "licenseId": "OFL-1.1",
           "copyrights": [
             "Copyright 2013 The Carlito Project Authors (https://github.com/googlefonts/carlito), with Reserved Font Name \"Carlito\""
+          ]
+        }
+      ]
+    },
+    {
+      "name": "@betteroffice/fonts-cjk",
+      "version": "0.4.0",
+      "license": "Apache-2.0 AND OFL-1.1",
+      "generatedNotices": [
+        { "licenseId": "Apache-2.0" },
+        {
+          "licenseId": "OFL-1.1",
+          "copyrights": [
+            "Copyright 2014-2021 Adobe (https://adobe.com/), with Reserved Font Name 'Source'",
+            "Copyright 2017-2024 Adobe (https://adobe.com/), with Reserved Font Name 'Source'"
           ]
         }
       ]
@@ -849,15 +868,6 @@
       "name": "iobuffer",
       "license": "MIT",
       "sourceUrl": "https://github.com/image-js/iobuffer"
-    },
-    {
-      "name": "data-uri-to-buffer",
-      "version": "4.0.1",
-      "sourceUrl": "https://github.com/TooTallNate/node-data-uri-to-buffer",
-      "generatedNotice": {
-        "licenseId": "MIT",
-        "copyrights": ["Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net>"]
-      }
     }
   ]
 }

@@ -17,7 +17,6 @@ import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.widget.OverScroller
-import com.facebook.react.common.assets.ReactFontManager
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -81,10 +80,10 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     TerminalTypefaces.ensureLoaded(context)
   }
 
-  private var regularTypeface = TerminalTypefaces.regular
-  private var boldTypeface = TerminalTypefaces.bold
-  private var italicTypeface = Typeface.create(TerminalTypefaces.regular, Typeface.ITALIC)
-  private var boldItalicTypeface = Typeface.create(TerminalTypefaces.bold, Typeface.ITALIC)
+  private val regularTypeface = TerminalTypefaces.regular
+  private val boldTypeface = TerminalTypefaces.bold
+  private val italicTypeface = Typeface.create(TerminalTypefaces.regular, Typeface.ITALIC)
+  private val boldItalicTypeface = Typeface.create(TerminalTypefaces.bold, Typeface.ITALIC)
   private val gestureDetector = GestureDetector(context, TerminalGestureListener())
   private val contentPadding = 8f * density
   private var frame: TerminalFrame? = null
@@ -152,23 +151,6 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     set(value) {
       if (field == value) return
       field = value
-      updateCellMetrics()
-    }
-
-  /** A system or app-bundled family name; empty uses the bundled Meslo font. */
-  var fontFamily: String = ""
-    set(value) {
-      if (field == value) return
-      field = value
-      val fonts = ReactFontManager.getInstance()
-      val regular =
-        if (value.isEmpty()) TerminalTypefaces.regular else fonts.getTypeface(value, Typeface.NORMAL, context.assets)
-      val bold =
-        if (value.isEmpty()) TerminalTypefaces.bold else fonts.getTypeface(value, Typeface.BOLD, context.assets)
-      regularTypeface = regular
-      boldTypeface = bold
-      italicTypeface = Typeface.create(regular, Typeface.ITALIC)
-      boldItalicTypeface = Typeface.create(bold, Typeface.ITALIC)
       updateCellMetrics()
     }
 
@@ -248,9 +230,7 @@ internal class TerminalCanvasView(context: Context) : View(context) {
         if (text.isNotEmpty() && flags and FLAG_INVISIBLE == 0) {
           configureTextPaint(flags, currentFrame.cellForegrounds[index])
           canvas.drawText(text, left, top + baselineOffsetPx, paint)
-          if (flags and FLAG_OVERLINE != 0) {
-            canvas.drawRect(left, top + 1f, right, top + max(2f, density), paint)
-          }
+          drawOverline(canvas, flags, left, top, right)
         }
       }
     }
@@ -349,11 +329,19 @@ internal class TerminalCanvasView(context: Context) : View(context) {
         canvas.drawRect(left, top, right, bottom, paint)
         val index = currentFrame.cursorY * currentFrame.cols + currentFrame.cursorX
         val text = currentFrame.cellText[index]
-        if (text.isNotEmpty()) {
-          configureTextPaint(currentFrame.cellFlags[index], currentFrame.background)
+        val flags = currentFrame.cellFlags[index]
+        if (text.isNotEmpty() && flags and FLAG_INVISIBLE == 0) {
+          configureTextPaint(flags, currentFrame.background)
           canvas.drawText(text, left, top + baselineOffsetPx, paint)
+          drawOverline(canvas, flags, left, top, right)
         }
       }
+    }
+  }
+
+  private fun drawOverline(canvas: Canvas, flags: Int, left: Float, top: Float, right: Float) {
+    if (flags and FLAG_OVERLINE != 0) {
+      canvas.drawRect(left, top + 1f, right, top + max(2f, density), paint)
     }
   }
 

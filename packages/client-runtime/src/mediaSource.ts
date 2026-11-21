@@ -68,7 +68,8 @@ export function resolveMediaSource(
       ? splitMarkdownLinkSearchAndHash(classified.uri).path
       : splitFilePathPosition(classified.path).path;
   // Local paths have already been decoded. Do not interpret literal #, ?, or % characters again.
-  const basename = fileBasename(path);
+  // A data URI carries no file name; its last path segment is the payload.
+  const basename = /^data:/i.test(path) ? "" : fileBasename(path);
   const extensionIndex = basename.lastIndexOf(".");
   const detectedMimeType =
     classified._tag === "Direct"
@@ -78,9 +79,7 @@ export function resolveMediaSource(
         : (mediaMimeTypeFromExtension(basename.slice(extensionIndex)) ??
           audioMimeTypeFromExtension(basename.slice(extensionIndex)));
   const mimeType = detectedMimeType ?? (input.imageEmbed ? "image/*" : null);
-  // Audio and 3D models have no native inline renderer; callers fall back to a file label.
-  if (mimeType === null || mimeType.startsWith("audio/") || mimeType.startsWith("model/"))
-    return null;
+  if (mimeType === null || mimeType.startsWith("audio/")) return null;
   const kind = mimeType.startsWith("video/") ? "video" : "image";
 
   const reference =
@@ -103,6 +102,11 @@ export function resolveMediaSource(
   return {
     ...common,
     access: "environment",
-    resource: { _tag: "media-file", threadId: input.threadId, path },
+    resource: {
+      _tag: "media-file",
+      threadId: input.threadId,
+      path,
+      ...(classified.relative ? { hostOnly: true as const } : {}),
+    },
   };
 }

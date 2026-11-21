@@ -351,7 +351,6 @@ export class BitbucketApi extends Context.Service<
     }) => Effect.Effect<{ readonly body: string; readonly truncated: boolean }, BitbucketApiError>;
     readonly listPullRequests: (input: {
       readonly cwd: string;
-      readonly repository?: string;
       readonly context?: SourceControlProvider.SourceControlProviderContext;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
@@ -610,7 +609,7 @@ function authFromCredential(credential: BitbucketCredential | null): SourceContr
     account: Option.none(),
     host: Option.some("bitbucket.org"),
     detail: Option.some(
-      "Add a Bitbucket token in Settings → Source Control, or set the T3CODE_BITBUCKET_* environment variables on the server.",
+      "Add a Bitbucket token in Settings → Source control & issues, or set the T3CODE_BITBUCKET_* environment variables on the server.",
     ),
   };
 }
@@ -919,7 +918,18 @@ export const make = Effect.gen(function* () {
       repository: input.sourceRepositoryName,
       ...(input.context ? { context: input.context } : {}),
     }).pipe(Effect.map(normalizeRepositoryCloneUrls));
-    const originRemoteUrl = yield* readConfigValueNullable(input.cwd, "remote.origin.url");
+    // Git fetches from a remote's first URL; `config --get` returns the last of several, and
+    // `git remote -v` applies `insteadOf` rewrites.
+    const originRemoteUrl = yield* git
+      .execute({
+        operation: "BitbucketApi.readOriginRemoteUrl",
+        cwd: input.cwd,
+        args: ["config", "--get-all", "remote.origin.url"],
+      })
+      .pipe(
+        Effect.map((result) => result.stdout.split("\n", 1)[0]?.trim() || null),
+        Effect.orElseSucceed(() => null),
+      );
     return yield* git.ensureRemote({
       cwd: input.cwd,
       preferredName: input.isCrossRepository
@@ -1118,10 +1128,7 @@ export const make = Effect.gen(function* () {
       );
     }),
     createPullRequest: Effect.fn("BitbucketApi.createPullRequest")(function* (input) {
-      const repository = yield* resolveRepository({
-        ...input,
-        ...(input.target?.repository ? { repository: input.target.repository } : {}),
-      });
+      const repository = yield* resolveRepository(input);
       const description = yield* fileSystem.readFileString(input.bodyFile).pipe(
         Effect.mapError(
           (cause) =>
@@ -1133,12 +1140,6 @@ export const make = Effect.gen(function* () {
         ),
       );
       const sourceOwner = sourceWorkspace(input);
-      const sourceRepository = input.source?.repository;
-      const sourceRepositoryName = sourceRepository?.includes("/")
-        ? sourceRepository
-        : sourceOwner
-          ? `${sourceOwner}/${sourceRepository ?? repository.repoSlug}`
-          : undefined;
       const body = {
         title: input.title,
         description,
@@ -1146,10 +1147,10 @@ export const make = Effect.gen(function* () {
           branch: {
             name: SourceControlProvider.sourceBranch(input),
           },
-          ...(sourceRepositoryName
+          ...(sourceOwner
             ? {
                 repository: {
-                  full_name: sourceRepositoryName,
+                  full_name: `${sourceOwner}/${input.source?.repository ?? repository.repoSlug}`,
                 },
               }
             : {}),

@@ -1,37 +1,54 @@
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  detectComposerTokenTrigger,
   detectComposerTrigger,
   parseSideChatCommand,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
+
+interface MarkdownNode {
+  readonly type: string;
+  readonly value?: string;
+  readonly children?: ReadonlyArray<MarkdownNode>;
+}
+
+function parsedLinkLabel(markdown: string): string | undefined {
+  const textOf = (node: MarkdownNode): string =>
+    node.value ?? (node.children ?? []).map(textOf).join("");
+  const find = (node: MarkdownNode): MarkdownNode | undefined =>
+    node.type === "link" ? node : node.children?.map(find).find(Boolean);
+  const link = find(unified().use(remarkParse).parse(markdown) as MarkdownNode);
+  return link && textOf(link);
+}
 
 describe("detectComposerTrigger", () => {
   it.each([
     ["Run /tmp/build.sh", "Run /tmp/build.sh".length],
     ["/etc/hosts", "/etc/hosts".length],
     ["Use /etc/hosts now", "Use /et".length],
+    ["cmd /foo\\bar", "cmd /foo\\bar".length],
+    ["/Windows\\System32", "/Windows\\System32".length],
   ])("keeps the path in %j out of the slash menu", (text, cursor) => {
     expect(detectComposerTrigger(text, cursor)).toBeNull();
   });
 
-  it("keeps a slash in the line-leading model picker query", () => {
-    expect(detectComposerTrigger("/model openai/gpt", 17)).toMatchObject({
-      kind: "slash-model",
-      query: "openai/gpt",
+  it.each([
+    ["/model", 0],
+    ["Question\n/MODEL", 9],
+  ])("offers typed %j as a slash command", (text, rangeStart) => {
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "slash-command",
+      query: text.slice(rangeStart + 1),
+      rangeStart,
+      rangeEnd: text.length,
     });
   });
 
-  it.each(["/Model opus", "/MODEL opus"])(
-    "opens the model picker for capitalized %j the same as /model",
-    (text) => {
-      expect(detectComposerTrigger(text, text.length)).toMatchObject({
-        kind: "slash-model",
-        query: "opus",
-      });
-    },
-  );
+  it("does not reopen a menu after /model arguments", () => {
+    expect(detectComposerTrigger("/Model opus", "/Model opus".length)).toBeNull();
+  });
 
   it.each(["Use /", "Use /review"])("detects the inline slash token in %j", (text) => {
     expect(detectComposerTrigger(text, text.length)).toEqual({
@@ -47,6 +64,50 @@ describe("detectComposerTrigger", () => {
     (text) => expect(detectComposerTrigger(text, text.length)).toBeNull(),
   );
 
+  it.each([
+    ["", "", ""],
+    ["Compare ", "8737", ""],
+    ["Compare (", "", ")"],
+    ["Compare(", "fix-name", ")"],
+    ["((", "fix_name", "))"],
+    ["[", "8737", "]"],
+    ["{", "8737", "}"],
+    ["【", "修正", "】"],
+  ])("keeps brackets outside the PR range after %j", (prefix, query, suffix) => {
+    const text = `${prefix}#${query}`;
+    expect(detectComposerTrigger(`${text}${suffix}`, text.length)).toEqual({
+      kind: "pull-request",
+      query,
+      rangeStart: prefix.length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it.each([
+    "# Heading",
+    "issue#123",
+    "https://example.com/#123",
+    "(#123)",
+    "[issue#123",
+    "[#_fix",
+    "]#123",
+  ])("does not detect a pull request in %j", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toBeNull();
+  });
+
+  it.each([
+    ["@src/(#1", "path", "src/(#1"],
+    ["$review(#1", "skill", "review(#1"],
+  ])("keeps explicit completion for %j", (token, kind, query) => {
+    const text = `Use ${token}`;
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind,
+      query,
+      rangeStart: 4,
+      rangeEnd: text.length,
+    });
+  });
+
   it.each(["$", "€", "𑿝"])("detects %s skill prefixes and their source range", (prefix) => {
     const text = `Use ${prefix}review`;
     expect(detectComposerTrigger(text, text.length)).toEqual({
@@ -58,8 +119,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it.each([
-    "It costs $5",
-    "is it $5?",
     "budget $9.99",
     "only $.99",
     "about €20",
@@ -77,65 +136,6 @@ describe("detectComposerTrigger", () => {
       query: text.slice(1),
     });
   });
-  it.each(["Compare with %", "Compare with %auth"])("detects the thread trigger in %j", (text) => {
-    expect(detectComposerTrigger(text, text.length)).toEqual({
-      kind: "thread",
-      query: text.slice("Compare with %".length),
-      rangeStart: "Compare with ".length,
-      rangeEnd: text.length,
-    });
-  });
-
-  it.each(["50%", "Open %APPDATA%", "Use %auth "])("does not open the thread menu for %j", (text) =>
-    expect(detectComposerTrigger(text, text.length)).toBeNull(),
-  );
-});
-
-describe("detectComposerTokenTrigger", () => {
-  it("reads only the word at the cursor, so /model arguments close the menu", () => {
-    expect(detectComposerTokenTrigger("/model spark", "/model spark".length)).toBeNull();
-    expect(detectComposerTokenTrigger("/model", "/model".length)).toEqual({
-      kind: "slash-command",
-      query: "model",
-      rangeStart: 0,
-      rangeEnd: "/model".length,
-    });
-  });
-
-  it.each(["Use ", "Use\t", "Use\n  "])("detects inline slash skills after %j", (prefix) => {
-    const text = `${prefix}/skill:review later`;
-    const cursor = `${prefix}/skill:review`.length;
-    expect(detectComposerTokenTrigger(text, cursor)).toEqual({
-      kind: "slash-command",
-      query: "skill:review",
-      rangeStart: prefix.length,
-      rangeEnd: cursor,
-    });
-  });
-
-  it("detects a pull request number at a token boundary, not in headings or words", () => {
-    const text = "Compare this with #8737";
-    expect(detectComposerTokenTrigger(text, text.length)).toEqual({
-      kind: "pull-request",
-      query: "8737",
-      rangeStart: "Compare this with ".length,
-      rangeEnd: text.length,
-    });
-    expect(detectComposerTokenTrigger("# Heading", "# Heading".length)).toBeNull();
-    expect(detectComposerTokenTrigger("issue#123", "issue#123".length)).toBeNull();
-  });
-
-  // regression: #936 @file autocomplete used the wrong cursor when typing mid-text
-  it("detects @path trigger in the middle of existing text", () => {
-    const text = "Please inspect @in this sentence";
-    const cursorAfterAt = "Please inspect @".length;
-    expect(detectComposerTokenTrigger(text, cursorAfterAt)).toEqual({
-      kind: "path",
-      query: "",
-      rangeStart: "Please inspect ".length,
-      rangeEnd: cursorAfterAt,
-    });
-  });
 });
 
 describe("serializeComposerFileLink", () => {
@@ -149,6 +149,13 @@ describe("serializeComposerFileLink", () => {
     expect(serializeComposerFileLink("C:\\repo\\src\\index.ts")).toBe(
       "[index.ts](C:%5Crepo%5Csrc%5Cindex.ts)",
     );
+  });
+
+  it.each([
+    ["pkg/__init__.py", "__init__.py"],
+    ["notes/*draft*.md", "*draft*.md"],
+  ])("renders the mention of %j with its file name as the label", (path, basename) => {
+    expect(parsedLinkLabel(serializeComposerFileLink(path))).toBe(basename);
   });
 
   it("preserves paths that legitimately start with an at sign", () => {

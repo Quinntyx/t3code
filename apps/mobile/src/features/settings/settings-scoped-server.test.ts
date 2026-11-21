@@ -21,11 +21,7 @@ const firstProject = "first-project" as ProjectId;
 const secondProject = "second-project" as ProjectId;
 
 describe("mobile usage-limit settings across environments", () => {
-  it.each([
-    "autoResumeLimitedThreads",
-    "autoResumePullRequestThreadsFirst",
-    "snoozeLimitedThreads",
-  ] as const)(
+  it.each(["autoResumeLimitedThreads", "snoozeLimitedThreads"] as const)(
     "shows %s as mixed and can enable it everywhere without changing other settings",
     (key) => {
       const targets = resolveMobileSettingsTargets(
@@ -182,13 +178,13 @@ describe("managed settings across environments", () => {
       null,
     );
 
-    expect(managedSettingReason(targets, "storageCleanup.logsAfterDays")).toBe(
+    expect(managedSettingReason(targets, ["storageCleanup.logsAfterDays"])).toBe(
       "Managed by Example Corp.",
     );
-    expect(managedSettingReason(targets, "defaultAutoPull", "storageCleanup")).toBe(
+    expect(managedSettingReason(targets, ["defaultAutoPull", "storageCleanup"])).toBe(
       "Managed by Example Corp.",
     );
-    expect(managedSettingReason(targets, "defaultAutoPull")).toBeUndefined();
-    expect(managedSettingReason(targets.slice(0, 1), "storageCleanup")).toBeUndefined();
+    expect(managedSettingReason(targets, ["defaultAutoPull"])).toBeUndefined();
+    expect(managedSettingReason(targets.slice(0, 1), ["storageCleanup"])).toBeUndefined();
   });
 });

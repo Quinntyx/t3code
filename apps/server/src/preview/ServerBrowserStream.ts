@@ -2,11 +2,8 @@ import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequ
 import {
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
-  PREVIEW_STREAM_AUDIO_CODECS,
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
-  PREVIEW_STREAM_VIDEO_CODECS,
   PreviewStreamHostSetup,
-  encodePreviewStreamAudioFrame,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -23,7 +20,8 @@ import {
 } from "effect/http";
 import * as Socket from "effect/socket/Socket";
 
-import { authenticateMediaRequest } from "../auth/http.ts";
+import { authenticateMediaRequest, failEnvironmentInternal } from "../auth/http.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import { assetResponseHeaders } from "../http.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -34,13 +32,6 @@ const TAB_GONE_CODE = 4404;
 
 const DEFAULT_QUALITY = 70;
 const MAX_SOCKET_BUFFER_BYTES = 8 * 1024 * 1024;
-// One frame per round trip caps a distant viewer's frame rate, so small frames share a window.
-// A frame this large still travels alone, keeping replies from queueing behind images.
-const MAX_FRAMES_IN_FLIGHT = 6;
-const MAX_BYTES_IN_FLIGHT = 128 * 1024;
-// A socket backlog this deep is already tens of seconds of audio at 32 kb/s; adding more only
-// makes the sound arrive later than the picture.
-const MAX_AUDIO_BACKLOG_BYTES = 64 * 1024;
 const textDecoder = new TextDecoder();
 
 const intParam = (params: URLSearchParams, name: string, fallback: number, max: number) => {
@@ -50,21 +41,8 @@ const intParam = (params: URLSearchParams, name: string, fallback: number, max: 
 
 type Frame = Extract<ServerBrowser.ServerBrowserViewerOutput, { readonly _tag: "frame" }>;
 
-const messageType = (message: unknown) =>
-  typeof message === "object" && message !== null && "type" in message ? message.type : undefined;
-
-const videoCodecsParam = (params: URLSearchParams) => {
-  const requested = params.get("codecs")?.split(",") ?? [];
-  return requested.filter((codec): codec is (typeof PREVIEW_STREAM_VIDEO_CODECS)[number] =>
-    PREVIEW_STREAM_VIDEO_CODECS.some((supported) => supported === codec),
-  );
-};
-
-/** Viewers opt in explicitly, so a client that cannot play Opus never pays for its packets. */
-const wantsAudio = (params: URLSearchParams) => {
-  const requested = params.get("audio")?.split(",") ?? [];
-  return PREVIEW_STREAM_AUDIO_CODECS.some((codec) => requested.includes(codec));
-};
+const isAck = (message: unknown) =>
+  typeof message === "object" && message !== null && "type" in message && message.type === "ack";
 
 const parseMessage = (chunk: Uint8Array | string): unknown => {
   try {
@@ -102,7 +80,8 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
   if (threadId.length === 0 || tabId.length === 0) {
     return HttpServerResponse.text("Not Found", { status: 404 });
   }
-  return yield* Effect.scoped(
+  const sessions = yield* SessionStore.SessionStore;
+  const stream = Effect.scoped(
     Effect.gen(function* () {
       const attached = yield* browser
         .attachViewer({
@@ -112,8 +91,6 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
           maxWidth: intParam(params, "maxWidth", 1280, 7680),
           maxHeight: intParam(params, "maxHeight", 800, 4320),
           quality: intParam(params, "quality", DEFAULT_QUALITY, 100),
-          videoCodecs: videoCodecsParam(params),
-          audio: wantsAudio(params),
         })
         .pipe(
           Effect.map((viewer) => ({ _tag: "attached" as const, viewer })),
@@ -150,16 +127,11 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
       }
       const viewer = attached.viewer;
       // `write` returns once the frame is queued, so Chromium's ack for each
-      // frame waits for the viewer's `ack` message instead. Frames on the wire
-      // are bounded and only the newest waits behind them, so replies never
+      // frame waits for the viewer's `ack` message instead. Only one frame
+      // is on the wire and only the newest waits behind it, so replies never
       // queue behind stale images on a slow link.
-      const inFlight: Array<{ readonly ack: Effect.Effect<void>; bytes: number }> = [];
-      let bytesInFlight = 0;
+      let inFlight: Effect.Effect<void> | null = null;
       let pending: Frame | null = null;
-      const hasRoom = () =>
-        inFlight.length === 0 ||
-        (inFlight.length < MAX_FRAMES_IN_FLIGHT && bytesInFlight < MAX_BYTES_IN_FLIGHT);
-      const outgoing = yield* Queue.unbounded<{ frame: Frame; slot: (typeof inFlight)[number] }>();
       const disconnectSlowViewer = Effect.sync(() => transport.destroy()).pipe(
         Effect.andThen(Effect.interrupt),
       );
@@ -171,47 +143,21 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
           }
           return writer.write(data);
         });
-      const sendFrame = (frame: Frame) =>
-        Effect.sync(() => {
-          const slot = { ack: frame.ack, bytes: 0 };
-          inFlight.push(slot);
-          Queue.offerUnsafe(outgoing, { frame, slot });
-        });
-      const sendPending = Effect.suspend(() => {
-        const next = pending;
-        if (next === null || !hasRoom()) return Effect.void;
-        pending = null;
-        return sendFrame(next);
-      });
-      // Video frames encode in order as they go out, so one fiber writes every frame.
-      const sendFrames = Queue.take(outgoing).pipe(
-        Effect.flatMap(({ frame, slot }) =>
-          Effect.gen(function* () {
-            const data = frame.data instanceof Uint8Array ? frame.data : yield* frame.data;
-            if (data !== null) {
-              slot.bytes = data.byteLength;
-              bytesInFlight += data.byteLength;
-              return yield* write(data);
-            }
-            // The encoder dropped it, so no ack will come.
-            inFlight.splice(inFlight.indexOf(slot), 1);
-            yield* Effect.forkScoped(slot.ack);
-            yield* sendPending;
-          }),
-        ),
-      );
+      const sendFrame = (frame: Frame) => {
+        inFlight = frame.ack;
+        return write(frame.data);
+      };
       const sendOutput = Queue.take(viewer.output).pipe(
         Effect.flatMap((output) => {
           switch (output._tag) {
             case "frame": {
-              if (hasRoom()) return sendFrame(output);
+              if (inFlight === null) return sendFrame(output);
               const superseded = pending;
               pending = output;
               // Never sent, but Chromium still waits for its ack.
               return superseded ? Effect.forkScoped(superseded.ack) : Effect.void;
             }
             case "viewport":
-            case "audio":
             case "control":
             case "clipboard":
             case "download":
@@ -235,46 +181,27 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
       // Incoming messages share the session span; frame acknowledgements are frequent.
       const receive = Effect.fnUntraced(function* (chunk: Uint8Array | string) {
         const message = parseMessage(chunk);
-        const type = messageType(message);
-        if (type === "keyFrame") return yield* Effect.forkScoped(viewer.requestKeyFrame);
         // Ownership serializes actions in the service. Keep reading so dialog
         // replies and takeover can unblock an action already waiting on the page.
-        if (type !== "ack")
+        if (!isAck(message))
           return yield* canOperate
             ? viewer.input(message).pipe(Effect.forkScoped, Effect.asVoid)
             : Effect.void;
-        const slot = inFlight.shift();
-        if (slot) bytesInFlight -= slot.bytes;
+        const ack = inFlight;
+        const next = pending;
+        inFlight = null;
+        pending = null;
         // Forked: Chromium acks are paced and must not hold up input.
-        if (slot) yield* Effect.forkScoped(slot.ack);
-        return yield* sendPending;
+        return yield* Effect.andThen(
+          ack ? Effect.forkScoped(ack) : Effect.void,
+          next ? sendFrame(next) : Effect.void,
+        );
       });
-      // Audio has its own queue: a packet is ~80 bytes and a minute of speech is thousands
-      // of them, so it skips the frame window rather than starving video of room. What is
-      // already waiting in the socket is latency, so audio past the bound is dropped whole
-      // instead of queueing behind video the viewer has not received.
-      const audio = viewer.audio;
-      const sendAudio =
-        audio === null
-          ? Effect.never
-          : Effect.forever(
-              Queue.take(audio).pipe(
-                Effect.flatMap((packet) =>
-                  transport.writableLength > MAX_AUDIO_BACKLOG_BYTES
-                    ? Effect.void
-                    : write(encodePreviewStreamAudioFrame(packet)),
-                ),
-              ),
-            );
       const receiveInput = reader.pull.pipe(
         Effect.flatMap((chunks) => Effect.forEach(chunks, receive, { discard: true })),
       );
-      return yield* Effect.raceFirst(
-        Effect.forever(sendOutput),
-        Effect.raceFirst(
-          Effect.forever(receiveInput),
-          Effect.raceFirst(Effect.forever(sendFrames), sendAudio),
-        ),
+      return yield* Effect.raceFirst(Effect.forever(sendOutput), Effect.forever(receiveInput)).pipe(
+        Effect.onInterrupt(() => Effect.sync(() => transport.destroy())),
       );
     }),
   ).pipe(
@@ -285,6 +212,16 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
         ),
     }),
     Effect.orElseSucceed(() => HttpServerResponse.empty()),
+  );
+  return yield* Effect.raceFirst(
+    stream,
+    sessions.awaitInvalidation(session.sessionId).pipe(
+      Effect.as(HttpServerResponse.empty()),
+      Effect.catchTags({
+        SessionCredentialVerificationError: (error) =>
+          failEnvironmentInternal("internal_error", error),
+      }),
+    ),
   );
 });
 

@@ -52,30 +52,8 @@ export function projectScriptRuntimeEnv(
   return env;
 }
 
-export function releaseClaimedRoles(
-  script: ProjectScript,
-  saved: Pick<ProjectScript, "runOnWorktreeCreate" | "runOnSettle">,
-): ProjectScript {
-  const releaseSetup = saved.runOnWorktreeCreate && script.runOnWorktreeCreate;
-  const releaseSettle = saved.runOnSettle && script.runOnSettle === true;
-  if (!releaseSetup && !releaseSettle) return script;
-  return {
-    ...script,
-    ...(releaseSetup ? { runOnWorktreeCreate: false } : {}),
-    ...(releaseSettle ? { runOnSettle: false } : {}),
-  };
-}
-
 export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
   return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
-}
-
-export function projectScriptMenuLabel(script: ProjectScript): string {
-  const roles = [
-    ...(script.runOnWorktreeCreate ? ["setup"] : []),
-    ...(script.runOnSettle ? ["on settle"] : []),
-  ];
-  return roles.length === 0 ? script.name : `${script.name} (${roles.join(", ")})`;
 }
 
 export function settleProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {

@@ -1,13 +1,5 @@
 import { MOBILE_CODE_SURFACE, MOBILE_TYPOGRAPHY } from "./typography";
 import {
-  FONT_FAMILIES,
-  codeFontChoices,
-  findFontChoice,
-  terminalFontChoices,
-  uiFontChoices,
-  type UiFontFaces,
-} from "./fontFamilies";
-import {
   DEFAULT_TERMINAL_FONT_SIZE,
   MAX_TERMINAL_FONT_SIZE,
   MIN_TERMINAL_FONT_SIZE,
@@ -30,9 +22,6 @@ export interface AppearancePreferences {
   readonly terminalFontSize: number | null;
   readonly codeFontSize: number | null;
   readonly codeWordBreak: boolean;
-  readonly uiFontId: string | null;
-  readonly codeFontId: string | null;
-  readonly terminalFontId: string | null;
 }
 
 export interface ResolvedAppearance {
@@ -42,18 +31,9 @@ export interface ResolvedAppearance {
   readonly codeWordBreak: boolean;
   readonly isTerminalFontSizeCustom: boolean;
   readonly isCodeFontSizeCustom: boolean;
-  readonly uiFontId: string | null;
-  readonly uiFont: UiFontFaces;
-  readonly codeFontId: string | null;
-  /** Null keeps each code surface's own default family. */
-  readonly codeFontFamily: string | null;
-  readonly terminalFontId: string | null;
-  /** Null keeps the native terminal's bundled font. */
-  readonly terminalFontFamily: string | null;
 }
 
 export interface ResolvedMobileCodeSurface {
-  readonly fontFamily: string;
   readonly fontSize: number;
   readonly lineNumberFontSize: number;
   readonly rowHeight: number;
@@ -118,9 +98,6 @@ interface StoredAppearancePreferences {
   readonly terminalFontSize?: number | null | undefined;
   readonly codeFontSize?: number | null | undefined;
   readonly codeWordBreak?: boolean | null | undefined;
-  readonly uiFontId?: string | null | undefined;
-  readonly codeFontId?: string | null | undefined;
-  readonly terminalFontId?: string | null | undefined;
 }
 
 export function resolveAppearancePreferences(
@@ -137,19 +114,10 @@ export function resolveAppearancePreferences(
         ? normalizeCodeFontSize(stored.codeFontSize)
         : null,
     codeWordBreak: normalizeCodeWordBreak(stored?.codeWordBreak),
-    uiFontId: stored?.uiFontId ?? null,
-    codeFontId: stored?.codeFontId ?? null,
-    terminalFontId: stored?.terminalFontId ?? null,
   };
 }
 
-export function resolveAppearance(
-  preferences: AppearancePreferences,
-  platform: string,
-): ResolvedAppearance {
-  const uiFont = findFontChoice(uiFontChoices(platform), preferences.uiFontId);
-  const codeFont = findFontChoice(codeFontChoices(platform), preferences.codeFontId);
-  const terminalFont = findFontChoice(terminalFontChoices(platform), preferences.terminalFontId);
+export function resolveAppearance(preferences: AppearancePreferences): ResolvedAppearance {
   return {
     baseFontSize: preferences.baseFontSize,
     terminalFontSize:
@@ -158,24 +126,14 @@ export function resolveAppearance(
     codeWordBreak: preferences.codeWordBreak,
     isTerminalFontSizeCustom: preferences.terminalFontSize !== null,
     isCodeFontSizeCustom: preferences.codeFontSize !== null,
-    uiFontId: uiFont?.id ?? null,
-    uiFont: uiFont?.value ?? FONT_FAMILIES,
-    codeFontId: codeFont?.id ?? null,
-    codeFontFamily: codeFont?.value ?? null,
-    terminalFontId: terminalFont?.id ?? null,
-    terminalFontFamily: terminalFont?.value ?? null,
   };
 }
 
-export function resolveMobileCodeSurface(
-  codeFontSize: number,
-  codeFontFamily: string,
-): ResolvedMobileCodeSurface {
+export function resolveMobileCodeSurface(codeFontSize: number): ResolvedMobileCodeSurface {
   const fontSize = normalizeCodeFontSize(codeFontSize);
   const scale = fontSize / DEFAULT_CODE_FONT_SIZE;
 
   return {
-    fontFamily: codeFontFamily,
     fontSize,
     lineNumberFontSize: Math.max(8, Math.round(MOBILE_CODE_SURFACE.lineNumberFontSize * scale)),
     rowHeight: Math.max(14, Math.round(MOBILE_CODE_SURFACE.rowHeight * scale)),
@@ -245,6 +203,17 @@ export function resolveScaledTextRole(role: keyof typeof MOBILE_TYPOGRAPHY, base
     fontSize: Math.max(8, Math.round(typography.fontSize * scale)),
     lineHeight: scaledTypographyLineHeight(typography, baseFontSize),
   };
+}
+
+// React Native text applies the system text size itself, but the iOS composer sets a fixed
+// UIFont, so it needs pre-scaled metrics. Android's editor already sizes text in sp.
+export function resolveComposerTextRole(
+  role: { readonly fontSize: number; readonly lineHeight: number },
+  fontScale: number,
+  os: string,
+) {
+  if (os !== "ios") return role;
+  return { fontSize: role.fontSize * fontScale, lineHeight: role.lineHeight * fontScale };
 }
 
 export function resolveNativeMarkdownTypography(baseFontSize: number): NativeMarkdownTypography {

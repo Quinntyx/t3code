@@ -19,6 +19,10 @@
       "types": "./src/server/attachmentPrompt.ts",
       "import": "./src/server/attachmentPrompt.ts"
     },
+    "./server/compatibility": {
+      "types": "./src/server/compatibility.ts",
+      "import": "./src/server/compatibility.ts"
+    },
     "./server/auth": {
       "types": "./src/server/auth.ts",
       "import": "./src/server/auth.ts"
@@ -90,10 +94,6 @@
     "./server/notification": {
       "types": "./src/server/notification.ts",
       "import": "./src/server/notification.ts"
-    },
-    "./server/opencodeGoUsage": {
-      "types": "./src/server/opencodeGoUsage.ts",
-      "import": "./src/server/opencodeGoUsage.ts"
     },
     "./server/orchestrationInstructions": {
       "types": "./src/server/orchestrationInstructions.ts",

@@ -59,18 +59,17 @@ links, so a context link is never mistaken for a mention.
 
 `projectComposerContextForProvider({ text, records })` builds what the provider reads:
 
-1. Every reference becomes an in-place marker: `[Image: shot.png; ref=ctx_1]`. A thread marker
-   names the thread instead, `[Thread: Fix login; threadId=mcp:…]`, because its context id is a
-   folded slug that no tool accepts and agents copy the id they read in place.
+1. Every reference becomes an in-place marker: `[Image: shot.png; ref=ctx_1]`.
 2. A trailing `<t3_context version="1">` envelope holds one `<context kind id>` entry per unique
    referenced id, in first-reference order. Records that are never referenced are not emitted.
    A referenced id with no record becomes `<context … unavailable="true"/>`. Mention and skill
    records produce a marker but no entry. Unknown kinds emit their payload as JSON.
 3. Captured text is data: any `<` that would open or close `t3_context` or `context` is escaped,
    so a terminal line or PR comment cannot forge a record.
+4. Assistant citation links are expanded too (`expandAssistantCitationsForProvider`).
 
 Attachment bytes travel on the existing attachment channel; the envelope only carries metadata.
-Text without references is returned unchanged.
+Text without references or citations is returned unchanged.
 
 ## Legacy messages
 

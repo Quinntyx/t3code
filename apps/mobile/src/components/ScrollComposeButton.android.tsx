@@ -3,11 +3,11 @@ import { Box, ExtendedFloatingActionButton, Icon, Text } from "@expo/ui/jetpack-
 import {
   defaultMinSize,
   fillMaxWidth,
-  graphicsLayer,
   height,
   onSizeChanged,
   size,
 } from "@expo/ui/jetpack-compose/modifiers";
+import { useGT } from "gt-react-native";
 import { useState } from "react";
 import { I18nManager, Pressable, View, type StyleProp, type ViewStyle } from "react-native";
 import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
@@ -17,13 +17,12 @@ import { resolveScaledTextRole } from "../lib/appearancePreferences";
 /** Keep the animated width and icon positioning entirely inside Compose, not Yoga. */
 export function ScrollComposeButton(props: {
   readonly expanded: boolean;
-  /** Match the floating tab bar's pill instead of Material's rounded square. */
-  readonly round?: boolean;
   readonly onPress: () => void;
   readonly size?: number;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
 }) {
+  const gt = useGT();
   const { appearance, themeVariables: colors } = useAppearancePreferences();
   const typography = resolveScaledTextRole("footnote", appearance.baseFontSize);
   const { iconSize, fabSize: scaledFabSize } = useAndroidControlSizing();
@@ -61,9 +60,6 @@ export function ScrollComposeButton(props: {
               modifiers={[
                 defaultMinSize({ minWidth: nativeSize }),
                 height(nativeSize),
-                ...(props.round
-                  ? [graphicsLayer({ shape: { type: "circle" }, clip: true, shadowElevation: 6 })]
-                  : []),
                 onSizeChanged(rememberWidth),
               ]}
             >
@@ -85,7 +81,7 @@ export function ScrollComposeButton(props: {
                     fontWeight: "500",
                   }}
                 >
-                  New thread
+                  {gt("New thread")}
                 </Text>
               </ExtendedFloatingActionButton.Text>
             </ExtendedFloatingActionButton>
@@ -96,7 +92,7 @@ export function ScrollComposeButton(props: {
       <Pressable
         onPress={props.onPress}
         accessibilityRole="button"
-        accessibilityLabel="New thread"
+        accessibilityLabel={gt("New thread")}
         android_ripple={{ foreground: true }}
         style={{
           position: "absolute",
@@ -104,7 +100,7 @@ export function ScrollComposeButton(props: {
           top: 0,
           bottom: 0,
           width: props.expanded ? buttonWidth * scale : fabSize,
-          borderRadius: props.round ? fabSize / 2 : 16 * scale,
+          borderRadius: 16 * scale,
           overflow: "hidden",
         }}
       />

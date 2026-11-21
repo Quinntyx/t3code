@@ -19,8 +19,6 @@ import {
   ProjectSettingsOverrides,
   ProviderDriverKind,
   ProviderInstanceId,
-  type RegisteredMcpServerEdit,
-  type RegisteredMcpServerEntry,
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
@@ -31,11 +29,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
 import { fromLenientJson } from "./schemaJson.ts";
-import {
-  createModelHiddenPredicate,
-  createModelSelection,
-  readCustomModelEntries,
-} from "./model.ts";
+import { createModelSelection, readCustomModelEntries } from "./model.ts";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -57,7 +51,9 @@ export function isModelSelectionProviderEnabled(
 ): boolean {
   const generator = textGeneratorForSelection(settings, selection.instanceId);
   if (generator !== undefined) return generator.enabled;
-  const instanceConfig = settings.providerInstances[selection.instanceId];
+  const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
+    ? settings.providerInstances[selection.instanceId]
+    : undefined;
   if (instanceConfig !== undefined) {
     return resolveProviderInstanceEnabled(instanceConfig);
   }
@@ -76,14 +72,24 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "antigravity",
 ].map((driver) => ProviderDriverKind.make(driver));
 
-/** Built-in default instances win over configured instances of the same drivers. */
+/** Configured instances come after every default instance, so they only win when no default qualifies. */
 export function fallbackTextGenerationModelSelection(
   providerInstances: ServerSettings["providerInstances"],
-  isEnabled: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean,
-  options?: {
-    readonly defaultModelSelection?: ModelSelection | null;
-  },
+  isEnabled: (instanceId: ProviderInstanceId, driver: ProviderDriverKind, model: string) => boolean,
+  options?: { readonly defaultModelSelection?: ModelSelection | null },
 ): ModelSelection | null {
+  const threadDefault = options?.defaultModelSelection;
+  // The thread default's custom model wins on its instance; the driver default still serves when that model is unusable.
+  const selectionsFor = (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => {
+    const config = providerInstances[instanceId]?.config as { customModels?: unknown } | undefined;
+    const driverDefault = { instanceId, model: defaultTextGenerationModel(driver) };
+    return threadDefault?.instanceId === instanceId &&
+      readCustomModelEntries(config?.customModels).some(
+        (entry) => entry.slug === threadDefault.model,
+      )
+      ? [threadDefault, driverDefault]
+      : [driverDefault];
+  };
   const candidates = [
     ...TEXT_GENERATION_FALLBACK_DRIVERS.map(
       (driver) => [defaultInstanceIdForDriver(driver), driver] as const,
@@ -94,21 +100,15 @@ export function fallbackTextGenerationModelSelection(
         : [],
     ),
   ];
-  const match = candidates.find(([instanceId, driver]) => isEnabled(instanceId, driver));
-  if (match === undefined) return null;
-  const [instanceId, driver] = match;
-  const threadDefault = options?.defaultModelSelection;
-  const config = providerInstances[instanceId]?.config as { customModels?: unknown } | undefined;
-  if (
-    threadDefault?.instanceId === instanceId &&
-    readCustomModelEntries(config?.customModels).some((entry) => entry.slug === threadDefault.model)
-  ) {
-    return threadDefault;
+  for (const [instanceId, driver] of candidates) {
+    for (const selection of selectionsFor(instanceId, driver)) {
+      if (isEnabled(instanceId, driver, selection.model)) return selection;
+    }
   }
-  return { instanceId, model: defaultTextGenerationModel(driver) };
+  return null;
 }
 
-export function defaultTextGenerationModel(driver: ProviderDriverKind): string {
+function defaultTextGenerationModel(driver: ProviderDriverKind): string {
   return (
     DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
     DEFAULT_MODEL_BY_PROVIDER[driver] ??
@@ -248,43 +248,6 @@ function mergeSettingsEntries<Value>(
     }
   }
   return Object.fromEntries(next);
-}
-
-function mergeRegisteredMcpServers(
-  current: ReadonlyArray<RegisteredMcpServerEntry>,
-  patch: Readonly<Record<string, RegisteredMcpServerEntry | RegisteredMcpServerEdit | null>>,
-): Array<RegisteredMcpServerEntry> {
-  const next: Array<RegisteredMcpServerEntry> = [];
-  for (const entry of current) {
-    if (!Object.hasOwn(patch, entry.id)) {
-      next.push(entry);
-      continue;
-    }
-    const change = patch[entry.id]!;
-    if (change === null) continue;
-    if ("source" in change) {
-      next.push(change);
-      continue;
-    }
-    const { config, ...fields } = change;
-    next.push({
-      ...entry,
-      ...fields,
-      config:
-        config === undefined
-          ? entry.config
-          : Object.fromEntries(
-              Object.entries({ ...entry.config, ...config }).flatMap(([key, value]) =>
-                value === null ? [] : [[key, value]],
-              ),
-            ),
-    });
-  }
-  const existing = new Set(current.map((entry) => entry.id));
-  for (const [id, change] of Object.entries(patch)) {
-    if (change !== null && "source" in change && !existing.has(id)) next.push(change);
-  }
-  return next;
 }
 
 // Secret persistence keys tokens by trimmed, lowercased host, so merge on the same key.
@@ -431,7 +394,6 @@ export function applyServerSettingsPatch(
     setModelFavorites,
     setModelsHidden,
     setProviderModelOrder,
-    setProviderNewModelsEnabled,
     providerModelPreferences,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
@@ -442,7 +404,6 @@ export function applyServerSettingsPatch(
     usageLimitSources: usageLimitSourcesPatch,
     textGenerators: textGeneratorsPatch,
     secretProviders: secretProvidersPatch,
-    registeredMcpServers: registeredMcpServersPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
@@ -523,38 +484,9 @@ export function applyServerSettingsPatch(
       };
       const hiddenModels = preferences.hiddenModels.filter((model) => model !== change.model);
       if (change.hidden) hiddenModels.push(change.model);
-      updated[change.provider] = {
-        ...preferences,
-        hiddenModels,
-        ...(preferences.newModelsEnabled === false && !change.hidden
-          ? { enabledModels: [...new Set([...(preferences.enabledModels ?? []), change.model])] }
-          : {}),
-      };
+      updated[change.provider] = { ...preferences, hiddenModels };
     }
     nextModelPreferences = updated;
-  }
-  if (setProviderNewModelsEnabled) {
-    const { provider, enabled, models } = setProviderNewModelsEnabled;
-    const preferences = (Object.hasOwn(nextModelPreferences ?? {}, provider)
-      ? nextModelPreferences?.[provider]
-      : undefined) ?? { hiddenModels: [], modelOrder: [] };
-    const isHidden = createModelHiddenPredicate(preferences);
-    nextModelPreferences = {
-      ...nextModelPreferences,
-      [provider]: {
-        ...preferences,
-        newModelsEnabled: enabled,
-        enabledModels: [
-          ...new Set([
-            ...(preferences.enabledModels ?? []),
-            ...models.filter((slug) => !isHidden({ slug })),
-          ]),
-        ],
-        hiddenModels: [
-          ...new Set([...preferences.hiddenModels, ...models.filter((slug) => isHidden({ slug }))]),
-        ],
-      },
-    };
   }
   if (setProviderModelOrder) {
     const preferences = nextModelPreferences?.[setProviderModelOrder.provider] ?? {
@@ -693,14 +625,6 @@ export function applyServerSettingsPatch(
       : {}),
     ...(secretProvidersPatch !== undefined
       ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
-      : {}),
-    ...(registeredMcpServersPatch !== undefined
-      ? {
-          registeredMcpServers: mergeRegisteredMcpServers(
-            current.registeredMcpServers,
-            registeredMcpServersPatch,
-          ),
-        }
       : {}),
     ...(usagePriceOverridesPatch !== undefined
       ? {

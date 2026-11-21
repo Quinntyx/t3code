@@ -114,7 +114,7 @@ export class SessionControl {
     if (!this.agentMayAct(agentId))
       return Promise.reject(
         new BrowserControlInterrupted({
-          message: "This tab is not owned by this thread's agent.",
+          message: "This tab belongs to another agent.",
           reason: "agentMismatch",
         }),
       );

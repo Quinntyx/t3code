@@ -1,10 +1,4 @@
-export type ComposerTriggerKind =
-  | "path"
-  | "pull-request"
-  | "slash-command"
-  | "slash-model"
-  | "skill"
-  | "thread";
+export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -14,18 +8,15 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
-/** A trigger read from the word at the cursor alone, without line-leading `/model` arguments. */
-export interface ComposerTokenTrigger extends ComposerTrigger {
-  kind: Exclude<ComposerTriggerKind, "slash-model">;
-}
-
 function composerFileLinkBasename(path: string): string {
   const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
 }
 
+// Emphasis markers too: `__init__.py` would otherwise render as bold "init.py",
+// which no longer matches the path, so the label shows beside the chip.
 function escapeMarkdownLinkLabel(label: string): string {
-  return label.replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]");
+  return label.replace(/[\\[\]*_]/g, "\\$&");
 }
 
 function encodeMarkdownLinkDestination(path: string): string {
@@ -51,8 +42,8 @@ function isWhitespace(char: string): boolean {
   return char === " " || char === "\n" || char === "\t" || char === "\r";
 }
 
-/** A second slash makes the whole word a path, even when the caret precedes that slash. */
-function isPathWord(
+/** A second slash or backslash makes the whole word a path, even when the caret precedes it. */
+export function isPathWord(
   text: string,
   wordStart: number,
   cursor: number,
@@ -62,7 +53,7 @@ function isPathWord(
   while (wordEnd < text.length && !isWhitespaceChar(text[wordEnd] ?? "")) {
     wordEnd += 1;
   }
-  return text.slice(wordStart + 1, wordEnd).includes("/");
+  return /[/\\]/.test(text.slice(wordStart + 1, wordEnd));
 }
 
 /**
@@ -70,8 +61,21 @@ function isPathWord(
  * token regexes already refuse to render as skills, plus the punctuation prose puts after
  * one (`$10k.`, `($5)`).
  */
-function isCurrencyAmountQuery(query: string): boolean {
+export function isCurrencyAmountQuery(query: string): boolean {
   return /^\.?[0-9][0-9,._]*(?:[kKmMbBtT]|[eE][0-9]+)?[.,;:!?)]*$/.test(query);
+}
+
+export function detectComposerPullRequestTrigger(token: string, cursor: number) {
+  if (/^[@\p{Sc}]/u.test(token)) return null;
+  const match = /(?:^|\p{Ps})#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
+  if (!match) return null;
+  const query = match[1] ?? "";
+  return {
+    kind: "pull-request" as const,
+    query,
+    rangeStart: cursor - query.length - 1,
+    rangeEnd: cursor,
+  };
 }
 
 export function detectComposerTrigger(
@@ -80,62 +84,16 @@ export function detectComposerTrigger(
   isWhitespaceChar?: (char: string) => boolean,
 ): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);
-  const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
-  const linePrefix = text.slice(lineStart, cursor);
-
-  if (linePrefix.startsWith("/")) {
-    const commandMatch = /^\/(\S*)$/.exec(linePrefix);
-    if (commandMatch && isPathWord(text, lineStart, cursor, isWhitespaceChar ?? isWhitespace)) {
-      return null;
-    }
-    if (commandMatch) {
-      const commandQuery = commandMatch[1] ?? "";
-      if (commandQuery.toLowerCase() === "model") {
-        return {
-          kind: "slash-model",
-          query: "",
-          rangeStart: lineStart,
-          rangeEnd: cursor,
-        };
-      }
-      return {
-        kind: "slash-command",
-        query: commandQuery,
-        rangeStart: lineStart,
-        rangeEnd: cursor,
-      };
-    }
-
-    const modelMatch = /^\/model(?:\s+(.*))?$/i.exec(linePrefix);
-    if (modelMatch) {
-      return {
-        kind: "slash-model",
-        query: (modelMatch[1] ?? "").trim(),
-        rangeStart: lineStart,
-        rangeEnd: cursor,
-      };
-    }
-  }
-
-  return detectComposerTokenTrigger(text, cursor, isWhitespaceChar);
-}
-
-/** The `/`, `#`, `%`, skill, or `@` trigger of the word that ends at the cursor. */
-export function detectComposerTokenTrigger(
-  text: string,
-  cursorInput: number,
-  isWhitespaceChar: (char: string) => boolean = isWhitespace,
-): ComposerTokenTrigger | null {
-  const cursor = clampCursor(text, cursorInput);
+  const wsCheck = isWhitespaceChar ?? isWhitespace;
   let tokenIdx = cursor - 1;
-  while (tokenIdx >= 0 && !isWhitespaceChar(text[tokenIdx] ?? "")) {
+  while (tokenIdx >= 0 && !wsCheck(text[tokenIdx] ?? "")) {
     tokenIdx -= 1;
   }
   const tokenStart = tokenIdx + 1;
 
   const token = text.slice(tokenStart, cursor);
   if (token.startsWith("/")) {
-    if (isPathWord(text, tokenStart, cursor, isWhitespaceChar)) return null;
+    if (isPathWord(text, tokenStart, cursor, wsCheck)) return null;
     return {
       kind: "slash-command",
       query: token.slice(1),
@@ -143,24 +101,8 @@ export function detectComposerTokenTrigger(
       rangeEnd: cursor,
     };
   }
-  const pullRequestMatch = /^#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
-  if (pullRequestMatch)
-    return {
-      kind: "pull-request",
-      query: pullRequestMatch[1] ?? "",
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
-  // A second `%` makes the word text, such as `%APPDATA%`.
-  const threadMatch = /^%([^%]*)$/u.exec(token);
-  if (threadMatch) {
-    return {
-      kind: "thread",
-      query: threadMatch[1] ?? "",
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
-  }
+  const pullRequestTrigger = detectComposerPullRequestTrigger(token, cursor);
+  if (pullRequestTrigger) return pullRequestTrigger;
   const skillPrefix = /^\p{Sc}/u.exec(token);
   if (skillPrefix) {
     if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;

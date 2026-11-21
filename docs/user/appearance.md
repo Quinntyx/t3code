@@ -21,27 +21,6 @@ Android uses **Material You Layout** by default unless you have turned it off in
 It changes shapes, spacing, and controls independently
 of the selected theme.
 
-## Liquid glass
-
-The experimental **Liquid glass** setting in **Settings → Appearance** bends the conversation and
-lists behind the composer, toolbars, and menus at their edges. It is available on desktop and web in
-Chromium browsers, and on Android 13 or newer. Blur, saturation, refraction, and dispersion sliders
-tune the effect; each device keeps its own values. It can increase GPU and battery use.
-
-The experimental **Ambient shimmer** setting drifts soft, never-repeating bands of your theme's
-colors behind the whole app on web and desktop. It is strongest on the new thread page and faint
-elsewhere, and gives liquid glass a backdrop to bend. It animates continuously, so it keeps the
-GPU busy and can cost battery; with reduced motion enabled it shows a still frame.
-
-## Floating panels
-
-Turn on **Floating panels** in **Settings → Appearance** to float the sidebar, right panel, and
-terminal drawer as rounded glass cards with a margin from the window edges, like the composer and
-thread details card. They slide in and out using the **Panel animations** duration, refract the
-backdrop when liquid glass is on, and show the ambient shimmer through them when that is on. The
-sidebar toggle and the panel toggles move into round bubbles in the window's bottom corners; hover
-the right bubble to reach the panel toggles. This applies to web and desktop.
-
 ## Composer context
 
 Git-backed projects show branch and worktree controls below the composer while you create a thread.
@@ -69,38 +48,36 @@ The main sidebar, right panel, and terminal drawer open and close immediately by
 in your operating system. Moving between threads always snaps to the selected thread's panel state
 without replaying its transitions.
 
-## Buddy
-
-Pick a buddy under **Settings → Appearance → Buddy** to add an animated companion that floats
-above the app. Clawd and Whale-chan ship with T3 Code, in the same format as a downloaded buddy
-— a `buddy.json` manifest beside its clips.
-
-It reacts to the agent in the thread you have open: thinking, running tools, juggling when
-subagents are working, waiting on an approval or answer, sweeping while the context compacts,
-carrying when a checkpoint lands, and finishing or failing a turn. Two or three threads running
-at once get busier clips. Leave the app alone and it drifts from a bored wander into a doze and
-then sleep, and wakes when you come back.
-
-Drag it anywhere on screen; it dangles while you drag, and you can click it to tease it. The
-choice and position are saved on each device. Buddies are not available in the mobile app, and
-Safari may show them on a solid background.
-
-### Buddy sources
-
-More buddies can come from git repositories instead of the app. A source is one folder per
-buddy, each holding a `buddy.json` manifest and its `.webm` clips. Add a repository under
-**Settings → Appearance → Buddy → Buddy sources**; T3 Code clones it with the same connections
-and credentials it uses for projects, then lists every buddy it finds.
-
-Sources are re-pulled when you open T3 Code, and **Reload** pulls immediately. A buddy from a
-source can be renamed, updated or removed there without reinstalling the app. Removing a source
-drops its buddies from the picker; the clone stays on disk until the server removes it.
-
 ## Custom themes
 
 On web and desktop, choose **Create theme** to adjust a palette, or import a T3 Code or VS Code
 theme. The theme editor's color picker lets you select an area of the app to find the color to
 change. Export your theme as JSON to share it.
+
+### Custom CSS
+
+For a change that colors cannot make, open **Custom CSS** in the theme editor. The CSS is saved with
+the theme, applies after T3 Code's own styles on web and desktop, and is included in exports. Use
+`.dark` or `:root:not(.dark)` to target one appearance.
+
+Custom CSS cannot load files. `@import`, `image-set()`, and `url()` are ignored, except `url()`
+with a `data:` address or an `#id`. This keeps an imported theme from sending what is on your screen
+to another site. For a full-size image, use a [background image](#background-image).
+
+Class names in the app change between releases. For rules that keep working, target `data-slot`
+and other `data-` attributes, such as `[data-chat-header]` or `[data-slot="button"]`.
+
+If a rule hides something you need, run `t3 theme set t3-chat` on the server to switch to a
+built-in theme, or press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to pick
+another theme.
+
+### Ask an agent
+
+An agent on the same machine as the server can restyle T3 Code for you. Ask it to change the look,
+for example "make T3 Code's chat header taller" or "give T3 Code a solarized theme". It publishes
+an [environment theme](#environment-themes) with colors and CSS, and web and desktop clients of that
+server switch to it. It can also switch them to light, dark, or system mode. The thread must run
+in Full access. Ask the agent to set a built-in theme to undo it.
 
 ## Environment themes
 
@@ -151,7 +128,22 @@ For an integration that generates a palette, this shorter format also works:
 
 Set `appearance` to `light` or `dark` and supply hex colors for `canvas` and `accent`. T3 Code
 generates the rest. The optional `colors` overrides use the names in the theme editor's advanced
-view.
+view. An optional `css` string adds [custom CSS](#custom-css).
 
 Write updates to a temporary file and rename it into place so clients never read a partial theme.
 Invalid files are not published.
+
+### Background image
+
+A published theme can have a full-size background image. Ask an agent, for example "use
+~/Pictures/wallpaper.jpg as T3 Code's background", or save a JPEG, PNG, or WebP file of up to
+16 MB beside the theme file: `nightfall.jpg` beside `nightfall.json`. The theme's CSS decides
+where the image shows:
+
+```css
+[data-workspace-area="conversation"] {
+  background: var(--theme-background-image) center / cover no-repeat;
+}
+```
+
+Delete the image file to remove it.

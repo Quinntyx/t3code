@@ -1,10 +1,11 @@
 import {
   isOrchestrationV2WorkActive,
-  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+
+import type { ThreadStructure } from "./models.ts";
 
 export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
 
@@ -34,7 +35,7 @@ export interface ThreadRelationshipWalkRow {
 }
 
 export function resolveMergeBackTargetThreadId(
-  projection: Pick<OrchestrationV2ThreadProjection, "thread"> | null,
+  projection: Pick<ThreadStructure, "thread"> | null,
 ): ThreadId | null {
   if (projection?.thread.lineage.relationshipToParent !== "fork") return null;
   return projection.thread.forkedFrom?.type === "run"
@@ -48,7 +49,7 @@ function edgeKey(edge: ThreadRelationshipEdge): string {
 
 export function deriveThreadRelationshipGraph(input: {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
-  readonly projection: OrchestrationV2ThreadProjection | null;
+  readonly projection: ThreadStructure | null;
 }): ThreadRelationshipGraph {
   const threadsById = new Map<ThreadId, OrchestrationV2ThreadShell>();
   for (const thread of input.threads) {
@@ -95,7 +96,7 @@ export function deriveThreadRelationshipGraph(input: {
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
       kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-      status: relationshipThreadStatus(thread),
+      status: thread.activityRunStatus ?? thread.status,
     });
   }
 
@@ -158,25 +159,6 @@ export function isParentThreadRelationship(
   return edge.kind !== "transfer" && edge.targetThreadId === currentThreadId;
 }
 
-/**
- * A thread's status for a relationship row. A failure the server retries is work, so the row
- * says stalled rather than failed; see presentThreadStall.
- */
-function relationshipThreadStatus(
-  thread:
-    | {
-        readonly activityRunStatus?: string | null | undefined;
-        readonly status?: string | null | undefined;
-        readonly stalled?: boolean | undefined;
-      }
-    | null
-    | undefined,
-): string | null {
-  if (thread == null) return null;
-  if (thread.stalled === true) return "stalled";
-  return thread.activityRunStatus ?? thread.status ?? null;
-}
-
 export function threadRelationshipRowStatus(
   graph: ThreadRelationshipGraph,
   row: Pick<ThreadRelationshipWalkRow, "threadId" | "edge">,
@@ -184,7 +166,8 @@ export function threadRelationshipRowStatus(
   if (row.edge.kind === "transfer" || row.threadId === row.edge.targetThreadId) {
     return row.edge.status;
   }
-  return relationshipThreadStatus(graph.nodes.get(row.threadId)?.thread);
+  const thread = graph.nodes.get(row.threadId)?.thread;
+  return thread?.activityRunStatus ?? thread?.status ?? null;
 }
 
 function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number | null {

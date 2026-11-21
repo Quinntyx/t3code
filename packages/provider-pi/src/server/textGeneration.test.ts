@@ -1,7 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -17,15 +16,16 @@ const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unk
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const makeFakePi = (
-  replies: string | ReadonlyArray<string>,
+  reply: string,
   setModelError?: string,
   turnEvents: ReadonlyArray<Record<string, unknown>> = [],
-) => {
-  const answers = typeof replies === "string" ? [replies] : replies;
-  return Effect.gen(function* () {
+  models?: ReadonlyArray<Record<string, unknown>>,
+  version = "0.84.3",
+  thinkingError?: string,
+) =>
+  Effect.gen(function* () {
     const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
     const received: Array<Record<string, unknown>> = [];
-    let textIndex = 0;
     const emit = (record: Record<string, unknown>) =>
       Queue.offer(stdout, new TextEncoder().encode(`${encodeJsonLine(record)}\n`));
     let buffered = "";
@@ -43,57 +43,55 @@ const makeFakePi = (
             for (const event of turnEvents) yield* emit(event);
             yield* emit({ type: "agent_settled" });
           } else if (record["type"] === "get_last_assistant_text") {
-            const reply = answers[textIndex++] ?? answers.at(-1) ?? "";
             yield* emit({ ...response, success: true, data: { text: reply } });
+          } else if (record["type"] === "get_available_models" && models !== undefined) {
+            yield* emit({ ...response, success: true, data: { models } });
           } else if (record["type"] === "set_model" && setModelError !== undefined) {
             yield* emit({ ...response, success: false, error: setModelError });
+          } else if (record["type"] === "set_thinking_level" && thinkingError !== undefined) {
+            yield* emit({ ...response, success: false, error: thinkingError });
           } else {
             yield* emit({ ...response, success: true });
           }
         }
       });
-    const spawner = ChildProcessSpawner.make(() =>
-      Effect.succeed(
+    const spawner = ChildProcessSpawner.make((command) => {
+      const versionProbe =
+        ChildProcess.isStandardCommand(command) && command.args.includes("--version");
+      return Effect.succeed(
         ChildProcessSpawner.makeHandle({
           // Outside the valid pid range, so PiRpc's process-group kill never lands.
           pid: ChildProcessSpawner.ProcessId(999_999_999),
-          exitCode: Effect.never,
+          exitCode: versionProbe ? Effect.succeed(ChildProcessSpawner.ExitCode(0)) : Effect.never,
           isRunning: Effect.succeed(true),
           kill: () => Effect.void,
           unref: Effect.succeed(Effect.void),
           stdin: Sink.forEach(onStdin),
-          stdout: Stream.fromQueue(stdout),
+          stdout: versionProbe
+            ? Stream.make(new TextEncoder().encode(version))
+            : Stream.fromQueue(stdout),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,
           getOutputFd: () => Stream.empty,
         }),
-      ),
-    );
+      );
+    });
     return { spawner, received };
   });
-};
 
 it.effect("runs Pi offline, since the process is stopped as soon as it answers", () =>
   Effect.gen(function* () {
     const pi = yield* makeFakePi(JSON.stringify({ subject: "Update README", body: "" }));
     const launches: Array<ReadonlyArray<string>> = [];
     const spawner = ChildProcessSpawner.make((command) => {
-      if (ChildProcess.isStandardCommand(command)) {
-        launches.push(command.args.map(String));
-        assert.equal(command.options.env?.["T3_TEST_PI_ENV"], "injected");
-      }
+      if (ChildProcess.isStandardCommand(command)) launches.push(command.args.map(String));
       return pi.spawner.spawn(command);
     });
-    const textGeneration = yield* makePiTextGeneration({
-      enabled: true,
-      binaryPath: "pi",
-      launchArgs: "",
-      customModels: [],
-    }).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(HostProcess.Environment, { T3_TEST_PI_ENV: "injected" }),
-    );
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
     const result = yield* textGeneration.generateCommitMessage({
       cwd: process.cwd(),
@@ -137,64 +135,32 @@ it.effect("names the model and the disabled extensions when Pi cannot load it", 
   }),
 );
 
-it.effect("asks Pi to repair a reply that has no JSON object", () =>
+it.effect("selects the provider and id Pi reported when the provider contains a slash", () =>
   Effect.gen(function* () {
-    const pi = yield* makeFakePi([
-      "I could not inspect the diff.",
-      '{"title":"Fix the empty reply","body":"Handles a reply with no JSON."}',
-    ]);
+    const provider = "llama-server=http://127.0.0.1:8080";
+    const pi = yield* makeFakePi(
+      JSON.stringify({ subject: "Update README", body: "" }),
+      undefined,
+      [],
+      [{ provider, id: "qwen3" }],
+    );
     const textGeneration = yield* makePiTextGeneration(
       { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
       {},
     ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
 
-    const result = yield* textGeneration.generatePrContent({
+    yield* textGeneration.generateCommitMessage({
       cwd: process.cwd(),
-      baseBranch: "main",
-      headBranch: "fix/demo",
-      commitSummary: "fix: handle an empty reply",
-      diffSummary: "1 file changed",
-      diffPatch: "diff --git a/README.md b/README.md",
-      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
+      branch: "main",
+      stagedSummary: "M README.md",
+      stagedPatch: "diff --git a/README.md b/README.md",
+      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), `${provider}/qwen3`),
     });
 
-    assert.equal(result.title, "Fix the empty reply");
-    const prompts = pi.received.filter((record) => record["type"] === "prompt");
-    assert.lengthOf(prompts, 2);
-    const repairPrompt = String(prompts[1]?.["message"]);
-    assert.include(repairPrompt, "the reply contained no JSON object");
-    assert.include(repairPrompt, "JSON Schema");
-  }),
-);
-
-it.effect("reports why the repaired reply also failed", () =>
-  Effect.gen(function* () {
-    const pi = yield* makeFakePi(["I could not inspect the diff.", "Still not JSON."]);
-    const textGeneration = yield* makePiTextGeneration(
-      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
-      {},
-    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
-
-    const error = yield* textGeneration
-      .generatePrContent({
-        cwd: process.cwd(),
-        baseBranch: "main",
-        headBranch: "fix/demo",
-        commitSummary: "fix: handle an empty reply",
-        diffSummary: "1 file changed",
-        diffPatch: "diff --git a/README.md b/README.md",
-        modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model"),
-      })
-      .pipe(Effect.flip);
-
-    assert.equal(error._tag, "TextGenerationError");
-    assert.include(
-      error.detail,
-      "Pi returned invalid structured output: the reply contained no JSON object (after one repair attempt).",
-    );
-    assert.lengthOf(
-      pi.received.filter((record) => record["type"] === "prompt"),
-      2,
+    const setModel = pi.received.find((record) => record["type"] === "set_model");
+    assert.deepEqual(
+      { provider: setModel?.["provider"], modelId: setModel?.["modelId"] },
+      { provider, modelId: "qwen3" },
     );
   }),
 );
@@ -263,5 +229,114 @@ it.effect("drops an earlier error once a later attempt succeeds", () =>
     ]).pipe(Effect.flip);
 
     assert.equal(error.detail, "Pi returned empty output.");
+  }),
+);
+
+it.effect.each([
+  { model: "demo/demo-model", thinking: "off", expected: "off", version: "0.84.3" },
+  { model: "demo/demo-model", thinking: "max", expected: "max", version: "1.4.0" },
+  { model: "demo/demo-model", thinking: "invalid", expected: undefined, version: "0.84.3" },
+  { model: "demo/demo-model", thinking: undefined, expected: undefined, version: "0.84.3" },
+  { model: "default", thinking: "off", expected: "off", version: "0.84.3" },
+  { model: "demo/demo-model", thinking: "low", expected: undefined, version: "0.84.2" },
+])(
+  "handles thinking=$thinking for $model on Pi $version",
+  ({ model, thinking, expected, version }) =>
+    Effect.gen(function* () {
+      const pi = yield* makeFakePi(
+        JSON.stringify({ subject: "Update README", body: "" }),
+        undefined,
+        [],
+        undefined,
+        version,
+      );
+      const textGeneration = yield* makePiTextGeneration(
+        { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+        {},
+        (_driver, detected) =>
+          Effect.succeed(
+            detected === "0.84.2"
+              ? {
+                  status: "broken" as const,
+                  message: null,
+                  recommendedVersion: null,
+                  recommendedRange: ">=1.0.0",
+                }
+              : undefined,
+          ),
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+      const generation = textGeneration.generateCommitMessage({
+        cwd: process.cwd(),
+        branch: "main",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("pi"),
+          model,
+          thinking === undefined ? [] : [{ id: "thinking", value: thinking }],
+        ),
+      });
+      if (version === "0.84.2") {
+        const error = yield* generation.pipe(Effect.flip);
+        assert.include(error.detail, "Pi 0.84.2 does not work");
+        assert.deepEqual(pi.received, []);
+        return;
+      }
+      const result = yield* generation;
+
+      assert.equal(result.subject, "Update README");
+      assert.deepEqual(
+        pi.received.map((record) => record["type"]),
+        [
+          ...(model === "default" ? [] : ["get_available_models", "set_model"]),
+          ...(expected === undefined ? [] : ["set_thinking_level"]),
+          "prompt",
+          "get_last_assistant_text",
+        ],
+      );
+      assert.equal(
+        pi.received.find((record) => record["type"] === "set_thinking_level")?.["level"],
+        expected,
+      );
+    }),
+);
+
+it.effect("generates at Pi's default level when Pi rejects the saved thinking level", () =>
+  Effect.gen(function* () {
+    const pi = yield* makeFakePi(
+      JSON.stringify({ subject: "Update README", body: "" }),
+      undefined,
+      [],
+      undefined,
+      "1.4.0",
+      'Thinking level "max" is not supported by demo/demo-model',
+    );
+    const textGeneration = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+
+    const result = yield* textGeneration.generateCommitMessage({
+      cwd: process.cwd(),
+      branch: "main",
+      stagedSummary: "M README.md",
+      stagedPatch: "diff --git a/README.md b/README.md",
+      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "demo/demo-model", [
+        { id: "thinking", value: "max" },
+      ]),
+    });
+
+    assert.equal(result.subject, "Update README");
+    assert.deepEqual(
+      pi.received.map((record) => record["type"]),
+      [
+        "get_available_models",
+        "set_model",
+        "set_thinking_level",
+        "prompt",
+        "get_last_assistant_text",
+      ],
+    );
   }),
 );

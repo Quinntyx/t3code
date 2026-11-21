@@ -4,8 +4,5 @@ export function shouldRecedeThreadRow(input: {
   readonly status: ThreadListV2Status;
   readonly selected: boolean;
 }): boolean {
-  return (
-    !input.selected &&
-    (input.status === "working" || input.status === "stalled" || input.status === "waiting")
-  );
+  return !input.selected && (input.status === "working" || input.status === "waiting");
 }

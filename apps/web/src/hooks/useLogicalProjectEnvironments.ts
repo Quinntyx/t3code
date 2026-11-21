@@ -1,5 +1,4 @@
 import { availableScratchWorkspaceRoot } from "@t3tools/client-runtime/operations/projects";
-import { matchingMachineHandoffProjects } from "@t3tools/client-runtime/handoff";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
@@ -20,7 +19,6 @@ import { useClientSettings } from "./useSettings";
 export function useLogicalProjectEnvironments(
   activeProject: EnvironmentProject | null,
   scratchDraft: boolean,
-  options?: { readonly machineHandoff: boolean },
 ): readonly EnvironmentOption[] {
   const { environments } = useEnvironments();
   const allProjects = useProjects();
@@ -61,15 +59,10 @@ export function useLogicalProjectEnvironments(
     }
   } else {
     const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
-    const projects = options?.machineHandoff
-      ? [activeProject, ...matchingMachineHandoffProjects(activeProject, allProjects)]
-      : allProjects.filter(
-          (project) =>
-            deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings) === logicalKey,
-        );
     const seen = new Set<string>();
-    for (const p of projects) {
+    for (const p of allProjects) {
       if (seen.has(p.environmentId)) continue;
+      if (deriveLogicalProjectKeyFromSettings(p, projectGroupingSettings) !== logicalKey) continue;
       seen.add(p.environmentId);
       pushEnvironment(p.environmentId, p.id);
     }

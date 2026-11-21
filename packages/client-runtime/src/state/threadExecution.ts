@@ -1,8 +1,8 @@
 import {
+  latestExecutedRun,
   latestRootProviderFailure,
+  latestRootProviderFailureItem,
   latestUnheldRun,
-  resumableContinuationRun,
-  stalledRun,
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -10,27 +10,24 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   latestProviderTurnForAttempt,
+  PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
   type OrchestrationV2NotificationSource,
   type OrchestrationV2PendingBackgroundTask,
-  type OrchestrationV2Goal,
+  type OrchestrationV2ProviderGoal,
   type OrchestrationV2ProviderSession,
   type ServerProvider,
   type ServerProviderModel,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2LimitRecovery,
-  isUpstreamOverloadFailure,
   type OrchestrationV2ThreadProjection,
   orchestrationV2RunWorkStartedAt,
   type RunId,
   type ThreadId,
-  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
-  findPullRequestForWatchTask,
-  waitingOnAgents,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   getModelSelectionStringOptionValue,
@@ -39,11 +36,11 @@ import {
   resolveSelectableModel,
   withLegacyUltracodeEffort,
 } from "@t3tools/shared/model";
+import { unsentManualContinuationSource } from "@t3tools/shared/orchestrationV2ManualContinuation";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
 import {
-  presentThreadStall,
   threadRuntimeIsActive,
   type ThreadRunSummary,
   type ThreadRuntimeSummary,
@@ -53,9 +50,14 @@ import {
 } from "./models.ts";
 import { commandDisplayText } from "../work-log/commandLabel.ts";
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
+import { mFallback, msg } from "gt-i18n";
+import { markedTextEnglish } from "../errors/translatable.ts";
+import type { MFunctionType } from "gt-i18n/types";
 
 const ACTIVITY_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const INTERRUPTIBLE_RUN_STATUSES = new Set(["preparing", "starting", "running"]);
+// Preparing runs show their workspace setup instead.
+const PROVIDER_STARTING_RUN_STATUSES = new Set(["starting", "running"]);
 
 const EMPTY_EXTENSION_STATUSES: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]> =
   [];
@@ -109,6 +111,21 @@ function latestMatchingRun(
   );
 }
 
+function providerStarting(
+  projection: ThreadStructure,
+  run: OrchestrationV2ThreadProjection["runs"][number],
+): Pick<ThreadRunSummary, "providerStartingLabel" | "providerStartingLabelMsg"> {
+  const driver = projection.providerSessions.findLast(
+    (session) => session.providerInstanceId === run.providerInstanceId,
+  )?.driver;
+  const name = driver === undefined ? undefined : PROVIDER_DISPLAY_NAMES[driver];
+  const label =
+    name === undefined
+      ? msg("Starting", { $context: "a provider is launching" })
+      : msg("Starting {provider}", { provider: name });
+  return { providerStartingLabel: markedTextEnglish([label]), providerStartingLabelMsg: label };
+}
+
 function summarizeThreadRun(
   projection: ThreadStructure,
   run: OrchestrationV2ThreadProjection["runs"][number],
@@ -126,9 +143,15 @@ function summarizeThreadRun(
       projection.messages.findLast(
         (message) => message.runId === run.id && message.role === "assistant",
       )?.id ?? null,
-    ...(turnStatus === undefined || turnStatus === "pending" || turnStatus === "running"
-      ? {}
-      : { turnEnded: true }),
+    // A run counts as running before its provider opens; until a turn appears,
+    // the provider can still be launching for minutes.
+    ...(turnStatus === undefined
+      ? PROVIDER_STARTING_RUN_STATUSES.has(run.status)
+        ? providerStarting(projection, run)
+        : {}
+      : turnStatus === "pending" || turnStatus === "running"
+        ? {}
+        : { turnEnded: true }),
     ...(run.sourcePlanRef === undefined ? {} : { sourcePlanRef: run.sourcePlanRef }),
   };
 }
@@ -261,23 +284,24 @@ export function formatSubagentEffort(input: {
 }
 
 const SUBAGENT_STATUS_LABELS: Record<OrchestrationV2ExecutionNode["status"], string> = {
-  idle: "Idle",
-  pending: "Working",
-  running: "Working",
-  waiting: "Waiting",
-  completed: "Completed",
-  interrupted: "Interrupted",
-  failed: "Failed",
-  cancelled: "Cancelled",
-  rolled_back: "Cancelled",
+  idle: msg("Idle"),
+  pending: msg("Working"),
+  running: msg("Working"),
+  waiting: msg("Waiting"),
+  completed: msg("Completed"),
+  interrupted: msg("Interrupted"),
+  failed: msg("Failed"),
+  cancelled: msg("Cancelled"),
+  rolled_back: msg("Cancelled"),
 };
 
 export function formatProviderSubagentStatus(
   status: ProviderSubagentStatus | null,
   nowMs: number,
+  resolve: MFunctionType = mFallback,
 ): string {
-  if (status === null) return "Starting";
-  const label = SUBAGENT_STATUS_LABELS[status.status];
+  if (status === null) return resolve(msg("Starting"));
+  const label = resolve(SUBAGENT_STATUS_LABELS[status.status]);
   const live = isOrchestrationV2WorkActive(status.status);
   if (!live && status.status !== "completed") return label;
   const start = status.startedAt === null ? Number.NaN : Date.parse(status.startedAt);
@@ -288,12 +312,61 @@ export function formatProviderSubagentStatus(
       : Date.parse(status.completedAt);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return label;
   const elapsed = formatDuration(Math.max(1_000, Math.floor((end - start) / 1_000) * 1_000));
-  return live ? `${label} ${elapsed}` : `${label} in ${elapsed}`;
+  return live
+    ? resolve(msg("{label} {elapsed}", { label, elapsed }))
+    : resolve(msg("{label} in {elapsed}", { label, elapsed }));
 }
 
 /** The run a manual continuation resumes; the server holds the queue until it does. */
-export function deriveResumableRunId(projection: Pick<ThreadStructure, "runs">): RunId | null {
-  return resumableContinuationRun(projection.runs)?.id ?? null;
+export function deriveResumableRunId(
+  projection: Pick<
+    ThreadStructure,
+    "runs" | "turnItems" | "attempts" | "providerTurns" | "providerThreads" | "providerSessions"
+  >,
+  runtime: Pick<ThreadStructureRuntime, "lastErrorClass"> | null,
+): RunId | null {
+  const run = latestExecutedRun(projection.runs);
+  const resumable =
+    run?.status === "interrupted" ||
+    (run?.status === "failed" &&
+      runtime?.lastErrorClass === "usage_limit" &&
+      latestRootProviderFailure(run, projection.turnItems)?.class === "usage_limit");
+  if (!resumable) return null;
+  // Without native resume the server can only resend a message the provider never received.
+  if (
+    runProviderSession(projection, run)?.capabilities.turns.supportsNativeResume === false &&
+    unsentManualContinuationSource({ manualContinuationOfRunId: run.id }, projection) === undefined
+  ) {
+    return null;
+  }
+  return run.id;
+}
+
+function runProviderSession(
+  projection: Pick<ThreadStructure, "providerThreads" | "providerSessions">,
+  run: ThreadStructure["runs"][number],
+) {
+  const sessionId = projection.providerThreads.find(
+    (thread) => thread.id === run.providerThreadId,
+  )?.providerSessionId;
+  return sessionId == null
+    ? projection.providerSessions.findLast(
+        (session) => session.providerInstanceId === run.providerInstanceId,
+      )
+    : projection.providerSessions.find((session) => session.id === sessionId);
+}
+
+/**
+ * Whether Resume can start: the run's continuation, else the held queue. The server refuses that
+ * continuation while any request is pending, so the queue must not be released in its place.
+ */
+export function canResumeThread(
+  projection: Pick<ThreadStructure, "runtimeRequests">,
+  resumableRunId: RunId | null,
+  queueHeld: boolean,
+): boolean {
+  if (resumableRunId === null) return queueHeld;
+  return !projection.runtimeRequests.some((request) => request.status === "pending");
 }
 
 export function deriveThreadRuntime(
@@ -314,55 +387,33 @@ export function deriveThreadStructureRuntime(
     (session) => session.providerInstanceId === projection.thread.providerInstanceId,
   );
   const usageLimitedRun = presentedUsageLimitRun(projection);
-  const capHit = projection.thread.consumptionCapHit ?? null;
   const latestRunProjection = presentedLatestRun(projection);
   const activityRun = deriveThreadActivityRun(projection);
   const liveActivityRun = latestMatchingRun(projection, (run) =>
     ACTIVITY_RUN_STATUSES.has(run.status),
   );
-  const pendingBackgroundTasks = derivePendingBackgroundWork({
-    latestRun: latestRunProjection,
-    providerThreads: projection.providerThreads,
-    turnItems: projection.turnItems,
-    activeProviderThreadId: projection.thread.activeProviderThreadId,
-    runs: projection.runs,
-    pullRequests: projection.thread.pullRequests,
-    awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
-    threadWatches: projection.thread.threadWatches,
-  });
-  const backgroundWorkHoldsRun = backgroundWorkHoldsCompletion(pendingBackgroundTasks);
-  const agentsHoldRun = waitingOnAgents({ pendingBackgroundTasks });
+  const backgroundWorkHoldsRun = backgroundWorkHoldsCompletion(
+    derivePendingBackgroundWork({
+      latestRun: latestRunProjection,
+      providerThreads: projection.providerThreads,
+      turnItems: projection.turnItems,
+      activeProviderThreadId: projection.thread.activeProviderThreadId,
+      runs: projection.runs,
+      pullRequests: projection.thread.pullRequests,
+    }),
+  );
   // A pull request watch can hold a thread that never ran.
-  if (
-    latestRun === null &&
-    projection.thread.activeProviderThreadId === null &&
-    !backgroundWorkHoldsRun &&
-    capHit === null
-  ) {
-    return null;
-  }
+  if (latestRun === null && !backgroundWorkHoldsRun) return null;
   const activeRunId =
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
-  const stalledRunId =
-    capHit === null ? (stalledRun(projection.runs, projection.turnItems)?.id ?? null) : null;
-  const stalled = presentThreadStall({
-    stalled: stalledRunId !== null,
-    runId: stalledRunId,
-    recovery: projection.thread.stallRecovery,
-  });
+  const failureItem = latestRootProviderFailureItem(latestRunProjection, projection.turnItems);
+  const sessionError = providerSession?.lastError ?? null;
   return {
-    // Active subagents/workflows keep the thread parked in Working (Delegating) and intentionally
-    // defer the usage-limit recovery notice until delegated work settles (unless cap-blocked).
-    status:
-      capHit !== null
-        ? "failed"
-        : agentsHoldRun
-          ? "idle"
-          : usageLimitedRun
-            ? "failed"
-            : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
-              ? "idle"
-              : (activityRun?.status ?? "idle"),
+    status: usageLimitedRun
+      ? "failed"
+      : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
+        ? "idle"
+        : (activityRun?.status ?? "idle"),
     activeRunId,
     activityStartedAt:
       liveActivityRun === null
@@ -370,22 +421,47 @@ export function deriveThreadStructureRuntime(
         : DateTime.formatIso(orchestrationV2RunWorkStartedAt(liveActivityRun)),
     providerInstanceId: projection.thread.providerInstanceId,
     providerName: providerSession?.driver ?? null,
-    ...(capHit === null
-      ? threadErrorSummary(
-          latestRootProviderFailure(latestRunProjection, projection.turnItems),
-          providerSession?.lastError ?? null,
-        )
-      : {
-          lastError: capHit.reason,
-          lastErrorClass: "usage_limit" as const,
-          lastErrorCode: "consumption_cap",
-          usageLimitResetAt: null,
-        }),
-    ...stalled,
+    ...threadErrorSummary(failureItem?.failure ?? null, sessionError),
+    lastErrorSource: threadErrorSource(failureItem, sessionError, projection),
   };
 }
 
-export interface NoticeRows {
+const isoOrEmpty = (at: DateTime.Utc | null) => (at === null ? "" : DateTime.formatIso(at));
+
+/**
+ * A session error belongs to the latest ended run, as that run's failure when the text matches.
+ * Session timestamps are not used: providers rewrite them on unrelated updates.
+ */
+function threadErrorSource(
+  failureItem: ReturnType<typeof latestRootProviderFailureItem>,
+  sessionError: string | null,
+  projection: Pick<ThreadStructure, "runs" | "turnItems">,
+): string | null {
+  const itemSource = (item: NonNullable<typeof failureItem>) =>
+    `${item.id}@${isoOrEmpty(item.completedAt)}`;
+  if (
+    failureItem !== null &&
+    (sessionError === null || sessionError === failureItem.failure.message)
+  ) {
+    return itemSource(failureItem);
+  }
+  if (sessionError === null) return null;
+  let ended: ThreadStructure["runs"][number] | null = null;
+  for (const run of projection.runs) {
+    if (run.status !== "failed" && run.status !== "completed") continue;
+    if (ended === null || run.ordinal > ended.ordinal) ended = run;
+  }
+  if (ended === null) return null;
+  const endedFailure =
+    failureItem?.runId === ended.id
+      ? failureItem
+      : latestRootProviderFailureItem(ended, projection.turnItems);
+  return endedFailure?.failure.message === sessionError
+    ? itemSource(endedFailure)
+    : `${ended.id}@${isoOrEmpty(ended.completedAt)}`;
+}
+
+export interface UsageLimitNoticeRows {
   readonly itemIds: ReadonlySet<ThreadStructureTurnItem["id"]>;
   /** Hidden only when its text reads as the provider's limit message; see PROVIDER_LIMIT_NOTICE. */
   readonly providerNoticeItemId: ThreadStructureTurnItem["id"] | null;
@@ -400,7 +476,9 @@ const PROVIDER_LIMIT_NOTICE =
  * limit failure, Claude's pause notices, and the provider's own limit message. They return to
  * history once another run executes.
  */
-export function deriveUsageLimitNoticeRows(projection: ThreadStructure): NoticeRows | null {
+export function deriveUsageLimitNoticeRows(
+  projection: ThreadStructure,
+): UsageLimitNoticeRows | null {
   const runtime = deriveThreadStructureRuntime(projection);
   const run = presentedLatestRun(projection);
   if (runtime?.status !== "failed" || runtime.lastErrorClass !== "usage_limit" || run === null) {
@@ -448,7 +526,7 @@ export function deriveUsageLimitNoticeRows(projection: ThreadStructure): NoticeR
 
 export function withoutUsageLimitNoticeRows<
   Row extends OrchestrationV2ThreadProjection["visibleTurnItems"][number],
->(rows: ReadonlyArray<Row>, notice: NoticeRows | null): ReadonlyArray<Row> {
+>(rows: ReadonlyArray<Row>, notice: UsageLimitNoticeRows | null): ReadonlyArray<Row> {
   if (notice === null) return rows;
   const hidden = ({ item }: Row) =>
     notice.itemIds.has(item.id) ||
@@ -456,61 +534,6 @@ export function withoutUsageLimitNoticeRows<
       item.type === "assistant_message" &&
       PROVIDER_LIMIT_NOTICE.test(item.text.trim()));
   return rows.some(hidden) ? rows.filter((row) => !hidden(row)) : rows;
-}
-
-/**
- * The timeline rows that repeat an outage while its retry notice shows: the server's own retry
- * message for each attempt, and the overload failure of every run in the chain. They return to
- * history once the thread leaves the stalled state.
- */
-export function deriveStallNoticeRows(projection: ThreadStructure): NoticeRows | null {
-  const runtime = deriveThreadStructureRuntime(projection);
-  const stalled = stalledRun(projection.runs, projection.turnItems);
-  if (runtime?.stalled !== true || stalled === null) return null;
-  // Follow the retry chain back, so an outage that stalled three times folds as one.
-  const runsById = new Map(projection.runs.map((run) => [run.id, run]));
-  const chain = new Set<RunId>([stalled.id]);
-  const retryRunIds = new Set<RunId>();
-  for (let run = stalled; run.stallContinuationOfRunId !== undefined;) {
-    const previous = runsById.get(run.stallContinuationOfRunId);
-    if (previous === undefined || chain.has(previous.id)) break;
-    chain.add(previous.id);
-    retryRunIds.add(run.id);
-    run = previous;
-  }
-  const itemIds = new Set<ThreadStructureTurnItem["id"]>();
-  for (const item of projection.turnItems) {
-    if (item.runId === null || !chain.has(item.runId)) continue;
-    if (
-      item.type === "error" &&
-      item.status === "failed" &&
-      // Each attempt's overload is a root failure of its own run.
-      item.parentItemId === null &&
-      isUpstreamOverloadFailure(item.failure)
-    ) {
-      itemIds.add(item.id);
-      continue;
-    }
-    // The server's own prompt for a retry arrives as its "resumed" notice; the user sent nothing.
-    if (
-      item.type === "notification" &&
-      item.parentItemId === null &&
-      item.source.kind === "system" &&
-      retryRunIds.has(item.runId)
-    ) {
-      itemIds.add(item.id);
-    }
-  }
-  return { itemIds, providerNoticeItemId: null };
-}
-
-export function withoutStallNoticeRows<
-  Row extends OrchestrationV2ThreadProjection["visibleTurnItems"][number],
->(rows: ReadonlyArray<Row>, notice: NoticeRows | null): ReadonlyArray<Row> {
-  if (notice === null || notice.itemIds.size === 0) return rows;
-  return rows.some(({ item }) => notice.itemIds.has(item.id))
-    ? rows.filter(({ item }) => !notice.itemIds.has(item.id))
-    : rows;
 }
 
 /** Whether a usage-limit recovery holds the thread's snooze, so its notice offers Wake now. */
@@ -546,12 +569,28 @@ type BackgroundWorkKind = OrchestrationV2PendingBackgroundTask["kind"];
 
 const BACKGROUND_WORK_KINDS: Record<
   BackgroundWorkKind,
-  { readonly order: number; readonly singular: string; readonly plural: string }
+  { readonly order: number; readonly singular: string; readonly count: string }
 > = {
-  subagent: { order: 0, singular: "subagent", plural: "subagents" },
-  command: { order: 1, singular: "command", plural: "commands" },
-  monitor: { order: 2, singular: "monitor", plural: "monitors" },
-  background_task: { order: 3, singular: "background task", plural: "background tasks" },
+  subagent: {
+    order: 0,
+    singular: msg("subagent"),
+    count: msg("{count, plural, one {{count} subagent} other {{count} subagents}}"),
+  },
+  command: {
+    order: 1,
+    singular: msg("command"),
+    count: msg("{count, plural, one {{count} command} other {{count} commands}}"),
+  },
+  monitor: {
+    order: 2,
+    singular: msg("monitor"),
+    count: msg("{count, plural, one {{count} monitor} other {{count} monitors}}"),
+  },
+  background_task: {
+    order: 3,
+    singular: msg("background task"),
+    count: msg("{count, plural, one {{count} background task} other {{count} background tasks}}"),
+  },
 };
 
 export interface RunStopPresentation {
@@ -607,8 +646,6 @@ export interface PendingBackgroundWorkItem {
   readonly taskId: string;
   readonly kind: BackgroundWorkKind;
   readonly label: string;
-  /** False when the label is only the kind's noun, such as "command". */
-  readonly named: boolean;
   readonly childThreadId: ThreadId | undefined;
 }
 
@@ -618,9 +655,11 @@ export interface PendingBackgroundWorkPresentation {
   readonly waiting: boolean;
 }
 
-function joinWithAnd(parts: ReadonlyArray<string>): string {
+function joinWithAnd(parts: ReadonlyArray<string>, resolve: MFunctionType): string {
   if (parts.length <= 1) return parts.join("");
-  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return resolve(
+    msg("{items} and {last}", { items: parts.slice(0, -1).join(", "), last: parts.at(-1)! }),
+  );
 }
 
 // The Claude adapter forces a stuck query closed after 10 seconds.
@@ -645,6 +684,7 @@ export function isBackgroundWorkStopPending(
 
 export function presentPendingBackgroundWork(
   tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+  resolve: MFunctionType = mFallback,
 ): PendingBackgroundWorkPresentation | null {
   if (tasks.length === 0) return null;
   const waiting = backgroundWorkHoldsCompletion(tasks);
@@ -659,18 +699,14 @@ export function presentPendingBackgroundWork(
             : task.kind === "command" || task.kind === "monitor"
               ? commandDisplayText(description)
               : description;
-      const named = label !== undefined && label.length > 0;
       return {
         taskId: task.taskId,
         kind: task.kind,
-        label: named ? label : BACKGROUND_WORK_KINDS[task.kind].singular,
-        named,
-        childThreadId:
-          task.kind === "subagent"
-            ? task.childThreadId
-            : task.kind === "monitor"
-              ? task.watchedThreadId
-              : undefined,
+        label:
+          label === undefined || label.length === 0
+            ? resolve(BACKGROUND_WORK_KINDS[task.kind].singular)
+            : label,
+        childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
       };
     })
     // `map` returned a new array; Hermes has no `toSorted`.
@@ -680,88 +716,47 @@ export function presentPendingBackgroundWork(
     );
   const [only] = items;
   if (items.length === 1 && only !== undefined) {
-    const noun = BACKGROUND_WORK_KINDS[only.kind].singular;
-    const title = only.named
-      ? `${waiting ? "Waiting" : "Running"} · ${only.label}`
-      : waiting
-        ? `Waiting on a ${noun}`
-        : `Running a ${noun}`;
+    const noun = resolve(BACKGROUND_WORK_KINDS[only.kind].singular);
+    const named = only.label !== noun;
+    const title = named
+      ? waiting
+        ? resolve(msg("Waiting · {label}", { label: only.label }))
+        : resolve(msg("Running · {label}", { label: only.label }))
+      : backgroundWorkSingleTitle(only.kind, waiting, resolve);
     return { title, items, waiting };
   }
   const counts = new Map<BackgroundWorkKind, number>();
   for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
-  const groups = Array.from(counts, ([kind, count]) => {
-    const { singular, plural } = BACKGROUND_WORK_KINDS[kind];
-    return `${count} ${count === 1 ? singular : plural}`;
-  });
-  return { title: `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}`, items, waiting };
+  const groups = joinWithAnd(
+    Array.from(counts, ([kind, count]) => resolve(BACKGROUND_WORK_KINDS[kind].count, { count })),
+    resolve,
+  );
+  return {
+    title: waiting
+      ? resolve(msg("Waiting on {groups}", { groups }))
+      : resolve(msg("Running {groups}", { groups })),
+    items,
+    waiting,
+  };
 }
 
-export function backgroundCommandOutputFile(output: string | undefined): string | null {
-  const path = output?.match(/Output is being written to: (\S+?)(?:\.(?=\s|$)|$)/u)?.[1];
-  return path || null;
-}
-
-export function followOutputFileCommand(path: string): string {
-  return `tail -n +1 -F '${path.replaceAll("'", "'\\''")}'`;
-}
-
-export interface BackgroundWorkDetail {
-  readonly item: PendingBackgroundWorkItem;
-  readonly awaited: boolean;
-  readonly turnItem: ThreadStructure["turnItems"][number] | undefined;
-  readonly command: string | null;
-  readonly isRawCommand: boolean;
-  readonly outputFile: string | null;
-  readonly startedAtMs: number | null;
-  readonly updatedAtMs: number;
-  readonly activity: string | null;
-  readonly childThreadId: ThreadId | undefined;
-  readonly pullRequest: ThreadPullRequestLink | undefined;
-}
-
-export function deriveBackgroundWorkDetails(input: {
-  readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
-  readonly turnItems: ThreadStructure["turnItems"];
-  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
-}): {
-  readonly presentation: PendingBackgroundWorkPresentation;
-  readonly details: ReadonlyArray<BackgroundWorkDetail>;
-} | null {
-  const presentation = presentPendingBackgroundWork(input.tasks);
-  if (presentation === null) return null;
-  const tasksById = new Map(input.tasks.map((task) => [task.taskId, task]));
-  const details = presentation.items.map((item): BackgroundWorkDetail => {
-    const task = tasksById.get(item.taskId);
-    const itemId = task?.itemId;
-    const nativeKey = task?.nativeItemId ?? item.taskId;
-    const turnItem =
-      itemId !== undefined
-        ? input.turnItems.findLast((candidate) => candidate.id === itemId)
-        : input.turnItems.findLast(
-            (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === nativeKey,
-          );
-    const subagent = turnItem?.type === "subagent" ? turnItem : undefined;
-    const commandItem = turnItem?.type === "command_execution" ? turnItem : undefined;
-    const command = commandItem?.input.trim() || task?.command?.trim() || null;
-    return {
-      item,
-      awaited: task?.awaited === true,
-      turnItem,
-      command,
-      isRawCommand: command !== null && commandDisplayText(command) === item.label,
-      outputFile: backgroundCommandOutputFile(commandItem?.output),
-      startedAtMs: turnItem?.startedAt ? DateTime.toEpochMillis(turnItem.startedAt) : null,
-      updatedAtMs:
-        turnItem !== undefined && "updatedAt" in turnItem
-          ? DateTime.toEpochMillis(turnItem.updatedAt)
-          : 0,
-      activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
-      childThreadId: item.childThreadId ?? subagent?.childThreadId ?? undefined,
-      pullRequest: findPullRequestForWatchTask(item.taskId, input.pullRequests),
-    };
-  });
-  return { presentation, details };
+function backgroundWorkSingleTitle(
+  kind: BackgroundWorkKind,
+  waiting: boolean,
+  resolve: MFunctionType,
+): string {
+  switch (kind) {
+    case "subagent":
+      return waiting ? resolve(msg("Waiting on a subagent")) : resolve(msg("Running a subagent"));
+    case "command":
+      return waiting ? resolve(msg("Waiting on a command")) : resolve(msg("Running a command"));
+    case "monitor":
+      return waiting ? resolve(msg("Waiting on a monitor")) : resolve(msg("Running a monitor"));
+    case "background_task":
+      return waiting
+        ? resolve(msg("Waiting on a background task"))
+        : resolve(msg("Running a background task"));
+  }
 }
 
 export interface ProviderGoalPresentation {
@@ -771,13 +766,13 @@ export interface ProviderGoalPresentation {
   readonly canResume: boolean;
 }
 
-const PROVIDER_GOAL_TITLES: Record<OrchestrationV2Goal["status"], string> = {
-  active: "Pursuing goal",
-  paused: "Goal paused",
-  blocked: "Goal blocked",
-  usage_limited: "Goal hit a usage limit",
-  budget_limited: "Goal reached its token budget",
-  complete: "Goal complete",
+const PROVIDER_GOAL_TITLES: Record<OrchestrationV2ProviderGoal["status"], string> = {
+  active: msg("Pursuing goal"),
+  paused: msg("Goal paused"),
+  blocked: msg("Goal blocked"),
+  usage_limited: msg("Goal hit a usage limit"),
+  budget_limited: msg("Goal reached its token budget"),
+  complete: msg("Goal complete"),
 };
 
 function formatGoalTokens(tokens: number): string {
@@ -788,25 +783,38 @@ function formatGoalTokens(tokens: number): string {
 }
 
 export function presentProviderGoal(
-  goal: OrchestrationV2Goal,
+  goal: OrchestrationV2ProviderGoal,
   working: boolean,
+  resolve: MFunctionType = mFallback,
 ): ProviderGoalPresentation {
   const usage: Array<string> = [];
   if (goal.tokensUsed !== undefined && goal.tokensUsed > 0) {
     usage.push(
       goal.tokenBudget == null
-        ? `${formatGoalTokens(goal.tokensUsed)} tokens`
-        : `${formatGoalTokens(goal.tokensUsed)} / ${formatGoalTokens(goal.tokenBudget)} tokens`,
+        ? resolve(msg("{used} tokens", { used: formatGoalTokens(goal.tokensUsed) }))
+        : resolve(
+            msg("{used} / {budget} tokens", {
+              used: formatGoalTokens(goal.tokensUsed),
+              budget: formatGoalTokens(goal.tokenBudget),
+            }),
+          ),
     );
   }
   if (goal.timeUsedSeconds !== undefined && goal.timeUsedSeconds >= 60) {
     usage.push(formatDuration(goal.timeUsedSeconds * 1_000));
   }
   if (goal.checks !== undefined && goal.checks > 0) {
-    usage.push(`${goal.checks} ${goal.checks === 1 ? "check" : "checks"}`);
+    usage.push(
+      resolve(
+        msg("{count, plural, one {{count} check} other {{count} checks}}", { count: goal.checks }),
+      ),
+    );
   }
   return {
-    title: goal.status === "active" && !working ? "Goal set" : PROVIDER_GOAL_TITLES[goal.status],
+    title:
+      goal.status === "active" && !working
+        ? resolve(msg("Goal set"))
+        : resolve(PROVIDER_GOAL_TITLES[goal.status]),
     objective: goal.objective,
     usage: usage.length === 0 ? null : usage.join(" · "),
     canResume: goal.status !== "active" && goal.status !== "complete",

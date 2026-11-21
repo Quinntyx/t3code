@@ -7,12 +7,11 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
+import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { threadListItemFromShell } from "../../threadListItem.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   dispatchFailure,
@@ -21,6 +20,8 @@ import {
   readThread,
   unavailable,
 } from "../../threadAccess.ts";
+import type * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
@@ -50,6 +51,20 @@ const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
     .dispatch(command({ commandId: yield* newCommandId(), threadId: projection.thread.id }))
     .pipe(Effect.mapError(dispatchFailure));
   return { sequence: result.sequence };
+});
+
+/**
+ * Places an agent pin at the top of the Pinned section, as a client pin is placed.
+ * Without a key the sidebar sorts the pin below every keyed pin. Ordering is
+ * best effort: if the index cannot be read, the pin still lands, keyless.
+ */
+const topOfPinnedRunKey = Effect.fn("mcp.topOfPinnedRunKey")(function* (
+  threads: Pick<ThreadManagement.ThreadManagementService["Service"], "listActiveShellIndex">,
+) {
+  const index = yield* threads.listActiveShellIndex().pipe(Effect.orElseSucceed(() => null));
+  if (index === null) return undefined;
+  const pinnedKeys = index.flatMap((entry) => (entry.pinnedAt == null ? [] : [entry.pinOrderKey]));
+  return topOfPinnedRunOrderKey(pinnedKeys) ?? undefined;
 });
 
 const readQuestion = Effect.fn("mcp.readQuestion")(function* (input: {
@@ -93,23 +108,6 @@ const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A,
 ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
 
 export const layer = McpToolAccess.toLayer(ThreadToolkit, {
-  notify_voice: McpToolAccess.writesThreads(
-    () => [undefined],
-    (input) =>
-      Effect.gen(function* () {
-        const { threads, projection } = yield* readThread(undefined);
-        yield* threads
-          .dispatch({
-            type: "thread.notify-voice",
-            commandId: yield* newCommandId(),
-            threadId: projection.thread.id,
-            message: input.message,
-            urgency: input.urgency,
-          })
-          .pipe(Effect.mapError(dispatchFailure));
-        return { recorded: true as const };
-      }),
-  ),
   run_scheduled_task_now: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
@@ -137,6 +135,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               link: McpInvocationContext.threadLinkFor(scope, threadId),
             }),
         lastRunStatus: task.lastRunStatus,
+        lastRunError: task.lastRunError,
         runCount: task.runCount,
         nextRunAt: task.nextRunAt,
       };
@@ -144,32 +143,19 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   t3_thread_search: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { caller, scope, threads } = yield* readCaller();
+      const { caller } = yield* readCaller();
+      const scope = yield* McpInvocationContext.McpInvocationContext;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
-      const nowMs = yield* Clock.currentTimeMillis;
       const { matches } = yield* threadSearch
         .searchThreads({ ...input, projectId: input.projectId ?? caller?.projectId })
         .pipe(Effect.mapError(unavailable));
-      const items = yield* Effect.forEach(
-        matches,
-        (match) =>
-          Effect.gen(function* () {
-            const shell = yield* threads
-              .getThreadShell(match.threadId)
-              .pipe(Effect.mapError(unavailable));
-            if (shell === null || shell.deletedAt !== null) return null;
-            return {
-              ...threadListItemFromShell(scope, shell, nowMs),
-              source: match.source,
-              ...(match.snippet === undefined ? {} : { snippet: match.snippet }),
-              ...(match.messageCreatedAt === undefined
-                ? {}
-                : { messageCreatedAt: match.messageCreatedAt }),
-            };
-          }),
-        { concurrency: 10 },
-      );
-      return { matches: items.filter((item) => item !== null) };
+      return {
+        currentThreadId: scope.thread?.threadId ?? null,
+        matches: matches.map((match) => ({
+          ...match,
+          link: McpInvocationContext.threadLinkFor(scope, match.threadId, match.title),
+        })),
+      };
     }),
   ),
   t3_thread_transfer: McpToolAccess.either(
@@ -301,7 +287,16 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     (input) => input.action === "list" || input.action === "read",
     McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
+        const { threads, projection: queued } = yield* readThread(input.threadId, ["runs"], {
+          runStatuses: ["queued"],
+        });
+        const messages = yield* threads
+          .getMessagesById(
+            queued.thread.id,
+            queued.runs.map((run) => run.userMessageId),
+          )
+          .pipe(Effect.mapError(unavailable));
+        const projection = { runs: queued.runs, messages: [...messages.values()] };
         if (input.action === "list") {
           const runs = queuedRunsInDeliveryOrder(projection);
           const cursor = input.cursor ?? 0;
@@ -330,12 +325,26 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         switch (input.action) {
           case "edit": {
             const text = yield* required(input.text, "text");
-            return yield* dispatch(input.threadId, (common) => ({
-              ...common,
+            const { threads, projection } = yield* readThread(input.threadId);
+            // An agent must not turn a person's queued message into a provider sign-out.
+            const command = yield* ThreadMessageIntake.withQueuedAttachmentsOnSignOutText({
               type: "queued-run.edit",
+              commandId: yield* newCommandId(),
+              threadId: projection.thread.id,
               runId,
               text,
-            }));
+            }).pipe(
+              Effect.mapError((error) =>
+                error._tag === "EnvironmentAuthorizationError"
+                  ? new OrchestratorMcpFailure({
+                      code: "invalid_request",
+                      message: "A queued message cannot be edited into a provider sign-out.",
+                    })
+                  : dispatchFailure(error),
+              ),
+            );
+            const result = yield* threads.dispatch(command).pipe(Effect.mapError(dispatchFailure));
+            return { sequence: result.sequence };
           }
           case "reorder": {
             const beforeRunId = yield* required(input.beforeRunId, "beforeRunId");
@@ -365,28 +374,6 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       }),
     ),
   ),
-  t3_goal: writesThread((input) =>
-    Effect.gen(function* () {
-      const { projection, caller } = yield* readThread(input.threadId);
-      if (projection.thread.goal == null)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: "This thread has no goal.",
-        });
-      // The agent working on a goal reports what blocks it; only the review closes the goal.
-      if (input.action === "complete" && caller?.id === projection.thread.id)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message:
-            'A goal is closed by its review, not by the agent working on it. Report what is missing with action "blocked" instead.',
-        });
-      return yield* dispatch(input.threadId, (common) => ({
-        ...common,
-        type: "thread.goal.update",
-        goal: { status: input.action === "complete" ? "complete" : "blocked" },
-      }));
-    }),
-  ),
   t3_thread_organize: writesThread((input) =>
     Effect.gen(function* () {
       const { threads, projection, caller } = yield* readThread(input.threadId);
@@ -414,6 +401,14 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         case "mark_unread":
           command = { ...common, type: "thread.mark-unread" };
           break;
+        case "pin": {
+          // Always send a key, as the client does: the reducer ignores it for a
+          // thread that is already pinned, and a projection read before this
+          // command can be stale if an unpin commits in between.
+          const orderKey = yield* topOfPinnedRunKey(threads);
+          command = { ...common, type: "thread.pin", ...(orderKey ? { orderKey } : {}) };
+          break;
+        }
         default:
           command = { ...common, type: `thread.${input.action}` };
       }

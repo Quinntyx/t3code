@@ -1,7 +1,6 @@
 import type { SDKControlGetUsageResponse, SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
 import type {
   ProviderUsageLimitsUpdate,
-  ServerProviderUsageAmount,
   ServerProviderUsageLimits,
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
@@ -48,8 +47,20 @@ export const makeClaudeScopedLimitNames = Ref.make<ClaudeScopedLimitNames>({
   overageIncluded: undefined,
 });
 
+const SCOPED_WINDOW_PREFIX = "seven_day_";
+const scopeToken = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+
 function scopedWindowId(displayName: string): string {
-  return `seven_day_${displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+  return `${SCOPED_WINDOW_PREFIX}${scopeToken(displayName)}`;
+}
+
+/** A model-scoped weekly allowance blocks only its own model; an unknown model is not blocked. */
+export function windowLimitsModel(
+  window: Pick<ServerProviderUsageWindow, "id">,
+  model: string | null,
+): boolean {
+  if (!window.id.startsWith(SCOPED_WINDOW_PREFIX)) return true;
+  return model !== null && scopeToken(model).includes(window.id.slice(SCOPED_WINDOW_PREFIX.length));
 }
 
 function scopedWindow(
@@ -82,9 +93,7 @@ function percentFromAmounts(used: number | null | undefined, limit: number | nul
   return Number.isFinite(percent) ? clampPercent(percent) : undefined;
 }
 
-const readSpend = (
-  rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>,
-): { readonly usedPercent: number; readonly amount?: ServerProviderUsageAmount } | undefined => {
+function readSpendPercent(rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>) {
   const spend = Option.getOrUndefined(
     decodeSpendBudget((rateLimits as { readonly spend?: unknown }).spend),
   );
@@ -96,46 +105,16 @@ const readSpend = (
     spend.used.exponent === spend.limit.exponent
   ) {
     const percent = percentFromAmounts(spend.used.amount_minor, spend.limit.amount_minor);
-    if (percent !== undefined) {
-      const used = spend.used.amount_minor / 10 ** spend.used.exponent;
-      const limit = spend.limit.amount_minor / 10 ** spend.limit.exponent;
-      return {
-        usedPercent: percent,
-        amount: {
-          currency: spend.used.currency.trim().toLowerCase(),
-          used,
-          limit,
-          remaining: Math.max(0, limit - used),
-        },
-      };
-    }
+    if (percent !== undefined) return percent;
   }
 
   const extra = rateLimits.extra_usage;
   if (extra?.is_enabled !== true) return undefined;
   const percent = percentFromAmounts(extra.used_credits, extra.monthly_limit) ?? extra.utilization;
-  if (typeof percent !== "number" || !Number.isFinite(percent) || percent < 0) return undefined;
-  // `decimal_places` ships in responses ahead of the SDK typings we pin.
-  const decimals = (extra as { readonly decimal_places?: unknown }).decimal_places;
-  const currency = extra.currency?.trim().toLowerCase();
-  if (
-    !currency ||
-    typeof decimals !== "number" ||
-    !Number.isInteger(decimals) ||
-    decimals < 0 ||
-    typeof extra.used_credits !== "number" ||
-    typeof extra.monthly_limit !== "number" ||
-    percentFromAmounts(extra.used_credits, extra.monthly_limit) === undefined
-  ) {
-    return { usedPercent: clampPercent(percent) };
-  }
-  const used = extra.used_credits / 10 ** decimals;
-  const limit = extra.monthly_limit / 10 ** decimals;
-  return {
-    usedPercent: clampPercent(percent),
-    amount: { currency, used, limit, remaining: Math.max(0, limit - used) },
-  };
-};
+  return typeof percent === "number" && Number.isFinite(percent) && percent >= 0
+    ? clampPercent(percent)
+    : undefined;
+}
 
 /**
  * `model_scoped` shipped in the CLI after the SDK typings we pin, so it is
@@ -234,18 +213,21 @@ export function claudeUsageResponseToLimits(input: {
     );
     overageIncluded ??= entry.display_name;
   }
-  const spend = readSpend(response.rate_limits);
-  if (spend !== undefined) {
+  const spendPercent = readSpendPercent(response.rate_limits);
+  const extra = response.rate_limits.extra_usage;
+  if (spendPercent !== undefined) {
     windows.push({
       id: "monthly_spend",
       kind: "monthly",
       label: "Monthly spend",
-      usedPercent: spend.usedPercent,
-      ...(spend.amount ? { amount: spend.amount } : {}),
+      usedPercent: spendPercent,
     });
   }
   return {
-    limits: makeUsageLimits({ checkedAt, windows }),
+    limits: {
+      ...makeUsageLimits({ checkedAt, windows }),
+      ...(extra?.is_enabled && extra.monthly_limit === 0 ? { zeroSpendCap: true } : {}),
+    },
     names: { overageIncluded },
   };
 }

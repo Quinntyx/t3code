@@ -18,6 +18,8 @@ export interface UsageRecord {
   readonly rateModel?: string;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
+  /** The part of `totals.cacheCreationTokens` written with a 1-hour TTL. */
+  readonly cacheCreation1hTokens?: number;
   readonly reportedCostUsd: number | null;
   readonly speed: UsageSpeed;
   readonly unresolvedServiceTierTurnId?: string;
@@ -44,44 +46,6 @@ export function totalTokens(totals: UsageTokenTotals): number {
 
 export function tokenCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
-}
-
-/** Input/cache buckets are disjoint; reasoning is already part of output. */
-export function normalizeUsageTokens(
-  usage: {
-    readonly inputTokens?: unknown;
-    readonly outputTokens?: unknown;
-    readonly cachedInputTokens?: unknown;
-    readonly cacheCreationTokens?: unknown;
-    readonly reasoningTokens?: unknown;
-  },
-  inputKind: "inclusive" | "uncached",
-): UsageTokenTotals {
-  const cacheRead = tokenCount(usage.cachedInputTokens);
-  const cacheWrite = tokenCount(usage.cacheCreationTokens);
-  const reasoningTokens = tokenCount(usage.reasoningTokens);
-  // Partial counters still account for measured subsets when the inclusive total is absent.
-  const inputTokens =
-    inputKind === "inclusive" && usage.inputTokens === undefined
-      ? cacheRead + cacheWrite
-      : tokenCount(usage.inputTokens);
-  const cachedInputTokens = Math.min(inputKind === "inclusive" ? inputTokens : Infinity, cacheRead);
-  const cacheCreationTokens = Math.min(
-    inputKind === "inclusive" ? inputTokens - cachedInputTokens : Infinity,
-    cacheWrite,
-  );
-  const outputTokens =
-    usage.outputTokens === undefined ? reasoningTokens : tokenCount(usage.outputTokens);
-  return {
-    uncachedInputTokens:
-      inputKind === "inclusive"
-        ? inputTokens - cachedInputTokens - cacheCreationTokens
-        : inputTokens,
-    cachedInputTokens,
-    cacheCreationTokens,
-    outputTokens,
-    reasoningTokens: Math.min(outputTokens, reasoningTokens),
-  };
 }
 
 export function parseTimestampMs(value: unknown): number | null {
@@ -141,27 +105,41 @@ export interface ProviderUsageScanInput<Config> {
   readonly awaitRefresh: boolean;
 }
 
+interface ProviderUsageRateModel {
+  /**
+   * The rate-table name for a model ID this provider records with a separate `rateModel`, so
+   * usage mapped onto that ID prices like the provider's own records of it.
+   */
+  readonly rateModel?: (model: string) => string;
+}
+
 export type ProviderUsageReader<Config, R> =
-  | {
+  | (ProviderUsageRateModel & {
       readonly kind: "transcripts";
       readonly provider: UsageProviderKind;
       readonly format: TranscriptUsageFormat<unknown>;
       readonly resolveServiceTiers?: (
         records: readonly UsageRecord[],
       ) => Effect.Effect<ReadonlyMap<UsageRecord, UsageSpeed>, never, R>;
+      /** A `refreshing` entry is not scanned; it reports its source as still being located. */
       readonly directories: (
         instance: ProviderUsageInstance<Config>,
+        options: { readonly awaitRefresh: boolean },
       ) => Effect.Effect<
-        ReadonlyArray<{ readonly dir: string; readonly fileName?: string }>,
+        ReadonlyArray<{
+          readonly dir: string;
+          readonly fileName?: string;
+          readonly refreshing?: true;
+        }>,
         never,
         R
       >;
-    }
-  | {
+    })
+  | (ProviderUsageRateModel & {
       readonly kind: "scan";
       readonly provider: UsageProviderKind;
       /** Fails only when the whole usage read cannot go on; an unreadable source is a status. */
       readonly scan: (
         input: ProviderUsageScanInput<Config>,
       ) => Effect.Effect<ReadonlyArray<ProviderUsageScan>, UsageReadError, R>;
-    };
+    });

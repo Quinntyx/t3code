@@ -5,7 +5,7 @@ import { build } from "vite-plus";
 
 const mobileRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 
-async function buildWebViewScript(feature: string, name: string) {
+async function generateWebViewScript(feature: string, name: string) {
   const stem = `${name.toLowerCase()}-stream`;
   const result = await build({
     configFile: false,
@@ -26,15 +26,10 @@ async function buildWebViewScript(feature: string, name: string) {
     .flatMap((bundle) => ("output" in bundle ? bundle.output : []))
     .find((output) => output.type === "chunk");
   if (!chunk) throw new Error(`${name} build did not emit a script.`);
-  return { stem, code: chunk.code };
-}
-
-async function generateWebViewScript(feature: string, name: string) {
-  const { stem, code } = await buildWebViewScript(feature, name);
   const root = NodePath.join(mobileRoot, ".generated", stem);
   await NodeFSP.mkdir(root, { recursive: true });
   for (const [file, contents] of [
-    ["index.js", `module.exports = ${JSON.stringify(code)};\n`],
+    ["index.js", `module.exports = ${JSON.stringify(chunk.code)};\n`],
     ["package.json", '{"main":"index.js"}\n'],
   ] as const) {
     const destination = NodePath.join(root, file);
@@ -42,10 +37,6 @@ async function generateWebViewScript(feature: string, name: string) {
     if (previous !== contents) await NodeFSP.writeFile(destination, contents);
   }
 }
-
-/** The same IIFE the generated module ships, for a test that executes it. */
-export const buildPreviewStreamScript = async () =>
-  (await buildWebViewScript("browser", "Preview")).code;
 
 export const generateDeviceStreamScript = () => generateWebViewScript("devices", "Device");
 export const generatePreviewStreamScript = () => generateWebViewScript("browser", "Preview");

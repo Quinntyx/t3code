@@ -11,7 +11,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { GlassBackdrop, useLiquidGlassActive } from "../../../components/ui/GlassBackdrop";
 import { useAndroidControlSizing } from "../../../components/ui/useAndroidControlSizing";
 import { useToolbarLayout } from "../../../components/ui/useToolbarLayout";
 import { rootNavigationRef } from "../../../lib/rootNavigation";
@@ -67,8 +66,6 @@ export function AndroidWorkspaceNavigation(props: {
   readonly onNewThread: () => void;
   readonly rail?: boolean;
   readonly floating?: boolean;
-  /** Only where a LiquidGlassTarget sits under the floating bar. */
-  readonly glass?: boolean;
   readonly fillWidth?: boolean;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;
@@ -90,7 +87,6 @@ export function AndroidWorkspaceNavigation(props: {
   const window = useWindowDimensions();
   const rail = Boolean(props.rail);
   const floating = !rail && Boolean(props.floating);
-  const glass = useLiquidGlassActive() && floating && Boolean(props.glass);
   const tabs = [...visibleNavigationTabs(order, hidden, rail ? 5 : 4), "settings"];
   const { containerColor, indicatorColor, selectedColor, unselectedColor } =
     androidWorkspaceNavigationColors(colors, rail, floating);
@@ -120,15 +116,6 @@ export function AndroidWorkspaceNavigation(props: {
             : { backgroundColor: containerColor, paddingBottom: insets.bottom }
       }
     >
-      {glass ? (
-        <View
-          pointerEvents="none"
-          className="absolute overflow-hidden rounded-full border border-border"
-          style={{ inset: FLOATING_TABS.shadow }}
-        >
-          <GlassBackdrop />
-        </View>
-      ) : null}
       <NativeNavigation
         rail={rail}
         floating={floating}
@@ -140,7 +127,7 @@ export function AndroidWorkspaceNavigation(props: {
         safeAreaTop={toolbar.paddingTop}
         safeAreaBottom={insets.bottom}
         headerHeight={toolbar.height}
-        containerColor={glass ? 0 : nativeColor(containerColor)}
+        containerColor={nativeColor(containerColor)}
         selectedColor={nativeColor(selectedColor)}
         indicatorColor={nativeColor(indicatorColor)}
         unselectedColor={nativeColor(unselectedColor)}
@@ -186,7 +173,6 @@ export function AndroidWorkspaceNavigation(props: {
 
 export function FloatingWorkspaceTabs(props: {
   readonly fillWidth?: boolean;
-  readonly glass?: boolean;
   readonly onNewThread: () => void;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;

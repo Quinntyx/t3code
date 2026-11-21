@@ -148,118 +148,6 @@ export const PreviewStreamHostSetup = Schema.Struct({
 export type PreviewStreamHostSetup = typeof PreviewStreamHostSetup.Type;
 export const PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE = 4503;
 
-/** WebCodecs strings the stream can encode, preferred first; clients send the ones they decode. */
-export const PREVIEW_STREAM_VIDEO_CODECS = ["avc1.42E034", "vp8"] as const;
-
-/** The only audio codec the stream sends; a viewer opts in by sending `audio=opus`. */
-export const PREVIEW_STREAM_AUDIO_CODECS = ["opus"] as const;
-/** Opus packets are plain Opus, so a decoder needs only these fixed parameters. */
-export const PREVIEW_STREAM_AUDIO_SAMPLE_RATE = 48_000;
-export const PREVIEW_STREAM_AUDIO_CHANNELS = 1;
-
-// A JPEG frame starts with 0xFF, so these first bytes mark the binary message as video.
-const VIDEO_KEY_FRAME = 1;
-const VIDEO_DELTA_FRAME = 2;
-/** The first byte of an audio message; a viewer routes on it before decoding the rest. */
-export const PREVIEW_STREAM_AUDIO_FRAME_TAG = 3;
-
-/**
- * Audio carries the capture clock so a viewer can keep a page's own pauses: tag, generation,
- * sequence, source timestamp, then one Opus packet.
- */
-const PREVIEW_STREAM_AUDIO_HEADER_BYTES = 17;
-
-export interface PreviewStreamAudioFrame {
-  /** Bumped by the server whenever the capture that produces packets restarts. */
-  readonly generation: number;
-  /** Monotonic per generation; a viewer drops anything it has already played. */
-  readonly sequence: number;
-  /** Source clock in microseconds, taken from the encoded frame itself. */
-  readonly timestampMicros: number;
-  readonly data: Uint8Array;
-}
-
-export type PreviewStreamFrame =
-  | { readonly type: "jpeg"; readonly data: Uint8Array }
-  | {
-      readonly type: "key";
-      readonly codec: string;
-      readonly width: number;
-      readonly height: number;
-      readonly data: Uint8Array;
-    }
-  | { readonly type: "delta"; readonly data: Uint8Array }
-  | ({ readonly type: "audio" } & PreviewStreamAudioFrame);
-
-export const encodePreviewStreamVideoFrame = (
-  frame: Exclude<PreviewStreamFrame, { readonly type: "jpeg" | "audio" }>,
-): Uint8Array => {
-  if (frame.type === "delta") {
-    const bytes = new Uint8Array(1 + frame.data.byteLength);
-    bytes[0] = VIDEO_DELTA_FRAME;
-    bytes.set(frame.data, 1);
-    return bytes;
-  }
-  const codec = new TextEncoder().encode(frame.codec);
-  const header = 6 + codec.byteLength;
-  const bytes = new Uint8Array(header + frame.data.byteLength);
-  const view = new DataView(bytes.buffer);
-  bytes[0] = VIDEO_KEY_FRAME;
-  view.setUint16(1, frame.width);
-  view.setUint16(3, frame.height);
-  bytes[5] = codec.byteLength;
-  bytes.set(codec, 6);
-  bytes.set(frame.data, header);
-  return bytes;
-};
-
-export const encodePreviewStreamAudioFrame = (frame: PreviewStreamAudioFrame): Uint8Array => {
-  const bytes = new Uint8Array(PREVIEW_STREAM_AUDIO_HEADER_BYTES + frame.data.byteLength);
-  const view = new DataView(bytes.buffer);
-  bytes[0] = PREVIEW_STREAM_AUDIO_FRAME_TAG;
-  view.setUint32(1, frame.generation);
-  view.setUint32(5, frame.sequence);
-  // Two unsigned words rather than a double: they keep the header aligned and decode simply.
-  view.setUint32(9, Math.floor(frame.timestampMicros / 2 ** 32));
-  view.setUint32(13, frame.timestampMicros % 2 ** 32);
-  bytes.set(frame.data, PREVIEW_STREAM_AUDIO_HEADER_BYTES);
-  return bytes;
-};
-
-const decodePreviewStreamAudioFrame = (bytes: Uint8Array): PreviewStreamAudioFrame | null => {
-  if (
-    bytes[0] !== PREVIEW_STREAM_AUDIO_FRAME_TAG ||
-    bytes.byteLength < PREVIEW_STREAM_AUDIO_HEADER_BYTES
-  )
-    return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  return {
-    generation: view.getUint32(1),
-    sequence: view.getUint32(5),
-    timestampMicros: view.getUint32(9) * 2 ** 32 + view.getUint32(13),
-    data: bytes.subarray(PREVIEW_STREAM_AUDIO_HEADER_BYTES),
-  };
-};
-
-export const decodePreviewStreamFrame = (bytes: Uint8Array): PreviewStreamFrame | null => {
-  if (bytes[0] === PREVIEW_STREAM_AUDIO_FRAME_TAG) {
-    const audio = decodePreviewStreamAudioFrame(bytes);
-    return audio === null ? null : { type: "audio", ...audio };
-  }
-  if (bytes[0] === VIDEO_DELTA_FRAME) return { type: "delta", data: bytes.subarray(1) };
-  if (bytes[0] !== VIDEO_KEY_FRAME) return bytes[0] === 0xff ? { type: "jpeg", data: bytes } : null;
-  if (bytes.byteLength < 6) return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const header = 6 + bytes[5]!;
-  return {
-    type: "key",
-    width: view.getUint16(1),
-    height: view.getUint16(3),
-    codec: new TextDecoder().decode(bytes.subarray(6, header)),
-    data: bytes.subarray(header),
-  };
-};
-
 export const PreviewSessionSnapshot = Schema.Struct({
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
@@ -287,6 +175,8 @@ export const PreviewOpenInput = Schema.Struct({
   viewport: Schema.optional(PreviewViewportSetting),
   profileId: Schema.optional(BrowserProfileId),
   runtime: Schema.optional(PreviewRuntime),
+  colorScheme: Schema.optional(PreviewAppearancePreference),
+  zoomFactor: Schema.optional(PreviewZoomFactor),
   reveal: Schema.optional(Schema.Boolean),
 });
 export type PreviewOpenInput = typeof PreviewOpenInput.Type;
@@ -341,27 +231,6 @@ export const PreviewClearProfileInput = Schema.Struct({
   profileId: BrowserProfileId,
 });
 export type PreviewClearProfileInput = typeof PreviewClearProfileInput.Type;
-
-/** "software" rasterizes on the CPU, "auto" lets Chromium pick, anything else is a GPU's `id`. */
-export const ServerBrowserGpu = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128));
-export type ServerBrowserGpu = typeof ServerBrowserGpu.Type;
-export const DEFAULT_SERVER_BROWSER_GPU = "software";
-export const ServerBrowserRenderScale = Schema.Literals([1, 1.5, 2, 3]);
-export type ServerBrowserRenderScale = typeof ServerBrowserRenderScale.Type;
-export const DEFAULT_SERVER_BROWSER_RENDER_SCALE: ServerBrowserRenderScale = 2;
-
-export const ServerBrowserGpuDevice = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  driver: Schema.NullOr(Schema.String),
-});
-export type ServerBrowserGpuDevice = typeof ServerBrowserGpuDevice.Type;
-
-export const ServerBrowserGpuList = Schema.Struct({
-  /** Only Linux can pin a GPU; elsewhere the choice is software or automatic. */
-  gpus: Schema.Array(ServerBrowserGpuDevice),
-});
-export type ServerBrowserGpuList = typeof ServerBrowserGpuList.Type;
 
 export const PreviewListInput = Schema.Struct({
   threadId: ThreadId,

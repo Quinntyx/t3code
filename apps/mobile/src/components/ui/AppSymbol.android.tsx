@@ -1,6 +1,7 @@
 import type { Icon } from "@tabler/icons-react-native/types";
 /* Package-root imports eagerly register the entire Tabler icon set in Metro. */
 import IconAdjustmentsHorizontal from "@tabler/icons-react-native/IconAdjustmentsHorizontal";
+import IconAlarm from "@tabler/icons-react-native/IconAlarm";
 import IconAlignLeft from "@tabler/icons-react-native/IconAlignLeft";
 import IconAlertCircle from "@tabler/icons-react-native/IconAlertCircle";
 import IconAlertTriangle from "@tabler/icons-react-native/IconAlertTriangle";
@@ -23,7 +24,6 @@ import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2"
 import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
 import IconBan from "@tabler/icons-react-native/IconBan";
 import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
-import IconBlur from "@tabler/icons-react-native/IconBlur";
 import IconBolt from "@tabler/icons-react-native/IconBolt";
 import IconBox from "@tabler/icons-react-native/IconBox";
 import IconBrain from "@tabler/icons-react-native/IconBrain";
@@ -41,7 +41,6 @@ import IconCircleFilled from "@tabler/icons-react-native/IconCircleFilled";
 import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
 import IconCircleDashed from "@tabler/icons-react-native/IconCircleDashed";
 import IconCircleDot from "@tabler/icons-react-native/IconCircleDot";
-import IconCircleHalf2 from "@tabler/icons-react-native/IconCircleHalf2";
 import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
 import IconMoodPlus from "@tabler/icons-react-native/IconMoodPlus";
 import IconTag from "@tabler/icons-react-native/IconTag";
@@ -50,7 +49,6 @@ import IconClock from "@tabler/icons-react-native/IconClock";
 import IconClipboard from "@tabler/icons-react-native/IconClipboard";
 import IconCode from "@tabler/icons-react-native/IconCode";
 import IconCopy from "@tabler/icons-react-native/IconCopy";
-import IconDropletHalf2 from "@tabler/icons-react-native/IconDropletHalf2";
 import IconDatabase from "@tabler/icons-react-native/IconDatabase";
 import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
 import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
@@ -67,6 +65,7 @@ import IconFileText from "@tabler/icons-react-native/IconFileText";
 import IconFileDiff from "@tabler/icons-react-native/IconFileDiff";
 import IconFilter from "@tabler/icons-react-native/IconFilter";
 import IconFilterFilled from "@tabler/icons-react-native/IconFilterFilled";
+import IconFlask from "@tabler/icons-react-native/IconFlask";
 import IconFolder from "@tabler/icons-react-native/IconFolder";
 import IconFolderOpen from "@tabler/icons-react-native/IconFolderOpen";
 import IconHeadphones from "@tabler/icons-react-native/IconHeadphones";
@@ -83,7 +82,6 @@ import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
 import IconKeyboard from "@tabler/icons-react-native/IconKeyboard";
 import IconKeyboardHide from "@tabler/icons-react-native/IconKeyboardHide";
 import IconLock from "@tabler/icons-react-native/IconLock";
-import IconMail from "@tabler/icons-react-native/IconMail";
 import IconLayoutColumns from "@tabler/icons-react-native/IconLayoutColumns";
 import IconLayoutSidebar from "@tabler/icons-react-native/IconLayoutSidebar";
 import IconLayoutSidebarRight from "@tabler/icons-react-native/IconLayoutSidebarRight";
@@ -94,12 +92,13 @@ import IconListNumbers from "@tabler/icons-react-native/IconListNumbers";
 import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
 import IconMessageCircleQuestion from "@tabler/icons-react-native/IconMessageCircleQuestion";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
+import IconMail from "@tabler/icons-react-native/IconMail";
+import IconMessageDots from "@tabler/icons-react-native/IconMessageDots";
 import IconMessagePlus from "@tabler/icons-react-native/IconMessagePlus";
 import IconMinus from "@tabler/icons-react-native/IconMinus";
 import IconMoon from "@tabler/icons-react-native/IconMoon";
 import IconNetwork from "@tabler/icons-react-native/IconNetwork";
 import IconPalette from "@tabler/icons-react-native/IconPalette";
-import IconPrism from "@tabler/icons-react-native/IconPrism";
 import IconPencil from "@tabler/icons-react-native/IconPencil";
 import IconPlug from "@tabler/icons-react-native/IconPlug";
 import IconPhoto from "@tabler/icons-react-native/IconPhoto";
@@ -111,18 +110,17 @@ import IconPlayerStopFilled from "@tabler/icons-react-native/IconPlayerStopFille
 import IconPlus from "@tabler/icons-react-native/IconPlus";
 import IconQrcode from "@tabler/icons-react-native/IconQrcode";
 import IconRefresh from "@tabler/icons-react-native/IconRefresh";
+import IconRobot from "@tabler/icons-react-native/IconRobot";
 import IconSearch from "@tabler/icons-react-native/IconSearch";
 import IconShare from "@tabler/icons-react-native/IconShare";
 import IconServer from "@tabler/icons-react-native/IconServer";
 import IconSettings from "@tabler/icons-react-native/IconSettings";
-import IconSparkles from "@tabler/icons-react-native/IconSparkles";
 import IconStack2 from "@tabler/icons-react-native/IconStack2";
 import IconStar from "@tabler/icons-react-native/IconStar";
 import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
 import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
 import IconSun from "@tabler/icons-react-native/IconSun";
 import IconShieldQuestion from "@tabler/icons-react-native/IconShieldQuestion";
-import IconTable from "@tabler/icons-react-native/IconTable";
 import IconTarget from "@tabler/icons-react-native/IconTarget";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
@@ -133,8 +131,6 @@ import IconTypography from "@tabler/icons-react-native/IconTypography";
 import IconDownload from "@tabler/icons-react-native/IconDownload";
 import IconSitemap from "@tabler/icons-react-native/IconSitemap";
 import IconUpload from "@tabler/icons-react-native/IconUpload";
-import IconVolumeOff from "@tabler/icons-react-native/IconVolumeOff";
-import IconVolume2 from "@tabler/icons-react-native/IconVolume2";
 import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
 import IconUserCheck from "@tabler/icons-react-native/IconUserCheck";
 import IconUserX from "@tabler/icons-react-native/IconUserX";
@@ -146,6 +142,7 @@ import IconWifiOff from "@tabler/icons-react-native/IconWifiOff";
 import IconWorld from "@tabler/icons-react-native/IconWorld";
 import IconX from "@tabler/icons-react-native/IconX";
 import type { AndroidSymbol, SFSymbol, SymbolViewProps } from "expo-symbols";
+import { StyleSheet, View } from "react-native";
 import { withUniwind } from "uniwind";
 
 const ANDROID_ICON_BY_SF_SYMBOL = {
@@ -153,6 +150,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "git.pull-request.closed": IconGitPullRequestClosed,
   "git.pull-request.draft": IconGitPullRequestDraft,
   "git.commit": IconGitCommit,
+  "git.issue": IconCircleDot,
   "arrow.branch": IconGitBranch,
   "arrow.left": IconArrowLeft,
   "arrow.right": IconArrowRight,
@@ -193,6 +191,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "circle.inset.filled": IconCircleDot,
   "circle.dashed.inset.filled": IconCircleDot,
   "calendar.badge.clock": IconCalendarClock,
+  alarm: IconAlarm,
   clock: IconClock,
   timer: IconClock,
   "face.smiling": IconMoodPlus,
@@ -213,10 +212,12 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   ellipsis: IconDots,
   moon: IconMoon,
   "ellipsis.circle": IconDotsCircleHorizontal,
+  "envelope.badge": IconMail,
   "exclamationmark.triangle": IconAlertTriangle,
   "exclamationmark.circle": IconAlertCircle,
   eye: IconEye,
   "eye.slash": IconEyeOff,
+  flask: IconFlask,
   folder: IconFolder,
   "folder.badge.plus": IconFolderPlus,
   "folder.fill": IconFolder,
@@ -283,11 +284,10 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "exclamationmark.shield": IconShieldQuestion,
   "bubble.left.and.bubble.right": IconMessage,
   "bubble.left": IconMessage,
-  sparkles: IconSparkles,
   "plus.bubble": IconMessagePlus,
-  tablecells: IconTable,
+  "ellipsis.bubble": IconMessageDots,
+  robot: IconRobot,
   "text.word.spacing": IconLetterSpacing,
-  textformat: IconTypography,
   "textformat.size": IconTypography,
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,
@@ -296,27 +296,35 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   trash: IconTrash,
   wifi: IconWifi,
   "wifi.slash": IconWifiOff,
+  "wrench.and.screwdriver": IconTool,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
-  "aqi.medium": IconBlur,
-  "circle.lefthalf.filled": IconCircleHalf2,
-  "drop.halffull": IconDropletHalf2,
-  rainbow: IconPrism,
 } satisfies Partial<
   Record<
-    SFSymbol | "git.pull-request.closed" | "git.pull-request.draft" | "git.commit" | "file.diff",
+    | SFSymbol
+    | "git.pull-request.closed"
+    | "git.pull-request.draft"
+    | "git.commit"
+    | "git.issue"
+    | "file.diff"
+    | "robot",
     Icon
   >
 >;
 const SF_ICON_LOOKUP: Partial<
   Record<
-    SFSymbol | "git.pull-request.closed" | "git.pull-request.draft" | "git.commit" | "file.diff",
+    | SFSymbol
+    | "git.pull-request.closed"
+    | "git.pull-request.draft"
+    | "git.commit"
+    | "git.issue"
+    | "file.diff"
+    | "robot",
     Icon
   >
 > = ANDROID_ICON_BY_SF_SYMBOL;
 
 const ANDROID_ICON_BY_MATERIAL_NAME = {
-  auto_awesome: IconSparkles,
   bolt: IconBolt,
   build: IconTool,
   chat: IconMessage,
@@ -336,7 +344,6 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   keyboard_arrow_up: IconChevronUp,
   keyboard_hide: IconKeyboardHide,
   lock: IconLock,
-  mail: IconMail,
   more_vert: IconDotsVertical,
   merge: IconGitMerge,
   psychology: IconBrain,
@@ -345,8 +352,6 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   smartphone: IconDeviceMobile,
   terminal: IconTerminal2,
   visibility: IconEye,
-  volume_up: IconVolume2,
-  volume_off: IconVolumeOff,
 } satisfies Partial<Record<AndroidSymbol, Icon>>;
 
 export type { SFSymbol } from "expo-symbols";
@@ -374,16 +379,20 @@ function AppSymbolView(props: AppSymbolViewProps) {
     return props.fallback ?? null;
   }
 
-  return (
+  // react-native-svg applies style.transform to its inner path around (0,0), so a
+  // rotated icon draws outside its box. Transform a wrapping View instead.
+  const transformed = StyleSheet.flatten(props.style)?.transform !== undefined;
+  const icon = (
     <AndroidIcon
       accessibilityLabel={props.accessibilityLabel}
       color={props.tintColor}
       size={props.size}
       strokeWidth={2}
-      style={props.style}
+      style={transformed ? undefined : props.style}
       testID={props.testID}
     />
   );
+  return transformed ? <View style={props.style}>{icon}</View> : icon;
 }
 
 export const SymbolView = withUniwind(AppSymbolView);

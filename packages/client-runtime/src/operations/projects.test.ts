@@ -4,20 +4,38 @@ import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import {
   findExistingAddProject,
+  getCloneDestinationForPickedFolder,
   getCloneDestinationPath,
   getCloneDirectoryLeafName,
   getCloneDirectoryName,
   getCloneDirectoryPath,
-  getProjectCloneCheckoutPath,
+  getAddProjectInitialQuery,
   getDefaultCloneUrl,
-  getNewProjectDefaultParent,
-  getNewProjectRepository,
   githubIncompleteOwnerRepositoryMessage,
   normalizePastedCloneUrl,
+  sortAddProjectProviderSources,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
+import { isFilesystemBrowseQuery } from "../state/projects.ts";
 
 describe("add project shared logic", () => {
+  it("starts the Add Project picker on a browsable path for a relative base directory", () => {
+    expect(isFilesystemBrowseQuery(getAddProjectInitialQuery("Desktop/dev"))).toBe(true);
+    expect(getAddProjectInitialQuery("Desktop/dev")).toBe("~/Desktop/dev/");
+    expect(getAddProjectInitialQuery("/srv/code")).toBe("/srv/code/");
+    expect(getAddProjectInitialQuery("~")).toBe("~/");
+    expect(getAddProjectInitialQuery("./work")).toBe("./work/");
+    expect(getAddProjectInitialQuery("C:\\dev")).toBe("C:\\dev\\");
+  });
+
+  it("offers only GitHub until other hosts are turned on", () => {
+    const ready = () => ({ ready: true, hint: null });
+    expect(sortAddProjectProviderSources(ready, {})).toEqual(["github"]);
+    expect(sortAddProjectProviderSources(ready, { gitlab: true, github: false })).toEqual([
+      "gitlab",
+    ]);
+  });
+
   it("asks for a repository name when GitHub input is only an owner path", () => {
     const github = SourceControlProviderKind.make("github");
     expect(githubIncompleteOwnerRepositoryMessage(github, "pingdotgg/")).toBe(
@@ -66,6 +84,33 @@ describe("add project shared logic", () => {
     );
     expect(normalizePastedCloneUrl("group/subgroup/project")).toBe("group/subgroup/project");
     expect(normalizePastedCloneUrl("/srv/git/repo.git")).toBe("/srv/git/repo.git");
+    for (const gitlabProject of [
+      "https://gitlab.com/acme/tools/src/branch/worker.git",
+      "https://scm.example.test/acme/tools/src/branch/worker.git",
+      "https://scm.example.test/acme/tools/src/branch/worker",
+      "https://scm.example.test/team/repo/src/branch/main/-/README.md",
+      "https://forgejo.example.test/a/b/src/branch/mount/team/repo.git",
+    ]) {
+      expect(normalizePastedCloneUrl(gitlabProject)).toBe(gitlabProject);
+    }
+  });
+
+  it("clones the repository when given a page URL copied from the browser", () => {
+    for (const [pageUrl, pageRoute, repository] of [
+      ["https://github.com/pingdotgg/t3code/tree/main", "/tree/", "t3code"],
+      ["https://gitlab.com/gitlab-org/gitlab-runner/-/tree/main", "/-/", "gitlab-runner"],
+      ["https://git.cafe/pingdotgg/t3code/tree/main", "/tree/", "t3code"],
+      ["https://gitlab.example.test/g/p/-/blob/main/src/branch/x", "/-/", "p"],
+      ["https://code.company.test/g/p/-/tree/main", "/-/", "p"],
+      ["https://github.com/pingdotgg/t3code/tree/release.git", "/tree/", "t3code"],
+    ] as const) {
+      const cloneUrl = normalizePastedCloneUrl(pageUrl);
+      expect(cloneUrl).not.toContain(pageRoute);
+      expect(getCloneDirectoryName(cloneUrl)).toBe(repository);
+    }
+    expect(
+      normalizePastedCloneUrl("https://alice:example@bitbucket.org/workspace/repo/src/master/"),
+    ).toBe("https://alice:example@bitbucket.org/workspace/repo");
   });
 
   it("uses HTTPS for repositories selected through a provider", () => {
@@ -100,16 +145,6 @@ describe("add project shared logic", () => {
     expect(getCloneDirectoryName("  https://github.com/owner/repo.git  ")).toBe("repo");
   });
 
-  it("resolves the selected clone layout without changing the repository folder", () => {
-    expect(getProjectCloneCheckoutPath("~/src/repo", "standard")).toBe("~/src/repo");
-    expect(getProjectCloneCheckoutPath("~/src/repo/", "worktree-container")).toBe(
-      "~/src/repo/main",
-    );
-    expect(getProjectCloneCheckoutPath("C:\\src\\repo", "worktree-container")).toBe(
-      "C:\\src\\repo\\main",
-    );
-  });
-
   it("lays clone folders out like ghq only when asked, and only when the URL is safe", () => {
     expect(getCloneDirectoryPath("git@github.com:owner/repo.git", false)).toBe("repo");
     expect(getCloneDirectoryPath("git@github.com:owner/repo.git", true)).toBe(
@@ -142,43 +177,27 @@ describe("add project shared logic", () => {
     ).toBe("C:\\Users\\me\\ghq\\github.com\\owner\\repo");
   });
 
-  it("prefers the Add project starts in setting for a new project, then the managed root", () => {
-    expect(
-      getNewProjectDefaultParent({
-        addProjectBaseDirectory: "  ~/src  ",
-        newProjectsRoot: "/home/me/.t3/projects",
-      }),
-    ).toBe("~/src");
-    expect(
-      getNewProjectDefaultParent({
-        addProjectBaseDirectory: "   ",
-        newProjectsRoot: "/home/me/.t3/projects",
-      }),
-    ).toBe("/home/me/.t3/projects");
-    expect(
-      getNewProjectDefaultParent({ addProjectBaseDirectory: null, newProjectsRoot: null }),
-    ).toBeNull();
-  });
-
-  it("names a new project's repository after its folder, not its main checkout", () => {
-    const target = { owner: "octocat" };
-    expect(getNewProjectRepository(target, "/src/pinball-stats")).toBe("octocat/pinball-stats");
-    expect(getNewProjectRepository(target, "/src/pinball-stats/", "standard")).toBe(
-      "octocat/pinball-stats",
-    );
-    expect(getNewProjectRepository(target, "/src/pinball-stats/main", "worktree-container")).toBe(
-      "octocat/pinball-stats",
-    );
-    expect(
-      getNewProjectRepository(target, "C:\\src\\pinball-stats\\main", "worktree-container"),
-    ).toBe("octocat/pinball-stats");
-    expect(getNewProjectRepository({ owner: null }, "/src/pinball-stats")).toBe("pinball-stats");
-  });
-
   it("keeps a numeric repository name that sits on a path", () => {
     expect(getCloneDirectoryName("https://github.com/acme/123.git")).toBe("123");
     expect(getCloneDirectoryName("https://github.com/acme/123")).toBe("123");
     expect(getCloneDirectoryName("git@github.com:acme/123.git")).toBe("123");
+  });
+
+  it("resolves a native-picker folder like an in-app clone selection", () => {
+    const pick = (pickedPath: string, caseSensitive = true) =>
+      getCloneDestinationForPickedFolder({
+        pickedPath,
+        cloneDirectoryName: "repo",
+        caseSensitive,
+      });
+
+    expect(pick("/Users/me/code")).toBe("/Users/me/code/repo");
+    expect(pick("/Users/me/code/")).toBe("/Users/me/code/repo");
+    expect(pick("/Users/me/repo")).toBe("/Users/me/repo/");
+    expect(pick("/Users/me/Repo")).toBe("/Users/me/Repo/repo");
+    expect(pick("C:\\Projects\\Repo", false)).toBe("C:\\Projects\\Repo\\");
+    expect(pick("C:\\Projects", false)).toBe("C:\\Projects\\repo");
+    expect(pick("/")).toBe("/repo");
   });
 
   it("finds existing projects by normalized path in the target environment", () => {

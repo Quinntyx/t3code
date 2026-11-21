@@ -7,7 +7,6 @@ import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { makeResolveMainCheckout } from "./worktreeLayout.ts";
 
 export class WorkspaceRootNotExistsError extends Schema.TaggedError<WorkspaceRootNotExistsError>()(
   "WorkspaceRootNotExistsError",
@@ -107,7 +106,6 @@ export class WorkspacePaths extends Context.Service<
 const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const resolveMainCheckout = yield* makeResolveMainCheckout;
 
   const statWorkspaceRoot = Effect.fn("WorkspacePaths.statWorkspaceRoot")(function* (
     workspaceRoot: string,
@@ -172,20 +170,19 @@ const make = Effect.gen(function* () {
         normalizedWorkspaceRoot,
       });
     }
-    return yield* resolveMainCheckout(normalizedWorkspaceRoot);
+    return normalizedWorkspaceRoot;
   });
 
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =
     Effect.fn("WorkspacePaths.resolveRelativePathWithinRoot")(function* (input) {
-      const normalizedInputPath = input.relativePath.trim();
-      if (path.isAbsolute(normalizedInputPath)) {
+      if (path.isAbsolute(input.relativePath)) {
         return yield* new WorkspacePathOutsideRootError({
           workspaceRoot: input.workspaceRoot,
           relativePath: input.relativePath,
         });
       }
 
-      const absolutePath = path.resolve(input.workspaceRoot, normalizedInputPath);
+      const absolutePath = path.resolve(input.workspaceRoot, input.relativePath);
       // Only the host separator becomes `/`: on POSIX `\` is a file name character.
       const relativeToRoot = path
         .relative(input.workspaceRoot, absolutePath)

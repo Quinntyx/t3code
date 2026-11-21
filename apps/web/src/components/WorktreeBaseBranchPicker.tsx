@@ -1,11 +1,12 @@
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT, useMessages } from "gt-react";
 import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
 import { useState } from "react";
 
 import { usePaginatedBranches } from "../state/queries";
 import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
-import { BranchPicker, BranchPickerRefItem, useBranchPickerRemoteView } from "./BranchPicker";
+import { BranchPicker, BranchPickerRefItem } from "./BranchPicker";
 import { resolveBranchTriggerLabel, sanitizeNewRefName } from "./BranchToolbar.logic";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { Button } from "./ui/button";
@@ -13,7 +14,6 @@ import { ComboboxTrigger } from "./ui/combobox";
 
 export function WorktreeBaseBranchPicker({
   environmentId,
-  projectId,
   cwd,
   value,
   onValueChange,
@@ -23,7 +23,6 @@ export function WorktreeBaseBranchPicker({
   id,
 }: {
   environmentId: EnvironmentId;
-  projectId: ProjectId | null;
   cwd: string | null;
   value: string;
   onValueChange: (branch: string) => void;
@@ -32,15 +31,18 @@ export function WorktreeBaseBranchPicker({
   disabled?: boolean;
   id?: string;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const remoteView = useBranchPickerRemoteView(environmentId, projectId);
-  const branches = usePaginatedBranches({
-    environmentId,
-    cwd,
-    query: sanitizeNewRefName(query.trim()),
-    ...remoteView.refTarget,
-  });
+  const branches = usePaginatedBranches(
+    {
+      environmentId,
+      cwd,
+      query: sanitizeNewRefName(query.trim()),
+    },
+    messages,
+  );
   const selectedRefQuery = useEnvironmentQuery(
     cwd && value
       ? vcsEnvironment.listRefs({
@@ -52,24 +54,33 @@ export function WorktreeBaseBranchPicker({
   const selectedRef =
     branches.refs.find((branch) => branch.name === value) ??
     selectedRefQuery.data?.refs.find((branch) => branch.name === value);
-  const label = resolveBranchTriggerLabel({
-    activeWorktreePath: null,
-    effectiveEnvMode: "worktree",
-    resolvedActiveBranch: value || null,
-    resolvedActiveBranchIsRemote: selectedRef ? selectedRef.isRemote === true : null,
-    startFromOrigin,
-  });
+  const label = resolveBranchTriggerLabel(
+    {
+      activeWorktreePath: null,
+      effectiveEnvMode: "worktree",
+      resolvedActiveBranch: value || null,
+      resolvedActiveBranchIsRemote: selectedRef ? selectedRef.isRemote === true : null,
+      startFromOrigin,
+    },
+    messages,
+  );
   const branchByName = new Map(branches.refs.map((branch) => [branch.name, branch]));
   const items = [...branchByName.keys()];
   const hasNextPage = branches.data?.nextCursor != null;
   const statusText =
     branches.error ??
     (branches.isPending && branches.data === null
-      ? "Loading refs..."
+      ? gt("Loading refs...")
       : branches.isFetchingNextPage
-        ? "Loading more refs..."
+        ? gt("Loading more refs...")
         : hasNextPage
-          ? `Showing ${branches.refs.length} of ${branches.data?.totalCount} refs`
+          ? gt(
+              "{total, plural, one {Showing {shown} of {total} refs} other {Showing {shown} of {total} refs}}",
+              {
+                shown: branches.refs.length,
+                total: String(branches.data?.totalCount),
+              },
+            )
           : null);
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -93,7 +104,6 @@ export function WorktreeBaseBranchPicker({
       onLoadNext={branches.loadNext}
       statusText={statusText}
       originControl={{ checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }}
-      remotes={remoteView.remotes(branches.data?.remoteNames)}
       popupProps={{ align: "start", side: "bottom", className: "flex w-80 flex-col" }}
       renderItem={(name, index) => {
         const branch = branchByName.get(name);
@@ -102,7 +112,6 @@ export function WorktreeBaseBranchPicker({
             branch={branch}
             projectCwd={cwd}
             index={index}
-            withinRemote={remoteView.view.kind === "remote"}
             onClick={() => {
               onValueChange(branch.name);
               handleOpenChange(false);

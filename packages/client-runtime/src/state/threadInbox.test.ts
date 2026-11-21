@@ -2,20 +2,13 @@ import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/con
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  beginPullRequestGeneration,
   createInboxReturnTracker,
-  isPullRequestGenerating,
   isThreadWorking,
-  isThreadWorkingInShelf,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
 } from "./threadInbox.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
-
-function pullRequestKey(thread: { id: ThreadId; environmentId: EnvironmentId }) {
-  return { environmentId: thread.environmentId, threadId: thread.id };
-}
 
 function thread(id: string, working: boolean) {
   return {
@@ -50,46 +43,6 @@ describe("createInboxReturnTracker", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
-  it("counts a pull request generation as working for as many generations as are open", () => {
-    const idle = thread("pr", false);
-    expect(isThreadWorkingInShelf(idle)).toBe(false);
-
-    const first = beginPullRequestGeneration(pullRequestKey(idle));
-    const second = beginPullRequestGeneration(pullRequestKey(idle));
-    expect(isPullRequestGenerating(pullRequestKey(idle))).toBe(true);
-    expect(isThreadWorkingInShelf(idle)).toBe(true);
-    expect(isThreadWorking(idle)).toBe(false);
-
-    first();
-    expect(isThreadWorkingInShelf(idle)).toBe(true);
-    second();
-    second();
-    expect(isPullRequestGenerating(pullRequestKey(idle))).toBe(false);
-    expect(isThreadWorkingInShelf(idle)).toBe(false);
-  });
-
-  it("moves a thread into the working shelf while its pull request is generated", () => {
-    const tracker = createInboxReturnTracker();
-    const notify = vi.fn();
-    const unsubscribe = tracker.subscribe(notify);
-    const idle = thread("pr-shelf", false);
-    tracker.observe([idle]);
-    expect(tracker.isWorking(idle)).toBe(false);
-
-    const release = beginPullRequestGeneration(pullRequestKey(idle));
-    expect(notify).toHaveBeenCalledTimes(1);
-    expect(tracker.observe([idle]).isWorking(idle)).toBe(true);
-
-    release();
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(tracker.observe([idle]).isWorking(idle)).toBe(true);
-    vi.advanceTimersByTime(2_000);
-    expect(tracker.isWorking(idle)).toBe(false);
-    expect(tracker.returnedAt(idle)).toBe(12_000);
-    expect(notify).toHaveBeenCalledTimes(3);
-    unsubscribe();
-  });
-
   it("stamps a thread when it stops working, but never on the first observation", () => {
     const tracker = createInboxReturnTracker();
     const first = tracker.observe([thread("a", true), thread("b", false)]);
@@ -124,6 +77,26 @@ describe("createInboxReturnTracker", () => {
     expect(tracker.returnedAt(thread("a", false))).toBe(12_000);
     expect(notify).toHaveBeenCalledTimes(1);
     unsubscribe();
+  });
+
+  it("moves a thread whose run ended long ago at once, as after a reconnect", () => {
+    const tracker = createInboxReturnTracker();
+    const finished = {
+      ...thread("a", false),
+      latestRun: {
+        runId: RunId.make("ended-while-away"),
+        status: "completed" as const,
+        requestedAt: "1970-01-01T00:00:02.000Z",
+        startedAt: "1970-01-01T00:00:02.000Z",
+        completedAt: "1970-01-01T00:00:09.000Z",
+        assistantMessageId: null,
+      },
+    };
+    tracker.observe([thread("a", true)]);
+    vi.setSystemTime(200_000);
+    tracker.observe([finished]);
+    expect(tracker.isWorking(finished)).toBe(false);
+    expect(tracker.returnedAt(finished)).toBe(200_000);
   });
 
   it("cancels a transient return on resume and grants a fresh grace after the next finish", () => {
@@ -188,41 +161,6 @@ describe("createInboxReturnTracker", () => {
       expect(tracker.isWorking(stopped)).toBe(false);
     },
   );
-
-  it("keeps a stalled thread on the working shelf, with no grace when it stops retrying", () => {
-    const tracker = createInboxReturnTracker();
-    const stalled = {
-      ...thread("a", true),
-      latestRun: {
-        runId: RunId.make("overloaded"),
-        status: "failed" as const,
-        requestedAt: "2026-06-01T00:00:00.000Z",
-        startedAt: "2026-06-01T00:00:00.000Z",
-        completedAt: "2026-06-01T00:00:00.000Z",
-        assistantMessageId: null,
-      },
-      runtime: {
-        ...thread("a", true).runtime!,
-        status: "failed" as const,
-        lastError: "Claude API overloaded.",
-        stalled: true as const,
-        stallNextAttemptAt: "2026-06-01T00:01:00.000Z",
-      },
-    };
-    expect(isThreadWorking(stalled)).toBe(true);
-    expect(isThreadWorkingInShelf(stalled)).toBe(true);
-    tracker.observe([{ ...stalled, runtime: thread("a", true).runtime }]);
-    tracker.observe([stalled]);
-    expect(tracker.isWorking(stalled)).toBe(true);
-
-    // Clearing the record ends the placement at once; the thread is a plain failure.
-    const { stalled: _stalled, stallNextAttemptAt: _next, ...idleRuntime } = stalled.runtime;
-    const stopped = { ...stalled, runtime: idleRuntime };
-    tracker.observe([stopped]);
-    expect(isThreadWorking(stopped)).toBe(false);
-    expect(tracker.isWorking(stopped)).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-  });
 
   it("grants grace after a retained expired snooze", () => {
     const tracker = createInboxReturnTracker();

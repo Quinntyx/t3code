@@ -7,9 +7,6 @@ import {
   SourceControlRepositoryInfo,
 } from "./sourceControl.ts";
 
-export const ProjectCloneLayout = Schema.Literals(["standard", "worktree-container"]);
-export type ProjectCloneLayout = typeof ProjectCloneLayout.Type;
-
 export const PROJECT_CLONE_DETAIL_MAX_LENGTH = 200;
 export const PROJECT_CLONE_ERROR_MAX_LENGTH = 1000;
 

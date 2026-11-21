@@ -122,23 +122,12 @@ const variant = VARIANT_CONFIG[APP_VARIANT];
 const HOSTED_APP_HOST = "app.t3.codes";
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
-  : (repoEnv.T3CODE_MOBILE_APP_ID ?? variant.iosBundleIdentifier);
+  : variant.iosBundleIdentifier;
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
   medium: "@expo-google-fonts/dm-sans/500Medium/DMSans_500Medium.ttf",
   bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
-} as const;
-
-const atkinsonFonts = {
-  regular:
-    "@expo-google-fonts/atkinson-hyperlegible/400Regular/AtkinsonHyperlegible_400Regular.ttf",
-  bold: "@expo-google-fonts/atkinson-hyperlegible/700Bold/AtkinsonHyperlegible_700Bold.ttf",
-} as const;
-
-const firaCodeNerdFonts = {
-  regular: "./assets/fonts/FiraCodeNerdFont-Regular.ttf",
-  bold: "./assets/fonts/FiraCodeNerdFont-Bold.ttf",
 } as const;
 
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
@@ -249,7 +238,7 @@ const config: ExpoConfig = {
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.3.0",
-  runtimeVersion: repoEnv.T3CODE_MOBILE_RUNTIME_VERSION ?? {
+  runtimeVersion: {
     // Skip costly fingerprinting on dev launches; preview and production OTAs require matching native projects.
     policy: runtimeVersionPolicy,
   },
@@ -258,8 +247,7 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   updates: {
     enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url:
-      repoEnv.T3CODE_MOBILE_UPDATE_URL ?? "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
@@ -289,6 +277,8 @@ const config: ExpoConfig = {
       },
       NSLocalNetworkUsageDescription:
         "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.",
+      // Built with the iOS 27 SDK, only view controllers can hide or style the status bar.
+      UIViewControllerBasedStatusBarAppearance: true,
       NSPhotoLibraryAddUsageDescription: "Allow T3 Code to save images to your photo library.",
       // System picture in picture needs background audio to start and survive outside the app.
       UIBackgroundModes: ["audio"],
@@ -308,7 +298,7 @@ const config: ExpoConfig = {
   },
   android: {
     icon: variant.assets.appIcon,
-    package: repoEnv.T3CODE_MOBILE_APP_ID ?? variant.androidPackage,
+    package: variant.androidPackage,
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
       : {}),
@@ -342,15 +332,7 @@ const config: ExpoConfig = {
       "expo-font",
       {
         ios: {
-          fonts: [
-            dmSansFonts.regular,
-            dmSansFonts.medium,
-            dmSansFonts.bold,
-            atkinsonFonts.regular,
-            atkinsonFonts.bold,
-            firaCodeNerdFonts.regular,
-            firaCodeNerdFonts.bold,
-          ],
+          fonts: [dmSansFonts.regular, dmSansFonts.medium, dmSansFonts.bold],
         },
         android: {
           fonts: [
@@ -365,22 +347,6 @@ const config: ExpoConfig = {
             {
               fontFamily: "DMSans-Bold",
               fontDefinitions: [{ path: dmSansFonts.bold, weight: 700 }],
-            },
-            {
-              fontFamily: "AtkinsonHyperlegible-Regular",
-              fontDefinitions: [{ path: atkinsonFonts.regular, weight: 400 }],
-            },
-            {
-              fontFamily: "AtkinsonHyperlegible-Bold",
-              fontDefinitions: [{ path: atkinsonFonts.bold, weight: 700 }],
-            },
-            // Code surfaces bold tokens by weight, so this family keeps both weights; iOS uses the same family name.
-            {
-              fontFamily: "FiraCode Nerd Font",
-              fontDefinitions: [
-                { path: firaCodeNerdFonts.regular, weight: 400 },
-                { path: firaCodeNerdFonts.bold, weight: 700 },
-              ],
             },
           ],
         },
@@ -490,7 +456,6 @@ const config: ExpoConfig = {
     "./plugins/withAndroidNetworkSecurityConfig.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
     "./plugins/withAndroidInputBackground.cjs",
-    "./plugins/withAndroidTransparentNavigationBar.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",

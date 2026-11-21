@@ -12,6 +12,7 @@ import {
   type AuthEnvironmentScope,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -21,6 +22,7 @@ import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServer } from "effect/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { routeLayer } from "./ServerBrowserStream.ts";
@@ -30,6 +32,7 @@ const platformLayer = NodeHttpPlatform.layer.pipe(Layer.provideMerge(NodeService
 const makeAuth = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   error?: EnvironmentAuth.ServerAuthCredentialError,
+  awaitInvalidation: SessionStore.SessionStore["Service"]["awaitInvalidation"] = () => Effect.never,
 ) => {
   const requests: string[] = [];
   const layer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
@@ -45,7 +48,17 @@ const makeAuth = (
           });
     },
   });
-  return { layer, requests };
+  return {
+    layer: Layer.merge(
+      layer,
+      Layer.mock(SessionStore.SessionStore, {
+        cookieName: "test",
+        legacyCookieName: undefined,
+        awaitInvalidation,
+      }),
+    ),
+    requests,
+  };
 };
 
 const mutations = [
@@ -57,6 +70,7 @@ const mutations = [
   { type: "navigate", url: "https://example.com" },
   { type: "history", delta: -1 },
   { type: "reload" },
+  { type: "stopLoading" },
   { type: "probe", x: 10, y: 10 },
   { type: "takeControl" },
   { type: "releaseControl" },
@@ -78,7 +92,6 @@ it.effect.each([
     const inputs: unknown[] = [];
     const attachments: Parameters<ServerBrowser.ServerBrowser["Service"]["attachViewer"]>[0][] = [];
     const acked = Promise.withResolvers<void>();
-    const keyFrameRequested = Promise.withResolvers<void>();
     const frame = new Uint8Array([255, 216, 255, 217]);
     const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
     yield* Queue.offer(output, { _tag: "viewport", width: 1280, height: 800 });
@@ -90,7 +103,6 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
-      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: (input) =>
@@ -98,9 +110,7 @@ it.effect.each([
           attachments.push(input);
           return {
             output,
-            audio: null,
             input: (message) => Effect.sync(() => void inputs.push(message)),
-            requestKeyFrame: Effect.sync(() => keyFrameRequested.resolve()),
           };
         }),
     });
@@ -115,7 +125,7 @@ it.effect.each([
     );
     const server = Context.get(services, HttpServer.HttpServer);
     const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
-    const resource = `/api/preview-stream/ws?threadId=thread&tabId=tab&codecs=vp8,hevc&wsTicket=one-use-ticket${interactive ? "" : "&interactive=false"}`;
+    const resource = `/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket${interactive ? "" : "&interactive=false"}`;
     const received = Promise.withResolvers<void>();
     const socket = yield* Effect.acquireRelease(
       Effect.sync(() => new WebSocket(`${origin}${resource}`)),
@@ -133,15 +143,12 @@ it.effect.each([
       frames.push(new Uint8Array(event.data as ArrayBuffer));
       for (const message of mutations) socket.send(JSON.stringify(message));
       socket.send("malformed input");
-      // Read-only viewers decode video too, so key frame requests skip the control check.
-      socket.send(JSON.stringify({ type: "keyFrame" }));
       socket.send(JSON.stringify({ type: "ack" }));
       received.resolve();
     });
     yield* Effect.promise(() => received.promise);
     // The socket ack follows every mutation, providing a barrier without sleeps.
     yield* Effect.promise(() => acked.promise);
-    yield* Effect.promise(() => keyFrameRequested.promise);
     expect(frames).toEqual([frame]);
     expect(viewports).toEqual([{ type: "viewport", width: 1280, height: 800 }]);
     expect(inputs).toEqual(canOperate ? [...mutations, null] : []);
@@ -153,146 +160,92 @@ it.effect.each([
         maxHeight: 800,
         quality: 70,
         canOperate,
-        videoCodecs: ["vp8"],
-        audio: false,
       },
     ]);
     expect(auth.requests).toEqual([resource]);
-  }).pipe(Effect.scoped),
+  }),
 );
 
-const openFrameStream = Effect.fnUntraced(function* (
-  output: Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>,
-  audio: Queue.Queue<{
-    data: Uint8Array;
-    timestampMicros: number;
-    generation: number;
-    sequence: number;
-  }> | null,
-) {
-  const browser = ServerBrowser.ServerBrowser.of({
-    clearProfile: () => Effect.void,
-    profileReporter: Effect.succeed(() => Effect.void),
-    listGpus: Effect.succeed({ gpus: [] }),
-    openDownload: () => Effect.succeedNone,
-    answerFileChooser: () => Effect.succeed(false),
-    attachViewer: () =>
-      Effect.succeed({ output, audio, input: () => Effect.void, requestKeyFrame: Effect.void }),
-  });
-  const services = yield* Layer.build(
-    HttpRouter.serve(
-      routeLayer.pipe(
-        Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
-        Layer.provide(platformLayer),
-      ),
-      { disableListenLog: true },
-    ).pipe(
-      Layer.provideMerge(NodeHttpServer.layerTest),
-      Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
-    ),
-  );
-  const server = Context.get(services, HttpServer.HttpServer);
-  const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
-  const received: Array<number | string> = [];
-  const waiters: Array<{ count: number; resolve: () => void }> = [];
-  const socket = yield* Effect.acquireRelease(
-    Effect.sync(
-      () =>
-        new WebSocket(
-          `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket`,
-        ),
-    ),
-    (socket) => Effect.sync(() => socket.close()),
-  );
-  socket.binaryType = "arraybuffer";
-  socket.addEventListener("message", (event) => {
-    received.push(
-      typeof event.data === "string"
-        ? JSON.parse(event.data).type
-        : new Uint8Array(event.data as ArrayBuffer)[0]!,
-    );
-    for (const waiter of waiters.filter((waiter) => received.length >= waiter.count)) {
-      waiters.splice(waiters.indexOf(waiter), 1);
-      waiter.resolve();
-    }
-  });
-  const receivedCount = (count: number) =>
-    Effect.promise(
-      () =>
-        new Promise<void>((resolve) =>
-          received.length >= count ? resolve() : waiters.push({ count, resolve }),
-        ),
-    );
-  const ack = Effect.sync(() => socket.send(JSON.stringify({ type: "ack" })));
-  return { received, receivedCount, ack };
-});
-
-it.effect("sends replies ahead of a large frame and only the newest frame after its ack", () =>
+it.effect("sends replies ahead of stale frames and only the newest frame after an ack", () =>
   Effect.gen(function* () {
     const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
     const released: number[] = [];
-    // Past the in-flight byte budget, so each frame travels alone.
-    const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => {
-      const data = new Uint8Array(128 * 1024);
-      data[0] = id;
-      return { _tag: "frame", data, ack: Effect.sync(() => void released.push(id)) };
-    };
-    const stream = yield* openFrameStream(output, null);
+    const invalidated = yield* Deferred.make<void>();
+    const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => ({
+      _tag: "frame",
+      data: new Uint8Array([id]),
+      ack: Effect.sync(() => void released.push(id)),
+    });
+    const browser = ServerBrowser.ServerBrowser.of({
+      clearProfile: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
+      openDownload: () => Effect.succeedNone,
+      answerFileChooser: () => Effect.succeed(false),
+      attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
+    });
+    const services = yield* Layer.build(
+      HttpRouter.serve(
+        routeLayer.pipe(
+          Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
+          Layer.provide(platformLayer),
+        ),
+        { disableListenLog: true },
+      ).pipe(
+        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provide(
+          makeAuth([AuthOrchestrationReadScope], undefined, () => Deferred.await(invalidated))
+            .layer,
+        ),
+      ),
+    );
+    const server = Context.get(services, HttpServer.HttpServer);
+    const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
+    const received: Array<number | string> = [];
+    let next = Promise.withResolvers<void>();
+    const socket = yield* Effect.acquireRelease(
+      Effect.sync(
+        () =>
+          new WebSocket(
+            `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket`,
+          ),
+      ),
+      (socket) => Effect.sync(() => socket.close()),
+    );
+    socket.binaryType = "arraybuffer";
+    socket.addEventListener("message", (event) => {
+      received.push(
+        typeof event.data === "string"
+          ? JSON.parse(event.data).type
+          : new Uint8Array(event.data as ArrayBuffer)[0]!,
+      );
+      next.resolve();
+    });
 
     yield* Queue.offer(output, frame(1));
-    yield* stream.receivedCount(1);
+    yield* Effect.promise(() => next.promise);
+    next = Promise.withResolvers();
     yield* Queue.offerAll(output, [
       frame(2),
       frame(3),
       frame(4),
       { _tag: "probe", x: 0, y: 0, editable: false },
     ]);
-    yield* stream.receivedCount(2);
-    expect(stream.received).toEqual([1, "probe"]);
+    yield* Effect.promise(() => next.promise);
+    expect(received).toEqual([1, "probe"]);
     expect(released).toEqual([2, 3]);
 
-    yield* stream.ack;
-    yield* stream.receivedCount(3);
-    expect(stream.received).toEqual([1, "probe", 4]);
+    next = Promise.withResolvers();
+    socket.send(JSON.stringify({ type: "ack" }));
+    yield* Effect.promise(() => next.promise);
+    expect(received).toEqual([1, "probe", 4]);
     expect(released).toEqual([2, 3, 1]);
-  }).pipe(Effect.scoped),
-);
 
-it.effect("keeps several small frames in flight and encodes waiting frames only when sent", () =>
-  Effect.gen(function* () {
-    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
-    const released: number[] = [];
-    const encoded: number[] = [];
-    const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => ({
-      _tag: "frame",
-      data: Effect.sync(() => {
-        encoded.push(id);
-        return new Uint8Array([id]);
-      }),
-      ack: Effect.sync(() => void released.push(id)),
-    });
-    const stream = yield* openFrameStream(output, null);
-
-    // A distant viewer gets more than one frame per round trip.
-    yield* Queue.offerAll(output, [1, 2, 3, 4, 5, 6].map(frame));
-    yield* stream.receivedCount(6);
-    yield* Queue.offerAll(output, [
-      frame(7),
-      frame(8),
-      { _tag: "probe", x: 0, y: 0, editable: false },
-    ]);
-    yield* stream.receivedCount(7);
-    expect(stream.received).toEqual([1, 2, 3, 4, 5, 6, "probe"]);
-    // Superseded before it was sent, so it was never encoded.
-    expect(released).toEqual([7]);
-    expect(encoded).toEqual([1, 2, 3, 4, 5, 6]);
-
-    yield* stream.ack;
-    yield* stream.receivedCount(8);
-    expect(stream.received).toEqual([1, 2, 3, 4, 5, 6, "probe", 8]);
-    expect(released).toEqual([7, 1]);
-    expect(encoded).toEqual([1, 2, 3, 4, 5, 6, 8]);
-  }).pipe(Effect.scoped),
+    const closed = new Promise<void>((resolve) =>
+      socket.addEventListener("close", () => resolve(), { once: true }),
+    );
+    yield* Deferred.succeed(invalidated, undefined);
+    yield* Effect.promise(() => closed);
+  }),
 );
 
 it.effect.each([
@@ -306,7 +259,6 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
-      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => {
@@ -336,102 +288,7 @@ it.effect.each([
     );
     expect(response.status).toBe(testCase.status);
     expect(attachments).toBe(0);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("writes audio packets beside video and only for a viewer that opted in", () =>
-  Effect.gen(function* () {
-    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
-    const audio = yield* Queue.make<{
-      data: Uint8Array;
-      timestampMicros: number;
-      generation: number;
-      sequence: number;
-    }>();
-    const stream = yield* openFrameStream(output, audio);
-
-    yield* Queue.offerAll(audio, [
-      { data: new Uint8Array([0x4f, 0x70]), timestampMicros: 20_000, generation: 1, sequence: 2 },
-      { data: new Uint8Array([0x75]), timestampMicros: 40_000, generation: 1, sequence: 3 },
-    ]);
-    yield* Queue.offer(output, {
-      _tag: "frame",
-      data: new Uint8Array([0xff, 0xd8]),
-      ack: Effect.void,
-    });
-    yield* stream.receivedCount(3);
-    // The leading tag tells the client which messages are audio, not frames. The two
-    // streams are independent, so only each one's own order is promised.
-    expect(stream.received).toEqual(expect.arrayContaining([3, 3, 0xff]));
-    expect(stream.received.filter((type) => type === 0xff)).toHaveLength(1);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("leaves a viewer without audio on its frame stream alone", () =>
-  Effect.gen(function* () {
-    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
-    const stream = yield* openFrameStream(output, null);
-
-    yield* Queue.offer(output, {
-      _tag: "frame",
-      data: new Uint8Array([0xff, 0xd8]),
-      ack: Effect.void,
-    });
-    yield* stream.receivedCount(1);
-    expect(stream.received).toEqual([0xff]);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("attaches without audio unless the viewer asks for it", () =>
-  Effect.gen(function* () {
-    const attachments: Array<
-      Parameters<ServerBrowser.ServerBrowser["Service"]["attachViewer"]>[0]
-    > = [];
-    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
-    const attached = Promise.withResolvers<void>();
-    const browser = ServerBrowser.ServerBrowser.of({
-      clearProfile: () => Effect.void,
-      profileReporter: Effect.succeed(() => Effect.void),
-      listGpus: Effect.succeed({ gpus: [] }),
-      openDownload: () => Effect.succeedNone,
-      answerFileChooser: () => Effect.succeed(false),
-      attachViewer: (input) =>
-        Effect.sync(() => {
-          attachments.push(input);
-          if (attachments.length === 2) attached.resolve();
-          return { output, audio: null, input: () => Effect.void, requestKeyFrame: Effect.void };
-        }),
-    });
-    const services = yield* Layer.build(
-      HttpRouter.serve(
-        routeLayer.pipe(
-          Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
-          Layer.provide(platformLayer),
-        ),
-        { disableListenLog: true },
-      ).pipe(
-        Layer.provideMerge(NodeHttpServer.layerTest),
-        Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
-      ),
-    );
-    const server = Context.get(services, HttpServer.HttpServer);
-    const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
-    const connect = (query: string) =>
-      Effect.acquireRelease(
-        Effect.sync(
-          () =>
-            new WebSocket(
-              `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket${query}`,
-            ),
-        ),
-        (socket) => Effect.sync(() => socket.close()),
-      );
-
-    yield* connect("");
-    yield* connect("&audio=opus");
-    yield* Effect.promise(() => attached.promise);
-    expect(attachments.map((input) => input.audio)).toEqual([false, true]);
-  }).pipe(Effect.scoped),
+  }),
 );
 
 it.effect("serves a tab's download only to an authorized session", () =>
@@ -443,7 +300,6 @@ it.effect("serves a tab's download only to an authorized session", () =>
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
-      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: (input) =>
         Effect.sync(() => {
           requests.push(input);
@@ -492,7 +348,6 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
-      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
         Effect.sync(() => {
@@ -538,7 +393,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
       { chooserId: "chooser-1", files: [{ name: "notes.txt", text: "hello" }] },
     ]);
     expect((yield* upload([AuthPreviewOperateScope], "stale")).status).toBe(409);
-  }).pipe(Effect.scoped),
+  }),
 );
 
 const decodeHostSetup = Schema.decodeUnknownEffect(Schema.fromJsonString(PreviewStreamHostSetup));
@@ -562,7 +417,6 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
-      listGpus: Effect.succeed({ gpus: [] }),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.fail(new ServerBrowser.ServerBrowserLaunchError({ cause: error })),
@@ -600,5 +454,5 @@ it.effect.each([
       need,
       command: "sudo t3 browser setup",
     });
-  }).pipe(Effect.scoped),
+  }),
 );

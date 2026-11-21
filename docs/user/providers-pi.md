@@ -7,7 +7,7 @@ extensions, skills, context files, and native session history.
 
 1. Install [Pi](https://pi.dev) on the machine running the T3 Code server. Pi requires Node.js
    22.19 or newer; its platform installers can install Node if needed. T3 Code supports Pi
-   0.80.5 or newer.
+   0.84.3 or newer.
 2. Run `pi` in a terminal, then `/login` to connect your model provider or configure its API key.
 3. Open T3 Code Settings, enable Pi, and refresh the provider.
 
@@ -33,14 +33,6 @@ Update installer-managed Pi with `pi update`. If another package manager owns th
 update it through that manager instead. For example, a Nix profile installation uses
 `nix profile upgrade pi`.
 
-## Models from a CLIProxyAPI hub
-
-When a [connected hub](usage.md#connect-a-cliproxyapi-hub) supports provider discovery, every Pi
-provider whose `baseUrl` is on the same host and port as the hub's URL also gets every model the hub
-exposes. Keep the provider and its key in Pi's `models.json` with at least one model, which the
-added models copy for reasoning, input types, and limits. A model you list yourself keeps its own
-settings. The list follows the hub within about a minute; an unreachable hub adds nothing.
-
 ## What Carries Over
 
 T3 Code discovers the models reported by Pi and exposes their supported thinking levels. The
@@ -48,10 +40,7 @@ thinking picker marks the discovered active model's configured level as its defa
 overriding it. Other models keep their Pi defaults when no level is selected. A model that lists
 `serviceTiers` (for example `[{ "id": "priority", "name": "Fast" }]`) in its Pi definition gets
 a speed picker with Standard plus those tiers. A chosen tier is sent as the request's
-`service_tier`; Standard sends none and leaves the endpoint's default. When one Pi provider
-lists both `my-model` and `my-model:fast`, the picker shows `my-model` once with the Standard /
-Fast speed control: Standard runs `my-model` and Fast runs `my-model:fast`. A `:fast` model
-without a base in the same provider stays a normal model. Threads
+`service_tier`; Standard sends none and leaves the endpoint's default. Threads
 use Pi's native session files for resume, rollback, and forks within the same Pi instance. Forks
 preserve the native conversation through the selected turn in the destination workspace.
 Switching providers uses portable conversation context. Extension

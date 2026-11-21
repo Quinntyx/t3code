@@ -1,9 +1,11 @@
+import { useMessages } from "gt-react";
+
 import { WizardSteps } from "../ui/wizard";
 import {
   ADD_PROVIDER_WIZARD_STEPS,
   resolveWizardNavigation,
   type WizardNavigation,
-} from "@t3tools/client-runtime/provider-settings/add-instance";
+} from "./AddProviderInstanceDialog.logic";
 
 interface AddProviderInstanceWizardStepsProps {
   readonly currentStep: number;
@@ -29,9 +31,10 @@ export function AddProviderInstanceWizardSteps({
   onNavigation,
   disabled = false,
 }: AddProviderInstanceWizardStepsProps) {
+  const m = useMessages();
   return (
     <WizardSteps
-      steps={steps}
+      steps={steps.map((step) => m(step))}
       currentStep={currentStep}
       summaries={summaries}
       isStepDisabled={() => disabled}

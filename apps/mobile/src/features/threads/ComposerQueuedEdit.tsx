@@ -1,28 +1,29 @@
 import { Button } from "../../components/ui/Button";
 import type { ChatAttachment, EnvironmentId } from "@t3tools/contracts";
 import { Image } from "expo-image";
+import { T, useGT } from "gt-react-native";
 import { Pressable, ScrollView, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useAssetUrl } from "../../state/assets";
-import { useCachedAssetImageUri } from "../../state/cached-asset-image";
 import { assetImageSource } from "../../lib/assetImageSource";
 
 export function ComposerQueuedEditBanner(props: {
   readonly saving: boolean;
   readonly onCancel: () => void;
 }) {
+  const gt = useGT();
   return (
     <View className="flex-row items-center gap-2 px-4 pb-2">
       <SymbolView name="pencil" size={12} tintColorClassName="accent-foreground-muted" />
       <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-        Editing queued message
+        <T>Editing queued message</T>
       </Text>
       <Button
-        label="Cancel"
+        label={gt("Cancel")}
         tone="text"
-        accessibilityLabel="Cancel editing queued message"
+        accessibilityLabel={gt("Cancel editing queued message")}
         disabled={props.saving}
         onPress={props.onCancel}
       />
@@ -64,6 +65,7 @@ function QueuedEditAttachmentChip(props: {
   readonly disabled: boolean;
   readonly onRemove: (attachmentId: string) => void;
 }) {
+  const gt = useGT();
   const { attachment } = props;
   const isImage = attachment.mimeType.startsWith("image/");
   const resource = {
@@ -73,11 +75,7 @@ function QueuedEditAttachmentChip(props: {
     mimeType: attachment.mimeType,
     disposition: "inline",
   } as const;
-  const url = useCachedAssetImageUri(
-    props.environmentId,
-    isImage ? resource : null,
-    useAssetUrl(props.environmentId, isImage ? resource : null),
-  );
+  const url = useAssetUrl(props.environmentId, isImage ? resource : null);
 
   return (
     <View className="max-w-[180px] flex-row items-center gap-2 rounded-xl border border-border bg-card py-1 pl-1 pr-2">
@@ -103,7 +101,7 @@ function QueuedEditAttachmentChip(props: {
       </Text>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Remove ${attachment.name}`}
+        accessibilityLabel={gt("Remove {name}", { name: attachment.name })}
         disabled={props.disabled}
         hitSlop={8}
         onPress={() => props.onRemove(attachment.id)}

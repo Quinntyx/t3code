@@ -6,11 +6,11 @@ import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -32,12 +32,14 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
+import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 
 const layerWorkspacePaths = Layer.succeed(WorkspacePaths.WorkspacePaths, {
   normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot.replace(/\/$/, "")),
@@ -207,8 +209,8 @@ const layerProjectServiceDependencies = Layer.mergeAll(
   Layer.provideMerge(layerMetadata),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
-  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* (
@@ -302,7 +304,14 @@ it.layer(layerTest)("ProjectService", (it) => {
       });
       assert.isFalse(reset.autoPull);
       assert.isNull(reset.projectIcon);
-      assert.equal(reset.faviconPath, hydratedCreated.faviconPath);
+      assert.equal(
+        (yield* waitForProject(
+          service,
+          projectId,
+          (project) => project.faviconPath === hydratedCreated.faviconPath,
+        )).faviconPath,
+        hydratedCreated.faviconPath,
+      );
       assert.isNull(reset.defaultThreadEnvMode);
       assert.deepEqual(
         (yield* service.snapshot).projects.map((project) => project.id),
@@ -504,6 +513,53 @@ it.layer(layerTest)("ProjectService", (it) => {
     }),
   );
 
+  it.effect("refuses a WSL share path on Windows and allows it elsewhere", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const onWindows = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(Effect.provideService(HostProcess.Platform, "win32"));
+      const projectId = ProjectId.make("project:wsl-share");
+      const refused = yield* onWindows(
+        service.create({
+          commandId: CommandId.make("command:wsl-share"),
+          projectId,
+          title: "WSL",
+          workspaceRoot: "\\\\wsl$\\Ubuntu\\home\\ubuntu\\repo",
+        }),
+      ).pipe(Effect.flip);
+      assert.equal(refused._tag, "ProjectInvalidError");
+      assert.isTrue(Option.isNone(yield* service.getById(projectId)));
+
+      const mover = ProjectId.make("project:wsl-share:mover");
+      yield* onWindows(
+        service.create({
+          commandId: CommandId.make("command:wsl-share:mover"),
+          projectId: mover,
+          title: "Mover",
+          workspaceRoot: "C:\\work\\wsl-share-mover",
+        }),
+      );
+      const move = yield* onWindows(
+        service.update({
+          commandId: CommandId.make("command:wsl-share:move"),
+          projectId: mover,
+          workspaceRoot: "\\\\wsl.localhost\\Ubuntu\\home\\ubuntu\\repo",
+        }),
+      ).pipe(Effect.flip);
+      assert.equal(move._tag, "ProjectInvalidError");
+
+      const linux = yield* service
+        .create({
+          commandId: CommandId.make("command:wsl-share:linux"),
+          projectId: ProjectId.make("project:wsl-share:linux"),
+          title: "Linux",
+          workspaceRoot: "\\\\wsl.localhost\\Ubuntu\\home\\ubuntu\\repo",
+        })
+        .pipe(Effect.provideService(HostProcess.Platform, "linux"));
+      assert.equal(linux.title, "Linux");
+    }),
+  );
+
   it.effect("replays a workspace conflict after the workspace frees up", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;
@@ -545,6 +601,12 @@ it.layer(layerTest)("ProjectService", (it) => {
         title: "Delete retry",
         workspaceRoot: "/work/delete-retry",
       });
+      // Enrichment landing between the two deletes would change the project the retry reads.
+      yield* waitForProject(
+        service,
+        projectId,
+        (project) => project.faviconPath !== null && project.repositoryIdentity !== null,
+      );
       const input = { commandId: CommandId.make("command:delete-retry:delete"), projectId };
       const deleted = yield* service.delete(input);
       assert.deepEqual(yield* service.delete(input), deleted);
@@ -727,107 +789,110 @@ it.effect("invalidates workspace-derived metadata when a project moves", () =>
   }),
 );
 
-it.effect("resolves newly registered and existing worktree-container projects to main", () =>
+it.effect("resolves a restored icon immediately after reselecting its saved path", () =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const workspacePaths = yield* Effect.service(WorkspacePaths.WorkspacePaths).pipe(
-      Effect.provide(WorkspacePaths.layer),
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-icon-reselect-" });
+    const iconPath = `${cwd}/icon.svg`;
+    const metadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: () => Effect.succeed(null),
+      }),
+      ProjectFaviconResolver.layer.pipe(
+        Layer.provide(layerWorkspacePaths),
+        Layer.provide(T3ProjectFileLoader.layer),
+        Layer.provide(NodeServices.layer),
+      ),
     );
-    const makeService = ProjectService.make.pipe(
-      Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
-    );
-    const original = yield* makeService;
-    const container = yield* fs.makeTempDirectoryScoped({ prefix: "project-container-" });
-    const projectId = ProjectId.make("project:container");
-    yield* original.create({
-      commandId: CommandId.make("command:container:create"),
-      projectId,
-      title: "Container",
-      workspaceRoot: container,
-    });
-    const main = path.join(container, "main");
-    yield* fs.makeDirectory(path.join(main, ".git"), { recursive: true });
-
-    const restarted = yield* makeService;
-    assert.equal(Option.getOrThrow(yield* restarted.getById(projectId)).workspaceRoot, main);
-    assert.equal(Option.getOrThrow(yield* restarted.getShell(projectId)).workspaceRoot, main);
-    assert.equal(Option.getOrThrow(yield* restarted.getByWorkspaceRoot(container)).id, projectId);
-    assert.equal(Option.getOrThrow(yield* restarted.getByWorkspaceRoot(main)).id, projectId);
-    const store = yield* ProjectStore.ProjectStoreV2;
-    assert.equal(Option.getOrThrow(yield* store.get(projectId)).workspaceRoot, main);
-    assert.equal((yield* restarted.snapshot).projects[0]?.workspaceRoot, main);
-    const duplicate = yield* restarted
-      .create({
-        commandId: CommandId.make("command:container:duplicate"),
-        projectId: ProjectId.make("project:container:duplicate"),
-        title: "Duplicate",
-        workspaceRoot: container,
-      })
-      .pipe(Effect.flip);
-    assert.equal(duplicate._tag, "ProjectConflictError");
-
-    const other = yield* fs.makeTempDirectoryScoped({ prefix: "project-container-new-" });
-    yield* fs.makeDirectory(path.join(other, "main", ".git"), { recursive: true });
-    const created = yield* restarted.create({
-      commandId: CommandId.make("command:container:new"),
-      projectId: ProjectId.make("project:container:new"),
-      title: "New container",
-      workspaceRoot: other,
-    });
-    assert.equal(created.workspaceRoot, path.join(other, "main"));
-    yield* makeService;
-    const sql = yield* SqlClient.SqlClient;
-    const events = yield* sql<{ readonly event_type: string }>`
-      SELECT event_type FROM orchestration_events
-      WHERE stream_id = ${projectId} ORDER BY sequence ASC
-    `;
-    assert.deepEqual(
-      events.map((event) => event.event_type),
-      ["project.created", "project.meta-updated"],
-    );
-  }).pipe(
-    Effect.provide(layerProjectServiceDependencies.pipe(Layer.provideMerge(NodeServices.layer))),
-  ),
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+      const projectId = ProjectId.make("project:icon-reselect");
+      yield* service.create({
+        commandId: CommandId.make("command:icon-reselect:create"),
+        projectId,
+        title: "Icon reselection",
+        workspaceRoot: cwd,
+      });
+      yield* service.update({
+        commandId: CommandId.make("command:icon-reselect:missing"),
+        projectId,
+        faviconPath: "icon.svg",
+      });
+      assert.isNull(yield* resolver.resolvePath(cwd, "icon.svg"));
+      yield* fileSystem.writeFileString(iconPath, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+      assert.isNull(yield* resolver.resolvePath(cwd, "icon.svg"));
+      yield* service.update({
+        commandId: CommandId.make("command:icon-reselect:restored"),
+        projectId,
+        faviconPath: "icon.svg",
+      });
+      assert.equal(yield* resolver.resolvePath(cwd, "icon.svg"), iconPath);
+    }).pipe(Effect.provide(layerTestFor(metadata)));
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect("preserves both projects when a container's main checkout is already registered", () =>
+it.effect("refuses a worktree container as a new project and as a new workspace root", () =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const workspacePaths = yield* Effect.service(WorkspacePaths.WorkspacePaths).pipe(
-      Effect.provide(WorkspacePaths.layer),
-    );
-    const makeService = ProjectService.make.pipe(
-      Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
-    );
-    const original = yield* makeService;
-    const container = yield* fs.makeTempDirectoryScoped({ prefix: "project-container-conflict-" });
-    const main = path.join(container, "main");
-    yield* fs.makeDirectory(main);
-    const parentId = ProjectId.make("project:container:parent");
-    const mainId = ProjectId.make("project:container:main");
-    yield* original.create({
-      commandId: CommandId.make("command:container:parent"),
-      projectId: parentId,
-      title: "Container",
-      workspaceRoot: container,
-    });
-    yield* original.create({
-      commandId: CommandId.make("command:container:main"),
-      projectId: mainId,
-      title: "Main",
-      workspaceRoot: main,
-    });
-    yield* fs.makeDirectory(path.join(main, ".git"));
+    const fileSystem = yield* FileSystem.FileSystem;
+    const processRunner = yield* ProcessRunner.ProcessRunner;
+    const fixture = yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-container-" });
+    const git = (cwd: string, ...args: ReadonlyArray<string>) =>
+      processRunner.run({
+        command: "git",
+        args: ["-C", cwd, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      });
+    const source = `${fixture}/source`;
+    const container = `${fixture}/container`;
+    yield* fileSystem.makeDirectory(source);
+    yield* fileSystem.makeDirectory(container);
+    yield* git(source, "init", "-b", "develop");
+    yield* fileSystem.writeFileString(`${source}/README.md`, "readme\n");
+    yield* git(source, "add", "README.md");
+    yield* git(source, "commit", "-m", "init");
+    yield* git(fixture, "clone", "--bare", source, `${container}/.bare`);
+    yield* fileSystem.writeFileString(`${container}/.git`, "gitdir: ./.bare\n");
+    yield* git(container, "worktree", "add", "develop", "develop");
 
-    const restarted = yield* makeService;
-    assert.equal(Option.getOrThrow(yield* restarted.getById(parentId)).workspaceRoot, container);
-    assert.equal(Option.getOrThrow(yield* restarted.getById(mainId)).workspaceRoot, main);
-    assert.equal((yield* restarted.snapshot).projects.length, 2);
-  }).pipe(
-    Effect.provide(layerProjectServiceDependencies.pipe(Layer.provideMerge(NodeServices.layer))),
-  ),
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      // As cloned the container is bare; Initialize Git or a config edit clears core.bare.
+      for (const coreBare of ["true", "false"]) {
+        yield* git(container, "config", "core.bare", coreBare);
+        const rejected = yield* service
+          .create({
+            commandId: CommandId.make(`command:container:create:${coreBare}`),
+            projectId: ProjectId.make(`project:container:${coreBare}`),
+            title: "Container",
+            workspaceRoot: container,
+          })
+          .pipe(Effect.flip);
+        assert.equal(rejected._tag, "ProjectInvalidError", `core.bare=${coreBare}`);
+        assert.include(rejected.message, "Add one of its worktrees");
+        assert.isTrue(Option.isNone(yield* service.getByWorkspaceRoot(container)));
+      }
+
+      const projectId = ProjectId.make("project:container:worktree");
+      const worktree = yield* service.create({
+        commandId: CommandId.make("command:container:worktree"),
+        projectId,
+        title: "Worktree",
+        workspaceRoot: `${container}/develop`,
+      });
+      const moved = yield* service
+        .update({
+          commandId: CommandId.make("command:container:move"),
+          projectId,
+          workspaceRoot: container,
+        })
+        .pipe(Effect.flip);
+      assert.equal(moved._tag, "ProjectInvalidError");
+      assert.equal(
+        Option.getOrThrow(yield* service.getById(projectId)).workspaceRoot,
+        worktree.workspaceRoot,
+      );
+    }).pipe(Effect.provide(layerTest));
+  }).pipe(Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect("serializes two projects claiming the same workspace root", () =>

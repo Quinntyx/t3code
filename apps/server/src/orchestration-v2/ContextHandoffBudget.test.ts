@@ -2,8 +2,6 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import { assert, describe, it } from "@effect/vitest";
 import {
   ContextHandoffId,
-  EnvironmentId,
-  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -15,13 +13,13 @@ import {
   type OrchestrationV2HistoricalMessage,
   type OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
-import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   contextUsageForHandoff,
   handoffBudget,
+  handoffCoverage,
   historyCost,
   historyResponseItems,
   selectHistory,
@@ -70,22 +68,6 @@ const message = (
   status: "interrupted",
   kind: role === "user" ? "user_message" : "assistant_message",
 });
-const turnItemBase = {
-  id: TurnItemId.make("item:base"),
-  threadId,
-  runId: RunId.make("run:source"),
-  nodeId: null,
-  providerThreadId: providerThread.id,
-  providerTurnId: null,
-  nativeItemRef: null,
-  parentItemId: null,
-  ordinal: 1,
-  status: "failed" as const,
-  title: null,
-  startedAt: now,
-  completedAt: now,
-  updatedAt: now,
-};
 const messages = [
   message("item:one", "user", "Preserve every line.\n\n  And this indentation.\n"),
   message("item:two", "assistant", "Partial work: 日本語 🧪 مرحبا\n" + "x".repeat(600)),
@@ -128,31 +110,25 @@ describe("handoff budget", () => {
     assert.equal(decodeHandoff(projected).id, handoff.id);
     assert.deepEqual(handoff.history?.messages, messages);
   });
-  it("replays a user message the way its live turn read, thread ids included", () => {
-    const ref = {
-      environmentId: EnvironmentId.make("environment:prep"),
-      threadId: ThreadId.make("mcp:46ef5164-692a-4a74-ae18-a37862a4591a"),
-    };
-    const record = threadContextRecord(ref, "Prep");
-    const replayed = historicalMessage({
-      ...turnItemBase,
-      type: "user_message",
-      messageId: MessageId.make("message:thread-ref"),
-      inputIntent: "turn_start",
-      text: `Compare with [Prep](t3-context://v1/thread/${record.contextId})`,
-      attachments: [],
-      context: { version: 1, records: [record] },
-      createdBy: "user",
-      creationSource: "web",
-    });
-    assert.notInclude(replayed!.text, "t3-context://");
-    assert.include(replayed!.text, `[Thread: Prep; threadId=${ref.threadId}]`);
-    assert.include(replayed!.text, `threadId: ${ref.threadId}`);
-  });
-
   it("carries command outcomes as attributed activity and excludes reasoning", () => {
+    const base = {
+      id: TurnItemId.make("item:command"),
+      threadId,
+      runId: RunId.make("run:source"),
+      nodeId: null,
+      providerThreadId: providerThread.id,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "failed" as const,
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+    };
     const command = historicalMessage({
-      ...turnItemBase,
+      ...base,
       type: "command_execution",
       input: "vp test",
       output: "Failure near the end: " + "界".repeat(300),
@@ -164,7 +140,7 @@ describe("handoff budget", () => {
     assert.include(command!.text, "界".repeat(300));
     assert.equal(
       historicalMessage({
-        ...turnItemBase,
+        ...base,
         type: "file_change",
         fileName: "src/a.ts",
         changes: [
@@ -175,9 +151,13 @@ describe("handoff budget", () => {
       })?.text,
       "File change: src/a.ts, src/b.ts, src/new.ts",
     );
+    assert.equal(
+      historicalMessage({ ...base, type: "file_change", fileName: "src/a.ts", changes: [] })?.text,
+      "File change: src/a.ts",
+    );
     assert.isNull(
       historicalMessage({
-        ...turnItemBase,
+        ...base,
         type: "reasoning",
         text: "private reasoning",
         streaming: false,
@@ -201,6 +181,21 @@ describe("handoff budget", () => {
     assert.deepEqual(selected.messages, messages);
     assert.equal(selected.omittedItems, 2);
     assert.isAtMost(historyCost(selected.messages, selected.context), 3_000);
+  });
+
+  it("points history recovery at the omitted items instead of a read from the thread's start", () => {
+    const omitted = message("item:omitted", "assistant", "o".repeat(4_000));
+    const selected = selectHistory({
+      messages: [
+        messages[0]!,
+        omitted,
+        ...Array.from({ length: 3 }, (_, i) => message(`item:recent-${i}`, "assistant", "recent")),
+      ],
+      coverage: handoffCoverage({ threadId, coveredRunOrdinals: { from: 1, to: 46 }, items: [] }),
+      budget: 3_000,
+    });
+    assert.deepEqual(selected.omittedItemIds, [omitted.itemId]);
+    assert.include(selected.context, omitted.itemId);
   });
 
   it("counts JSON escaping and UTF-8 bytes across many messages", () => {
@@ -285,6 +280,17 @@ describe("handoff budget", () => {
       );
     }
     assert.equal(handoffBudget({ ...base, tokenCap: 2_000 }), 2_000);
+    // The work reserve never takes more than half of a small local window.
+    for (const [modelContextWindow, nativeContextEstimate, expected] of [
+      [8_192, 0, 4_086],
+      [32_768, 0, 16_758],
+      [131_072, 50_000, 48_294],
+    ] as const) {
+      assert.equal(
+        handoffBudget({ ...base, tokenCap: 64_000, modelContextWindow, nativeContextEstimate }),
+        expected,
+      );
+    }
   });
 
   it("keeps measured occupancy across a model change", () => {
@@ -413,13 +419,15 @@ describe("handoff budget", () => {
         assert.isAtMost(historyCost(selected.messages, selected.context), budget);
       }
       assert.equal(handoffBudget({ ...input, modelContextWindow: 2_000_000 }), 16_000);
-      assert.equal(handoffBudget({ ...input, modelContextWindow: 20_000 }), 0);
+      // 20k window: half is reserved for work, then 27 prompt bytes and 8,192 per image.
+      const smallWindowBudget = count === 1 ? 1_781 : 0;
+      assert.equal(handoffBudget({ ...input, modelContextWindow: 20_000 }), smallWindowBudget);
       assert.equal(
         handoffBudget({
           ...input,
           providerThread: { ...providerThread, contextUsage: { usedTokens: 0, maxTokens: 20_000 } },
         }),
-        0,
+        smallWindowBudget,
       );
       assert.equal(
         handoffBudget({
@@ -430,7 +438,7 @@ describe("handoff budget", () => {
             contextUsage: { usedTokens: 0, maxTokens: 1_000_000, autoCompactThreshold: 20_000 },
           },
         }),
-        0,
+        smallWindowBudget,
       );
     }
   });

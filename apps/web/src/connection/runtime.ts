@@ -1,5 +1,4 @@
 import { Connection } from "@t3tools/client-runtime/connection";
-import { DirectoryDiscovery } from "@t3tools/client-runtime/discover";
 import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import {
   BoundedThreadSnapshotLoader,
@@ -68,6 +67,6 @@ const layerForPage = Layer.unwrap(
 );
 
 export const connectionAtomRuntime: Atom.AtomRuntime<
-  Layer.Success<ConnectionLayerSource> | DirectoryDiscovery,
+  Layer.Success<ConnectionLayerSource>,
   Layer.Error<ConnectionLayerSource>
 > = Atom.runtime(layerForPage);

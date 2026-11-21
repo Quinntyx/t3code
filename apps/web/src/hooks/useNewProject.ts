@@ -7,9 +7,11 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ProjectCloneLayout } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { msg } from "gt-react";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { m } from "~/i18n/messages";
 import { waitForProject } from "~/state/entities";
 import { projectEnvironment } from "~/state/projects";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -20,7 +22,7 @@ import { suggestAppAccessForRemote } from "../components/sourceControlAppAccessT
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
-    : "An error occurred.";
+    : m(msg("An error occurred."));
 }
 
 export function useNewProject() {
@@ -34,7 +36,6 @@ export function useNewProject() {
     readonly environmentId: EnvironmentId;
     readonly workspaceRoot: string;
     readonly target: NewProjectPublishTarget;
-    readonly layout: ProjectCloneLayout;
   }) => {
     const { label } = input.target.definition;
     const result = await publishRepository({
@@ -42,7 +43,7 @@ export function useNewProject() {
       input: {
         cwd: input.workspaceRoot,
         provider: input.target.definition.kind,
-        repository: getNewProjectRepository(input.target, input.workspaceRoot, input.layout),
+        repository: getNewProjectRepository(input.target, input.workspaceRoot),
         visibility: "private",
       },
     });
@@ -51,8 +52,12 @@ export function useNewProject() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: `Could not create the ${label} repository`,
-            description: `${errorMessage(squashAtomCommandFailure(result))} Use Publish Repository in the Git menu to try again.`,
+            title: m(msg("Could not create the {label} repository", { label })),
+            description: m(
+              msg("{error} Use Publish Repository in the Git menu to try again.", {
+                error: errorMessage(squashAtomCommandFailure(result)),
+              }),
+            ),
           }),
         );
       }
@@ -61,7 +66,7 @@ export function useNewProject() {
     toastManager.add(
       stackedThreadToast({
         type: "success",
-        title: `Published to ${label}`,
+        title: m(msg("Published to {label}", { label })),
         description: result.value.repository.nameWithOwner,
       }),
     );
@@ -71,24 +76,18 @@ export function useNewProject() {
   return async (input: {
     readonly environmentId: EnvironmentId;
     readonly name: string;
-    readonly parentDirectory: string | null;
-    readonly layout: ProjectCloneLayout | null;
     readonly publishTo: NewProjectPublishTarget | null;
   }): Promise<boolean> => {
     const result = await createNew({
       environmentId: input.environmentId,
-      input: {
-        name: input.name,
-        ...(input.parentDirectory === null ? {} : { parentDirectory: input.parentDirectory }),
-        ...(input.layout === null ? {} : { layout: input.layout }),
-      },
+      input: { name: input.name },
     });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not create the project",
+            title: m(msg("Could not create the project")),
             description: errorMessage(squashAtomCommandFailure(result)),
           }),
         );
@@ -100,11 +99,20 @@ export function useNewProject() {
     toastManager.add(
       stackedThreadToast(
         commitError === undefined
-          ? { type: "success", title: `Created ${input.name}`, description: workspaceRoot }
+          ? {
+              type: "success",
+              title: m(msg("Created {name}", { name: input.name })),
+              description: workspaceRoot,
+            }
           : {
               type: "warning",
-              title: `Created ${input.name} without a first commit`,
-              description: `${commitError} The project is in ${workspaceRoot}.`,
+              title: m(msg("Created {name} without a first commit", { name: input.name })),
+              description: m(
+                msg("{error} The project is in {path}.", {
+                  error: commitError,
+                  path: workspaceRoot,
+                }),
+              ),
             },
       ),
     );
@@ -113,7 +121,6 @@ export function useNewProject() {
         environmentId: input.environmentId,
         workspaceRoot,
         target: input.publishTo,
-        layout: input.layout ?? "standard",
       });
     }
 
@@ -123,19 +130,22 @@ export function useNewProject() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to open project",
-          description: `${errorMessage(error)} It will appear in the sidebar once this client catches up.`,
+          title: m(msg("Failed to open project")),
+          description: m(
+            msg("{error} It will appear in the sidebar once this client catches up.", {
+              error: errorMessage(error),
+            }),
+          ),
         }),
       );
       return null;
     });
     if (project === null) return true;
-    // A new project's checkout is wherever it was created, so its first thread runs in place.
-    await handleNewThread(projectRef, { envMode: "local" }).catch((error: unknown) => {
+    await handleNewThread(projectRef).catch((error: unknown) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to open project",
+          title: m(msg("Failed to open project")),
           description: errorMessage(error),
         }),
       );

@@ -1,4 +1,7 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
+import { msg } from "gt-react";
+
+import { m } from "./i18n/messages";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -252,7 +255,6 @@ export function showContextMenuFallback<T extends string>(
     const previouslyFocusedElement = focusedElement instanceof HTMLElement ? focusedElement : null;
     const menuStack: HTMLDivElement[] = [];
     const submenuTriggerStack: Array<HTMLButtonElement | undefined> = [];
-    const disarmers: Array<() => void> = [];
     let isDisposed = false;
     let canDismissFromPointer = false;
 
@@ -271,8 +273,6 @@ export function showContextMenuFallback<T extends string>(
       document.removeEventListener("contextmenu", onContextMenu, true);
       document.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("blur", onWindowBlur);
-      for (const disarm of disarmers) disarm();
-      disarmers.length = 0;
       const shouldRestoreFocus =
         restoreFocus && isNodeWithinMenuStack(document.activeElement, menuStack);
       for (const menu of menuStack) {
@@ -390,22 +390,22 @@ export function showContextMenuFallback<T extends string>(
 
       const menu = document.createElement("div");
       menu.className =
-        "dropdown-glass fixed z-[10000] min-w-32 max-w-sm overflow-hidden rounded-glass text-popover-foreground outline-none";
+        "dropdown-glass fixed z-[10000] min-w-32 max-w-sm overflow-hidden rounded-lg bg-clip-padding text-popover-foreground outline-none";
       menu.style.cssText =
-        "position:fixed;z-index:10000;min-width:8rem;max-width:24rem;overflow:hidden;border-radius:var(--radius-glass);color:var(--contrast-popover-foreground);outline:none;pointer-events:auto;-webkit-app-region:no-drag;";
+        "position:fixed;z-index:10000;min-width:8rem;max-width:24rem;overflow:hidden;border-radius:var(--radius-lg);background-clip:padding-box;color:var(--contrast-popover-foreground);outline:none;pointer-events:auto;";
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
       menu.dataset.level = String(level);
       menu.dataset.contextMenu = "true";
       menu.setAttribute("role", "menu");
-      menu.setAttribute("aria-label", parentTrigger?.textContent ?? "Context menu");
+      menu.setAttribute("aria-label", parentTrigger?.textContent ?? m(msg("Context menu")));
       menu.tabIndex = -1;
 
       const inner = document.createElement("div");
       inner.className =
-        "max-h-[calc(100vh-0.5rem)] min-w-0 max-w-sm overflow-y-auto overflow-x-hidden p-1.5";
+        "max-h-[calc(100vh-0.5rem)] min-w-0 max-w-sm overflow-y-auto overflow-x-hidden p-1";
       inner.style.cssText =
-        "max-height:calc(100vh - 0.5rem);min-width:0;max-width:24rem;overflow-x:hidden;overflow-y:auto;padding:0.375rem;";
+        "max-height:calc(100vh - 0.5rem);min-width:0;max-width:24rem;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
 
       for (const item of entries) {
         if (item.separatorBefore === true && inner.children.length > 0) {
@@ -438,14 +438,14 @@ export function showContextMenuFallback<T extends string>(
         button.setAttribute("role", "menuitem");
         button.setAttribute("aria-disabled", String(isDisabled));
         const rowBase =
-          "flex w-full cursor-default select-none items-center gap-2 rounded-glass-item px-2 py-1 text-left outline-none transition-colors sm:min-h-7 sm:text-sm min-h-8 text-base";
+          "flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left outline-none transition-colors sm:min-h-7 sm:text-sm min-h-8 text-base";
         button.className = isDisabled
           ? `${rowBase} pointer-events-none cursor-not-allowed text-muted-foreground opacity-64`
           : isLeafDestructive
             ? `${rowBase} text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground`
-            : `${rowBase} text-foreground hover:bg-accent-glass hover:text-accent-foreground`;
+            : `${rowBase} text-foreground hover:bg-accent hover:text-accent-foreground`;
         button.style.cssText =
-          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:var(--radius-glass-item);background:transparent;padding:0.25rem 0.5rem;color:var(--contrast-foreground);font-family:var(--font-sans,system-ui,sans-serif);font-size:0.875rem;line-height:1.25rem;text-align:left;cursor:default;";
+          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:var(--radius-sm);background:transparent;padding:0.25rem 0.5rem;color:var(--contrast-foreground);font-family:var(--font-sans,system-ui,sans-serif);font-size:0.875rem;line-height:1.25rem;text-align:left;cursor:default;";
         if (isLeafDestructive) {
           button.style.color = "var(--destructive-foreground)";
         }
@@ -455,7 +455,6 @@ export function showContextMenuFallback<T extends string>(
           button.style.pointerEvents = "none";
         }
 
-        let iconNode: SVGSVGElement | null = null;
         if (typeof item.checked === "boolean") {
           button.setAttribute("role", "menuitemradio");
           button.setAttribute("aria-checked", item.checked ? "true" : "false");
@@ -473,15 +472,24 @@ export function showContextMenuFallback<T extends string>(
           const icon = createIconElement(item.icon, isLeafDestructive ? "destructive" : "neutral");
           if (icon) {
             button.appendChild(icon);
-            iconNode = icon;
           }
         }
-        const originalIcon = iconNode;
 
         const label = document.createElement("span");
         label.className = "min-w-0 flex-1 truncate";
         label.textContent = item.label;
         button.appendChild(label);
+
+        if (item.detail) {
+          // The comma gives screen readers a pause between label and detail.
+          button.setAttribute("aria-label", `${item.label}, ${item.detail}`);
+          const detail = document.createElement("span");
+          detail.className = "ms-auto shrink-0 ps-4 text-muted-foreground text-xs";
+          detail.style.cssText =
+            "margin-inline-start:auto;flex-shrink:0;padding-inline-start:1rem;color:var(--contrast-muted-foreground);font-size:0.75rem;";
+          detail.textContent = item.detail;
+          button.appendChild(detail);
+        }
 
         if (hasChildren) {
           button.setAttribute("aria-haspopup", "menu");
@@ -506,7 +514,7 @@ export function showContextMenuFallback<T extends string>(
             button.style.background = isHighlighted
               ? isLeafDestructive
                 ? "color-mix(in srgb, var(--destructive) 10%, transparent)"
-                : "rgb(from var(--accent) r g b / min(alpha, var(--glass-alpha)))"
+                : "var(--accent)"
               : "transparent";
             button.style.color = isHighlighted
               ? isLeafDestructive
@@ -534,49 +542,6 @@ export function showContextMenuFallback<T extends string>(
             updateHighlight();
           });
 
-          const confirmLabel =
-            hasChildren || typeof item.confirmLabel !== "string" ? null : item.confirmLabel;
-          const armedLabel = confirmLabel ?? item.label;
-          let armed = false;
-          let disarmTimer: ReturnType<typeof setTimeout> | null = null;
-          const setArmed = (next: boolean) => {
-            if (armed === next) return;
-            armed = next;
-            if (disarmTimer !== null) {
-              clearTimeout(disarmTimer);
-              disarmTimer = null;
-            }
-            label.textContent = next ? armedLabel : item.label;
-            button.dataset.contextMenuArmed = String(next);
-            if (next) {
-              const check = createIconElement(
-                "check",
-                isLeafDestructive ? "destructive" : "neutral",
-              );
-              if (check) {
-                if (iconNode) button.replaceChild(check, iconNode);
-                else button.insertBefore(check, label);
-                iconNode = check;
-              }
-              disarmTimer = setTimeout(() => setArmed(false), 3000);
-            } else if (iconNode) {
-              if (originalIcon) button.replaceChild(originalIcon, iconNode);
-              else iconNode.remove();
-              iconNode = originalIcon;
-            }
-          };
-          if (confirmLabel !== null) {
-            disarmers.push(() => {
-              if (disarmTimer !== null) {
-                clearTimeout(disarmTimer);
-                disarmTimer = null;
-              }
-            });
-            button.addEventListener("blur", () => {
-              if (armed) setArmed(false);
-            });
-          }
-
           if (hasChildren) {
             const openSubmenu = (focusFirstItem = false) => {
               const rect = button.getBoundingClientRect();
@@ -588,10 +553,6 @@ export function showContextMenuFallback<T extends string>(
               const childMenu = menuStack[level + 1];
               if (!childMenu) {
                 return;
-              }
-              const childRect = childMenu.getBoundingClientRect();
-              if (childRect.right > window.innerWidth) {
-                clampMenuPosition(childMenu, rect.left - childRect.width - 4, rect.top);
               }
               if (focusFirstItem) {
                 [...childMenu.querySelectorAll<HTMLButtonElement>("button")]
@@ -611,12 +572,7 @@ export function showContextMenuFallback<T extends string>(
               closeMenusFromLevel(level + 1);
             });
             button.addEventListener("click", () => {
-              if (!canDismissFromPointer) return;
-              if (confirmLabel !== null && !armed) {
-                setArmed(true);
-                return;
-              }
-              cleanup(item.id);
+              if (canDismissFromPointer) cleanup(item.id);
             });
           }
         }
@@ -629,13 +585,31 @@ export function showContextMenuFallback<T extends string>(
       menu.addEventListener("mouseenter", () => {
         closeMenusFromLevel(level + 1);
       });
+      // Like a native menu, take thumb Back/Forward presses instead of letting Chromium
+      // run the app router's history underneath.
+      const swallowThumbButton = (event: MouseEvent) => {
+        if (event.button === 3 || event.button === 4) event.preventDefault();
+      };
+      menu.addEventListener("mousedown", swallowThumbButton);
+      menu.addEventListener("mouseup", swallowThumbButton);
 
       document.body.appendChild(menu);
       menuStack[level] = menu;
       submenuTriggerStack[level] = parentTrigger;
 
       requestAnimationFrame(() => {
-        clampMenuPosition(menu, preferredLeft, preferredTop);
+        if (!parentTrigger) {
+          clampMenuPosition(menu, preferredLeft, preferredTop);
+          return;
+        }
+        // A fixed menu near the right edge shrinks to the space left; measure its real width.
+        menu.style.width = "max-content";
+        menu.style.maxWidth = "min(24rem, calc(100vw - 0.5rem))";
+        const { width } = menu.getBoundingClientRect();
+        const roomLeft = parentTrigger.getBoundingClientRect().left - 4;
+        const roomRight = window.innerWidth - preferredLeft;
+        const flipLeft = width > roomRight && roomLeft > roomRight;
+        clampMenuPosition(menu, flipLeft ? roomLeft - width : preferredLeft, preferredTop);
       });
     };
 

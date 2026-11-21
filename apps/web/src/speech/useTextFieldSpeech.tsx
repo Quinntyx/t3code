@@ -11,55 +11,16 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useDictationShortcut } from "./useDictationShortcut";
 import { useEnvironmentSpeechInput } from "./useEnvironmentSpeechInput";
 
-interface FieldSpeechInput {
+/** Binds dictation to a plain textarea draft; the shortcut targets it only while it has focus. */
+export function useTextFieldSpeech(input: {
   readonly environmentId: EnvironmentId;
   readonly projectId?: ProjectId | null | undefined;
   readonly ownerKey: string;
   readonly text: string;
+  readonly textareaRef: RefObject<HTMLTextAreaElement | null>;
+  readonly onTextChange: (text: string) => void;
   readonly disabled?: boolean | undefined;
-}
-
-type FieldSelection = { readonly start: number; readonly end: number };
-
-/** Binds dictation to a plain textarea draft; the shortcut targets it only while it has focus. */
-export function useTextFieldSpeech(
-  input: FieldSpeechInput & {
-    readonly textareaRef: RefObject<HTMLTextAreaElement | null>;
-    readonly onTextChange: (text: string) => void;
-  },
-) {
-  const { textareaRef } = input;
-  return useDraftFieldSpeech({
-    ...input,
-    targetRef: textareaRef,
-    readDraft: () => {
-      const field = textareaRef.current;
-      const cursor = field?.selectionStart ?? input.text.length;
-      return {
-        text: field?.value ?? input.text,
-        selection: { start: cursor, end: field?.selectionEnd ?? cursor },
-      };
-    },
-    commitDraft: (text, selection) => {
-      input.onTextChange(text);
-      window.requestAnimationFrame(() => {
-        const field = textareaRef.current;
-        if (!field) return;
-        field.focus({ preventScroll: true });
-        field.setSelectionRange(selection.start, selection.end);
-      });
-    },
-  });
-}
-
-/** Binds dictation to any draft editor; the shortcut targets it only while `targetRef` has focus. */
-export function useDraftFieldSpeech(
-  input: FieldSpeechInput & {
-    readonly targetRef: RefObject<HTMLElement | null>;
-    readonly readDraft: () => { readonly text: string; readonly selection: FieldSelection };
-    readonly commitDraft: (text: string, selection: FieldSelection) => void;
-  },
-) {
+}) {
   const latest = useRef(input);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed field callbacks to the asynchronous recording controller
   useEffect(() => {
@@ -70,11 +31,25 @@ export function useDraftFieldSpeech(
     environmentId: input.environmentId,
     projectId: input.projectId,
     ownerKey: input.ownerKey,
-    draftText: input.text,
     disabled: input.disabled,
     offerSetup: false,
-    readDraft: () => latest.current.readDraft(),
-    commitDraft: (text, selection) => latest.current.commitDraft(text, selection),
+    readDraft: () => {
+      const field = latest.current.textareaRef.current;
+      const cursor = field?.selectionStart ?? latest.current.text.length;
+      return {
+        text: field?.value ?? latest.current.text,
+        selection: { start: cursor, end: field?.selectionEnd ?? cursor },
+      };
+    },
+    commitDraft: (text, selection) => {
+      latest.current.onTextChange(text);
+      window.requestAnimationFrame(() => {
+        const field = latest.current.textareaRef.current;
+        if (!field) return;
+        field.focus({ preventScroll: true });
+        field.setSelectionRange(selection.start, selection.end);
+      });
+    },
   });
   const shortcutLabel = useDictationShortcut({
     keybindings,
@@ -82,7 +57,7 @@ export function useDraftFieldSpeech(
     disabled: input.disabled ?? false,
     terminalOpen: false,
     modelPickerOpen: false,
-    targetRef: input.targetRef,
+    targetRef: input.textareaRef,
   });
   return { ...speech, shortcutLabel };
 }
@@ -99,35 +74,36 @@ export function TextFieldSpeechControls({
   return (
     <>
       {speech.preview ? (
-        <p role="status" className="w-full text-sm text-muted-foreground">
+        <p
+          role="status"
+          className="order-first max-h-24 w-full overflow-y-auto rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5 text-sm break-words whitespace-pre-wrap"
+        >
           {speech.preview.committed}
-          <span className="opacity-70">{speech.preview.tentative}</span>
+          <span className="text-muted-foreground">{speech.preview.tentative}</span>
         </p>
       ) : null}
-      <div className="flex min-w-0 items-center gap-1">
-        <ComposerSpeechRecordingPill
+      <ComposerSpeechRecordingPill
+        size="compact"
+        state={speech.state}
+        progress={null}
+        level={speech.level}
+        finishShortcutLabel={speech.shortcutLabel}
+        cancelShortcutLabel="Esc"
+        disabled={disabled}
+        onStart={() => void speech.start()}
+        onStop={() => void speech.stop()}
+        onCancel={speech.cancel}
+        onSkipPostProcessing={speech.skipPostProcessing}
+      />
+      {speech.available ? (
+        <ComposerSpeechButton
           state={speech.state}
-          progress={null}
-          level={speech.level}
-          finishShortcutLabel={speech.shortcutLabel}
-          cancelShortcutLabel="Esc"
+          size="compact"
+          shortcutLabel={speech.shortcutLabel}
           disabled={disabled}
           onStart={() => void speech.start()}
-          onStop={() => void speech.stop()}
-          onCancel={speech.cancel}
-          onSkipPostProcessing={speech.skipPostProcessing}
         />
-        {speech.available ? (
-          <ComposerSpeechButton
-            state={speech.state}
-            progress={null}
-            shortcutLabel={speech.shortcutLabel}
-            disabled={disabled}
-            onStart={() => void speech.start()}
-            onCancel={speech.cancel}
-          />
-        ) : null}
-      </div>
+      ) : null}
       <VoiceInputSetup
         environmentId={speech.transcriptionEnvironmentId}
         open={speech.setup.open}

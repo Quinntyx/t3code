@@ -5,7 +5,6 @@ export interface IconButtonProps {
   readonly icon: AppSymbolName;
   readonly onPress?: () => void;
   readonly disabled?: boolean;
-  readonly busy?: boolean;
   readonly selected?: boolean;
   readonly variant?: "standard" | "primary" | "tonal" | "danger";
   readonly tintColorClassName?: string;

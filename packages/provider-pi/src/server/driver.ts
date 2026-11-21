@@ -2,7 +2,6 @@
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { PiSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
-import * as Digest from "effect/crypto/Digest";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -12,12 +11,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { piUsageReader } from "./usage.ts";
-import { readPiOpenCodeGoUsageLimits } from "./goUsageLimits.ts";
-import { readPiCodexUsageLimits } from "./codexUsageLimits.ts";
 import { makePiTextGeneration } from "./textGeneration.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./adapter.ts";
-import { materializePiT3DiscoverExtension } from "./mcpInjection.ts";
-import { withHubModelsEnvironment } from "./discoverExtensionSource.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import {
   buildInitialPiProviderSnapshot,
@@ -52,14 +47,12 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
   npmPackageName: "@earendil-works/pi-coding-agent",
   mise: { tool: "pi" },
   nativeUpdate: { args: ["update", "--self"] },
-  extensionUpdateArgs: ["update", "--extensions"],
 });
 
 export type PiDriverEnv =
   | PiAdapterV2DriverEnv
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | Digest.Digest
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -102,10 +95,10 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     const fileSystem = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
-    const digest = yield* Digest.Digest;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const host = yield* ProviderHost.ProviderHost;
-    const { cwd } = host.paths;
+    // Pi runs extensions' session_start in its cwd; the server's cwd is $HOME on packaged desktop.
+    const probeCwd = pathService.join(host.paths.providerStatusCacheDir, "pi-status-probe");
     const processEnv = yield* mergeProviderInstanceEnvironment(environment);
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
@@ -147,62 +140,22 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
           }),
       ),
     );
-    const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
+    const textGeneration = yield* makePiTextGeneration(
+      effectiveConfig,
+      processEnv,
+      host.compatibility,
+    );
 
-    const discoverExtensionPath = yield* materializePiT3DiscoverExtension(
-      host.paths.providerStatusCacheDir,
-    ).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.orElseSucceed(() => undefined),
-    );
-    const checkProvider = Effect.all(
-      {
-        provider: (host.hubModels ?? Effect.succeed([])).pipe(
-          Effect.flatMap((hubModels) =>
-            checkPiProviderStatus(
-              effectiveConfig,
-              withHubModelsEnvironment(processEnv, hubModels),
-              cwd,
-              discoverExtensionPath,
-            ),
-          ),
+    const checkProvider = fileSystem
+      .makeDirectory(probeCwd, { recursive: true })
+      .pipe(
+        Effect.ignore,
+        Effect.andThen(
+          checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility),
         ),
-        usageLimits: readPiOpenCodeGoUsageLimits({
-          enabled,
-          settings: effectiveConfig,
-          environment: processEnv,
-        }),
-        codexUsage: readPiCodexUsageLimits({
-          enabled,
-          settings: effectiveConfig,
-          environment: processEnv,
-        }),
-      },
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.map(({ provider, usageLimits, codexUsage }) => ({
-        ...provider,
-        usageLimits,
-        ...(codexUsage.limits.unavailable || codexUsage.limits.windows.length === 0
-          ? {}
-          : {
-              usageSources: [
-                {
-                  id: "chatgpt",
-                  label: "ChatGPT",
-                  driver: ProviderDriverKind.make("codex"),
-                  ...(codexUsage.email ? { email: codexUsage.email } : {}),
-                  ...(codexUsage.workspaceId ? { workspaceId: codexUsage.workspaceId } : {}),
-                  limits: codexUsage.limits,
-                },
-              ],
-            }),
-      })),
-      Effect.map(stampIdentity),
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.provideService(Digest.Digest, digest),
-    );
+        Effect.map(stampIdentity),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<PiSettings>>({

@@ -1,14 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import {
-  ForwardCompatibleArray,
-  IsoDateTime,
-  NonNegativeInt,
-  PositiveInt,
-  ThreadId,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Bump for incompatible UsageSummary changes; skipped unknown array variants need no bump. */
 export const USAGE_CONTRACT_VERSION = 6 as const;
@@ -74,6 +66,8 @@ export const UsageBucket = Schema.Struct({
   costSource: UsageCostSource,
   records: NonNegativeInt,
   unpricedRecords: NonNegativeInt,
+  /** Absent from older servers; merges then estimate it from the unpriced record share. */
+  unpricedTokens: Schema.optional(NonNegativeInt),
   sessions: NonNegativeInt,
 });
 export type UsageBucket = typeof UsageBucket.Type;
@@ -84,6 +78,13 @@ export const UsageSourceFingerprint = Schema.Struct({
   resolvedHomePath: TrimmedNonEmptyString,
   /** Transcript directory device:inode distinguishes machines sharing a hostname and home path. */
   volumeId: Schema.String,
+  /**
+   * Opaque identity of a directory that the Windows server of a desktop install
+   * reads natively and its managed WSL server reads through a drvfs mount. Path
+   * and `volumeId` differ between the two sides, so clients treat sources with
+   * an equal value as one directory in addition to the fields above.
+   */
+  physicalSourceId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type UsageSourceFingerprint = typeof UsageSourceFingerprint.Type;
 
@@ -141,6 +142,8 @@ export const UsageSummaryInput = Schema.Struct({
   sinceTime: Schema.optional(TrimmedNonEmptyString),
   untilTime: Schema.optional(TrimmedNonEmptyString),
   awaitRefresh: Schema.optional(Schema.Boolean),
+  /** Accept an immediate answer from the last scan; its sources are marked refreshing. */
+  provisional: Schema.optional(Schema.Boolean),
   modelFilter: Schema.optional(UsageModelFilter),
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
@@ -167,62 +170,5 @@ export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageR
 }) {
   override get message(): string {
     return `Usage read failed (${this.reason}): ${this.detail}`;
-  }
-}
-
-export const ThreadUsageInput = Schema.Struct({ threadId: ThreadId });
-export type ThreadUsageInput = typeof ThreadUsageInput.Type;
-
-/** The thread's own turns, or the turns of the subagent threads it delegated to, at any depth. */
-export const ThreadUsageGroup = Schema.Literals(["main", "delegates"]);
-export type ThreadUsageGroup = typeof ThreadUsageGroup.Type;
-
-const ThreadUsageModelKey = {
-  providerInstanceId: ProviderInstanceId,
-  driver: ProviderDriverKind,
-  model: TrimmedNonEmptyString,
-};
-
-export const ThreadUsageModel = Schema.Struct({
-  ...ThreadUsageModelKey,
-  group: ThreadUsageGroup,
-  /** Threads in the group that ran this model. */
-  threads: PositiveInt,
-  tokens: UsageTokenTotals,
-  totalTokens: NonNegativeInt,
-  /** API-list price of the tokens; null when no rate is known for the model. */
-  costUsd: Schema.NullOr(Schema.Number),
-});
-export type ThreadUsageModel = typeof ThreadUsageModel.Type;
-
-/** Tokens per bucket for one model across both groups, aligned to `ThreadUsage.startedAt`. */
-export const ThreadUsageSeries = Schema.Struct({
-  ...ThreadUsageModelKey,
-  buckets: Schema.Array(NonNegativeInt),
-});
-export type ThreadUsageSeries = typeof ThreadUsageSeries.Type;
-
-export const ThreadUsage = Schema.Struct({
-  /** Sum of this thread's run durations, excluding gaps between runs; absent on older servers. */
-  durationMs: Schema.optional(NonNegativeInt),
-  /** Server timestamp when `durationMs` was sampled; absent on older servers. */
-  readAt: Schema.optional(IsoDateTime),
-  startedAt: Schema.NullOr(IsoDateTime),
-  bucketMs: PositiveInt,
-  models: Schema.Array(ThreadUsageModel),
-  series: Schema.Array(ThreadUsageSeries),
-  /** When the thread's own context was compacted. */
-  compactedAt: Schema.Array(IsoDateTime),
-  /** Groups missing usage a provider could not measure, so their totals are a floor. */
-  incompleteGroups: Schema.optional(Schema.Array(ThreadUsageGroup)),
-});
-export type ThreadUsage = typeof ThreadUsage.Type;
-
-export class ThreadUsageError extends Schema.TaggedError<ThreadUsageError>()("ThreadUsageError", {
-  threadId: ThreadId,
-  cause: Schema.optional(Schema.Defect()),
-}) {
-  override get message(): string {
-    return `Thread usage could not be read for ${this.threadId}.`;
   }
 }

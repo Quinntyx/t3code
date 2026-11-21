@@ -1,4 +1,3 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { applyUsageLimitsUpdate, resolveUsageLimitsAfterProbe } from "./usageLimits.ts";
@@ -34,6 +33,29 @@ describe("applyUsageLimitsUpdate", () => {
       },
     });
     expect(next).toBe(published);
+    const scoped = { checkedAt, windows: [{ ...weekly, modelIds: ["opencode/a"] }] };
+    const providerScoped = { checkedAt, windows: [{ ...weekly, providerIds: ["opencode"] }] };
+    expect(
+      applyUsageLimitsUpdate({
+        previous: providerScoped,
+        checkedAt,
+        update: { windows: [{ ...weekly, providerIds: ["console-custom"] }] },
+      })?.windows[0]?.providerIds,
+    ).toEqual(["console-custom"]);
+    expect(
+      applyUsageLimitsUpdate({
+        previous: scoped,
+        checkedAt,
+        update: { windows: [{ ...weekly, modelIds: ["opencode/a"] }] },
+      }),
+    ).toBe(scoped);
+    expect(
+      applyUsageLimitsUpdate({
+        previous: scoped,
+        checkedAt,
+        update: { windows: [{ ...weekly, modelIds: ["opencode/b"] }] },
+      })?.windows[0]?.modelIds,
+    ).toEqual(["opencode/b"]);
   });
 
   it("upserts by id and keeps the reset a percent-only update omits", () => {
@@ -67,32 +89,10 @@ describe("applyUsageLimitsUpdate", () => {
     ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });
   });
 
-  it("keeps the account identity a window update does not carry", () => {
-    const account = {
-      ...published,
-      credentialFingerprint: "shared-go-key",
-      ownerDriver: ProviderDriverKind.make("opencode"),
-      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
-    };
-    const next = applyUsageLimitsUpdate({
-      previous: account,
-      checkedAt: "2026-09-03T12:00:05.000Z",
-      update: { windows: [{ ...session, usedPercent: 55 }] },
-    });
-
-    expect(next).toEqual({
-      checkedAt: "2026-09-03T12:00:05.000Z",
-      windows: [{ ...session, usedPercent: 55 }, weekly],
-      credentialFingerprint: "shared-go-key",
-      ownerDriver: "opencode",
-      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
-    });
-  });
-
-  it("preserves reset credits when a streamed window update changes usage", () => {
+  it("preserves reset credits and a $0 cap when a streamed window update changes usage", () => {
     const resetCredits = { availableCount: 2, nextExpiresAt: "2026-10-01T00:00:00.000Z" };
     const next = applyUsageLimitsUpdate({
-      previous: { ...published, resetCredits },
+      previous: { ...published, resetCredits, zeroSpendCap: true },
       checkedAt: "2026-09-03T12:00:05.000Z",
       update: { windows: [{ ...session, usedPercent: 55 }] },
     });
@@ -101,56 +101,29 @@ describe("applyUsageLimitsUpdate", () => {
       checkedAt: "2026-09-03T12:00:05.000Z",
       windows: [{ ...session, usedPercent: 55 }, weekly],
       resetCredits,
-    });
-  });
-
-  it("keeps a window's money and the account's money lines through a percent-only update", () => {
-    const amount = { currency: "eur", used: 8, limit: 20, remaining: 12 };
-    const amounts = [{ id: "key", label: "Key spend", amount: { currency: "usd", used: 3.5 } }];
-    const next = applyUsageLimitsUpdate({
-      previous: { ...published, windows: [{ ...session, amount }, weekly], amounts },
-      checkedAt: "2026-09-03T12:00:05.000Z",
-      update: {
-        windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 55 }],
-      },
-    });
-
-    expect(next).toEqual({
-      checkedAt: "2026-09-03T12:00:05.000Z",
-      windows: [{ ...session, usedPercent: 55, amount }, weekly],
-      amounts,
+      zeroSpendCap: true,
     });
   });
 });
 
 describe("resolveUsageLimitsAfterProbe", () => {
   it("uses read order for windows while taking metadata from the successful probe", () => {
-    const staleAmount = { currency: "usd", used: 8, limit: 20, remaining: 12 };
-    const freshAmount = { currency: "usd", used: 10, limit: 20, remaining: 10 };
-    const line = (used: number) => ({
-      id: "key",
-      label: "Key spend",
-      amount: { currency: "usd", used },
-    });
     const live = {
       checkedAt: "2026-09-03T12:00:05.000Z",
       windows: [
-        { ...session, usedPercent: 95, amount: staleAmount },
-        { ...weekly, usedPercent: 70, amount: staleAmount },
+        { ...session, usedPercent: 95 },
+        { ...weekly, usedPercent: 70 },
       ],
-      amounts: [line(1)],
       resetCredits: { availableCount: 2 },
       externalUsage: { label: "Old dashboard", url: "https://example.com/old" },
     };
     const probed = {
       ...published,
-      windows: [{ ...session, usedPercent: 0, amount: freshAmount }],
-      amounts: [line(2)],
+      windows: [{ ...session, usedPercent: 0 }],
       resetCredits: { availableCount: 1 },
       externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
     };
 
-    // Money lines are probe-only, so the probe's win; a window keeps the money beside its percent.
     expect(resolveUsageLimitsAfterProbe({ published: live, probed })).toEqual({
       ...probed,
       checkedAt: live.checkedAt,

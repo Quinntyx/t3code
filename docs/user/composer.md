@@ -124,13 +124,6 @@ T3 Code remembers your provider, model, and model options for new threads. A
 project's configured model takes precedence; resetting that project setting
 returns to the remembered selection.
 
-To keep a provider's growing catalog out of your model picker, turn off **Enable new models by
-default** in Settings → Providers → Models on web or desktop, or **Turn on new models** in
-Settings → Providers → a provider → Models on mobile. Existing choices
-stay unchanged; newly discovered models stay hidden until you enable them individually. The
-setting is per provider instance and shared across devices connected to that environment.
-Custom models you add remain enabled.
-
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
 ## Quote an assistant response
@@ -149,8 +142,12 @@ delete it like other inline context. Copying, reloading, and restoring a
 with its quote, and sending tells the agent which words were quoted and which comment you wrote.
 The quoted text and comment count toward the message limit.
 
-Mobile displays saved quotes and comments, but does not create citations or
-navigate to their sources.
+On mobile, long-press an assistant response, adjust the text selection, and choose
+**Cite** to insert a quote at the composer cursor. If the passage appears more than
+once in that section, choose its source occurrence. Select more surrounding text
+if a short passage appears too often. Tap a quote in a draft to add
+or edit its comment, or to remove it. To open the source message, tap a quote in
+a draft or sent message, then choose **Go to message**.
 
 ## Recall a sent prompt
 
@@ -184,8 +181,10 @@ to its checkpoint from before that message. That also undoes edits you made your
 File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
-restoring would erase their changes. A thread that works in the project directory
-rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
+restoring would erase their changes. Completed subagents belonging to the reverting
+thread do not block restoring that same worktree, provided they have no queued or
+active work, pending requests, or background tasks. A thread that works in the project
+directory rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
@@ -265,8 +264,12 @@ images. **Send now** sends a message right away, into the running turn if there 
 also edit or remove it.
 
 If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press **Resume** in an empty composer to continue. **Resume** also continues a stopped
-run or one that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue, unless it steers a turn that is already
+Press **Resume** in an empty composer to continue. For stopped runs and usage limits,
+this uses the provider's native continuation without sending a new prompt. If the provider
+does not support it, send a message to continue instead. If the original request never reached
+the provider, Resume sends that request again.
+
+Sending a new message also resumes the queue, unless it steers a turn that is already
 running. You can edit or remove held messages without starting them.
 
 The pencil on a queued message opens it in the composer for editing. The original message
@@ -311,28 +314,21 @@ Claude instances can also compact idle threads for you. See
 
 ## Goals
 
-Send `/goal` followed by what "done" means, for example
+With Codex, Claude, and OpenCode 2.2.5 or later, send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
 line at the end of the thread (above the composer on mobile) shows the goal and
 its progress.
 
-Codex and Claude have their own goals, with pause/resume and token budgets. With
-every other provider T3 Code keeps the goal itself. Each turn ends with a review
-by a delegate on the same model, and only a review that leaves the goal open
-starts the next turn. The agent working on the goal reports what blocks it with
-the `t3_goal` tool; the review is what closes the goal.
-
 - `/goal` alone shows the current goal. `/goal clear` removes it.
-- Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
-  pauses it, and so does Codex ending its work without meeting the goal.
+- Codex and OpenCode also support `/goal pause` and `/goal resume`. Stopping
+  their goal pauses it. Codex also pauses when its work ends without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
-- Elsewhere, stopping a goal turn ends that turn. The goal stays set and the next
-  completed turn continues it, unless you pause or clear it.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current
   turn and starts the goal, unless you queue it. `/goal clear` and `/goal pause`
-  stop the turn only when it is working on the goal.
+  stop the turn only when it is working on the goal. Other goal commands wait for
+  the turn to end.
 
 ## Context in your message
 
@@ -352,10 +348,9 @@ by any part of its pull request numbers. A complete number is also resolved dire
 pull request is older than the recent list. Type a single word after `#` to search pull requests in
 the repository by text. Choose a result to insert it as a chip.
 
-Another thread can be context too. Type `%` to list threads only, active ones first, then
-snoozed, then settled, newest first in each; keep typing part of a title to narrow the list. You
-pick from the same server, or from a machine it links to while the Linked environments beta is on;
-those show the machine's name. On web and desktop you can also drag a thread out of the sidebar and
+Another thread can be context too. Type `@` followed by part of its title to pick one from
+the same server, or from a machine it links to while the Linked environments beta is on; those
+show the machine's name. On web and desktop you can also drag a thread out of the sidebar and
 drop it on the composer; a multi-selection drops together. On any client, **Copy thread** copies a
 link to the thread that pastes into a composer as its chip. The chip shows the thread's
 current title and opens it when selected. Your prompt only carries a reference: the agent reads the thread's

@@ -1,10 +1,7 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
-import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
 import { effectiveSnoozed } from "./threadSettled.ts";
-
-type ThreadKeyInput = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 
 type WorkingThreadInput = Pick<
   EnvironmentThreadShell,
@@ -15,66 +12,12 @@ type WorkingThreadInput = Pick<
   | "interactionMode"
   | "latestRun"
   | "runtime"
-> &
-  Partial<Pick<EnvironmentThreadShell, "blockedOnThreadWait" | "pendingBackgroundTasks">>;
-
-/** Working for shelf placement: the thread's own runs, or the pull request it is generating. */
-export function isThreadWorkingInShelf(thread: WorkingThreadInput & ThreadKeyInput): boolean {
-  return (
-    isThreadWorking(thread) ||
-    isPullRequestGenerating({ environmentId: thread.environmentId, threadId: thread.id })
-  );
-}
-
-const threadKey = (thread: ThreadKeyInput) => `${thread.environmentId}:${thread.id}`;
-
-type PullRequestGenerationKey = {
-  readonly environmentId: EnvironmentThreadShell["environmentId"];
-  readonly threadId: EnvironmentThreadShell["id"];
-};
-
-const pullRequestGenerationKey = (thread: PullRequestGenerationKey) =>
-  `${thread.environmentId}:${thread.threadId}`;
-
-// The PR is composed over the source-control RPC, not by a provider turn, so no thread
-// shell reports it and clients track the generation here.
-const pullRequestGenerations = new Map<string, number>();
-const pullRequestGenerationListeners = new Set<() => void>();
-
-export function subscribePullRequestGeneration(listener: () => void): () => void {
-  pullRequestGenerationListeners.add(listener);
-  return () => {
-    pullRequestGenerationListeners.delete(listener);
-  };
-}
-
-/** Counts a pull request generation on the thread until the returned release runs. */
-export function beginPullRequestGeneration(thread: PullRequestGenerationKey): () => void {
-  const key = pullRequestGenerationKey(thread);
-  pullRequestGenerations.set(key, (pullRequestGenerations.get(key) ?? 0) + 1);
-  for (const listener of pullRequestGenerationListeners) listener();
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    const remaining = (pullRequestGenerations.get(key) ?? 1) - 1;
-    if (remaining > 0) pullRequestGenerations.set(key, remaining);
-    else pullRequestGenerations.delete(key);
-    for (const listener of pullRequestGenerationListeners) listener();
-  };
-}
-
-export function isPullRequestGenerating(thread: PullRequestGenerationKey): boolean {
-  return pullRequestGenerations.has(pullRequestGenerationKey(thread));
-}
+>;
 
 export function isThreadWorking(thread: WorkingThreadInput): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
   if (thread.pendingSubagentRequest != null) return false;
-  // A stalled thread's latest run failed, but the server retries it, so it keeps working.
-  if (thread.runtime?.stalled === true) return true;
   if (!threadRuntimeIsActive(thread.runtime) && thread.runtime?.status !== "idle") return false;
-  if (waitingOnAgents(thread)) return true;
   const run = thread.latestRun;
   const runSettled =
     run !== null &&
@@ -85,6 +28,25 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
     run.status !== "waiting" &&
     thread.runtime?.activeRunId !== run.runId;
   return !(thread.interactionMode === "plan" && thread.hasActionableProposedPlan && runSettled);
+}
+
+/**
+ * A thread its own client is launching reads as preparing until its first run lands.
+ * The server commits the thread before its run, so the list would otherwise place it twice.
+ */
+export function asLaunchingThread<T extends EnvironmentThreadShell>(thread: T): T {
+  if (thread.latestRun !== null || thread.runtime !== null) return thread;
+  return {
+    ...thread,
+    runtime: {
+      status: "preparing",
+      activeRunId: null,
+      providerInstanceId: thread.providerInstanceId,
+      providerName: null,
+      lastError: null,
+      updatedAt: thread.updatedAt,
+    },
+  };
 }
 
 type InboxThreadInput = Pick<
@@ -162,6 +124,8 @@ type TrackedInboxThread = WorkingThreadInput &
     >
   >;
 
+type ThreadKeyInput = Pick<EnvironmentThreadShell, "environmentId" | "id">;
+
 /**
  * How long a thread that stopped working keeps reading as working. An orchestrator
  * run can end moments before its continuation starts, so clients wait this long
@@ -170,12 +134,19 @@ type TrackedInboxThread = WorkingThreadInput &
 const WORKING_EXIT_GRACE_MS = 2_000;
 
 /**
+ * A run that ended this long ago has no continuation about to start, so its thread gets no
+ * grace. A client sees this for work that ended while it was closed or disconnected; the
+ * margin is wide so a client clock that runs ahead of the server does not cancel the grace.
+ */
+const STALE_EXIT_MS = 60_000;
+
+/**
  * Keep one at module scope so placement survives routes that unmount the list. Call
  * `observe` when the shells or the snapshot version change, or with null while the beta
  * is off. Its result stays fixed, so a list built from it can be cached.
  */
 export function createInboxReturnTracker() {
-  const keyOf = threadKey;
+  const keyOf = (thread: ThreadKeyInput) => `${thread.environmentId}:${thread.id}`;
   const states = new Map<
     string,
     { working: boolean; deadline: number | null; placement: string | null }
@@ -216,14 +187,8 @@ export function createInboxReturnTracker() {
   return {
     subscribe(listener: () => void) {
       listeners.add(listener);
-      // A generation starts and ends outside any shell update, so it repartitions too.
-      const unsubscribeGeneration = subscribePullRequestGeneration(() => {
-        version++;
-        listener();
-      });
       return () => {
         listeners.delete(listener);
-        unsubscribeGeneration();
       };
     },
     getSnapshot: () => version,
@@ -236,7 +201,7 @@ export function createInboxReturnTracker() {
         timer = undefined;
         states.clear();
         returns.clear();
-        return { isWorking: isThreadWorkingInShelf, returnedAt: () => undefined };
+        return { isWorking: isThreadWorking, returnedAt: () => undefined };
       }
       const present = new Set<string>();
       const at = now();
@@ -246,7 +211,7 @@ export function createInboxReturnTracker() {
         const key = keyOf(thread);
         present.add(key);
         const previous = states.get(key);
-        const actual = isThreadWorkingInShelf(thread);
+        const actual = isThreadWorking(thread);
         const placement =
           actual || previous?.working
             ? JSON.stringify([
@@ -276,8 +241,10 @@ export function createInboxReturnTracker() {
           thread.settledOverride === "settled" ||
           effectiveSnoozed(thread, { now: observedAt });
         // Only shelf placement is held: execution state and attention requests stay authoritative.
+        const endedAt = toSortableTimestamp(thread.latestRun?.completedAt ?? undefined);
+        const endedLongAgo = endedAt !== null && endedAt <= at - STALE_EXIT_MS;
         const deadline =
-          !actual && previous?.working && !actionable && !moved && !excluded
+          !actual && previous?.working && !actionable && !moved && !excluded && !endedLongAgo
             ? (previous.deadline ?? at + WORKING_EXIT_GRACE_MS)
             : null;
         const working = actual || (deadline !== null && deadline > at);
@@ -295,12 +262,12 @@ export function createInboxReturnTracker() {
       states.forEach((state, key) => observedWorking.set(key, state.working));
       const observedReturns = new Map(returns);
       return {
-        isWorking: (thread) => observedWorking.get(keyOf(thread)) ?? isThreadWorkingInShelf(thread),
+        isWorking: (thread) => observedWorking.get(keyOf(thread)) ?? isThreadWorking(thread),
         returnedAt: (thread) => observedReturns.get(keyOf(thread)),
       };
     },
     isWorking: (thread: WorkingThreadInput & ThreadKeyInput) =>
-      states.get(keyOf(thread))?.working ?? isThreadWorkingInShelf(thread),
+      states.get(keyOf(thread))?.working ?? isThreadWorking(thread),
     returnedAt: (thread: ThreadKeyInput) => returns.get(keyOf(thread)),
   };
 }

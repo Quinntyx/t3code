@@ -19,7 +19,6 @@ export function createNativeSourceStyle(
     gutterWidth: codeSurface.gutterWidth,
     codePadding: codeSurface.codePadding,
     textVerticalInset: codeSurface.textVerticalInset,
-    codeFontFamily: codeSurface.fontFamily,
     codeFontSize: codeSurface.fontSize,
     codeFontWeight: "regular",
     lineNumberFontSize: codeSurface.lineNumberFontSize,

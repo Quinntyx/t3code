@@ -1,7 +1,10 @@
+import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { parsePullRequestAnchor } from "@t3tools/shared/pullRequestAnchor";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { type MouseEvent } from "react";
+import { msg } from "gt-react";
 
 import {
   resolveChangeRequestLinkTarget,
@@ -14,7 +17,8 @@ import { canOpenLinksInApp } from "../browser/browserLinkTarget";
 import { useOpenLink } from "../browser/useOpenLink";
 import { useClientSettings } from "../hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
-import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
+import { m } from "../i18n/messages";
+import { useRightPanelStore } from "../rightPanelStore";
 import {
   selectThreadBranchBaseRef,
   selectThreadDiffPanelSelection,
@@ -24,7 +28,7 @@ import {
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProject, readProjects, readThreadShell, useProjects } from "../state/entities";
 import { environmentServerConfigsAtom, serverEnvironment } from "../state/server";
-import { readPrimaryEnvironmentId } from "../state/environments";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { reviewEnvironment } from "../state/review";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 
@@ -39,60 +43,32 @@ export function usePullRequestPreviewTarget(environmentId: EnvironmentId | null,
   });
 }
 
+/** Where a click on this link opens the in-app panel, read at call time as the click reads it. */
+export function pullRequestLinkPanelTarget(input: {
+  readonly url: string;
+  readonly environmentId: EnvironmentId | undefined;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly lendHostProject: boolean;
+}) {
+  // Read at click time: every provider status push replaces the config map, and
+  // subscribing would hand every rendered link a new handler. Projects likewise, so a
+  // link can resolve against a snapshot that arrived after this handler was built.
+  const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
+  return resolveChangeRequestLinkTarget({
+    url: input.url,
+    projects: readProjects(),
+    configLoaded: (environmentId) => serverConfigs.has(environmentId),
+    environmentId: input.environmentId,
+    primaryEnvironmentId: input.primaryEnvironmentId,
+    lendHostProject: input.lendHostProject,
+  });
+}
+
 function shouldOpenPullRequestExternally(
   event: Pick<MouseEvent<HTMLElement>, "metaKey" | "ctrlKey"> &
     Partial<Pick<MouseEvent<HTMLElement>, "button">>,
 ): boolean {
   return event.metaKey || event.ctrlKey || event.button === 1;
-}
-
-// Read at click time: every provider status push replaces the config map, and subscribing
-// would hand every rendered link a new handler. Projects likewise, so a link can resolve
-// against a snapshot that arrived after this handler was built.
-function readChangeRequestLinkTarget(
-  url: string,
-  environmentId: EnvironmentId | undefined,
-  lendHostProject: boolean,
-) {
-  const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
-  return resolveChangeRequestLinkTarget({
-    url,
-    projects: readProjects(),
-    configLoaded: (candidate) => serverConfigs.has(candidate),
-    ...(environmentId === undefined ? {} : { environmentId }),
-    primaryEnvironmentId: readPrimaryEnvironmentId(),
-    lendHostProject,
-  });
-}
-
-function openChangeRequestInPanel(input: {
-  readonly panelRef: ScopedThreadRef;
-  readonly target: NonNullable<ReturnType<typeof readChangeRequestLinkTarget>>;
-  readonly url: string;
-}) {
-  const { project, repository, number, host } = input.target;
-  useRightPanelStore.getState().openPullRequest(input.panelRef, {
-    // The standalone PR panel has a synthetic ref; each tab keeps its real environment.
-    ...(input.panelRef.environmentId === project.environmentId
-      ? {}
-      : { environmentId: project.environmentId }),
-    projectId: project.id,
-    ...(host === undefined ? {} : { host }),
-    repository,
-    url: input.url,
-    number,
-  });
-}
-
-/** Opens a link's pull request in the thread's right panel, whatever the link setting says. */
-export function openChangeRequestInRightPanel(input: {
-  readonly threadRef: ScopedThreadRef;
-  readonly url: string;
-}): boolean {
-  const target = readChangeRequestLinkTarget(input.url, input.threadRef.environmentId, true);
-  if (target === null) return false;
-  openChangeRequestInPanel({ panelRef: input.threadRef, target, url: input.url });
-  return true;
 }
 
 export function useOpenChangeRequestLink(
@@ -110,6 +86,7 @@ export function useOpenChangeRequestLink(
   onCommitUnavailable?: () => void,
 ) => boolean {
   const navigate = useNavigate();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const openInApp = useClientSettings((settings) => settings.pullRequestLinksOpenInApp);
   const ignoreWhitespace = useClientSettings((settings) => settings.diffIgnoreWhitespace);
   const browserLinkTarget = useClientSettings((settings) => settings.browserLinkTarget);
@@ -123,13 +100,15 @@ export function useOpenChangeRequestLink(
     const resolvedThreadRef = targetThreadRef ?? threadRef;
     const resolvedPanelRef = panelRef ?? resolvedThreadRef;
     const openPullRequest = () => {
-      const target = readChangeRequestLinkTarget(
-        targetUrl,
-        resolvedThreadRef?.environmentId ?? targetEnvironmentId,
-        resolvedPanelRef !== undefined,
-      );
+      const target = pullRequestLinkPanelTarget({
+        url: targetUrl,
+        environmentId: resolvedThreadRef?.environmentId ?? targetEnvironmentId,
+        primaryEnvironmentId,
+        lendHostProject: resolvedPanelRef !== undefined,
+      });
       if (target === null) return false;
       const { project, repository, number, host } = target;
+      const revealUrl = parsePullRequestAnchor(targetUrl) === null ? undefined : targetUrl;
       const pullRequestsSearch = {
         repository,
         number,
@@ -138,7 +117,18 @@ export function useOpenChangeRequestLink(
         selectedEnvironmentId: project.environmentId,
       };
       if (resolvedPanelRef) {
-        openChangeRequestInPanel({ panelRef: resolvedPanelRef, target, url: targetUrl });
+        useRightPanelStore.getState().openPullRequest(resolvedPanelRef, {
+          // The standalone PR panel has a synthetic ref; each tab keeps its real environment.
+          ...(resolvedPanelRef.environmentId === project.environmentId
+            ? {}
+            : { environmentId: project.environmentId }),
+          projectId: project.id,
+          ...(host === undefined ? {} : { host }),
+          repository,
+          url: targetUrl,
+          ...(revealUrl === undefined ? {} : { revealUrl }),
+          number,
+        });
         if (!resolvedThreadRef) {
           void navigate({
             to: "/pull-requests",
@@ -155,7 +145,12 @@ export function useOpenChangeRequestLink(
       }
       void navigate({
         to: "/pull-requests",
-        search: { involvement: "all", state: "all", ...pullRequestsSearch },
+        search: {
+          involvement: "all",
+          state: "all",
+          ...pullRequestsSearch,
+          ...(revealUrl === undefined ? {} : { selectedUrl: revealUrl }),
+        },
       });
       return true;
     };
@@ -171,6 +166,14 @@ export function useOpenChangeRequestLink(
     const parsedCommit = sourceControlClients.parseCommitUrl(targetUrl, identity?.provider);
     // Shift and Alt keep their browser meaning (new window, download) on commit links.
     if (parsedCommit !== null && (event.shiftKey || event.altKey)) return false;
+    // A plain commit link stays a workspace commit; one naming a file or line opens the PR's diff.
+    const anchor = parsePullRequestAnchor(targetUrl);
+    if (anchor !== null && anchor.kind !== "code" && openPullRequest()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
     if (
       parsedCommit !== null &&
       commitThread &&
@@ -214,12 +217,7 @@ export function useOpenChangeRequestLink(
               (source) => source.kind === "commit" && source.headRef === commit.sha,
             )
           ) {
-            const diffOpen =
-              selectActiveRightPanel(
-                useRightPanelStore.getState().byThreadKey,
-                resolvedThreadRef,
-              ) === "diff";
-            useDiffPanelStore.getState().selectCommit(resolvedThreadRef, commit.sha, !diffOpen);
+            useDiffPanelStore.getState().selectCommit(resolvedThreadRef, commit.sha);
             useRightPanelStore.getState().open(resolvedThreadRef, "diff");
             return;
           }
@@ -233,9 +231,9 @@ export function useOpenChangeRequestLink(
             const toastId = toastManager.add(
               stackedThreadToast({
                 type: "info",
-                title: "This commit is not in the thread's workspace",
+                title: m(msg("This commit is not in the thread's workspace")),
                 actionProps: {
-                  children: "Open link",
+                  children: m(msg("Open link")),
                   onClick: () => {
                     toastManager.close(toastId);
                     window.open(targetUrl, "_blank", "noopener,noreferrer");
@@ -280,8 +278,8 @@ export function useOpenPrLink(threadRef?: ScopedThreadRef) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to open pull request link",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: m(msg("Unable to open pull request link")),
+          description: thrownErrorMessage(error, m) ?? m(msg("An error occurred.")),
         }),
       );
     });

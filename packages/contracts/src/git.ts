@@ -23,8 +23,6 @@ export const GitStackedAction = Schema.Literals([
   "commit_push_pr",
 ]);
 export type GitStackedAction = typeof GitStackedAction.Type;
-export const actionOpensPullRequest = (action: GitStackedAction): boolean =>
-  action === "create_pr" || action === "commit_push_pr";
 export const GitActionProgressPhase = Schema.Literals(["branch", "commit", "push", "pr"]);
 export type GitActionProgressPhase = typeof GitActionProgressPhase.Type;
 export const GitActionProgressKind = Schema.Literals([
@@ -113,7 +111,11 @@ export const VcsStatusInput = Schema.Struct({
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
-export const VcsBranchStatus = Schema.Struct({ refName: Schema.NullOr(Schema.String) });
+export const VcsBranchStatus = Schema.Struct({
+  refName: Schema.NullOr(Schema.String),
+  /** Absent from older servers, where a removed checkout looks like a detached HEAD. */
+  isRepo: Schema.optional(Schema.Boolean),
+});
 export type VcsBranchStatus = typeof VcsBranchStatus.Type;
 
 export const VcsStatusSubscriptionInput = Schema.Struct({
@@ -146,8 +148,6 @@ export const VcsListRefsInput = Schema.Struct({
   cursor: Schema.optional(NonNegativeInt),
   includeMatchingRemoteRefs: Schema.optional(Schema.Boolean),
   refKind: Schema.optional(Schema.Literals(["all", "local", "remote"])),
-  /** Lists only this remote's remote refs; an unconfigured name falls back like the default remote. */
-  remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
   refresh: Schema.optional(Schema.Boolean),
   limit: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
@@ -177,49 +177,6 @@ export const GitPreparePullRequestThreadInput = Schema.Struct({
   threadId: Schema.optional(ThreadId),
 });
 export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThreadInput.Type;
-
-/** Rebases the threads stacked on `threadId` onto its branch's current tip. */
-export const GitRestackThreadsInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type GitRestackThreadsInput = typeof GitRestackThreadsInput.Type;
-
-/**
- * `restacked`: rebased, and force-pushed when the branch has an upstream. `agent-asked`: the
- * rebase could not run unattended, so the thread's agent was sent the commands to run.
- */
-export const GitRestackOutcome = Schema.Literals(["restacked", "up-to-date", "agent-asked"]);
-export type GitRestackOutcome = typeof GitRestackOutcome.Type;
-
-/** Why a restack was handed to the agent. */
-export const GitRestackHandoffReason = Schema.Literals(["busy", "dirty", "conflict", "checkout"]);
-export type GitRestackHandoffReason = typeof GitRestackHandoffReason.Type;
-
-export const GitRestackThreadResult = Schema.Struct({
-  threadId: ThreadId,
-  branch: TrimmedNonEmptyStringSchema,
-  onto: TrimmedNonEmptyStringSchema,
-  outcome: GitRestackOutcome,
-  reason: Schema.optional(GitRestackHandoffReason),
-  /** False when the rebase landed locally but the force push failed. */
-  pushed: Schema.optional(Schema.Boolean),
-});
-export type GitRestackThreadResult = typeof GitRestackThreadResult.Type;
-
-export const GitRestackThreadsResult = Schema.Struct({
-  threads: Schema.Array(GitRestackThreadResult),
-});
-export type GitRestackThreadsResult = typeof GitRestackThreadsResult.Type;
-
-export class GitRestackError extends Schema.TaggedError<GitRestackError>()("GitRestackError", {
-  threadId: ThreadId,
-  detail: TrimmedNonEmptyStringSchema,
-  cause: Schema.optional(Schema.Defect()),
-}) {
-  override get message(): string {
-    return `Restacking thread ${this.threadId} failed: ${this.detail}`;
-  }
-}
 
 export const VcsRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -332,7 +289,6 @@ export const VcsListRefsResult = Schema.Struct({
   refs: Schema.Array(VcsRef),
   isRepo: Schema.Boolean,
   hasPrimaryRemote: Schema.Boolean,
-  remoteNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
   nextCursor: NonNegativeInt.pipe(Schema.NullOr),
   totalCount: NonNegativeInt,
 });
@@ -340,8 +296,6 @@ export type VcsListRefsResult = typeof VcsListRefsResult.Type;
 
 export const VcsCreateWorktreeResult = Schema.Struct({
   worktree: VcsWorktree,
-  /** The branch a new branch was started from, as the host names it. */
-  baseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type VcsCreateWorktreeResult = typeof VcsCreateWorktreeResult.Type;
 
@@ -413,6 +367,7 @@ export const GitCommandFailureReason = Schema.Literals([
   "path_already_exists",
   "push_rejected_by_remote",
   "push_rejected_non_fast_forward",
+  "ref_name_conflict",
   "ref_not_found",
   "remote_unreachable",
   "tag_would_be_clobbered",

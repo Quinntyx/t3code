@@ -13,7 +13,6 @@ import { openSettings } from "../../settings/settings-navigation";
 import { ThreadNavigationSidebar } from "../../threads/ThreadNavigationSidebar";
 import { useOpenThreadPullRequests } from "../../threads/use-open-thread-pull-requests";
 import { useSelectWorkspaceDetail } from "./useSelectWorkspaceDetail";
-import { useWorkspaceListNavigation } from "./useAndroidWorkspaceNavigation";
 
 type Route = { readonly name: string; readonly params?: object };
 
@@ -40,44 +39,26 @@ function selectedThreadKey(state: { readonly index: number; readonly routes: rea
   }
 }
 
-/** The thread list in the workspace's sidebar column, or in the compact thread drawer. */
-export function WorkspaceThreadSidebar(props: {
-  /** The compact drawer closes before anything opens, so the page is what it uncovers. */
-  readonly drawer?: {
-    readonly width: number;
-    readonly visible: boolean;
-    readonly close: () => void;
-  };
-}) {
+/** The thread list in the workspace's sidebar column. */
+export function WorkspaceThreadSidebar() {
   const navigation = useNavigation();
   const { layout, setPrimarySidebarSearchQuery, revealPrimarySidebar, openWorkspaceTab } =
     useAdaptiveWorkspaceLayout();
   const { panes, primarySidebarSearchQuery } = useWorkspacePaneState();
   const selectDetail = useSelectWorkspaceDetail();
   const openThreadPullRequests = useOpenThreadPullRequests();
-  const openHome = useWorkspaceListNavigation("threads");
   const selectedThread = useNavigationState(selectedThreadKey);
-  const { drawer } = props;
-  const leave = <Args extends unknown[]>(open: (...args: Args) => void) =>
-    drawer
-      ? (...args: Args) => {
-          drawer.close();
-          open(...args);
-        }
-      : open;
-  const selectThreadRoute = leave((params: ReactNavigation.RootParamList["Thread"]) =>
-    selectDetail({ name: "Thread", params }),
-  );
+  const selectThreadRoute = (params: ReactNavigation.RootParamList["Thread"]) =>
+    selectDetail({ name: "Thread", params });
   const { openPendingTask } = usePendingTaskListActions(selectThreadRoute);
   return (
     <ThreadNavigationSidebar
-      width={drawer?.width ?? layout.listPaneWidth ?? 0}
-      visible={drawer?.visible ?? panes.primarySidebarVisible}
+      width={layout.listPaneWidth ?? 0}
+      visible={panes.primarySidebarVisible}
       onRequestVisibility={revealPrimarySidebar}
       selectedThreadKey={selectedThread}
-      onOpenSettings={leave(() => openWorkspaceTab("settings"))}
+      onOpenSettings={() => openWorkspaceTab("settings")}
       onOpenEnvironmentSettings={() => openSettings(navigation, "SettingsEnvironments")}
-      onOpenHome={drawer ? leave(openHome) : undefined}
       onNewThreadInProject={(project: EnvironmentProject) =>
         selectThreadRoute({
           draft: {
@@ -106,7 +87,7 @@ export function WorkspaceThreadSidebar(props: {
           threadId: String(thread.id),
         })
       }
-      onOpenThreadPullRequests={leave(openThreadPullRequests)}
+      onOpenThreadPullRequests={openThreadPullRequests}
       onSearchQueryChange={setPrimarySidebarSearchQuery}
       searchQuery={primarySidebarSearchQuery}
     />

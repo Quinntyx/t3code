@@ -77,33 +77,6 @@ it.effect.each([
     expect(result).toEqual({ title: "Fix login" });
     expect(yield* generators.runner(ProviderInstanceId.make("codex"))).toBeUndefined();
 
-    for (const text of [
-      '```json\n{"title":"Fix login",}\n```',
-      '{"title":12}\nThe corrected answer is {"title":"Fix login"}',
-      '{"title":12}',
-    ]) {
-      upstream.mockResolvedValueOnce(
-        Response.json(
-          api.kind === "anthropic"
-            ? { stop_reason: "end_turn", content: [{ type: "text", text }] }
-            : { choices: [{ finish_reason: "stop", message: { content: text } }] },
-        ),
-      );
-      const callsBefore = upstream.mock.calls.length;
-      const decoded = yield* Effect.result(
-        run!(request).pipe(Effect.provideService(FetchHttpClient.Fetch, upstream)),
-      );
-      if (text === '{"title":12}') {
-        expect(decoded._tag).toBe("Failure");
-        if (decoded._tag === "Failure") {
-          expect(decoded.failure.detail).toContain("JSON did not match the expected shape");
-        }
-      } else {
-        expect(decoded).toMatchObject({ _tag: "Success", success: { title: "Fix login" } });
-      }
-      expect(upstream.mock.calls.length - callsBefore).toBe(1);
-    }
-
     upstream.mockResolvedValueOnce(
       Response.json({ error: { message: "Incorrect API key provided" } }, { status: 401 }),
     );
@@ -209,10 +182,13 @@ it.effect("checks unsaved settings, keeping the saved key behind a redaction mar
     expect((yield* list("draft", { apiKey: "typed-key" })).models).toEqual([
       { id: "model-a", name: "model-a" },
     ]);
+    yield* list(ID, { apiKey: SECRET_REDACTED, baseUrl: "https://api.test/v1" });
+    // The saved key goes only to the endpoint it was saved for.
     yield* list(ID, { apiKey: SECRET_REDACTED });
     expect(seen).toEqual([
       { url: "https://new.test/v1/models", auth: "Bearer typed-key" },
-      { url: "https://new.test/v1/models", auth: "Bearer saved-key" },
+      { url: "https://api.test/v1/models", auth: "Bearer saved-key" },
+      { url: "https://new.test/v1/models", auth: null },
     ]);
 
     // Listing alone proves nothing about the key on some APIs; a test asks the model itself.

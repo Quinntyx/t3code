@@ -5,7 +5,6 @@ import {
   MessageId,
   ThreadId,
 } from "@t3tools/contracts";
-import type { TiptapEditorHTMLElement } from "@tiptap/core";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -14,24 +13,7 @@ import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection
 import "~/index.css";
 import { act, render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({
-  observeSource: vi.fn(),
-  dispose: vi.fn(),
-  dictation: null as null | {
-    readDraft: () => { text: string; selection: { start: number; end: number } };
-    commitDraft: (text: string, selection: { start: number; end: number }) => void;
-  },
-}));
-vi.mock(import("~/speech/useEnvironmentSpeechInput"), async (importOriginal) => {
-  const original = await importOriginal();
-  return {
-    ...original,
-    useEnvironmentSpeechInput: (input) => {
-      mocks.dictation = input;
-      return original.useEnvironmentSpeechInput(input);
-    },
-  };
-});
+const mocks = vi.hoisted(() => ({ observeSource: vi.fn(), dispose: vi.fn() }));
 vi.mock(import("./AssistantCitationSource"), async (importOriginal) => ({
   ...(await importOriginal()),
   observeAssistantCitationCommentSource: mocks.observeSource,
@@ -79,7 +61,6 @@ function mount(
     return (
       <AssistantCitationChip
         citation={chipCitation}
-        composer
         commentEditor={{ open, sourceAnchor, onOpenChange: setOpen, onSave }}
       />
     );
@@ -87,13 +68,17 @@ function mount(
   return render(<Composer />);
 }
 
-const commentInput = () =>
-  document.querySelector<TiptapEditorHTMLElement>('[aria-label="Comment on selected text"]');
+const textarea = () =>
+  document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Comment on selected text"]');
 
 async function typeComment(value: string) {
-  const editor = commentInput()!.editor!;
+  const input = textarea()!;
   await act(async () => {
-    editor.chain().selectAll().insertContent(value).run();
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      input,
+      value,
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
@@ -110,48 +95,6 @@ async function clickButton(label: string) {
   await act(async () => button!.click());
 }
 
-describe("citation comment editing", () => {
-  it("formats markdown as it is typed and saves it on Enter", async () => {
-    using source = setup();
-    const onSave = vi.fn(() => true);
-    await using _screen = await mount(source.sourceAnchor, onSave);
-    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
-    // Typing on past the closing marker leaves emphasis, as in the composer.
-    await userEvent.keyboard("needs to *spawn agents* now{Shift>}{Enter}{/Shift}twice");
-
-    expect(commentInput()?.querySelector("em")?.textContent).toBe("spawn agents");
-    expect(onSave).not.toHaveBeenCalled();
-    await userEvent.keyboard("{Enter}");
-    expect(onSave).toHaveBeenCalledWith("needs to *spawn agents* now\ntwice");
-    expect(commentInput()).toBeNull();
-  });
-});
-
-describe("citation comment dictation", () => {
-  it("inserts a transcript at the editor's caret and keeps typing after it", async () => {
-    using source = setup();
-    const onSave = vi.fn(() => true);
-    await using _screen = await mount(source.sourceAnchor, onSave, {
-      ...citation,
-      comment: "hello world",
-    });
-    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
-    await userEvent.keyboard("{ArrowLeft>6/}");
-    expect(mocks.dictation!.readDraft()).toEqual({
-      text: "hello world",
-      selection: { start: 5, end: 5 },
-    });
-
-    await act(async () =>
-      mocks.dictation!.commitDraft("hello dictated world", { start: 14, end: 14 }),
-    );
-    await vi.waitFor(() => expect(commentInput()?.textContent).toBe("hello dictated world"));
-    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
-    await userEvent.keyboard("!{Enter}");
-    expect(onSave).toHaveBeenCalledWith("hello dictated! world");
-  });
-});
-
 describe("citation comment source disappearance", () => {
   it("preserves an over-length draft at the composer until it can be shortened and saved", async () => {
     using source = setup();
@@ -161,8 +104,8 @@ describe("citation comment source disappearance", () => {
     await typeComment(draft);
     await removeSource();
 
-    expect(commentInput()?.textContent).toBe(draft);
-    expect(commentInput()?.getAttribute("aria-invalid")).toBe("true");
+    expect(textarea()?.value).toBe(draft);
+    expect(textarea()?.getAttribute("aria-invalid")).toBe("true");
     expect(onSave).not.toHaveBeenCalled();
     expect(mocks.dispose).toHaveBeenCalled();
     expect(mocks.observeSource).toHaveBeenCalledTimes(1);
@@ -170,7 +113,7 @@ describe("citation comment source disappearance", () => {
     await typeComment("shortened comment");
     await clickButton("Save");
     expect(onSave).toHaveBeenCalledWith("shortened comment");
-    expect(commentInput()).toBeNull();
+    expect(textarea()).toBeNull();
   });
 
   it("preserves a rejected save and allows a later retry", async () => {
@@ -181,11 +124,11 @@ describe("citation comment source disappearance", () => {
     await removeSource();
 
     expect(onSave).toHaveBeenCalledWith("keep this draft");
-    expect(commentInput()?.textContent).toBe("keep this draft");
+    expect(textarea()?.value).toBe("keep this draft");
     onSave.mockReturnValue(true);
     await clickButton("Save");
     expect(onSave).toHaveBeenLastCalledWith("keep this draft");
-    expect(commentInput()).toBeNull();
+    expect(textarea()).toBeNull();
   });
 });
 
@@ -193,19 +136,31 @@ describe("citation comment caret", () => {
   it("opens a saved comment with the caret after its end, scrolled into view", async () => {
     using _source = setup();
     const comment = `${"line\n".repeat(40)}end`;
-    const onSave = vi.fn(() => true);
-    await using _screen = await mount(undefined, onSave, { ...citation, comment });
-    await vi.waitFor(() => expect(document.activeElement).toBe(commentInput()));
-    const input = commentInput()!;
+    await using _screen = await mount(
+      undefined,
+      vi.fn(() => true),
+      { ...citation, comment },
+    );
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    const input = textarea()!;
 
     expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
-    await vi.waitFor(() => {
-      const caret = window.getSelection()!.getRangeAt(0).getBoundingClientRect();
-      expect(input.scrollTop).toBeGreaterThan(0);
-      expect(caret.bottom).toBeLessThanOrEqual(input.getBoundingClientRect().bottom);
-    });
-    await userEvent.keyboard("!{Enter}");
-    expect(onSave).toHaveBeenCalledWith(`${comment}!`);
+    expect(input.scrollTop).toBe(input.scrollHeight - input.clientHeight);
+    await userEvent.keyboard("!");
+    expect(input.value).toBe(`${comment}!`);
+  });
+
+  it("saves with Tab then Enter after typing a comment", async () => {
+    using _source = setup();
+    const onSave = vi.fn(() => true);
+    await using _screen = await mount(undefined, onSave);
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+
+    await userEvent.keyboard("agreed");
+    await userEvent.keyboard("{Tab}");
+    await userEvent.keyboard("{Enter}");
+
+    expect(onSave).toHaveBeenCalledWith("agreed");
   });
 });
 
@@ -268,7 +223,7 @@ describe("citation comment popup position", () => {
     // sideways when the box is off screen.
     await userEvent.keyboard("note");
 
-    expect(commentInput()?.textContent).toBe("note");
+    expect(textarea()?.value).toBe("note");
     expect(document.scrollingElement?.scrollLeft).toBe(0);
     expect(document.body.scrollLeft).toBe(0);
     const rect = popup()!.getBoundingClientRect();

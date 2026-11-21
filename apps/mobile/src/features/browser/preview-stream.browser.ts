@@ -1,9 +1,7 @@
 import {
-  createPreviewAudioPlayer,
   createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamModifiers,
-  type PreviewAudioPlayer,
   type PreviewStreamClient,
   type PreviewStreamControl,
   type PreviewStreamInput,
@@ -34,8 +32,9 @@ const TAP_SLOP_PX = 8;
 const MULTI_CLICK_MS = 500;
 const MULTI_CLICK_SLOP_PX = 4;
 const WHEEL_LINE_PX = 16;
+const SCROLL_REPORT_PX = 24;
 const MAX_PIXEL_RATIO = 2;
-// iOS needs a touch gesture to show the keyboard when the first probe reply arrives too late.
+// Reuse nearby probe answers: slow replies arrive too late after touch-end to raise the iOS keyboard.
 const PROBE_REUSE_PX = 24;
 const PROBE_REUSE_MS = 10_000;
 // A sentinel makes backspace fire input; Gboard keydown supplies only keyCode 229.
@@ -44,18 +43,10 @@ const AGENT_CURSOR_ACTIVE_MS = 700;
 const AGENT_CURSOR_SVG =
   '<svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"/></svg>';
 
-type ImmediateStreamCommand = Exclude<PreviewStreamInput, { readonly type: "text" }>;
-type TextStreamCommand = Extract<PreviewStreamInput, { readonly type: "text" }>;
-
 interface Viewer {
   readonly stop: () => void;
-  readonly command: (input: PreviewStreamInput, expectedInputSession?: number) => void;
-  readonly updateAccess: (
-    access: PreviewStreamConfiguration["access"] | null,
-    generation?: number,
-  ) => void;
+  readonly command: (input: PreviewStreamInput) => void;
   readonly togglePictureInPicture: () => void;
-  readonly setMuted: (muted: boolean) => void;
 }
 
 let activeViewer: Viewer | null = null;
@@ -65,48 +56,33 @@ export function stop() {
   activeViewer = null;
 }
 
-export function command(input: ImmediateStreamCommand): void;
-export function command(input: TextStreamCommand, expectedInputSession: number): void;
-export function command(input: PreviewStreamInput, expectedInputSession?: number) {
-  activeViewer?.command(input, expectedInputSession);
-}
-
-export function updateAccess(
-  access: PreviewStreamConfiguration["access"] | null,
-  generation?: number,
-) {
-  activeViewer?.updateAccess(access, generation);
+export function command(input: PreviewStreamInput) {
+  activeViewer?.command(input);
 }
 
 export function pictureInPicture() {
   activeViewer?.togglePictureInPicture();
 }
 
-export function setMuted(muted: boolean) {
-  activeViewer?.setMuted(muted);
-}
-
 export function start(configuration: PreviewStreamConfiguration) {
   stop();
-  let accessGeneration = configuration.accessGeneration ?? 0;
   const post = (message: PreviewStreamMessage) => {
     // oxlint-disable-next-line unicorn/require-post-message-target-origin -- The native WebView bridge takes one string.
-    window.ReactNativeWebView.postMessage(JSON.stringify({ ...message, accessGeneration }));
+    window.ReactNativeWebView.postMessage(JSON.stringify(message));
   };
   const { interactive } = configuration;
-  let access: PreviewStreamConfiguration["access"] | null = configuration.access;
   document.body.style.background = configuration.background;
   const container = document.createElement("div");
   const canvas = document.createElement("canvas");
   canvas.setAttribute("role", "img");
-  canvas.setAttribute("aria-label", "Browser page");
+  canvas.setAttribute("aria-label", configuration.labels.page);
   const agentCursor = document.createElement("div");
   agentCursor.className = "agent-cursor";
   agentCursor.setAttribute("aria-hidden", "true");
   agentCursor.innerHTML = AGENT_CURSOR_SVG;
   container.append(canvas, agentCursor);
   const input = document.createElement("textarea");
-  input.setAttribute("aria-label", "Browser page input");
+  input.setAttribute("aria-label", configuration.labels.pageInput);
   input.autocapitalize = "off";
   input.autocomplete = "off";
   input.spellcheck = false;
@@ -116,9 +92,7 @@ export function start(configuration: PreviewStreamConfiguration) {
 
   let stopped = false;
   let streaming = false;
-  let inputSession = 0;
   let viewport: PreviewStreamViewport | null = null;
-  let postedViewport: PreviewStreamViewport | null = null;
   let size: { width: number; height: number } | null = null;
   let cap: { width: number; height: number } | null = null;
   let client: PreviewStreamClient | null = null;
@@ -162,31 +136,10 @@ export function start(configuration: PreviewStreamConfiguration) {
     streaming = status === "streaming";
     post({ type: "status", status });
   };
-  const painter = createPreviewFramePainter(
-    canvas,
-    () => {
-      if (!streaming && !stopped) {
-        reportStatus("streaming");
-        if (control?.controller === "you") input.disabled = !interactive;
-      }
-      sendPictureInPictureFrame();
-    },
-    () => client?.requestKeyFrame(),
-  );
-  /**
-   * The wrapper seeds this before the viewer starts, so a tab reopened while muted never plays
-   * a first packet. Mute is this page's own gain: it never changes what the stream sends, so
-   * toggling it neither reconnects nor touches control, dialogs or input.
-   */
-  const viewerState = window as unknown as { T3PreviewStream?: { muted?: boolean } };
-  const audioMuted = () => viewerState.T3PreviewStream?.muted === true;
-  let audio: PreviewAudioPlayer | null = null;
-  const audioPlayer = () => {
-    if (audio) return audio;
-    audio = createPreviewAudioPlayer();
-    audio.setMuted(audioMuted());
-    return audio;
-  };
+  const painter = createPreviewFramePainter(canvas, () => {
+    if (!streaming && !stopped) reportStatus("streaming");
+    sendPictureInPictureFrame();
+  });
   const send = (message: PreviewStreamInput) => client?.send(message) ?? false;
   const clearInput = () => {
     if (wheelFrame !== null) cancelAnimationFrame(wheelFrame);
@@ -203,52 +156,41 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const connect = () => {
-    inputSession += 1;
-    viewport = null;
     if (client) reportStatus("connecting");
-    painter.reset();
     client?.stop();
-    client = null;
     control = null;
     clearInput();
-    if (!cap || !access || stopped) return;
+    if (!cap || stopped) return;
     const next = createPreviewStreamClient(
       {
-        access,
+        access: configuration.access,
         threadId: configuration.threadId,
         tabId: configuration.tabId,
         maxWidth: cap.width,
         maxHeight: cap.height,
         interactive,
-        // A silent peek never asks for packets, so the server captures nothing for it.
-        ...(configuration.audio === false ? { audio: false } : {}),
       },
       {
-        onFrame: (frame) => painter.paint(frame),
-        onAudio: (frame) => audioPlayer().push(frame),
-        onAudioAvailable: (available) => post({ type: "audio", available }),
+        onFrame: (jpeg) => painter.paint(jpeg),
         onPointer: showAgentCursor,
         onClipboard: (text) => post({ type: "clipboard", text }),
         onDownload: (download) => post({ type: "download", ...download }),
         onFileChooser: (chooser) => post({ type: "fileChooser", chooser }),
         onViewport: (page) => {
+          if (viewport?.width === page.width && viewport.height === page.height) return;
           viewport = page;
-          if (postedViewport?.width === page.width && postedViewport.height === page.height) return;
-          postedViewport = page;
           post({ type: "viewport", width: page.width, height: page.height });
         },
         onProbe: (result) => {
           if (control?.controller !== "you") return;
           const current = probe;
           if (!current || current.x !== result.x || current.y !== result.y) return;
-          if (configuration.reuseNearbyTouchProbe) {
-            probeCache = {
-              clientX: current.clientX,
-              clientY: current.clientY,
-              editable: result.editable,
-              time: performance.now(),
-            };
-          }
+          probeCache = {
+            clientX: current.clientX,
+            clientY: current.clientY,
+            editable: result.editable,
+            time: performance.now(),
+          };
           if (current.end === "touching") {
             current.editable = result.editable;
             return;
@@ -263,31 +205,20 @@ export function start(configuration: PreviewStreamConfiguration) {
         onControl: (nextControl) => {
           const previous = control;
           control = nextControl;
-          if (
-            nextControl.controller !== "you" ||
-            previous?.controller !== "you" ||
-            previous.generation !== nextControl.generation
-          ) {
-            inputSession += 1;
-          }
-          post({ type: "control", ...nextControl, inputSession });
+          post({ type: "control", ...nextControl });
           if (nextControl.controller === "you") agentCursor.style.opacity = "0";
           if (nextControl.controller !== "you") clearInput();
           else {
-            input.disabled = !(interactive && streaming);
+            input.disabled = !interactive;
             if (interactive && size && previous?.controller !== "you")
               next.send({ type: "resize", ...size });
           }
         },
         onConnectedChange: (connected) => {
           if (!connected) {
-            const hadControl = control !== null;
-            inputSession += 1;
-            viewport = null;
-            painter.reset();
             control = null;
             clearInput();
-            if (streaming || hadControl) reportStatus("connecting");
+            if (streaming) reportStatus("connecting");
             return;
           }
         },
@@ -358,13 +289,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const pagePoint = (clientX: number, clientY: number, clamp: boolean) => {
-    if (
-      !streaming ||
-      !viewport ||
-      canvas.width === 0 ||
-      canvas.height === 0 ||
-      control?.controller !== "you"
-    )
+    if (!viewport || canvas.width === 0 || canvas.height === 0 || control?.controller !== "you")
       return null;
     const rect = canvas.getBoundingClientRect();
     const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
@@ -383,12 +308,20 @@ export function start(configuration: PreviewStreamConfiguration) {
     };
   };
 
+  let scrolled = 0;
   const flushWheel = () => {
     if (wheelFrame !== null) cancelAnimationFrame(wheelFrame);
     wheelFrame = null;
     const wheel = pendingWheel;
     pendingWheel = null;
-    if (wheel) send(wheel);
+    if (!wheel) return;
+    send(wheel);
+    // The app shrinks its bar while the page scrolls down, so it only needs the direction.
+    scrolled =
+      Math.sign(scrolled) === Math.sign(wheel.deltaY) ? scrolled + wheel.deltaY : wheel.deltaY;
+    if (Math.abs(scrolled) < SCROLL_REPORT_PX) return;
+    post({ type: "scroll", direction: scrolled > 0 ? "down" : "up" });
+    scrolled = 0;
   };
   const queueWheel = (point: { x: number; y: number }, deltaX: number, deltaY: number) => {
     pendingWheel = {
@@ -454,13 +387,12 @@ export function start(configuration: PreviewStreamConfiguration) {
       send(mouseInput(event, point, "down", button));
       return;
     }
+    touch = { start: event, last: event, panning: false };
     const point = pagePoint(event.clientX, event.clientY, false);
     if (!point) {
-      touch = null;
       probe = null;
       return;
     }
-    touch = { start: event, last: event, panning: false };
     const cached = probeCache;
     const reuse =
       cached !== null &&
@@ -583,7 +515,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   const preventDefault = (event: Event) => event.preventDefault();
 
   const onKey = (action: "down" | "up", event: KeyboardEvent) => {
-    if (!streaming || control?.controller !== "you") return;
+    if (control?.controller !== "you") return;
     if (
       event.isComposing ||
       event.keyCode === 229 ||
@@ -629,10 +561,6 @@ export function start(configuration: PreviewStreamConfiguration) {
     }
   };
   const onInput = (event: Event) => {
-    if (!streaming || control?.controller !== "you") {
-      resetInput();
-      return;
-    }
     if (event instanceof InputEvent && event.isComposing) return;
     const inputType = event instanceof InputEvent ? event.inputType : "";
     if (keySent) keySent = false;
@@ -646,10 +574,6 @@ export function start(configuration: PreviewStreamConfiguration) {
     resetInput();
   };
   const onCompositionEnd = (event: CompositionEvent) => {
-    if (!streaming || control?.controller !== "you") {
-      resetInput();
-      return;
-    }
     const text = event.data.startsWith(SENTINEL) ? event.data.slice(SENTINEL.length) : event.data;
     if (text) send({ type: "text", text });
     resetInput();
@@ -735,7 +659,7 @@ export function start(configuration: PreviewStreamConfiguration) {
       return;
     }
     if (element.readyState === HTMLMediaElement.HAVE_NOTHING) {
-      reportPictureInPicture("The page has not shown yet. Try again in a moment.");
+      reportPictureInPicture(configuration.labels.pictureInPictureNotReady);
       return;
     }
     // The page may have changed since the video's last frame. WebKit captures only on a draw.
@@ -744,7 +668,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     const fail = (error: unknown) => {
       element.pause();
       reportPictureInPicture(
-        error instanceof Error ? error.message : "Picture in picture is unavailable.",
+        error instanceof Error ? error.message : configuration.labels.pictureInPictureUnavailable,
       );
     };
     if (document.pictureInPictureEnabled) {
@@ -759,7 +683,6 @@ export function start(configuration: PreviewStreamConfiguration) {
   activeViewer = {
     stop: () => {
       stopped = true;
-      inputSession += 1;
       observer.disconnect();
       visualViewport?.removeEventListener("resize", followVisualViewport);
       visualViewport?.removeEventListener("scroll", followVisualViewport);
@@ -768,33 +691,15 @@ export function start(configuration: PreviewStreamConfiguration) {
       if (mouseFrame !== null) cancelAnimationFrame(mouseFrame);
       if (agentCursorTimer !== null) clearTimeout(agentCursorTimer);
       painter.stop();
-      audio?.stop();
-      audio = null;
       client?.stop();
       client = null;
       track?.stop();
       if (video) video.srcObject = null;
     },
-    command: (message, expectedInputSession) => {
-      if (
-        message.type === "text" &&
-        (!streaming || control?.controller !== "you" || expectedInputSession !== inputSession)
-      ) {
-        return;
-      }
+    command: (message) => {
       send(message);
     },
-    updateAccess: (nextAccess, nextGeneration) => {
-      access = nextAccess;
-      if (nextGeneration !== undefined) accessGeneration = nextGeneration;
-      if (stopped) return;
-      connect();
-    },
     togglePictureInPicture,
-    setMuted: (next) => {
-      viewerState.T3PreviewStream!.muted = next;
-      audio?.setMuted(next);
-    },
   };
   window.addEventListener("pagehide", stop, { once: true });
   reportStatus("connecting");

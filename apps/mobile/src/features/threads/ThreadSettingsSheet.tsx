@@ -2,10 +2,11 @@ import {
   getPromptControlledTraits,
   getTraitSelectChange,
 } from "@t3tools/client-runtime/model-traits";
+import { T, useGT, useLocale, useMessages } from "gt-react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
@@ -14,21 +15,18 @@ import type {
   EnvironmentId,
   ModelSelection,
   ProjectId,
-  ProviderInstanceId,
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
-  ScopedThreadRef,
   ServerSettings,
   ThreadId,
 } from "@t3tools/contracts";
 import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
-import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import {
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
-  getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import {
   useNavigation,
@@ -48,7 +46,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
+import { READABLE_WIDTH_STYLE, ROW_MIN_HEIGHT } from "../../components/ui/listMetrics";
+import { RefreshControl } from "../../components/ui/RefreshControl";
 import Animated, {
   FadeIn,
   FadeOut,
@@ -60,7 +60,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppBar } from "../../components/ui/AppBar";
-import { Button } from "../../components/ui/Button";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
@@ -68,9 +67,12 @@ import { useReduceMotionEnabled } from "../../lib/appState";
 import {
   buildModelOptions,
   groupByProvider,
+  serverConfigForCwd,
   type ModelOption,
   type ProviderGroup,
+  withStoredThreadModelOptions,
 } from "../../lib/modelOptions";
+import { groupModelsBySubProvider } from "@t3tools/client-runtime/providerSubProviders";
 import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import {
@@ -92,6 +94,8 @@ import { useQuietThreadStructure } from "../../state/use-thread-detail";
 import { activeComposerDraftKey, useQueuedRunEdit } from "../../state/queued-run-edit";
 import { selectThreadModel } from "../../state/thread-model-selection";
 import { useThreadSelection } from "../../state/use-thread-selection";
+import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
+import { providerWorkspaceSnapshotRefresh } from "../../state/provider-workspace-snapshot-refresh";
 import { threadAllowsProviderSwitch } from "../../state/thread-provider-switching";
 import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
 import { mobilePreferencesAtom } from "../../state/preferences";
@@ -105,7 +109,6 @@ import {
 import { useSearchToolbarInset } from "../../components/ui/useBarInset";
 import type { AppBarSearch } from "../../components/ui/AppBar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
-import { MachineHandoffScreen } from "./MachineHandoffScreen";
 import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
@@ -122,6 +125,7 @@ import {
   providerSectionIsCollapsed,
 } from "./thread-settings-sheet-state";
 import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
+import type { MessageResolver } from "../../i18n/messages";
 
 const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
@@ -150,15 +154,29 @@ function ProviderHeader(props: {
   readonly driver: string | undefined;
   readonly iconUrl: string | undefined;
   readonly label: string;
+  /** A backend inside a provider's section, such as one of fx's: no icon. */
+  readonly nested?: boolean;
+  /** Why the section has no usable models, such as a signed-out backend. */
+  readonly detail?: string | undefined;
   readonly collapsible: boolean;
   readonly collapsed: boolean;
   readonly modelCount: number;
   readonly onToggle: () => void;
 }) {
+  const gt = useGT();
   const content = (
     <>
-      <ProviderIcon iconUrl={props.iconUrl} provider={props.driver} size={15} />
-      <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
+      {props.nested ? null : (
+        <ProviderIcon iconUrl={props.iconUrl} provider={props.driver} size={15} />
+      )}
+      {props.detail ? (
+        <View className="min-w-0 flex-1 py-1">
+          <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
+          <Text className="text-xs text-foreground-muted">{props.detail}</Text>
+        </View>
+      ) : (
+        <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
+      )}
       {props.collapsible ? (
         <>
           <View className="flex-1" />
@@ -181,10 +199,17 @@ function ProviderHeader(props: {
   if (props.collapsible) {
     return (
       <Pressable
-        accessibilityLabel={`${props.label}, ${props.modelCount} models`}
+        accessibilityLabel={gt(
+          "{provider}, {count, plural, one {{count} model} other {{count} models}}",
+          {
+            provider: props.label,
+            count: props.modelCount,
+          },
+        )}
         accessibilityRole="button"
         accessibilityState={{ expanded: !props.collapsed }}
-        className="mx-4 mt-1 min-h-11 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60 android:min-h-12"
+        className="mx-4 mt-1 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60"
+        style={{ minHeight: ROW_MIN_HEIGHT.control }}
         onPress={props.onToggle}
       >
         {content}
@@ -193,7 +218,10 @@ function ProviderHeader(props: {
   }
 
   return (
-    <View accessibilityRole="header" className="mx-4 min-h-9 flex-row items-center gap-2 px-1 pt-1">
+    <View
+      accessibilityRole="header"
+      className={cn("mx-4 min-h-9 flex-row items-center gap-2 px-1 pt-1", props.nested && "mt-1")}
+    >
       {content}
     </View>
   );
@@ -210,9 +238,10 @@ function DisclosureRow(props: {
       accessibilityRole="button"
       onPress={props.onPress}
       className={cn(
-        "min-h-11 flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14",
+        "flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle",
         !props.isLast && "border-b border-border-subtle",
       )}
+      style={{ minHeight: ROW_MIN_HEIGHT.item }}
     >
       <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
       <View className="flex-1" />
@@ -235,7 +264,6 @@ function SwitchRow(props: {
   readonly label: string;
   readonly value: boolean;
   readonly onValueChange: (value: boolean) => void;
-  readonly disabled?: boolean;
   readonly isLast?: boolean;
 }) {
   return (
@@ -248,7 +276,6 @@ function SwitchRow(props: {
       <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
       <ThemedSwitch
         accessibilityLabel={props.label}
-        disabled={props.disabled}
         onValueChange={props.onValueChange}
         value={props.value}
       />
@@ -263,6 +290,7 @@ type ThreadSettingsSubmenuPage =
 type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
   readonly projectId: ProjectId | null;
+  readonly cwd: string | null;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly lockedProviderInstanceId?: ProviderInstanceId;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
@@ -318,6 +346,8 @@ type ThreadSettingsSessionValue = {
   readonly setSearchQuery: (query: string) => void;
   readonly setShowLegacy: (showLegacy: boolean) => void;
   readonly toggleProvider: (providerKey: string) => void;
+  /** The provider whose catalog for this folder the picker keeps fresh. */
+  readonly workspaceScan: { readonly instanceId: ProviderInstanceId; readonly cwd: string } | null;
 };
 
 const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | null>(null);
@@ -325,6 +355,8 @@ const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | 
 function ThreadSettingsSessionProvider(
   props: ThreadSettingsSessionProps & { readonly children: ReactNode },
 ) {
+  const gt = useGT();
+  const messages = useMessages();
   const registry = use(RegistryContext);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
@@ -344,7 +376,7 @@ function ThreadSettingsSessionProvider(
     manageHidden && config
       ? groupByProvider(
           buildModelOptions(
-            config,
+            serverConfigForCwd(config, props.cwd),
             props.selectedModel,
             props.lockedProviderInstanceId,
             props.projectId,
@@ -492,12 +524,10 @@ function ThreadSettingsSessionProvider(
     pendingModel ? option.key === pendingModel.key : isApplied(option);
 
   const displayedDescriptors = pendingModel
-    ? pendingModel.capabilities
-      ? getProviderOptionDescriptors({
-          caps: pendingModel.capabilities,
-          selections: pendingModel.selection.options,
-        })
-      : []
+    ? resolveProviderOptionDescriptors({
+        capabilities: pendingModel.capabilities,
+        selections: pendingModel.selection.options,
+      })
     : props.optionDescriptors;
   const promptTraits = getPromptControlledTraits(displayedDescriptors, displayedPrompt);
   const displayedModel =
@@ -507,6 +537,7 @@ function ThreadSettingsSessionProvider(
   const runtimeModeChoices = withManagedRuntimeModeLimits(
     runtimeModeChoicesForSupportedModes(displayedModel?.supportedRuntimeModes),
     [config?.managedPolicy],
+    messages,
   );
   const compatibleRuntimeMode = compatibleRuntimeModeForChoices(
     props.runtimeMode,
@@ -520,8 +551,8 @@ function ThreadSettingsSessionProvider(
     if (pendingModel) {
       if (!canCommitPendingModel(pendingModel, props.providerGroups)) {
         Dialog.alert(
-          "Model unavailable",
-          "Set up this provider on web or desktop, or select another model.",
+          gt("Model unavailable"),
+          gt("Set up this provider on web or desktop, or select another model."),
         );
         return false;
       }
@@ -597,8 +628,17 @@ function ThreadSettingsSessionProvider(
     );
   };
 
+  const environmentId = props.environmentId;
+  // Like the web picker's open tab: scanning every provider would spawn a probe per provider.
+  const scannedInstanceId =
+    providerFilter !== null && providerFilter !== FAVORITES_PROVIDER_FILTER
+      ? ProviderInstanceId.make(providerFilter)
+      : props.providerInstanceId;
+  const workspaceScan =
+    props.cwd && scannedInstanceId ? { instanceId: scannedInstanceId, cwd: props.cwd } : null;
+
   const value = {
-    environmentId: props.environmentId,
+    environmentId,
     providerInstanceId: props.providerInstanceId,
     providerGroups,
     manageHidden,
@@ -630,13 +670,32 @@ function ThreadSettingsSessionProvider(
     setShowLegacy: setShowLegacyToggle,
     toggleProvider,
     toggleFavorite,
+    workspaceScan,
   } satisfies ThreadSettingsSessionValue;
 
   return (
     <ThreadSettingsSessionContext.Provider value={value}>
+      {environmentId && workspaceScan ? (
+        <ProviderWorkspaceSnapshotScan
+          key={workspaceScan.instanceId}
+          environmentId={environmentId}
+          instanceId={workspaceScan.instanceId}
+          cwd={workspaceScan.cwd}
+        />
+      ) : null}
       {props.children}
     </ThreadSettingsSessionContext.Provider>
   );
+}
+
+/** A project's own provider config can add models only its workspace scan lists. */
+function ProviderWorkspaceSnapshotScan(props: {
+  readonly environmentId: EnvironmentId;
+  readonly instanceId: ProviderInstanceId;
+  readonly cwd: string;
+}) {
+  useAtomMount(providerWorkspaceSnapshotRefresh(props));
+  return null;
 }
 
 function useThreadSettingsSession() {
@@ -663,6 +722,15 @@ type ThreadSettingsCatalogItem =
       readonly kind: "provider";
       readonly key: string;
       readonly provider: ThreadSettingsProviderCatalog;
+    }
+  | {
+      readonly kind: "subProvider";
+      readonly key: string;
+      readonly expansionKey: string;
+      readonly label: string;
+      readonly detail: string | undefined;
+      readonly collapsed: boolean;
+      readonly modelCount: number;
     }
   | {
       readonly kind: "model";
@@ -718,64 +786,106 @@ function ThreadSettingsProviderListHeader(props: {
 }) {
   const session = useThreadSettingsSession();
   const onToggle = () => session.toggleProvider(props.provider.key);
-  const configs = useAtomValue(environmentServerConfigsAtom);
-  const config = session.environmentId ? configs.get(session.environmentId) : undefined;
-  const provider = config?.providers.find(
-    (candidate) => candidate.instanceId === props.provider.key,
-  );
-  const permission = useAtomValue(
-    serverEnvironment.updateSettings.permissionAtom(session.environmentId),
-  );
-  const saveSettings = useAtomCommand(serverEnvironment.updateSettings, "new model default update");
-  const [pending, setPending] = useState(false);
 
   return (
-    <>
-      <ProviderHeader
-        collapsible={props.provider.collapsible}
-        collapsed={props.provider.collapsed}
-        driver={props.provider.driver}
-        iconUrl={props.provider.iconUrl}
-        label={props.provider.label}
-        modelCount={props.provider.modelCount}
-        onToggle={onToggle}
-      />
-      {session.manageHidden && !props.provider.collapsed && provider ? (
-        <View className="mx-3 overflow-hidden rounded-t-2xl">
-          <SwitchRow
-            label="Enable new models by default"
-            value={
-              config?.settings.providerModelPreferences?.[provider.instanceId]?.newModelsEnabled ??
-              true
-            }
-            disabled={pending || !permission}
-            onValueChange={(enabled) => {
-              if (!session.environmentId || pending) return;
-              setPending(true);
-              void saveSettings({
-                environmentId: session.environmentId,
-                input: {
-                  patch: {
-                    setProviderNewModelsEnabled: {
-                      provider: provider.instanceId,
-                      enabled,
-                      models: provider.models
-                        .filter((model) => !model.isCustom)
-                        .map((model) => model.slug),
-                    },
-                  },
-                },
-              }).then(() => setPending(false));
-            }}
-          />
-        </View>
-      ) : null}
-    </>
+    <ProviderHeader
+      collapsible={props.provider.collapsible}
+      collapsed={props.provider.collapsed}
+      driver={props.provider.driver}
+      iconUrl={props.provider.iconUrl}
+      label={props.provider.label}
+      modelCount={props.provider.modelCount}
+      onToggle={onToggle}
+    />
   );
+}
+
+function ThreadSettingsSubProviderListHeader(props: {
+  readonly item: Extract<ThreadSettingsCatalogItem, { kind: "subProvider" }>;
+}) {
+  const session = useThreadSettingsSession();
+  const onToggle = () => session.toggleProvider(props.item.expansionKey);
+
+  return (
+    <ProviderHeader
+      nested
+      collapsible={props.item.detail === undefined}
+      collapsed={props.item.collapsed}
+      detail={props.item.detail}
+      driver={undefined}
+      iconUrl={undefined}
+      label={props.item.label}
+      modelCount={props.item.modelCount}
+      onToggle={onToggle}
+    />
+  );
+}
+
+const modelItems = (models: ReadonlyArray<ModelOption>) =>
+  models.map((option, index) => ({
+    kind: "model" as const,
+    key: `model:${option.key}`,
+    option,
+    isFirst: index === 0,
+    isLast: index === models.length - 1,
+  }));
+
+/**
+ * A provider whose models run on several backends, such as fx, lists each
+ * backend under its own collapsible heading; the thread's backend opens.
+ * Search and Favorites stay flat.
+ */
+function subProviderCatalogItems(
+  session: ThreadSettingsSessionValue,
+  group: ProviderGroup,
+  models: ReadonlyArray<ModelOption>,
+): ReadonlyArray<ThreadSettingsCatalogItem> | null {
+  if (
+    !group.subProviders?.length ||
+    session.searchQuery.trim().length > 0 ||
+    session.providerFilter === FAVORITES_PROVIDER_FILTER
+  ) {
+    return null;
+  }
+  const { ungrouped, groups } = groupModelsBySubProvider(
+    models,
+    group.subProviders,
+    (option) => option.subtitle,
+  );
+  return [
+    ...modelItems(ungrouped),
+    ...groups.flatMap(({ subProvider, models: backendModels }) => {
+      const expansionKey = `${group.providerKey}:sub-provider:${subProvider.name}`;
+      const collapsed =
+        subProvider.unavailableReason !== undefined ||
+        providerSectionIsCollapsed({
+          defaultExpanded: backendModels.some(session.isApplied),
+          hasExpansionOverride: session.providerExpansionOverrides.has(expansionKey),
+          isNarrowed: false,
+        });
+      return [
+        {
+          kind: "subProvider" as const,
+          key: `sub-provider:${expansionKey}`,
+          expansionKey,
+          label: subProvider.name,
+          detail: subProvider.unavailableReason,
+          collapsed,
+          modelCount: backendModels.length,
+        },
+        // The heading names the backend, so rows drop it.
+        ...(collapsed
+          ? []
+          : modelItems(backendModels.map((option) => ({ ...option, subtitle: "" })))),
+      ];
+    }),
+  ];
 }
 
 function buildThreadSettingsCatalogItems(
   session: ThreadSettingsSessionValue,
+  resolve: MessageResolver,
+  locale: string,
 ): ReadonlyArray<ThreadSettingsCatalogItem> {
   return session.providerGroups.flatMap((group) => {
     if (
@@ -810,7 +920,12 @@ function buildThreadSettingsCatalogItems(
     );
     const updateRequiredNotice =
       group.updateRequired && session.providerFilter !== FAVORITES_PROVIDER_FILTER
-        ? formatProviderUpdateRequiredNotice(group.updateRequired, session.searchQuery)
+        ? formatProviderUpdateRequiredNotice(
+            group.updateRequired,
+            session.searchQuery,
+            resolve,
+            locale,
+          )
         : null;
     if (visibleModels.length === 0 && !updateRequiredNotice) {
       return [];
@@ -840,13 +955,8 @@ function buildThreadSettingsCatalogItems(
         key: `provider:${group.providerKey}`,
         provider,
       },
-      ...provider.models.map((option, index) => ({
-        kind: "model" as const,
-        key: `model:${option.key}`,
-        option,
-        isFirst: index === 0,
-        isLast: index === provider.models.length - 1,
-      })),
+      ...((collapsed ? null : subProviderCatalogItems(session, group, provider.models)) ??
+        modelItems(provider.models)),
       ...(!collapsed && updateRequiredNotice
         ? [
             {
@@ -866,6 +976,8 @@ function ThreadSettingsOptionsItem(props: {
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const gt = useGT();
+  const m = useMessages();
   const session = useThreadSettingsSession();
   const configs = useAtomValue(environmentServerConfigsAtom);
   const selectedProvider = session.environmentId
@@ -877,7 +989,9 @@ function ThreadSettingsOptionsItem(props: {
   return (
     <View style={{ paddingBottom: insets.bottom + props.bottomInset + 12 }}>
       <ChatGptSharingStatus provider={selectedProvider} />
-      <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">Options</Text>
+      <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">
+        <T>Options</T>
+      </Text>
       <Animated.View
         className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
@@ -928,20 +1042,24 @@ function ThreadSettingsOptionsItem(props: {
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
-            label="Runtime"
-            value={
-              session.runtimeModeChoices.find((choice) => choice.mode === session.runtimeMode)
-                ?.label
-            }
+            label={gt("Runtime", { $context: "agent permission mode setting" })}
+            value={(() => {
+              const label = session.runtimeModeChoices.find(
+                (choice) => choice.mode === session.runtimeMode,
+              )?.label;
+              return label === undefined ? undefined : m(label);
+            })()}
             onPress={() => props.onOpenSubmenu({ kind: "runtime" })}
           />
         </Animated.View>
       </Animated.View>
 
-      <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">Catalog</Text>
+      <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
+        {gt("Catalog", { $context: "section heading for the model catalog" })}
+      </Text>
       <View className="mx-4 overflow-hidden rounded-2xl bg-grouped-card">
         <SwitchRow
-          label="Manage hidden models"
+          label={gt("Manage hidden models")}
           value={session.manageHidden}
           onValueChange={session.setManageHidden}
           isLast
@@ -954,8 +1072,10 @@ function ThreadSettingsOptionsItem(props: {
 function ThreadSettingsMainContent(props: {
   readonly bottomInset: number;
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
-  readonly onMachineHandoff?: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useLocale();
   const session = useThreadSettingsSession();
   const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -978,18 +1098,32 @@ function ThreadSettingsMainContent(props: {
   const refreshProviders = () => {
     if (!session.environmentId || isRefreshingProviders) return;
     setIsRefreshingProviders(true);
-    void refreshProviderCatalog(session.environmentId).then((result) => {
-      setIsRefreshingProviders(false);
-      const error = providerCatalogRefreshError(result);
-      if (error) Dialog.alert("Could not refresh models", error);
-    });
+    const environmentId = session.environmentId;
+    const workspaceScan = session.workspaceScan;
+    void refreshProviderCatalog(environmentId)
+      .then(async (result) => {
+        // A project's own models are read per folder, so the machine refresh alone keeps them stale.
+        // A failed folder read keeps its previous models and retries, so only the machine result alerts.
+        if (result._tag === "Success" && workspaceScan) {
+          await refreshProvidersCommand({
+            environmentId,
+            input: { ...workspaceScan, fresh: true },
+          });
+        }
+        return result;
+      })
+      .then((result) => {
+        setIsRefreshingProviders(false);
+        const error = providerCatalogRefreshError(result);
+        if (error) Dialog.alert(gt("Could not refresh models"), error);
+      });
   };
   const [listLoaded, setListLoaded] = useState(false);
   // Android can drop the first frame of a reduced-motion fade, leaving rows invisible.
   const reducedMotion = useReducedMotion();
   const reduceMotionEnabled = useReduceMotionEnabled();
   const animationsReady = listLoaded && !reducedMotion && !reduceMotionEnabled;
-  const catalogItems = buildThreadSettingsCatalogItems(session);
+  const catalogItems = buildThreadSettingsCatalogItems(session, m, locale);
   const hasActiveCatalogFilter =
     session.providerFilter !== null || session.searchQuery.trim().length > 0;
   const listItems = [
@@ -1002,6 +1136,8 @@ function ThreadSettingsMainContent(props: {
 
     if (item.kind === "provider") {
       content = <ThreadSettingsProviderListHeader provider={item.provider} />;
+    } else if (item.kind === "subProvider") {
+      content = <ThreadSettingsSubProviderListHeader item={item} />;
     } else if (item.kind === "model") {
       content = (
         <ThreadSettingsModelListRow
@@ -1018,10 +1154,10 @@ function ThreadSettingsMainContent(props: {
           <Text className="text-center text-sm text-foreground-muted">
             {session.providerFilter === FAVORITES_PROVIDER_FILTER &&
             session.searchQuery.trim().length === 0
-              ? "No favorite models"
+              ? gt("No favorite models")
               : hasActiveCatalogFilter
-                ? "No matching models"
-                : "No available models"}
+                ? gt("No matching models")
+                : gt("No available models")}
           </Text>
         </View>
       );
@@ -1052,15 +1188,11 @@ function ThreadSettingsMainContent(props: {
       alwaysBounceVertical
       automaticallyAdjustsScrollIndicatorInsets
       className="flex-1 bg-sheet"
-      style={
-        Platform.OS === "android"
-          ? { width: "100%", maxWidth: 720, alignSelf: "center" }
-          : undefined
-      }
+      style={READABLE_WIDTH_STYLE}
       contentContainerStyle={{ paddingTop: 4 }}
       contentInsetAdjustmentBehavior="automatic"
       data={listItems}
-      estimatedItemSize={Platform.OS === "android" ? 56 : 48}
+      estimatedItemSize={ROW_MIN_HEIGHT.item}
       extraData={animationsReady}
       getItemType={(item) => item.kind}
       itemLayoutAnimation={THREAD_SETTINGS_CATALOG_LAYOUT_TRANSITION}
@@ -1068,18 +1200,6 @@ function ThreadSettingsMainContent(props: {
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
       maintainVisibleContentPosition={THREAD_SETTINGS_MAINTAIN_VISIBLE_CONTENT_POSITION}
-      ListHeaderComponent={
-        props.onMachineHandoff ? (
-          <View className="px-4 py-3">
-            <Button
-              label="Hand off to another machine"
-              icon="arrow.left.arrow.right"
-              fullWidth
-              onPress={props.onMachineHandoff}
-            />
-          </View>
-        ) : null
-      }
       recycleItems
       refreshControl={
         session.environmentId ? (
@@ -1098,6 +1218,8 @@ function ThreadSettingsChoiceContent(props: {
   readonly onSelected: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const gt = useGT();
+  const m = useMessages();
   const session = useThreadSettingsSession();
   const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
 
@@ -1113,8 +1235,8 @@ function ThreadSettingsChoiceContent(props: {
       ? {
           rows: session.runtimeModeChoices.map((choice) => ({
             id: choice.mode,
-            label: choice.label,
-            description: choice.disabledReason ?? choice.description,
+            label: m(choice.label),
+            description: choice.disabledReason ?? m(choice.description),
             disabled: choice.disabledReason !== undefined,
             selected: choice.mode === session.runtimeMode,
             onPress: () => {
@@ -1148,8 +1270,10 @@ function ThreadSettingsChoiceContent(props: {
                   activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
                 ) {
                   Dialog.alert(
-                    "Reasoning controlled by prompt",
-                    'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
+                    gt("Reasoning controlled by prompt"),
+                    gt(
+                      'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
+                    ),
                   );
                   return;
                 }
@@ -1167,11 +1291,7 @@ function ThreadSettingsChoiceContent(props: {
   return (
     <ScrollView
       className="flex-1 bg-sheet"
-      style={
-        Platform.OS === "android"
-          ? { width: "100%", maxWidth: 720, alignSelf: "center" }
-          : undefined
-      }
+      style={READABLE_WIDTH_STYLE}
       contentContainerStyle={{
         paddingBottom: insets.bottom + 12,
         paddingHorizontal: 16,
@@ -1200,12 +1320,10 @@ function ThreadSettingsChoiceContent(props: {
 type ThreadSettingsPickerStackParams = {
   ThreadSettingsModels: undefined;
   ThreadSettingsChoice: ThreadSettingsSubmenuPage & { readonly title: string };
-  ThreadSettingsMachineHandoff: { readonly modelSelection: ModelSelection };
 };
 
 type ThreadSettingsPickerPresentation = {
   readonly onClose: () => void;
-  readonly machineHandoffThreadRef?: ScopedThreadRef;
 };
 
 const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
@@ -1223,6 +1341,7 @@ function useThreadSettingsPickerPresentation() {
 }
 
 function ThreadSettingsModelsScreen() {
+  const gt = useGT();
   const session = useThreadSettingsSession();
   const presentation = useThreadSettingsPickerPresentation();
   const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
@@ -1234,15 +1353,15 @@ function ThreadSettingsModelsScreen() {
   const search: AppBarSearch = {
     value: session.searchQuery,
     onChangeText: session.setSearchQuery,
-    placeholder: "Find a model",
-    clearAccessibilityLabel: "Clear model search",
+    placeholder: gt("Find a model"),
+    clearAccessibilityLabel: gt("Clear model search"),
     mode: "inline",
     compactToolbar: true,
   };
   const searchToolbarInset = useSearchToolbarInset(search);
   const providerFilters = [
-    { id: "all-providers", title: "All providers", value: null },
-    { id: "favorites", title: "Favorites", value: FAVORITES_PROVIDER_FILTER },
+    { id: "all-providers", title: gt("All providers"), value: null },
+    { id: "favorites", title: gt("Favorites"), value: FAVORITES_PROVIDER_FILTER },
     ...session.providerGroups.map((group) => ({
       id: `provider:${group.providerKey}`,
       title: group.providerLabel,
@@ -1253,20 +1372,20 @@ function ThreadSettingsModelsScreen() {
   return (
     <>
       <AppBar
-        title="Thread settings"
+        title={gt("Thread settings")}
         onClose={presentation.onClose}
-        closeAccessibilityLabel="Cancel thread settings"
+        closeAccessibilityLabel={gt("Cancel thread settings")}
         search={search}
         menus={[
           {
-            title: "Model filters",
+            title: gt("Model filters"),
             icon: hasCustomCatalogFilter
               ? "line.3.horizontal.decrease.circle.fill"
               : "line.3.horizontal.decrease",
             items: [
               {
                 id: "provider",
-                title: "Provider",
+                title: gt("Provider"),
                 items: providerFilters.map((filter) => ({
                   id: filter.id,
                   title: filter.title,
@@ -1278,7 +1397,7 @@ function ThreadSettingsModelsScreen() {
                 ? [
                     {
                       id: "show-legacy",
-                      title: "Show legacy models",
+                      title: gt("Show legacy models"),
                       selected: session.showLegacy,
                       onPress: () => session.setShowLegacy(!session.showLegacy),
                     },
@@ -1294,32 +1413,23 @@ function ThreadSettingsModelsScreen() {
           session.hasLegacyModels,
         ]}
         confirm={{
-          label: session.pendingModel ? "Save" : "Done",
+          label: session.pendingModel
+            ? gt("Save", { $context: "verb, button" })
+            : gt("Done", { $context: "button that closes the sheet" }),
           onPress: commitAndClose,
         }}
         hideBottomBorder
       />
       <ScreenContent>
         <ThreadSettingsMainContent
-          onMachineHandoff={
-            presentation.machineHandoffThreadRef && session.displayedModelSelection
-              ? () => {
-                  if (session.displayedModelSelection) {
-                    navigation.navigate("ThreadSettingsMachineHandoff", {
-                      modelSelection: session.displayedModelSelection,
-                    });
-                  }
-                }
-              : undefined
-          }
           bottomInset={searchToolbarInset}
           onOpenSubmenu={(submenu) => {
             const title =
               submenu.kind === "runtime"
-                ? "Runtime"
+                ? gt("Runtime", { $context: "agent permission mode setting" })
                 : (session.displayedDescriptors.find(
                     (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                  )?.label ?? "Option");
+                  )?.label ?? gt("Option"));
             navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
           }}
         />
@@ -1345,28 +1455,11 @@ function ThreadSettingsChoiceScreen() {
   );
 }
 
-function ThreadSettingsMachineHandoffScreen() {
-  const presentation = useThreadSettingsPickerPresentation();
-  const route =
-    useRoute<RouteProp<ThreadSettingsPickerStackParams, "ThreadSettingsMachineHandoff">>();
-  const navigation = useNavigation();
-  if (!presentation.machineHandoffThreadRef) return null;
-  return (
-    <>
-      <AppBar title="Machine handoff" onBack={() => navigation.goBack()} hideBottomBorder />
-      <MachineHandoffScreen
-        sourceRef={presentation.machineHandoffThreadRef}
-        modelSelection={route.params.modelSelection}
-      />
-    </>
-  );
-}
-
 function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) {
   const screenOptions = useSheetStackOptions();
+  const gt = useGT();
   const presentation = {
     onClose: props.onClose,
-    machineHandoffThreadRef: props.machineHandoffThreadRef,
   };
 
   return (
@@ -1378,17 +1471,12 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
         <ThreadSettingsPickerStack.Screen
           name="ThreadSettingsModels"
           component={ThreadSettingsModelsScreen}
-          options={{ headerBackVisible: false, title: "Thread settings" }}
+          options={{ headerBackVisible: false, title: gt("Thread settings") }}
         />
         <ThreadSettingsPickerStack.Screen
           name="ThreadSettingsChoice"
           component={ThreadSettingsChoiceScreen}
           options={({ route }) => ({ title: route.params.title })}
-        />
-        <ThreadSettingsPickerStack.Screen
-          name="ThreadSettingsMachineHandoff"
-          component={ThreadSettingsMachineHandoffScreen}
-          options={{ title: "Machine handoff" }}
         />
       </ThreadSettingsPickerStack.Navigator>
     </ThreadSettingsPickerPresentationContext.Provider>
@@ -1396,14 +1484,11 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
 }
 
 export function ThreadSettingsPickerScreen(
-  props: ThreadSettingsSessionProps & ThreadSettingsPickerPresentation,
+  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
 ) {
   return (
     <ThreadSettingsSessionProvider {...props}>
-      <ThreadSettingsPickerNavigator
-        onClose={props.onClose}
-        machineHandoffThreadRef={props.machineHandoffThreadRef}
-      />
+      <ThreadSettingsPickerNavigator onClose={props.onClose} />
     </ThreadSettingsSessionProvider>
   );
 }
@@ -1415,6 +1500,7 @@ export function ExistingThreadSettingsRouteScreen({
   // Reads the same environmentId/threadId params as the Thread route beneath it.
   const { selectedThread, selectedThreadDetailRef, selectedEnvironmentRuntime } =
     useThreadSelection();
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
   // Streamed text would otherwise re-render the whole model picker on every delta.
   const structure = useQuietThreadStructure(selectedThreadDetailRef);
   const reportedModelSelection = useThreadReportedModelSelection(selectedThreadDetailRef);
@@ -1429,7 +1515,10 @@ export function ExistingThreadSettingsRouteScreen({
     return <View className="flex-1 bg-sheet" />;
   }
 
-  const serverConfig = selectedEnvironmentRuntime?.serverConfig ?? null;
+  const serverConfig = serverConfigForCwd(
+    selectedEnvironmentRuntime?.serverConfig ?? null,
+    selectedThreadCwd,
+  );
   const modelSelection = draftSettings.modelSelection ?? selectedThread.modelSelection;
   const lockedProviderInstanceId = threadAllowsProviderSwitch({
     thread: selectedThread,
@@ -1454,12 +1543,9 @@ export function ExistingThreadSettingsRouteScreen({
 
   return (
     <ThreadSettingsPickerScreen
-      machineHandoffThreadRef={{
-        environmentId: selectedThread.environmentId,
-        threadId: selectedThread.id,
-      }}
       environmentId={selectedThread.environmentId}
       projectId={selectedThread.projectId}
+      cwd={selectedThreadCwd}
       providerInstanceId={modelSelection.instanceId}
       {...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {})}
       providerGroups={groupByProvider(modelOptions)}
@@ -1467,7 +1553,14 @@ export function ExistingThreadSettingsRouteScreen({
       prompt={prompt}
       onPromptChange={(text) => setComposerDraftText(draftKey, text)}
       reportedModelSelection={reportedModelSelection}
-      onSelectModel={(option) => updateModelSelection(withRememberedModelOptions(option.selection))}
+      onSelectModel={(option) =>
+        updateModelSelection(
+          withStoredThreadModelOptions(
+            withRememberedModelOptions(option.selection),
+            selectedThread.modelSelection,
+          ),
+        )
+      }
       restoreSelection={withRememberedModelOptions}
       optionDescriptors={resolveProviderOptionDescriptors({
         capabilities: currentModelOption?.capabilities,
@@ -1497,6 +1590,7 @@ export function NewTaskThreadSettingsRouteScreen() {
     <ThreadSettingsPickerScreen
       environmentId={flow.selectedEnvironmentId}
       projectId={flow.selectedProject?.id ?? null}
+      cwd={flow.workspaceCwd}
       {...(flow.selectedModel ? { providerInstanceId: flow.selectedModel.instanceId } : {})}
       providerGroups={flow.providerGroups}
       selectedModel={flow.selectedModel}

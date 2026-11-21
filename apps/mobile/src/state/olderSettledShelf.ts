@@ -1,4 +1,4 @@
-import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   isListedSettledThread,
@@ -11,10 +11,10 @@ import {
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useContext, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
-import { environmentThreadShells, olderSettledThreads, threadFamilies } from "./threads";
+import { olderSettledThreads, threadFamilies } from "./threads";
 
 const NO_PAGES: ReadonlyMap<EnvironmentId, number> = new Map();
 const NO_OLDER_SETTLED: Atom.Atom<OlderSettled | null> = Atom.make(null);
@@ -31,7 +31,6 @@ export function useOlderSettledShelf(input: {
   /** Rows the shelf shows; pages are read until it lists that many. */
   readonly visibleCount: number;
 }) {
-  const registry = useContext(RegistryContext);
   const scopes = useMemo(() => sortOlderSettledScopes(input.scopes), [input.scopes]);
   const scopeKey = JSON.stringify(scopes);
   const [requested, setRequested] = useState({ scopeKey, pages: NO_PAGES });
@@ -72,14 +71,8 @@ export function useOlderSettledShelf(input: {
     grow: (next: ReadonlyMap<EnvironmentId, number>) => setRequested({ scopeKey, pages: next }),
     isListed: (thread: EnvironmentThreadShell) => isListedSettledThread(thread.source, frontier),
     /** Older settled threads in scope that are not local; add it to the local Settled rows. */
-    unloadedCount: () =>
-      unloadedOlderSettledCount({
-        olderSettled: olderOf,
-        scopes,
-        threads: registry
-          .get(environmentThreadShells.threadShellsAtom)
-          .filter((thread) => thread.archivedAt === null),
-      }),
+    unloadedCount: (threads: ReadonlyArray<EnvironmentThreadShell>) =>
+      unloadedOlderSettledCount({ olderSettled: olderOf, scopes, threads }),
     loading: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "pending"),
     failed: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "failed"),
     retry: () => {

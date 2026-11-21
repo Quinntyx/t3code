@@ -1,13 +1,7 @@
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  extractJsonObject,
-  extractJsonObjectCandidates,
-  parseLenientJson,
-  fromLenientJson,
-} from "./schemaJson.ts";
+import { extractJsonObject, fromLenientJson } from "./schemaJson.ts";
 
 const decodeLenientJson = Schema.decodeUnknownSync(fromLenientJson(Schema.Unknown));
 
@@ -64,28 +58,5 @@ Done.`),
       enabled: true,
       values: [1, 2],
     });
-  });
-});
-
-describe("extractJsonObjectCandidates", () => {
-  it("lists complete objects last first so the final answer wins", () => {
-    expect(extractJsonObjectCandidates('Draft: {"title":"one"}\nFinal: {"title":"two"}')).toEqual({
-      complete: ['{"title":"two"}', '{"title":"one"}'],
-      truncated: undefined,
-    });
-  });
-
-  it("reports the object that never closed", () => {
-    expect(extractJsonObjectCandidates('Here you go: {"title":"one"} then {"title":')).toEqual({
-      complete: ['{"title":"one"}'],
-      truncated: '{"title":',
-    });
-  });
-});
-
-describe("parseLenientJson", () => {
-  it("accepts trailing commas that JSON.parse rejects", () => {
-    const parsed = parseLenientJson('{"title":"one",}');
-    expect(Result.isSuccess(parsed) ? parsed.success : undefined).toEqual({ title: "one" });
   });
 });

@@ -1,14 +1,12 @@
 import {
   CommandId,
+  GitCommandError,
   type GitManagerServiceError,
   ProjectId,
-  type ProjectCloneLayout,
   type ThreadId,
   VcsProcessSpawnError,
 } from "@t3tools/contracts";
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { newProjectFolderName } from "@t3tools/shared/path";
+import { foldLatinDiacritics, newProjectFolderName } from "@t3tools/shared/path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -21,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
@@ -30,10 +29,16 @@ import * as ProjectService from "./ProjectService.ts";
 
 export class ScratchUnavailableError extends Schema.TaggedError<ScratchUnavailableError>()(
   "ScratchUnavailableError",
-  {},
+  {
+    baseDir: Schema.String,
+    repositoryRoot: Schema.optional(Schema.String),
+  },
 ) {
   override get message(): string {
-    return "Threads without a project are not available on this environment.";
+    if (this.repositoryRoot === undefined) {
+      return "Threads without a project are not available on this environment.";
+    }
+    return `Threads without a project are off because the T3 home ${this.baseDir} is inside the Git repository ${this.repositoryRoot}. If that repository was created by mistake, move ${this.repositoryRoot}/.git out of the way; otherwise point T3CODE_HOME (or --base-dir) at a folder outside it. Then restart T3 Code.`;
   }
 }
 
@@ -61,7 +66,19 @@ export class ScratchProjectError extends Schema.TaggedError<ScratchProjectError>
   }
 }
 
+/** Where No project threads keep their folders, whether or not this T3 home allows them. */
+export const scratchFolderRoot = (baseDir: string, path: Path.Path) =>
+  path.resolve(baseDir, "scratch");
+
 export type ScratchError = ScratchUnavailableError | ScratchFolderError | ScratchProjectError;
+
+// The spawner checks cwd before spawning, so NotFound from spawn itself means a missing executable.
+const isMissingExecutable = (cause: unknown) =>
+  PlatformError.isPlatformError(cause) &&
+  cause.reason._tag === "NotFound" &&
+  cause.reason.method === "spawn";
+
+const isGitCommandError = Schema.is(GitCommandError);
 
 export class NamedProjectFolderError extends Schema.TaggedError<NamedProjectFolderError>()(
   "NamedProjectFolderError",
@@ -71,8 +88,8 @@ export class NamedProjectFolderError extends Schema.TaggedError<NamedProjectFold
   },
 ) {
   override get message(): string {
-    return typeof this.cause === "string"
-      ? `Failed to create the project folder: ${this.cause}`
+    return isGitCommandError(this.cause) && isMissingExecutable(this.cause.cause)
+      ? "Git isn't installed on this machine. Install Git to create a project."
       : "Failed to create the project folder.";
   }
 }
@@ -104,11 +121,7 @@ export class ManagedProjectFolders extends Context.Service<
     }) => Effect.Effect<Option.Option<string>, ScratchFolderError>;
     readonly namedProjectsRoot: string;
     /** Removes failed/cancelled creations' folders only while no project owns them. */
-    readonly createNamedProject: (input: {
-      readonly name: string;
-      readonly parentDirectory?: string;
-      readonly layout?: ProjectCloneLayout;
-    }) => Effect.Effect<
+    readonly createNamedProject: (input: { readonly name: string }) => Effect.Effect<
       {
         readonly projectId: ProjectId;
         readonly workspaceRoot: string;
@@ -120,7 +133,7 @@ export class ManagedProjectFolders extends Context.Service<
 >()("t3/project/ManagedProjectFolders") {}
 
 const folderWords = (text: string) =>
-  text
+  foldLatinDiacritics(text)
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
@@ -241,18 +254,51 @@ const make = Effect.gen(function* () {
 
   // Scratch inside a checkout would inherit its git status and checkpoints; require a data dir outside work trees.
   const [probe, invalidate] = yield* Effect.cachedInvalidateWithTTL(
-    gitWorkflow.isRepository(config.baseDir).pipe(
-      Effect.catchIf(isGitMissing, () => Effect.succeed(false)),
-      Effect.map((isRepository) =>
-        isRepository ? Option.none<string>() : Option.some(path.resolve(config.baseDir, "scratch")),
-      ),
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(Option.none<string>()),
+    gitWorkflow.repositoryRoot(config.baseDir).pipe(
+      Effect.catchIf(isGitMissing, () => Effect.succeed(null)),
+      Effect.flatMap(
+        (repositoryRoot): Effect.Effect<Result.Result<string, ScratchUnavailableError>> => {
+          if (repositoryRoot === null) {
+            return Effect.succeed(Result.succeed(scratchFolderRoot(config.baseDir, path)));
+          }
+          const unavailable = new ScratchUnavailableError({
+            baseDir: config.baseDir,
+            repositoryRoot,
+          });
+          return Effect.logWarning(unavailable.message).pipe(Effect.as(Result.fail(unavailable)));
+        },
       ),
     ),
-    Duration.infinity,
+    // A failed git check (say, a timeout on a busy machine) is not an answer; ask again next time.
+    Exit.match({ onSuccess: () => Duration.infinity, onFailure: () => Duration.zero }),
   );
-  const scratchRoot = probe.pipe(Effect.onInterrupt(() => invalidate));
+  const scratchProbe = probe.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterrupts(cause)
+        ? Effect.interrupt
+        : Effect.succeed(Result.fail(new ScratchUnavailableError({ baseDir: config.baseDir }))),
+    ),
+    Effect.onInterrupt(() => invalidate),
+  );
+  // A symlinked scratch folder lets the No project live at either the link or its target.
+  const scratchProjectRoot = (root: string) =>
+    fileSystem.realPath(root).pipe(
+      Effect.flatMap((target) =>
+        target === root
+          ? Effect.succeed(root)
+          : projects
+              .getByWorkspaceRoot(target)
+              .pipe(Effect.map((project) => (Option.isSome(project) ? target : root))),
+      ),
+      Effect.orElseSucceed(() => root),
+    );
+  const scratchRoot = scratchProbe.pipe(
+    Effect.flatMap((probed) =>
+      Result.isSuccess(probed)
+        ? scratchProjectRoot(probed.success).pipe(Effect.asSome)
+        : Effect.succeedNone,
+    ),
+  );
 
   const makeScratchFolder = (folder: string) =>
     fileSystem
@@ -261,15 +307,9 @@ const make = Effect.gen(function* () {
 
   const ensureScratchProject: ManagedProjectFolders["Service"]["ensureScratchProject"] = Effect.gen(
     function* () {
-      const workspaceRoot = yield* scratchRoot.pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(new ScratchUnavailableError()),
-            onSome: Effect.succeed,
-          }),
-        ),
-      );
-      yield* makeScratchFolder(workspaceRoot);
+      const probedRoot = yield* scratchProbe.pipe(Effect.flatMap(Effect.fromResult));
+      yield* makeScratchFolder(probedRoot);
+      const workspaceRoot = yield* scratchProjectRoot(probedRoot);
       const id = yield* random
         .uuidV4()
         .pipe(Effect.mapError((cause) => new ScratchProjectError({ workspaceRoot, cause })));
@@ -353,9 +393,15 @@ const make = Effect.gen(function* () {
   const namedProjectsRoot = path.resolve(config.baseDir, "projects");
 
   const claimNamedFolder = Effect.fn("ManagedProjectFolders.claimNamedFolder")(function* (
-    parent: string,
     name: string,
   ) {
+    yield* fileSystem
+      .makeDirectory(namedProjectsRoot, { recursive: true })
+      .pipe(
+        Effect.mapError(
+          (cause) => new NamedProjectFolderError({ folder: namedProjectsRoot, cause }),
+        ),
+      );
     const folderName = newProjectFolderName(name);
     const claimed = yield* claimFreeFolder(
       (attempt) =>
@@ -363,39 +409,20 @@ const make = Effect.gen(function* () {
           attempt > MAX_NAMED_FOLDER_ATTEMPTS
             ? Option.none()
             : Option.some(
-                path.join(parent, attempt === 1 ? folderName : `${folderName}-${attempt}`),
+                path.join(
+                  namedProjectsRoot,
+                  attempt === 1 ? folderName : `${folderName}-${attempt}`,
+                ),
               ),
         ),
       (folder, cause) => new NamedProjectFolderError({ folder, cause }),
     );
     if (Option.isSome(claimed)) return claimed.value;
     return yield* new NamedProjectFolderError({
-      folder: path.join(parent, folderName),
+      folder: path.join(namedProjectsRoot, folderName),
       cause: `Every folder name for "${folderName}" is taken.`,
     });
   });
-
-  const resolveParentDirectory = Effect.fn("ManagedProjectFolders.resolveParentDirectory")(
-    function* (parentDirectory: string) {
-      const expanded = expandHomePath(parentDirectory.trim(), yield* HostProcess.HomeDirectory);
-      if (!path.isAbsolute(expanded)) {
-        return yield* new NamedProjectFolderError({
-          folder: parentDirectory,
-          cause: "The location must be an absolute folder on this machine.",
-        });
-      }
-      const parent = path.resolve(expanded);
-      yield* fileSystem
-        .makeDirectory(parent, { recursive: true })
-        .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder: parent, cause })));
-      return parent;
-    },
-  );
-
-  const ensureFolder = (folder: string) =>
-    fileSystem
-      .makeDirectory(folder, { recursive: true })
-      .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder, cause })));
 
   const scaffoldRepository = Effect.fn("ManagedProjectFolders.scaffoldRepository")(function* (
     cwd: string,
@@ -444,23 +471,11 @@ const make = Effect.gen(function* () {
   const createNamedProject: ManagedProjectFolders["Service"]["createNamedProject"] = Effect.fn(
     "ManagedProjectFolders.createNamedProject",
   )(function* (input) {
-    const parent =
-      input.parentDirectory === undefined
-        ? yield* ensureFolder(namedProjectsRoot).pipe(Effect.as(namedProjectsRoot))
-        : yield* resolveParentDirectory(input.parentDirectory);
-    const container = yield* claimNamedFolder(parent, input.name);
-    const workspaceRoot =
-      input.layout === "worktree-container" ? path.join(container, "main") : container;
-    const removeFolder = fileSystem.remove(container, { recursive: true }).pipe(Effect.ignore);
+    const workspaceRoot = yield* claimNamedFolder(input.name);
+    const removeFolder = fileSystem.remove(workspaceRoot, { recursive: true }).pipe(Effect.ignore);
     const prepared = yield* Effect.all([
-      (workspaceRoot === container ? Effect.void : ensureFolder(workspaceRoot)).pipe(
-        Effect.andThen(
-          scaffoldRepository(workspaceRoot, input.name).pipe(
-            Effect.mapError(
-              (cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause }),
-            ),
-          ),
-        ),
+      scaffoldRepository(workspaceRoot, input.name).pipe(
+        Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
       ),
       random
         .uuidV4()

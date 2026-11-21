@@ -70,10 +70,6 @@ export function applyUsageLimitsUpdate(input: {
       ...(window.windowDurationMins === undefined && existing?.windowDurationMins !== undefined
         ? { windowDurationMins: existing.windowDurationMins }
         : {}),
-      // A rate-limit tick carries a percentage only, so keep the money the probe last read.
-      ...(window.amount === undefined && existing?.amount !== undefined
-        ? { amount: existing.amount }
-        : {}),
     };
     if (existing === undefined || !usageWindowEquals(existing, next)) {
       merged.set(window.id, next);
@@ -87,15 +83,8 @@ export function applyUsageLimitsUpdate(input: {
     previous === undefined ? { reason: "probeFailed" as const } : previous.unavailable;
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
-    // Account-level facts outlive a window tick; dropping the fingerprint would split one account
-    // into a duplicate row on every provider that reported it.
-    ...(previous?.credentialFingerprint !== undefined
-      ? { credentialFingerprint: previous.credentialFingerprint }
-      : {}),
-    ...(previous?.ownerDriver !== undefined ? { ownerDriver: previous.ownerDriver } : {}),
-    ...(previous?.externalUsage !== undefined ? { externalUsage: previous.externalUsage } : {}),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
-    ...(previous?.amounts !== undefined ? { amounts: previous.amounts } : {}),
+    ...(previous?.zeroSpendCap ? { zeroSpendCap: true } : {}),
     ...(unavailable !== undefined ? { unavailable } : {}),
   };
 }
@@ -106,22 +95,18 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
     a.kind === b.kind &&
     a.label === b.label &&
     a.usedPercent === b.usedPercent &&
+    (a.modelIds === b.modelIds ||
+      (a.modelIds !== undefined &&
+        b.modelIds !== undefined &&
+        a.modelIds.length === b.modelIds.length &&
+        a.modelIds.every((id, index) => id === b.modelIds?.[index]))) &&
+    (a.providerIds === b.providerIds ||
+      (a.providerIds !== undefined &&
+        b.providerIds !== undefined &&
+        a.providerIds.length === b.providerIds.length &&
+        a.providerIds.every((id, index) => id === b.providerIds?.[index]))) &&
     a.resetsAt === b.resetsAt &&
-    a.windowDurationMins === b.windowDurationMins &&
-    amountsEqual(a.amount, b.amount)
-  );
-}
-
-function amountsEqual(
-  a: ServerProviderUsageWindow["amount"],
-  b: ServerProviderUsageWindow["amount"],
-): boolean {
-  if (a === undefined || b === undefined) return a === b;
-  return (
-    a.currency === b.currency &&
-    a.used === b.used &&
-    a.limit === b.limit &&
-    a.remaining === b.remaining
+    a.windowDurationMins === b.windowDurationMins
   );
 }
 
@@ -140,7 +125,6 @@ export function resolveUsageLimitsAfterProbe(input: {
     !probed.unavailable &&
     Date.parse(published.checkedAt) > Date.parse(probed.checkedAt)
   ) {
-    // A window's money stays beside its percentage. Money lines are only ever read by a probe.
     return { ...probed, checkedAt: published.checkedAt, windows: published.windows };
   }
   return probed;

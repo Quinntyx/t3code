@@ -12,7 +12,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type { ConnectionRegistration } from "../connection/catalog.ts";
-import type { StoredDiscoverMembership } from "./storageDocument.ts";
 import type { DeferredShellSnapshot } from "../state/shellPullRequests.ts";
 import type { ConnectionTarget, PersistedConnectionTarget } from "../connection/model.ts";
 import type { ShellCacheOrigin } from "./orchestrationCache.ts";
@@ -27,8 +26,6 @@ export class ConnectionPersistenceError extends Schema.TaggedError<ConnectionPer
   "ConnectionPersistenceError",
   {
     operation: Schema.Literals([
-      "load-discovery-membership",
-      "save-discovery-membership",
       "list-targets",
       "list-disabled-targets",
       "register-connection",
@@ -51,24 +48,6 @@ export class ConnectionPersistenceError extends Schema.TaggedError<ConnectionPer
     message: Schema.String,
   },
 ) {}
-
-export class DiscoverMembershipStore extends Context.Reference<{
-  readonly load: Effect.Effect<StoredDiscoverMembership | null, ConnectionPersistenceError>;
-  readonly save: (
-    membership: StoredDiscoverMembership | null,
-  ) => Effect.Effect<void, ConnectionPersistenceError>;
-}>("@t3tools/client-runtime/platform/persistence/DiscoverMembershipStore", {
-  defaultValue: () => ({
-    load: Effect.succeed(null),
-    save: () =>
-      Effect.fail(
-        new ConnectionPersistenceError({
-          operation: "save-discovery-membership",
-          message: "Protected discovery storage is unavailable.",
-        }),
-      ),
-  }),
-}) {}
 
 export class ConnectionTargetStore extends Context.Service<
   ConnectionTargetStore,

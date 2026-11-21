@@ -4,8 +4,8 @@ import * as Path from "effect/Path";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
-  normalizeUsageTokens,
   parseTimestampMs,
+  tokenCount,
   type ProviderUsageReader,
   type TranscriptUsageFormat,
   type UsageRecord,
@@ -16,9 +16,9 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 export const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 
 /**
- * T3 Code writes one record per assistant *content block*, and every one of those records repeats
- * the same complete `usage` object for the parent message. Summing them overcounts by roughly
- * 2.4x on a real workload, so the caller must drop repeats by `dedupeKey` and keep the first.
+ * Claude Code repeats a message's `dedupeKey` for each assistant content block.
+ * Subagent blocks can progress from stream-start to final usage, so callers
+ * must count each key once using the maximum of each token channel.
  */
 export function parseClaudeLine(line: string): readonly UsageRecord[] {
   let parsed: unknown;
@@ -28,6 +28,13 @@ export function parseClaudeLine(line: string): readonly UsageRecord[] {
     return [];
   }
   return parseClaudeRecord(parsed);
+}
+
+function cacheCreation1h(usage: Record<string, unknown>): { cacheCreation1hTokens?: number } {
+  const split = usage["cache_creation"];
+  if (typeof split !== "object" || split === null) return {};
+  const tokens = tokenCount((split as Record<string, unknown>)["ephemeral_1h_input_tokens"]);
+  return tokens > 0 ? { cacheCreation1hTokens: tokens } : {};
 }
 
 function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
@@ -62,15 +69,15 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
     timestampMs,
     model,
     sessionId: typeof record["sessionId"] === "string" ? record["sessionId"] : "",
-    totals: normalizeUsageTokens(
-      {
-        inputTokens: usageRecord["input_tokens"],
-        cachedInputTokens: usageRecord["cache_read_input_tokens"],
-        cacheCreationTokens: usageRecord["cache_creation_input_tokens"],
-        outputTokens: usageRecord["output_tokens"],
-      },
-      "uncached",
-    ),
+    totals: {
+      uncachedInputTokens: tokenCount(usageRecord["input_tokens"]),
+      cachedInputTokens: tokenCount(usageRecord["cache_read_input_tokens"]),
+      cacheCreationTokens: tokenCount(usageRecord["cache_creation_input_tokens"]),
+      outputTokens: tokenCount(usageRecord["output_tokens"]),
+      // Anthropic folds thinking tokens into output and does not break them out.
+      reasoningTokens: 0,
+    },
+    ...cacheCreation1h(usageRecord),
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
     dedupeKey,
@@ -95,15 +102,14 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
       timestampMs,
       model: advisorModel,
       sessionId: executor.sessionId,
-      totals: normalizeUsageTokens(
-        {
-          inputTokens: advisor["input_tokens"],
-          cachedInputTokens: advisor["cache_read_input_tokens"],
-          cacheCreationTokens: advisor["cache_creation_input_tokens"],
-          outputTokens: advisor["output_tokens"],
-        },
-        "uncached",
-      ),
+      totals: {
+        uncachedInputTokens: tokenCount(advisor["input_tokens"]),
+        cachedInputTokens: tokenCount(advisor["cache_read_input_tokens"]),
+        cacheCreationTokens: tokenCount(advisor["cache_creation_input_tokens"]),
+        outputTokens: tokenCount(advisor["output_tokens"]),
+        reasoningTokens: 0,
+      },
+      ...cacheCreation1h(advisor),
       reportedCostUsd: null,
       speed: executor.speed,
       dedupeKey: dedupeKey === null ? null : `${dedupeKey}:advisor:${index}`,

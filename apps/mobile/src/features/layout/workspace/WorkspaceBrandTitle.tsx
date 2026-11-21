@@ -5,13 +5,11 @@ import { WorkspaceConnectionTitle } from "../../home/WorkspaceConnectionTitle";
 export function WorkspaceBrandTitle(props: {
   readonly accessibilityLabel: string;
   readonly onOpenEnvironments: () => void;
-  readonly onOpenHome?: () => void;
 }) {
   return (
     <WorkspaceConnectionTitle
       grow
-      onPress={props.onOpenHome ?? props.onOpenEnvironments}
-      onPressStatus={props.onOpenEnvironments}
+      onPress={props.onOpenEnvironments}
       brand={
         <CompactBrandTitle
           allowFontScaling={false}

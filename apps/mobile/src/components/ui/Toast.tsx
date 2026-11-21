@@ -1,15 +1,8 @@
+import { useGT } from "gt-react-native";
 import { cn } from "../../lib/cn";
 import { MOBILE_MOTION, MOBILE_SHAPE } from "../../lib/designTokens";
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import {
-  AccessibilityInfo,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-} from "react-native";
+import { AccessibilityInfo, Platform, StyleSheet, View, useWindowDimensions } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, {
   cancelAnimation,
@@ -30,14 +23,11 @@ import { useControlTheme } from "./useControlTheme";
 import { IconButton } from "./IconButton";
 import { AppActivityIndicator } from "./AppActivityIndicator";
 import { SymbolView } from "./AppSymbol";
-import * as Dialog from "./Dialog";
-import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 
 export type ToastProps = {
   readonly message: string;
   readonly description?: string;
   readonly singleLine?: boolean;
-  readonly onExpand?: () => void;
   readonly tone?: "default" | "success" | "danger";
   readonly busy?: boolean;
   readonly action?: { readonly label: string; readonly onPress: () => void };
@@ -47,23 +37,16 @@ export type ToastProps = {
 );
 
 export function Toast(props: ToastProps) {
-  const key =
-    props.tone === "danger" ? JSON.stringify([props.message, props.description]) : undefined;
   return props.dismissMode === "swipe" ? (
-    <SwipeableToast key={key} {...props} />
+    <SwipeableToast {...props} />
   ) : (
-    <ToastContent key={key} {...props} />
+    <ToastContent {...props} />
   );
 }
 
 function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
-  const { fontScale, height } = useWindowDimensions();
-  const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const expandable = props.tone === "danger" && !props.busy;
-  const fullMessage = props.description
-    ? `${props.message}\n\n${props.description}`
-    : props.message;
+  const gt = useGT();
+  const { fontScale } = useWindowDimensions();
   const { colorScheme } = useControlTheme();
   const borderRadius = Platform.OS === "ios" ? 28 : MOBILE_SHAPE.toast;
   // Explicit single-line notices reserve the action's width and truncate the text.
@@ -83,41 +66,13 @@ function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
   useEffect(() => {
     if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility(props.message);
   }, [props.message]);
-  const notice = (
-    <>
-      {props.busy ? (
-        <AppActivityIndicator />
-      ) : (
-        <SymbolView
-          name={props.tone === "danger" ? "exclamationmark.triangle" : "checkmark.circle"}
-          size={20}
-          tintColorClassName={props.tone === "danger" ? "accent-danger-foreground" : "accent-icon"}
-        />
-      )}
-      <View className="min-w-0 flex-1" accessibilityLiveRegion="polite">
-        <AppText
-          textRole="footnote"
-          className="font-t3-semibold"
-          numberOfLines={props.singleLine || expanded ? 1 : undefined}
-          accessibilityLabel={props.singleLine && !expanded ? message : undefined}
-        >
-          {expanded ? "Error details" : message}
-        </AppText>
-        {props.description && !props.singleLine && !expanded ? (
-          <AppText textRole="label" className="text-foreground-muted">
-            {props.description}
-          </AppText>
-        ) : null}
-      </View>
-    </>
-  );
   const surface = (
     <GlassSurface
       key={props.glassReady === false ? "entering" : "settled"}
       chrome={Platform.OS === "ios" && colorScheme === "dark" ? "none" : undefined}
       tintColor={Platform.OS === "ios" ? null : undefined}
       className={Platform.OS === "ios" ? "bg-transparent p-2" : "p-3"}
-      style={{ borderRadius, maxHeight: expanded ? height / 3 : undefined }}
+      style={{ borderRadius }}
     >
       <View
         className={cn(
@@ -126,50 +81,41 @@ function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
           Platform.OS === "ios" && inlineAction && action && "pl-5",
         )}
       >
-        {expandable ? (
-          <Pressable
-            className="min-w-0 flex-1 flex-row items-center gap-3"
-            accessibilityRole="button"
-            accessibilityLabel={expanded ? "Collapse error" : message}
-            accessibilityHint={expanded ? "Hide error details" : "Show full error details"}
-            accessibilityState={{ expanded }}
-            onPress={() => {
-              if (!expanded) props.onExpand?.();
-              setExpanded(!expanded);
-            }}
-          >
-            {notice}
-            <SymbolView
-              name={expanded ? "chevron.up" : "chevron.down"}
-              size={14}
-              tintColorClassName="accent-icon"
-            />
-          </Pressable>
+        {props.busy ? (
+          <AppActivityIndicator />
         ) : (
-          notice
+          <SymbolView
+            name={props.tone === "danger" ? "exclamationmark.triangle" : "checkmark.circle"}
+            size={20}
+            tintColorClassName={
+              props.tone === "danger" ? "accent-danger-foreground" : "accent-icon"
+            }
+          />
         )}
-        {expanded ? (
+        <View className="min-w-0 flex-1" accessibilityLiveRegion="polite">
+          <AppText
+            textRole="footnote"
+            className="font-t3-semibold"
+            numberOfLines={props.singleLine ? 1 : undefined}
+            accessibilityLabel={props.singleLine ? message : undefined}
+          >
+            {message}
+          </AppText>
+          {props.description && !props.singleLine ? (
+            <AppText textRole="label" className="text-foreground-muted">
+              {props.description}
+            </AppText>
+          ) : null}
+        </View>
+        {inlineAction && action ? <View className="self-center">{action}</View> : null}
+        {props.onDismiss && props.dismissMode !== "swipe" ? (
           <IconButton
-            accessibilityLabel={copied ? "Copied" : "Copy error"}
-            icon={copied ? "checkmark" : "doc.on.doc"}
-            onPress={async () => {
-              if (await tryCopyTextWithHaptic(fullMessage)) setCopied(true);
-              else Dialog.alert("Could not copy", "Try again.");
-            }}
+            accessibilityLabel={gt("Dismiss message")}
+            icon="xmark"
+            onPress={props.onDismiss}
           />
         ) : null}
-        {inlineAction && action ? <View className="self-center">{action}</View> : null}
-        {props.onDismiss && (props.dismissMode !== "swipe" || expanded) ? (
-          <IconButton accessibilityLabel="Dismiss message" icon="xmark" onPress={props.onDismiss} />
-        ) : null}
       </View>
-      {expanded ? (
-        <ScrollView className="mt-2" style={{ flexGrow: 0, flexShrink: 1 }} nestedScrollEnabled>
-          <AppText textRole="footnote" selectable>
-            {fullMessage}
-          </AppText>
-        </ScrollView>
-      ) : null}
       {action && !inlineAction ? <View className="mt-2 self-end">{action}</View> : null}
     </GlassSurface>
   );
@@ -202,6 +148,7 @@ const ENTER_TIMING = {
 };
 const TOAST_EXITING = FadeOut.duration(MOBILE_MOTION.exit).reduceMotion(ReduceMotion.System);
 function SwipeableToast(props: ToastProps & { readonly onDismiss: () => void }) {
+  const gt = useGT();
   const [glassReady, setGlassReady] = useState(Platform.OS !== "ios");
   const finishEntering = useCallback(() => setGlassReady(true), []);
   // UIKit can skip glass on a moving host; remount the surface after entry so its blur installs.
@@ -270,7 +217,7 @@ function SwipeableToast(props: ToastProps & { readonly onDismiss: () => void }) 
               accessibilityRole="alert"
               accessibilityLiveRegion="assertive"
               accessibilityLabel={props.message}
-              accessibilityActions={[{ name: "dismiss", label: "Dismiss message" }]}
+              accessibilityActions={[{ name: "dismiss", label: gt("Dismiss message") }]}
               onAccessibilityAction={({ nativeEvent }) => {
                 if (nativeEvent.actionName === "dismiss") onDismiss();
               }}

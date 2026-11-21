@@ -3,7 +3,6 @@ import {
   MODEL_SLUG_ALIASES_BY_PROVIDER,
   ModelCapabilities,
   type ModelSelection,
-  type ModelPreferences,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -14,17 +13,6 @@ import * as Schema from "effect/Schema";
 import { copySorted } from "./Array.ts";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
-
-export function createModelHiddenPredicate(
-  preferences: ModelPreferences["providerModelPreferences"][ProviderInstanceId] | undefined,
-) {
-  const hidden = new Set(preferences?.hiddenModels);
-  const enabled = new Set(preferences?.enabledModels);
-  return (model: { readonly slug: string; readonly isCustom?: boolean }) =>
-    !model.isCustom &&
-    (hidden.has(model.slug) ||
-      (preferences?.newModelsEnabled === false && !enabled.has(model.slug)));
-}
 
 export function modelSelectionCommandType(
   currentInstanceId: ProviderInstanceId,
@@ -47,87 +35,6 @@ export function createModelCapabilities(input: {
   return {
     optionDescriptors: input.optionDescriptors.map(cloneDescriptor),
   };
-}
-
-const FAST_MODEL_VARIANT_SUFFIX = ":fast";
-
-const hasSpeedDescriptor = (capabilities: ModelCapabilities | null) =>
-  capabilities?.optionDescriptors?.some(
-    (descriptor) => descriptor.id === "fastMode" || descriptor.id === "serviceTier",
-  ) ?? false;
-
-const fastVariantBase = (slug: string) =>
-  slug.endsWith(FAST_MODEL_VARIANT_SUFFIX) && slug.length > FAST_MODEL_VARIANT_SUFFIX.length
-    ? slug.slice(0, -FAST_MODEL_VARIANT_SUFFIX.length)
-    : null;
-
-/**
- * Folds `x:fast` into `x` when one catalog lists both, so the existing speed control picks the
- * slug. Unpaired `:fast` models and models with a native speed option stay as they are.
- */
-export function pairFastModelVariants<
-  Model extends {
-    readonly slug: string;
-    readonly subProvider?: string | undefined;
-    readonly aliases?: ReadonlyArray<string> | undefined;
-    readonly capabilities: ModelCapabilities | null;
-  },
->(models: ReadonlyArray<Model>): ReadonlyArray<Model> {
-  const bySlug = new Map(models.map((model) => [model.slug, model]));
-  const pairedBases = new Set<string>();
-  for (const model of models) {
-    const base = fastVariantBase(model.slug);
-    const baseModel = base === null ? undefined : bySlug.get(base);
-    if (
-      baseModel === undefined ||
-      fastVariantBase(baseModel.slug) !== null ||
-      hasSpeedDescriptor(baseModel.capabilities) ||
-      (baseModel.subProvider !== undefined &&
-        model.subProvider !== undefined &&
-        baseModel.subProvider !== model.subProvider)
-    ) {
-      continue;
-    }
-    pairedBases.add(baseModel.slug);
-  }
-  if (pairedBases.size === 0) return models;
-  return models.flatMap((model) => {
-    const base = fastVariantBase(model.slug);
-    if (base !== null && pairedBases.has(base)) return [];
-    if (!pairedBases.has(model.slug)) return [model];
-    const sibling = `${model.slug}${FAST_MODEL_VARIANT_SUFFIX}`;
-    return [
-      {
-        ...model,
-        // A selection saved while the sibling was its own row still resolves to this model.
-        aliases: [...(model.aliases ?? []), sibling],
-        capabilities: createModelCapabilities({
-          optionDescriptors: [
-            ...(model.capabilities?.optionDescriptors ?? []),
-            { id: "fastMode", label: "Fast Mode", type: "boolean" },
-          ],
-        }),
-      },
-    ];
-  });
-}
-
-/**
- * The exact slug for a provider without a native fast mode: a paired model's `:fast` sibling when
- * Fast is on. `isAvailable` lets a stale Fast choice fall back to the base after the sibling left.
- */
-export function fastVariantDispatchModel(
-  selection: ModelSelection,
-  isAvailable?: (slug: string) => boolean,
-): string {
-  if (
-    getModelSelectionBooleanOptionValue(selection, "fastMode") !== true ||
-    fastVariantBase(selection.model) !== null
-  ) {
-    return selection.model;
-  }
-  const sibling = `${selection.model}${FAST_MODEL_VARIANT_SUFFIX}`;
-  return isAvailable === undefined || isAvailable(sibling) ? sibling : selection.model;
 }
 
 function getRawSelectionValueById(
@@ -221,6 +128,24 @@ export function draftModelPickMatchesThread(pick: ModelSelection, thread: ModelS
       selection.options?.filter((option) => option.id !== "fastMode" || option.value !== false),
     );
   return modelSelectionsEqual(withoutFastModeOff(pick), withoutFastModeOff(thread));
+}
+
+/** Cursor ACP can default Fast to true; T3 requires a user selection. */
+export function withImplicitFastModeDefault(
+  caps: ModelCapabilities,
+  modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  const hasExplicitFastMode = modelOptions?.some((selection) => selection.id === "fastMode");
+  if (hasExplicitFastMode) {
+    return modelOptions ?? undefined;
+  }
+  const hasFastModeDescriptor = caps.optionDescriptors?.some(
+    (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+  );
+  if (!hasFastModeDescriptor) {
+    return modelOptions ?? undefined;
+  }
+  return [...(modelOptions ?? []), { id: "fastMode", value: false }];
 }
 
 function resolveDescriptorChoiceValue(
@@ -611,6 +536,17 @@ export function createModelSelection(
     model,
   };
   return selections.length > 0 ? { ...base, options: selections } : base;
+}
+
+/** A model picker's pick: re-picking the current model keeps its options, another model starts without any. */
+export function pickModelSelection(
+  current: ModelSelection | null | undefined,
+  instanceId: ProviderInstanceId,
+  model: string,
+): ModelSelection {
+  return current?.instanceId === instanceId && current.model === model
+    ? current
+    : createModelSelection(instanceId, model);
 }
 
 export function resolvePromptInjectedEffort(

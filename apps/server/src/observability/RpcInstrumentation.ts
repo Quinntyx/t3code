@@ -1,6 +1,7 @@
 import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS, type WsRpcGroup } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as References from "effect/References";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -25,14 +26,11 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadTitles]: "orchestration",
-  [ORCHESTRATION_V2_WS_METHODS.listPreviousAgents]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadLinkMetadata]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: "orchestration",
-  [ORCHESTRATION_V2_WS_METHODS.exportMachineHandoff]: "orchestration",
-  [ORCHESTRATION_V2_WS_METHODS.importMachineHandoff]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: "orchestrationV2",
@@ -67,13 +65,11 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetStorageCleanupReport]: "server",
   [WS_METHODS.serverGetDatabaseStorage]: "server",
   [WS_METHODS.serverReclaimDatabaseSpace]: "server",
-  [WS_METHODS.discoverStatus]: "discover",
-  [WS_METHODS.discoverConfigure]: "discover",
-  [WS_METHODS.discoverRevoke]: "discover",
   [WS_METHODS.peerLinksList]: "peerLinks",
   [WS_METHODS.peerLinksLink]: "peerLinks",
   [WS_METHODS.peerLinksUnlink]: "peerLinks",
   [WS_METHODS.peerLinksAnswerRequest]: "peerLinks",
+  [WS_METHODS.serverGetSettings]: "server",
   [WS_METHODS.serverUpdateSettings]: "server",
   [WS_METHODS.serverSearchAcpRegistry]: "server",
   [WS_METHODS.serverPrepareAcpRegistryAgent]: "server",
@@ -87,6 +83,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverDisableAcpRegistryProvider]: "server",
   [WS_METHODS.serverLogoutAcpRegistry]: "server",
   [WS_METHODS.serverDiscoverSourceControl]: "server",
+  [WS_METHODS.serverCheckSecretSource]: "server",
   [WS_METHODS.serverGetTraceDiagnostics]: "server",
   [WS_METHODS.serverGetProcessDiagnostics]: "server",
   [WS_METHODS.serverGetHostResources]: "server",
@@ -97,8 +94,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverListTextGeneratorModels]: "server",
   [WS_METHODS.serverPrepareTriage]: "server",
   [WS_METHODS.serverGetUsageSummary]: "server",
-  [WS_METHODS.serverGetThreadUsage]: "server",
-  [WS_METHODS.threadsGetNotebook]: "threads",
   [WS_METHODS.serverRefreshUsageRates]: "server",
   [WS_METHODS.serverSignalProcess]: "server",
   [WS_METHODS.serverReportClientActivity]: "server",
@@ -111,8 +106,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: "scheduledTasks",
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: "scheduledTasks",
   [WS_METHODS.secretsAnswerRequest]: "secrets",
-  [WS_METHODS.emailAnswerRequest]: "email",
-  [WS_METHODS.emailListAccounts]: "email",
   [WS_METHODS.guestShareCreate]: "guest-share",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",
   [WS_METHODS.cloudInstallRelayClient]: "cloud",
@@ -135,7 +128,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.pullRequestsFilesViewed]: "pull-requests",
   [WS_METHODS.pullRequestsChangeBreakdown]: "pull-requests",
   [WS_METHODS.pullRequestsRunAction]: "pull-requests",
-  [WS_METHODS.pullRequestsMergeStack]: "pull-requests",
   [WS_METHODS.pullRequestsUpdate]: "pull-requests",
   [WS_METHODS.pullRequestsComment]: "pull-requests",
   [WS_METHODS.pullRequestsUpdateComment]: "pull-requests",
@@ -147,10 +139,25 @@ const RPC_AGGREGATES = {
   [WS_METHODS.pullRequestsInvalidate]: "pull-requests",
   [WS_METHODS.pullRequestsReportState]: "pull-requests",
   [WS_METHODS.pullRequestsSubscribeRefreshes]: "pull-requests",
+  [WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes]: "pull-requests",
   [WS_METHODS.pullRequestsReviewerCandidates]: "pull-requests",
   [WS_METHODS.pullRequestsRequestReviewers]: "pull-requests",
   [WS_METHODS.pullRequestsLabelCandidates]: "pull-requests",
   [WS_METHODS.pullRequestsSetLabels]: "pull-requests",
+  [WS_METHODS.issuesList]: "issues",
+  [WS_METHODS.issuesDetail]: "issues",
+  [WS_METHODS.issuesComments]: "issues",
+  [WS_METHODS.issuesTemplates]: "issues",
+  [WS_METHODS.issuesCandidates]: "issues",
+  [WS_METHODS.issuesLinkedThreads]: "issues",
+  [WS_METHODS.issuesCreate]: "issues",
+  [WS_METHODS.issuesComment]: "issues",
+  [WS_METHODS.issuesUpdate]: "issues",
+  [WS_METHODS.issuesSetState]: "issues",
+  [WS_METHODS.issuesReact]: "issues",
+  [WS_METHODS.issueTrackersList]: "issues",
+  [WS_METHODS.issueTrackersConnect]: "issues",
+  [WS_METHODS.issueTrackersBindProject]: "issues",
   [WS_METHODS.sourceControlLookupRepository]: "source-control",
   [WS_METHODS.sourceControlCloneRepository]: "source-control",
   [WS_METHODS.sourceControlPublishRepository]: "source-control",
@@ -198,7 +205,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.gitRunStackedAction]: "vcs",
   [WS_METHODS.gitResolvePullRequest]: "git",
   [WS_METHODS.gitPreparePullRequestThread]: "git",
-  [WS_METHODS.gitRestackThreads]: "git",
   [WS_METHODS.vcsListRefs]: "vcs",
   [WS_METHODS.vcsCreateWorktree]: "vcs",
   [WS_METHODS.vcsRemoveWorktree]: "vcs",
@@ -221,7 +227,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.previewAdjust]: "preview",
   [WS_METHODS.previewClose]: "preview",
   [WS_METHODS.previewList]: "preview",
-  [WS_METHODS.previewListGpus]: "preview",
   [WS_METHODS.previewClearProfile]: "preview",
   [WS_METHODS.previewReportProfiles]: "preview",
   [WS_METHODS.previewReportStatus]: "preview",
@@ -270,13 +275,25 @@ export const rpcInstrumentationLayer = Layer.succeed(RpcInstrumentation)((effect
   if (RPC_METHODS_WITH_TRACING_DISABLED.has(method)) {
     return measured.pipe(Effect.provideService(References.TracerEnabled, false));
   }
-  return measured.pipe(
-    Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
-      attributes: {
-        ...DEFAULT_RPC_SPAN_ATTRIBUTES,
-        "rpc.method": method,
-        "rpc.aggregate": RPC_AGGREGATES[method as WsRpcMethod],
-      },
-    }),
+  // The ambient span is the socket's `GET /ws` request, open for the whole connection. Parenting
+  // every call to it grows one trace past the collector's per-trace limit, which then drops it.
+  return Effect.currentParentSpan.pipe(
+    Effect.option,
+    Effect.flatMap((connection) =>
+      measured.pipe(
+        Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
+          root: true,
+          links: Option.match(connection, {
+            onNone: () => [],
+            onSome: (span) => [{ span, attributes: {} }],
+          }),
+          attributes: {
+            ...DEFAULT_RPC_SPAN_ATTRIBUTES,
+            "rpc.method": method,
+            "rpc.aggregate": RPC_AGGREGATES[method as WsRpcMethod],
+          },
+        }),
+      ),
+    ),
   );
 });

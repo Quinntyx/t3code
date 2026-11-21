@@ -9,6 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -63,6 +64,14 @@ const repositoryJson = {
   mainbranch: { name: "main" },
 };
 
+const gitOutput = (stdout: string) => ({
+  exitCode: ChildProcessSpawner.ExitCode(0),
+  stdout,
+  stderr: "",
+  stdoutTruncated: false,
+  stderrTruncated: false,
+});
+
 function makeLayer(input: {
   readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
   /** Holds the answer until it resolves, in place of answering at once. */
@@ -85,6 +94,9 @@ function makeLayer(input: {
           ),
   );
   const gitMock = {
+    execute: vi.fn<HostGit["execute"]>(() =>
+      Effect.succeed(gitOutput("git@bitbucket.org:pingdotgg/t3code.git\n")),
+    ),
     readConfigValue: vi.fn<HostGit["readConfigValue"]>(() =>
       Effect.succeed<string | null>("git@bitbucket.org:pingdotgg/t3code.git"),
     ),
@@ -253,6 +265,44 @@ it.effect.each([false, true])("honors PR URL repositories, context=%s", (withCon
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("adds a fork remote with the protocol of the URL origin fetches from", () => {
+  // `git remote -v` shows origin's SSH `insteadOf` rewrite; config holds HTTPS, then an SSH push URL.
+  const { git, layer } = makeLayer({
+    git: {
+      execute: () =>
+        Effect.succeed(
+          gitOutput(
+            "https://bitbucket.org/pingdotgg/t3code.git\ngit@bitbucket.org:pingdotgg/t3code.git\n",
+          ),
+        ),
+    },
+    response: (request) =>
+      Response.json(
+        request.url.endsWith("/pullrequests/42")
+          ? bitbucketPullRequest
+          : {
+              ...repositoryJson,
+              full_name: "octocat/t3code",
+              links: {
+                clone: [
+                  { name: "https", href: "https://bitbucket.org/octocat/t3code.git" },
+                  { name: "ssh", href: "git@bitbucket.org:octocat/t3code.git" },
+                ],
+              },
+            },
+      ),
+  });
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    yield* bitbucket.checkoutPullRequest({ cwd: "/repo", reference: "#42" });
+    assert.deepStrictEqual(git.ensureRemote.mock.calls[0]?.[0], {
+      cwd: "/repo",
+      preferredName: "octocat",
+      url: "https://bitbucket.org/octocat/t3code.git",
+    });
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect.each([false, true])(
   "reuses matching checkout remotes for numeric references, context=%s",
   (withContext) => {
@@ -316,7 +366,6 @@ it.effect("lists pull requests with Bitbucket state and source branch query para
     const result = yield* bitbucket.listPullRequests({
       cwd: "/repo",
       headSelector: "origin:feature/merged",
-      repository: "base/upstream",
       state: "merged",
       limit: 10,
     });
@@ -325,7 +374,7 @@ it.effect("lists pull requests with Bitbucket state and source branch query para
     const request = execute.mock.calls[0]?.[0];
     assert.strictEqual(
       request?.url,
-      "https://api.test.local/2.0/repositories/base/upstream/pullrequests",
+      "https://api.test.local/2.0/repositories/pingdotgg/t3code/pullrequests",
     );
     assert.deepStrictEqual(request?.urlParams.params, [
       ["pagelen", "10"],
@@ -596,8 +645,6 @@ it.effect("creates pull requests using the official REST payload shape", () => {
       cwd: "/repo",
       baseBranch: "main",
       headSelector: "owner:feature/provider",
-      source: { owner: "owner", repository: "owner/fork", refName: "feature/provider" },
-      target: { repository: "base/upstream", refName: "main" },
       title: "Provider PR",
       bodyFile,
     });
@@ -605,7 +652,7 @@ it.effect("creates pull requests using the official REST payload shape", () => {
     const request = execute.mock.calls[0]?.[0];
     assert.strictEqual(
       request?.url,
-      "https://api.test.local/2.0/repositories/base/upstream/pullrequests",
+      "https://api.test.local/2.0/repositories/pingdotgg/t3code/pullrequests",
     );
     assert.strictEqual(request?.method, "POST");
     assert.ok(request);
@@ -616,13 +663,13 @@ it.effect("creates pull requests using the official REST payload shape", () => {
       description: "PR body",
       source: {
         branch: { name: "feature/provider" },
-        repository: { full_name: "owner/fork" },
+        repository: { full_name: "owner/t3code" },
       },
       destination: {
         branch: { name: "main" },
       },
     });
-  }).pipe(Effect.provide(layer), Effect.scoped);
+  }).pipe(Effect.provide(layer));
 });
 
 it.effect("reports the account Bitbucket confirms for the configured credential", () => {

@@ -1,7 +1,10 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Dialog from "../components/ui/Dialog";
+import { msg, useMessages } from "gt-react-native";
+import { m } from "../i18n/messages";
 import { filePreviewDelimiter, parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
 import { readFilePreviewResponse } from "@t3tools/client-runtime/file-preview";
@@ -15,11 +18,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { FileBackedComposerAttachment } from "./composerImages";
 import { localAttachmentPreviewAtom, localAttachmentPreviewState } from "./localAttachmentPreview";
-import {
-  downloadAndShareAttachment,
-  downloadAttachmentToDevice,
-  shareLocalAttachment,
-} from "./attachmentDownload";
+import { downloadAndShareAttachment, shareLocalAttachment } from "./attachmentDownload";
 import { refreshAssetUrl, useFreshAssetUrl, useRefreshAssetUrl } from "../state/assets";
 import { attachmentDocumentPresentation } from "./attachmentDocumentPresentation";
 
@@ -49,7 +48,7 @@ async function readAttachmentText(key: AttachmentTextKey, signal: AbortSignal) {
       key.environmentId === null
         ? null
         : await refreshAssetUrl(key.environmentId, key.resource, signal).catch(() => null);
-    if (!refreshed) throw new Error("Reconnect to this environment and try again.");
+    if (!refreshed) throw new Error(m(msg("Reconnect to this environment and try again.")));
     target = refreshed;
   }
   const response = await fetch(target, {
@@ -78,7 +77,7 @@ const attachmentTextAtom = Atom.family((key: AttachmentTextKey) =>
       try: (signal) => readAttachmentText(key, signal),
       catch: (cause) =>
         new AttachmentTextReadError({
-          message: cause instanceof Error ? cause.message : "Could not read this file.",
+          message: errorDisplayMessage(cause, m) ?? m(msg("Could not read this file.")),
           cause,
         }),
     }),
@@ -98,11 +97,12 @@ export function useAttachmentDocument(input: {
   readonly environmentId: EnvironmentId | null;
   readonly attachment: FileBackedComposerAttachment | null;
 }) {
+  const resolve = useMessages();
   const kind = filePreviewKind(input, { richDocuments: false });
   const delimiter = filePreviewDelimiter(input);
-  const taskController = useRef<AbortController | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight attachment share or download when the component unmounts
-  useEffect(() => () => taskController.current?.abort(), []);
+  const shareController = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight attachment share download when the component unmounts
+  useEffect(() => () => shareController.current?.abort(), []);
   const resource = {
     _tag: "attachment" as const,
     attachmentId: input.attachmentId,
@@ -114,7 +114,7 @@ export function useAttachmentDocument(input: {
   const refresh = useRefreshAssetUrl(environmentId, resource);
   const [rendered, setRendered] = useState(true);
   const [revision, setRevision] = useState(0);
-  const [busy, setBusy] = useState<"share" | "download" | null>(null);
+  const [sharing, setSharing] = useState(false);
   const attachment = input.attachment;
   const localPreviewAtom = localAttachmentPreviewAtom(attachment);
   const localPreview = localAttachmentPreviewState(useAtomValue(localPreviewAtom));
@@ -137,7 +137,8 @@ export function useAttachmentDocument(input: {
   );
   const content = AsyncResult.isSuccess(text) ? text.value : null;
   const contentError = AsyncResult.isFailure(text)
-    ? (Option.getOrNull(AsyncResult.error(text))?.message ?? "Could not read this file.")
+    ? (Option.getOrNull(AsyncResult.error(text))?.message ??
+      resolve(msg("Could not read this file.")))
     : null;
   const table = content && delimiter ? parseDelimitedPreview(content.text, delimiter) : null;
   const presentation = attachmentDocumentPresentation({
@@ -147,33 +148,33 @@ export function useAttachmentDocument(input: {
     rendered,
   });
   const error = attachment
-    ? localPreview.error && (localPreview.error.message || "The local file is unavailable.")
+    ? localPreview.error &&
+      (localPreview.error.message || resolve(msg("The local file is unavailable.")))
     : AsyncResult.isFailure(remote)
-      ? (Option.getOrNull(AsyncResult.error(remote))?.message ?? "The attachment is unavailable.")
+      ? (Option.getOrNull(AsyncResult.error(remote))?.message ??
+        resolve(msg("The attachment is unavailable.")))
       : null;
-  const run = async (kind: "share" | "download") => {
-    if (!uri || busy) return;
-    setBusy(kind);
+  const share = async () => {
+    if (!uri || sharing) return;
+    setSharing(true);
     const controller = new AbortController();
-    taskController.current = controller;
+    shareController.current = controller;
     const request = {
       attachment: { name: input.name, mimeType: input.mimeType },
       signal: controller.signal,
     };
     const result = await settlePromise(async () => {
-      const fileUri = isLocalUri(uri) ? uri : ((await refresh()) ?? uri);
-      if (kind === "download") await downloadAttachmentToDevice({ ...request, uri: fileUri });
-      else if (isLocalUri(fileUri)) await shareLocalAttachment({ ...request, uri: fileUri });
-      else await downloadAndShareAttachment({ ...request, url: fileUri });
+      if (isLocalUri(uri)) await shareLocalAttachment({ ...request, uri });
+      else await downloadAndShareAttachment({ ...request, url: (await refresh()) ?? uri });
     });
-    if (taskController.current === controller) taskController.current = null;
+    if (shareController.current === controller) shareController.current = null;
     if (controller.signal.aborted) return;
-    setBusy(null);
+    setSharing(false);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
       Dialog.alert(
-        kind === "download" ? "Could not download file" : "Could not share file",
-        cause instanceof Error ? cause.message : "Please try again.",
+        m(msg("Could not share file")),
+        errorDisplayMessage(cause, m) ?? m(msg("Please try again.")),
       );
     }
   };
@@ -194,9 +195,7 @@ export function useAttachmentDocument(input: {
       setRevision((value) => value + 1);
       if (attachment) refreshLocalPreview();
     },
-    share: () => run("share"),
-    sharing: busy === "share",
-    download: () => run("download"),
-    downloading: busy === "download",
+    share,
+    sharing,
   };
 }

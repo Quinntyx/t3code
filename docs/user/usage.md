@@ -20,6 +20,13 @@ record are missing from the totals.
 Text generation (thread titles, commit messages, PR text, branch names and review guides) is not in
 the totals for Codex or Claude Code 2.0.63 and newer, because those runs save no session history.
 
+The server keeps scanned usage history for 92 days by default. Claude Code deletes its own
+transcripts after 30 days, so for older Claude usage this history is the only record left. To keep
+it longer, set `usageHistoryRetentionDays` in `<T3 home>/userdata/settings.json` to a number of days
+such as `365`, or to `"unlimited"`. Usage views still show at most 90 days. Lowering the value
+prunes older history on the next refresh, and raising it again does not bring pruned history back.
+While `settings.json` cannot be read, nothing is pruned.
+
 OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
 databases, including T3-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
 server to read a different data directory; comma-separated paths read multiple directories.
@@ -56,33 +63,6 @@ saved totals first, then updates them when Cursor's API responds.
 
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
-
-## See one thread's consumption
-
-On web and desktop, **Consumption** in the thread details card charts the tokens a thread used
-over time, with its estimated API-equivalent cost. **Main agent** is the thread's own turns;
-**Delegates** are the subagent threads it started and any those started, including Claude's native
-subagents and workflows. A group that ran more than one model reads **Mixed**; select it for the
-per-model breakdown. A dotted line marks each time the thread's context was compacted. Turns
-from providers that do not report per-turn usage show nothing here, and other providers' native
-subagents may count toward the main agent or not appear at all.
-
-Choose whether the card shows it under **Consumption** in Settings → Appearance → Thread details,
-or by right-clicking the card. The sidebar hover on a thread shows how long it worked and its
-estimated cost.
-
-## Cap a thread's consumption
-
-Right-click **Consumption** in the thread details card to add consumption limits for that thread. Add as
-many as you need; the thread stops when any one of them is reached, and delegates count toward the
-same thread.
-
-Each limit is either **API spend** or **Usage quota**, and applies to **All** models or to a chosen
-set of them. A spend limit compares the models it covers with your estimated API-list cost, and a
-quota limit compares a provider's window, such as the 5-hour session or the week, with a
-percentage. When a limit is reached, T3 stops the thread and marks it **Limited**; removing the cap
-or raising a limit clears it after the next check. A model without a known price cannot enforce a
-dollar limit, and a quota limit needs a provider that reports usage limits.
 
 ## Set custom model prices
 
@@ -152,17 +132,8 @@ Claude resets are not available when the server runs on macOS, where Claude keep
 Keychain. On narrow screens, numbered rows below
 the bar show each account's quota, countdown, and credits. Tap a row to open its details.
 
-The same account signed in on more than one environment, reported by a hub as well, or read by a
-provider that shares its login counts once. Filter with the environment dropdown to see what a
-single machine has.
-
-Some providers report their allowance as money. The amount then appears next to the bar, and the
-account details carry it too. Money that has no allowance behind it, such as prepaid credit or
-spend on an API key, is listed as an amount rather than a bar, so a provider can appear under
-Limits with only amounts.
-
-On the model picker, a hub's accounts appear on a provider card only when that provider, or a Pi
-route on it, uses the hub's endpoint. A provider pointed at a different proxy keeps its own numbers.
+The same account signed in on more than one environment, or reported by a hub as well, counts once.
+Filter with the environment dropdown to see what a single machine has.
 
 When a Claude or Codex account has no overall weekly quota left, its pooled session contribution
 shows 0% left. The next refill depends on both reset times: an exhausted session must also reset,
@@ -191,11 +162,7 @@ the environment. T3 cannot report limits for external OpenCode servers because t
 belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode Console connected
 in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
 your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
-refresh provider status. Pi reports the same OpenCode Go allowance on Pi's card when the Pi
-account is signed in to Go, and the ChatGPT allowance when the Pi account is signed in with
-ChatGPT, so a subscription driven through Pi does not need OpenCode or Codex running. When the
-provider that owns that login also reports it, the subscription still counts once.
-Cursor reports
+refresh provider status. Cursor reports
 its monthly allowance, including separate Auto and API usage, for `CURSOR_AUTH_TOKEN` when it is set,
 otherwise for the account you signed in with in T3 or set as `CURSOR_API_KEY`.
 Sign-in and API keys report limits only with Cursor's default API endpoint. If you configure a custom
@@ -205,27 +172,24 @@ Grok reports the remaining subscription allowance and reset time for its current
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
 
+Muse Code reports its session and weekly windows and its tier once the Muse CLI has run in a thread.
+Until then it shows no limits. Readings are not kept across a server restart.
+
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
 ## Connect a CLIProxyAPI hub
 
-To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**, or
-**Settings → Providers → Usage and background checks → Add hub** on mobile. Choose the
+To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
-The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
-account and choose **Use reset** to redeem one. No hub plugin is required. A hub with provider
-discovery also reports its other upstream providers, such as Mistral, OpenCode Go, or OpenRouter,
-with each vendor's own windows. A provider or window the hub cannot measure shows no bar rather
-than 0% or unlimited. Older hubs report only Claude and Codex accounts.
+The hub's Codex, Claude, xAI (shown as Grok) and Antigravity accounts appear under **Usage → Limits**;
+accounts for other providers are not read. Codex accounts show banked reset credits; select an
+account and choose **Use reset** to redeem one. No hub plugin is required.
 
-A hub with provider discovery also shares its model list with Pi: see
-[Pi models from a hub](providers-pi.md#models-from-a-cliproxyapi-hub). This connection does not
-supply an inference key. To have T3 Code set up the endpoint and key as well, use discovery: a hub the `t3discover` broker advertises appears at the top of **Usage**, and
-linking it mints one key for this machine and can set the endpoint and key on Claude Code, Codex,
-and Pi providers. See [Self-hosted discovery](remote-access.md#discover-and-run-other-services).
-Remove the hub from the same settings section when you no longer need it.
+This connection supplies usage information; configure
+the provider separately to send agent requests through the hub. Remove the hub from the same
+settings section when you no longer need it.
 
 ## Subscription usage widget
 

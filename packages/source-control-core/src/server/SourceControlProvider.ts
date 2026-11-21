@@ -100,7 +100,8 @@ export function sourceControlRefFromInput(input: {
 }
 
 export function repositoryPathFromRemoteUrl(url: string | null): string | null {
-  const trimmed = url?.trim() ?? "";
+  const remote = url?.trim() ?? "";
+  const trimmed = /^(?:ssh|https?|git):\/\//iu.test(remote) ? remote.split(/[?#]/u, 1)[0]! : remote;
   if (trimmed.length === 0) {
     return null;
   }
@@ -121,6 +122,8 @@ export class SourceControlProvider extends Context.Service<
     readonly headBranchProbe?: (input: {
       readonly headSelectors: ReadonlyArray<string>;
       readonly state: "open" | "all";
+      /** `owner:branch` to read instead of bare names, when the caller knows the head's owner. */
+      readonly ownerHeadSelector?: string | undefined;
     }) => { readonly headSelectors: ReadonlyArray<string>; readonly limit: number };
     readonly readChangeRequestTemplate?: (input: {
       readonly cwd: string;
@@ -151,8 +154,8 @@ export class SourceControlProvider extends Context.Service<
     readonly resolveLink?: ResolveSourceControlLink;
     /**
      * Whether `createChangeRequest` from `cwd` targets `repository`, the `owner/name` of the
-     * context's remote when no `target` repository is given, for a host whose tools can pick
-     * another remote or name another repository. Absent means `origin`, or the only remote.
+     * context's remote, for a host whose tools let configuration outside the remotes name another
+     * repository. Absent means it does.
      */
     readonly createsChangeRequestsIn?: (input: {
       readonly cwd: string;
@@ -171,8 +174,6 @@ export class SourceControlProvider extends Context.Service<
     readonly listChangeRequests: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
-      /** The repository, as in `createChangeRequest`'s `target`, to search; absent is the host's default. */
-      readonly targetRepository?: string;
       readonly source?: SourceControlRefSelector;
       readonly headSelector: string;
       readonly state: ChangeRequestState | "all";

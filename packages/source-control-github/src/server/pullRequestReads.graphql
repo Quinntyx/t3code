@@ -59,7 +59,7 @@ query PullRequestCore(
   $headRef: String!
   $required: Boolean!
   $requestedReviewers: Int!
-  $stacks: Boolean!
+  $mergeQueue: Boolean!
 ) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed
@@ -83,6 +83,16 @@ query PullRequestCore(
       createdAt
       updatedAt
       mergedAt
+      mergeCommit {
+        oid
+      }
+      mergedBy {
+        login
+        avatarUrl
+        ... on User {
+          name
+        }
+      }
       closedAt
       headRefName
       baseRefName
@@ -112,14 +122,17 @@ query PullRequestCore(
       autoMergeRequest {
         mergeMethod
       }
-      # Lets the header decide single-merge from this read alone; github.com only.
-      stack @include(if: $stacks) {
-        number
-        size
-        baseRefName
-      }
-      stackEntry @include(if: $stacks) {
-        position
+      # Merge queue checks run on a commit of the queue's own, so a pull request the queue drops
+      # can keep a green head. Only this event says it left without merging.
+      mergeQueueRemovals: timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT])
+        @include(if: $mergeQueue) {
+        nodes {
+          ... on RemovedFromMergeQueueEvent {
+            id
+            createdAt
+            reason
+          }
+        }
       }
       viewerCanUpdate
       viewerDidAuthor
@@ -154,6 +167,7 @@ query PullRequestCore(
         nodes {
           name
           color
+          description
         }
       }
       commits(last: 1) {

@@ -1,46 +1,35 @@
 import { useAtomCommand } from "~/state/use-atom-command";
-import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  DEFAULT_SERVER_SETTINGS,
-  type EnvironmentId,
-  type ProjectId,
-  type PullRequestAction,
-  type PullRequestDetail,
-  type PullRequestMergeMethod,
-  type PullRequestRef,
-  type PullRequestSummary,
-  type ScopedThreadRef,
+import type {
+  EnvironmentId,
+  ProjectId,
+  PullRequestAction,
+  PullRequestDetail,
+  PullRequestMergeMethod,
+  PullRequestRef,
+  PullRequestSummary,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
+import { msg } from "gt-react";
 import { useRef, useState } from "react";
 import {
-  capitalizeTerm,
   sourceControlClients,
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import {
-  getClientSettings,
-  mergeEnvironmentSettings,
-  useClientSettings,
-  useEnvironmentSettings,
-} from "~/hooks/useSettings";
+import { useClientSettings, useEnvironmentSettings } from "~/hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { buildPhysicalToLogicalProjectKeyMap } from "~/sidebarProjectGrouping";
-import { readProjects, useProjects } from "~/state/entities";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { readPrimaryEnvironmentId, usePrimaryEnvironmentId } from "~/state/environments";
-import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { serverEnvironment } from "~/state/server";
-import { useUiStateStore } from "~/uiStateStore";
+import { useProjects } from "~/state/entities";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -48,41 +37,18 @@ import { usePreparePullRequestThreadAction } from "~/state/sourceControlActions"
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 
+import { m } from "~/i18n/messages";
+
 import { toastManager } from "../ui/toast";
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import {
   checkoutFailureDescription,
   appendHandoff,
   readableFailure,
-  resolvePullRequestMergeMethod,
 } from "./pullRequestDetail.logic";
 import { pullRequestEntryKey, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 
-function resolveDefaultMergeMethod(input: {
-  readonly projectDefault: PullRequestMergeMethod | null;
-  readonly legacyOverrides: Readonly<Partial<Record<string, PullRequestMergeMethod>>>;
-  readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly grouping: ReturnType<typeof selectProjectGroupingSettings>;
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId | null;
-}): PullRequestMergeMethod | undefined {
-  if (input.projectDefault != null) return input.projectDefault;
-  if (Object.keys(input.legacyOverrides).length === 0) return undefined;
-  const project = input.projects.find(
-    (candidate) =>
-      candidate.environmentId === input.environmentId && candidate.id === input.projectId,
-  );
-  if (!project) return undefined;
-  const key =
-    buildPhysicalToLogicalProjectKeyMap({
-      projects: input.projects,
-      settings: input.grouping,
-      primaryEnvironmentId: input.primaryEnvironmentId,
-    }).get(derivePhysicalProjectKey(project)) ??
-    deriveLogicalProjectKeyFromSettings(project, input.grouping);
-  return input.legacyOverrides[key];
-}
+import { changeRequestTermKind, type ChangeRequestTermKind } from "./changeRequestTerm";
 
 export function usePullRequestDefaultMergeMethodResolver(
   environmentId: EnvironmentId,
@@ -96,100 +62,126 @@ export function usePullRequestDefaultMergeMethodResolver(
   const grouping = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  return () =>
-    resolveDefaultMergeMethod({
-      projectDefault,
-      legacyOverrides,
-      projects,
-      grouping,
-      primaryEnvironmentId,
-      environmentId,
-      projectId,
-    });
+  return () => {
+    if (projectDefault != null) return projectDefault;
+    if (Object.keys(legacyOverrides).length === 0) return undefined;
+    const project = projects.find(
+      (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
+    );
+    if (!project) return undefined;
+    const key =
+      buildPhysicalToLogicalProjectKeyMap({
+        projects,
+        settings: grouping,
+        primaryEnvironmentId,
+      }).get(derivePhysicalProjectKey(project)) ??
+      deriveLogicalProjectKeyFromSettings(project, grouping);
+    return legacyOverrides[key];
+  };
 }
 
-/** Reads the same default at click time, for callers outside a rendered control. */
-export function readPullRequestDefaultMergeMethod(
-  environmentId: EnvironmentId,
-  projectId: ProjectId | null,
-): PullRequestMergeMethod | undefined {
-  const clientSettings = getClientSettings();
-  const settings = mergeEnvironmentSettings(
-    appAtomRegistry.get(serverEnvironment.settingsValueAtom(environmentId)) ??
-      DEFAULT_SERVER_SETTINGS,
-    clientSettings,
-  );
-  return resolveDefaultMergeMethod({
-    projectDefault: resolveProjectSettings(settings, projectId).settings.pullRequestMergeMethod,
-    legacyOverrides: clientSettings.pullRequestMergeMethodOverrides,
-    projects: readProjects(),
-    grouping: selectProjectGroupingSettings(clientSettings),
-    primaryEnvironmentId: readPrimaryEnvironmentId(),
-    environmentId,
-    projectId,
-  });
-}
-
-export function resolvePullRequestMergeMethodForDetail(
-  detail: PullRequestDetail,
-  projectDefault: PullRequestMergeMethod | undefined,
-): PullRequestMergeMethod {
-  const allowed = allowedPullRequestMergeMethods(detail);
-  if (allowed.length === 0) throw new Error("No merge method is available for this repository.");
-  return resolvePullRequestMergeMethod(
-    allowed,
-    null,
-    projectDefault,
-    useUiStateStore.getState().pullRequestMergeMethod,
-  );
-}
-
-const actionSuccessLabels = (term: string): Record<PullRequestAction, string> => ({
-  merge: "Merge requested",
-  ready: "Marked ready for review",
-  draft: "Converted to draft",
-  close: `${capitalizeTerm(term)} closed`,
-  reopen: `${capitalizeTerm(term)} reopened`,
-  "update-branch": "Branch updated with the base branch",
-  "enable-auto-merge": "Auto-merge enabled",
-  "disable-auto-merge": "Auto-merge disabled",
-  revert: `Revert ${term} opened`,
-  "delete-branch": "Branch deleted",
-  "approve-workflows": "Workflows approved",
+const actionSuccessLabels = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({
+  merge: m(msg("Merge requested")),
+  ready: m(msg("Marked ready for review")),
+  draft: m(msg("Converted to draft")),
+  close: m(
+    msg("{term, select, mr {Merge request} cr {Change request} other {Pull request}} closed", {
+      term,
+    }),
+  ),
+  reopen: m(
+    msg("{term, select, mr {Merge request} cr {Change request} other {Pull request}} reopened", {
+      term,
+    }),
+  ),
+  "update-branch": m(msg("Branch updated with the base branch")),
+  "enable-auto-merge": m(msg("Auto-merge enabled")),
+  "disable-auto-merge": m(msg("Auto-merge disabled")),
+  revert: m(
+    msg(
+      "Revert {term, select, mr {merge request} cr {change request} other {pull request}} opened",
+      { term },
+    ),
+  ),
+  "delete-branch": m(msg("Branch deleted")),
+  "approve-workflows": m(msg("Workflows approved")),
 });
 
-const actionFailureLabels = (term: string): Record<PullRequestAction, string> => ({
-  merge: `Could not merge this ${term}`,
-  ready: "Could not mark this ready for review",
-  draft: "Could not convert this to a draft",
-  close: `Could not close this ${term}`,
-  reopen: `Could not reopen this ${term}`,
-  "update-branch": "Could not update this branch",
-  "enable-auto-merge": "Could not enable auto-merge",
-  "disable-auto-merge": "Could not disable auto-merge",
-  revert: `Could not open a revert ${term}`,
-  "delete-branch": "Could not delete this branch",
-  "approve-workflows": "Could not approve workflows",
+const actionFailureLabels = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({
+  merge: m(
+    msg(
+      "Could not merge this {term, select, mr {merge request} cr {change request} other {pull request}}",
+      { term },
+    ),
+  ),
+  ready: m(msg("Could not mark this ready for review")),
+  draft: m(msg("Could not convert this to a draft")),
+  close: m(
+    msg(
+      "Could not close this {term, select, mr {merge request} cr {change request} other {pull request}}",
+      { term },
+    ),
+  ),
+  reopen: m(
+    msg(
+      "Could not reopen this {term, select, mr {merge request} cr {change request} other {pull request}}",
+      { term },
+    ),
+  ),
+  "update-branch": m(msg("Could not update this branch")),
+  "enable-auto-merge": m(msg("Could not enable auto-merge")),
+  "disable-auto-merge": m(msg("Could not disable auto-merge")),
+  revert: m(
+    msg(
+      "Could not open a revert {term, select, mr {merge request} cr {change request} other {pull request}}",
+      { term },
+    ),
+  ),
+  "delete-branch": m(msg("Could not delete this branch")),
+  "approve-workflows": m(msg("Could not approve workflows")),
 });
 
-const actionFailureHints = (term: string): Record<PullRequestAction, string> => ({
-  merge:
-    "The host refused the merge. Check that you have write access, that the checks it requires have passed, and that the branch is not conflicting.",
-  ready: "The host refused it. Check that you have write access to this repository.",
-  draft: "The host refused it. Check that you have write access to this repository.",
-  close: "The host refused it. Check that you have write access, or that you opened it.",
-  reopen:
-    "The host refused it. Check that you have write access, and that the branch still exists.",
-  "update-branch":
-    "The host refused it. Check that you have write access, and that the base branch has not diverged in a way the host cannot merge.",
-  "enable-auto-merge":
-    "The host refused it. Check that auto-merge is enabled for this repository and that you have write access.",
-  "disable-auto-merge": "The host refused it. Check that you have write access to this repository.",
-  revert: `The host refused it. Check that you have write access and that this ${term} was merged on the host.`,
-  "delete-branch":
-    "The host refused it. Check that you have write access to the source repository and that the branch has not moved since this page loaded.",
-  "approve-workflows":
-    "The host refused it. Check that you have Actions write access and that these workflow runs are still awaiting approval.",
+const actionFailureHints = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({
+  merge: m(
+    msg(
+      "The host refused the merge. Check that you have write access, that the checks it requires have passed, and that the branch is not conflicting.",
+    ),
+  ),
+  ready: m(msg("The host refused it. Check that you have write access to this repository.")),
+  draft: m(msg("The host refused it. Check that you have write access to this repository.")),
+  close: m(msg("The host refused it. Check that you have write access, or that you opened it.")),
+  reopen: m(
+    msg("The host refused it. Check that you have write access, and that the branch still exists."),
+  ),
+  "update-branch": m(
+    msg(
+      "The host refused it. Check that you have write access, and that the base branch has not diverged in a way the host cannot merge.",
+    ),
+  ),
+  "enable-auto-merge": m(
+    msg(
+      "The host refused it. Check that auto-merge is enabled for this repository and that you have write access.",
+    ),
+  ),
+  "disable-auto-merge": m(
+    msg("The host refused it. Check that you have write access to this repository."),
+  ),
+  revert: m(
+    msg(
+      "The host refused it. Check that you have write access and that this {term, select, mr {merge request} cr {change request} other {pull request}} was merged on the host.",
+      { term },
+    ),
+  ),
+  "delete-branch": m(
+    msg(
+      "The host refused it. Check that you have write access to the source repository and that the branch has not moved since this page loaded.",
+    ),
+  ),
+  "approve-workflows": m(
+    msg(
+      "The host refused it. Check that you have Actions write access and that these workflow runs are still awaiting approval.",
+    ),
+  ),
 });
 
 export function usePullRequestActionRunner({
@@ -209,23 +201,27 @@ export function usePullRequestActionRunner({
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, {
     reportFailure: false,
   });
-  const pendingRef = useRef(new Set<string>());
-  const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const pendingRef = useRef(new Map<string, PullRequestAction>());
+  const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, PullRequestAction>>(
+    () => new Map(),
+  );
   const actionKey =
     reference === null
       ? null
       : JSON.stringify([
           environmentId,
+          reference.projectId,
           reference.host ?? null,
           reference.repository,
           reference.number,
         ]);
-  const actionPending = actionKey !== null && pendingKeys.has(actionKey);
+  const pendingAction = actionKey === null ? null : (pendingActions.get(actionKey) ?? null);
+  const actionPending = pendingAction !== null;
 
   const perform = async (action: PullRequestAction, method?: PullRequestMergeMethod) => {
     if (actionKey === null || reference === null || pendingRef.current.has(actionKey)) return;
-    pendingRef.current.add(actionKey);
-    setPendingKeys(new Set(pendingRef.current));
+    pendingRef.current.set(actionKey, action);
+    setPendingActions(new Map(pendingRef.current));
     const result = await runAction({
       environmentId,
       input: {
@@ -235,23 +231,26 @@ export function usePullRequestActionRunner({
       },
     });
     pendingRef.current.delete(actionKey);
-    setPendingKeys(new Set(pendingRef.current));
+    setPendingActions(new Map(pendingRef.current));
     if (result._tag === "Failure") {
       toastManager.add({
         type: "error",
-        title: actionFailureLabels(terminology.singular)[action],
+        title: actionFailureLabels(changeRequestTermKind(terminology))[action],
         description: readableFailure(
           squashAtomCommandFailure(result),
-          actionFailureHints(terminology.singular)[action],
+          actionFailureHints(changeRequestTermKind(terminology))[action],
         ),
       });
       return;
     }
-    toastManager.add({ type: "success", title: actionSuccessLabels(terminology.singular)[action] });
+    toastManager.add({
+      type: "success",
+      title: actionSuccessLabels(changeRequestTermKind(terminology))[action],
+    });
     onSuccess?.(action, result.value);
   };
 
-  return { actionPending, perform };
+  return { actionPending, pendingAction, perform };
 }
 
 export function usePullRequestCloseBatch(
@@ -286,7 +285,7 @@ export function usePullRequestCloseBatch(
         setClosingKeys(new Set(pending.current));
         if (result._tag === "Failure") {
           failures.push(
-            `#${entry.number}: ${readableFailure(squashAtomCommandFailure(result), actionFailureHints(sourceControlClients.get(entry.provider).changeRequest.singular).close)}`,
+            `#${entry.number}: ${readableFailure(squashAtomCommandFailure(result), actionFailureHints(changeRequestTermKind(sourceControlClients.get(entry.provider).changeRequest)).close)}`,
           );
           return;
         }
@@ -299,8 +298,13 @@ export function usePullRequestCloseBatch(
       type: failures.length > 0 ? "error" : "success",
       title:
         failures.length > 0
-          ? `Closed ${closed} of ${batch.length} pull requests`
-          : `Closed ${closed} pull request${closed === 1 ? "" : "s"}`,
+          ? m(msg("Closed {closed} of {total} pull requests", { closed, total: batch.length }))
+          : m(
+              msg(
+                "{closed, plural, one {Closed {closed} pull request} other {Closed {closed} pull requests}}",
+                { closed },
+              ),
+            ),
       ...(failures.length > 0 ? { description: failures.slice(0, 3).join("\n") } : {}),
     });
   };
@@ -378,18 +382,25 @@ export function usePullRequestHandoffs({
     if (opened === null) {
       toastManager.add({
         type: "error",
-        title: "Could not open a thread",
-        description: "Try again from the project, or open a thread first.",
+        title: m(msg("Could not open a thread")),
+        description: m(msg("Try again from the project, or open a thread first.")),
       });
       return;
     }
     toastManager.add({
       type: "success",
-      title: "Asked in a thread",
+      title: m(msg("Asked in a thread")),
       description:
         task.prompt.length > 0
-          ? "The question is in the composer. Read it over, then send."
-          : `The ${terminology.singular} is in the composer. Type your question, then send.`,
+          ? m(msg("The question is in the composer. Read it over, then send."))
+          : m(
+              msg(
+                "The {term, select, mr {merge request} cr {change request} other {pull request}} is in the composer. Type your question, then send.",
+                {
+                  term: changeRequestTermKind(terminology),
+                },
+              ),
+            ),
     });
   };
 
@@ -400,10 +411,22 @@ export function usePullRequestHandoffs({
   ) => {
     if (!detail || handoff !== null) return;
     setHandoff(kind);
+    // Dismissing the loading toast cancels the handoff before it touches a draft.
+    let cancelled = false;
     // Explicit timeouts survive toast updates and would pin the result after loading.
     const toastId = toastManager.add({
       type: "loading",
-      title: `Preparing the ${terminology.singular} checkout...`,
+      title: m(
+        msg(
+          "Preparing the {term, select, mr {merge request} cr {change request} other {pull request}} checkout...",
+          { term: changeRequestTermKind(terminology) },
+        ),
+      ),
+      data: {
+        onClose: () => {
+          cancelled = true;
+        },
+      },
     });
     const projectRef = scopeProjectRef(environmentId, detail.projectId);
     // Checkout setup requires the thread to exist first.
@@ -411,12 +434,16 @@ export function usePullRequestHandoffs({
       (session) => session,
       () => null,
     );
+    if (cancelled) {
+      setHandoff(null);
+      return;
+    }
     if (opened === null) {
       setHandoff(null);
       toastManager.update(toastId, {
         type: "error",
-        title: "Could not open a thread for the checkout",
-        description: "Try again from the project, or open a thread first.",
+        title: m(msg("Could not open a thread for the checkout")),
+        description: m(msg("Try again from the project, or open a thread first.")),
       });
       return;
     }
@@ -425,11 +452,20 @@ export function usePullRequestHandoffs({
       mode,
       threadId: opened.threadId,
     });
+    if (cancelled) {
+      setHandoff(null);
+      return;
+    }
     if (prepared._tag === "Failure") {
       setHandoff(null);
       toastManager.update(toastId, {
         type: "error",
-        title: `Could not prepare the ${terminology.singular} checkout`,
+        title: m(
+          msg(
+            "Could not prepare the {term, select, mr {merge request} cr {change request} other {pull request}} checkout",
+            { term: changeRequestTermKind(terminology) },
+          ),
+        ),
         description: checkoutFailureDescription(
           isAtomCommandInterrupted(prepared) ? undefined : squashAtomCommandFailure(prepared),
         ),
@@ -441,18 +477,34 @@ export function usePullRequestHandoffs({
       worktreePath: prepared.value.worktreePath,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
-      (session) => session !== null,
-      () => false,
+      (session) => session,
+      () => null,
     );
-    if (!pointed) {
+    if (cancelled) {
+      setHandoff(null);
+      return;
+    }
+    if (pointed === null) {
       setHandoff(null);
       toastManager.update(toastId, {
         type: "error",
-        title: "Checked out, but the thread stayed where it was",
-        description: `The checkout is ready on \`${prepared.value.branch}\`. Point a thread at it from the branch picker, then ask again.`,
+        title: m(msg("Checked out, but the thread stayed where it was")),
+        description: m(
+          msg(
+            "The checkout is ready on `{branch}`. Point a thread at it from the branch picker, then ask again.",
+            { branch: prepared.value.branch },
+          ),
+        ),
       });
       return;
     }
+    // The draft carries the pull request until its first send makes it a thread, which links it.
+    useComposerDraftStore.getState().setDraftThreadContext(pointed.draftId, {
+      checkoutPullRequest: {
+        url: prepared.value.pullRequest.url,
+        branch: prepared.value.branch,
+      },
+    });
     setHandoff(null);
     if (task === null) {
       toastManager.update(
@@ -460,24 +512,40 @@ export function usePullRequestHandoffs({
         prepared.value.isOnPullRequestHead
           ? {
               type: "success",
-              title: mode === "local" ? "Checked out here" : "Checked out",
+              title: mode === "local" ? m(msg("Checked out here")) : m(msg("Checked out")),
               description:
                 mode === "local"
-                  ? `This repository is on the ${terminology.singular}'s branch, with a thread open on it.`
-                  : `The ${terminology.singular} is in its own worktree, with a thread open on it.`,
+                  ? m(
+                      msg(
+                        "This repository is on the {term, select, mr {merge request} cr {change request} other {pull request}}'s branch, with a thread open on it.",
+                        {
+                          term: changeRequestTermKind(terminology),
+                        },
+                      ),
+                    )
+                  : m(
+                      msg(
+                        "The {term, select, mr {merge request} cr {change request} other {pull request}} is in its own worktree, with a thread open on it.",
+                        {
+                          term: changeRequestTermKind(terminology),
+                        },
+                      ),
+                    ),
             }
           : offHeadPullRequestCheckoutToast(terminology),
       );
       return;
     }
-    await openThreadWithTask(projectRef, task, opened);
+    // The task goes on the checkout draft: if the user typed into `opened` while the
+    // checkout ran, that is no longer the draft the user is looking at.
+    await openThreadWithTask(projectRef, task, pointed);
     toastManager.update(
       toastId,
       prepared.value.isOnPullRequestHead
         ? {
             type: "success",
-            title: "Checkout ready",
-            description: "The task is in the composer. Read it over, then send.",
+            title: m(msg("Checkout ready")),
+            description: m(msg("The task is in the composer. Read it over, then send.")),
           }
         : offHeadPullRequestCheckoutToast(terminology),
     );

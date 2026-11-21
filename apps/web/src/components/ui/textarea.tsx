@@ -5,8 +5,7 @@ import type * as React from "react";
 import { cn } from "~/lib/utils";
 
 type TextareaProps = React.ComponentProps<"textarea"> & {
-  /** `line` starts one line tall, like a small input, and grows as the text wraps. */
-  size?: "line" | "sm" | "default" | "lg" | number;
+  size?: "sm" | "default" | "lg" | number;
   unstyled?: boolean;
 };
 
@@ -39,19 +38,13 @@ function Textarea({
               size === "sm" && rows === undefined && "min-h-16.5 max-sm:min-h-19.5",
               size === "lg" && "py-[calc(--spacing(2)-1px)]",
               size === "lg" && rows === undefined && "min-h-18.5 max-sm:min-h-21.5",
-              size === "line" &&
-                "resize-none px-[calc(--spacing(2.5)-1px)] py-0 leading-6.5 max-sm:leading-7.5",
-              size === "line" && rows === undefined && "min-h-6.5 max-sm:min-h-7.5",
             )}
             // field-sizing: content ignores `rows`, so an explicit row count sets the minimum height.
             style={
               rows === undefined
                 ? undefined
                 : {
-                    minHeight:
-                      size === "line"
-                        ? `${rows}lh`
-                        : `calc(${rows}lh + 2 * (var(--spacing) * ${size === "sm" ? 1 : size === "lg" ? 2 : 1.5} - 1px))`,
+                    minHeight: `calc(${rows}lh + 2 * (var(--spacing) * ${size === "sm" ? 1 : size === "lg" ? 2 : 1.5} - 1px))`,
                   }
             }
             data-slot="textarea"

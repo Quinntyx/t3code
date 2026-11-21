@@ -41,26 +41,6 @@ describe("thread relationships", () => {
     ).toBe(childStatus);
   });
 
-  it("reports a retried overload as stalled, not failed", () => {
-    const parent = ThreadId.make("parent");
-    const child = ThreadId.make("child");
-    const graph = deriveThreadRelationshipGraph({
-      threads: [
-        { id: parent, status: "completed", lineage: { parentThreadId: null } },
-        {
-          id: child,
-          status: "failed",
-          stalled: true,
-          lineage: { parentThreadId: parent, relationshipToParent: "subagent" },
-        },
-      ] as never,
-      projection: null,
-    });
-    expect(
-      threadRelationshipRowStatus(graph, immediateThreadRelationships(graph, parent)[0]!),
-    ).toBe("stalled");
-  });
-
   it("does not label a missing parent with its child's running status", () => {
     const parent = ThreadId.make("missing-parent");
     const child = ThreadId.make("child");

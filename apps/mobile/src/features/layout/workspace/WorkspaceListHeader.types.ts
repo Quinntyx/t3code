@@ -6,8 +6,6 @@ export interface WorkspaceListHeaderProps {
   readonly accessibilityLabel: string;
   /** The connection status beside the brand opens environment settings. */
   readonly onOpenEnvironments: () => void;
-  /** The compact drawer's brand returns to the home list; the status still opens environments. */
-  readonly onOpenHome?: () => void;
   readonly search: {
     readonly value: string;
     readonly onChangeText: (value: string) => void;

@@ -56,11 +56,7 @@ export function SecretTextInput(props: SecretTextInputProps) {
         onSubmit={(event) => props.onSubmitEditing(event.nativeEvent.value)}
         style={{ flex: 1, height: LINE_HEIGHT }}
       />
-      <SecretRevealButton
-        revealed={revealed}
-        disabled={!props.editable}
-        onPress={() => setRevealed((current) => !current)}
-      />
+      <SecretRevealButton revealed={revealed} onPress={() => setRevealed(!revealed)} />
     </View>
   );
 }

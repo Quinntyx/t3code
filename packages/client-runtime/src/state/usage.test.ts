@@ -1,20 +1,17 @@
 import {
   EnvironmentId,
-  ThreadId,
-  RunId,
   UsageDay,
   USAGE_CONTRACT_VERSION,
   type UsageModelFilter,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
-import { refreshUsage, refreshUsageLimits, threadUsageRevision } from "./usage.ts";
+import { refreshUsage, refreshUsageLimits } from "./usage.ts";
 
 const input = {
   sinceDay: UsageDay.make("2026-09-05"),
@@ -42,7 +39,7 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
   const environments = ids.map((id) => {
     const environmentId = EnvironmentId.make(id);
     const rates = Promise.withResolvers<
-      AsyncResult.Success<typeof pricing> | AsyncResult.Failure<never, unknown>
+      AsyncResult.Success<typeof pricing> | AsyncResult.Failure<never, Error>
     >();
     const scan = Promise.withResolvers<UsageSummary>();
     const scanStarted = Promise.withResolvers<void>();
@@ -81,7 +78,14 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
         run: (
           _registry: AtomRegistry.AtomRegistry,
           { environmentId }: { environmentId: EnvironmentId },
-        ) => get(environmentId).rates.promise,
+        ) =>
+          Effect.promise(() => get(environmentId).rates.promise).pipe(
+            Effect.flatMap((result) =>
+              AsyncResult.isSuccess(result)
+                ? Effect.succeed(result.value)
+                : Effect.failCause(result.cause),
+            ),
+          ),
       },
     },
     presentations: {
@@ -90,58 +94,6 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
   } satisfies Parameters<typeof refreshUsage>[0];
   return { registry, environments, requested, refresh: () => refreshUsage(options) };
 }
-
-describe("thread usage revision", () => {
-  it("tracks nested delegate completion without refreshing for forks, side chats or streaming", () => {
-    const root = {
-      id: ThreadId.make("root"),
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: ThreadId.make("root"),
-      },
-      latestRunId: RunId.make("root:run"),
-      latestRunCompletedAt: DateTime.makeUnsafe("2026-09-05T12:00:00Z"),
-      activeRunId: null,
-    };
-    const child = {
-      ...root,
-      id: ThreadId.make("child"),
-      lineage: {
-        ...root.lineage,
-        parentThreadId: root.id,
-        relationshipToParent: "subagent" as const,
-      },
-      activeRunId: RunId.make("child:run"),
-    };
-    const grandchild = {
-      ...child,
-      id: ThreadId.make("grandchild"),
-      lineage: { ...child.lineage, parentThreadId: child.id },
-    };
-    const fork = {
-      ...child,
-      id: ThreadId.make("fork"),
-      lineage: { ...child.lineage, relationshipToParent: "fork" as const },
-    };
-    const sideChat = {
-      ...child,
-      id: ThreadId.make("side-chat"),
-      lineage: { ...child.lineage, sideChat: true },
-    };
-    const before = threadUsageRevision(root.id, [root, child, grandchild]);
-    const completed = {
-      ...grandchild,
-      activeRunId: null,
-      latestRunCompletedAt: DateTime.makeUnsafe("2026-09-05T12:01:00Z"),
-    };
-    expect(threadUsageRevision(root.id, [root, child, completed])).not.toBe(before);
-    expect(threadUsageRevision(root.id, [grandchild, child, root, fork, sideChat])).toBe(before);
-    const streaming = { ...child, title: "streaming" };
-    expect(threadUsageRevision(root.id, [root, streaming, grandchild])).toBe(before);
-    expect(threadUsageRevision(root.id, [root, child])).not.toBe(before);
-  });
-});
 
 describe("manual usage refresh", () => {
   it.each(["success", "failure"])("waits for the rescan after a pricing %s", async (result) => {

@@ -3,16 +3,11 @@ package expo.modules.t3nativecontrols
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.provider.MediaStore
 import android.text.format.DateFormat
-import android.view.PixelCopy
-import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
@@ -52,43 +47,6 @@ class T3NativeControlsModule : Module() {
 
     AsyncFunction("signDpop") { key: ByteArray, input: ByteArray -> T3DpopKeys.sign(key, input) }
 
-    AsyncFunction("captureScreenshot") { promise: Promise ->
-      val activity = appContext.currentActivity ?: error("The app is not active.")
-      activity.runOnUiThread {
-        val view = activity.window.decorView
-        if (view.width <= 0 || view.height <= 0) {
-          promise.reject("SCREENSHOT_UNAVAILABLE", "The window is not ready.", null)
-          return@runOnUiThread
-        }
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        try {
-          PixelCopy.request(
-            activity.window,
-            bitmap,
-            { result ->
-              try {
-                check(result == PixelCopy.SUCCESS) { "Could not capture the window ($result)." }
-                val directory = File(activity.cacheDir, "t3-composer-paste").apply { mkdirs() }
-                val file = File.createTempFile("debug-shake-", ".png", directory)
-                file.outputStream().use {
-                  check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
-                }
-                promise.resolve(file.toURI().toString())
-              } catch (error: Exception) {
-                promise.reject("SCREENSHOT_FAILED", "Could not save the screenshot.", error)
-              } finally {
-                bitmap.recycle()
-              }
-            },
-            Handler(Looper.getMainLooper())
-          )
-        } catch (error: Exception) {
-          bitmap.recycle()
-          promise.reject("SCREENSHOT_FAILED", "Could not capture the window.", error)
-        }
-      }
-    }
-
     AsyncFunction("openFile") { uri: String, mimeType: String, promise: Promise ->
       check(filePreviewPromise == null) { "A document viewer is already open." }
       val activity = appContext.currentActivity ?: error("The app is not active.")
@@ -115,36 +73,9 @@ class T3NativeControlsModule : Module() {
     AsyncFunction("saveImageToLibrary") { uri: String, mimeType: String, name: String ->
       val context = appContext.reactContext ?: error("The app is not active.")
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        saveToMediaStore(
-          context,
-          MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-          "${Environment.DIRECTORY_PICTURES}/T3 Code",
-          Uri.parse(uri),
-          mimeType,
-          name
-        )
+        saveImageToPictures(context, Uri.parse(uri), mimeType, name)
       } else {
         error("Saving images needs Android 10 or later.")
-      }
-    }
-
-    AsyncFunction("saveFileToDownloads") { uri: String, name: String ->
-      val context = appContext.reactContext ?: error("The app is not active.")
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        // MediaStore appends the extension of a MIME type that disagrees with the name.
-        val mimeType = MimeTypeMap.getSingleton()
-          .getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
-          ?: "application/octet-stream"
-        saveToMediaStore(
-          context,
-          MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-          Environment.DIRECTORY_DOWNLOADS,
-          Uri.parse(uri),
-          mimeType,
-          name
-        )
-      } else {
-        error("Downloading files needs Android 10 or later.")
       }
     }
 
@@ -189,41 +120,31 @@ class T3NativeControlsModule : Module() {
   }
 }
 
-// Android 10+ lets apps add their own media and downloads without a storage permission.
-// Returns the saved name: MediaStore renames a file whose name the folder already has.
+// Android 10+ lets apps add their own media without a storage permission.
 @RequiresApi(Build.VERSION_CODES.Q)
-private fun saveToMediaStore(
-  context: Context,
-  collection: Uri,
-  relativePath: String,
-  source: Uri,
-  mimeType: String,
-  name: String
-): String {
+private fun saveImageToPictures(context: Context, source: Uri, mimeType: String, name: String) {
   val resolver = context.contentResolver
   val values = ContentValues().apply {
-    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-    put(MediaStore.MediaColumns.IS_PENDING, 1)
+    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+    put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/T3 Code")
+    put(MediaStore.Images.Media.IS_PENDING, 1)
   }
-  val target = resolver.insert(collection, values) ?: error("Could not create $name.")
+  val target = resolver.insert(
+    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+    values
+  ) ?: error("Could not create the image in Pictures.")
   runCatching {
-    val input = resolver.openInputStream(source) ?: error("The file is no longer available.")
+    val input = resolver.openInputStream(source) ?: error("The image is no longer available.")
     input.use { from ->
-      val output = resolver.openOutputStream(target) ?: error("Could not write $name.")
+      val output = resolver.openOutputStream(target) ?: error("Could not write the image.")
       output.use { from.copyTo(it) }
     }
-    val published = resolver.update(
+    resolver.update(
       target,
-      ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+      ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
       null,
       null
     )
-    check(published == 1) { "Could not finish saving $name." }
   }.onFailure { resolver.delete(target, null, null) }.getOrThrow()
-  return runCatching {
-    resolver.query(target, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
-      ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-  }.getOrNull() ?: name
 }

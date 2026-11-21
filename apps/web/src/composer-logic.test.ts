@@ -1,3 +1,4 @@
+import { threadPullRequestKeyOf } from "@t3tools/client-runtime/thread-pull-requests";
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
@@ -97,6 +98,7 @@ describe("formatAssistantCitationForComposer", () => {
 describe("composerSubmissionIntentForKey", () => {
   const input = {
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
+    context: {},
     platform: "Linux",
     isSoftwareKeyboardOpen: false,
     isDraftThread: false,
@@ -121,6 +123,25 @@ describe("composerSubmissionIntentForKey", () => {
       }),
     ).toBe(expected);
   });
+
+  it.each([
+    ["mod-enter", "one line"],
+    ["mod-enter-multiline", "two\nlines"],
+  ] as const)(
+    "starts a new thread in the foreground on Mod+Enter with %s",
+    (sendShortcut, prompt) => {
+      const draft = { ...input, isDraftThread: true, sendShortcut, prompt };
+      expect(composerSubmissionIntentForKey({ ...draft, event: { ...enter, ctrlKey: true } })).toBe(
+        "foreground",
+      );
+      expect(
+        composerSubmissionIntentForKey({
+          ...draft,
+          event: { ...enter, ctrlKey: true, altKey: true },
+        }),
+      ).toBe("background");
+    },
+  );
 
   it("honors the send preference with an existing install's saved alternate binding", () => {
     const keybindings = mergeWithDefaultKeybindings(
@@ -224,6 +245,19 @@ describe("composerSubmissionIntentForKey", () => {
     },
   );
 
+  it("sends on Enter when a binding conditioned on !rightPanelOpen is inactive", () => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "enter", command: "commandPalette.toggle", when: "!rightPanelOpen" },
+      ]),
+    );
+    const conditioned = { ...input, keybindings, sendShortcut: "enter" as const, event: enter };
+    expect(composerSubmissionIntentForKey(conditioned)).toBeNull();
+    expect(
+      composerSubmissionIntentForKey({ ...conditioned, context: { rightPanelOpen: true } }),
+    ).toBe("foreground");
+  });
+
   it.each([
     { isSoftwareKeyboardOpen: true },
     { event: { ...enter, isComposing: true } },
@@ -234,33 +268,113 @@ describe("composerSubmissionIntentForKey", () => {
   });
 });
 
+describe("detectComposerTrigger", () => {
+  it.each([
+    ["Run /tmp/build.sh", "Run /tmp/build.sh".length],
+    ["/etc/hosts", "/etc/hosts".length],
+    ["Use /etc/hosts now", "Use /et".length],
+  ])("keeps the path in %j out of the slash menu", (text, cursor) => {
+    expect(detectComposerTrigger(text, cursor)).toBeNull();
+  });
+
+  it.each(["Use ", "Use\t", "Use\n  "])("detects inline slash skills after %j", (prefix) => {
+    const text = `${prefix}/skill:review later`;
+    const cursor = `${prefix}/skill:review`.length;
+    expect(detectComposerTrigger(text, cursor)).toEqual({
+      kind: "slash-command",
+      query: "skill:review",
+      rangeStart: prefix.length,
+      rangeEnd: cursor,
+    });
+  });
+
+  it.each(["Use/review", "https://example.com/review", "Use /review "])(
+    "does not trigger for %j",
+    (text) => expect(detectComposerTrigger(text, text.length)).toBeNull(),
+  );
+
+  it("does not keep a subcommand trigger active after /model arguments", () => {
+    const text = "/model spark";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
+  it.each([
+    "It costs $5",
+    "budget $9.99",
+    "only $.99",
+    "about €20",
+    "raise $10k",
+    "raise $10k.",
+    "is it $5?",
+  ])("does not detect a skill trigger for the amount in %j", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toBeNull();
+  });
+
+  it("detects a pull request number at a token boundary", () => {
+    const text = "Compare this with #8737";
+
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "pull-request",
+      query: "8737",
+      rangeStart: "Compare this with ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("does not keep pull request completion active for headings or embedded hashes", () => {
+    expect(detectComposerTrigger("# Heading", "# Heading".length)).toBeNull();
+    expect(detectComposerTrigger("issue#123", "issue#123".length)).toBeNull();
+  });
+
+  // regression: #936 @file autocomplete used the wrong cursor when typing mid-text
+  it("detects @path trigger in the middle of existing text", () => {
+    const text = "Please inspect @in this sentence";
+    const cursorAfterAt = "Please inspect @".length;
+
+    const trigger = detectComposerTrigger(text, cursorAfterAt);
+    expect(trigger).toEqual({
+      kind: "path",
+      query: "",
+      rangeStart: "Please inspect ".length,
+      rangeEnd: cursorAfterAt,
+    });
+  });
+});
+
 describe("filterComposerPullRequestMatches", () => {
   const entries = [
     {
+      host: "github.com",
       number: 7,
       projectId: "project-1",
       repository: "t3tools/t3code",
       updatedAt: "2026-09-01T12:00:00.000Z",
     },
     {
+      host: "github.com",
       number: 8987,
       projectId: "project-1",
       repository: "T3Tools/T3Code",
       updatedAt: "2026-09-03T12:00:00.000Z",
     },
     {
+      host: "github.com",
       number: 27,
       projectId: "project-1",
       repository: "t3tools/t3code",
       updatedAt: "2026-09-02T12:00:00.000Z",
     },
     {
+      host: "github.com",
       number: 27,
       projectId: "project-1",
       repository: "t3tools/t3code",
       updatedAt: "2026-09-01T13:00:00.000Z",
     },
     {
+      host: "github.com",
       number: 70,
       projectId: "project-2",
       repository: "t3tools/other",
@@ -271,6 +385,7 @@ describe("filterComposerPullRequestMatches", () => {
   it("matches and de-duplicates number fragments within one repository, exact match first", () => {
     expect(
       filterComposerPullRequestMatches({
+        keyOf: threadPullRequestKeyOf,
         entries,
         projectId: "project-1",
         repository: "t3tools/t3code",
@@ -282,18 +397,21 @@ describe("filterComposerPullRequestMatches", () => {
 
   it("keeps an older exact match when newer substring matches would fill the limit", () => {
     const exact = {
+      host: "github.com",
       number: 7,
       projectId: "project-1",
       repository: "t3tools/t3code",
       updatedAt: "2020-01-01T00:00:00.000Z",
     };
     const newerSubstringMatches = Array.from({ length: 12 }, (_unused, index) => ({
+      host: "github.com",
       number: 700 + index,
       projectId: "project-1",
       repository: "t3tools/t3code",
       updatedAt: `2026-09-${String(index + 1).padStart(2, "0")}T12:00:00.000Z`,
     }));
     const matches = filterComposerPullRequestMatches({
+      keyOf: threadPullRequestKeyOf,
       entries: [...newerSubstringMatches, exact],
       projectId: "project-1",
       repository: "t3tools/t3code",

@@ -1,19 +1,19 @@
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import type { UsageProviderKind } from "@t3tools/contracts";
+import { T, useGT, useLocale, useMessages } from "gt-react";
 import { useLayoutEffect, useRef, useState } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 import {
   formatDayShort,
   formatHourShort,
-  formatRelativeHourShort,
   formatTokens,
   formatUsd,
 } from "@t3tools/shared/usageFormat";
+import { formatRelativeHourShort } from "@t3tools/shared/usageFormatCopy";
 import { cn } from "~/lib/utils";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
 import { observeResize } from "~/lib/observeResize";
-import { curvePath, niceScale, smoothCurve } from "./usageChartGeometry";
 
 const VIEW_WIDTH = 960;
 const VIEW_HEIGHT = 260;
@@ -45,6 +45,11 @@ export interface DayColumn {
   readonly total: number;
 }
 
+interface Point {
+  readonly x: number;
+  readonly y: number;
+}
+
 function valueFor(
   totals: DailyTotals | HourlyTotals | undefined,
   provider: UsageProviderKind,
@@ -70,8 +75,99 @@ export function buildPeriodColumns(
   });
 }
 
+function monotoneTangents(points: readonly Point[]): readonly number[] {
+  const count = points.length;
+  if (count < 2) return [0];
+
+  const slopes: number[] = [];
+  for (let index = 0; index < count - 1; index += 1) {
+    const dx = (points[index + 1]?.x ?? 0) - (points[index]?.x ?? 0);
+    const dy = (points[index + 1]?.y ?? 0) - (points[index]?.y ?? 0);
+    slopes.push(dx === 0 ? 0 : dy / dx);
+  }
+
+  const tangents: number[] = Array.from({ length: count }, () => 0);
+  tangents[0] = slopes[0] ?? 0;
+  tangents[count - 1] = slopes[count - 2] ?? 0;
+  for (let index = 1; index < count - 1; index += 1) {
+    const previous = slopes[index - 1] ?? 0;
+    const next = slopes[index] ?? 0;
+    tangents[index] = previous * next <= 0 ? 0 : (previous + next) / 2;
+  }
+
+  for (let index = 0; index < count - 1; index += 1) {
+    const slope = slopes[index] ?? 0;
+    if (slope === 0) {
+      tangents[index] = 0;
+      tangents[index + 1] = 0;
+      continue;
+    }
+    const a = (tangents[index] ?? 0) / slope;
+    const b = (tangents[index + 1] ?? 0) / slope;
+    const magnitude = a * a + b * b;
+    if (magnitude > 9) {
+      const scale = 3 / Math.sqrt(magnitude);
+      tangents[index] = scale * a * slope;
+      tangents[index + 1] = scale * b * slope;
+    }
+  }
+
+  return tangents;
+}
+
+interface CurveSegment {
+  readonly from: Point;
+  readonly c1: Point;
+  readonly c2: Point;
+  readonly to: Point;
+}
+
+function smoothCurve(points: readonly Point[]): readonly CurveSegment[] {
+  if (points.length < 2) return [];
+  const tangents = monotoneTangents(points);
+  const segments: CurveSegment[] = [];
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    if (from === undefined || to === undefined) continue;
+    const dx = to.x - from.x;
+    segments.push({
+      from,
+      c1: { x: from.x + dx / 3, y: from.y + ((tangents[index] ?? 0) * dx) / 3 },
+      c2: { x: to.x - dx / 3, y: to.y - ((tangents[index + 1] ?? 0) * dx) / 3 },
+      to,
+    });
+  }
+  return segments;
+}
+
+function curvePath(segments: readonly CurveSegment[]): string {
+  const first = segments[0];
+  if (first === undefined) return "";
+  let path = `M${first.from.x.toFixed(2)},${first.from.y.toFixed(2)}`;
+  for (const segment of segments) {
+    path += ` C${segment.c1.x.toFixed(2)},${segment.c1.y.toFixed(2)} ${segment.c2.x.toFixed(2)},${segment.c2.y.toFixed(2)} ${segment.to.x.toFixed(2)},${segment.to.y.toFixed(2)}`;
+  }
+  return path;
+}
+
 function areaPath(line: string) {
   return line === "" ? "" : `${line} L${VIEW_WIDTH},${VIEW_HEIGHT} L0,${VIEW_HEIGHT} Z`;
+}
+
+function niceScale(peak: number, count: number): { max: number; ticks: readonly number[] } {
+  if (peak <= 0) return { max: 0, ticks: [0] };
+
+  const rawStep = peak / count;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  const step = (normalized > 5 ? 10 : normalized > 2 ? 5 : normalized > 1 ? 2 : 1) * magnitude;
+
+  const max = Math.ceil(peak / step) * step;
+  const ticks: number[] = [];
+  for (let value = 0; value <= max + step * 1e-6; value += step) ticks.push(value);
+  return { max, ticks };
 }
 
 const PLACEHOLDER_TICKS = Array.from({ length: TICK_COUNT + 1 }, (_, index) => index);
@@ -145,7 +241,7 @@ function UsageChartTooltip({
   return (
     <div
       ref={tooltipRef}
-      className="surface-glass pointer-events-none absolute z-10 min-w-36 max-w-full rounded-glass border border-border/50 px-2.5 py-2 text-xs shadow-lg"
+      className="surface-glass pointer-events-none absolute z-10 min-w-36 max-w-full rounded-xl border border-border/50 px-2.5 py-2 text-xs shadow-lg"
       style={{
         left: "var(--usage-tooltip-left, 0px)",
         top: "var(--usage-tooltip-top, 0px)",
@@ -176,7 +272,9 @@ function UsageChartTooltip({
         );
       })}
       <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-1">
-        <span className="text-muted-foreground">Total</span>
+        <span className="text-muted-foreground">
+          <T>Total</T>
+        </span>
         <span className={cn("tabular-nums", partial ? "text-muted-foreground" : "text-foreground")}>
           {format(column?.total ?? 0)}
         </span>
@@ -193,7 +291,6 @@ function UsageChartPlot({
   loadingProviders,
   format,
   formatTooltipPeriod,
-  ariaLabel,
   children,
 }: {
   readonly periods: readonly string[];
@@ -203,7 +300,6 @@ function UsageChartPlot({
   readonly loadingProviders: ReadonlySet<UsageProviderKind>;
   readonly format: (value: number) => string;
   readonly formatTooltipPeriod: (period: string) => string;
-  readonly ariaLabel: string;
   readonly children: React.ReactNode;
 }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -278,8 +374,7 @@ function UsageChartPlot({
         className="h-full w-full"
         viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
         preserveAspectRatio="none"
-        role="img"
-        aria-label={ariaLabel}
+        aria-hidden
       >
         {children}
         {hoverIndex === null ? null : (
@@ -323,6 +418,9 @@ export function UsageProviderChart({
   timeZone,
   hour12,
 }: UsageProviderChartProps) {
+  const gt = useGT();
+  const locale = useLocale();
+  const m = useMessages();
   const periods = resolution === "hour" ? hours : days;
   const totals: readonly (DailyTotals | HourlyTotals)[] = resolution === "hour" ? hourly : daily;
   const byPeriod = new Map(
@@ -339,18 +437,20 @@ export function UsageProviderChart({
   const toY = (value: number) => valueToY(value, scale.max);
   const seriesClassName = (loading: boolean) =>
     cn("transition-opacity", loading && "opacity-40 delay-150");
-  const format = metric === "tokens" ? formatTokens : formatUsd;
+  const format = metric === "tokens" ? formatTokens : (value: number) => formatUsd(value, locale);
   const formatPeriod = (period: string) =>
-    resolution === "hour" ? formatHourShort(period, timeZone, hour12) : formatDayShort(period);
+    resolution === "hour"
+      ? formatHourShort(period, timeZone, hour12, locale)
+      : formatDayShort(period, locale);
   const formatTooltipPeriod = (period: string) =>
     resolution === "hour" && referenceTime !== undefined
-      ? formatRelativeHourShort(period, referenceTime, timeZone, hour12)
+      ? formatRelativeHourShort(period, referenceTime, timeZone, hour12, m, locale)
       : formatPeriod(period);
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex gap-2">
-        <div className="relative h-56 w-14 shrink-0">
+        <div aria-hidden className="relative h-56 w-14 shrink-0">
           {scale.labeled
             ? scale.ticks.map((tick) => (
                 <span
@@ -372,7 +472,6 @@ export function UsageProviderChart({
           loadingProviders={loadingProviders}
           format={format}
           formatTooltipPeriod={formatTooltipPeriod}
-          ariaLabel={`${resolution === "hour" ? "Hourly" : "Daily"} ${metric === "tokens" ? "processed tokens" : "cost"} by provider`}
         >
           {scale.ticks.map((tick) => {
             const y = toY(tick);
@@ -414,7 +513,10 @@ export function UsageProviderChart({
         </UsageChartPlot>
       </div>
 
-      <div className="flex justify-between pl-16 text-3xs text-muted-foreground uppercase">
+      <div
+        aria-hidden
+        className="flex justify-between pl-16 text-3xs text-muted-foreground uppercase"
+      >
         <span>{periods[0] === undefined ? "" : formatPeriod(periods[0])}</span>
         <span>
           {periods[Math.floor(periods.length / 2)] === undefined
@@ -426,6 +528,53 @@ export function UsageProviderChart({
             ? ""
             : formatPeriod(periods[periods.length - 1] ?? "")}
         </span>
+      </div>
+
+      {/* The plot and its axes are hover-only; this carries the same figures for screen readers.
+          sr-only sits on a wrapper: Firefox does not clip a table's caption by the table's own box. */}
+      <div className="sr-only">
+        <table>
+          <caption>
+            {resolution === "hour"
+              ? metric === "tokens"
+                ? gt("Hourly processed tokens by provider")
+                : gt("Hourly cost by provider")
+              : metric === "tokens"
+                ? gt("Daily processed tokens by provider")
+                : gt("Daily cost by provider")}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">{resolution === "hour" ? gt("Hour") : gt("Day")}</th>
+              {providers.map((provider) => (
+                <th key={provider} scope="col">
+                  {PROVIDER_PRESENTATION[provider].label}
+                </th>
+              ))}
+              {providers.length > 1 ? (
+                <th scope="col">
+                  <T>Total</T>
+                </th>
+              ) : null}
+            </tr>
+          </thead>
+          <tbody>
+            {periods.map((period, index) => {
+              const column = columns[index];
+              return (
+                <tr key={period}>
+                  <th scope="row">{formatTooltipPeriod(period)}</th>
+                  {providers.map((provider) => (
+                    <td key={provider}>
+                      {format(column?.bands.find((band) => band.provider === provider)?.value ?? 0)}
+                    </td>
+                  ))}
+                  {providers.length > 1 ? <td>{format(column?.total ?? 0)}</td> : null}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );

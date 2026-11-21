@@ -7,19 +7,22 @@ import type {
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 
 export interface PreviewStreamConfiguration {
-  readonly access: DeviceHubAccess | null;
-  readonly accessGeneration?: number;
+  readonly access: DeviceHubAccess;
   readonly threadId: string;
   readonly tabId: string;
   readonly interactive: boolean;
   readonly background: string;
-  readonly reuseNearbyTouchProbe: boolean;
-  /** A surface that can never play audio asks for no packets at all. */
-  readonly audio?: boolean;
+  /** Translated in React Native: the WebView cannot load the catalogs. */
+  readonly labels: {
+    readonly page: string;
+    readonly pageInput: string;
+    readonly pictureInPictureNotReady: string;
+    readonly pictureInPictureUnavailable: string;
+  };
 }
 
-export type PreviewStreamMessage = (
-  | ({ readonly type: "control"; readonly inputSession?: number } & PreviewStreamControl)
+export type PreviewStreamMessage =
+  | ({ readonly type: "control" } & PreviewStreamControl)
   | {
       readonly type: "status";
       readonly status: "connecting" | "streaming" | "error";
@@ -29,7 +32,8 @@ export type PreviewStreamMessage = (
   | { readonly type: "gone" }
   | ({ readonly type: "hostSetup" } & PreviewStreamHostSetup)
   | { readonly type: "viewport"; readonly width: number; readonly height: number }
-  | { readonly type: "audio"; readonly available: boolean }
+  /** The direction a drag scrolls the page, sent every few dozen pixels of it. */
+  | { readonly type: "scroll"; readonly direction: "up" | "down" }
   | { readonly type: "clipboard"; readonly text: string }
   | ({ readonly type: "download" } & PreviewStreamDownload)
   | { readonly type: "fileChooser"; readonly chooser: PreviewStreamFileChooser | null }
@@ -38,15 +42,18 @@ export type PreviewStreamMessage = (
       readonly supported: boolean;
       readonly active: boolean;
       readonly detail?: string;
-    }
-) & { readonly accessGeneration?: number };
+    };
 
-export function previewStreamDocument(configuration: string, script: string, muted = false) {
+export function previewStreamDocument(
+  configuration: string,
+  script: string,
+  stoppedDetail: string,
+) {
   const safeConfiguration = configuration.replace(/</g, "\\u003c");
   const safeScript = script.replace(/<\/script/gi, "<\\/script");
-  const failure = `window.ReactNativeWebView.postMessage(JSON.stringify({type:"status",status:"error",detail:"Browser viewer stopped unexpectedly."}));`;
-  // The bundle runs before anything uses it: it is what defines T3PreviewStream, so the muted
-  // tab is seeded and the viewer started only after it.
+  const safeStoppedDetail = JSON.stringify(stoppedDetail).replace(/</g, "\\u003c");
+  const failure = `window.ReactNativeWebView.postMessage(JSON.stringify({type:"status",status:"error",detail:${safeStoppedDetail}}));`;
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- WebView document markup
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
   html, body { height: 100%; overflow: hidden; }
@@ -76,7 +83,7 @@ export function previewStreamDocument(configuration: string, script: string, mut
     padding: 0; margin: -1px; border: 0; overflow: hidden;
     clip: rect(0, 0, 0, 0); white-space: nowrap; font-size: 16px;
   }
-</style></head><body><script>window.addEventListener("error",function(){${failure}});window.addEventListener("unhandledrejection",function(){${failure}});\n${safeScript}\ntry{T3PreviewStream.muted=${muted ? "true" : "false"};T3PreviewStream.start(${safeConfiguration});}catch{${failure}}</script></body></html>`;
+</style></head><body><script>window.addEventListener("error",function(){${failure}});window.addEventListener("unhandledrejection",function(){${failure}});\n${safeScript}\ntry{T3PreviewStream.start(${safeConfiguration});}catch{${failure}}</script></body></html>`;
 }
 
 export function previewStreamMessage(data: string): PreviewStreamMessage | null {

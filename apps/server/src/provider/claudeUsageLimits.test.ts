@@ -133,19 +133,6 @@ describe("claudeUsageResponseToLimits", () => {
     kind: "monthly",
     label: "Monthly spend",
     usedPercent: expect.closeTo(9.262, 10),
-    amount: {
-      currency: "usd",
-      used: 46.31,
-      limit: 500,
-      remaining: expect.closeTo(453.69, 10),
-    },
-  };
-  // A bare utilization has no money behind it.
-  const monthlyWindowWithoutAmount = {
-    id: "monthly_spend",
-    kind: "monthly",
-    label: "Monthly spend",
-    usedPercent: expect.closeTo(9.262, 10),
   };
 
   it("maps the captured Enterprise budget precisely, preferring spend beside rolling windows", () => {
@@ -209,7 +196,23 @@ describe("claudeUsageResponseToLimits", () => {
     };
     expect(
       claudeUsageResponseToLimits({ checkedAt, response: utilizationOnly }).limits.windows,
-    ).toEqual([monthlyWindowWithoutAmount]);
+    ).toEqual([monthlyWindow]);
+  });
+
+  it("flags a $0 cap instead of reporting a monthly window", () => {
+    const response = {
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: null,
+        seven_day: null,
+        extra_usage: { is_enabled: true, used_credits: 0, monthly_limit: 0, utilization: null },
+      },
+    };
+    expect(claudeUsageResponseToLimits({ checkedAt, response }).limits).toEqual({
+      checkedAt,
+      windows: [],
+      zeroSpendCap: true,
+    });
   });
 
   it("omits disabled budgets and refuses invalid money without an enabled fallback", () => {

@@ -6,8 +6,14 @@ import { Atom, type AtomRegistry } from "effect/reactivity";
 const readRevisions = new WeakMap<AtomRegistry.AtomRegistry, WeakMap<object, string | null>>();
 
 // The registry keys serializable atoms' nodes by their key, not the atom.
-const queryKey = (query: Atom.Atom<unknown>) =>
-  Atom.isSerializable(query) ? query[Atom.SerializableTypeId].key : query;
+const hasNode = (registry: AtomRegistry.AtomRegistry, atom: Atom.Atom<unknown>) =>
+  registry.getNodes().has(Atom.isSerializable(atom) ? atom[Atom.SerializableTypeId].key : atom);
+
+// A query's own node can go with its last reader while the atom it takes its value from
+// (an environment query's cache, on an idle TTL) still holds the value.
+const isCached = (registry: AtomRegistry.AtomRegistry, query: Atom.Atom<unknown>) =>
+  hasNode(registry, query) ||
+  (query.initialValueTarget !== undefined && hasNode(registry, query.initialValueTarget));
 
 const makeRevisionedFamily = (query: Atom.Atom<unknown>) =>
   Atom.family((revision: string | null) =>
@@ -21,18 +27,18 @@ const makeRevisionedFamily = (query: Atom.Atom<unknown>) =>
             revisions = new WeakMap();
             readRevisions.set(get.registry, revisions);
           }
-          const cached = get.registry.getNodes().has(queryKey(query));
-          // An evicted or unread query fetches fresh on `get(query)` below; only a cached one needs refreshing.
-          const stale =
-            cached &&
-            (revisions.has(query) ? revisions.get(query) !== revision : revision !== null);
+          const stale = revisions.has(query)
+            ? revisions.get(query) !== revision
+            : // A reader without a revision may have cached it before the latest
+              // workspace change; a query nobody has read yet fetches fresh anyway.
+              revision !== null && isCached(get.registry, query);
           // Deferred: this builds while React renders, and a refresh would synchronously
           // re-render the query's other readers, which React rejects.
           if (stale) {
             const registry = get.registry;
             queueMicrotask(() => {
               // No node, as after the registry is disposed: nothing cached to refetch.
-              if (registry.getNodes().has(queryKey(query))) registry.refresh(query);
+              if (isCached(registry, query)) registry.refresh(query);
             });
           }
           revisions.set(query, revision);
@@ -41,7 +47,7 @@ const makeRevisionedFamily = (query: Atom.Atom<unknown>) =>
       },
       // Refreshing the reader refetches the query it reads.
       (refresh) => refresh(query),
-    ).pipe(Atom.setIdleTTL(0)),
+    ),
   );
 
 // Held as long as the query lives, so one (query, revision) pair keeps one atom; an

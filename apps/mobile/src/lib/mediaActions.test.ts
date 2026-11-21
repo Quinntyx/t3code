@@ -13,7 +13,6 @@ const state = vi.hoisted(() => ({
   download: vi.fn(),
   downloadPreview: vi.fn(),
   saveImage: vi.fn(),
-  saveDownload: vi.fn(),
   shareLocal: vi.fn(),
   shareDraft: vi.fn(),
   navigate: vi.fn(),
@@ -26,6 +25,10 @@ vi.mock("react", () => ({
   useState: <A>(initial: A) => [initial, () => {}],
 }));
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+vi.mock("gt-react-native", async (importOriginal) => {
+  const gt = await importOriginal<typeof import("gt-react-native")>();
+  return { ...gt, useGT: () => gt.mFallback, useMessages: () => gt.mFallback };
+});
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ navigate: state.navigate }),
 }));
@@ -56,12 +59,10 @@ vi.mock("../state/atom-registry", () => ({
 vi.mock("./attachmentDownload", () => ({
   downloadAndShareAttachment: state.download,
   downloadAttachmentForPreview: state.downloadPreview,
-  downloadAttachmentToDevice: state.saveDownload,
   shareLocalAttachment: state.shareLocal,
 }));
-vi.mock("./saveToDevice", () => ({
+vi.mock("./saveImageToLibrary", () => ({
   canSaveImageToLibrary: (mimeType: string) => mimeType === "image/png",
-  canSaveFileToDownloads: () => true,
   saveImageToLibrary: state.saveImage,
 }));
 vi.mock("expo-haptics", () => ({
@@ -88,16 +89,11 @@ const denied: Pick<AuthSessionState, "authenticated" | "scopes"> = {
   scopes: [],
 };
 
-function hostSource(
-  _tag: "workspace-file" | "media-file" | "draft-workspace-file" = "media-file",
-): MediaActionsSource {
+function hostSource(_tag: "workspace-file" | "media-file" = "media-file"): MediaActionsSource {
   return {
     environmentId,
     threadId,
-    resource:
-      _tag === "draft-workspace-file"
-        ? { _tag, cwd: "/repo", path: "image.png", disposition: "attachment" }
-        : { _tag, threadId, path: "/repo/image.png" },
+    resource: { _tag, threadId, path: "/repo/image.png" },
     reference: { kind: "file", path: "/repo/image.png", relativePath: "image.png" },
     name: "image.png",
     mimeType: "image/png",
@@ -111,14 +107,13 @@ beforeEach(() => {
   state.download.mockReset().mockResolvedValue(undefined);
   state.downloadPreview.mockReset();
   state.saveImage.mockReset().mockResolvedValue(undefined);
-  state.saveDownload.mockReset().mockResolvedValue(undefined);
   state.shareLocal.mockReset().mockResolvedValue(undefined);
   state.shareDraft.mockReset().mockResolvedValue(undefined);
   state.navigate.mockReset();
   state.copy.mockReset();
 });
 
-it.each(["workspace-file", "media-file", "draft-workspace-file"] as const)(
+it.each(["workspace-file", "media-file"] as const)(
   "blocks denied %s sharing and file opening while preserving path copying",
   async (_tag) => {
     const media = useMediaActions(hostSource(_tag));
@@ -219,42 +214,4 @@ it("saves a host image from its downloaded file, then removes the file", async (
     expect.objectContaining({ url: "https://host.test/image.png" }),
   );
   expect(state.saveImage).toHaveBeenCalledWith("file:///cache/image.png", "image/png", "image.png");
-});
-
-function pdfSource(): MediaActionsSource {
-  return { ...hostSource(), name: "report.pdf", mimeType: "application/pdf" };
-}
-
-it("disables a denied host download and never saves", () => {
-  const media = useMediaActions(pdfSource());
-  const download = media.actions.find(({ id }) => id === "download")!;
-  download.run();
-
-  expect(download.disabled).toBe(true);
-  expect(media.actions.find(({ id }) => id === "save")?.title).toBe("Share");
-  expect(state.saveDownload).not.toHaveBeenCalled();
-});
-
-it("downloads a granted host file from a freshly minted URL", async () => {
-  state.sessions.set(environmentId, granted);
-  state.refresh.mockResolvedValue("https://host.test/report.pdf");
-  const saved = Promise.withResolvers<void>();
-  state.saveDownload.mockImplementation(async () => saved.resolve());
-
-  useMediaActions(pdfSource())
-    .actions.find(({ id }) => id === "download")!
-    .run();
-  await saved.promise;
-
-  expect(state.saveDownload).toHaveBeenCalledWith(
-    expect.objectContaining({
-      uri: "https://host.test/report.pdf",
-      attachment: { name: "report.pdf", mimeType: "application/pdf" },
-    }),
-  );
-});
-
-it("leaves image downloads to Save image", () => {
-  state.sessions.set(environmentId, granted);
-  expect(useMediaActions(hostSource()).actions.map(({ id }) => id)).not.toContain("download");
 });

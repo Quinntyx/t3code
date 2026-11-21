@@ -1,12 +1,8 @@
 import { Debouncer } from "@tanstack/react-pacer";
-import type {
-  ProjectCloneLayout,
-  PullRequestMergeMethod,
-  SourceControlProviderKind,
-} from "@t3tools/contracts";
+import { PullRequestMergeMethod } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
-import { Atom } from "effect/reactivity";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 2;
@@ -27,7 +23,6 @@ export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
   threadLastVisitedAtById?: Record<string, string>;
-  hiddenThreadKeys?: string[];
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
@@ -37,8 +32,6 @@ export interface PersistedUiState {
   threadChangedFilesExpansionVersion?: number;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   pullRequestMergeMethod?: string;
-  newProjectLayout?: string;
-  newProjectPublishHost?: string | null;
 }
 
 export interface UiProjectState {
@@ -49,7 +42,6 @@ export interface UiProjectState {
 
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
-  hiddenThreadKeys: string[];
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
 
@@ -61,25 +53,17 @@ export interface UiPullRequestState {
   pullRequestMergeMethod: PullRequestMergeMethod;
 }
 
-export interface UiNewProjectState {
-  newProjectLayout: ProjectCloneLayout;
-  newProjectPublishHost: SourceControlProviderKind | null;
-}
-
 export interface UiState
-  extends UiProjectState, UiThreadState, UiEndpointState, UiPullRequestState, UiNewProjectState {}
+  extends UiProjectState, UiThreadState, UiEndpointState, UiPullRequestState {}
 
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   sidebarProjectScopeKeys: [],
   threadLastVisitedAtById: {},
-  hiddenThreadKeys: [],
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
-  newProjectLayout: "standard",
-  newProjectPublishHost: null,
 };
 
 const LEGACY_PROJECT_CWD_PREFERENCE_PREFIX = "legacy-project-cwd:";
@@ -116,6 +100,8 @@ function sanitizeOptionalKey(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
+
 function sanitizeTimestampRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
@@ -129,21 +115,6 @@ function sanitizeTimestampRecord(value: unknown): Record<string, string> {
         Number.isFinite(Date.parse(entry[1])),
     ),
   );
-}
-
-function isPullRequestMergeMethod(value: unknown): value is PullRequestMergeMethod {
-  return value === "merge" || value === "squash" || value === "rebase";
-}
-
-function isProjectCloneLayout(value: unknown): value is ProjectCloneLayout {
-  return value === "standard" || value === "worktree-container";
-}
-
-// An unknown kind is harmless: the publish target falls back to the first one.
-function sanitizeProviderKind(value: unknown): SourceControlProviderKind | null {
-  return typeof value === "string" && value.length > 0
-    ? (value as SourceControlProviderKind)
-    : null;
 }
 
 export function parsePersistedState(parsed: PersistedUiState): UiState {
@@ -174,7 +145,6 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     projectExpandedById,
     projectOrder,
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
-    hiddenThreadKeys: sanitizeStringArray(parsed.hiddenThreadKeys),
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
         ? sanitizePersistedThreadChangedFilesExpanded(parsed.threadChangedFilesExpandedById)
@@ -186,10 +156,6 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
-    newProjectLayout: isProjectCloneLayout(parsed.newProjectLayout)
-      ? parsed.newProjectLayout
-      : initialState.newProjectLayout,
-    newProjectPublishHost: sanitizeProviderKind(parsed.newProjectPublishHost),
   };
 }
 
@@ -248,18 +214,12 @@ export function persistState(state: UiState): void {
     return;
   }
   try {
-    const projectExpandedById = Object.fromEntries(
-      Object.entries(state.projectExpandedById).filter(
-        ([key]) => key !== LEGACY_PROJECT_EXPANSION_DEFAULT_KEY,
-      ),
-    );
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
-        projectExpandedById,
+        projectExpandedById: state.projectExpandedById,
         projectOrder: state.projectOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
-        hiddenThreadKeys: state.hiddenThreadKeys,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarProjectScopeKeys: state.sidebarProjectScopeKeys,
         // Older clients read only this field.
@@ -270,8 +230,6 @@ export function persistState(state: UiState): void {
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
-        newProjectLayout: state.newProjectLayout,
-        newProjectPublishHost: state.newProjectPublishHost,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -284,16 +242,6 @@ export function persistState(state: UiState): void {
 }
 
 const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
-
-export function setThreadHidden(state: UiState, threadKey: string, hidden: boolean): UiState {
-  if (state.hiddenThreadKeys.includes(threadKey) === hidden) return state;
-  return {
-    ...state,
-    hiddenThreadKeys: hidden
-      ? [...state.hiddenThreadKeys, threadKey]
-      : state.hiddenThreadKeys.filter((key) => key !== threadKey),
-  };
-}
 
 export function markThreadVisited(state: UiState, threadId: string, visitedAt: string): UiState {
   const visitedAtMs = Date.parse(visitedAt);
@@ -397,14 +345,6 @@ function setPullRequestMergeMethod(state: UiState, method: PullRequestMergeMetho
     : { ...state, pullRequestMergeMethod: method };
 }
 
-function setNewProjectLayout(state: UiState, layout: ProjectCloneLayout): UiState {
-  return state.newProjectLayout === layout ? state : { ...state, newProjectLayout: layout };
-}
-
-function setNewProjectPublishHost(state: UiState, kind: SourceControlProviderKind | null): UiState {
-  return state.newProjectPublishHost === kind ? state : { ...state, newProjectPublishHost: kind };
-}
-
 export function resolveProjectExpanded(
   projectExpandedById: Readonly<Record<string, boolean>>,
   preferenceKeys: readonly string[],
@@ -483,15 +423,12 @@ export function reorderProjects(
 }
 
 interface UiStateStore extends UiState {
-  setThreadHidden: (threadKey: string, hidden: boolean) => void;
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setSidebarProjectScopeKeys: (projectKeys: readonly string[]) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
-  setNewProjectLayout: (layout: ProjectCloneLayout) => void;
-  setNewProjectPublishHost: (kind: SourceControlProviderKind | null) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
@@ -502,7 +439,6 @@ interface UiStateStore extends UiState {
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
   ...readPersistedState(),
-  setThreadHidden: (threadKey, hidden) => set((state) => setThreadHidden(state, threadKey, hidden)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
@@ -514,8 +450,6 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setSidebarProjectScopeKeys: (projectKeys) =>
     set((state) => setSidebarProjectScopeKeys(state, projectKeys)),
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),
-  setNewProjectLayout: (layout) => set((state) => setNewProjectLayout(state, layout)),
-  setNewProjectPublishHost: (kind) => set((state) => setNewProjectPublishHost(state, kind)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>
@@ -525,21 +459,6 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
-
-const NO_DEVICE_HIDES: ReadonlySet<string> = new Set();
-export const showHiddenThreadsAtom = Atom.make(false).pipe(Atom.keepAlive);
-const storedHiddenThreadKeysAtom = Atom.make((get) => {
-  get.addFinalizer(
-    useUiStateStore.subscribe((state, previous) => {
-      if (state.hiddenThreadKeys !== previous.hiddenThreadKeys)
-        get.setSelf(new Set(state.hiddenThreadKeys));
-    }),
-  );
-  return new Set(useUiStateStore.getState().hiddenThreadKeys);
-});
-export const deviceHiddenThreadKeysAtom = Atom.make((get) =>
-  get(showHiddenThreadsAtom) ? NO_DEVICE_HIDES : get(storedHiddenThreadKeysAtom),
-);
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {

@@ -5,16 +5,17 @@ import {
   clampFileAttachmentUploadBytes,
   formatAttachmentSize,
 } from "@t3tools/client-runtime/state/attachments";
+import { msg, useGT } from "gt-react-native";
 import { useRef, useState } from "react";
 import { View } from "react-native";
 
 import { AppBar, type AppBarMenu } from "../../components/ui/AppBar";
+import { m } from "../../i18n/messages";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/ui/FilePreviewModal";
 import { useAttachmentDocument } from "../../lib/attachmentDocument";
 import { nativeViewerErrorMessage } from "../../lib/attachmentDownload";
 import { isFileBackedComposerAttachment } from "../../lib/composerImages";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
-import { canSaveFileToDownloads } from "../../lib/saveToDevice";
 import { removeComposerDraftAttachment, useComposerDraft } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { useRefreshAssetUrl } from "../../state/assets";
@@ -22,8 +23,6 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { isZipFile, ZipArchiveView } from "./ZipArchiveView";
 import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentDocumentBody";
-import { ATTACHMENT_VIEWER_PAGE_CLASS_NAME, AttachmentViewerCard } from "./AttachmentViewerCard";
-import { renderedToggleAction } from "./renderedToggleAction";
 
 export type AttachmentFileRouteParams = {
   readonly environmentId?: string;
@@ -40,6 +39,7 @@ type AttachmentFileScreenProps = StaticScreenProps<AttachmentFileRouteParams>;
 
 export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   const navigation = useNavigation();
+  const gt = useGT();
   const { appearance, setCodeWordBreak } = useAppearancePreferences();
   const params = props.route.params;
   const environmentId = params.environmentId?.trim()
@@ -63,9 +63,9 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   });
   const [nativeOpen, setNativeOpen] = useState(false);
   const nativeKind = nativeViewerKind(document.kind);
-  const [nativeViewer, setNativeViewer] = useState<
-    "pending" | "open" | "closed" | "unavailable" | null
-  >(nativeKind ? "pending" : null);
+  const [nativeViewer, setNativeViewer] = useState<"pending" | "open" | "unavailable" | null>(
+    nativeKind ? "pending" : null,
+  );
   const [nativeError, setNativeError] = useState<string | null>(null);
   const pendingNativeError = useRef<string | null>(null);
   const handleBack = () => {
@@ -93,7 +93,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
     const message = pendingNativeError.current;
     pendingNativeError.current = null;
     if (nativeViewer === null) {
-      if (message) Dialog.alert("Could not open document", message);
+      if (message) Dialog.alert(m(msg("Could not open document")), message);
       return;
     }
     if (message) {
@@ -101,9 +101,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
       setNativeViewer("unavailable");
       return;
     }
-    // External Android document apps have no save, so the screen stays to offer Download.
-    if (nativeKind === "document" && canSaveFileToDownloads()) setNativeViewer("closed");
-    else handleBack();
+    handleBack();
   };
   const removeFromDraft = () => {
     if (!draftKey) return;
@@ -112,78 +110,119 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   };
 
   const { content, renderedMode, activeMode, setRendered, share, sharing } = document;
-  const canDownload = uri !== null && canSaveFileToDownloads();
-  const modeToggle = renderedMode
-    ? renderedToggleAction({
-        rendered: activeMode !== "source",
-        table: renderedMode === "table",
-        onToggle: setRendered,
-      })
-    : null;
+  const menuActions = [
+    renderedMode
+      ? ({
+          id: "preview",
+          title:
+            renderedMode === "table"
+              ? gt("Table", { $context: "file view mode" })
+              : gt("Preview", { $context: "file view mode" }),
+          icon: renderedMode === "table" ? "tablecells" : "eye",
+          inline: true,
+          onPress: () => setRendered(true),
+        } as const)
+      : null,
+    renderedMode
+      ? ({
+          id: "source",
+          title: gt("Source", { $context: "file view mode, raw source text" }),
+          icon: "doc.text",
+          inline: true,
+          onPress: () => setRendered(false),
+        } as const)
+      : null,
+    content && activeMode === "source"
+      ? ({
+          id: "word-wrap",
+          title: appearance.codeWordBreak ? gt("Disable word wrap") : gt("Enable word wrap"),
+          icon: "text.alignleft",
+          inline: false,
+          onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
+        } as const)
+      : null,
+    content
+      ? ({
+          id: "copy",
+          title: content.truncated ? gt("Copy preview") : gt("Copy contents"),
+          icon: "doc.on.doc",
+          inline: false,
+          onPress: () => copyTextWithHaptic(content.text),
+        } as const)
+      : null,
+    uri
+      ? ({
+          id: "share",
+          title: sharing ? gt("Opening share sheet…") : gt("Save or share"),
+          icon: "square.and.arrow.up",
+          inline: false,
+          onPress: () => void share(),
+        } as const)
+      : null,
+    uri
+      ? ({
+          id: "open-viewer",
+          title: gt("Open in file viewer"),
+          icon: "arrow.up.left.and.arrow.down.right",
+          inline: false,
+          onPress: () => {
+            setNativeViewer((current) => (current === null ? null : "open"));
+            setNativeOpen(true);
+          },
+        } as const)
+      : null,
+    draftKey
+      ? ({
+          id: "remove",
+          title: gt("Remove from draft"),
+          icon: "trash",
+          inline: false,
+          destructive: true,
+          onPress: removeFromDraft,
+        } as const)
+      : null,
+  ].filter((action) => action !== null);
+  const selectedAction = activeMode === "source" ? "source" : "preview";
   const fileMenu: AppBarMenu = {
-    title: "File actions",
+    title: gt("File actions"),
     icon: "ellipsis",
     items: [
-      content && activeMode === "source"
-        ? {
-            id: "word-wrap",
-            title: appearance.codeWordBreak ? "Disable word wrap" : "Enable word wrap",
-            icon: "text.alignleft",
-            onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
-          }
-        : null,
-      content
-        ? {
-            id: "copy",
-            title: content.truncated ? "Copy preview" : "Copy contents",
-            icon: "doc.on.doc",
-            onPress: () => copyTextWithHaptic(content.text),
-          }
-        : null,
-      canDownload
-        ? {
-            id: "download",
-            title: document.downloading ? "Downloading…" : "Download",
-            icon: "tray.and.arrow.down",
-            onPress: () => void document.download(),
-          }
-        : null,
-      uri
-        ? {
-            id: "share",
-            title: sharing ? "Opening share sheet…" : canDownload ? "Share" : "Save or share",
-            icon: "square.and.arrow.up",
-            onPress: () => void share(),
-          }
-        : null,
-      uri
-        ? {
-            id: "open-viewer",
-            title: "Open in file viewer",
-            icon: "arrow.up.left.and.arrow.down.right",
-            onPress: () => {
-              setNativeViewer((current) => (current === null ? null : "open"));
-              setNativeOpen(true);
+      ...(renderedMode
+        ? [
+            {
+              id: "modes",
+              inline: true,
+              items: menuActions
+                .filter(({ inline }) => inline)
+                .map((action) => ({
+                  id: action.id,
+                  title: action.title,
+                  icon: action.icon,
+                  selected: action.id === selectedAction,
+                  onPress: action.onPress,
+                })),
             },
-          }
-        : null,
-      draftKey
-        ? {
-            id: "remove",
-            title: "Remove from draft",
-            icon: "trash",
-            destructive: true,
-            onPress: removeFromDraft,
-          }
-        : null,
-    ].filter((action) => action !== null),
+          ]
+        : []),
+      ...menuActions
+        .filter(({ inline }) => !inline)
+        .map((action) => ({
+          id: action.id,
+          title: action.title,
+          icon: action.icon,
+          destructive: "destructive" in action,
+          onPress: action.onPress,
+        })),
+    ],
   };
-  const subtitle = [
-    draftKey ? "Draft" : null,
-    sizeBytes > 0 ? formatAttachmentSize(sizeBytes) : null,
-  ]
-    .filter((part) => part !== null)
-    .join(" · ");
+  const subtitle =
+    sizeBytes > 0
+      ? draftKey
+        ? gt("Draft attachment · {size}", { size: formatAttachmentSize(sizeBytes) })
+        : gt("Attachment · {size}", { size: formatAttachmentSize(sizeBytes) })
+      : draftKey
+        ? gt("Draft attachment")
+        : gt("Attachment");
   const refresh = useRefreshAssetUrl(environmentId, resource);
   const capabilities = useEnvironmentServerConfig(environmentId)?.environment.capabilities;
 
@@ -209,35 +248,26 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
             : undefined
         }
         onSave={() => void share()}
-        onDownload={canDownload ? () => void document.download() : null}
         onRemove={draftKey ? removeFromDraft : null}
       />
     );
   }
 
   return (
-    <View className={ATTACHMENT_VIEWER_PAGE_CLASS_NAME}>
-      <AppBar
-        title={params.name}
-        subtitle={subtitle}
-        onBack={handleBack}
-        actions={modeToggle ? [modeToggle] : undefined}
-        menus={[fileMenu]}
+    <View className="flex-1 bg-sheet">
+      <AppBar title={params.name} subtitle={subtitle} onBack={handleBack} menus={[fileMenu]} />
+      <AttachmentDocumentBody
+        document={document}
+        name={params.name}
+        environmentId={environmentId}
+        htmlRender={params.htmlRender === "1"}
+        nativeViewer={nativeViewer}
+        nativeError={nativeError}
+        onOpenNative={() => {
+          setNativeViewer((current) => (current === null ? null : "open"));
+          setNativeOpen(true);
+        }}
       />
-      <AttachmentViewerCard>
-        <AttachmentDocumentBody
-          document={document}
-          name={params.name}
-          environmentId={environmentId}
-          htmlRender={params.htmlRender === "1"}
-          nativeViewer={nativeViewer}
-          nativeError={nativeError}
-          onOpenNative={() => {
-            setNativeViewer((current) => (current === null ? null : "open"));
-            setNativeOpen(true);
-          }}
-        />
-      </AttachmentViewerCard>
       {nativeOpen && nativeSource ? (
         <FilePreviewModal
           source={nativeSource}

@@ -38,6 +38,7 @@ apps/mobile/.android-cache/
 artifacts/app-store/screenshots/
 artifacts/mobile-e2e/
 artifacts/mobile-behavior/
+scripts/.e2e/
 .github/pr-assets/
 native/**/target/
 node_modules/
@@ -49,10 +50,4 @@ node_modules/
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
 
-# makepkg scratch and artifacts from packaging/arch.
-/packaging/arch/*/src/
-/packaging/arch/*/pkg/
-/packaging/arch/*/*.pkg.tar.zst
-/packaging/arch/*/T3-Code-*.AppImage
-/packaging/arch/*/t3-*-linux-*.tar.gz
-/packaging/arch/*/*-LICENSE
+/packages/ssh/.ssh-launcher-test-*/

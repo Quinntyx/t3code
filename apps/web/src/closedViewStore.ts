@@ -11,13 +11,13 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 import { randomUUID } from "./lib/utils";
-import { type ThreadRightPanelSurface } from "./rightPanelStore";
+import { type RightPanelSurface } from "./rightPanelStore";
 
 export type ClosedView =
   | {
       kind: "panel-tab";
       threadRef: ScopedThreadRef;
-      surface: Exclude<ThreadRightPanelSurface, { kind: "terminal" }>;
+      surface: Exclude<RightPanelSurface, { kind: "terminal" }>;
     }
   | { kind: "browser"; threadRef: ScopedThreadRef; snapshot: PreviewSessionSnapshot };
 
@@ -62,7 +62,6 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
   switch (surface.kind) {
     case "diff":
     case "files":
-    case "notebook":
     case "pull-requests":
       return surface.id === surface.kind;
     case "preview":
@@ -92,6 +91,16 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         typeof surface.repository === "string" &&
         Number.isSafeInteger(surface.number) &&
         surface.number > 0 &&
+        (surface.environmentId === undefined || typeof surface.environmentId === "string") &&
+        (surface.host === undefined || typeof surface.host === "string") &&
+        (surface.url === undefined || typeof surface.url === "string")
+      );
+    case "issue":
+      return (
+        typeof surface.projectId === "string" &&
+        typeof surface.tracker === "string" &&
+        typeof surface.scope === "string" &&
+        typeof surface.key === "string" &&
         (surface.environmentId === undefined || typeof surface.environmentId === "string") &&
         (surface.host === undefined || typeof surface.host === "string") &&
         (surface.url === undefined || typeof surface.url === "string")
@@ -130,7 +139,7 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      version: 3,
+      version: 2,
       migrate: (persisted) => {
         const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)
           ?.entries;

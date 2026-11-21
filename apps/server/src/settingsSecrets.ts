@@ -5,7 +5,6 @@ import {
   CodexSettings,
   EasDeviceHostConfig,
   type ProviderInstanceConfig,
-  type RegisteredMcpServerEntry,
   type ServerSettings,
   type SettingsSecretValue,
   SimlockDeviceHostConfig,
@@ -27,7 +26,6 @@ import {
   sourceControlHostSecretName,
   writeSecretFieldValues,
 } from "./sourceControl/sourceControlHostSecrets.ts";
-import { parseMcpRegistration } from "@t3tools/shared/mcpRegistration";
 
 export const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
 
@@ -237,7 +235,7 @@ function mapSecretFieldGroups(
       ) as EasDeviceHostConfig,
   );
 
-  // Its own prefix: an EAS and a Simlock host may share an id.
+  // Its own prefix: an Expo and a Simlock host may share an id.
   const simlockDeviceHosts = settings.simlockDeviceHosts.map(
     (host) =>
       mapFields(
@@ -247,19 +245,6 @@ function mapSecretFieldGroups(
           `simlock-device-host-${encode(host.id)}-${encode(field)}` +
           (serverHost === null ? "" : `-${encode(serverHost)}`),
       ) as SimlockDeviceHostConfig,
-  );
-
-  // A secret field is one the pasted document declares, so the keys come from it, not a schema.
-  const registeredMcpServers = settings.registeredMcpServers.map(
-    (server) =>
-      ({
-        ...server,
-        config: mapFields(
-          server.config,
-          registeredMcpSecretFields(server),
-          (field) => `registered-mcp-${encode(server.id)}-${encode(field)}`,
-        ),
-      }) as RegisteredMcpServerEntry,
   );
 
   return {
@@ -275,20 +260,7 @@ function mapSecretFieldGroups(
     textGenerators,
     easDeviceHosts,
     simlockDeviceHosts,
-    registeredMcpServers,
   };
-}
-
-/** The config keys of `server` its document marks secret. */
-function registeredMcpSecretFields(
-  server: Pick<RegisteredMcpServerEntry, "source">,
-): ReadonlyArray<string> {
-  const parsed = parseMcpRegistration(
-    server.source.kind === "server.json" ? server.source.document : server.source.manifest,
-  );
-  return parsed.ok
-    ? parsed.registration.fields.flatMap((field) => (field.secret ? [field.key] : []))
-    : [];
 }
 
 /**
@@ -318,5 +290,35 @@ export function withoutRemovedSecretProviderReferences(
           : instance,
       ]),
     ),
+  };
+}
+
+const gatewayOrigin = (url: string) => (URL.canParse(url) ? new URL(url).origin : url);
+
+/**
+ * `next` with a Simlock host's kept token cleared when its gateway moved to another origin: a
+ * saved token goes only to the gateway it was saved for. A newly entered token stays.
+ */
+export function withoutRedirectedSimlockTokens(
+  current: ServerSettings,
+  next: ServerSettings,
+): ServerSettings {
+  const saved = new Map(current.simlockDeviceHosts.map((host) => [host.id, host]));
+  const kept = (token: SettingsSecretValue, savedToken: SettingsSecretValue) =>
+    token === SECRET_REDACTED ||
+    (isSecretReference(token) &&
+      isSecretReference(savedToken) &&
+      token.provider === savedToken.provider &&
+      token.reference === savedToken.reference);
+  return {
+    ...next,
+    simlockDeviceHosts: next.simlockDeviceHosts.map((host) => {
+      const previous = saved.get(host.id);
+      return previous &&
+        gatewayOrigin(previous.gatewayUrl) !== gatewayOrigin(host.gatewayUrl) &&
+        kept(host.agentToken, previous.agentToken)
+        ? { ...host, agentToken: "" }
+        : host;
+    }),
   };
 }

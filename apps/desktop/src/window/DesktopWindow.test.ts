@@ -1,11 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import {
-  DesktopSnapShotId,
-  DEFAULT_CLIENT_SETTINGS,
-  type ClientSettings,
-} from "@t3tools/contracts";
+import { DesktopSnapShotId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -40,6 +36,7 @@ vi.mock("electron", async (importOriginal) => ({
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopPrimaryPaste from "../app/DesktopPrimaryPaste.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
@@ -52,6 +49,10 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
+import {
+  PASSKEY_BRIDGE_ARGUMENT,
+  PRIMARY_PASTE_DISABLED_ARGUMENT,
+} from "../preview/GuestProtocol.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 
@@ -72,7 +73,6 @@ function makeFakeBrowserWindow() {
   const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
   let zoomLevel = 0;
   const webContents = {
-    session: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() },
     copyImageAt: vi.fn(),
     focus: vi.fn(),
     isDestroyed: vi.fn(() => false),
@@ -130,7 +130,6 @@ function makeFakeBrowserWindow() {
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     setWindowButtonPosition: vi.fn(),
-    setWindowButtonVisibility: vi.fn(),
     show: vi.fn(),
     webContents,
   };
@@ -154,7 +153,6 @@ function makeFakeBrowserWindow() {
     send: webContents.send,
     setZoomLevel: webContents.setZoomLevel,
     setWindowButtonPosition: window.setWindowButtonPosition,
-    setWindowButtonVisibility: window.setWindowButtonVisibility,
     setBackgroundThrottling: webContents.setBackgroundThrottling,
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
@@ -209,7 +207,7 @@ const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronTheme["Service"]);
 
-const makeEnvironmentLayer = (platform: NodeJS.Platform) =>
+const layerDesktopEnvironmentFor = (platform: NodeJS.Platform) =>
   DesktopEnvironment.layer({ ...environmentInput, platform }).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -222,7 +220,7 @@ const makeEnvironmentLayer = (platform: NodeJS.Platform) =>
     ),
   );
 
-const layerDesktopEnvironment = makeEnvironmentLayer("darwin");
+const layerDesktopEnvironment = layerDesktopEnvironmentFor(environmentInput.platform);
 
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
@@ -248,16 +246,16 @@ function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly fallbackWindow?: Electron.BrowserWindow;
   readonly platform?: NodeJS.Platform;
-  readonly clientSettings?: Option.Option<ClientSettings>;
+  readonly appearanceWindows?: ReadonlyArray<{
+    readonly window: Electron.BrowserWindow;
+    readonly titleBarOverlay: boolean;
+  }>;
+  readonly primaryPasteEnabled?: boolean;
+  readonly previewPasskeyBridgeEnabled?: boolean;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
-  const layerEnvironment =
-    input.platform === undefined ? layerDesktopEnvironment : makeEnvironmentLayer(input.platform);
-  const layerClientSettings =
-    input.clientSettings === undefined
-      ? layerDesktopClientSettings
-      : DesktopClientSettings.layerTest(input.clientSettings);
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
     get: Effect.sync(() => desktopSettings),
     load: Effect.sync(() => desktopSettings),
@@ -302,7 +300,9 @@ function layerTest(input: {
         Effect.as(input.window),
       ),
     main: Ref.get(input.mainWindow),
-    currentMainOrFirst: Ref.get(input.mainWindow),
+    currentMainOrFirst: Ref.get(input.mainWindow).pipe(
+      Effect.map(Option.orElse(() => Option.fromNullishOr(input.fallbackWindow ?? null))),
+    ),
     focusedMainOrFirst:
       input.focusedWindow === undefined
         ? Ref.get(input.mainWindow)
@@ -313,7 +313,14 @@ function layerTest(input: {
     reveal: (window) => Effect.sync(() => input.onReveal?.(window)),
     sendAll: () => Effect.void,
     destroyAll: input.destroyAll ?? Effect.void,
-    syncAllAppearance: (sync) => sync(input.window),
+    syncAllAppearance: (sync) =>
+      input.appearanceWindows === undefined
+        ? sync(input.window, { titleBarOverlay: true })
+        : Effect.forEach(
+            input.appearanceWindows,
+            ({ window, titleBarOverlay }) => sync(window, { titleBarOverlay }),
+            { discard: true },
+          ),
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
   return DesktopWindow.layer.pipe(
@@ -325,9 +332,11 @@ function layerTest(input: {
           recordMetrics: () => Effect.void,
           shutdown: Effect.void,
         }),
-        layerEnvironment,
+        input.platform === undefined
+          ? layerDesktopEnvironment
+          : layerDesktopEnvironmentFor(input.platform),
         layerDesktopAppSettings,
-        layerClientSettings,
+        layerDesktopClientSettings,
         layerDesktopServerExposure,
         DesktopState.layer,
         layerElectronApp,
@@ -347,8 +356,11 @@ function layerTest(input: {
         } satisfies ElectronShell.ElectronShell["Service"]),
         layerElectronTheme,
         layerElectronWindow,
+        Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, {
+          enabled: input.primaryPasteEnabled ?? true,
+        }),
         Layer.mock(PreviewPasskeys.PreviewPasskeys)({
-          bridgeEnabled: false,
+          bridgeEnabled: input.previewPasskeyBridgeEnabled ?? false,
           installSessionHandlers: () => {},
           attachGuest: () => () => {},
         }),
@@ -357,7 +369,6 @@ function layerTest(input: {
           setMainWindow: input.setPreviewMainWindow ?? (() => Effect.void),
           prepareWebview: () => Effect.void,
           isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
-          claimFormReplay: () => {},
           getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
           reapplyZoom: () =>
             Effect.sync(() => {
@@ -432,7 +443,8 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
       reveal: (window) => Ref.update(revealedWindows, (windows) => [...windows, window]),
       sendAll: () => Effect.void,
       destroyAll: Effect.void,
-      syncAllAppearance: (sync) => (fallbackWindow ? sync(fallbackWindow) : Effect.void),
+      syncAllAppearance: (sync) =>
+        fallbackWindow ? sync(fallbackWindow, { titleBarOverlay: true }) : Effect.void,
     } satisfies ElectronWindow.ElectronWindow["Service"];
 
     const layer = DesktopWindow.layer.pipe(
@@ -458,6 +470,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           } satisfies ElectronShell.ElectronShell["Service"]),
           layerElectronTheme,
           Layer.succeed(ElectronWindow.ElectronWindow, electronWindowShape),
+          Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
           Layer.mock(PreviewPasskeys.PreviewPasskeys)({
             bridgeEnabled: false,
             installSessionHandlers: () => {},
@@ -467,7 +480,6 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
             getBrowserSession: () => Effect.succeed({} as Electron.Session),
             setMainWindow: () => Effect.void,
             isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
-            claimFormReplay: () => {},
             getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
           }),
         ),
@@ -560,98 +572,6 @@ describe("DesktopWindow", () => {
       }),
     );
   });
-
-  // Native caption buttons and traffic lights are created with the frame; the
-  // setting decides whether they exist at all.
-  it.effect(
-    "creates the main window without the native controls overlay on Linux when hidden",
-    () =>
-      Effect.gen(function* () {
-        const fakeWindow = makeFakeBrowserWindow();
-        // The traffic-light API is macOS-only and absent on Linux windows.
-        Reflect.deleteProperty(fakeWindow.window, "setWindowButtonVisibility");
-        const createCount = yield* Ref.make(0);
-        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-        const layer = layerTest({
-          window: fakeWindow.window,
-          createCount,
-          mainWindow,
-          createdWindowOptions,
-          clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
-          platform: "linux",
-        });
-
-        yield* Effect.gen(function* () {
-          const desktopWindow = yield* DesktopWindow.DesktopWindow;
-          yield* desktopWindow.createMain;
-          const options = createdWindowOptions[0];
-          if (options === undefined) {
-            return yield* Effect.die("main window options were not captured");
-          }
-          assert.equal(options.titleBarStyle, "hidden");
-          assert.isUndefined(options.titleBarOverlay);
-        }).pipe(Effect.provide(layer));
-      }),
-  );
-
-  it.effect("keeps the native controls overlay on Linux by default", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-        createdWindowOptions,
-        clientSettings: Option.some(DEFAULT_CLIENT_SETTINGS),
-        platform: "linux",
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.createMain;
-        const options = createdWindowOptions[0];
-        if (options === undefined) {
-          return yield* Effect.die("main window options were not captured");
-        }
-        assert.deepEqual(options.titleBarOverlay, {
-          color: "#01000000",
-          height: 40,
-          symbolColor: "#1f2937",
-        });
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
-  it.effect("hides the macOS traffic lights when the setting hides window controls", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-        createdWindowOptions,
-        clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, hideWindowControls: true }),
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.createMain;
-        const options = createdWindowOptions[0];
-        if (options === undefined) {
-          return yield* Effect.die("main window options were not captured");
-        }
-        assert.equal(options.titleBarStyle, "hiddenInset");
-        assert.deepEqual(fakeWindow.setWindowButtonVisibility.mock.calls, [[false]]);
-      }).pipe(Effect.provide(layer));
-    }),
-  );
 
   it.effect(
     "opens and reopens the window without backend readiness when local execution is disabled",
@@ -809,6 +729,55 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("ignores input that arrives after the window is destroyed", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+        const inputEvent = fakeWindow.webContentsListeners.get("input-event");
+        if (!beforeInput || !inputEvent) {
+          return yield* Effect.die("input listeners were not registered");
+        }
+
+        // Electron throws on any member access of a destroyed BrowserWindow.
+        fakeWindow.isDestroyed.mockReturnValue(true);
+        Object.defineProperty(fakeWindow.window, "webContents", {
+          get: () => {
+            throw new TypeError("Object has been destroyed");
+          },
+        });
+
+        // A held Cmd+Q quits from the grace timer, so the trailing Q keyUp lands here.
+        assert.doesNotThrow(() =>
+          beforeInput(
+            { preventDefault: () => {} },
+            {
+              type: "keyUp",
+              isAutoRepeat: false,
+              key: "q",
+              meta: true,
+              control: false,
+              alt: false,
+              shift: false,
+            },
+          ),
+        );
+        assert.doesNotThrow(() => inputEvent({}, { type: "gestureScrollEnd" }));
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   // Chromium hands the main window's zoom level down to embedded preview
   // guests, so every app zoom has to put the preview browser back at its own
   // zoom or zooming the UI drags the previewed page with it.
@@ -878,7 +847,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("reloads and inspects the main window even when a popup has focus", () =>
+  it.effect("routes menu commands to the main window even when a popup has focus", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const popup = makeFakeBrowserWindow();
@@ -898,7 +867,10 @@ describe("DesktopWindow", () => {
         yield* desktopWindow.runMainContentsCommand("reload");
         yield* desktopWindow.runMainContentsCommand("forceReload");
         yield* desktopWindow.runMainContentsCommand("toggleDevTools");
+        yield* desktopWindow.dispatchMenuAction("open-settings");
 
+        assert.deepEqual(fakeWindow.send.mock.calls, [["desktop:menu-action", "open-settings"]]);
+        assert.equal(popup.send.mock.calls.length, 0);
         assert.equal(fakeWindow.reload.mock.calls.length, 1);
         assert.equal(fakeWindow.reloadIgnoringCache.mock.calls.length, 1);
         assert.equal(fakeWindow.toggleDevTools.mock.calls.length, 1);
@@ -906,6 +878,38 @@ describe("DesktopWindow", () => {
         assert.equal(popup.reloadIgnoringCache.mock.calls.length, 0);
         assert.equal(popup.toggleDevTools.mock.calls.length, 0);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("recreates main for Settings when only an unregistered popup survives", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const auxiliary = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+
+      yield* Effect.gen(function* () {
+        const windows = yield* DesktopWindow.DesktopWindow;
+        yield* windows.dispatchMenuAction("open-settings");
+        assert.deepEqual(main.send.mock.calls, [["desktop:menu-action", "open-settings"]]);
+        assert.equal(auxiliary.send.mock.calls.length, 0);
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.strictEqual(yield* windows.ensureMain, main.window);
+        assert.equal(yield* Ref.get(createCount), 1);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            window: main.window,
+            createCount,
+            mainWindow,
+            fallbackWindow: auxiliary.window,
+            desktopSettings: {
+              ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+              localEnvironmentEnabled: false,
+            },
+          }),
+        ),
+      );
     }),
   );
 
@@ -1075,9 +1079,73 @@ describe("DesktopWindow", () => {
         assert.deepEqual(mainWindowBoundsUpdates, [{ x: 220, y: 140, width: 1380, height: 920 }]);
         assert.deepEqual(mainWindowMaximizedUpdates, [true]);
         assert.equal(fakeWindow.getNormalBounds.mock.calls.length, 1);
-        assert.equal(fakeWindow.getBounds.mock.calls.length, 0);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect.each([
+    { normal: "on display 1", width: 1920, height: 1080, x: 220 },
+    { normal: "on display 1", width: 1280, height: 720, x: 220 },
+    { normal: "straddling both displays", width: 1920, height: 1080, x: 1800 },
+  ])(
+    "persists bounds on the display a maximized window was moved to ($width x $height, normal $normal)",
+    ({ width, height, x }) =>
+      Effect.gen(function* () {
+        const displayOne = { x: 0, y: 0, width: 1920, height: 1080 };
+        const displayTwo = { x: 1920, y: 0, width, height };
+        const getAllDisplays = vi.mocked(Electron.screen.getAllDisplays);
+        getAllDisplays.mockReturnValue([
+          { bounds: displayOne, workArea: displayOne },
+          { bounds: displayTwo, workArea: displayTwo },
+        ] as unknown as Electron.Display[]);
+        const fakeWindow = makeFakeBrowserWindow();
+        fakeWindow.isMaximized.mockReturnValue(true);
+        fakeWindow.getBounds.mockReturnValue(displayTwo);
+        fakeWindow.getNormalBounds.mockReturnValue({ x, y: 140, width: 1380, height: 920 });
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const mainWindowBoundsUpdates: DesktopAppSettings.DesktopWindowBounds[] = [];
+        const mainWindowMaximizedUpdates: boolean[] = [];
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          mainWindowBoundsUpdates,
+          mainWindowMaximizedUpdates,
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const move = fakeWindow.windowListeners.get("move");
+          if (!move) {
+            return yield* Effect.die("window move listener was not registered");
+          }
+          move();
+          yield* TestClock.adjust(500);
+          yield* Effect.promise(() => Promise.resolve());
+
+          const persisted = mainWindowBoundsUpdates.at(-1);
+          assert.isDefined(persisted, "maximized window bounds were not persisted");
+          const persistedDisplay = [displayOne, displayTwo].findIndex(
+            (display) =>
+              persisted.x >= display.x &&
+              persisted.y >= display.y &&
+              persisted.x + persisted.width <= display.x + display.width &&
+              persisted.y + persisted.height <= display.y + display.height,
+          );
+          assert.equal(
+            persistedDisplay,
+            1,
+            `window maximized on display 2 persisted bounds ${JSON.stringify(persisted)}, which restore on display ${persistedDisplay + 1}`,
+          );
+          assert.deepEqual(mainWindowMaximizedUpdates, [true]);
+        }).pipe(
+          Effect.provide(layer),
+          Effect.ensuring(Effect.sync(() => getAllDisplays.mockReset())),
+        );
+      }),
   );
 
   it.effect("preserves unrestorable bounds until the user changes the window", () =>
@@ -1123,8 +1191,7 @@ describe("DesktopWindow", () => {
   it.effect("flushes normal bounds when minimized before the debounce completes", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
-      fakeWindow.getBounds.mockReturnValue({ x: -32_000, y: -32_000, width: 160, height: 28 });
-      fakeWindow.getNormalBounds.mockReturnValue({ x: 180, y: 120, width: 1440, height: 960 });
+      fakeWindow.getBounds.mockReturnValue({ x: 180, y: 120, width: 1440, height: 960 });
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
       const mainWindowBoundsUpdates: DesktopAppSettings.DesktopWindowBounds[] = [];
@@ -1145,14 +1212,146 @@ describe("DesktopWindow", () => {
         }
         resize();
         yield* TestClock.adjust(250);
+        // Windows reports a minimized window at -32000.
         fakeWindow.isMinimized.mockReturnValue(true);
+        fakeWindow.getBounds.mockReturnValue({ x: -32_000, y: -32_000, width: 160, height: 28 });
 
         yield* desktopWindow.flushMainWindowBounds;
+        resize();
+        yield* TestClock.adjust(500);
+        yield* Effect.promise(() => Promise.resolve());
 
         assert.deepEqual(mainWindowBoundsUpdates, [{ x: 180, y: 120, width: 1440, height: 960 }]);
-        assert.equal(fakeWindow.getBounds.mock.calls.length, 0);
-        assert.equal(fakeWindow.getNormalBounds.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect(
+    "brings the window back after the renderer dies more often than the reload budget",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const renderProcessGone = fakeWindow.webContentsListeners.get("render-process-gone");
+          if (!renderProcessGone) {
+            return yield* Effect.die("render-process-gone listener was not registered");
+          }
+          for (let crash = 1; crash <= 4; crash++) {
+            const loadsBefore = fakeWindow.loadURL.mock.calls.length;
+            renderProcessGone({}, { reason: "oom", exitCode: -536870904 });
+            yield* TestClock.adjust(crash < 4 ? 1_000 : 60_000);
+            yield* Effect.promise(() => Promise.resolve());
+            assert.isAbove(
+              fakeWindow.loadURL.mock.calls.length,
+              loadsBefore,
+              `window shows nothing after renderer crash ${crash}`,
+            );
+          }
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect("updates title bar overlays only on windows created with one", () =>
+    Effect.gen(function* () {
+      const framed = makeFakeBrowserWindow();
+      vi.mocked(framed.window.setTitleBarOverlay).mockImplementation(() => {
+        throw new TypeError("Titlebar overlay is not enabled");
+      });
+      const overlay = makeFakeBrowserWindow();
+      const layer = layerTest({
+        window: overlay.window,
+        createCount: yield* Ref.make(0),
+        mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
+        platform: "win32",
+        appearanceWindows: [
+          { window: framed.window, titleBarOverlay: false },
+          { window: overlay.window, titleBarOverlay: true },
+        ],
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.syncAppearance;
+      }).pipe(Effect.provide(layer));
+
+      assert.deepEqual(vi.mocked(framed.window.setBackgroundColor).mock.calls, [["#ffffff"]]);
+      assert.lengthOf(vi.mocked(framed.window.setTitleBarOverlay).mock.calls, 0);
+      assert.deepEqual(vi.mocked(overlay.window.setBackgroundColor).mock.calls, [["#ffffff"]]);
+      assert.lengthOf(vi.mocked(overlay.window.setTitleBarOverlay).mock.calls, 1);
+    }),
+  );
+
+  it.effect.each([
+    { window: "normal", write: "flush" },
+    { window: "normal", write: "debounce" },
+    { window: "maximized", write: "flush" },
+    { window: "maximized", write: "debounce" },
+  ] as const)("persists a $window window change minimized before its $write", (input) =>
+    Effect.gen(function* () {
+      const displayOne = { x: 0, y: 0, width: 1920, height: 1080 };
+      const displayTwo = { x: 1920, y: 0, width: 1920, height: 1080 };
+      const getAllDisplays = vi.mocked(Electron.screen.getAllDisplays);
+      getAllDisplays.mockReturnValue([
+        { bounds: displayOne, workArea: displayOne },
+        { bounds: displayTwo, workArea: displayTwo },
+      ] as unknown as Electron.Display[]);
+      const maximized = input.window === "maximized";
+      const fakeWindow = makeFakeBrowserWindow();
+      fakeWindow.isMaximized.mockReturnValue(maximized);
+      fakeWindow.getBounds.mockReturnValue(
+        maximized ? displayTwo : { x: 220, y: 140, width: 1380, height: 920 },
+      );
+      fakeWindow.getNormalBounds.mockReturnValue({ x: 220, y: 140, width: 1380, height: 920 });
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const mainWindowBoundsUpdates: DesktopAppSettings.DesktopWindowBounds[] = [];
+      const mainWindowMaximizedUpdates: boolean[] = [];
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        mainWindowBoundsUpdates,
+        mainWindowMaximizedUpdates,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const move = fakeWindow.windowListeners.get("move");
+        if (!move) {
+          return yield* Effect.die("window move listener was not registered");
+        }
+        move();
+        yield* TestClock.adjust(250);
+        // Minimized windows report stale state: macOS unmaximized at the pre-move frame.
+        fakeWindow.isMinimized.mockReturnValue(true);
+        fakeWindow.isMaximized.mockReturnValue(false);
+        fakeWindow.getBounds.mockReturnValue({ x: 100, y: 100, width: 1100, height: 780 });
+        fakeWindow.getNormalBounds.mockReturnValue({ x: 100, y: 100, width: 1100, height: 780 });
+        if (input.write === "debounce") {
+          yield* TestClock.adjust(250);
+          yield* Effect.promise(() => Promise.resolve());
+        }
+        yield* desktopWindow.flushMainWindowBounds;
+
+        assert.deepEqual(mainWindowBoundsUpdates, [
+          maximized
+            ? { x: 2140, y: 140, width: 1380, height: 920 }
+            : { x: 220, y: 140, width: 1380, height: 920 },
+        ]);
+        assert.deepEqual(mainWindowMaximizedUpdates, [maximized]);
+      }).pipe(
+        Effect.provide(layer),
+        Effect.ensuring(Effect.sync(() => getAllDisplays.mockReset())),
+      );
     }),
   );
 
@@ -1244,6 +1443,43 @@ describe("DesktopWindow", () => {
         ]);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect.each([
+    {
+      primaryPasteEnabled: false,
+      expected: [PASSKEY_BRIDGE_ARGUMENT, PRIMARY_PASTE_DISABLED_ARGUMENT],
+    },
+    { primaryPasteEnabled: true, expected: [PASSKEY_BRIDGE_ARGUMENT] },
+  ])(
+    "passes the primary-paste setting to preview guests (enabled: $primaryPasteEnabled)",
+    ({ primaryPasteEnabled, expected }) =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount: yield* Ref.make(0),
+          mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
+          primaryPasteEnabled,
+          previewPasskeyBridgeEnabled: true,
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const willAttachWebview = fakeWindow.webContentsListeners.get("will-attach-webview");
+          if (!willAttachWebview) {
+            return yield* Effect.die("will-attach-webview listener was not registered");
+          }
+          const webPreferences: Electron.WebPreferences = {};
+          willAttachWebview({ preventDefault: () => {} }, webPreferences, {
+            partition: "persist:t3code-preview-test",
+          });
+
+          assert.deepEqual(webPreferences.additionalArguments, expected);
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   it.effect("opens safe off-origin renderer navigations in the system browser", () =>

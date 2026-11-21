@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import { pipe } from "effect/Function";
 
-import { normalizeUsageTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
+import type { UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -129,18 +129,19 @@ const MODEL_IDS: Record<number, string> = {
 };
 
 // Effort and routing variants share the base model's price.
-function withRateModel(record: UsageRecord): UsageRecord {
-  const base = record.model.replace(
-    /-(?:extra-low|low|medium|high|tiered|control|thinking|agent)$/,
-    "",
-  );
-  const rateModel = /^gemini-3-flash-(?:agent(?:-[ab])?|[ab])$/.test(record.model)
+export const antigravityRateModel = (model: string) => {
+  const base = model.replace(/-(?:extra-low|low|medium|high|tiered|control|thinking|agent)$/, "");
+  return /^gemini-3-flash-(?:agent(?:-[ab])?|[ab])$/.test(model)
     ? "gemini-3.5-flash"
-    : record.model === "gemini-3.7-flash-safety-le"
+    : model === "gemini-3.7-flash-safety-le"
       ? "gemini-3.7-flash"
       : base === "gemini-3-flash"
         ? "gemini-3-flash-preview"
         : base;
+};
+
+function withRateModel(record: UsageRecord): UsageRecord {
+  const rateModel = antigravityRateModel(record.model);
   return rateModel === record.model ? record : { ...record, rateModel };
 }
 
@@ -252,9 +253,8 @@ const readDatabase = Effect.fn("readDatabase")(function* (
         "SELECT name FROM sqlite_master WHERE type = 'table'",
       )).map((row) => row.name),
     );
-    if (!tables.has("gen_metadata") && !tables.has("steps")) {
-      return yield* new AntigravityDatabaseDecodeError({ path });
-    }
+    // Not a conversation store, e.g. agy's conversation_summaries.db index.
+    if (!tables.has("gen_metadata") && !tables.has("steps")) return null;
     // Seek by rowid regardless of indexes; idx normally aliases rowid, but sort for layouts where it does not.
     const readMetadata = Effect.fnUntraced(function* (
       query: string,
@@ -356,16 +356,13 @@ function usageCandidates(
               ? generation.model
               : "";
         const outputTokens = Math.max(numberAt(usage, 3), numberAt(usage, 9) + numberAt(usage, 10));
-        const totals = normalizeUsageTokens(
-          {
-            inputTokens: numberAt(usage, 2),
-            cachedInputTokens: numberAt(usage, 5),
-            cacheCreationTokens: numberAt(usage, 4),
-            outputTokens,
-            reasoningTokens: numberAt(usage, 9),
-          },
-          "uncached",
-        );
+        const totals = {
+          uncachedInputTokens: numberAt(usage, 2),
+          cachedInputTokens: numberAt(usage, 5),
+          cacheCreationTokens: numberAt(usage, 4),
+          outputTokens,
+          reasoningTokens: Math.min(outputTokens, numberAt(usage, 9)),
+        };
         if (
           totals.uncachedInputTokens +
             totals.cachedInputTokens +
@@ -423,7 +420,7 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
   const files: Array<{ root: string; path: string; records: UsageRecord[] }> = [];
   const errors: string[] = [];
   const models = new Map<number, string | null>();
-  const pending: Array<{ data: CachedDatabase["data"]; fileIndex: number }> = [];
+  const pending: Array<{ data: NonNullable<CachedDatabase["data"]>; fileIndex: number }> = [];
   const identities = new Map<string, number>();
   const groups: Array<
     UsageCandidate & { parent: number; size: number; owner: number; fileIndex: number }

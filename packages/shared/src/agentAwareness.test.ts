@@ -24,14 +24,13 @@ describe("projectThreadAwarenessV2", () => {
       Pick<
         OrchestrationV2ThreadShell,
         | "activityRunStatus"
-        | "consumptionCapHit"
+        | "latestRunBackgroundWake"
         | "latestRunStopRequested"
         | "status"
         | "pendingBackgroundTasks"
         | "pendingRuntimeRequest"
         | "lineage"
         | "settledOverride"
-        | "stalled"
       >
     > = {},
   ) => ({
@@ -63,6 +62,44 @@ describe("projectThreadAwarenessV2", () => {
         thread: { ...input.thread, latestRunStopRequested: true },
       }),
     ).toBeNull();
+  });
+
+  it.each([
+    ["holds a wake run", true, [{ taskId: "watch", kind: "monitor" as const }], "running"],
+    ["completes a wake run once its monitor ends", true, [], "completed"],
+    [
+      "holds a wake run while a monitor remains beside other work",
+      true,
+      [
+        { taskId: "build", kind: "command" as const },
+        { taskId: "watch", kind: "monitor" as const },
+      ],
+      "running",
+    ],
+    [
+      "completes a wake run with only a command pending",
+      true,
+      [{ taskId: "build", kind: "command" as const }],
+      "completed",
+    ],
+    [
+      "completes a run the user started",
+      false,
+      [{ taskId: "watch", kind: "monitor" as const }],
+      "completed",
+    ],
+  ] as const)("%s while a monitor wakes the thread", (_, latestRunBackgroundWake, tasks, phase) => {
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({
+          status: "completed",
+          latestRunBackgroundWake,
+          pendingBackgroundTasks: [...tasks],
+        }),
+      })?.phase,
+    ).toBe(phase);
   });
 
   it.each([
@@ -99,30 +136,21 @@ describe("projectThreadAwarenessV2", () => {
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
   });
 
-  it("publishes a stalled thread as working, not as the failure being retried", () => {
+  it.each([
+    ["completed", "completed", false],
+    ["failed", "failed", false],
+    ["monitor-held", "completed", true],
+  ] as const)("removes settled %s work", (_, status, latestRunBackgroundWake) => {
     expect(
       projectThreadAwarenessV2({
         environmentId: "env-1" as EnvironmentId,
         project,
-        thread: v2Thread({ status: "failed", stalled: true }),
-      }),
-    ).toMatchObject({ phase: "running", headline: "Agent is working" });
-    // A stopped overload is an ordinary failure and is announced as before.
-    expect(
-      projectThreadAwarenessV2({
-        environmentId: "env-1" as EnvironmentId,
-        project,
-        thread: v2Thread({ status: "failed", stalled: false }),
-      }),
-    ).toMatchObject({ phase: "failed", headline: "Agent failed" });
-  });
-
-  it.each(["completed", "failed"] as const)("removes settled %s work", (status) => {
-    expect(
-      projectThreadAwarenessV2({
-        environmentId: "env-1" as EnvironmentId,
-        project,
-        thread: v2Thread({ status, settledOverride: "settled" }),
+        thread: v2Thread({
+          status,
+          settledOverride: "settled",
+          latestRunBackgroundWake,
+          pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" }],
+        }),
       }),
     ).toBeNull();
   });
@@ -236,40 +264,5 @@ describe("projectThreadAwarenessV2", () => {
         }),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
-  });
-
-  it("reports a failed root run as running while an active subagent or workflow continues", () => {
-    const tasks = [{ taskId: "wf-1", kind: "subagent" as const }];
-    expect(
-      projectThreadAwarenessV2({
-        environmentId: "env-1" as EnvironmentId,
-        project,
-        thread: v2Thread({ status: "failed", pendingBackgroundTasks: tasks }),
-      }),
-    ).toMatchObject({ phase: "running", headline: "Agent is working" });
-    expect(
-      projectThreadAwarenessV2({
-        environmentId: "env-1" as EnvironmentId,
-        project,
-        thread: v2Thread({
-          status: "failed",
-          pendingBackgroundTasks: tasks,
-          consumptionCapHit: {
-            at: NOW,
-            reason: "Token budget reached",
-          },
-        }),
-      }),
-    ).toMatchObject({ phase: "failed" });
-    expect(
-      projectThreadAwarenessV2({
-        environmentId: "env-1" as EnvironmentId,
-        project,
-        thread: v2Thread({
-          status: "failed",
-          pendingBackgroundTasks: [{ taskId: "watch-1", kind: "monitor", awaited: true }],
-        }),
-      }),
-    ).toMatchObject({ phase: "failed" });
   });
 });

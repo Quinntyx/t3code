@@ -43,6 +43,7 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { resolveTaggedSourceVersion } from "./lib/tagged-source-version.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -420,43 +421,6 @@ export class MacDesktopBuildPrerequisitesMissingError extends Schema.TaggedError
       `  rustup target add ${this.rustTargets.join(" ")}`,
       "",
       "Then rerun the desktop artifact command.",
-    ].join("\n");
-  }
-}
-
-const MAC_CROSS_BUILD_PREREQUISITES = [
-  { id: "rust", description: "Rust/Cargo and the requested Rust target" },
-  { id: "cc", description: "a C compiler (cc), which links Rust build scripts for this host" },
-  {
-    id: "sdk",
-    description: "a macOS SDK directory named by SDKROOT, to link the resource monitor",
-  },
-  { id: "imagemagick", description: "ImageMagick (magick or convert)" },
-  { id: "rsvg-convert", description: "librsvg's rsvg-convert, to draw the DMG background" },
-  { id: "go", description: "Go, to build scripts/mkdmg" },
-] as const;
-
-class MacCrossBuildPrerequisitesMissingError extends Schema.TaggedError<MacCrossBuildPrerequisitesMissingError>()(
-  "MacCrossBuildPrerequisitesMissingError",
-  {
-    missing: Schema.Array(Schema.String),
-    rustTarget: Schema.String,
-  },
-) {
-  override get message(): string {
-    const details = MAC_CROSS_BUILD_PREREQUISITES.filter((requirement) =>
-      this.missing.includes(requirement.id),
-    )
-      .map((requirement) => `  - ${requirement.description}`)
-      .join("\n");
-    return [
-      "Prerequisites for packaging the macOS app on this host are missing:",
-      details,
-      "",
-      ...(this.missing.includes("rust")
-        ? [`Add the Rust target with \`rustup target add ${this.rustTarget}\`.`]
-        : []),
-      "See docs/operations/development.md#macos-dmgs-from-linux.",
     ].join("\n");
   }
 }
@@ -1004,7 +968,6 @@ interface StagePackageJson {
   readonly buildVersion: string;
   readonly t3codeCommitHash: string;
   readonly t3codeWebAuthn?: MacWebAuthnEntitlements;
-  readonly t3codeMacUnsignedUpdates?: true;
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
@@ -2037,63 +2000,6 @@ export const preflightMacDesktopBuild = Effect.fn("preflightMacDesktopBuild")(fu
   }
 });
 
-const preflightMacCrossBuild = Effect.fn("preflightMacCrossBuild")(function* (
-  arch: typeof BuildArch.Type,
-  target: string,
-) {
-  // Nothing here signs the app. Apple silicon refuses to run unsigned code; Intel Macs do not.
-  if (arch !== "x64") {
-    return yield* new UnsupportedDesktopBuildArchitectureError({
-      platform: "mac",
-      arch,
-      supportedArchitectures: ["x64"],
-    });
-  }
-  const fs = yield* FileSystem.FileSystem;
-  const rustTarget = resolveResourceMonitorRustTargets("mac", arch)[0]!;
-  const reuseResourceMonitor = yield* Config.Boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
-    Config.withDefault(false),
-  );
-  const sdkRoot = yield* Config.String("SDKROOT").pipe(Config.withDefault(""));
-  const checks = yield* Effect.all(
-    {
-      rust: reuseResourceMonitor
-        ? Effect.succeed(true)
-        : Effect.all([
-            desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo"),
-            rustTargetIsInstalled(rustTarget),
-          ]).pipe(Effect.map(([cargo, installed]) => cargo && installed)),
-      cc: reuseResourceMonitor
-        ? Effect.succeed(true)
-        : desktopBuildProbeSucceeds(ChildProcess.make("cc", ["--version"]), "cc"),
-      sdk: reuseResourceMonitor
-        ? Effect.succeed(true)
-        : sdkRoot === ""
-          ? Effect.succeed(false)
-          : fs.exists(sdkRoot).pipe(Effect.orElseSucceed(() => false)),
-      imagemagick: Effect.all([
-        desktopBuildProbeSucceeds(ChildProcess.make("magick", ["-version"]), "magick"),
-        desktopBuildProbeSucceeds(ChildProcess.make("convert", ["-version"]), "convert"),
-      ]).pipe(Effect.map(([magick, convert]) => magick || convert)),
-      "rsvg-convert":
-        target === "dmg"
-          ? desktopBuildProbeSucceeds(ChildProcess.make("rsvg-convert", ["--version"]), "rsvg")
-          : Effect.succeed(true),
-      go:
-        target === "dmg"
-          ? desktopBuildProbeSucceeds(ChildProcess.make("go", ["version"]), "go")
-          : Effect.succeed(true),
-    },
-    { concurrency: "unbounded" },
-  );
-  const missing = MAC_CROSS_BUILD_PREREQUISITES.filter(
-    (requirement) => !checks[requirement.id],
-  ).map((requirement) => requirement.id);
-  if (missing.length > 0) {
-    return yield* new MacCrossBuildPrerequisitesMissingError({ missing, rustTarget });
-  }
-});
-
 function windowsVswherePrerequisiteScript(arch: typeof BuildArch.Type): string {
   const toolComponents =
     arch === "arm64"
@@ -2306,6 +2212,13 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
 
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
+    // A PR preview's bundle is untrusted and this job may hold signing secrets, so never run it.
+    if (yield* Config.Boolean("T3CODE_DESKTOP_UNTRUSTED_BUNDLE").pipe(Config.withDefault(false))) {
+      yield* Effect.log(
+        "[desktop-artifact] Skipped the bundle self-check for an untrusted bundle.",
+      );
+      return;
+    }
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
@@ -2474,16 +2387,6 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: input.repoRoot,
           shell: spawnCommand.shell,
-          // Off macOS there is no Apple linker; rustup's bundled lld links against SDKROOT.
-          ...(input.platform === "mac" && (yield* HostProcess.Platform) !== "darwin"
-            ? {
-                env: {
-                  [`CARGO_TARGET_${rustTarget.toUpperCase().replaceAll("-", "_")}_LINKER`]:
-                    "rust-lld",
-                },
-                extendEnv: true,
-              }
-            : {}),
         }),
         {
           label: `cargo build resource monitor (${rustTarget})`,
@@ -2600,65 +2503,6 @@ const generateMacIconSet = Effect.fn("build-desktop-artifact.generateMacIconSet"
   });
 });
 
-// icns types that hold PNG data, by pixel size. iconutil stores its 16 and 32 pixel slots as raw
-// ARGB, so those sizes are covered by the @2x slots here.
-const ICNS_PNG_SLOTS = [
-  ["ic11", 32],
-  ["ic12", 64],
-  ["ic07", 128],
-  ["ic13", 256],
-  ["ic08", 256],
-  ["ic14", 512],
-  ["ic09", 512],
-  ["ic10", 1024],
-] as const;
-
-export function encodeIcns(
-  slots: ReadonlyArray<{ readonly type: string; readonly png: Uint8Array }>,
-): Uint8Array {
-  const entries = slots.map(({ type, png }) => {
-    const header = Buffer.alloc(8);
-    header.write(type, 0, "ascii");
-    header.writeUInt32BE(8 + png.byteLength, 4);
-    return Buffer.concat([header, png]);
-  });
-  const header = Buffer.alloc(8);
-  header.write("icns", 0, "ascii");
-  header.writeUInt32BE(8 + entries.reduce((total, entry) => total + entry.byteLength, 0), 4);
-  return Buffer.concat([header, ...entries]);
-}
-
-// sips and iconutil are macOS-only; ImageMagick resizes and the icns container is written here.
-const stageMacIconsOffMac = Effect.fn("build-desktop-artifact.stageMacIconsOffMac")(function* (
-  sourcePng: string,
-  iconPngPath: string,
-  iconIcnsPath: string,
-  tmpRoot: string,
-  verbose: boolean,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const sizes = [...new Set(ICNS_PNG_SLOTS.map(([, size]) => size))];
-  const pngBySize = new Map(
-    yield* Effect.forEach(
-      sizes,
-      (size) => {
-        const resized = path.join(tmpRoot, `${size}.png`);
-        return stageLinuxIconSize(sourcePng, resized, size, verbose).pipe(
-          Effect.andThen(fs.readFile(resized)),
-          Effect.map((png) => [size, png] as const),
-        );
-      },
-      { concurrency: "unbounded" },
-    ),
-  );
-  yield* fs.writeFile(iconPngPath, pngBySize.get(512)!);
-  yield* fs.writeFile(
-    iconIcnsPath,
-    encodeIcns(ICNS_PNG_SLOTS.map(([type, size]) => ({ type, png: pngBySize.get(size)! }))),
-  );
-});
-
 const stageMacIcons = Effect.fn("build-desktop-artifact.stageMacIcons")(function* (
   stageResourcesDir: string,
   sourcePng: string,
@@ -2680,10 +2524,6 @@ const stageMacIcons = Effect.fn("build-desktop-artifact.stageMacIcons")(function
   const iconPngPath = path.join(stageResourcesDir, "icon.png");
   const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
 
-  if ((yield* HostProcess.Platform) !== "darwin") {
-    return yield* stageMacIconsOffMac(sourcePng, iconPngPath, iconIcnsPath, tmpRoot, verbose);
-  }
-
   yield* runCommand(ChildProcess.make({})`sips -z 512 512 ${sourcePng} --out ${iconPngPath}`, {
     label: "sips mac icon",
     verbose,
@@ -2704,7 +2544,6 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
     return yield* new DesktopDmgBackgroundSourceMissingError({ channel, sourcePath });
   }
 
-  const onMac = (yield* HostProcess.Platform) === "darwin";
   for (const output of [
     { suffix: "", width: 640, height: 432 },
     { suffix: "@2x", width: 1280, height: 864 },
@@ -2714,21 +2553,6 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
       "dmg",
       `dmg-background-${channel}${output.suffix}.png`,
     );
-    if (!onMac) {
-      yield* runCommand(
-        ChildProcess.make("rsvg-convert", [
-          "--width",
-          String(output.width),
-          "--height",
-          String(output.height),
-          "--output",
-          targetPath,
-          sourcePath,
-        ]),
-        { label: `rsvg-convert ${channel} DMG background${output.suffix || "@1x"}`, verbose },
-      );
-      continue;
-    }
     yield* runCommand(
       ChildProcess.make(
         {},
@@ -2739,65 +2563,6 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
       },
     );
   }
-});
-
-const buildMacDmgOffMac = Effect.fn("build-desktop-artifact.buildMacDmgOffMac")(function* (input: {
-  readonly repoRoot: string;
-  readonly stageDistDir: string;
-  readonly stageResourcesDir: string;
-  readonly appVersion: string;
-  readonly arch: typeof BuildArch.Type;
-  readonly verbose: boolean;
-}) {
-  const path = yield* Path.Path;
-  const productName = resolveDesktopProductName(input.appVersion);
-  const appOutDir = input.arch === "x64" ? "mac" : `mac-${input.arch}`;
-  const background = path.join(
-    input.stageResourcesDir,
-    "dmg",
-    `dmg-background-${resolveDesktopUpdateChannel(input.appVersion)}`,
-  );
-  // Finder draws the 144 dpi page of a two-page TIFF on Retina displays, as electron-builder's
-  // own dmg target does with tiffutil.
-  const page = (file: string, density: string) =>
-    ["(", file, "-set", "units", "PixelsPerInch", "-set", "density", density, ")"] as const;
-  const tiffArgs = [
-    ...page(`${background}.png`, "72"),
-    ...page(`${background}@2x.png`, "144"),
-    "-compress",
-    "lzw",
-    `${background}.tiff`,
-  ];
-  yield* runCommand(ChildProcess.make("magick", tiffArgs), {
-    label: "magick DMG background",
-    verbose: input.verbose,
-  }).pipe(
-    Effect.catch(() =>
-      runCommand(ChildProcess.make("convert", tiffArgs), {
-        label: "convert DMG background",
-        verbose: input.verbose,
-      }),
-    ),
-  );
-  yield* runCommand(
-    ChildProcess.make(
-      "go",
-      [
-        "run",
-        ".",
-        "-app",
-        path.join(input.stageDistDir, appOutDir, `${productName}.app`),
-        "-out",
-        path.join(input.stageDistDir, `T3-Code-${input.appVersion}-${input.arch}.dmg`),
-        "-volume",
-        `${productName} ${input.appVersion} Installer`,
-        "-background",
-        `${background}.tiff`,
-      ],
-      { cwd: path.join(input.repoRoot, "scripts/mkdmg") },
-    ),
-    { label: "mkdmg", verbose: input.verbose },
-  );
 });
 
 const stageLinuxIcons = Effect.fn("build-desktop-artifact.stageLinuxIcons")(function* (
@@ -2931,17 +2696,13 @@ export function resolveDesktopRuntimeDependencies(
   );
 }
 
-export const resolveDesktopPublishConfig = Effect.fn("resolveDesktopPublishConfig")(function* (
+export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
   const env = yield* Config.all({
-    updateUrl: Config.String("T3CODE_DESKTOP_UPDATE_URL").pipe(Config.option),
     updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
     githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
   });
-  const updateUrl = Option.getOrUndefined(env.updateUrl)?.trim();
-  if (updateUrl) return { provider: "generic", url: updateUrl };
-
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
     Option.getOrUndefined(env.githubRepository)?.trim() ||
@@ -3059,7 +2820,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // Missing publish config infers a GitHub feed from tokens; staging has no repository, so manifest generation would crash.
   buildConfig.publish = null;
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveDesktopPublishConfig(updateChannel);
+    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
@@ -3075,14 +2836,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "mac") {
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
-    const packagedOnMac = (yield* HostProcess.Platform) === "darwin";
-    if (!packagedOnMac) {
-      // Native modules ship darwin prebuilds; a rebuild here would compile host binaries.
-      buildConfig.npmRebuild = false;
-    }
     buildConfig.mac = {
-      // electron-builder's dmg target needs hdiutil; off macOS scripts/mkdmg wraps the packaged app.
-      target: target !== "dmg" ? [target] : packagedOnMac ? [target, "zip"] : ["zip"],
+      target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {
@@ -3174,10 +2929,18 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
+          StartupWMClass: "com.t3tools.T3Code",
         },
       },
     };
+    // electron-updater replaces an installed AppImage in place only when its name has no x.y.z version.
+    if (buildConfig.publish) {
+      buildConfig.appImage = {
+        artifactName:
+          updateChannel === "nightly" ? "T3-Code-Nightly-${arch}.${ext}" : "T3-Code-${arch}.${ext}",
+      };
+    }
     buildConfig.deb = {
       // FPM runs outside the staged app directory, so source paths must be absolute.
       fpm: [
@@ -3827,6 +3590,34 @@ export const validateMacPackagedPayload = Effect.fn("desktopArtifact.validateMac
   },
 );
 
+export class LinuxPackagedAppMissingError extends Schema.TaggedError<LinuxPackagedAppMissingError>()(
+  "LinuxPackagedAppMissingError",
+  { stageDistDir: Schema.String },
+) {
+  override get message(): string {
+    return `Expected electron-builder to leave resources/app.asar under ${this.stageDistDir}/linux*-unpacked.`;
+  }
+}
+
+export const validateLinuxPackagedPayload = Effect.fn(
+  "desktopArtifact.validateLinuxPackagedPayload",
+)(function* (input: { readonly stageDistDir: string; readonly verbose?: boolean }) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const asarPaths = (yield* fs.readDirectory(input.stageDistDir))
+    .filter((entry) => entry.startsWith("linux") && entry.endsWith("-unpacked"))
+    .map((entry) => path.join(input.stageDistDir, entry, "resources/app.asar"));
+  if (asarPaths.length === 0) {
+    return yield* new LinuxPackagedAppMissingError({ stageDistDir: input.stageDistDir });
+  }
+  for (const asarPath of asarPaths) {
+    yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: input.verbose ?? false });
+  }
+  yield* Effect.log(
+    `[desktop-artifact] Validated Linux payload (${String(asarPaths.length)} app bundle(s)).`,
+  );
+});
+
 const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -3839,9 +3630,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   }
   if (hostPlatform === "darwin" && options.platform === "mac") {
     yield* preflightMacDesktopBuild(options.arch);
-  }
-  if (hostPlatform !== "darwin" && options.platform === "mac") {
-    yield* preflightMacCrossBuild(options.arch, options.target);
   }
   if (hostPlatform === "win32" && options.platform === "win") {
     yield* preflightWindowsDesktopBuild({
@@ -3906,7 +3694,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       }),
   });
 
-  const appVersion = options.version ?? serverPackageJson.version;
+  const appVersion =
+    options.version ?? resolveTaggedSourceVersion(repoRoot, serverPackageJson.version);
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
@@ -4131,8 +3920,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     t3codeCommitHash: commitHash,
     // Read by apps/desktop/src/preview/Passkeys.ts; must match the signed entitlements.
     ...(macWebAuthn ? { t3codeWebAuthn: macWebAuthn } : {}),
-    // Read by apps/desktop/src/electron/MacUnsignedUpdater.ts; Squirrel.Mac installs only signed builds.
-    ...(options.platform === "mac" && !options.signed ? { t3codeMacUnsignedUpdates: true } : {}),
     private: true,
     packageManager: rootPackageJson.packageManager,
     description:
@@ -4314,17 +4101,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
-  if (options.platform === "mac" && options.target === "dmg" && hostPlatform !== "darwin") {
-    yield* buildMacDmgOffMac({
-      repoRoot,
-      stageDistDir,
-      stageResourcesDir,
-      appVersion,
-      arch: options.arch,
-      verbose: options.verbose,
-    });
-  }
-
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
@@ -4337,6 +4113,14 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       }),
       verbose: options.verbose,
     });
+  }
+  // The probe runs on the host Node, so a cross-arch build skips it.
+  if (
+    options.platform === "linux" &&
+    hostPlatform === "linux" &&
+    options.arch === (yield* HostProcess.Architecture)
+  ) {
+    yield* validateLinuxPackagedPayload({ stageDistDir, verbose: options.verbose });
   }
   // x64 builds on arm64 runners; the arm64 check covers the shared JS bundle.
   if (options.platform === "mac" && options.arch === "arm64" && hostPlatform === "darwin") {

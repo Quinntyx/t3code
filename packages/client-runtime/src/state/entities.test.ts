@@ -53,95 +53,6 @@ describe("V2 client presentation", () => {
     expect(effectiveSnoozed(active, { now: "2026-06-20T00:05:00.000Z" })).toBe(false);
   });
 
-  it("presents the server's stalled flag, with the retry time only when the record names the run", () => {
-    const runId = RunId.make("run-overloaded");
-    const stalledUntil = "2026-06-20T00:01:00.000Z";
-    const overloaded = { ...v2ThreadShell, latestRunId: runId, status: "failed" as const };
-    const armed = presentThreadShell(environmentId, {
-      ...overloaded,
-      stalled: true,
-      stallRecovery: { runId, attempt: 1, nextAttemptAt: stalledUntil },
-    });
-    expect(armed.runtime).toMatchObject({
-      status: "failed",
-      stalled: true,
-      stallNextAttemptAt: stalledUntil,
-    });
-    expect(isThreadWorking(armed)).toBe(true);
-
-    // Stalled from the moment the run fails: the server has not scheduled the retry yet.
-    const unarmed = presentThreadShell(environmentId, { ...overloaded, stalled: true });
-    expect(unarmed.runtime?.stalled).toBe(true);
-    expect(unarmed.runtime?.stallNextAttemptAt).toBeUndefined();
-    expect(isThreadWorking(unarmed)).toBe(true);
-
-    // A record left from an earlier outage lends neither its state nor its time.
-    const stale = { runId: RunId.make("run-earlier"), attempt: 3, nextAttemptAt: stalledUntil };
-    const failed = presentThreadShell(environmentId, { ...overloaded, stallRecovery: stale });
-    expect(failed.runtime?.stalled).toBeUndefined();
-    expect(isThreadWorking(failed)).toBe(false);
-    const again = presentThreadShell(environmentId, {
-      ...overloaded,
-      stalled: true,
-      stallRecovery: stale,
-    });
-    expect(again.runtime?.stalled).toBe(true);
-    expect(again.runtime?.stallNextAttemptAt).toBeUndefined();
-
-    // A consumption cap outranks the stall: the thread waits on the cap, not a retry.
-    const capped = presentThreadShell(environmentId, {
-      ...overloaded,
-      stalled: true,
-      stallRecovery: { runId, attempt: 1, nextAttemptAt: stalledUntil },
-      consumptionCapHit: {
-        at: DateTime.formatIso(v2ThreadShell.updatedAt),
-        reason: "5h usage 90% reached 80% cap.",
-      },
-    });
-    expect(capped.runtime?.stalled).toBeUndefined();
-    expect(capped.runtime?.lastErrorCode).toBe("consumption_cap");
-    expect(isThreadWorking(capped)).toBe(false);
-  });
-
-  it("presents a consumption cap hit as limited in the shell summary", () => {
-    const shell = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: RunId.make("run-consumption-cap"),
-      status: "completed",
-      consumptionCapHit: {
-        at: DateTime.formatIso(v2ThreadShell.updatedAt),
-        reason: "Thread API spend $0.75 reached $0.50 cap.",
-      },
-    });
-    expect(shell.runtime).toMatchObject({
-      status: "failed",
-      lastError: "Thread API spend $0.75 reached $0.50 cap.",
-      lastErrorClass: "usage_limit",
-      lastErrorCode: "consumption_cap",
-      usageLimitResetAt: null,
-    });
-  });
-
-  it("presents a first-turn cap hit before any run exists", () => {
-    const shell = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: null,
-      activeRunId: null,
-      activeProviderThreadId: null,
-      status: "idle",
-      consumptionCapHit: {
-        at: DateTime.formatIso(v2ThreadShell.updatedAt),
-        reason: "5h usage 90% reached 80% cap.",
-      },
-    });
-    expect(shell.runtime).toMatchObject({
-      status: "failed",
-      lastError: "5h usage 90% reached 80% cap.",
-      lastErrorClass: "usage_limit",
-      lastErrorCode: "consumption_cap",
-    });
-  });
-
   it("moves a running thread with any question out of Working", () => {
     for (const capability of [{ blocking: false }, { blocking: true }, {}]) {
       const shell = presentThreadShell(environmentId, {
@@ -185,6 +96,19 @@ describe("V2 client presentation", () => {
         pendingBackgroundTasks: [],
       }).runtime,
     ).toBeNull();
+  });
+
+  it("keeps an imported thread that never ran out of Working", () => {
+    const imported = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      historyOrigin: "v1_import",
+      activeProviderThreadId: ProviderThreadId.make("provider-thread-imported"),
+      latestRunId: null,
+      activeRunId: null,
+      status: "idle",
+      pendingBackgroundTasks: [],
+    });
+    expect(isThreadWorking(imported)).toBe(false);
   });
 
   it.each([
@@ -241,44 +165,6 @@ describe("V2 client presentation", () => {
 
     expect(shell.runtime).toMatchObject({ status: "failed", lastError: "Provider turn failed" });
     expect(shell.pendingBackgroundTasks).toHaveLength(1);
-  });
-
-  it("parks a failed usage-limited shell at idle while a subagent or workflow is still running", () => {
-    const activeWorkflow = [
-      { taskId: "wf-1", description: "Run workflow", kind: "subagent" as const },
-    ];
-    const delegating = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: RunId.make("run-limited"),
-      activeRunId: null,
-      status: "failed",
-      lastError: "Usage limit reached",
-      lastErrorClass: "usage_limit",
-      pendingBackgroundTasks: activeWorkflow,
-    });
-
-    expect(delegating.runtime).toMatchObject({
-      status: "idle",
-      lastError: "Usage limit reached",
-      lastErrorClass: "usage_limit",
-    });
-
-    const capped = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: RunId.make("run-capped"),
-      activeRunId: null,
-      status: "failed",
-      consumptionCapHit: {
-        at: "2026-06-20T01:05:00.000Z",
-        reason: "Token cap reached",
-      },
-      pendingBackgroundTasks: activeWorkflow,
-    });
-
-    expect(capped.runtime).toMatchObject({
-      status: "failed",
-      lastErrorCode: "consumption_cap",
-    });
   });
 
   it("keeps an older active run visible over a newer cancelled run", () => {
@@ -513,40 +399,7 @@ describe("V2 client presentation", () => {
         runs: [{ ...run, status: "failed" as const, completedAt: now }],
         turnItems: [backgroundItem],
       }),
-    ).toMatchObject({ status: "idle", activeRunId: null });
-    expect(
-      deriveThreadRuntime({
-        ...v2Projection,
-        runs: [{ ...run, status: "failed" as const, completedAt: now }],
-        turnItems: [
-          backgroundItem,
-          {
-            id: TurnItemId.make("item-usage-limit-error"),
-            threadId: v2Projection.thread.id,
-            runId,
-            nodeId: run.rootNodeId,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            status: "failed" as const,
-            title: "Usage limit",
-            startedAt: now,
-            completedAt: now,
-            updatedAt: now,
-            type: "error" as const,
-            failure: {
-              class: "usage_limit" as const,
-              code: "usage_limit",
-              message: "Out of quota",
-              retryable: true,
-              resetAt: "2026-06-20T05:00:00.000Z",
-            },
-          },
-        ],
-      }),
-    ).toMatchObject({ status: "idle", activeRunId: null, lastErrorClass: "usage_limit" });
+    ).toMatchObject({ status: "failed", activeRunId: null });
     const commandItem = {
       ...backgroundItem,
       id: TurnItemId.make("item-background-command"),

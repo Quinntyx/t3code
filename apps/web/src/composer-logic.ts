@@ -10,21 +10,31 @@ import {
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
 import {
-  type ComposerTokenTrigger,
-  detectComposerTokenTrigger,
+  detectComposerPullRequestTrigger,
+  isCurrencyAmountQuery,
+  isPathWord,
 } from "@t3tools/shared/composerTrigger";
 import {
   splitPromptIntoComposerSegments,
   type ComposerPromptSegment,
 } from "./composer-editor-mentions";
 
-import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
+import {
+  resolveShortcutCommand,
+  type ShortcutEventLike,
+  type ShortcutMatchContext,
+} from "./keybindings";
 
-// `/model` opens the picker as a command here, so the chat composer reads only the word at the cursor.
-export type ComposerTrigger = ComposerTokenTrigger;
-export type ComposerTriggerKind = ComposerTrigger["kind"];
+export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
 export type ComposerSlashCommand = "model" | "side" | "btw" | "clear";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
+
+export interface ComposerTrigger {
+  kind: ComposerTriggerKind;
+  query: string;
+  rangeStart: number;
+  rangeEnd: number;
+}
 
 export function isPathSuggestionCurrent(
   searchTarget: ComposerPathSearchTarget,
@@ -57,6 +67,8 @@ export function composerRequiresModifier(
 export function composerSubmissionIntentForKey(input: {
   event: ShortcutEventLike & { isComposing?: boolean; keyCode?: number; repeat?: boolean };
   keybindings: ResolvedKeybindingsConfig;
+  /** The when-clause context ChatView's shortcut listeners see, so both resolve Enter alike. */
+  context: Partial<ShortcutMatchContext>;
   platform?: string;
   isSoftwareKeyboardOpen: boolean;
   isDraftThread: boolean;
@@ -71,6 +83,7 @@ export function composerSubmissionIntentForKey(input: {
   const command = resolveShortcutCommand(event, input.keybindings, {
     ...(input.platform === undefined ? {} : { platform: input.platform }),
     context: {
+      ...input.context,
       composerFocus: true,
       draftThreadRoute: input.isDraftThread,
       turnRunning: input.isRunning === true,
@@ -93,6 +106,18 @@ export function composerSubmissionIntentForKey(input: {
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
   return Math.max(0, Math.min(text.length, Math.floor(cursor)));
+}
+
+function isWhitespace(char: string): boolean {
+  return char === " " || char === "\n" || char === "\t" || char === "\r";
+}
+
+function tokenStartForCursor(text: string, cursor: number): number {
+  let index = cursor - 1;
+  while (index >= 0 && !isWhitespace(text[index] ?? "")) {
+    index -= 1;
+  }
+  return index + 1;
 }
 
 export function expandCollapsedComposerCursor(
@@ -235,7 +260,40 @@ export function collapseExpandedComposerCursor(
 }
 
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
-  return detectComposerTokenTrigger(text, cursorInput);
+  const cursor = clampCursor(text, cursorInput);
+  const tokenStart = tokenStartForCursor(text, cursor);
+  const token = text.slice(tokenStart, cursor);
+  if (token.startsWith("/")) {
+    if (isPathWord(text, tokenStart, cursor, isWhitespace)) return null;
+    return {
+      kind: "slash-command",
+      query: token.slice(1),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
+  const pullRequestTrigger = detectComposerPullRequestTrigger(token, cursor);
+  if (pullRequestTrigger) return pullRequestTrigger;
+  const skillPrefix = /^\p{Sc}/u.exec(token);
+  if (skillPrefix) {
+    if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;
+    return {
+      kind: "skill",
+      query: token.slice(skillPrefix[0].length),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
+  if (!token.startsWith("@")) {
+    return null;
+  }
+
+  return {
+    kind: "path",
+    query: token.slice(1),
+    rangeStart: tokenStart,
+    rangeEnd: cursor,
+  };
 }
 
 export function pastedPathQueryLength(

@@ -2,24 +2,24 @@ import { SheetHeader } from "../../components/ui/SheetHeader";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
 import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/reactivity";
-import { EnvironmentId, ThreadId, type PreviewSessionSnapshot } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { normalizePreviewUrl, previewPdfAssetUrl } from "@t3tools/shared/preview";
 import * as Option from "effect/Option";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { useEffect, useRef, useState } from "react";
-import { Platform, TextInput, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Platform, View } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPill } from "../../components/ui/ControlPill";
-import type { AppBarAction } from "../../components/ui/AppBar.types";
+import { Menu } from "../../components/ui/Menu";
+import { useContentTopInset } from "../../components/ui/useBarInset";
+import { m } from "../../i18n/messages";
 import { useAppForeground } from "../../lib/appState";
 
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadServerBrowserTabs } from "../../state/preview";
-import { useEnvironmentPresentation } from "../../state/presentation";
 import { usePreparedConnection } from "../../state/session";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { BrowserChrome } from "./BrowserBar";
 import { BrowserTabMenu } from "./BrowserTabMenu";
 import { browserTabTitle, browserTabUrl, latestBrowserTab } from "./browserTabs";
 import {
@@ -39,13 +39,35 @@ type BrowserPreviewRouteScreenProps = StaticScreenProps<{
 export function BrowserPreviewRouteScreen({ route }: BrowserPreviewRouteScreenProps) {
   const navigation = useNavigation();
   const onClose = () => navigation.goBack();
+  const { environmentId, threadId } = route.params;
+  if (!environmentId?.trim() || !threadId?.trim()) {
+    return <BrowserUnavailableScreen onClose={onClose} />;
+  }
   return (
     <BrowserPreviewScreen
-      environmentId={EnvironmentId.make(route.params.environmentId)}
-      threadId={ThreadId.make(route.params.threadId)}
+      environmentId={EnvironmentId.make(environmentId)}
+      threadId={ThreadId.make(threadId)}
       initialTabId={route.params.tabId ?? null}
       onClose={onClose}
     />
+  );
+}
+
+function BrowserUnavailableScreen({ onClose }: { readonly onClose: () => void }) {
+  const gt = useGT();
+  const insets = useSafeAreaInsets();
+  const contentTopInset = useContentTopInset();
+  return (
+    <View
+      className="flex-1 bg-sheet"
+      style={{ paddingTop: contentTopInset, paddingBottom: insets.bottom }}
+    >
+      <SheetHeader
+        title={gt("Browser", { $context: "screen title" })}
+        onClose={onClose}
+        accessibilityLabel={gt("Close browser")}
+      />
+    </View>
   );
 }
 
@@ -60,7 +82,8 @@ function BrowserPreviewScreen({
   readonly initialTabId: string | null;
   readonly onClose: () => void;
 }) {
-  const insets = useSafeAreaInsets();
+  const gt = useGT();
+  const resolveMessage = useMessages();
   const { themeVariables } = useAppearancePreferences();
   const prepared = usePreparedConnection(environmentId);
   const httpBaseUrl = Option.isSome(prepared) ? prepared.value.httpBaseUrl : null;
@@ -70,47 +93,14 @@ function BrowserPreviewScreen({
   const [pictureInPicture, setPictureInPicture] = useState(NO_PICTURE_IN_PICTURE);
   const [streaming, setStreaming] = useState(false);
   const [canControl, setCanControl] = useState(false);
-
   const streamRef = useRef<PreviewStreamRef>(null);
   const { tabs, loaded } = useThreadServerBrowserTabs({ environmentId, threadId, enabled: true });
-  const environment = useEnvironmentPresentation(environmentId);
-  // Mute belongs to the tab, not the screen: switching tabs must not carry it over.
-  const preferences = useAtomValue(mobilePreferencesAtom);
-  const mutedTabIds =
-    (AsyncResult.isSuccess(preferences) ? preferences.value.mutedPreviewTabIds : null) ?? [];
-  const setMutedTabs = useAtomSet(updateMobilePreferencesAtom);
   const tab = tabs.find((entry) => entry.tabId === selectedTabId) ?? latestBrowserTab(tabs);
   const pdfUri =
     tab?.navStatus._tag === "Success" ? previewPdfAssetUrl(tab.navStatus.url, httpBaseUrl) : null;
   const tabId = tab?.tabId ?? null;
-  const audioMuted = tabId !== null && mutedTabIds.includes(tabId);
-  // Per tab, so switching tabs never borrows another page's answer.
-  const [unavailableTabs, setUnavailableTabs] = useState<ReadonlySet<string>>(new Set());
-  const audioUnavailable = tabId !== null && unavailableTabs.has(tabId);
-  const reportAudioAvailability = (available: boolean) => {
-    if (tabId === null) return;
-    setUnavailableTabs((current) => {
-      if (available === !current.has(tabId)) return current;
-      const next = new Set(current);
-      if (available) next.delete(tabId);
-      else next.add(tabId);
-      return next;
-    });
-  };
-  // The preference is the only mute path: the WebView follows it through its bridge effect, so
-  // a toggle never reconnects the stream and never sends the same value twice.
-  const setAudioMuted = (next: boolean) => {
-    if (tabId === null) return;
-    setMutedTabs({
-      mutedPreviewTabIds: next
-        ? [...mutedTabIds.filter((id: string) => id !== tabId), tabId]
-        : mutedTabIds.filter((id: string) => id !== tabId),
-    });
-  };
   if (tabId !== null && tabId !== selectedTabId) {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
-    setStreaming(false);
-    setCanControl(false);
     setSelectedTabId(tabId);
   }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the focused route through the navigator once the thread has no browser tabs left
@@ -119,204 +109,132 @@ function BrowserPreviewScreen({
   }, [focused, loaded, tabs.length, onClose]);
   const onPictureInPicture = (state: PreviewPictureInPictureState, detail?: string) => {
     setPictureInPicture({ supported: state.supported, active: state.active });
-    if (detail) Dialog.alert("Picture in picture is unavailable", detail);
+    if (detail) Dialog.alert(m(msg("Picture in picture is unavailable")), detail);
   };
   const selectTab = (next: string) => {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
-    setStreaming(false);
-    setCanControl(false);
     setSelectedTabId(next);
   };
   const live = (focused && foreground) || pictureInPicture.active;
 
+  const ready = streaming && canControl;
+  const command: PreviewStreamRef["command"] = (input) => streamRef.current?.command(input);
+  const showPictureInPicture =
+    // Android WebView cannot play video in picture in picture.
+    Platform.OS === "ios" &&
+    pictureInPicture.supported &&
+    (pictureInPicture.active || pdfUri === null);
+
   return (
-    <View className="flex-1 bg-sheet" style={{ paddingBottom: insets.bottom }}>
-      <SheetHeader
-        title={tab ? browserTabTitle(tab) : "Browser"}
-        onClose={onClose}
-        accessibilityLabel="Close browser"
-        actions={
-          [
-            // Android WebView cannot play video in picture in picture.
-            ...(Platform.OS === "ios" &&
-            pictureInPicture.supported &&
-            (pictureInPicture.active || pdfUri === null)
-              ? [
-                  {
-                    accessibilityLabel: pictureInPicture.active
-                      ? "Exit picture in picture"
-                      : "Picture in picture",
-                    icon: {
-                      ios: pictureInPicture.active ? "pip.exit" : "pip.enter",
-                      android: "visibility",
-                    },
-                    selected: pictureInPicture.active,
-                    onPress: () => streamRef.current?.togglePictureInPicture(),
-                  } satisfies AppBarAction,
-                ]
-              : []),
-            ...(pdfUri === null && !audioUnavailable
-              ? [
-                  {
-                    accessibilityLabel: audioMuted ? "Unmute tab" : "Mute tab",
-                    icon: {
-                      ios: audioMuted ? "speaker.slash" : "speaker.wave.2",
-                      android: audioMuted ? "volume_off" : "volume_up",
-                    } as AppBarAction["icon"],
-                    selected: audioMuted,
-                    onPress: () => setAudioMuted(!audioMuted),
-                  } satisfies AppBarAction,
-                ]
-              : []),
-          ] satisfies ReadonlyArray<AppBarAction>
-        }
-        menus={
-          tabs.length > 1
-            ? [
-                {
-                  title: "Tabs",
-                  icon: "square.on.square",
-                  items: tabs.map((entry) => ({
+    // The route spans the Duo's rail, so the screen insets its own sides.
+    <SafeAreaView
+      edges={["left", "right"]}
+      style={{ flex: 1, backgroundColor: themeVariables["--color-sheet-solid"] }}
+    >
+      <BrowserChrome
+        key={tab ? `address:${tab.tabId}` : "address"}
+        scrollsUnderBar={false}
+        bar={{
+          url: tab ? browserTabUrl(tab) : "",
+          editable: ready,
+          canGoBack: ready && (tab?.canGoBack ?? false),
+          onClose,
+          onBack: () => command({ type: "history", delta: -1 }),
+          onReload: () => command({ type: "reload" }),
+          onSubmit: (value) => {
+            const url = normalizedOrNull(value);
+            if (url === null)
+              Dialog.alert(
+                m(msg("Could not open this address")),
+                m(msg("Enter an http or https URL.")),
+              );
+            else command({ type: "navigate", url });
+          },
+          trailing: (
+            <>
+              {showPictureInPicture ? (
+                <ControlPill
+                  icon={{
+                    ios: pictureInPicture.active ? "pip.exit" : "pip.enter",
+                    android: "visibility",
+                  }}
+                  accessibilityLabel={
+                    pictureInPicture.active
+                      ? gt("Exit picture in picture")
+                      : gt("Picture in picture")
+                  }
+                  onPress={() => streamRef.current?.togglePictureInPicture()}
+                />
+              ) : null}
+              {tabs.length > 1 ? (
+                <Menu
+                  accessible
+                  accessibilityLabel={gt("Tabs", { $context: "browser tabs menu" })}
+                  accessibilityRole="button"
+                  actions={tabs.map((entry) => ({
                     id: entry.tabId,
-                    title: browserTabTitle(entry),
+                    title: browserTabTitle(entry, resolveMessage),
                     subtitle: browserTabUrl(entry),
-                    selected: entry.tabId === tabId,
-                    onPress: () => selectTab(entry.tabId),
-                  })),
-                },
-              ]
-            : []
-        }
-      />
-      {tab ? (
-        <>
-          <BrowserAddressBar
-            key={`address:${tab.tabId}`}
-            environmentId={environmentId}
-            tab={tab}
-            streaming={streaming}
-            canControl={canControl}
-            onCommand={(input) => streamRef.current?.command(input)}
-            onPaste={() => streamRef.current?.paste()}
-          />
-          {live ? (
-            <PreviewStreamWebView
-              key={`stream:${tab.tabId}`}
-              environmentId={environmentId}
-              threadId={threadId}
-              tabId={tab.tabId}
-              pdfUri={pdfUri}
-              environmentLabel={environment.presentation?.entry.target.label}
-              ref={streamRef}
-              interactive
-              background={themeVariables["--color-sheet-solid"]}
-              audioMuted={audioMuted}
-              onAudioUnavailable={(available) => reportAudioAvailability(available)}
-              onPictureInPicture={onPictureInPicture}
-              onStreamingChange={setStreaming}
-              onControl={(control) => setCanControl(control?.controller === "you")}
-            />
+                    state: entry.tabId === tabId ? "on" : "off",
+                  }))}
+                  onPressAction={({ nativeEvent }) => selectTab(nativeEvent.event)}
+                >
+                  <ControlPill
+                    icon="square.on.square"
+                    accessibilityLabel={gt("Tabs", { $context: "browser tabs menu" })}
+                  />
+                </Menu>
+              ) : null}
+              {tab ? (
+                <BrowserTabMenu
+                  environmentId={environmentId}
+                  tab={tab}
+                  streaming={streaming}
+                  onPaste={ready ? () => streamRef.current?.paste() : undefined}
+                  onReleaseControl={ready ? () => command({ type: "releaseControl" }) : undefined}
+                />
+              ) : null}
+            </>
+          ),
+        }}
+      >
+        {({ onScrollDirection }) =>
+          tab ? (
+            live ? (
+              <PreviewStreamWebView
+                key={`stream:${tab.tabId}`}
+                environmentId={environmentId}
+                threadId={threadId}
+                tabId={tab.tabId}
+                pdfUri={pdfUri}
+                ref={streamRef}
+                interactive
+                background={themeVariables["--color-sheet-solid"]}
+                onPictureInPicture={onPictureInPicture}
+                onStreamingChange={setStreaming}
+                onScrollDirection={onScrollDirection}
+                onControl={(control) => setCanControl(control?.controller === "you")}
+              />
+            ) : (
+              <View className="flex-1" />
+            )
           ) : (
-            <View className="flex-1" />
-          )}
-        </>
-      ) : (
-        <View className="flex-1 items-center justify-center">
-          {focused && foreground ? (
-            <AppActivityIndicator color={themeVariables["--color-icon"]} />
-          ) : null}
-        </View>
-      )}
-    </View>
+            <View className="flex-1 items-center justify-center">
+              {focused && foreground ? (
+                <AppActivityIndicator color={themeVariables["--color-icon"]} />
+              ) : null}
+            </View>
+          )
+        }
+      </BrowserChrome>
+    </SafeAreaView>
   );
 }
 
-function BrowserAddressBar({
-  environmentId,
-  tab,
-  canControl,
-  streaming,
-  onCommand,
-  onPaste,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly tab: PreviewSessionSnapshot;
-  readonly canControl: boolean;
-  readonly streaming: boolean;
-  readonly onCommand: PreviewStreamRef["command"];
-  readonly onPaste: () => void;
-}) {
-  const url = browserTabUrl(tab);
-  const loading = tab.navStatus._tag === "Loading";
-  const [draft, setDraft] = useState<string | null>(null);
-  const submit = () => {
-    const value = draft ?? url;
-    setDraft(null);
-    try {
-      onCommand({ type: "navigate", url: normalizePreviewUrl(value) });
-    } catch {
-      Dialog.alert("Could not open this address", "Enter an http or https URL.");
-    }
-  };
-  return (
-    <View>
-      <View className="flex-row items-center gap-1 px-2 pb-2">
-        <ControlPill
-          icon="chevron.left"
-          accessibilityLabel="Back"
-          disabled={!canControl || !tab.canGoBack}
-          onPress={() => onCommand({ type: "history", delta: -1 })}
-        />
-        <ControlPill
-          icon="chevron.right"
-          accessibilityLabel="Forward"
-          disabled={!canControl || !tab.canGoForward}
-          onPress={() => onCommand({ type: "history", delta: 1 })}
-        />
-        <TextInput
-          accessibilityLabel="Address"
-          editable={canControl}
-          value={draft ?? url}
-          onChangeText={setDraft}
-          onBlur={() => setDraft(null)}
-          onSubmitEditing={submit}
-          placeholder="Enter a URL"
-          placeholderTextColorClassName="accent-placeholder"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          returnKeyType="go"
-          selectTextOnFocus
-          lineBreakModeIOS="tail"
-          className="h-10 min-w-0 flex-1 rounded-full border border-input-border bg-input px-4 font-sans text-sm text-foreground"
-        />
-        <ControlPill
-          icon="arrow.clockwise"
-          accessibilityLabel="Reload page"
-          busy={loading}
-          disabled={!canControl || tab.navStatus._tag === "Idle"}
-          onPress={() => onCommand({ type: "reload" })}
-        />
-        <BrowserTabMenu
-          environmentId={environmentId}
-          tab={tab}
-          streaming={streaming}
-          onHardReload={
-            canControl && tab.navStatus._tag !== "Idle"
-              ? () => onCommand({ type: "reload", ignoreCache: true })
-              : undefined
-          }
-          onPaste={streaming && canControl ? onPaste : undefined}
-        />
-      </View>
-      {loading ? (
-        <View
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no"
-          className="absolute inset-x-0 bottom-0 h-0.5 bg-primary"
-        />
-      ) : null}
-    </View>
-  );
+function normalizedOrNull(value: string): string | null {
+  try {
+    return normalizePreviewUrl(value);
+  } catch {
+    return null;
+  }
 }

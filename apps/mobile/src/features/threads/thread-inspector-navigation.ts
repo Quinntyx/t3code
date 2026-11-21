@@ -4,34 +4,15 @@ import { Platform } from "react-native";
 
 import { useWorkspacePaneState } from "../layout/AdaptiveWorkspaceLayout";
 
-export type ThreadInspectorMode = "route" | "git" | "files" | "preview" | "details";
-
-/**
- * The pane a thread's inspector shows. A preview target wins; the chosen mode survives thread
- * switches, and "route" applies only while the route supplies its own inspector.
- */
-export function resolveThreadInspectorMode(input: {
-  readonly previewing: boolean;
-  readonly routeInspector: boolean;
-  readonly chosen: ThreadInspectorMode | null;
-  readonly hasCwd: boolean;
-}): ThreadInspectorMode | null {
-  if (input.previewing) return "preview";
-  const mode = input.routeInspector
-    ? input.chosen === null || input.chosen === "route"
-      ? "route"
-      : input.chosen
-    : input.chosen === "route"
-      ? null
-      : input.chosen;
-  return mode === "files" && !input.hasCwd ? null : mode;
-}
+export type ThreadInspectorMode = "route" | "git" | "files" | "preview";
 
 export type ThreadInspectorTarget = {
-  readonly type: "thread" | "device";
+  readonly type: "thread" | "device" | "localPreview";
   readonly environmentId: string;
   readonly threadId: string;
   readonly deviceKey?: string;
+  /** The environment's localhost page a "localPreview" shows. */
+  readonly url?: string;
 };
 
 export const ThreadInspectorNavigationContext = createContext<

@@ -1,22 +1,12 @@
+import "~/index.css";
 import * as DateTime from "effect/DateTime";
-import {
-  EnvironmentId,
-  NodeId,
-  ThreadId,
-  type OrchestrationV2PreviousAgentsPage,
-} from "@t3tools/contracts";
+import { EnvironmentId, NodeId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult, Atom } from "effect/reactivity";
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
+import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
-
-class HistoryQueryFailed extends Schema.TaggedError<HistoryQueryFailed>()("HistoryQueryFailed", {
-  cause: Schema.Defect(),
-}) {}
 
 const state = vi.hoisted(() => ({
   projection: null as unknown,
@@ -24,87 +14,24 @@ const state = vi.hoisted(() => ({
   relatedShells: [] as unknown[],
   threadTitles: {} as Record<string, string>,
   archivedThreads: [] as unknown[],
-  historyQuery: Symbol("history"),
-  refreshHistory: () => {},
-  controlledHistory: false,
-  historyAtoms: new Map<
-    string,
-    Atom.Atom<AsyncResult.AsyncResult<OrchestrationV2PreviousAgentsPage, HistoryQueryFailed>>
-  >(),
-  historyRequests: [] as Array<{
-    key: string;
-    cursor: number;
-    resolve: (page: OrchestrationV2PreviousAgentsPage) => void;
-    reject: (error: Error) => void;
-  }>,
 }));
 
-vi.mock(import("../../state/orchestration"), async (original) => {
-  const actual = await original();
-  return {
-    orchestrationEnvironment: {
-      ...actual.orchestrationEnvironment,
-      previousAgents: ((target: {
-        environmentId: string;
-        input: { threadId: string; cursor: number };
-      }) => {
-        if (!state.controlledHistory) return state.historyQuery;
-        const key = JSON.stringify([
-          target.environmentId,
-          target.input.threadId,
-          target.input.cursor,
-        ]);
-        let atom = state.historyAtoms.get(key);
-        if (!atom) {
-          atom = Atom.make(
-            Effect.tryPromise({
-              try: () =>
-                new Promise<OrchestrationV2PreviousAgentsPage>((resolve, reject) => {
-                  state.historyRequests.push({ key, cursor: target.input.cursor, resolve, reject });
-                }),
-              catch: (cause) => new HistoryQueryFailed({ cause }),
-            }),
-          ).pipe(Atom.setIdleTTL(0));
-          state.historyAtoms.set(key, atom);
-        }
-        return atom;
-      }) as never,
-    },
-  };
-});
+vi.mock(import("../../state/query"), async (original) => ({
+  ...(await original()),
+  useEnvironmentQuery: ((atom: unknown) =>
+    atom === null
+      ? { data: null, isSuccess: false, isPending: false }
+      : { data: state.threadTitles, isSuccess: true, isPending: false }) as never,
+}));
 
-vi.mock(import("../../state/query"), async (original) => {
-  const actual = await original();
-  return {
-    ...actual,
-    useEnvironmentQuery: ((atom: unknown) => {
-      if ([...state.historyAtoms.values()].includes(atom as never))
-        return actual.useEnvironmentQuery(atom as never);
-      return {
-        data: atom === state.historyQuery || atom === null ? null : state.threadTitles,
-        isSuccess: atom !== null && atom !== state.historyQuery,
-        isPending: false,
-        error: null,
-        refresh: state.refreshHistory,
-      };
-    }) as never,
-  };
-});
-
-vi.mock(import("@effect/atom-react"), async (original) => {
-  const actual = await original();
-  return {
-    ...actual,
-    useAtomValue: ((atom: unknown) =>
-      [...state.historyAtoms.values()].includes(atom as never)
-        ? actual.useAtomValue(atom as never)
-        : false) as never,
-  };
-});
+vi.mock(import("@effect/atom-react"), async (original) => ({
+  ...(await original()),
+  useAtomValue: (() => false) as never,
+}));
 
 vi.mock(import("../../state/entities"), () => ({
   useQuietThreadShell: (() => null) as never,
-  useThreadProjection: ((ref: unknown) =>
+  useQuietThreadProjection: ((ref: unknown) =>
     ref === null ? null : { projection: state.projection }) as never,
   useThreadRelationshipShells: (() =>
     state.projection === null
@@ -130,8 +57,9 @@ vi.mock(import("../../state/use-atom-command"), () => ({
       : AsyncResult.failure(Cause.fail(new Error("Connection lost")))) as never,
 }));
 
-import { act, render } from "../../../test/render";
+import { render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
+import { ScrollArea } from "../ui/scroll-area";
 import { ToastProvider } from "../ui/toast";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -139,9 +67,6 @@ const environmentId = EnvironmentId.make("environment");
 const threadId = ThreadId.make("fork");
 
 function setup() {
-  state.controlledHistory = false;
-  state.historyAtoms.clear();
-  state.historyRequests = [];
   state.commandSucceeds = false;
   state.relatedShells = [];
   state.threadTitles = { source: "Source" };
@@ -413,6 +338,32 @@ it("shows a remote subagent's full title in its tooltip even when its environmen
   expect(screen.router?.state.location.pathname).toBe("/environment/fork");
 });
 
+it("explains why Merge back is unavailable before the fork completes a run", async () => {
+  setup();
+  state.projection = { ...(state.projection as Record<string, unknown>), runs: [] };
+  await using screen = await render(
+    <ThreadRelationshipsPanel
+      environmentId={environmentId}
+      threadId={threadId}
+      showLineage
+      showSideChats={false}
+    />,
+    { router: "/environment/fork" },
+  );
+
+  const mergeBack = screen.getByRole("button", { name: "Merge back to source conversation" });
+  await userEvent.hover(mergeBack);
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+      "Complete a run in this fork before merging it back",
+    ),
+  );
+
+  state.commandSucceeds = true;
+  await mergeBack.click({ force: true });
+  expect(screen.router?.state.location.pathname).toBe("/environment/fork");
+});
+
 it("shows a delegated-from thread's full title in its tooltip even when its environment is unavailable", async () => {
   setup();
   const longTitle = "Parent task delegated from another machine that has a long description";
@@ -484,174 +435,43 @@ it("hides a deleted fork and keeps unloaded and archived forks with their curren
   await expect.element(screen.getByText("deleted-fork", { exact: true })).not.toBeInTheDocument();
 });
 
-function previousAgentsPage(cursor: number, total = 24): OrchestrationV2PreviousAgentsPage {
-  return {
-    agents: Array.from({ length: Math.max(0, Math.min(12, total - cursor)) }, (_, index) => ({
-      childThreadId: ThreadId.make(`historical-${cursor + index}`),
-      remoteChild: null,
-      title: `Historical agent ${cursor + index}`,
-      status: "completed",
-      providerInstanceId: null,
-    })),
-    total,
-    failedCount: 0,
-    nextCursor: cursor + 12 < total ? cursor + 12 : null,
-  };
-}
-
-it("keeps the answered history page and pager during a delayed next page", async () => {
+it.each([1, 18])("continues scrolling the panel past a list of %i subagents", async (count) => {
   setup();
-  state.controlledHistory = true;
-  await using screen = await render(
-    <ThreadRelationshipsPanel
-      environmentId={environmentId}
-      threadId={threadId}
-      showLineage
-      showSideChats
-    />,
-  );
-  await vi.waitFor(() => expect(state.historyRequests.length).toBeGreaterThan(0));
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(0)));
-  await screen.getByRole("button", { name: /Previous agents/ }).click();
-  await expect.element(screen.getByText("1–12 of 24")).toBeVisible();
-  await screen.getByRole("button", { name: "Next page" }).click();
-  await vi.waitFor(() => expect(state.historyRequests.at(-1)?.cursor).toBe(12));
-  await expect.element(screen.getByRole("button", { name: /Historical agent 0/ })).toBeVisible();
-  await expect.element(screen.getByText("1–12 of 24")).toBeVisible();
-  await expect.element(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
-  await expect
-    .element(screen.getByRole("button", { name: /Previous agents/ }))
-    .not.toHaveTextContent("loaded");
-  expect(
-    screen.container.querySelector(
-      'ul[aria-label="Related threads"] button[aria-label="Next page"]',
-    ),
-  ).toBeNull();
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(12)));
-  await expect.element(screen.getByText("13–24 of 24")).toBeVisible();
-  await screen.getByRole("button", { name: "Previous page" }).click();
-  await vi.waitFor(() => expect(state.historyRequests.at(-1)?.cursor).toBe(0));
-  await expect.element(screen.getByRole("button", { name: /Historical agent 12/ })).toBeVisible();
-  await act(() => state.historyRequests.at(-1)!.reject(new Error("Disconnected")));
-  await expect
-    .element(screen.getByRole("button", { name: /Historical agent 12/ }))
-    .not.toBeInTheDocument();
-});
-
-it("refreshes the current history page on status changes and clamps a shrunken result", async () => {
-  setup();
-  state.controlledHistory = true;
-  const activeChild = {
-    ...makeThreadProjectionFixture().thread,
-    id: ThreadId.make("active-child"),
-    lineage: { rootThreadId: threadId, parentThreadId: threadId, relationshipToParent: "subagent" },
-    status: "running",
+  const projection = makeThreadProjectionFixture();
+  state.projection = projection;
+  state.relatedShells = Array.from({ length: count }, (_, index) => ({
+    id: ThreadId.make(`subagent-${index}`),
+    title: `Subagent ${index}`,
+    forkedFrom: null,
+    lineage: { parentThreadId: projection.thread.id, relationshipToParent: "subagent" },
     activityRunStatus: "running",
-  };
-  state.relatedShells = [activeChild];
+    status: "running",
+  }));
   await using screen = await render(
-    <ThreadRelationshipsPanel
-      environmentId={environmentId}
-      threadId={threadId}
-      showLineage
-      showSideChats
-    />,
-  );
-  await vi.waitFor(() => expect(state.historyRequests.length).toBeGreaterThan(0));
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(0, 36)));
-  await screen.getByRole("button", { name: /Previous agents/ }).click();
-  await screen.getByRole("button", { name: "Next page" }).click();
-  await vi.waitFor(() => expect(state.historyRequests.at(-1)?.cursor).toBe(12));
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(12, 36)));
-  await expect.element(screen.getByText("13–24 of 36")).toBeVisible();
-  state.projection = {
-    ...(state.projection as object),
-    thread: { ...(state.projection as { thread: object }).thread, status: "running" },
-  };
-  const requestCount = state.historyRequests.length;
-  await screen.rerender(
-    <ThreadRelationshipsPanel
-      environmentId={environmentId}
-      threadId={threadId}
-      showLineage
-      showSideChats
-    />,
-  );
-  await vi.waitFor(() => expect(state.historyRequests.length).toBeGreaterThan(requestCount));
-  expect(state.historyRequests.at(-1)?.cursor).toBe(12);
-  await expect.element(screen.getByText("13–24 of 36")).toBeVisible();
-  expect(state.historyRequests).toHaveLength(requestCount + 1);
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(12, 36)));
-  state.relatedShells = [{ ...activeChild, status: "waiting", activityRunStatus: "waiting" }];
-  await screen.rerender(
-    <ThreadRelationshipsPanel
-      environmentId={environmentId}
-      threadId={threadId}
-      showLineage
-      showSideChats
-    />,
-  );
-  await vi.waitFor(() => expect(state.historyRequests).toHaveLength(requestCount + 2));
-  expect(state.historyRequests.at(-1)?.cursor).toBe(12);
-  await expect.element(screen.getByText("13–24 of 36")).toBeVisible();
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(12, 12)));
-  await vi.waitFor(() => expect(state.historyRequests.at(-1)?.cursor).toBe(0));
-  await expect.element(screen.getByText("13–12 of 12")).not.toBeInTheDocument();
-  await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(0, 12)));
-  await expect.element(screen.getByRole("button", { name: /Historical agent 0/ })).toBeVisible();
-  expect(state.historyRequests).toHaveLength(requestCount + 3);
-});
-
-it.each([
-  ["environment", "other-thread", false],
-  ["other-environment", "fork", true],
-])(
-  "fetches history once per page and scopes it to %s/%s",
-  async (nextEnvironmentId, nextThreadId, delayedProjection) => {
-    setup();
-    state.controlledHistory = true;
-    const initialProjection = state.projection;
-    if (delayedProjection) state.projection = null;
-    await using screen = await render(
-      <ThreadRelationshipsPanel
-        environmentId={environmentId}
-        threadId={threadId}
-        showLineage
-        showSideChats
-      />,
-    );
-    await vi.waitFor(() => expect(state.historyRequests.length).toBeGreaterThan(0));
-    if (delayedProjection) {
-      state.projection = initialProjection;
-      await screen.rerender(
+    <div data-testid="panel" style={{ height: 320, width: 280 }}>
+      <ScrollArea>
         <ThreadRelationshipsPanel
           environmentId={environmentId}
-          threadId={threadId}
+          threadId={projection.thread.id}
           showLineage
           showSideChats
-        />,
-      );
-    }
-    await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(0)));
-    await screen.getByRole("button", { name: /Previous agents/ }).click();
-    expect(state.historyRequests).toHaveLength(1);
-    await screen.getByRole("button", { name: "Next page" }).click();
-    await vi.waitFor(() => expect(state.historyRequests.at(-1)?.cursor).toBe(12));
-    await act(() => state.historyRequests.at(-1)!.resolve(previousAgentsPage(12)));
-    await expect.element(screen.getByText("13–24 of 24")).toBeVisible();
-    expect(state.historyRequests).toHaveLength(2);
-    await screen.rerender(
-      <ThreadRelationshipsPanel
-        environmentId={EnvironmentId.make(nextEnvironmentId)}
-        threadId={ThreadId.make(nextThreadId)}
-        showLineage
-        showSideChats
-      />,
-    );
-    await vi.waitFor(() => expect(state.historyRequests).toHaveLength(3));
-    expect(state.historyRequests[2]?.cursor).toBe(0);
-    await expect
-      .element(screen.getByRole("button", { name: /Historical agent 12/ }))
-      .not.toBeInTheDocument();
-  },
-);
+        />
+        <div style={{ height: 600 }} />
+      </ScrollArea>
+    </div>,
+  );
+  if (count > 6) {
+    await screen.getByRole("button", { name: "Show 12 more" }).click();
+    await expect.element(screen.getByText("Subagent 17", { exact: true })).toBeInTheDocument();
+  }
+  const list = screen.getByRole("list", { name: "Related threads" }).element();
+  const viewport = screen
+    .getByTestId("panel")
+    .element()
+    .querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")!;
+  list.scrollTop = list.scrollHeight;
+  if (count > 6) expect(list.scrollTop).toBeGreaterThan(0);
+  viewport.scrollTop = 0;
+  await userEvent.wheel(list, { delta: { y: 300 } });
+  await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
+});

@@ -2,37 +2,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { UsageSource } from "@t3tools/contracts";
 
-import {
-  formatHourShort,
-  formatMoney,
-  formatThreadUsageCost,
-  makeWindow,
-  usageSourceMessages,
-} from "./usageFormat.ts";
-
-it("shows thread cost as a floor when some models are unpriced or usage went unmeasured", () => {
-  expect(formatThreadUsageCost([{ costUsd: 1.25 }, { costUsd: 2.5 }])).toBe("$3.75");
-  expect(formatThreadUsageCost([{ costUsd: 1.25 }, { costUsd: null }])).toBe("$1.25+");
-  expect(formatThreadUsageCost([{ costUsd: 0 }])).toBe("$0.00");
-  expect(formatThreadUsageCost([{ costUsd: 2 }], true)).toBe("$2.00+");
-  expect(formatThreadUsageCost([{ costUsd: 0.002 }], true)).toBe("$0.00+");
-  expect(formatThreadUsageCost([{ costUsd: null }])).toBeNull();
-  expect(formatThreadUsageCost([])).toBeNull();
-});
-
-it.each([
-  ["usd", 12.5, "$12.50"],
-  ["eur", 12.5, "€12.50"],
-  ["USD", 1234.5, "$1,234.50"],
-  ["gbp", 0, "£0.00"],
-])("formats %s %d as %s", (currency, value, expected) => {
-  expect(formatMoney(value, currency)).toBe(expected);
-});
-
-it("falls back to a code suffix when the runtime rejects the currency", () => {
-  expect(formatMoney(3.5, "us")).toBe("3.50 US");
-  expect(formatMoney(3.5, "usdd")).toBe("3.50 USDD");
-});
+import { formatHourShort, formatTokens, makeWindow, usageSourceMessages } from "./usageFormat.ts";
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {
@@ -204,5 +174,13 @@ describe("hourly usage formatting", () => {
     } finally {
       resolvedOptions.mockRestore();
     }
+  });
+});
+
+describe("token formatting", () => {
+  it("moves to the next unit when rounding reaches it", () => {
+    expect(formatTokens(999_999)).toBe("1M");
+    expect(formatTokens(999_999_999)).toBe("1B");
+    expect(formatTokens(-999_999)).toBe("-1M");
   });
 });

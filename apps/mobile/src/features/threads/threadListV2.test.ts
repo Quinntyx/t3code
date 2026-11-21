@@ -1,8 +1,5 @@
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import {
-  createInboxReturnTracker,
-  isThreadWorking,
-} from "@t3tools/client-runtime/state/thread-inbox";
+import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -43,10 +40,11 @@ import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SwipeActions,
   resolveThreadListV2SnoozePresets,
+  resolveThreadListV2RowStatus,
   resolveThreadListV2Status,
   resolveThreadListV2WokeAt,
-  sortThreadsForListV2,
   threadListV2ListItemsAreEqual,
+  threadListV2RowAccessibilityLabel,
   threadHasUnseenCompletion,
   type ThreadListV2ListItem,
 } from "./threadListV2";
@@ -178,6 +176,22 @@ describe("resolveThreadListV2Status", () => {
     );
   });
 
+  it("settles a failure the user opened to ready in the row, keeping the raw status", () => {
+    const failed = presentThreadShell(
+      environmentId,
+      makeRawThreadShell({
+        status: "failed",
+        latestRunId: RunId.make("run-failed"),
+        latestRunCompletedAt: DateTime.makeUnsafe("2026-06-01T23:59:00.000Z"),
+        lastVisitedAt: DateTime.makeUnsafe(NOW),
+      }),
+    );
+
+    expect(resolveThreadListV2Status(failed)).toBe("failed");
+    expect(resolveThreadListV2RowStatus(failed)).toBe("ready");
+    expect(resolveThreadListV2RowStatus({ ...failed, lastVisitedAt: null })).toBe("failed");
+  });
+
   it("shows a waiting guest message as Request, after the agent's own requests", () => {
     const thread = presentThreadShell(
       environmentId,
@@ -188,29 +202,6 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(guest)).toBe("request");
     expect(resolveThreadListV2Status({ ...guest, hasPendingUserInput: true })).toBe("input");
     expect(resolveThreadListV2Status({ ...guest, hasPendingApprovals: true })).toBe("approval");
-  });
-
-  it("keeps a stalled thread working while the server retries it", () => {
-    const thread = presentThreadShell(
-      environmentId,
-      makeRawThreadShell({
-        status: "failed",
-        latestRunId: RunId.make("run-overloaded"),
-        stalled: true,
-      }),
-    );
-    expect(resolveThreadListV2Status(thread)).toBe("stalled");
-    expect(threadHasUnseenCompletion(thread)).toBe(false);
-
-    // Clearing the record leaves an ordinary failure.
-    expect(
-      resolveThreadListV2Status(
-        presentThreadShell(
-          environmentId,
-          makeRawThreadShell({ status: "failed", latestRunId: RunId.make("run-overloaded") }),
-        ),
-      ),
-    ).toBe("failed");
   });
 
   it.each([
@@ -236,34 +227,53 @@ describe("resolveThreadListV2Status", () => {
     },
   );
 
-  it("keeps a usage-limit-failed thread working and waiting while delegated subagents run, unless cap-blocked", () => {
-    const raw = makeRawThreadShell({
-      latestRunId: RunId.make("run-delegating-limit"),
-      status: "failed",
-      latestRunCompletedAt: DateTime.makeUnsafe(NOW),
-      lastError: "You've hit your limit",
-      lastErrorClass: "usage_limit",
-      usageLimitResetAt: "2026-06-02T01:00:00.000Z",
-      pendingBackgroundTasks: [
-        { taskId: "workflow-1", kind: "subagent", description: "Council review" },
-      ],
-    });
-    const delegating = presentThreadShell(environmentId, decodeThreadShell(raw));
-    expect(isThreadWorking(delegating)).toBe(true);
-    expect(resolveThreadListV2Status(delegating)).toBe("waiting");
+  it.each(["interrupted", "cancelled"] as const)(
+    "does not present a %s run as an unseen completion",
+    (status) => {
+      const thread = presentThreadShell(
+        environmentId,
+        makeRawThreadShell({
+          latestRunId: RunId.make("run-stopped"),
+          status,
+          latestRunCompletedAt: DateTime.makeUnsafe(NOW),
+          lastVisitedAt: DateTime.makeUnsafe("2026-06-01T23:59:00.000Z"),
+        }),
+      );
 
-    const capBlocked = presentThreadShell(
-      environmentId,
-      decodeThreadShell({
-        ...raw,
-        consumptionCapHit: {
-          at: NOW,
-          reason: "Daily spending limit reached",
-        },
-      }),
+      expect(threadHasUnseenCompletion(thread)).toBe(false);
+    },
+  );
+});
+
+describe("threadListV2RowAccessibilityLabel", () => {
+  const row = {
+    title: "Fix login",
+    variant: "card",
+    woke: false,
+    statusLabel: undefined,
+    timeLabel: "5m",
+    snoozeWakeLabel: undefined,
+    providerNameLabel: "Codex",
+    hasQueuedMessages: false,
+    regeneratingTitle: false,
+  } as const;
+
+  it("speaks the status or time the row shows beside its title", () => {
+    expect(threadListV2RowAccessibilityLabel({ ...row, statusLabel: "Approval" })).toBe(
+      "Fix login, Approval, Codex",
     );
-    expect(isThreadWorking(capBlocked)).toBe(false);
-    expect(resolveThreadListV2Status(capBlocked)).toBe("limited");
+    expect(threadListV2RowAccessibilityLabel(row)).toBe("Fix login, 5m, Codex");
+    expect(threadListV2RowAccessibilityLabel({ ...row, woke: true, statusLabel: "Done" })).toBe(
+      "Fix login, Woke, Codex",
+    );
+    expect(
+      threadListV2RowAccessibilityLabel({
+        ...row,
+        variant: "slim",
+        statusLabel: "Failed",
+        snoozeWakeLabel: "in 2h",
+      }),
+    ).toBe("Fix login, in 2h, Codex");
   });
 });
 
@@ -323,17 +333,6 @@ describe("search lists ranked matches", () => {
       ["mentioned", "card"],
     ]);
     expect([...layout.contentOnlyThreadKeys]).toEqual([matchKey("mentioned")]);
-  });
-});
-
-describe("sortThreadsForListV2", () => {
-  it("honors a saved active order and leaves new threads above it", () => {
-    const sorted = sortThreadsForListV2([
-      { id: "newer-arranged", createdAt: "2026-06-01T12:00:00.000Z", activeOrderKey: "t" },
-      { id: "older-arranged", createdAt: "2026-06-01T08:00:00.000Z", activeOrderKey: "f" },
-      { id: "new", createdAt: "2026-06-01T13:00:00.000Z" },
-    ]);
-    expect(sorted.map((thread) => thread.id)).toEqual(["new", "older-arranged", "newer-arranged"]);
   });
 });
 
@@ -1880,132 +1879,5 @@ describe("queued messages keep a settled thread active", () => {
       ["settled", "slim"],
     ]);
     expect(layout.settledCount).toBe(1);
-  });
-});
-
-describe("thread stacks", () => {
-  const running = {
-    status: "running" as const,
-    activeRunId: null,
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    providerName: "Codex",
-    lastError: null,
-    updatedAt: NOW,
-  };
-  // `root` owns feat/root; `child` and `sibling` land on it; `grandchild` lands on feat/child.
-  const member = (
-    id: string,
-    baseBranch: string,
-    createdAt: string,
-    extra: Partial<EnvironmentThreadShell> = {},
-  ) =>
-    makeThread({
-      id: ThreadId.make(id),
-      title: id,
-      branch: `feat/${id}`,
-      worktreePath: `/worktrees/${id}`,
-      baseBranch,
-      createdAt,
-      ...extra,
-    });
-  const stack = (extra: Partial<Record<string, Partial<EnvironmentThreadShell>>> = {}) => [
-    member("root", "main", "2026-06-01T00:00:00.000Z", extra.root),
-    member("child", "feat/root", "2026-06-01T01:00:00.000Z", extra.child),
-    member("grandchild", "feat/child", "2026-06-01T02:00:00.000Z", extra.grandchild),
-    member("sibling", "feat/root", "2026-06-01T03:00:00.000Z", extra.sibling),
-  ];
-  const lone = makeThread({
-    id: ThreadId.make("lone"),
-    title: "lone",
-    createdAt: "2026-06-01T04:00:00.000Z",
-  });
-  const build = (
-    threads: ReadonlyArray<EnvironmentThreadShell>,
-    input: Partial<Parameters<typeof buildThreadListV2Items>[0]> = {},
-  ) =>
-    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW, ...input });
-  const rows = (layout: ReturnType<typeof buildThreadListV2Items>) =>
-    layout.items.map((item) =>
-      item.stack === null ? item.thread.id : `${"  ".repeat(item.stack.depth)}${item.thread.id}`,
-    );
-
-  it("nests children under their parent", () => {
-    const layout = build([...stack(), lone], {
-      selectedThreadKey: `${environmentId}:grandchild`,
-    });
-    // Manual order follows the root, so the newer lone thread stays above it.
-    expect(rows(layout)).toEqual(["lone", "root", "  sibling", "  child", "    grandchild"]);
-    const child = layout.items.find((item) => item.thread.id === "child");
-    expect(child?.stack?.foreignBranches.split("\n")).toEqual([
-      "feat/grandchild",
-      "feat/root",
-      "feat/sibling",
-    ]);
-  });
-
-  it("shelves a stack only while every member works, keeping working members in the inbox", () => {
-    const allWorking = stack({
-      root: { runtime: running },
-      child: { runtime: running },
-      grandchild: { runtime: running },
-      sibling: { runtime: running },
-    });
-    const shelved = build([...allWorking, lone], {
-      workingShelfEnabled: true,
-      workingShelfExpanded: true,
-    });
-    expect(shelved.workingCount).toBe(4);
-    expect(shelved.workingShelfHeaderIndex).toBe(1);
-    expect(rows(shelved)).toEqual(["lone", "root", "  sibling", "  child", "    grandchild"]);
-
-    const mixed = build([...allWorking.slice(0, 3), stack()[3]!, lone], {
-      workingShelfEnabled: true,
-      workingShelfExpanded: true,
-    });
-    expect(mixed.workingCount).toBe(0);
-    expect(mixed.items.map((item) => item.thread.id).toSorted()).toEqual(
-      ["child", "grandchild", "lone", "root", "sibling"].toSorted(),
-    );
-    const child = mixed.items.find((item) => item.thread.id === "child")!;
-    expect(resolveThreadListV2Status(child.thread)).toBe("working");
-    expect(child.stack?.depth).toBe(1);
-  });
-
-  it("lists a shelved stack whole, and keeps the open thread's stack on a closed shelf", () => {
-    const allWorking = stack({
-      root: { runtime: running },
-      child: { runtime: running },
-      grandchild: { runtime: running },
-      sibling: { runtime: running },
-    });
-    const listItems = (input: Partial<Parameters<typeof buildThreadListV2Items>[0]>) => {
-      const layout = build(allWorking, { workingShelfEnabled: true, ...input });
-      return buildThreadListV2ListItems({
-        items: layout.items,
-        pendingTasks: [],
-        workingCount: layout.workingCount,
-        workingShelfExpanded: input.workingShelfExpanded === true,
-        workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
-      }).map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type));
-    };
-    const whole = ["v2-working-shelf", "root", "sibling", "child", "grandchild"];
-
-    expect(listItems({ workingShelfExpanded: true })).toEqual(whole);
-    expect(listItems({ selectedThreadKey: `${environmentId}:grandchild` })).toEqual(whole);
-  });
-
-  it("ranks an inbox stack by its newest return and keeps pinned members flat", () => {
-    const threads = [...stack({ child: { pinnedAt: "2026-06-01T00:00:00.000Z" } }), lone];
-    const layout = build(threads, {
-      workingShelfEnabled: true,
-      inboxReturnAt: (thread) =>
-        thread.id === "sibling"
-          ? Date.parse("2026-06-01T09:00:00.000Z")
-          : thread.id === "lone"
-            ? Date.parse("2026-06-01T08:00:00.000Z")
-            : undefined,
-    });
-    // The inbox places the stack at its newest return, ahead of the lone thread.
-    expect(rows(layout)).toEqual(["child", "root", "  sibling", "lone", "grandchild"]);
   });
 });

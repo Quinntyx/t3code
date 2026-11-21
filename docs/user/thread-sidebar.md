@@ -3,18 +3,6 @@
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.
 
-## Inspect a thread on mobile
-
-On phones, swipe left across the conversation or tap **Thread details** to open
-its workspace and source-control drawer. Dismiss the keyboard before swiping.
-Swipe right, tap outside, or close the drawer to return to the conversation.
-On tablets and wide windows, **Thread details** opens the same details beside the
-conversation, or as a sheet where there is no room.
-
-Use the drawer to run or edit project actions, import actions from `t3.json`,
-review changes, and manage branches and worktrees. Source-control and terminal
-actions need a saved thread; send the first message before using them.
-
 ## Start a thread
 
 On web and desktop, **New thread** opens the project picker when you have more than one
@@ -25,10 +13,11 @@ Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
 On mobile, **New thread** starts in the current thread's project, or else in the
-last project you opened or chose on that device. If neither is available, the
-project picker opens. Turn off **Settings → General → Use last project** to
-choose a project every time. When you pick a project that is on more than one
-machine, the thread starts on a connected one if any is connected.
+project the thread list is filtered to, or else in the last project you opened
+or chose on that device. If none is available, the project picker opens. Turn
+off **Settings → General → Use last project** to choose a project every time.
+When you pick a project that is on more than one machine, the thread starts on
+a connected one if any is connected.
 
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
@@ -146,8 +135,8 @@ open.
 
 Threads that are working or waiting on work they will resume from move into a collapsed
 **Working** section below the active list.
-That includes subagents, watched pull requests, and background commands or monitors the agent
-says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
+That includes subagents, watched pull requests with checks still running, Claude monitors,
+and background commands or other monitors the agent says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
 there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
 answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
 the pinned section.
@@ -170,23 +159,6 @@ needs you. Use the pen button on a folder, or right-click it, to start a thread 
 Pinned threads stay above the folders, and Snoozed and Settled stay below them. In this mode you
 can drag a thread onto the composer to mention it, but not within the sidebar, and the Working
 section is off. Each device keeps its own choice.
-
-## Hide work on this device
-
-Choose **Hide on this device** from a thread's menu to remove it from this
-client's thread list without settling or snoozing it. It keeps running and stays
-visible on your other devices. New activity does not unhide it.
-
-On web and desktop, use the thread's **Hide** action beside Snooze and Settle.
-On mobile, swipe opposite the existing thread actions to hide it; on Android
-phones' main list, swipe left. In an Android phone's thread drawer, use the menu
-so the swipe can still close the drawer.
-
-Use **Undo** immediately, or turn on **Show hidden threads on this device** in
-the list filters and choose **Restore on this device** from the thread's menu.
-Hidden threads stay hidden after restarting this client; clearing its local data
-resets them. Hiding does not prevent automatic settlement or change any shared
-thread settings.
 
 ## Settle finished work
 
@@ -278,23 +250,17 @@ thread** from its long-press menu on mobile.
 keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
 Press **Resume** in an empty composer to continue a limited or interrupted turn
-manually. Do this when the provider reports no reset time, because nothing
-continues the turn on its own.
+manually when the provider supports native continuation, or send a message to continue.
+Do this when the provider reports no reset time, because nothing continues the turn on its own.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
-When the provider or usage tracker reports a reset time, choose **Resume at reset**
-to schedule a continuation. You can cancel it from the thread. Enable **Resume after
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Resume after
 usage limits** in **Settings → Threads** to schedule limit stops by default.
-Enable **Resume threads with pull requests first** there to give threads with a
-linked pull request the first chance at each new allowance; the other limited
-threads resume after those finish. This keeps quota with work that is closest to
-review.
 The environment must be running when the reset arrives; it resumes overdue
-continuations after a restart. When the provider reports the allowance back
-before the scheduled time, as with a redeemed reset credit, the waiting threads
-continue then instead of at the old time. Stopping the thread, sending a new
-message, archiving, or settling it prevents a pending continuation from starting.
+continuations after a restart. Stopping the thread, sending a new message,
+archiving, or settling it prevents a pending continuation from starting.
 
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without
@@ -303,19 +269,12 @@ the snooze. Enable **Snooze until limits reset** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
-**Stalled** means the provider's API was overloaded, so the turn ended through no
-fault of the thread's. T3 Code retries it on its own, waiting a minute at first
-and doubling up to an hour between attempts, and keeps going until the work
-finishes or you stop it. The conversation shows when the next attempt goes out.
-A stalled thread stays with your working threads and does not count as failed.
-Choose **Retry now** to send the next attempt immediately, or **Stop retrying**
-to leave the thread failed and pick it up yourself with **Resume**.
-
 On web and desktop, use **Agents** to follow work delegated to subagents.
 On mobile, open a subagent from its conversation card or **Agents**. On iOS
 layouts with an inspector, its thread opens beside the parent. Maximize it to
 fill the screen; close the full-screen view to return to the parent and inspector.
 Stop on a thread also stops the subagents it delegated to.
+Before archiving the parent, wait for its delegated tasks to finish or cancel them.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
@@ -353,12 +312,17 @@ model, and reasoning level shown in the thread's composer, including for its fir
 reply. Change them for an individual side chat in its composer. Later changes to the
 parent do not change existing side chats.
 
-To use what you learned, choose **Bring back**. The thread gets the side chat with
-your next message there. Bring back is available while the thread is idle.
+To use what you learned, choose **Add to chat** at the top of the side chat, or type
+`@` and a word from its title in the thread's composer. The thread's message gets a
+link to the side chat, and the agent reads as much of it as it needs. This works
+while the thread is busy, once you have sent a message in the side chat. An agent on
+an external OpenCode server cannot read the link, so put the details in your message
+instead.
 
 Closing a side chat you never sent a message in deletes it. To delete one you used,
 choose **Delete** at the top of the side chat. Deleting a thread also deletes its
-side chats.
+side chats. Archiving a thread also archives its side chats and stops their work, and
+unarchiving the thread brings them back.
 
 On mobile, a thread lists its side chats above the composer. Tap one to open it and
 answer its questions.
