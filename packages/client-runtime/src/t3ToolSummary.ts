@@ -446,6 +446,39 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
+    case "connectors": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Checked external connectors {count} time} other {Checked external connectors {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to check external connectors {count} time} other {Tried to check external connectors {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "email-request": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg("{count, plural, one {Drafted {count} email} other {Drafted {count} emails}}", {
+              count,
+            }),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to draft {count} email} other {Tried to draft {count} emails}}",
+              { count },
+            ),
+          );
+      break;
+    }
     case "worktree-handoff": {
       const count = countEntities(entityIds("worktreePath"));
       label = done
@@ -1066,6 +1099,23 @@ export function summarizeT3ToolCalls(
         : resolve(
             msg(
               "{count, plural, one {Tried to check worktree status {count} time} other {Tried to check worktree status {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "worktree-restack": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Restacked stacked threads {count} time} other {Restacked stacked threads {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to restack stacked threads {count} time} other {Tried to restack stacked threads {count} times}}",
               { count },
             ),
           );

@@ -571,13 +571,15 @@ const refreshOnSignalWhileRead =
     // registry can sweep this node while `self` keeps the data, and the rebuilt node must still
     // see a change it missed.
     const readUnder = new WeakMap<AtomRegistry.AtomRegistry, unknown>();
+    const selfKey = Atom.isSerializable(self) ? self[Atom.SerializableTypeId].key : self;
     return Atom.transform(
       self,
       (get) => {
         const current = get(signal);
+        const cached = get.registry.getNodes().has(selfKey);
         get.subscribe(self, (value) => get.setSelf(value));
         const changed =
-          readUnder.has(get.registry) && !Object.is(readUnder.get(get.registry), current);
+          cached && readUnder.has(get.registry) && !Object.is(readUnder.get(get.registry), current);
         readUnder.set(get.registry, current);
         if (changed && !isFinal(get.once(self))) get.refresh(self);
         return get.once(self);
@@ -1098,6 +1100,19 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
   });
 }
 
+export function withEnvironmentRpcPermissions<R, E>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
+  registry: AtomRegistry.AtomRegistry,
+) {
+  return <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
+    effect.pipe(
+      Effect.provideService(RpcPermissionGuard, {
+        authorize: (id, method, payload) =>
+          createCommandPermissions(runtime, method).authorize(registry, id, payload),
+      }),
+    );
+}
+
 export function createEnvironmentRpcCommand<
   R,
   ER,
@@ -1169,10 +1184,7 @@ export function createEnvironmentRpcCommand<
             options.execute?.(input, registry, environmentId) ?? requestGuarded(options.tag, input)
           );
         }),
-        Effect.provideService(RpcPermissionGuard, {
-          authorize: (id, method, payload) =>
-            createCommandPermissions(runtime, method).authorize(registry, id, payload),
-        }),
+        withEnvironmentRpcPermissions(runtime, registry),
         Effect.tap(
           (result) => options.onSuccess?.(target, registry, result, started) ?? Effect.void,
         ),

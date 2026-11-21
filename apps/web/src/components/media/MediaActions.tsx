@@ -34,7 +34,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { downloadMedia, readMediaPng } from "./mediaContent";
 
 export interface MediaActionSource {
-  readonly kind: "image" | "video";
+  readonly kind: "image" | "video" | "model";
   readonly name: string;
   readonly src: string | null;
   readonly reference?: MediaReference;
@@ -139,6 +139,7 @@ export function MediaActions({
     let progressToast: ReturnType<typeof toastManager.add> | undefined;
     const result = await settlePromise(async () => {
       const isImage = source.kind === "image";
+      const isVideo = source.kind === "video";
       const unavailable = !canReadMedia || (source.src === null && source.asset === undefined);
       const canCopyImage =
         typeof navigator !== "undefined" &&
@@ -160,7 +161,11 @@ export function MediaActions({
         });
       items.push({
         id: "save",
-        label: isImage ? m(msg("Save image")) : m(msg("Save video")),
+        label: isImage
+          ? m(msg("Save image"))
+          : isVideo
+            ? m(msg("Save video"))
+            : m(msg("Save model")),
         disabled: unavailable,
       });
       if (source.kind === "image") {
@@ -185,7 +190,9 @@ export function MediaActions({
                 : action === "save"
                   ? isImage
                     ? m(msg("Could not save image"))
-                    : m(msg("Could not save video"))
+                    : isVideo
+                      ? m(msg("Could not save video"))
+                      : m(msg("Could not save model"))
                   : action === "copy-image"
                     ? m(msg("Could not copy image"))
                     : m(msg("Could not complete media action"));
@@ -224,7 +231,9 @@ export function MediaActions({
             action === "save"
               ? isImage
                 ? m(msg("Preparing image download…"))
-                : m(msg("Preparing video download…"))
+                : isVideo
+                  ? m(msg("Preparing video download…"))
+                  : m(msg("Preparing model download…"))
               : m(msg("Copying image…")),
         });
         await (action === "save" ? save() : copyImage());

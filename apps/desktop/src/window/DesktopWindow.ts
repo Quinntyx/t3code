@@ -11,7 +11,11 @@ import * as Semaphore from "effect/Semaphore";
 import * as Electron from "electron";
 import { msg } from "gt-i18n";
 
-import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import {
+  type ClientSettings,
+  type DesktopSnapShotEvent,
+  DEFAULT_CLIENT_SETTINGS,
+} from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -44,6 +48,7 @@ import { m } from "../i18n/messages.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
+import { installAppMediaPermissions } from "./MediaPermission.ts";
 
 const TITLEBAR_HEIGHT = 40;
 
@@ -322,6 +327,7 @@ function concealPendingQuitWindow(
 function getWindowTitleBarOptions(
   shouldUseDarkColors: boolean,
   platform: NodeJS.Platform,
+  hideWindowControls = false,
 ): WindowTitleBarOptions {
   if (platform === "darwin") {
     return {
@@ -331,6 +337,11 @@ function getWindowTitleBarOptions(
         y: MACOS_WORKSPACE_TOPBAR_HEIGHT / 2 - MACOS_WINDOW_BUTTON_RADIUS,
       },
     };
+  }
+
+  if (hideWindowControls) {
+    // Frameless: without the overlay there are no native buttons at all.
+    return { titleBarStyle: "hidden" };
   }
 
   return {
@@ -409,6 +420,18 @@ export const make = Effect.gen(function* () {
   );
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
 
+  // Window chrome forms at creation, so the setting can only apply on the next launch.
+  const readHideWindowControls = Effect.gen(function* () {
+    const settings = yield* clientSettings.get.pipe(
+      Effect.catch((error) =>
+        logWindowWarning("failed to read client settings for window controls", {
+          message: error.message,
+        }).pipe(Effect.as(Option.none<ClientSettings>())),
+      ),
+    );
+    return Option.isSome(settings) && settings.value.hideWindowControls;
+  });
+
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
     if (Option.isSome(splash) && !splash.value.isDestroyed()) {
@@ -451,6 +474,7 @@ export const make = Effect.gen(function* () {
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+    const hideWindowControls = yield* readHideWindowControls;
     const persistedSettings = yield* desktopSettings.get;
     const persistedBounds = persistedSettings.mainWindowBounds;
     const displayBoundsResult = yield* Effect.sync(() => {
@@ -485,7 +509,7 @@ export const make = Effect.gen(function* () {
       backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
       ...iconOption,
       title: environment.displayName,
-      ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
+      ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform, hideWindowControls),
       webPreferences: {
         preload: environment.preloadPath,
         // Hidden-renderer throttling stalls first paint; re-enable it after the first reveal.
@@ -505,9 +529,14 @@ export const make = Effect.gen(function* () {
     }
 
     pendingMainReveals.set(window, Effect.void);
+    installAppMediaPermissions(window.webContents, applicationUrl);
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
+    }
+    // macOS draws its controls in-process; Windows/Linux drop the overlay at creation.
+    if (environment.platform === "darwin" && hideWindowControls) {
+      window.setWindowButtonVisibility(false);
     }
     let boundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let pendingBoundsPersistFiber: Fiber.Fiber<void, never> | undefined;
@@ -644,6 +673,7 @@ export const make = Effect.gen(function* () {
           PRIMARY_PASTE_DISABLED_ARGUMENT,
         ];
       }
+      previewManager.claimFormReplay(params);
     });
 
     const contextMenuContents = new WeakSet<Electron.WebContents>();

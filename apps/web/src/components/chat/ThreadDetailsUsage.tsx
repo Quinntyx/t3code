@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
+  describeUsageAmount,
   type LimitPace,
   paceOf,
   paceRemainingPercent,
@@ -23,6 +24,7 @@ import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { UsageAmountLines } from "../usage/UsageAmountLines";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 
@@ -62,6 +64,7 @@ export function ThreadDetailsUsage({
     providers.find((provider) => provider.instanceId === providerInstanceId)?.usageLimits;
   if (!limits) return null;
   const notice = limitsNotice(limits, m);
+  const amounts = limits.amounts ?? [];
 
   return (
     <ThreadDetailsSection
@@ -80,7 +83,14 @@ export function ThreadDetailsUsage({
             opensUsage
           />
         ) : (
-          limits.windows.map((window) => <LimitRow key={window.id} window={window} now={now} />)
+          <>
+            {limits.windows.map((window) => (
+              <LimitRow key={window.id} window={window} now={now} />
+            ))}
+            {amounts.length > 0 ? (
+              <UsageAmountLines amounts={amounts} now={now} className="col-span-3 px-2.5" />
+            ) : null}
+          </>
         )}
       </div>
     </ThreadDetailsSection>
@@ -168,6 +178,7 @@ function LimitRow({
   const pace = paceOf(window, now);
   const timeLeft = paceRemainingPercent(window, now);
   const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+  const amount = window.amount ? describeUsageAmount(window.amount) : null;
   return (
     <UsageRow
       label={window.label}
@@ -182,6 +193,11 @@ function LimitRow({
           <span className="text-foreground">
             {gt("{label}: {left}% left", { label: window.label, left })}
           </span>
+          {amount ? (
+            <span className="text-muted-foreground">
+              {amount.value} {amount.qualifier}
+            </span>
+          ) : null}
           {pace && timeLeft !== null ? (
             <span className="text-muted-foreground">
               {m(PACE_LABEL[pace])} · {gt("{timeLeft}% of the window left", { timeLeft })}

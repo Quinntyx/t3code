@@ -1,10 +1,39 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  threadRuntimeIsActive,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/models";
 import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../i18n/messages";
 
+export function threadContinuationRunId(
+  thread: Pick<
+    EnvironmentThreadShell,
+    | "latestRun"
+    | "runtime"
+    | "archivedAt"
+    | "deletedAt"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+  >,
+) {
+  if (
+    thread.archivedAt != null ||
+    thread.deletedAt != null ||
+    thread.hasPendingApprovals ||
+    thread.hasPendingUserInput ||
+    threadRuntimeIsActive(thread.runtime)
+  ) {
+    return null;
+  }
+  const run = thread.latestRun;
+  return run?.status === "failed" || run?.status === "interrupted" ? run.runId : null;
+}
+
 export type ThreadActionMenuId =
+  | "continue"
   | "find"
   | "new-thread-on-branch"
   | "filter-by-project"
@@ -12,6 +41,8 @@ export type ThreadActionMenuId =
   | "project-settings"
   | "pin"
   | "unpin"
+  | "hide"
+  | "unhide"
   | "settle"
   | "unsettle"
   | "auto-settle"
@@ -95,6 +126,7 @@ export function buildDraftActionMenuItems(
 
 export interface ThreadActionMenuState {
   readonly canOperate: boolean;
+  readonly canContinue?: boolean;
   readonly canFind?: boolean;
   /** False where no inline title editor is rendered, such as sidebar search results. */
   readonly canRename?: boolean;
@@ -104,6 +136,7 @@ export interface ThreadActionMenuState {
     readonly isActive: boolean;
   } | null;
   readonly isPinned: boolean;
+  readonly isHidden?: boolean;
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
   readonly isSnoozed: boolean;
@@ -132,6 +165,8 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
+    "hide",
+    "unhide",
     "share-guest",
     "copy",
     "copy-path",
@@ -146,9 +181,15 @@ export function buildThreadActionMenuItems(
   resolve: MessageResolver = m,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    ...(state.canContinue
+      ? [{ id: "continue" as const, label: resolve(msg("Continue")), icon: "play" }]
+      : []),
     ...(state.canFind
       ? [{ id: "find" as const, label: resolve(msg("Find in thread")), icon: "text-search" }]
       : []),
+    state.isHidden
+      ? { id: "unhide", label: resolve(msg("Restore on this device")), icon: "eye" }
+      : { id: "hide", label: resolve(msg("Hide on this device")), icon: "eye-off" },
     ...(state.branch
       ? [
           {

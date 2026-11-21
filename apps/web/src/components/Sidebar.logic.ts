@@ -2,7 +2,14 @@ import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  isPullRequestGenerating,
+  subscribePullRequestGeneration,
+} from "@t3tools/client-runtime/state/thread-inbox";
+import {
+  backgroundWorkHoldsCompletion,
+  waitingOnAgents,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import { msg } from "gt-react";
@@ -583,9 +590,59 @@ export async function deleteSelectedThreadEntries<
   return { deletedThreadKeys, firstFailure };
 }
 
+const EMPTY_DELEGATED_THREADS: ReadonlySet<string> = new Set();
+
+/**
+ * Subagents, side chats and tasks delegated from a listed parent have no list row,
+ * so an open one is represented by its nearest listed ancestor — unless `hasOwnRow`
+ * marks it as stacked directly under a listed thread.
+ */
+export function resolveSidebarRowThreadRef<
+  T extends Pick<
+    SidebarThreadSummary,
+    "id" | "environmentId" | "lineage" | "delegatedFrom" | "archivedAt"
+  >,
+>(
+  ref: ScopedThreadRef,
+  threads: readonly T[],
+  hasOwnRow: (thread: T) => boolean = () => false,
+): ScopedThreadRef {
+  const findThread = (target: ScopedThreadRef) =>
+    threads.find(
+      (thread) => thread.id === target.threadId && thread.environmentId === target.environmentId,
+    );
+  const visited = new Set<string>();
+  let current = ref;
+  let thread = findThread(current);
+  while (thread !== undefined) {
+    if (hasOwnRow(thread)) return current;
+    let parent: ScopedThreadRef;
+    if (isShownUnderParent(current, thread.lineage, EMPTY_DELEGATED_THREADS)) {
+      if (thread.lineage.parentThreadId === null) return ref;
+      parent = { environmentId: thread.environmentId, threadId: thread.lineage.parentThreadId };
+    } else if (thread.delegatedFrom != null) {
+      parent = {
+        environmentId: thread.delegatedFrom.environmentId,
+        threadId: thread.delegatedFrom.threadId,
+      };
+      if (findThread(parent)?.archivedAt !== null) return current;
+    } else {
+      return current;
+    }
+    const key = scopedThreadKey(current);
+    if (visited.has(key)) return ref;
+    visited.add(key);
+    current = parent;
+    thread = findThread(current);
+  }
+  return ref;
+}
+
 /**
  * `delegatedUnderParent` holds the tasks linked environments run for a thread
  * the sidebar lists, by thread key; they show under that thread, as subagents do.
+ * A subagent or task stacked on a listed thread (`stackParents`, by thread key) is
+ * listed too, as a member of that thread's stack.
  */
 export function filterSidebarV2VisibleThreads<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "environmentId" | "id" | "lineage"> & {
@@ -594,19 +651,41 @@ export function filterSidebarV2VisibleThreads<
 >(
   threads: readonly T[],
   scopedProjectKeys: ReadonlySet<string> | null,
-  delegatedUnderParent: ReadonlySet<string>,
+  delegatedUnderParent: ReadonlySet<string> = new Set(),
+  stackParents?: ReadonlyMap<string, Pick<SidebarThreadSummary, "environmentId" | "id">>,
 ): T[] {
-  return threads.filter(
-    (thread) =>
-      thread.archivedAt === null &&
-      !isShownUnderParent(
-        { environmentId: thread.environmentId, threadId: thread.id },
-        thread.lineage,
-        delegatedUnderParent,
-      ) &&
-      (scopedProjectKeys === null ||
-        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-  );
+  const keyOf = (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) =>
+    `${thread.environmentId}:${thread.id}`;
+  const listable = (thread: T) =>
+    thread.archivedAt === null &&
+    (scopedProjectKeys === null ||
+      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`));
+  const shownUnderParent = (thread: T) =>
+    isShownUnderParent(
+      { environmentId: thread.environmentId, threadId: thread.id },
+      thread.lineage,
+      delegatedUnderParent,
+    );
+  if (stackParents === undefined || stackParents.size === 0) {
+    return threads.filter((thread) => listable(thread) && !shownUnderParent(thread));
+  }
+  const byKey = new Map(threads.map((thread) => [keyOf(thread), thread]));
+  const visibility = new Map<string, boolean>();
+  const visible = (thread: T): boolean => {
+    const key = keyOf(thread);
+    const known = visibility.get(key);
+    if (known !== undefined) return known;
+    visibility.set(key, false);
+    let result = listable(thread);
+    if (result && shownUnderParent(thread)) {
+      const parent = stackParents.get(key);
+      const parentThread = parent === undefined ? undefined : byKey.get(keyOf(parent));
+      result = parentThread !== undefined && visible(parentThread);
+    }
+    visibility.set(key, result);
+    return result;
+  };
+  return threads.filter(visible);
 }
 
 export function buildBulkTitleRegenerationContextMenuItem(input: {
@@ -884,6 +963,7 @@ export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "request"
+  | "pring"
   | "preparing"
   | "working"
   | "waiting"
@@ -906,7 +986,12 @@ export function shouldRecedeSidebarThread(input: {
   ) {
     return false;
   }
-  if (input.status === "preparing" || input.status === "working" || input.status === "waiting") {
+  if (
+    input.status === "preparing" ||
+    input.status === "working" ||
+    input.status === "pring" ||
+    input.status === "waiting"
+  ) {
     return true;
   }
   if (input.status === "ready" || input.status === "approval") {
@@ -925,7 +1010,10 @@ type SidebarThreadStatusInput = Pick<
   | "blockedOnThreadWait"
 >;
 
-export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
+export function resolveSidebarThreadStatus(
+  thread: SidebarThreadStatusInput,
+  local: { readonly pullRequestGenerating?: boolean } = {},
+): SidebarThreadStatus {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return "approval";
   }
@@ -935,6 +1023,10 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   // A guest is waiting on the owner; the agent's own requests come first.
   if ((thread.pendingGuestMessageCount ?? 0) > 0) {
     return "request";
+  }
+  // PR generation is client-only state; it counts as work the thread is still doing.
+  if (local.pullRequestGenerating === true) {
+    return "pring";
   }
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
@@ -960,8 +1052,9 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
 /** Sidebar row status: a failure the user has already opened settles to ready, like Done. */
 export function resolveSidebarRowStatus(
   thread: ThreadStatusInput & SidebarThreadStatusInput,
+  local: { readonly pullRequestGenerating?: boolean } = {},
 ): SidebarThreadStatus {
-  const status = resolveSidebarThreadStatus(thread);
+  const status = resolveSidebarThreadStatus(thread, local);
   // A runtime failure without a failed run has nothing to date it, so it stays.
   if (status !== "failed" || thread.latestRun?.status !== "failed") return status;
   return hasUnseenRunFailure(thread) ? status : "ready";
@@ -996,7 +1089,7 @@ export function resolveWindowTitleThreadStatus(
 export function resolveSidebarFolderDot(
   threads: ReadonlyArray<ThreadStatusInput & SidebarThreadStatusInput>,
 ): "attention" | "failed" | "unread" | "working" | null {
-  const statuses = new Set(threads.map(resolveSidebarRowStatus));
+  const statuses = new Set(threads.map((thread) => resolveSidebarRowStatus(thread)));
   if (
     statuses.has("input") ||
     statuses.has("approval") ||
@@ -1187,8 +1280,39 @@ export function resolveWorkingStartedAt(
   return resolveThreadWorkingStartedAt(thread);
 }
 
+export function useThreadPullRequestGenerating(
+  thread: Pick<SidebarThreadSummary, "environmentId" | "id">,
+): boolean {
+  return React.useSyncExternalStore(
+    subscribePullRequestGeneration,
+    () => isPullRequestGenerating({ environmentId: thread.environmentId, threadId: thread.id }),
+    () => false,
+  );
+}
+
+/** The single sidebar status entrypoint: folds client-only work into the thread's own state. */
+export function useSidebarThreadStatus(
+  thread: SidebarThreadStatusInput & Pick<SidebarThreadSummary, "environmentId" | "id">,
+): SidebarThreadStatus {
+  return resolveSidebarThreadStatus(thread, {
+    pullRequestGenerating: useThreadPullRequestGenerating(thread),
+  });
+}
+
+/** Sidebar row status with client-only work (like PR generation) folded in. */
+export function useSidebarRowStatus(
+  thread: ThreadStatusInput &
+    SidebarThreadStatusInput &
+    Pick<SidebarThreadSummary, "environmentId" | "id">,
+): SidebarThreadStatus {
+  return resolveSidebarRowStatus(thread, {
+    pullRequestGenerating: useThreadPullRequestGenerating(thread),
+  });
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
+  pullRequestInFlight?: boolean | undefined;
 }): ThreadStatusPill | null {
   const { thread } = input;
 
@@ -1219,6 +1343,15 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  if (input.pullRequestInFlight === true) {
+    return {
+      label: msg("PRing"),
+      colorClass: "text-teal-600 dark:text-teal-300/90",
+      dotClass: "bg-teal-500 dark:bg-teal-300/90",
+      pulse: true,
+    };
+  }
+
   if (
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait !== true) ||
     thread.runtime?.status === "waiting"
@@ -1244,13 +1377,17 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  const waiting = {
-    label: msg("Waiting"),
-    colorClass: "text-sidebar-muted-foreground",
-    dotClass: "bg-sidebar-muted-foreground",
-    pulse: false,
-  };
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) return waiting;
+  if (
+    (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
+    (thread.runtime?.status !== "failed" && waitingOnAgents(thread))
+  ) {
+    return {
+      label: msg("Delegating"),
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
+    };
+  }
 
   // A failed run goes to the inbox even while background work holds the thread.
   if (hasUnseenRunFailure(thread)) {
@@ -1262,7 +1399,17 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return waiting;
+  if (
+    thread.runtime?.status !== "failed" &&
+    backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
+  ) {
+    return {
+      label: msg("Waiting"),
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
+      pulse: false,
+    };
+  }
 
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&

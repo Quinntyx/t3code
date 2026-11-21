@@ -19,6 +19,16 @@ export const getClientSettings = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const getLegacyVisualSettings = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.GET_LEGACY_VISUAL_SETTINGS_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+  handler: Effect.fn("desktop.ipc.clientSettings.getLegacyVisualSettings")(function* () {
+    const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
+    return Option.getOrNull(yield* clientSettings.getLegacyVisualSettings);
+  }),
+});
+
 export const setClientSettings = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SET_CLIENT_SETTINGS_CHANNEL,
   payload: ClientSettingsSchema,

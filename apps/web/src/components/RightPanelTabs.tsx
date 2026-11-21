@@ -39,6 +39,7 @@ import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dn
 import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  AudioLines,
   CircleDotIcon,
   Smartphone,
   ChevronDown,
@@ -48,6 +49,7 @@ import {
   Files,
   Globe2,
   MessagesSquare,
+  NotebookPen,
   Plus,
   TerminalSquare,
   Volume2Icon,
@@ -143,11 +145,13 @@ export interface RightPanelTabsProps {
   onAddBrowser: () => void;
   /** Keep separate from the DOM click handler so a MouseEvent cannot become a profile id. */
   onAddBrowserInProfile: (profileId: string) => void;
+  onAddNotebook?: (() => void) | undefined;
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
+  onAddVoice?: () => void;
   onAddDevice: () => void;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
@@ -324,6 +328,7 @@ function SurfaceMenuItem(props: {
 }
 
 function RightPanelEmptyState(props: {
+  onAddNotebook?: (() => void) | undefined;
   onAddBrowser: () => void;
   onAddBrowserInProfile: (profileId: string) => void;
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
@@ -332,6 +337,7 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
+  onAddVoice?: () => void;
   onAddDevice: () => void;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
@@ -350,6 +356,14 @@ function RightPanelEmptyState(props: {
   const [highlight, setHighlight] = useState(-1);
 
   const actions = [
+    {
+      label: msg("Notebook"),
+      icon: NotebookPen,
+      shortcut: "N",
+      available: props.onAddNotebook !== undefined,
+      disabledReason: gt("Notebooks are only available from a saved thread."),
+      onClick: () => props.onAddNotebook?.(),
+    },
     {
       label: msg("Browser"),
       icon: Globe2,
@@ -397,6 +411,14 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestsAvailable,
       disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.pullRequests),
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: msg("Voice"),
+      icon: AudioLines,
+      shortcut: "V",
+      available: props.onAddVoice !== undefined,
+      disabledReason: gt("Open a thread to use Voice."),
+      onClick: props.onAddVoice ?? (() => undefined),
     },
     {
       label: msg("Device"),
@@ -605,11 +627,15 @@ function surfaceTitle(
       );
     case "pull-request":
       return `#${surface.number}`;
+    case "notebook":
+      return resolve(msg("Notebook"));
     case "pull-requests":
       return resolve(msg("Linked items"));
     case "issue":
       // A git host numbers its issues; a tracker with keys of its own, such as Linear, names them.
       return /^\d+$/.test(surface.key) ? `#${surface.key}` : surface.key;
+    case "voice":
+      return resolve(msg("Voice"));
     case "device":
       return surface.title ?? surface.target?.name ?? resolve(msg("Device"));
     case "side-chat":
@@ -700,12 +726,16 @@ function SurfaceIcon({
           seed={pullRequestStatusSeed}
         />
       );
+    case "notebook":
+      return <NotebookPen className="size-3 shrink-0" />;
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "issue":
       return <IssueSurfaceIcon surface={surface} environmentId={environmentId} />;
     case "side-chat":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
+    case "voice":
+      return <AudioLines className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1170,6 +1200,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
   const addSurfaceActions = [
     {
+      label: msg("Notebook"),
+      icon: NotebookPen,
+      shortcut: "N",
+      available: props.onAddNotebook !== undefined,
+      disabledReason: gt("Notebooks are only available from a saved thread."),
+      onClick: () => props.onAddNotebook?.(),
+    },
+    {
       label: msg("Browser"),
       icon: Globe2,
       shortcut: "B",
@@ -1216,6 +1254,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.pullRequestsAvailable,
       disabledReason: messages(SURFACE_DISABLED_REASONS.pullRequests),
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: msg("Voice"),
+      icon: AudioLines,
+      shortcut: "V",
+      available: props.onAddVoice !== undefined,
+      disabledReason: gt("Open a thread to use Voice."),
+      onClick: props.onAddVoice ?? (() => undefined),
     },
     {
       label: msg("Device"),
@@ -1639,8 +1685,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddNotebook={props.onAddNotebook}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
+            {...(props.onAddVoice ? { onAddVoice: props.onAddVoice } : {})}
             onAddDevice={props.onAddDevice}
             onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}

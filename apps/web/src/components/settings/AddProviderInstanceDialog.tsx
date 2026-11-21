@@ -5,13 +5,22 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { useState } from "react";
-import { msg, T, useGT, useMessages, Var } from "gt-react";
-import type { MessageResolver } from "../../i18n/messages";
-import {
-  deriveAvailableInstanceId,
-  deriveInstanceId,
-} from "@t3tools/client-runtime/provider-instance-ids";
+import { T, useGT, useMessages, Var } from "gt-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  ADD_PROVIDER_WIZARD_STEPS,
+  ACP_REGISTRY_WIZARD_STEPS,
+  LOCAL_ACP_WIZARD_STEPS,
+  deriveNewInstanceId,
+  reservedInstanceIds,
+  resolveAcpRegistryWizardNavigation,
+  resolveWizardNavigation,
+  updateProviderIdentityDraft,
+  validateInstanceId,
+  type ProviderIdentityDraft,
+  type WizardNavigation,
+} from "@t3tools/client-runtime/provider-settings/add-instance";
+import { managedInstanceLocks } from "@t3tools/client-runtime/provider-settings/instance";
 import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
 import {
   type AcpRegistrySearchAgent,
@@ -31,7 +40,7 @@ import {
 
 import { cn } from "../../lib/utils";
 import { normalizeProviderAccentColor } from "../../providerInstances";
-import { managedInstanceLocks, useManagedPolicy } from "../../state/managedPolicy";
+import { useManagedPolicy } from "../../state/managedPolicy";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
 import { ChatGptConnectionButton } from "./ChatGptConnectionButton";
@@ -47,16 +56,6 @@ import { SettingsGroup } from "./SettingsGroup";
 import { SettingsRow } from "./settingsLayout";
 import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSettingsForm";
 import { WizardPanel, WizardPopup, WizardHeader, WizardFooter } from "../ui/wizard";
-import {
-  ADD_PROVIDER_WIZARD_STEPS,
-  ACP_REGISTRY_WIZARD_STEPS,
-  LOCAL_ACP_WIZARD_STEPS,
-  resolveAcpRegistryWizardNavigation,
-  resolveWizardNavigation,
-  updateProviderIdentityDraft,
-  type ProviderIdentityDraft,
-  type WizardNavigation,
-} from "./AddProviderInstanceDialog.logic";
 import { AddProviderInstanceWizardSteps } from "./AddProviderInstanceWizardSteps";
 import { AcpRegistrySearchStep, useAcpRegistrySearch } from "./AcpRegistrySearchStep";
 import { ProviderWizardAuthenticationStep } from "./ProviderWizardAuthenticationStep";
@@ -66,7 +65,6 @@ import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { ProviderEnvironmentSection } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
 
-const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 const ACP_REGISTRY_DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const DEFAULT_DRIVER_OPTION = providerClients.definitions[0]!;
@@ -76,21 +74,6 @@ const DRIVER_OPTIONS = providerClients.definitions.filter(
 const FEATURED_DRIVER_OPTIONS = DRIVER_OPTIONS.filter((option) => option.featured !== false);
 const MORE_DRIVER_OPTIONS = DRIVER_OPTIONS.filter((option) => option.featured === false);
 const EMPTY_CONFIG_DRAFT: Record<string, unknown> = {};
-function validateInstanceId(
-  id: string,
-  existing: ReadonlySet<string>,
-  resolve: MessageResolver,
-): string | null {
-  if (id.length === 0) return resolve(msg("Instance ID is required."));
-  if (id.length > 64) return resolve(msg("Instance ID must be 64 characters or fewer."));
-  if (!INSTANCE_ID_PATTERN.test(id)) {
-    return resolve(
-      msg("Instance ID must start with a letter and use only letters, digits, '-', or '_'."),
-    );
-  }
-  if (existing.has(id)) return resolve(msg("An instance named ''{id}'' already exists.", { id }));
-  return null;
-}
 
 function ProviderOptionGrid({
   options,
@@ -200,13 +183,7 @@ export function AddProviderInstanceDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [createdInstanceId, setCreatedInstanceId] = useState<ProviderInstanceId | null>(null);
 
-  // Reserve Codex/Claude default ids because they run before configuration; other unconfigured slots are
-  // available.
-  const existingIds = new Set([
-    "codex",
-    "claudeAgent",
-    ...Object.keys(settings.providerInstances ?? {}),
-  ]);
+  const existingIds = reservedInstanceIds(settings.providerInstances);
 
   const driverOption = providerClients.get(driver) ?? DEFAULT_DRIVER_OPTION;
   const isAcpRegistry = driver === ACP_REGISTRY_DRIVER_KIND;
@@ -226,16 +203,7 @@ export function AddProviderInstanceDialog({
   const { label, accentColor, instanceIdOverride } = identityByDriver[driver] ?? defaultIdentity;
   const instanceId =
     instanceIdOverride ??
-    deriveAvailableInstanceId(
-      (candidateLabel) => {
-        if (!candidateLabel.trim() || candidateLabel === driverOption.label) {
-          return isAcpRegistry ? `${driver}_custom` : driver;
-        }
-        return deriveInstanceId(driver, candidateLabel);
-      },
-      label,
-      existingIds,
-    );
+    deriveNewInstanceId({ driver, driverLabel: driverOption.label, label, existingIds });
   const driverSettingsFields = deriveProviderSettingsFields(driverOption, undefined, m);
   const instanceIdError = validateInstanceId(instanceId, existingIds, m);
   const showInstanceIdError = hasAttemptedSubmit && instanceIdError !== null;
@@ -318,11 +286,12 @@ export function AddProviderInstanceDialog({
     setDriver(ACP_REGISTRY_DRIVER_KIND);
     const nextLabel = agent.name;
     const registryIconUrl = resolveOfficialAcpRegistryIconUrl(agent.icon);
-    const nextInstanceId = deriveAvailableInstanceId(
-      (candidateLabel) => deriveInstanceId(ACP_REGISTRY_DRIVER_KIND, candidateLabel),
-      nextLabel,
+    const nextInstanceId = deriveNewInstanceId({
+      driver: ACP_REGISTRY_DRIVER_KIND,
+      driverLabel: "",
+      label: nextLabel,
       existingIds,
-    );
+    });
     setSelectedAcp(agent);
     setIsManualAcpConfiguration(false);
     setIdentityByDriver((existing) =>

@@ -42,6 +42,7 @@ import {
   type TimelineRow,
 } from "./timelineRowContext";
 import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
+import { AgentTrajectorySegments } from "./AgentTrajectorySegments";
 import {
   failedToolIconClassName,
   toolIconAcceptsTint,
@@ -366,14 +367,15 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
   );
   return (
     <div className="border-b border-border/60 pb-2 pt-1">
-      <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+      <div className="flex min-h-6 min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
         <span
           ref={shimmer ? observeVisibleAnimation : undefined}
-          className="relative shrink-0 overflow-hidden whitespace-nowrap"
+          className="relative shrink-0 overflow-hidden pe-1 whitespace-nowrap"
         >
           {label}
           {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
         </span>
+        <AgentTrajectorySegments summary={row.trajectory ?? []} compact={false} />
         {backgroundWorktreeSetup ? (
           <BackgroundWorktreeSetupChip snapshot={backgroundWorktreeSetup} />
         ) : null}

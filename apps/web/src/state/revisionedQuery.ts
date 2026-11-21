@@ -27,11 +27,11 @@ const makeRevisionedFamily = (query: Atom.Atom<unknown>) =>
             revisions = new WeakMap();
             readRevisions.set(get.registry, revisions);
           }
-          const stale = revisions.has(query)
-            ? revisions.get(query) !== revision
-            : // A reader without a revision may have cached it before the latest
-              // workspace change; a query nobody has read yet fetches fresh anyway.
-              revision !== null && isCached(get.registry, query);
+          const cached = isCached(get.registry, query);
+          // An evicted or unread query fetches fresh on `get(query)` below; only a cached one needs refreshing.
+          const stale =
+            cached &&
+            (revisions.has(query) ? revisions.get(query) !== revision : revision !== null);
           // Deferred: this builds while React renders, and a refresh would synchronously
           // re-render the query's other readers, which React rejects.
           if (stale) {
@@ -47,7 +47,7 @@ const makeRevisionedFamily = (query: Atom.Atom<unknown>) =>
       },
       // Refreshing the reader refetches the query it reads.
       (refresh) => refresh(query),
-    ),
+    ).pipe(Atom.setIdleTTL(0)),
   );
 
 // Held as long as the query lives, so one (query, revision) pair keeps one atom; an

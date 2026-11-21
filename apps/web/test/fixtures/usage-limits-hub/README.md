@@ -7,6 +7,7 @@ A fake CLIProxyAPI hub that serves the Limits evidence scenarios in `scenarios.j
 | A        | mixed Codex and Claude accounts                                          |
 | B        | one account per provider                                                 |
 | C        | six long-email Codex accounts                                            |
+| D        | v8 discovery: Mistral, OpenCode Go, OpenRouter, Inco, models             |
 | F        | xAI and Antigravity accounts that read, answer malformed, or are refused |
 | L        | named accounts (no email, so segments show the auth-file name)           |
 | P        | one account per read hub provider, plus an unread Kiro account           |

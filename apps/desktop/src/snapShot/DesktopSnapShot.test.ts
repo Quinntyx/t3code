@@ -504,6 +504,7 @@ const layerTest = (
           DesktopClientSettings.DesktopClientSettings,
           DesktopClientSettings.DesktopClientSettings.of({
             get: settingsGet,
+            getLegacyVisualSettings: Effect.succeedNone,
             set: () => Effect.void,
           }),
         ),

@@ -5,6 +5,7 @@ import {
   type PullRequestAnchor,
 } from "@t3tools/shared/pullRequestAnchor";
 import { projectChangeRequestUrl } from "@t3tools/client-runtime/change-request-links";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { normalizeThreadPullRequestKey } from "@t3tools/client-runtime/thread-pull-requests";
 import { useAtomValue } from "@effect/atom-react";
 import { usePullRequestStack } from "~/state/usePullRequestStack";
@@ -27,6 +28,7 @@ import {
   type PullRequestSummary,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -65,9 +67,9 @@ import {
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import { usePreparePullRequestThreadAction } from "~/state/sourceControlActions";
 import { cn } from "~/lib/utils";
-import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
-import { useProjects, useServerConfigs } from "~/state/entities";
+import { useProjects, useQuietThreadShells, useServerConfigs } from "~/state/entities";
+import { gitEnvironment } from "~/state/git";
 import { useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
@@ -76,6 +78,12 @@ import { pullRequestEnvironment, usePullRequestTurnRefresh } from "~/state/pullR
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PullRequestStackMenu } from "./PullRequestStackMenu";
 import { pullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
+import { PullRequestMergeDependentsConfirm } from "./PullRequestMergeDependentsConfirm";
+import {
+  derivePullRequestStack,
+  resolvePullRequestStackMerge,
+  summarizeRestackOutcomes,
+} from "./pullRequestStack.logic";
 import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
@@ -139,9 +147,8 @@ import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   checkoutFailureDescription,
   readableFailure,
-  resolvePullRequestReferenceHost,
+  resolvePullRequestReference,
   resolvePullRequestPrimaryControl,
-  allowedPullRequestMergeMethods,
   allowsSinglePullRequestMerge,
   canDeletePullRequestBranch,
   isPullRequestConflicting,
@@ -277,20 +284,6 @@ function reportCheckoutCommandError(error: Error) {
     title: m(msg("Could not copy checkout command")),
     description: error.message,
   });
-}
-
-function resolvePullRequestReference(
-  requestedReference: PullRequestRef,
-  repositoryIdentity: Parameters<typeof resolvePullRequestReferenceHost>[1],
-  supportsThreadPullRequests: boolean,
-): PullRequestRef {
-  return supportsThreadPullRequests
-    ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
-    : {
-        projectId: requestedReference.projectId,
-        repository: requestedReference.repository,
-        number: requestedReference.number,
-      };
 }
 
 function pullRequestMarkdownContext(
@@ -688,11 +681,13 @@ export function PullRequestDetailPanel({
     supportsThreadPullRequests &&
     detail?.capabilities.stacks === true &&
     detail.capabilities.stackActions === true;
+  const liveStackMembership = detailQuery.data?.stack;
   const canMergeSinglePullRequest = allowsSinglePullRequestMerge({
     supportsStackActions,
     hasStack: nativeStack !== null,
     stackPending: !nativeStackQuery.isFresh,
     stackError: nativeStackQuery.error,
+    liveMembership: liveStackMembership,
   });
   const stackOwnsMerge = supportsStackActions && nativeStack !== null;
   const mergeBlockedReason = canMergeSinglePullRequest
@@ -700,6 +695,32 @@ export function PullRequestDetailPanel({
     : nativeStackQuery.error
       ? gt("Couldn't check stack membership")
       : gt("Checking stack membership…");
+  const threadShells = useQuietThreadShells();
+  const derivedStack =
+    detail === null || nativeStack !== null || liveStackMembership != null
+      ? null
+      : derivePullRequestStack(
+          threadShells.filter(
+            (thread) =>
+              thread.environmentId === environmentId &&
+              thread.projectId === reference.projectId &&
+              thread.archivedAt === null,
+          ),
+          {
+            number: detail.number,
+            title: detail.title,
+            state: detail.state,
+            isDraft: detail.isDraft,
+            headBranch: detail.headBranch,
+            baseBranch: detail.baseBranch,
+            repository: reference.repository,
+          },
+        );
+  const stackChoice = resolvePullRequestStackMerge({
+    number: reference.number,
+    baseBranch: detail?.baseBranch ?? "",
+    stack: derivedStack,
+  });
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
   const refreshDetail = () => {
@@ -819,6 +840,24 @@ export function PullRequestDetailPanel({
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, {
     reportFailure: false,
   });
+  const mergeStack = useAtomCommand(pullRequestEnvironment.mergeStack, { reportFailure: false });
+  const canMergeStack = useAtomValue(
+    pullRequestEnvironment.mergeStack.permissionAtom(environmentId),
+  );
+  const canRestackDependents = useAtomValue(
+    pullRequestEnvironment.runAction.permissionAtom(environmentId, {
+      ...reference,
+      action: "merge",
+      restackDependents: true,
+    }),
+  );
+  const restackThreads = useAtomCommand(gitEnvironment.restackThreads, { reportFailure: false });
+  const canRestackThreads = useAtomValue(
+    gitEnvironment.restackThreads.permissionAtom(environmentId),
+  );
+  const [restacking, setRestacking] = useState(false);
+  const [mergeConfirmKey, setMergeConfirmKey] = useState<string | null>(null);
+  const headerActionsRef = useRef<HTMLDivElement | null>(null);
   const postComment = useAtomCommand(pullRequestEnvironment.comment, {
     reportFailure: false,
   });
@@ -859,6 +898,7 @@ export function PullRequestDetailPanel({
     action: PullRequestAction,
     method?: PullRequestMergeMethod,
     updateMethod?: PullRequestUpdateMethod,
+    restackDependents?: boolean,
   ) => {
     onActed?.(action, "sent");
     const result = await runAction({
@@ -868,6 +908,7 @@ export function PullRequestDetailPanel({
         action,
         ...(method ? { mergeMethod: method } : {}),
         ...(updateMethod ? { updateMethod } : {}),
+        ...(restackDependents ? { restackDependents } : {}),
       },
     });
     setPendingAction(null);
@@ -919,6 +960,57 @@ export function PullRequestDetailPanel({
     if (!canWriteSourceControl || pendingAction !== null) return false;
     setPendingAction(action);
     return finishAction(action, method, updateMethod);
+  };
+
+  const mergeWithDependents = async (restackDependents: boolean) => {
+    if (!canWriteSourceControl || pendingAction !== null) return false;
+    setPendingAction("merge");
+    return finishAction("merge", selectedMergeMethod, undefined, restackDependents);
+  };
+
+  const performStackMerge = async () => {
+    if (!canMergeStack || pendingAction !== null) return;
+    setPendingAction("merge");
+    onActed?.("merge", "sent");
+    const result = await mergeStack({
+      environmentId,
+      input: { ...reference, mergeMethod: selectedMergeMethod },
+    });
+    setPendingAction(null);
+    // A stack merge can stop partway, so the host is reread either way.
+    void refreshFromHost();
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: m(msg("Could not merge the stack")),
+        description: readableFailure(
+          squashAtomCommandFailure(result),
+          actionFailureHints(changeRequestTermKind(terminology)).merge,
+        ),
+      });
+      onActed?.("merge", "failed");
+      return;
+    }
+    onActed?.("merge", "done");
+  };
+
+  const restackStacked = async (threadId: ThreadId) => {
+    setRestacking(true);
+    const toastId = toastManager.add({ type: "loading", title: m(msg("Restacking...")) });
+    const result = await restackThreads({ environmentId, input: { threadId } });
+    setRestacking(false);
+    if (result._tag === "Failure") {
+      toastManager.update(toastId, {
+        type: "error",
+        title: m(msg("Could not restack")),
+        description: readableFailure(squashAtomCommandFailure(result), m(msg("Try again."))),
+      });
+      return;
+    }
+    toastManager.update(toastId, {
+      type: "success",
+      title: summarizeRestackOutcomes(result.value.threads),
+    });
   };
 
   const performCommentAction = async (body: string, action: "close" | "reopen") => {
@@ -1453,6 +1545,45 @@ export function PullRequestDetailPanel({
     !detail.isDraft &&
     !conflicting &&
     allowedMergeMethods.length > 1;
+  const canMergeAlone =
+    canMergeSinglePullRequest &&
+    detail?.state === "open" &&
+    can("merge") &&
+    !detail.isDraft &&
+    !conflicting &&
+    allowedMergeMethods.length > 0;
+  const openMergeConfirm = () => setMergeConfirmKey(pullRequestKey);
+  const mergeControl =
+    primaryAction !== "merge"
+      ? null
+      : stackChoice.stackMerge && canMergeStack
+        ? {
+            label: stackChoice.stackMerge.label,
+            tooltip: stackChoice.stackMerge.tooltip,
+            confirmInline: true,
+            run: () => void performStackMerge(),
+          }
+        : stackChoice.dependents
+          ? {
+              label: selectedMergeMethodLabel,
+              tooltip: stackChoice.dependents.title,
+              confirmInline: false,
+              run: openMergeConfirm,
+            }
+          : null;
+  const mergeOnly = canMergeAlone ? stackChoice.mergeOnly : null;
+  const stackOwnerThreadId = derivedStack?.ownerThreadId ?? null;
+  const restackMenu =
+    derivedStack !== null &&
+    stackOwnerThreadId !== null &&
+    derivedStack.stackedThreadCount > 0 &&
+    canRestackThreads
+      ? {
+          label: gt("Restack {count} stacked", { count: derivedStack.stackedThreadCount }),
+          pending: restacking,
+          run: () => void restackStacked(stackOwnerThreadId),
+        }
+      : null;
   const statePresentation = detail
     ? resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft }, resolve)
     : null;
@@ -1461,25 +1592,6 @@ export function PullRequestDetailPanel({
     (environment) =>
       environment.environmentId === environmentId && environment.connection.phase === "connected",
   );
-  const confirmDeleteBranch = async () => {
-    if (detail === null) return;
-    const confirmed = await readLocalApi()?.dialogs.confirm(
-      [
-        m(msg("Delete branch {branch}?", { branch: detail.headBranch })),
-        m(
-          msg(
-            "This deletes {branch} from {repository}. Local branches and worktrees are not changed.",
-            {
-              branch: detail.headBranch,
-              repository: detail.headRepositoryNameWithOwner ?? detail.repository,
-            },
-          ),
-        ),
-      ].join("\n"),
-      { variant: "destructive" },
-    );
-    if (confirmed) void perform("delete-branch");
-  };
   const showsApproveWorkflows =
     workflowApprovalsRequired > 0 && !checksStale && can("approve-workflows");
   const checksSummary = checksStale
@@ -1573,7 +1685,10 @@ export function PullRequestDetailPanel({
           openOnHostText={openOnHostText}
           onBack={onBack}
         />
-        <div className="mr-4 flex h-7 shrink-0 select-none items-center justify-end gap-1">
+        <div
+          ref={headerActionsRef}
+          className="mr-4 flex h-7 shrink-0 select-none items-center justify-end gap-1"
+        >
           {detail ? (
             <TooltipProvider delay={150} closeDelay={150} timeout={400}>
               {context === "page" ? (
@@ -1623,7 +1738,25 @@ export function PullRequestDetailPanel({
                 pendingAction={pendingAction}
                 perform={perform}
                 resolveConflicts={resolveConflictsControl}
+                mergeControl={mergeControl}
               />
+              {stackChoice.dependents ? (
+                <PullRequestMergeDependentsConfirm
+                  open={mergeConfirmKey === pullRequestKey}
+                  onOpenChange={(open) => setMergeConfirmKey(open ? pullRequestKey : null)}
+                  anchor={headerActionsRef}
+                  copy={stackChoice.dependents}
+                  environmentId={environmentId}
+                  projectId={reference.projectId}
+                  ownerThreadRef={
+                    stackOwnerThreadId === null
+                      ? null
+                      : scopeThreadRef(environmentId, stackOwnerThreadId)
+                  }
+                  canRestack={canRestackDependents}
+                  onMerge={mergeWithDependents}
+                />
+              ) : null}
               {checkoutControl}
               <PullRequestActionsMenu
                 environmentId={environmentId}
@@ -1656,6 +1789,9 @@ export function PullRequestDetailPanel({
                 autoMergeArmed={autoMergeArmed}
                 showsDraftToggle={showsDraftToggle}
                 showsMergeNow={showsMergeNow}
+                mergeOnly={mergeOnly}
+                confirmMerge={stackChoice.dependents ? openMergeConfirm : null}
+                restack={restackMenu}
                 showsAutoMerge={showsAutoMerge}
                 showsMergeMethods={showsMergeMethods}
                 allowedMergeMethods={allowedMergeMethods}
@@ -1665,7 +1801,6 @@ export function PullRequestDetailPanel({
                 environmentConnected={environmentConnected}
                 canWriteSourceControl={canWriteSourceControl}
                 onMaintainerEditsSaved={refreshDetail}
-                confirmDeleteBranch={confirmDeleteBranch}
                 pendingAction={pendingAction}
                 perform={perform}
                 openOnHostText={openOnHostText}
@@ -2098,6 +2233,12 @@ export function PullRequestDetailPanel({
                   {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                   onRefresh={refreshDetail}
                   onRefreshChecks={refreshFromHost}
+                  stack={derivedStack}
+                  onSelectStackMember={
+                    onSelectPullRequest
+                      ? (number) => onSelectPullRequest({ ...reference, number })
+                      : undefined
+                  }
                 />
               </div>
             ) : null}

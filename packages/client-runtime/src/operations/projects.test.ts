@@ -9,8 +9,11 @@ import {
   getCloneDirectoryLeafName,
   getCloneDirectoryName,
   getCloneDirectoryPath,
+  getProjectCloneCheckoutPath,
   getAddProjectInitialQuery,
   getDefaultCloneUrl,
+  getNewProjectDefaultParent,
+  getNewProjectRepository,
   githubIncompleteOwnerRepositoryMessage,
   normalizePastedCloneUrl,
   sortAddProjectProviderSources,
@@ -145,6 +148,16 @@ describe("add project shared logic", () => {
     expect(getCloneDirectoryName("  https://github.com/owner/repo.git  ")).toBe("repo");
   });
 
+  it("resolves the selected clone layout without changing the repository folder", () => {
+    expect(getProjectCloneCheckoutPath("~/src/repo", "standard")).toBe("~/src/repo");
+    expect(getProjectCloneCheckoutPath("~/src/repo/", "worktree-container")).toBe(
+      "~/src/repo/main",
+    );
+    expect(getProjectCloneCheckoutPath("C:\\src\\repo", "worktree-container")).toBe(
+      "C:\\src\\repo\\main",
+    );
+  });
+
   it("lays clone folders out like ghq only when asked, and only when the URL is safe", () => {
     expect(getCloneDirectoryPath("git@github.com:owner/repo.git", false)).toBe("repo");
     expect(getCloneDirectoryPath("git@github.com:owner/repo.git", true)).toBe(
@@ -175,6 +188,39 @@ describe("add project shared logic", () => {
         getCloneDirectoryPath("git@github.com:owner/repo.git", true),
       ),
     ).toBe("C:\\Users\\me\\ghq\\github.com\\owner\\repo");
+  });
+
+  it("prefers the Add project starts in setting for a new project, then the managed root", () => {
+    expect(
+      getNewProjectDefaultParent({
+        addProjectBaseDirectory: "  ~/src  ",
+        newProjectsRoot: "/home/me/.t3/projects",
+      }),
+    ).toBe("~/src");
+    expect(
+      getNewProjectDefaultParent({
+        addProjectBaseDirectory: "   ",
+        newProjectsRoot: "/home/me/.t3/projects",
+      }),
+    ).toBe("/home/me/.t3/projects");
+    expect(
+      getNewProjectDefaultParent({ addProjectBaseDirectory: null, newProjectsRoot: null }),
+    ).toBeNull();
+  });
+
+  it("names a new project's repository after its folder, not its main checkout", () => {
+    const target = { owner: "octocat" };
+    expect(getNewProjectRepository(target, "/src/pinball-stats")).toBe("octocat/pinball-stats");
+    expect(getNewProjectRepository(target, "/src/pinball-stats/", "standard")).toBe(
+      "octocat/pinball-stats",
+    );
+    expect(getNewProjectRepository(target, "/src/pinball-stats/main", "worktree-container")).toBe(
+      "octocat/pinball-stats",
+    );
+    expect(
+      getNewProjectRepository(target, "C:\\src\\pinball-stats\\main", "worktree-container"),
+    ).toBe("octocat/pinball-stats");
+    expect(getNewProjectRepository({ owner: null }, "/src/pinball-stats")).toBe("pinball-stats");
   });
 
   it("keeps a numeric repository name that sits on a path", () => {

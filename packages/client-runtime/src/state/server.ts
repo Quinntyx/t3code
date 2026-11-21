@@ -1357,6 +1357,11 @@ export function createServerEnvironmentAtoms<R, E>(
       );
     }).pipe(Atom.withLabel(`environment-data:server:usage-prices:${environmentId}`)),
   );
+  const emailAccountsFileAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(settingsValueAtom(environmentId))?.emailAccountsFile ?? "").pipe(
+      Atom.withLabel(`environment-data:server:email-accounts-file:${environmentId}`),
+    ),
+  );
   const usageScanSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
@@ -1540,6 +1545,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
     }),
+    emailAccounts: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:email:accounts",
+      tag: WS_METHODS.emailListAccounts,
+      refreshTrigger: ({ environmentId }) => emailAccountsFileAtom(environmentId),
+    }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",
       tag: WS_METHODS.serverGetNpmRelease,
@@ -1618,6 +1628,21 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
       idleTtlMs: 0,
+    }),
+    threadNotebook: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-notebook",
+      tag: WS_METHODS.threadsGetNotebook,
+      idleTtlMs: 0,
+      staleTimeMs: 0,
+      refreshIntervalMs: 1_000,
+    }),
+    threadUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-usage",
+      tag: WS_METHODS.serverGetThreadUsage,
+      staleTimeMs: 30_000,
+      // Only the open thread's details panel reads this; an idle atom would stay live and refetch on reconnect.
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
     }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry-history",
@@ -1878,6 +1903,15 @@ export function createServerEnvironmentAtoms<R, E>(
     answerSecretRequest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:secrets:answer-request",
       tag: WS_METHODS.secretsAnswerRequest,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.turnItemId]),
+      },
+    }),
+    answerEmailRequest: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:email:answer-request",
+      tag: WS_METHODS.emailAnswerRequest,
       concurrency: {
         mode: "singleFlight",
         key: ({ environmentId, input }) =>

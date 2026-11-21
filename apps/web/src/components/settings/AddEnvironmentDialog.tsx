@@ -18,10 +18,13 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Option from "effect/Option";
+import { parseDiscoverEnrollmentUrl } from "@t3tools/client-runtime/discover";
+import type { DiscoverTransport } from "@t3tools/contracts/discover";
 
 import { cn } from "../../lib/utils";
 import { formatDesktopSshTarget } from "./EnvironmentRow";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { CommandShortcut } from "../ui/command";
 import {
   Autocomplete,
@@ -54,6 +57,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
 import { type EnvironmentPresentation, useRelayEnvironmentDiscovery } from "~/state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { directoryDiscovery } from "../../state/discover";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import {
   resolveShortcutCommand,
@@ -94,6 +98,7 @@ export function AddEnvironmentDialog({
   const desktopBridge = window.desktopBridge;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
+  const enrollDiscovery = useAtomCommand(directoryDiscovery.enroll, { reportFailure: false });
   const connectSshEnvironment = useAtomCommand(connectSshEnvironmentAtom, {
     reportFailure: false,
   });
@@ -121,6 +126,8 @@ export function AddEnvironmentDialog({
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
+  const isDiscoveryEnrollment = parseDiscoverEnrollmentUrl(savedBackendHost) !== null;
+  const [discoveryTransport, setDiscoveryTransport] = useState<DiscoverTransport>("tailscale");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
   const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
@@ -220,6 +227,42 @@ export function AddEnvironmentDialog({
 
     setIsAddingSavedBackend(true);
     onErrorChange(null);
+    if (isDiscoveryEnrollment) {
+      if (routeTarget) {
+        onErrorChange(gt("Discovery enrollment cannot add a route to an existing environment."));
+        setIsAddingSavedBackend(false);
+        return;
+      }
+      const result = await enrollDiscovery({
+        enrollmentUrl: savedBackendHost.trim(),
+        transport: discoveryTransport,
+      });
+      setIsAddingSavedBackend(false);
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const failure = squashAtomCommandFailure(result);
+          onErrorChange(
+            failure instanceof Error
+              ? (thrownErrorMessage(failure, m) ?? failure.message)
+              : gt("Could not join discovery."),
+          );
+        }
+        return;
+      }
+      setSavedBackendHost("");
+      setSavedBackendPairingCode("");
+      onOpenChange(false);
+      toastManager.add({
+        type: "success",
+        title: gt("Discovery connected"),
+        description: desktopBridge
+          ? gt(
+              "Your local environment is discoverable. Other environments appear in your existing list.",
+            )
+          : gt("Discovered environments appear in your existing environment list."),
+      });
+      return;
+    }
     let remotePairingInput: ReturnType<typeof parseRemotePairingFields>;
     try {
       remotePairingInput = parseRemotePairingFields({
@@ -361,6 +404,11 @@ export function AddEnvironmentDialog({
   };
 
   const handleSavedBackendHostChange = (value: string) => {
+    if (parseDiscoverEnrollmentUrl(value) !== null) {
+      setSavedBackendHost(value);
+      setSavedBackendPairingCode("");
+      return;
+    }
     const parsedPairingUrl = parsePairingUrlFields(value);
     if (parsedPairingUrl) {
       setSavedBackendHost(parsedPairingUrl.host);
@@ -412,6 +460,34 @@ export function AddEnvironmentDialog({
     );
   };
 
+  const renderDiscoveryTransport = () =>
+    isDiscoveryEnrollment && desktopBridge && !routeTarget ? (
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-medium text-foreground">
+          <T>Local environment address</T>
+        </span>
+        <Select
+          value={discoveryTransport}
+          disabled={isAddingSavedBackend}
+          onValueChange={(value) => {
+            if (value === "tailscale" || value === "lan") setDiscoveryTransport(value);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="tailscale">
+              <T>Tailscale</T>
+            </SelectItem>
+            <SelectItem value="lan">
+              <T>LAN</T>
+            </SelectItem>
+          </SelectPopup>
+        </Select>
+      </label>
+    ) : null;
+
   const renderRemoteFields = () => (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
@@ -435,14 +511,25 @@ export function AddEnvironmentDialog({
             value={savedBackendPairingCode}
             onChange={(event) => setSavedBackendPairingCode(event.target.value)}
             placeholder={gt("PAIRCODE")}
-            disabled={isAddingSavedBackend}
+            disabled={isAddingSavedBackend || isDiscoveryEnrollment}
             spellCheck={false}
           />
         </label>
       </div>
+      {renderDiscoveryTransport()}
       <div>
         <span className="mt-1 block text-2xs text-muted-foreground">
-          <T>Paste a full pairing URL here to fill both fields automatically.</T>
+          {isDiscoveryEnrollment
+            ? routeTarget
+              ? gt("Discovery enrollment cannot add a route. Use a direct environment pairing URL.")
+              : desktopBridge
+                ? gt(
+                    "Join this discovery directory and make this desktop’s local environment discoverable to its members.",
+                  )
+                : gt(
+                    "Join this discovery directory. Discovered environments appear in your existing list.",
+                  )
+            : gt("Paste a full pairing or discovery enrollment URL here.")}
         </span>
       </div>
     </div>
@@ -508,15 +595,17 @@ export function AddEnvironmentDialog({
       <Button
         variant="outline"
         className="w-full"
-        disabled={isAddingSavedBackend}
+        disabled={isAddingSavedBackend || (isDiscoveryEnrollment && routeTarget !== null)}
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />
         {isAddingSavedBackend
           ? gt("Adding…")
-          : routeTarget
-            ? gt("Add route")
-            : gt("Add environment")}
+          : isDiscoveryEnrollment
+            ? gt("Join discovery")
+            : routeTarget
+              ? gt("Add route")
+              : gt("Add environment")}
       </Button>
     </div>
   );

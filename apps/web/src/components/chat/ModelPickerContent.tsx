@@ -3,12 +3,14 @@ import { useLegendListRef } from "~/hooks/useLegendListRef";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
+  type UsageLimitSourceSnapshots,
   type EnvironmentId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
+import { summarizeProviderLimits } from "@t3tools/shared/usageLimits";
 import { useAtomValue } from "@effect/atom-react";
 import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
 import { groupModelsBySubProvider } from "@t3tools/client-runtime/providerSubProviders";
@@ -48,6 +50,7 @@ import { ModelEsque } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { registerModelPickerContent } from "../../modelPickerVisibility";
 import { primaryServerKeybindingsAtom } from "../../state/server";
+import { useServerConfigs } from "../../state/entities";
 import {
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
@@ -70,7 +73,7 @@ import {
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
+import { providerModelKey, sortProviderModelItems } from "@t3tools/client-runtime/model-ordering";
 import { hasRuntimeModelCatalog } from "../../providerModels";
 
 type ModelPickerItem = {
@@ -170,6 +173,7 @@ function adjacentModelPickerProvider(input: {
 }
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
+const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 const MODEL_LIST_ESTIMATED_ITEM_SIZE = 32;
 // Rendered heights in `--spacing` units. Chrome is the search box and list padding, plus a 1px border.
 const ROW_UNITS = 8;
@@ -479,6 +483,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const keybindings = providedKeybindings ?? serverKeybindings;
   const [searchHeight, setSearchHeight] = useState(0);
   const toggleFavorite = useToggleEnvironmentModelFavorite(props.environmentId);
+  // Read once per opening, like the limits panel, so the bars do not tick while open.
+  const [limitsNow] = useState(Date.now);
+  const serverConfigs = useServerConfigs();
+  const usageLimitSources =
+    (props.environmentId === null
+      ? undefined
+      : serverConfigs.get(props.environmentId)?.usageLimitSources) ?? EMPTY_USAGE_LIMIT_SOURCES;
 
   const focusSearchInput = () => {
     searchInputRef.current?.focus({ preventScroll: true });
@@ -685,6 +696,18 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return [...available, ...disabled];
   })();
   const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const providerSnapshots = instanceEntries.map((entry) => entry.snapshot);
+  const limitsByInstance = new Map(
+    sidebarInstanceEntries.flatMap((entry) => {
+      const summary = summarizeProviderLimits(
+        entry.snapshot,
+        providerSnapshots,
+        usageLimitSources,
+        limitsNow,
+      );
+      return summary ? [[entry.instanceId, summary] as const] : [];
+    }),
+  );
   const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
 
   const filteredModels = (() => {
@@ -941,7 +964,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         ref={pickerContentRef}
         className={cn(
           "relative flex w-screen max-w-90 flex-row overflow-hidden",
-          props.docked ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none" : "max-h-86.5",
+          // Wide layouts give the provider rail room for quota cards; docked, the effort column
+          // takes 12rem beside the picker.
+          props.docked
+            ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none sm:max-w-[min(37.5rem,calc(100vw-14rem))]"
+            : "max-h-86.5 sm:max-h-120 sm:max-w-150",
         )}
         // Docked, the popup sets the height; a minimum here would overflow short windows.
         style={
@@ -962,6 +989,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
             showFavorites
+            limitsByInstance={limitsByInstance}
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
               ? {

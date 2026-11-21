@@ -1,11 +1,14 @@
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  backgroundWorkHoldsCompletion,
+  waitingOnAgents,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "../threadPullRequests.ts";
 import type {
   ThreadLinkedPullRequest,
   EnvironmentId,
   MessageId,
   OrchestrationProjectShell,
-  OrchestrationV2ProviderGoal,
+  OrchestrationV2Goal,
   OrchestrationV2RunStatus,
   OrchestrationV2ProviderFailureClass,
   OrchestrationV2ThreadProjection,
@@ -157,6 +160,8 @@ export interface EnvironmentThreadShell {
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** The branch the thread's worktree started from. */
+  readonly baseBranch?: string | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly linkOrigin: OrchestrationV2ThreadShell["linkOrigin"] | null;
@@ -179,7 +184,7 @@ export interface EnvironmentThreadShell {
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
   >;
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
-  readonly goal: OrchestrationV2ProviderGoal | null;
+  readonly goal: OrchestrationV2Goal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -191,6 +196,8 @@ export interface EnvironmentThreadShell {
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
+  readonly consumptionCap?: import("@t3tools/contracts").ThreadConsumptionCap | null;
+  readonly consumptionCapHit?: import("@t3tools/contracts").ThreadConsumptionCapHit | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   readonly pinOrderKey: string | null;
@@ -236,13 +243,16 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
 // server suppresses the roster while an interruptible activity run exists, so a
 // remaining roster is stronger than checkpoint-oriented waiting.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
+  const pendingBackgroundTasks = thread.pendingBackgroundTasks ?? [];
   const parkAtIdle =
-    backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
-    thread.status !== "failed";
-  if (thread.latestRunId === null && !parkAtIdle) {
+    waitingOnAgents({ pendingBackgroundTasks }) ||
+    (backgroundWorkHoldsCompletion(pendingBackgroundTasks) && thread.status !== "failed");
+  if (thread.latestRunId === null && !parkAtIdle && thread.consumptionCapHit == null) {
     return null;
   }
-  const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
+  const capHit = thread.consumptionCapHit ?? null;
+  const status =
+    capHit !== null ? "failed" : parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
   return {
     status,
     activeRunId: thread.activeRunId,
@@ -252,10 +262,10 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
         : nullableIso(thread.activityRunStartedAt),
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
-    lastError: thread.lastError ?? null,
-    lastErrorClass: thread.lastErrorClass ?? null,
-    lastErrorCode: thread.lastErrorCode ?? null,
-    usageLimitResetAt: thread.usageLimitResetAt ?? null,
+    lastError: capHit?.reason ?? thread.lastError ?? null,
+    lastErrorClass: capHit === null ? (thread.lastErrorClass ?? null) : "usage_limit",
+    lastErrorCode: capHit === null ? (thread.lastErrorCode ?? null) : "consumption_cap",
+    usageLimitResetAt: capHit === null ? (thread.usageLimitResetAt ?? null) : null,
     updatedAt: iso(thread.updatedAt),
   };
 }
@@ -306,6 +316,7 @@ export function presentThreadShell(
     interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    baseBranch: thread.baseBranch ?? null,
     pullRequests: threadPullRequestsOf(thread),
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,
@@ -349,6 +360,8 @@ export function presentThreadShell(
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     limitRecovery: thread.limitRecovery ?? null,
+    consumptionCap: thread.consumptionCap ?? null,
+    consumptionCapHit: thread.consumptionCapHit ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,

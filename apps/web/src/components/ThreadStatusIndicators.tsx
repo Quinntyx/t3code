@@ -50,6 +50,7 @@ import {
   type ThreadStatusPill,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
+  useThreadPullRequestGenerating,
 } from "./Sidebar.logic";
 
 import type { SidebarThreadSummary } from "../types";
@@ -403,6 +404,7 @@ export function ThreadPullRequestBadgeControl({
   status,
   onOpenList,
   onOpenPullRequest,
+  onContextMenu,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   badge: ThreadPullRequestBadge | null;
@@ -412,6 +414,8 @@ export function ThreadPullRequestBadgeControl({
   status: PrStatusIndicator | null;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  /** Replaces the enclosing row's menu with the pull request's own. */
+  onContextMenu?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
 }) {
   const m = useMessages();
   const presentation = resolveThreadPullRequestBadgePresentation({ badge, number, url, status }, m);
@@ -427,6 +431,7 @@ export function ThreadPullRequestBadgeControl({
       pullRequests={pullRequests}
       onOpenList={onOpenList}
       onOpenPullRequest={onOpenPullRequest}
+      onContextMenu={onContextMenu}
     />
   );
 }
@@ -441,6 +446,7 @@ function PullRequestBadge({
   pullRequests,
   onOpenList,
   onOpenPullRequest,
+  onContextMenu,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   presentation: NonNullable<ReturnType<typeof resolveThreadPullRequestBadgePresentation>>;
@@ -451,6 +457,7 @@ function PullRequestBadge({
   pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  onContextMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
 }) {
   const onClick = opensList
     ? (event: MouseEvent<HTMLElement>) => {
@@ -471,6 +478,15 @@ function PullRequestBadge({
       "aria-label": presentation.label,
       onPointerDown: (event: MouseEvent<HTMLElement>) => event.stopPropagation(),
       onClick,
+      ...(onContextMenu === undefined
+        ? {}
+        : {
+            onContextMenu: (event: MouseEvent<HTMLElement>) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onContextMenu(event);
+            },
+          }),
     },
   });
   return (
@@ -545,12 +561,7 @@ export function ThreadPullRequestsMiniList({
           >
             {line.stack ? (
               <span className="ml-auto shrink-0 pl-1 text-3xs">
-                {line.stack.kind === "native" ? (
-                  <T context="a native stack of pull requests">stack</T>
-                ) : (
-                  <T context="a chain of pull requests based on each other">chain</T>
-                )}{" "}
-                · {line.stack.size}
+                <T context="a native stack of pull requests">stack</T> · {line.stack.size}
               </span>
             ) : null}
           </ThreadPullRequestMiniListItem>
@@ -915,6 +926,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
       ...thread,
       lastVisitedAt,
     },
+    pullRequestInFlight: useThreadPullRequestGenerating(thread),
   });
 
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);

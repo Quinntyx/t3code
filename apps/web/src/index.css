@@ -325,6 +325,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-sidebar-row-active: var(--sidebar-row-active);
   --color-sidebar-row-selected: var(--sidebar-row-selected);
   --color-sidebar-border: var(--contrast-sidebar-border);
+  /* A selected row's outline (border at 70% over the row fill), as one opaque colour. */
+  --color-sidebar-stack-guide: color-mix(
+    in srgb,
+    var(--color-sidebar-border) 70%,
+    var(--color-sidebar-row-active)
+  );
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -688,6 +694,28 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   background: var(--composer-glass-shadow-color);
   mask: var(--glass-liquid-shadow, linear-gradient(transparent, transparent)) 0 0 / 100% 100%
     no-repeat;
+}
+
+/* One-line text that fades out at its end instead of ending in an ellipsis. */
+@utility truncate-fade {
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+
+  &:dir(rtl) {
+    -webkit-mask-image: linear-gradient(to left, black calc(100% - 1.5rem), transparent);
+    mask-image: linear-gradient(to left, black calc(100% - 1.5rem), transparent);
+  }
+}
+
+/* A stack guide's elbow: an inset shadow, like the selected row's ring, so both draw alike. */
+@utility stack-guide-elbow {
+  box-shadow: inset 1px -1px 0 0 var(--color-sidebar-stack-guide);
+}
+
+@utility stack-guide-corner {
+  box-shadow: inset 1px 1px 0 0 var(--color-sidebar-stack-guide);
 }
 
 @utility topbar-scroll-fade {
@@ -1791,10 +1819,16 @@ html[data-theme-id] :is(.chat-markdown, .composer-tiptap) .chat-markdown-codeblo
    secondary tokens are substantially darker than those visible pixels. */
 html[data-theme-id="t3-chat"] {
   @variant light {
-    & .chat-markdown :not(pre) > code,
-    & [data-changed-files-state],
-    & [data-changed-files-header] {
+    & .chat-markdown :not(pre) > code {
       background-color: var(--message-surface);
+    }
+
+    & [data-changed-files-state] {
+      --changed-files-fill: color-mix(
+        in srgb,
+        var(--message-surface) var(--glass-opacity),
+        transparent
+      );
     }
 
     & .chat-markdown :not(pre) > code,

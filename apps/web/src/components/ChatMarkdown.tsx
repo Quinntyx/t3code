@@ -16,6 +16,9 @@ import {
 import { taskListMarkerOffset } from "@t3tools/shared/markdownTaskList";
 import { isHostPath, resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
+import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { handoffFilePrompt, isHandoffFile } from "@t3tools/client-runtime/handoff";
 import {
   AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
@@ -223,10 +226,12 @@ import {
   ChatMarkdownAssetImage,
   ChatMarkdownImage,
   ChatMarkdownImageFallback,
+  ChatMarkdownModel,
   ChatMarkdownVideo,
   MarkdownLinkContext,
   markdownImageCopy,
 } from "./chat/ChatMarkdownMedia";
+import { createAssetCacheKey } from "../assets/assetBytesCache";
 import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
@@ -736,6 +741,7 @@ function useChatMarkdownState({
   };
   const openChangeRequestLink = useOpenChangeRequestLink(threadRef, pullRequestPanelRef);
   const openIssueLink = useOpenIssueLink(threadRef, pullRequestPanelRef);
+  const newThread = useNewThreadHandler();
   const openDeferredMarkdownLink = useOpenLink(threadRef);
   // Subscribe so hydrated settings apply before the anchor synchronously decides whether to intercept _blank.
   const linkTargetPreference = useClientSettings((settings) => settings.browserLinkTarget);
@@ -930,6 +936,15 @@ function useChatMarkdownState({
         cwd,
         findWorkspaceMatch: () => findWorkspaceFileMatch(fileLinkMeta),
       });
+    const handOffToNewThread = async (source: ScopedThreadRef) => {
+      const thread = readThreadShell(source);
+      if (!thread) return;
+      const { absolutePath } = await resolveHostPath();
+      await newThread(scopeProjectRef(thread.environmentId, thread.projectId), {
+        prompt: handoffFilePrompt(absolutePath),
+        modelSelection: thread.modelSelection,
+      });
+    };
     const isAppBundle = isMacOS && fileLinkMeta.filePath.endsWith(".app");
     const canOpenApp =
       environmentId !== null &&
@@ -1005,6 +1020,17 @@ function useChatMarkdownState({
             : undefined
         }
         revealLabel={revealInFileManagerLabel}
+        onHandOff={
+          threadRef && isHandoffFile(fileLinkMeta.filePath)
+            ? () =>
+                void handOffToNewThread(threadRef).catch((cause) =>
+                  reportMarkdownActionFailure(
+                    { operation: "hand-off-to-new-thread", target: fileLinkMeta.targetPath },
+                    cause,
+                  ),
+                )
+            : undefined
+        }
         onOpenInBrowser={
           threadRef &&
           canOperatePreview &&
@@ -1650,6 +1676,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={environmentId}
+          threadId={threadRef?.threadId ?? null}
           resource={{
             _tag: SOURCE_CONTROL_MEDIA_ASSET,
             cwd,
@@ -1682,6 +1709,26 @@ const CHAT_MARKDOWN_COMPONENTS = {
         src: mediaSrc,
         ...(reference ? { reference } : {}),
       };
+      if (kind === "model") {
+        const modelCacheKey =
+          environmentId !== null && threadRef !== null && threadRef !== undefined
+            ? createAssetCacheKey({
+                environmentId,
+                threadId: threadRef.threadId,
+                resource: mediaSrc,
+                revision: mediaSrc,
+              })
+            : undefined;
+        return (
+          <ChatMarkdownModel
+            src={mediaSrc}
+            alt={altText}
+            copyMarkdown={copyMarkdown}
+            actionsSource={actionsSource}
+            cacheKey={modelCacheKey}
+          />
+        );
+      }
       if (kind === "video") {
         return (
           <ChatMarkdownVideo
@@ -1732,6 +1779,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={threadRef.environmentId}
+          threadId={threadRef.threadId}
           resource={{
             _tag: "media-file",
             threadId: threadRef.threadId,

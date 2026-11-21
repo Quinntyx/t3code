@@ -238,6 +238,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
             isBrowserPartition: () => {
               throw new Error("unexpected browser partition lookup");
             },
+            claimFormReplay: () => {},
           }),
           stub.fileSystem,
           Layer.mock(NetService.NetService, {}),

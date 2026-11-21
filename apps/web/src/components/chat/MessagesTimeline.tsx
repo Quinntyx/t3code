@@ -23,6 +23,7 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
+import { compactTrajectoryLabel } from "@t3tools/client-runtime/work-log/trajectory-summary";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -94,7 +95,8 @@ import {
 } from "./MessagesTimeline.logic";
 import { type ThreadFindMatch } from "./threadFind";
 import { useThreadFindNavigation } from "./useThreadFindNavigation";
-import { TooltipScrollDismissArea } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipScrollDismissArea, TooltipTrigger } from "../ui/tooltip";
+import { AgentTrajectorySegments } from "./AgentTrajectorySegments";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -639,6 +641,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
 
   const preferredToolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
+  const foldContextCompactions = useClientSettings((settings) => settings.foldContextCompactions);
   const screenReaderAnnouncements = useClientSettings(
     (settings) => settings.screenReaderAnnouncements,
   );
@@ -655,6 +658,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runlessWorkActive,
         toolCallVisibility,
         revealedMessageId,
+        foldContextCompactions,
       })
     : null;
   const activeFindRunId =
@@ -699,6 +703,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runlessWorkActive,
         toolCallVisibility,
         revealedMessageId,
+        foldContextCompactions,
       })
     ).get(citedEntry.id);
     setCitationExpandedFor(citationRequest.key);
@@ -759,6 +764,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     worktreeSetup,
     toolCallVisibility,
     revealedMessageId,
+    foldContextCompactions,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
   const matchedApprovalRequestIds = new Set<string>();
@@ -1415,7 +1421,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return (
         <>
           {activityAnnouncer}
-          <div className="h-full min-h-0 bg-background" data-timeline-loading="true" />
+          <div className="h-full min-h-0" data-timeline-loading="true" />
         </>
       );
     }
@@ -1856,39 +1862,120 @@ function WorkHistorySkeleton() {
   );
 }
 
+function TurnFoldLabel({
+  row,
+  compact,
+}: {
+  row: Extract<TimelineRow, { kind: "turn-fold" }>;
+  compact: boolean;
+}) {
+  return <span>{compact ? compactTrajectoryLabel(row.label) : row.label}</span>;
+}
+
+function TurnFoldChevron({ expanded }: { expanded: boolean }) {
+  return expanded ? (
+    <ChevronDownIcon className="size-3.5" />
+  ) : (
+    <ChevronRightIcon className="size-3.5" />
+  );
+}
+
+function useFittedInlineContent() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [fits, setFits] = useState(false);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Resize observations keep the trajectory label fitted to its DOM container.
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const measure = () => setFits(content.scrollWidth <= container.clientWidth);
+    measure();
+    return observeResize([container, content], measure);
+  }, []);
+
+  return { containerRef, contentRef, fits };
+}
+
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
+  const { containerRef, contentRef, fits } = useFittedInlineContent();
   const { loading, error, toggle } = useDeferredWorkLoading(row, () =>
     ctx.onToggleTurnFold(row.runId),
   );
+  const compact = !fits;
 
   return (
-    <div className="group/timeline-row border-b border-border/60 pb-2 pe-0.5 pt-1">
-      <div className="relative flex items-center gap-1">
+    <div className="group/timeline-row relative flex items-start gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
+      <div
+        ref={containerRef}
+        className="relative flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5"
+      >
+        <span
+          aria-hidden="true"
+          className="pointer-events-none invisible absolute left-0 top-0 h-0 w-0 overflow-hidden"
+        >
+          <span
+            ref={contentRef}
+            className="inline-flex w-max items-center gap-x-1 whitespace-nowrap text-sm leading-relaxed text-muted-foreground tabular-nums"
+          >
+            <span className="inline-flex items-center px-1">
+              <TurnFoldLabel row={row} compact={false} />
+            </span>
+            <AgentTrajectorySegments summary={row.trajectory} measurement />
+            <span className="inline-flex items-center px-1">
+              <TurnFoldChevron expanded={row.expanded} />
+            </span>
+          </span>
+        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-expanded={row.expanded}
+                aria-label={row.label}
+                aria-busy={loading}
+                data-scroll-anchor-ignore
+                onClick={toggle}
+                className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+              />
+            }
+          >
+            <TurnFoldLabel row={row} compact={compact} />
+            {error ? ` · ${error}` : null}
+          </TooltipTrigger>
+          <TooltipPopup>
+            {row.expanded ? (
+              <T>
+                Elapsed time for this response, including thinking and tool calls. Click to hide the
+                activity.
+              </T>
+            ) : (
+              <T>
+                Elapsed time for this response, including thinking and tool calls. Click to show the
+                activity.
+              </T>
+            )}
+          </TooltipPopup>
+        </Tooltip>
+        <AgentTrajectorySegments summary={row.trajectory} compact={compact} />
         <button
           type="button"
-          aria-expanded={row.expanded}
-          data-scroll-anchor-ignore
+          aria-hidden="true"
+          tabIndex={-1}
           onClick={toggle}
-          aria-busy={loading}
-          className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+          className="flex cursor-pointer select-none items-center rounded-md px-1 text-muted-foreground transition-colors hover:text-foreground"
         >
-          <span>
-            {row.label}
-            {error ? ` · ${error}` : ""}
-          </span>
-          {row.expanded ? (
-            <ChevronDownIcon className="size-3.5" />
-          ) : (
-            <ChevronRightIcon className="size-3.5" />
-          )}
+          <TurnFoldChevron expanded={row.expanded} />
         </button>
-        <TimelineRowTimestamp
-          createdAt={row.createdAt}
-          timestampFormat={ctx.timestampFormat}
-          className="ms-auto"
-        />
       </div>
+      <TimelineRowTimestamp
+        createdAt={row.createdAt}
+        timestampFormat={ctx.timestampFormat}
+        className="ms-auto"
+      />
       {loading ? <WorkHistorySkeleton /> : null}
     </div>
   );

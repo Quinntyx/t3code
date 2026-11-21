@@ -57,7 +57,7 @@ describe("rightPanelStore", () => {
     );
   });
 
-  it("records single and bulk tab closes, newest first", () => {
+  it("records single and bulk tab closes, newest first", async () => {
     const store = useRightPanelStore.getState();
     const pr = pullRequestSurface({
       projectId: "project-a",
@@ -66,6 +66,7 @@ describe("rightPanelStore", () => {
     });
     store.openFile(refA, "src/app.ts");
     store.open(refA, "device");
+    store.open(refA, "notebook");
     store.openPullRequest(refA, pr);
     store.open(refA, "diff");
     store.closeSurface(refA, pr.id);
@@ -75,7 +76,22 @@ describe("rightPanelStore", () => {
       useClosedViewStore
         .getState()
         .entries.map((entry) => (entry.kind === "panel-tab" ? entry.surface.id : null)),
-    ).toEqual(["device", "diff", pr.id]);
+    ).toEqual(["device", "diff", "notebook", pr.id]);
+    const notebook = useClosedViewStore
+      .getState()
+      .entries.find((entry) => entry.kind === "panel-tab" && entry.surface.kind === "notebook");
+    expect(notebook).toBeDefined();
+    await reopenClosedView(notebook!, {
+      workspaceAvailable: true,
+      openPreview: () => {
+        throw new Error("Notebook restore must not open a browser");
+      },
+    });
+    await reloadRightPanelStore();
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "notebook",
+      kind: "notebook",
+    });
   });
 
   it("reopens the active tab first after a bulk close", () => {
@@ -467,11 +483,13 @@ describe("rightPanelStore", () => {
     const otherEnvironment = scopeThreadRef("env-2" as EnvironmentId, refA.threadId);
     const store = useRightPanelStore.getState();
     const revision = store.getUserActionRevision(refA);
-    store.openFile(refB, "src/app.ts");
+    store.open(refB, "notebook");
     store.openFile(otherEnvironment, "src/app.ts");
 
     expect(store.openProactive(refA, completedDiff, revision)).toBe(true);
-    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refB)).toBe("file");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refB)).toBe(
+      "notebook",
+    );
     expect(
       selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, otherEnvironment),
     ).toBe("file");

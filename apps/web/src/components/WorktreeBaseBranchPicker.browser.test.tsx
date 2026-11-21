@@ -49,6 +49,7 @@ describe("WorktreeBaseBranchPicker", () => {
       const picker = () => (
         <WorktreeBaseBranchPicker
           environmentId={EnvironmentId.make("primary")}
+          projectId={null}
           cwd="/repo"
           value=""
           onValueChange={onValueChange}

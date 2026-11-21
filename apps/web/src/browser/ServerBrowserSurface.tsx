@@ -386,19 +386,23 @@ export function ServerBrowserSurface(props: {
       if (noFrameTimer !== null) clearTimeout(noFrameTimer);
       noFrameTimer = null;
     };
-    const painter = createPreviewFramePainter(canvas, () => {
-      if (hasFrameRef.current) return;
-      hasFrameRef.current = true;
-      clearNoFrameTimer();
-      setFramesStalled(false);
-      firstFrame();
-    });
+    const painter = createPreviewFramePainter(
+      canvas,
+      () => {
+        if (hasFrameRef.current) return;
+        hasFrameRef.current = true;
+        clearNoFrameTimer();
+        setFramesStalled(false);
+        firstFrame();
+      },
+      () => client.requestKeyFrame(),
+    );
     const client = createPreviewStreamClient(
       { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
       {
-        onFrame: (jpeg) => {
+        onFrame: (frame) => {
           unauthorizedRef.current = 0;
-          painter.paint(jpeg);
+          painter.paint(frame);
         },
         onProbe: (result) => {
           if (controlRef.current?.controller !== "you") return;

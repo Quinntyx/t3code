@@ -4,17 +4,135 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
   ProviderInstanceId,
+  ProjectCloneSnapshot,
   ServerProvider,
   ServerProviderModel,
 } from "@t3tools/contracts";
+import { repositoryGroupingKeyOf } from "@t3tools/contracts";
+import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import {
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
 } from "@t3tools/shared/model";
+import { fileBasename } from "@t3tools/shared/path";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { isReasoningSelect } from "./modelTraits.ts";
-import type { ThreadStructure } from "./state/models.ts";
+import type { EnvironmentProject, ThreadStructure } from "./state/models.ts";
 import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
+
+type MachineHandoffProject = Pick<
+  EnvironmentProject,
+  "environmentId" | "workspaceRoot" | "repositoryIdentity"
+>;
+
+function machineHandoffProjectSubdirectory(
+  project: Pick<MachineHandoffProject, "workspaceRoot" | "repositoryIdentity">,
+): string | null {
+  return sourceProjectSubdirectory(project.repositoryIdentity?.rootPath, project.workspaceRoot);
+}
+
+export function matchingMachineHandoffProjects<T extends MachineHandoffProject>(
+  source: MachineHandoffProject,
+  projects: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const identity = source.repositoryIdentity;
+  const subdirectory = machineHandoffProjectSubdirectory(source);
+  if (!identity || subdirectory === null) return [];
+  return projects.filter(
+    (project) =>
+      project.environmentId !== source.environmentId &&
+      project.repositoryIdentity &&
+      repositoryGroupingKeyOf(project.repositoryIdentity) === repositoryGroupingKeyOf(identity) &&
+      machineHandoffProjectSubdirectory(project) === subdirectory,
+  );
+}
+
+export function machineHandoffBlocker(
+  input: {
+    readonly sourceAvailable: boolean;
+    readonly sourceStatus: string | undefined;
+    readonly sourceConnected: boolean;
+    readonly targetConnected: boolean;
+    readonly sourceSupported: boolean;
+    readonly targetSupported: boolean;
+    readonly canExport: boolean;
+    readonly canImport: boolean;
+    readonly projectSelected: boolean;
+    readonly modelReady: boolean;
+  },
+  resolve: MFunctionType = mFallback,
+): string | null {
+  if (!input.sourceAvailable)
+    return resolve(msg("The source thread or project is no longer available."));
+  if (
+    ["preparing", "queued", "starting", "running", "waiting"].includes(input.sourceStatus ?? "")
+  ) {
+    return resolve(msg("Stop the current turn before handing off this thread."));
+  }
+  if (!input.sourceConnected || !input.targetConnected)
+    return resolve(msg("Both machines must be connected."));
+  if (!input.sourceSupported || !input.targetSupported)
+    return resolve(
+      msg("Both machines must support machine handoffs. Update the server if needed."),
+    );
+  if (!input.canExport || !input.canImport)
+    return resolve(
+      msg("Permission to transfer threads and working files is required on both machines."),
+    );
+  if (!input.projectSelected)
+    return resolve(msg("Choose the destination project, or clone the repository first."));
+  if (!input.modelReady)
+    return resolve(msg("Choose an available provider and model on the destination machine."));
+  return null;
+}
+
+export function machineHandoffCloneReady(
+  clone: Pick<ProjectCloneSnapshot, "phase"> | "pending" | null,
+  hasRepositoryIdentity: boolean,
+): boolean {
+  return (
+    clone !== "pending" && (clone?.phase === "done" || (clone === null && hasRepositoryIdentity))
+  );
+}
+
+export async function relayMachineHandoff<Snapshot, Result>(input: {
+  readonly eligibility: () => string | null;
+  readonly exportSnapshot: () => Promise<Snapshot>;
+  readonly importSnapshot: (snapshot: Snapshot) => Promise<Result>;
+  readonly attempt?: { current: (() => Promise<Result>) | null };
+}): Promise<Result> {
+  const before = input.eligibility();
+  if (before) throw new Error(before);
+  let importSnapshot = input.attempt?.current;
+  if (!importSnapshot) {
+    const snapshot = await input.exportSnapshot();
+    importSnapshot = () => input.importSnapshot(snapshot);
+    if (input.attempt) input.attempt.current = importSnapshot;
+  }
+  const after = input.eligibility();
+  if (after) throw new Error(after);
+  return importSnapshot();
+}
+
+export function sourceProjectSubdirectory(
+  rootPath: string | undefined,
+  workspaceRoot: string,
+): string | null {
+  if (!rootPath) return null;
+  const root = rootPath.replaceAll("\\", "/").replace(/\/+$/, "");
+  const workspace = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
+  const relative =
+    workspace === root
+      ? ""
+      : workspace.startsWith(`${root}/`)
+        ? workspace.slice(root.length + 1)
+        : null;
+  return relative?.split("/").some((segment) => segment === ".." || segment === ".")
+    ? null
+    : relative;
+}
 
 export type HandoffTimelineRun = Pick<
   OrchestrationV2Run,
@@ -24,7 +142,12 @@ export type HandoffTimelineRun = Pick<
 export type HandoffEndpoints = ReturnType<typeof resolveHandoffEndpoints>;
 
 export function resolvePendingHandoff(
-  projection: Pick<ThreadStructure, "runs" | "visibleTurnItems"> | null | undefined,
+  projection:
+    | (Pick<ThreadStructure, "runs" | "visibleTurnItems"> & {
+        readonly thread?: Pick<ThreadStructure["thread"], "historyOrigin">;
+      })
+    | null
+    | undefined,
   selection: ModelSelection | null | undefined,
   providers: ReadonlyArray<ServerProvider>,
 ): HandoffEndpoints | null {
@@ -38,7 +161,12 @@ export function resolvePendingHandoff(
       run.status !== "rolled_back" &&
       (run.startedAt !== null || (run.status === "starting" && run.contextHandoffId !== null)),
   )?.modelSelection;
-  if (from === undefined || selection == null) return null;
+  if (selection == null) return null;
+  if (from === undefined) {
+    return projection.thread?.historyOrigin === "machine_handoff"
+      ? { from: [], to: selection }
+      : null;
+  }
   const source = providers.find((provider) => provider.instanceId === from.instanceId);
   const target = providers.find((provider) => provider.instanceId === selection.instanceId);
   const needsHandoff =
@@ -87,6 +215,16 @@ function latestRunModelBefore(
     if (latest === undefined || run.ordinal > latest.ordinal) latest = run;
   }
   return latest?.modelSelection.model;
+}
+
+export function isHandoffFile(path: string): boolean {
+  return fileBasename(path).toLowerCase() === "handoff.md";
+}
+
+/** The trailing space lets the composer render the link as a file chip. */
+export function handoffFilePrompt(path: string): string {
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- agent prompt
+  return `Continue from ${serializeComposerFileLink(path)} `;
 }
 
 export interface ModelSwitchChange {

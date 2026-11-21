@@ -506,6 +506,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled
       ? [gt("Render math")]
       : []),
+    ...(settings.buddy !== DEFAULT_UNIFIED_SETTINGS.buddy ? [gt("Buddy")] : []),
     ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
       ? [gt("Panel animations")]
       : []),
@@ -545,6 +546,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? [gt("Resume after usage limits")]
       : []),
+    ...(settings.autoResumePullRequestThreadsFirst !==
+    DEFAULT_UNIFIED_SETTINGS.autoResumePullRequestThreadsFirst
+      ? [gt("Resume threads with pull requests first")]
+      : []),
     ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
       ? [gt("Snooze until limits reset")]
       : []),
@@ -582,6 +587,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.toolCallVisibility !== DEFAULT_UNIFIED_SETTINGS.toolCallVisibility
       ? [gt("Tool calls in chat")]
       : []),
+    ...(settings.foldContextCompactions !== DEFAULT_UNIFIED_SETTINGS.foldContextCompactions
+      ? [gt("Fold context compactions")]
+      : []),
     ...(settings.screenReaderAnnouncements !== DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements
       ? [gt("Screen reader announcements")]
       : []),
@@ -609,6 +617,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
       ? [gt("New worktrees start from remote")]
       : []),
+    ...(settings.defaultBranchRemote !== DEFAULT_UNIFIED_SETTINGS.defaultBranchRemote
+      ? [gt("Default remote")]
+      : []),
+    ...(settings.newWorktreesBesideMain !== DEFAULT_UNIFIED_SETTINGS.newWorktreesBesideMain
+      ? [gt("Beside the main checkout")]
+      : []),
     ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
       ? [gt("Add project base directory")]
       : []),
@@ -628,6 +642,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Delete confirmation")]
       : []),
     ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? [gt("Quit shortcut")] : []),
+    ...(settings.hideWindowControls !== DEFAULT_UNIFIED_SETTINGS.hideWindowControls
+      ? [gt("Window controls")]
+      : []),
     ...(isTextGenerationModelDirty ? [gt("Text generation model")] : []),
     ...(settings.threadTitleInstructions !== DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions
       ? [gt("Thread title instructions")]
@@ -696,6 +713,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
+      buddy: DEFAULT_UNIFIED_SETTINGS.buddy,
       language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
@@ -711,6 +729,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
+      foldContextCompactions: DEFAULT_UNIFIED_SETTINGS.foldContextCompactions,
       screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
       screenReaderWindowTitle: DEFAULT_UNIFIED_SETTINGS.screenReaderWindowTitle,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
@@ -723,6 +742,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+      autoResumePullRequestThreadsFirst: DEFAULT_UNIFIED_SETTINGS.autoResumePullRequestThreadsFirst,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
@@ -735,6 +755,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
+      defaultBranchRemote: DEFAULT_UNIFIED_SETTINGS.defaultBranchRemote,
+      newWorktreesBesideMain: DEFAULT_UNIFIED_SETTINGS.newWorktreesBesideMain,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       ghqCloneLayout: DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
@@ -742,6 +764,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
+      hideWindowControls: DEFAULT_UNIFIED_SETTINGS.hideWindowControls,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       threadTitleInstructions: DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
@@ -1395,6 +1418,7 @@ export function ChatSettingsPanel() {
 
       <SettingsSection id="activity" title={gt("Activity")}>
         <ToolCallVisibilityRow />
+        <FoldContextCompactionsRow />
       </SettingsSection>
 
       <SettingsSection id="screen-reader" title={gt("Screen reader")}>
@@ -1456,6 +1480,42 @@ function ToolCallVisibilityRow() {
             ))}
           </SelectPopup>
         </Select>
+      }
+    />
+  );
+}
+
+function FoldContextCompactionsRow() {
+  const setting = useSearchableSetting();
+  const gt = useGT();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...setting("fold-context-compactions")}
+      description={gt(
+        "Hide “Context compacted” dividers inside a finished turn’s collapsed work instead of showing them below it.",
+      )}
+      resetAction={
+        settings.foldContextCompactions !== DEFAULT_UNIFIED_SETTINGS.foldContextCompactions ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset fold context compactions to default")}
+            onClick={() =>
+              updateSettings({
+                foldContextCompactions: DEFAULT_UNIFIED_SETTINGS.foldContextCompactions,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.foldContextCompactions}
+          onCheckedChange={(checked) =>
+            updateSettings({ foldContextCompactions: Boolean(checked) })
+          }
+          aria-label={gt("Fold context compactions")}
+        />
       }
     />
   );
@@ -2002,6 +2062,24 @@ export function ThreadsSettingsPanel() {
                 updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
               }
               aria-label={gt("Resume after usage limits")}
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...setting("auto-resume-pull-request-threads-first")}
+          description={gt(
+            "Resume limited threads with a linked pull request before the rest. Other limited threads wait until those finish.",
+          )}
+          settingKeys={["autoResumePullRequestThreadsFirst"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["autoResumePullRequestThreadsFirst"]}
+              checked={settings.autoResumePullRequestThreadsFirst}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumePullRequestThreadsFirst: Boolean(checked) })
+              }
+              aria-label={gt("Resume threads with pull requests first")}
             />
           }
         />

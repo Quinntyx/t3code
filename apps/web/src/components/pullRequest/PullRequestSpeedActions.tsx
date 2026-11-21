@@ -4,17 +4,15 @@ import { msg, useGT, useMessages } from "gt-react";
 import { createContext, use, type ReactNode } from "react";
 import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
 
-import { m } from "~/i18n/messages";
 import { useShortcutModifierState } from "~/shortcutModifierState";
 import { pullRequestEnvironment } from "~/state/pullRequests";
-import { useUiStateStore } from "~/uiStateStore";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { resolvePullRequestMergeMethod } from "./pullRequestDetail.logic";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import { pullRequestQuickActions, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import {
+  resolvePullRequestMergeMethodForDetail,
   usePullRequestActionRunner,
   usePullRequestDefaultMergeMethodResolver,
 } from "./usePullRequestActions";
@@ -69,19 +67,8 @@ export function PullRequestSpeedActions<Entry extends PullRequestSpeedActionEntr
     reference,
     terminology,
     onSuccess: (action, reply) => onActed?.({ entry, action, reply }),
-    resolveMergeMethod: (detail) => {
-      const allowed = detail.capabilities.mergeMethods.filter(
-        (method) => detail.mergeCapabilities[method],
-      );
-      if (allowed.length === 0)
-        throw new Error(m(msg("No merge method is available for this repository.")));
-      return resolvePullRequestMergeMethod(
-        allowed,
-        null,
-        resolveProjectDefault(),
-        useUiStateStore.getState().pullRequestMergeMethod,
-      );
-    },
+    resolveMergeMethod: (detail) =>
+      resolvePullRequestMergeMethodForDetail(detail, resolveProjectDefault()),
   });
   const actions = pullRequestQuickActions(entry, hostActions);
   const busy = actionPending || closing || sweeping;

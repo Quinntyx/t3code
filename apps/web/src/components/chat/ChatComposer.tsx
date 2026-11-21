@@ -1304,6 +1304,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerDraftFile(attachmentDraftTarget, fileId);
   };
 
+  const clearComposerAttachments = (): boolean => {
+    if (questionAttachmentTarget && activePendingIsResponding) return false;
+    const imageIds = composerImagesRef.current.map((image) => image.id);
+    const fileIds = composerFilesRef.current.map((file) => file.id);
+    if (imageIds.length === 0 && fileIds.length === 0) return false;
+    for (const imageId of imageIds) removeComposerImageFromDraft(imageId);
+    for (const fileId of fileIds) removeComposerFileFromDraft(fileId);
+    return true;
+  };
+
   const addComposerDraftReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const addComposerDraftPreviewAnnotation = useComposerDraftStore(
     (store) => store.addPreviewAnnotation,
@@ -2081,7 +2091,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "thread") {
-      if (trigger.kind !== "path") return;
+      if (trigger.kind !== "thread") return;
       const shell = readThreadShell(item.thread);
       if (!shell) return;
       const record = threadContextRecord(item.thread, shell.title);
@@ -2423,6 +2433,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       readComposerSnapshot,
       applyPromptReplacement,
       submitComposer,
+      clearComposerAttachments,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
     })(key, event, isTaskItem);
@@ -3522,7 +3533,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             data-chat-composer-surface="true"
             data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
             className={cn(
-              "rounded-2xl transition-[background-color] duration-200",
+              "rounded-(--chat-composer-inner-radius) transition-[background-color] duration-200",
               "in-data-[thread-context-over]:bg-accent/45 in-data-[thread-context-over]:ring-1 in-data-[thread-context-over]:ring-inset in-data-[thread-context-over]:ring-primary/70",
               isDragOverComposer ? "bg-accent/45 ring-1 ring-inset ring-primary/70" : null,
               projectSelectionRequired ? "opacity-75" : null,
@@ -3530,7 +3541,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             )}
           >
             {showCollapsedMobilePromptRow ? (
-              <div className="flex items-center justify-between gap-2 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 px-(--chat-composer-action-inset) py-2">
                 <button
                   type="button"
                   data-chat-composer-transition-prompt="true"
@@ -3615,8 +3626,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               }}
               data-chat-composer-body="true"
               className={cn(
-                "relative px-4 pb-2",
-                "pt-3.5 sm:pt-4",
+                "relative px-(--chat-composer-action-inset) pt-(--chat-composer-action-inset) pb-2",
                 isComposerCollapsedMobile && "hidden",
               )}
             >
@@ -3805,7 +3815,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <div
                 data-chat-composer-footer="true"
                 className={cn(
-                  "flex min-w-0 flex-nowrap items-center overflow-visible px-2 pb-2",
+                  "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-(--chat-composer-action-inset) pb-(--chat-composer-action-inset)",
                   pendingUserInputs.length > 0 && "pt-2",
                   showMobilePendingAnswerActions &&
                     speechInput.state.phase === "idle" &&

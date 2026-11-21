@@ -1,4 +1,5 @@
 import { resolvePullRequestDetailChecks } from "@t3tools/client-runtime/pull-request-checks";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { changeRequestTermKind } from "../pullRequest/changeRequestTerm";
 import { T, useGT, useMessages, Var } from "gt-react";
@@ -17,7 +18,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { type MouseEvent as ReactMouseEvent } from "react";
 
 import type { ComposerThreadTarget } from "~/composerDraftStore";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -39,7 +40,6 @@ import {
   describePullRequestChecks,
   isPullRequestConflicting,
   resolvePullRequestMergeMethod,
-  allowedPullRequestMergeMethods,
   resolveThreadPanelPullRequestAction,
 } from "../pullRequest/pullRequestDetail.logic";
 import { PullRequestChecksPopover } from "../pullRequest/PullRequestChecksPopover";
@@ -61,16 +61,7 @@ import {
   type PrStatusIndicator,
   type ThreadPr,
 } from "../ThreadStatusIndicators";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
-import { Button } from "../ui/button";
+import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -181,15 +172,10 @@ export function ThreadDetailsPrRow({
     environmentId,
     (project?.id as ProjectId | undefined) ?? null,
   );
-  const [confirmingMerge, setConfirmingMerge] = useState(false);
-
   const rowAction =
     pendingAction === "ready" || pendingAction === "merge"
       ? pendingAction
       : resolveThreadPanelPullRequestAction(detail);
-  if (confirmingMerge && rowAction !== "merge") {
-    setConfirmingMerge(false);
-  }
   const conflicting = isPullRequestConflicting(detail);
   const checksState = detail === null ? "none" : classifyPullRequestChecks(detail.checks);
   const checksRollup = detail === null ? null : pullRequestChecksState(detail.checks);
@@ -198,6 +184,9 @@ export function ThreadDetailsPrRow({
     null,
     resolveProjectDefaultMergeMethod(),
     lastSelectedMergeMethod,
+  );
+  const inlineConfirm = useInlineActionConfirm(
+    `${refreshKey}:${rowAction}:${selectedMergeMethod}:${actionPending}:${handoff}`,
   );
   const mergeMethodKey =
     selectedMergeMethod === "fast-forward" ? "fastForward" : selectedMergeMethod;
@@ -390,6 +379,7 @@ export function ThreadDetailsPrRow({
     composerTarget === undefined ? (
       <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />
     ) : null;
+  const confirmMergeLabel = gt("Confirm merge?");
   const trailingAction =
     rowAction === "resolve"
       ? {
@@ -437,7 +427,9 @@ export function ThreadDetailsPrRow({
             }
           : rowAction === "merge"
             ? {
-                label: gt("Merge", { $context: "verb, merges a pull request" }),
+                label: inlineConfirm.isArmed("merge")
+                  ? confirmMergeLabel
+                  : gt("Merge", { $context: "verb, merges a pull request" }),
                 pendingLabel: gt("Merging..."),
                 pending: actionPending,
                 destructive: false,
@@ -449,7 +441,7 @@ export function ThreadDetailsPrRow({
                     method: mergeMethodKey,
                   },
                 ),
-                onClick: () => setConfirmingMerge(true),
+                onClick: () => void perform("merge", selectedMergeMethod),
               }
             : null;
 
@@ -556,11 +548,22 @@ export function ThreadDetailsPrRow({
                       part="meta"
                       tone={trailingAction.destructive ? "destructive" : "primary"}
                       disabled={actionPending || handoff !== null}
-                      onClick={trailingAction.onClick}
+                      {...(rowAction === "merge"
+                        ? inlineConfirm.props("merge", trailingAction.onClick)
+                        : { onClick: trailingAction.onClick })}
                     />
                   }
                 >
-                  {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
+                  <span className="grid">
+                    {rowAction === "merge" ? (
+                      <span aria-hidden className="invisible col-start-1 row-start-1">
+                        {confirmMergeLabel}
+                      </span>
+                    ) : null}
+                    <span className="col-start-1 row-start-1">
+                      {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
+                    </span>
+                  </span>
                   {trailingAction.suffix}
                 </TooltipTrigger>
                 <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
@@ -577,44 +580,6 @@ export function ThreadDetailsPrRow({
       ) : (
         openRow(label, "row")
       )}
-      {rowAction === "merge" ? (
-        <AlertDialog open={confirmingMerge} onOpenChange={(open) => setConfirmingMerge(open)}>
-          <AlertDialogPopup>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {gt(
-                  "Merge {term, select, mr {merge request} cr {change request} other {pull request}}?",
-                  { term },
-                )}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {gt(
-                  "This merges #{number} using {method, select, merge {merge} squash {squash} rebase {rebase} fastForward {fast-forward} other {merge}}.",
-                  {
-                    number,
-                    method: mergeMethodKey,
-                  },
-                )}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-                <T>Cancel</T>
-              </AlertDialogClose>
-              <Button
-                size="sm"
-                disabled={actionPending}
-                onClick={() => {
-                  setConfirmingMerge(false);
-                  void perform("merge", selectedMergeMethod);
-                }}
-              >
-                <T context="verb, merges a pull request">Merge</T>
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogPopup>
-        </AlertDialog>
-      ) : null}
     </>
   );
 }

@@ -217,7 +217,10 @@ export function ComposerControlsBar(props: {
       triggerClassName={cn(
         "group/model-trigger",
         MODEL_TRIGGER_STATES,
-        composerControlsCollapsed ? "min-w-13 shrink text-xs!" : "min-w-13",
+        composerControlsCollapsed
+          ? "min-w-13 shrink text-xs!"
+          : // Concentric with the composer corner: both share the footer inset.
+            "min-w-13 rounded-(--chat-composer-action-radius)",
       )}
       triggerSuffix={effort.suffix}
       triggerDetail={effort.detail}
@@ -236,9 +239,7 @@ export function ComposerControlsBar(props: {
       terminalOpen={terminalOpen}
       open={modelPickerOpen}
       instanceIndicatorBackground={
-        composerControlsCollapsed
-          ? "color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent)"
-          : "var(--contrast-input)"
+        composerControlsCollapsed ? "var(--chat-composer-glass-fill)" : "var(--contrast-input)"
       }
       {...(modelPickerIconClassName
         ? { activeProviderIconClassName: modelPickerIconClassName }

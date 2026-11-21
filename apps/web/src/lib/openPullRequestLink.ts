@@ -28,7 +28,7 @@ import {
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProject, readProjects, readThreadShell, useProjects } from "../state/entities";
 import { environmentServerConfigsAtom, serverEnvironment } from "../state/server";
-import { usePrimaryEnvironmentId } from "../state/environments";
+import { readPrimaryEnvironmentId, usePrimaryEnvironmentId } from "../state/environments";
 import { reviewEnvironment } from "../state/review";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 
@@ -62,6 +62,44 @@ export function pullRequestLinkPanelTarget(input: {
     primaryEnvironmentId: input.primaryEnvironmentId,
     lendHostProject: input.lendHostProject,
   });
+}
+
+function openChangeRequestInPanel(input: {
+  readonly panelRef: ScopedThreadRef;
+  readonly target: NonNullable<ReturnType<typeof pullRequestLinkPanelTarget>>;
+  readonly url: string;
+  readonly revealUrl?: string | undefined;
+}) {
+  const { project, repository, number, host } = input.target;
+  useRightPanelStore.getState().openPullRequest(input.panelRef, {
+    // The standalone PR panel has a synthetic ref; each tab keeps its real environment.
+    ...(input.panelRef.environmentId === project.environmentId
+      ? {}
+      : { environmentId: project.environmentId }),
+    projectId: project.id,
+    ...(host === undefined ? {} : { host }),
+    repository,
+    url: input.url,
+    ...(input.revealUrl === undefined ? {} : { revealUrl: input.revealUrl }),
+    number,
+  });
+}
+
+/** Opens a link's pull request in the thread's right panel, whatever the link setting says. */
+export function openChangeRequestInRightPanel(input: {
+  readonly threadRef: ScopedThreadRef;
+  readonly url: string;
+}): boolean {
+  const target = pullRequestLinkPanelTarget({
+    url: input.url,
+    environmentId: input.threadRef.environmentId,
+    primaryEnvironmentId: readPrimaryEnvironmentId(),
+    lendHostProject: true,
+  });
+  if (target === null) return false;
+  const revealUrl = parsePullRequestAnchor(input.url) === null ? undefined : input.url;
+  openChangeRequestInPanel({ panelRef: input.threadRef, target, url: input.url, revealUrl });
+  return true;
 }
 
 function shouldOpenPullRequestExternally(
@@ -117,17 +155,11 @@ export function useOpenChangeRequestLink(
         selectedEnvironmentId: project.environmentId,
       };
       if (resolvedPanelRef) {
-        useRightPanelStore.getState().openPullRequest(resolvedPanelRef, {
-          // The standalone PR panel has a synthetic ref; each tab keeps its real environment.
-          ...(resolvedPanelRef.environmentId === project.environmentId
-            ? {}
-            : { environmentId: project.environmentId }),
-          projectId: project.id,
-          ...(host === undefined ? {} : { host }),
-          repository,
+        openChangeRequestInPanel({
+          panelRef: resolvedPanelRef,
+          target,
           url: targetUrl,
-          ...(revealUrl === undefined ? {} : { revealUrl }),
-          number,
+          revealUrl,
         });
         if (!resolvedThreadRef) {
           void navigate({

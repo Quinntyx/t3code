@@ -11,6 +11,7 @@ import {
   sourceControlClients,
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import * as Schema from "effect/Schema";
 import {
   COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS,
@@ -34,6 +35,7 @@ import {
   type RepositoryIdentity,
   type PullRequestConversationThread,
   type PullRequestReviewThread,
+  type PullRequestStackMembership,
   type PullRequestState,
   type PullRequestUpdateMethod,
   SourceControlProviderKind,
@@ -67,11 +69,14 @@ export function allowsSinglePullRequestMerge(input: {
   hasStack: boolean;
   stackPending: boolean;
   stackError: string | null;
+  /** The live detail read's own membership; absent when that read did not report one. */
+  liveMembership: PullRequestStackMembership | null | undefined;
 }): boolean {
-  return (
-    !input.supportsStackActions ||
-    (!input.hasStack && !input.stackPending && input.stackError === null)
-  );
+  if (!input.supportsStackActions) return true;
+  const freshStack = input.hasStack && !input.stackPending;
+  // A live membership answer settles it without the slower stack lookup, unless that disagrees.
+  if (input.liveMembership !== undefined) return input.liveMembership === null && !freshStack;
+  return !input.hasStack && !input.stackPending && input.stackError === null;
 }
 
 export function resolvePullRequestMergeMethod(
@@ -294,14 +299,6 @@ type PullRequestActionableDetail = Pick<
   PullRequestDetail,
   "state" | "isDraft" | "mergeability" | "capabilities" | "viewerPermissions" | "mergeCapabilities"
 >;
-
-export function allowedPullRequestMergeMethods(
-  detail: Pick<PullRequestActionableDetail, "capabilities" | "mergeCapabilities"> | null,
-): ReadonlyArray<PullRequestMergeMethod> {
-  return detail === null
-    ? []
-    : detail.capabilities.mergeMethods.filter((method) => detail.mergeCapabilities[method]);
-}
 
 function canPerformPullRequestAction(
   detail: Pick<PullRequestActionableDetail, "capabilities" | "viewerPermissions"> | null,
@@ -1642,6 +1639,20 @@ export function resolvePullRequestReferenceHost(
   if (reference.host !== undefined || !identity?.provider) return reference;
   const host = sourceControlClients.get(identity.provider).checkoutChangeRequestHost(identity);
   return host === null ? reference : { ...reference, host };
+}
+
+export function resolvePullRequestReference(
+  requestedReference: PullRequestRef,
+  repositoryIdentity: RepositoryIdentity | null | undefined,
+  supportsThreadPullRequests: boolean,
+): PullRequestRef {
+  return supportsThreadPullRequests
+    ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
+    : {
+        projectId: requestedReference.projectId,
+        repository: requestedReference.repository,
+        number: requestedReference.number,
+      };
 }
 
 interface PullRequestDetailSnapshotRef {

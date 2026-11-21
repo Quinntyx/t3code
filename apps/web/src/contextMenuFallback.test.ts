@@ -221,6 +221,40 @@ afterEach(() => {
 });
 
 describe("showContextMenuFallback", () => {
+  it("arms an item with a confirm label instead of choosing it", async () => {
+    let settled = false;
+    const selectionPromise = showContextMenuFallback([
+      { id: "merge", label: "Merge pull request", confirmLabel: "Confirm merge?" },
+    ]);
+    void selectionPromise.then(() => {
+      settled = true;
+    });
+
+    findButton("Merge pull request")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    findButton("Confirm merge?")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await expect(selectionPromise).resolves.toBe("merge");
+  });
+
+  it("disarms a confirm label when the item loses focus", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "merge", label: "Merge pull request", confirmLabel: "Confirm merge?" },
+    ]);
+
+    const mergeButton = findButton("Merge pull request");
+    mergeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(findButton("Confirm merge?")).toBeDefined();
+
+    mergeButton?.blur();
+    expect(findButton("Merge pull request")).toBeDefined();
+
+    mergeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    mergeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await expect(selectionPromise).resolves.toBe("merge");
+  });
+
   it("ignores a click from the gesture that opened the menu", async () => {
     let enablePointerSelection: ((time: number) => void) | undefined;
     vi.stubGlobal("requestAnimationFrame", (callback: (time: number) => void) => {

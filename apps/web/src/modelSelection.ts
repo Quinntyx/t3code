@@ -12,6 +12,7 @@ import {
 import {
   type CustomModelDefinition,
   createModelSelection,
+  createModelHiddenPredicate,
   normalizeCustomModelSlug,
   readCustomModelEntries,
   resolveSelectableModel,
@@ -37,10 +38,10 @@ import {
   resolveDefaultProviderModelSelection,
   resolveProjectDefaultProviderModelSelection,
 } from "./providerInstances";
-import { sortModelsForProviderInstance } from "./modelOrdering";
+import { sortModelsForProviderInstance } from "@t3tools/client-runtime/model-ordering";
+import { MAX_CUSTOM_MODEL_LENGTH } from "@t3tools/client-runtime/provider-settings/models";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 
-export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
 
 // Legacy per-driver buckets would leak custom-instance models into stock instances.
@@ -79,7 +80,7 @@ function appendUnavailableDynamicModelSelection(
   rawModels: ReadonlyArray<ServerProvider["models"][number]>,
   provider: ProviderDriverKind,
   selectedModel: string | null | undefined,
-  hiddenModels: ReadonlyArray<string>,
+  preferences: UnifiedSettings["providerModelPreferences"][ProviderInstanceId],
 ): AppModelOption[] {
   if (!hasRuntimeModelCatalog(provider)) return options;
   const slug = normalizeCustomModelSlug(selectedModel);
@@ -87,7 +88,7 @@ function appendUnavailableDynamicModelSelection(
   if (isRuntimeModelDefaultAlias(provider, slug)) return options;
 
   if (resolveSelectableModel(provider, slug, rawModels) !== null) return options;
-  if (hiddenModels.includes(slug)) return options;
+  if (createModelHiddenPredicate(preferences)({ slug })) return options;
   if (options.some((option) => option.slug === slug)) return options;
 
   return [...options, { slug, name: slug, isCustom: false, isUnavailable: true }];
@@ -115,7 +116,7 @@ function toAppModelOption(
 function readInstanceModelPreferences(
   settings: UnifiedSettings,
   instanceId: ProviderInstanceId,
-): { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> } {
+): UnifiedSettings["providerModelPreferences"][ProviderInstanceId] {
   return (
     settings.providerModelPreferences?.[instanceId] ?? {
       hiddenModels: [],
@@ -126,14 +127,11 @@ function readInstanceModelPreferences(
 
 function applyInstanceModelPreferences(
   options: ReadonlyArray<AppModelOption>,
-  preferences: {
-    readonly hiddenModels: ReadonlyArray<string>;
-    readonly modelOrder: ReadonlyArray<string>;
-  },
+  preferences: UnifiedSettings["providerModelPreferences"][ProviderInstanceId],
 ): AppModelOption[] {
-  const hiddenModels = new Set(preferences.hiddenModels);
+  const isHidden = createModelHiddenPredicate(preferences);
   return sortModelsForProviderInstance(
-    options.filter((option) => option.isCustom || !hiddenModels.has(option.slug)),
+    options.filter((option) => !isHidden(option)),
     { modelOrder: preferences.modelOrder },
   );
 }
@@ -202,7 +200,7 @@ function getAppModelOptions(
     rawModels,
     provider,
     selectedModel,
-    preferences.hiddenModels,
+    preferences,
   );
 }
 
@@ -243,7 +241,7 @@ export function getAppModelOptionsForInstance(
     entry.models,
     entry.driverKind,
     selectedModel,
-    preferences.hiddenModels,
+    preferences,
   );
 }
 
@@ -255,10 +253,16 @@ export function resolveAppModelSelection(
 ): string {
   const resolvedProvider = resolveSelectableProvider(providers, provider);
   const options = getAppModelOptions(settings, providers, resolvedProvider, selectedModel);
-  return (
-    resolveSelectableModel(resolvedProvider, selectedModel, options) ??
-    getDefaultServerModel(providers, resolvedProvider)
-  );
+  const resolved = resolveSelectableModel(resolvedProvider, selectedModel, options);
+  if (resolved !== null) return resolved;
+  const instanceId = defaultInstanceIdForDriver(resolvedProvider);
+  if (providers.some((candidate) => candidate.instanceId === instanceId)) return "";
+  const fallback = getDefaultServerModel(providers, resolvedProvider);
+  return createModelHiddenPredicate(readInstanceModelPreferences(settings, instanceId))({
+    slug: fallback,
+  })
+    ? ""
+    : fallback;
 }
 
 export function resolveAppModelSelectionForInstance(
@@ -283,17 +287,19 @@ export function resolveAppModelSelectionForInstance(
   }
   if (resolutionOptions?.preserveUnavailableSelection && hasRuntimeModelCatalog(entry.driverKind)) {
     const unavailableSelection = normalizeCustomModelSlug(selectedModel);
-    const hiddenModels = readInstanceModelPreferences(settings, entry.instanceId).hiddenModels;
+    const isHidden = createModelHiddenPredicate(
+      readInstanceModelPreferences(settings, entry.instanceId),
+    );
     if (
       unavailableSelection &&
-      !hiddenModels.includes(unavailableSelection) &&
+      !isHidden({ slug: unavailableSelection }) &&
       resolveSelectableModel(entry.driverKind, selectedModel, entry.models) === null &&
       !isRuntimeModelDefaultAlias(entry.driverKind, unavailableSelection)
     ) {
       return unavailableSelection;
     }
   }
-  return options.find((option) => option.isDefault)?.slug ?? options[0]?.slug ?? null;
+  return options.find((option) => option.isDefault)?.slug ?? options[0]?.slug ?? "";
 }
 
 // New drafts carry the stored selection; capabilities resolve its raw options later.
@@ -434,8 +440,7 @@ export function resolveAppModelSelectionState(
       ) ??
       options.find((option) => option.isDefault)?.slug ??
       options[0]?.slug ??
-      entry.models.find((model) => model.supportsTextGeneration !== false)?.slug ??
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind];
+      "";
     if (!model) {
       return createModelSelection(entry.instanceId, "", []);
     }

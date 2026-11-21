@@ -19,6 +19,12 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { useLayoutEffect, useRef, useState } from "react";
+import {
+  initialAcpProviderDraft,
+  parseProviderHeaders,
+  reloadedAcpProviderDrafts,
+  type AcpProviderDraft,
+} from "@t3tools/client-runtime/provider-settings/acp-registry";
 import { msg, T, useGT } from "gt-react";
 import { m } from "../../i18n/messages";
 
@@ -52,35 +58,6 @@ function reportFailure(title: string, result: AtomCommandResult<unknown, unknown
         ? (thrownErrorMessage(error, m) ?? error.message)
         : m(msg("The ACP operation failed.")),
   });
-}
-
-function parseProviderHeaders(
-  text: string,
-):
-  | { readonly ok: true; readonly headers: Record<string, string> | undefined }
-  | { readonly ok: false; readonly error: string } {
-  if (text.trim().length === 0) return { ok: true, headers: undefined };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    return {
-      ok: false,
-      error:
-        error instanceof Error
-          ? (thrownErrorMessage(error, m) ?? error.message)
-          : m(msg("Headers must be valid JSON.")),
-    };
-  }
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    Array.isArray(parsed) ||
-    !Object.values(parsed).every((value) => typeof value === "string")
-  ) {
-    return { ok: false, error: m(msg("Headers must be a JSON object with string values.")) };
-  }
-  return { ok: true, headers: parsed as Record<string, string> };
 }
 
 interface AcpSessionManagementProps {
@@ -138,9 +115,9 @@ function InstanceSessionManagement(
   const [providers, setProviders] = useState<ReadonlyArray<AcpRegistryConfigurableProvider>>([]);
   const [loadingProviders, setLoadingProviders] = useState(false);
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
-  const [providerDrafts, setProviderDrafts] = useState<
-    Readonly<Record<string, { apiType: string; baseUrl: string; headers: string }>>
-  >({});
+  const [providerDrafts, setProviderDrafts] = useState<Readonly<Record<string, AcpProviderDraft>>>(
+    {},
+  );
   const [previousProjectId, setPreviousProjectId] = useState(projectId);
   if (previousProjectId !== projectId) {
     setPreviousProjectId(projectId);
@@ -307,18 +284,7 @@ function InstanceSessionManagement(
     if (result._tag === "Success") {
       setProviders(result.value.providers);
       setProviderDrafts((current) =>
-        Object.fromEntries(
-          result.value.providers.map((provider) => [
-            provider.providerId,
-            (resetProviderId !== undefined && provider.providerId !== resetProviderId
-              ? current[provider.providerId]
-              : undefined) ?? {
-              apiType: provider.current?.apiType ?? provider.supported[0] ?? "",
-              baseUrl: provider.current?.baseUrl ?? "",
-              headers: "",
-            },
-          ]),
-        ),
+        reloadedAcpProviderDrafts(result.value.providers, current, resetProviderId),
       );
       return;
     }
@@ -336,7 +302,7 @@ function InstanceSessionManagement(
       return;
     const draft = providerDrafts[provider.providerId];
     if (draft === undefined || draft.apiType.length === 0 || draft.baseUrl.length === 0) return;
-    const parsedHeaders = parseProviderHeaders(draft.headers);
+    const parsedHeaders = parseProviderHeaders(draft.headers, m);
     if (!parsedHeaders.ok) {
       toastManager.add({
         type: "error",
@@ -613,11 +579,8 @@ function InstanceSessionManagement(
           {providers.length > 0 ? (
             <div className="divide-y divide-border/60 border-y border-border/60">
               {providers.map((provider) => {
-                const draft = providerDrafts[provider.providerId] ?? {
-                  apiType: provider.current?.apiType ?? provider.supported[0] ?? "",
-                  baseUrl: provider.current?.baseUrl ?? "",
-                  headers: "",
-                };
+                const draft =
+                  providerDrafts[provider.providerId] ?? initialAcpProviderDraft(provider);
                 const updateDraft = (update: Partial<typeof draft>) =>
                   setProviderDrafts((current) => ({
                     ...current,

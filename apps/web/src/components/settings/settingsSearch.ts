@@ -31,6 +31,7 @@ export type SettingsPath =
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
+  | "/settings/email"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
@@ -106,6 +107,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
+  "/settings/email": msg("Email"),
   "/settings/scheduled-tasks": msg("Scheduled tasks"),
   "/settings/source-control": msg("Source control & issues"),
   "/settings/worktrees": msg("Worktrees"),
@@ -157,6 +159,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/scheduled-tasks",
     ],
   },
+  { heading: msg("Capabilities"), paths: ["/settings/email"] },
   {
     heading: msg("Code"),
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
@@ -396,6 +399,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("latex tex katex equations formulas markdown")],
   },
   {
+    id: "buddy",
+    title: msg("Buddy"),
+    to: "/settings/appearance",
+    searchTerms: [
+      msg(
+        "companion pet mascot whale chan deepseek clawd claude crab anthropic sprite animation overlay",
+      ),
+    ],
+  },
+  {
     id: "panel-animations",
     title: msg("Panel animations"),
     to: "/settings/appearance",
@@ -488,6 +501,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("usage quota rate limit reset recover continue")],
   },
   {
+    id: "auto-resume-pull-request-threads-first",
+    title: msg("Resume threads with pull requests first"),
+    to: "/settings/threads",
+    searchTerms: [
+      msg(
+        "usage quota rate limit reset recover continue priority linked pull request review ready",
+      ),
+    ],
+  },
+  {
     id: "working-shelf",
     title: msg("Working section"),
     to: "/settings/general",
@@ -515,6 +538,14 @@ export const SETTINGS_SEARCH_ITEMS = [
       msg(
         "hide tool calls commands edits searches work log activity quiet chat zen final answers only",
       ),
+    ],
+  },
+  {
+    id: "fold-context-compactions",
+    title: msg("Fold context compactions"),
+    to: "/settings/chat",
+    searchTerms: [
+      msg("context compacted divider collapse worked for turn fold tool calls activity"),
     ],
   },
   {
@@ -684,6 +715,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Test model"),
     to: "/settings/voice",
     searchTerms: [msg("test voice speech model transcription recognition")],
+  },
+  {
+    id: "voice-key",
+    title: msg("Device Gemini API key"),
+    to: "/settings/voice",
+    searchTerms: [msg("voice panel assistant gemini local device key save remove privacy")],
+  },
+  {
+    id: "voice-model",
+    title: msg("Live model"),
+    to: "/settings/voice",
+    searchTerms: [msg("voice panel gemini live audio model")],
+  },
+  {
+    id: "voice-shortcuts",
+    title: msg("Voice panel shortcuts"),
+    to: "/settings/voice",
+    searchTerms: [msg("voice keyboard keybindings microphone mute connect disconnect")],
   },
   {
     id: "auto-settle-inactive-threads",
@@ -871,6 +920,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("new worktrees start remote origin latest fetched branch local")],
   },
   {
+    id: "default-branch-remote",
+    title: msg("Default remote"),
+    to: "/settings/worktrees",
+    scope: "project-defaults",
+    searchTerms: [msg("branch picker remote upstream origin fork other remotes base branch")],
+  },
+  {
+    id: "beside-main",
+    title: msg("Beside the main checkout"),
+    to: "/settings/worktrees",
+    scope: "project-defaults",
+    searchTerms: [
+      msg(
+        "new worktree container main checkout beside project folder worktrees location default override",
+      ),
+    ],
+  },
+  {
     id: "add-project-starts-in",
     title: msg("Add project starts in"),
     to: "/settings/threads",
@@ -913,6 +980,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Quit shortcut"),
     to: "/settings/general",
     searchTerms: [msg("confirmation desktop app exit direct hold double click press twice")],
+    desktopOnly: true,
+  },
+  {
+    id: "hide-window-controls",
+    title: msg("Hide window controls"),
+    to: "/settings/appearance",
+    searchTerms: [
+      msg("window decorations minimize maximize close buttons titlebar frame hide disable"),
+    ],
     desktopOnly: true,
   },
   {
@@ -1086,6 +1162,78 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/browser",
     scope: "project-defaults",
     searchTerms: [msg("allow disable enable open drive preview tools sessions project override")],
+  },
+  {
+    id: "browser-render-gpu",
+    title: msg("Browser GPU"),
+    to: "/settings/browser",
+    scope: "environment-defaults",
+    searchTerms: [
+      msg("graphics card hardware acceleration render node nvidia amd intel software swiftshader"),
+    ],
+  },
+  {
+    id: "browser-render-scale",
+    title: msg("Browser render scale"),
+    to: "/settings/browser",
+    scope: "environment-defaults",
+    searchTerms: [msg("device pixel ratio dpr resolution sharp hidpi retina 1x 2x")],
+  },
+  {
+    id: "email-enabled",
+    title: msg("Agents can draft emails"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("agents send email mail enable disable turn on off drafts aerc")],
+  },
+  {
+    id: "email-inbox-enabled",
+    title: msg("Agents can read inboxes"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email inbox read search unread native notmuch")],
+  },
+  {
+    id: "email-tagging-enabled",
+    title: msg("Agents can tag messages"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email tag unread read flagged labels")],
+  },
+  {
+    id: "email-notmuch-config",
+    title: msg("Inbox notmuch config"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email inbox database index notmuch configuration")],
+  },
+  {
+    id: "email-inbox-accounts",
+    title: msg("Inbox account scopes"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email inbox accounts path query scope")],
+  },
+  {
+    id: "email-refresh-command",
+    title: msg("Mail refresh command"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email mail refresh sync mbsync freshness")],
+  },
+  {
+    id: "email-accounts-file",
+    title: msg("aerc accounts file"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email mail send smtp aerc accounts.conf config path outgoing")],
+  },
+  {
+    id: "email-accounts",
+    title: msg("Email accounts"),
+    to: "/settings/email",
+    scope: "environment",
+    searchTerms: [msg("email mail send from address gmail outlook smtp sendmail msmtp oauth")],
   },
   {
     id: "device-sources",
@@ -1489,6 +1637,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,
+  "/settings/email": "environment",
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",

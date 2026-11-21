@@ -3,9 +3,8 @@ import {
   type NewProjectPublishTarget,
 } from "@t3tools/client-runtime/operations/projects";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import type { SourceControlProviderKind } from "@t3tools/contracts";
 import { FolderGit2Icon, LinkIcon } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode } from "react";
 import { T, useGT } from "gt-react";
 
 import { sourceControlIcon } from "~/sourceControlPresentation";
@@ -13,7 +12,6 @@ import { ITEM_ICON_CLASS } from "./CommandPalette.logic";
 import { CommandPaletteTitleIcon } from "./CommandPaletteResults";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export function remoteProjectSourceIcon(
@@ -71,63 +69,11 @@ export function CommandPaletteSubmitButton(props: {
   );
 }
 
-/**
- * Picks which host a new project publishes to. The row it sits in toggles on click, so the
- * picker keeps its clicks to itself. The row also cancels pointerdown to keep focus in the
- * input, which drops the mousedown Select opens on, so the picker opens on click instead.
- */
-export function NewProjectPublishHostPicker(props: {
-  readonly disabled: boolean;
-  readonly targets: ReadonlyArray<NewProjectPublishTarget>;
-  readonly value: SourceControlProviderKind;
-  readonly onValueChange: (kind: SourceControlProviderKind) => void;
-}) {
-  const gt = useGT();
-  const [open, setOpen] = useState(false);
-  return (
-    <span
-      className="flex"
-      onClick={(event) => {
-        event.stopPropagation();
-        // React bubbles the popup's clicks here through its portal; only the
-        // trigger opens the picker.
-        if (!event.currentTarget.contains(event.target as Node)) return;
-        if (!props.disabled) setOpen(true);
-      }}
-    >
-      <Select
-        disabled={props.disabled}
-        open={open}
-        onOpenChange={setOpen}
-        value={props.value}
-        onValueChange={(kind) => {
-          if (kind !== null) props.onValueChange(kind);
-        }}
-      >
-        <SelectTrigger size="xs" variant="ghost" aria-label={gt("Host for the new repository")}>
-          <SelectValue>
-            {(kind: SourceControlProviderKind) => sourceControlClients.get(kind).label}
-          </SelectValue>
-        </SelectTrigger>
-        <SelectPopup align="end" alignItemWithTrigger={false}>
-          {props.targets.map((target) => (
-            <SelectItem key={target.definition.kind} hideIndicator value={target.definition.kind}>
-              <span className="inline-flex items-center gap-1.5">
-                {sourceControlHostIcon(target.definition, "size-3.5")}
-                {target.definition.label}
-              </span>
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
-    </span>
-  );
-}
-
 export function NewProjectSummary(props: {
   readonly name: string;
-  readonly pathPreview: string;
-  readonly projectsRoot: string | null;
+  /** The folder the checkout lands in; null when there is no name yet. */
+  readonly checkoutPath: string | null;
+  readonly parent: string;
   readonly environmentLabel: string | null;
 }) {
   const gt = useGT();
@@ -143,14 +89,14 @@ export function NewProjectSummary(props: {
             {props.name.length > 0 ? props.name : gt("New project")}
           </span>
           <span className="truncate text-muted-foreground/85 text-xs">
-            {props.name.length > 0
+            {props.checkoutPath !== null
               ? environment === null
-                ? gt("Creates {path}", { path: props.pathPreview })
-                : gt("Creates {path} on {environment}", { path: props.pathPreview, environment })
+                ? gt("Creates {path}", { path: props.checkoutPath })
+                : gt("Creates {path} on {environment}", { path: props.checkoutPath, environment })
               : environment === null
-                ? gt("Goes in {root}", { root: String(props.projectsRoot) })
+                ? gt("Goes in {root}", { root: props.parent })
                 : gt("Goes in {root} on {environment}", {
-                    root: String(props.projectsRoot),
+                    root: props.parent,
                     environment,
                   })}
           </span>

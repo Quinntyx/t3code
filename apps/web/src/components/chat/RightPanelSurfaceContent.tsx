@@ -36,6 +36,10 @@ const DevicePanel = lazy(() =>
   import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
+const NotebookPanel = lazy(() => import("../notebook/NotebookPanel"));
+const VoicePanel = lazy(() =>
+  import("../../voice/VoicePanel").then((module) => ({ default: module.VoicePanel })),
+);
 
 type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
@@ -210,6 +214,12 @@ export function RightPanelSurfaceContent(props: {
           }}
         />
       );
+    case "notebook":
+      return visible && props.activeSurfaceId === surface.id ? (
+        <Suspense fallback={null}>
+          <NotebookPanel key={scopedThreadKey(threadRef)} threadRef={threadRef} />
+        </Suspense>
+      ) : null;
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
     case "side-chat":
@@ -222,6 +232,12 @@ export function RightPanelSurfaceContent(props: {
           parentPanel={props.sideChatParentPanel}
           onClose={() => onCloseSurface(surface)}
         />
+      );
+    case "voice":
+      return (
+        <Suspense fallback={null}>
+          <VoicePanel visible={visible && props.activeSurfaceId === surface.id} />
+        </Suspense>
       );
     case "device":
       return (

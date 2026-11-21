@@ -7,12 +7,14 @@ import { act, render } from "../../test/render";
 import { CommandPalette } from "./CommandPalette";
 import { openCommandPalette } from "../commandPaletteBus";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { useAtomCommand } from "../state/use-atom-command";
 
 const scopes = vi.hoisted(() => ({
   denied: undefined as string | undefined,
   sourceControl: undefined as unknown,
 }));
 const setup = (deniedScope?: string, sourceControl?: unknown) => {
+  vi.mocked(useAtomCommand).mockClear();
   scopes.denied = deniedScope;
   scopes.sourceControl = sourceControl;
 };
@@ -69,7 +71,9 @@ vi.mock("../hooks/useOpenPanelPullRequestUrl", () => ({ useOpenPanelPullRequestU
 vi.mock("../connection/useDesktopLocalBootstraps", () => ({ useDesktopLocalBootstraps: () => [] }));
 vi.mock("../state/use-atom-command", () => ({
   // The add-project destination step starts a clone and follows its project id.
-  useAtomCommand: () => async () => ({ _tag: "Success", value: { projectId: "project-cloned" } }),
+  useAtomCommand: vi.fn(() =>
+    vi.fn(async () => ({ _tag: "Success", value: { projectId: "project-cloned" } })),
+  ),
 }));
 vi.mock("../state/use-atom-query-runner", () => ({
   useAtomQueryRunner: () => async () => ({ _tag: "Success", value: undefined }),
@@ -144,6 +148,9 @@ describe.each(["repository", "folder", "destination"] as const)("add-project %s"
     if (step === "destination") {
       await input().fill("https://example.com/team/project.git");
       await userEvent.keyboard("{Enter}");
+      page.getByRole("checkbox").element().focus();
+      await userEvent.keyboard(" ");
+      await expect.element(page.getByRole("checkbox")).toBeChecked();
     }
     const value = step === "repository" ? "https://example.com/team/計画.git" : "/workspace/計画";
     await input().fill(value);
@@ -162,6 +169,18 @@ describe.each(["repository", "folder", "destination"] as const)("add-project %s"
     } else {
       await userEvent.keyboard("{Enter}");
       await expect.element(page.getByRole("combobox")).not.toBeInTheDocument();
+      if (step === "destination") {
+        const calls = vi
+          .mocked(useAtomCommand)
+          .mock.results.flatMap((result) =>
+            result.type === "return" ? vi.mocked(result.value).mock.calls : [],
+          );
+        expect(calls).toContainEqual([
+          expect.objectContaining({
+            input: expect.objectContaining({ destinationPath: "/workspace/計画/main" }),
+          }),
+        ]);
+      }
     }
   });
 });

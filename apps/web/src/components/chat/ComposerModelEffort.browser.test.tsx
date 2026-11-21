@@ -1,8 +1,11 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionSelection,
   type ServerProviderModel,
+  ThreadId,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { useState } from "react";
@@ -10,6 +13,7 @@ import { expect, it } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { ComposerEffortColumn, describeComposerEffort } from "./ComposerModelEffort";
 import type { TraitsSelectionInput } from "./TraitsPicker";
 
@@ -121,4 +125,92 @@ it("draws an agent's reasoning as bars and keeps its mode out of the levels", as
     .element(screen.getByRole("button", { name: "Session Mode: Plan" }))
     .toBeInTheDocument();
   await expect.element(page.getByRole("menuitemradio")).not.toBeInTheDocument();
+});
+
+const DEFAULT_LEVEL_INSTANCE = ProviderInstanceId.make("codex");
+const DEFAULT_LEVEL_MODEL = "gpt-5.4";
+
+function defaultLevelTraits(): TraitsSelectionInput {
+  return {
+    provider: ProviderDriverKind.make("codex"),
+    instanceId: DEFAULT_LEVEL_INSTANCE,
+    models: [
+      {
+        slug: DEFAULT_LEVEL_MODEL,
+        name: DEFAULT_LEVEL_MODEL,
+        isCustom: false,
+        capabilities: createModelCapabilities({
+          optionDescriptors: [
+            {
+              id: "reasoningEffort",
+              label: "Thinking",
+              type: "select",
+              currentValue: "high",
+              options: [
+                { id: "low", label: "Low" },
+                { id: "high", label: "High", isDefault: true },
+                { id: "max", label: "Max" },
+              ],
+            },
+          ],
+        }),
+      },
+    ],
+    model: DEFAULT_LEVEL_MODEL,
+    modelOptions: [{ id: "reasoningEffort", value: "high" }],
+    threadRef: scopeThreadRef(
+      EnvironmentId.make("environment-local"),
+      ThreadId.make("thread-default-level"),
+    ),
+  };
+}
+
+function setupDefaultLevel(storedLevel?: string) {
+  useComposerDraftStore.setState({
+    draftsByThreadKey: {},
+    stickyModelSelectionByProvider: {},
+    stickyOptionsByModelByProvider: {},
+    stickyActiveProvider: null,
+  });
+  if (storedLevel === undefined) return;
+  useComposerDraftStore.getState().setProviderModelOptionsDefault({
+    provider: ProviderDriverKind.make("codex"),
+    instanceId: DEFAULT_LEVEL_INSTANCE,
+    model: DEFAULT_LEVEL_MODEL,
+    options: [{ id: "reasoningEffort", value: storedLevel }],
+  });
+}
+
+function storedDefaultLevel() {
+  return useComposerDraftStore.getState().stickyOptionsByModelByProvider[DEFAULT_LEVEL_INSTANCE]?.[
+    DEFAULT_LEVEL_MODEL
+  ];
+}
+
+it("sets the effort level picked from the context menu as the model's default", async () => {
+  setupDefaultLevel();
+  await using screen = await render(<ComposerEffortColumn traits={defaultLevelTraits()} />, {
+    router: false, // no routes involved
+  });
+
+  await userEvent.click(screen.getByRole("radio", { name: /^Low/ }), { button: "right" });
+  await userEvent.click(page.getByRole("menuitem", { name: "Set Low as default" }));
+
+  expect(storedDefaultLevel()).toEqual([{ id: "reasoningEffort", value: "low" }]);
+  await expect.element(screen.getByRole("radio", { name: /Low\s*Default/ })).toBeVisible();
+  await expect.element(screen.getByRole("radio", { name: "High", exact: true })).toBeVisible();
+});
+
+it("resets a model's default effort back to the provider's level", async () => {
+  setupDefaultLevel("low");
+  await using screen = await render(<ComposerEffortColumn traits={defaultLevelTraits()} />, {
+    router: false, // no routes involved
+  });
+
+  await expect.element(screen.getByRole("radio", { name: /Low\s*Default/ })).toBeVisible();
+  await userEvent.click(screen.getByRole("radio", { name: /^Low/ }), { button: "right" });
+  await userEvent.click(page.getByRole("menuitem", { name: "Reset to provider default" }));
+
+  expect(storedDefaultLevel()).toEqual([]);
+  await expect.element(screen.getByRole("radio", { name: /High\s*Default/ })).toBeVisible();
 });

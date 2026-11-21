@@ -400,7 +400,7 @@ describe("ChatMarkdown external link labels", () => {
 });
 
 describe("ChatMarkdown streaming", () => {
-  it("runs only a complete single-line shell block after a click", async () => {
+  it("runs a complete shell block after a click, single-line or multi-line", async () => {
     setup();
     const onRunShellCommand = vi.fn();
     const message = (text: string, isStreaming = false) => (
@@ -420,24 +420,34 @@ describe("ChatMarkdown streaming", () => {
     await act(async () => runButtons()[0]!.click());
     expect(onRunShellCommand).toHaveBeenCalledExactlyOnceWith("echo hello");
 
-    for (const text of [
-      "~~~bash\necho tilde\n~~~",
-      "> ```bash\n> echo quote\n> ```",
-      "````bash\necho four\n````",
-      "- Command\n\n  ```bash\n  echo list\n  ```",
-      "```bash\r\necho crlf\r\n```\r",
-    ]) {
+    for (const [text, command] of [
+      ["~~~bash\necho tilde\n~~~", "echo tilde"],
+      ["> ```bash\n> echo quote\n> ```", "echo quote"],
+      ["````bash\necho four\n````", "echo four"],
+      ["- Command\n\n  ```bash\n  echo list\n  ```", "echo list"],
+      ["```bash\r\necho crlf\r\n```\r", "echo crlf"],
+      ["```bash\necho one\necho two\n```", "echo one\necho two"],
+      ["```bash\necho\tone\n```", "echo\tone"],
+      ["```bash\necho hello\n\n```", "echo hello"],
+      [
+        '```bash\nsudo sdkmanager --licenses\nsudo sdkmanager \\\n  "ndk;27.1.12297006"\n```',
+        'sudo sdkmanager --licenses\nsudo sdkmanager \\\n  "ndk;27.1.12297006"',
+      ],
+    ] as const) {
       await rerender(message(text));
       expect(runButtons()).toHaveLength(1);
+      onRunShellCommand.mockClear();
+      await act(async () => runButtons()[0]!.click());
+      expect(onRunShellCommand).toHaveBeenCalledExactlyOnceWith(command);
     }
 
     for (const text of [
-      "```bash\necho one\necho two\n```",
       "```typescript\necho hello\n```",
       "```bash\n\n```",
-      "```bash\necho hello\n\n```",
       "```bash\necho hello\\\n```",
+      "```bash\necho one\\\necho two\\\n```",
       "```bash\necho safe \u202e#\n```",
+      "```bash\necho \u001b[31mred\n```",
       "```bash\necho incomplete",
       "~~~bash\necho incomplete",
       "````bash\necho incomplete\n```",

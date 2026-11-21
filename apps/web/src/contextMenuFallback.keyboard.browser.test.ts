@@ -86,6 +86,33 @@ it("activates the focused action with Space or Enter", async () => {
   await expect(second).resolves.toBe("rename");
 });
 
+it("arms a confirm action in place and chooses it on the next press", async () => {
+  using _fixture = setup();
+  const result = showContextMenuFallback([
+    { id: "merge", label: "Merge pull request", confirmLabel: "Confirm merge?" },
+  ]);
+  expect(label()).toBe("Merge pull request");
+  press("Enter");
+  expect(label()).toBe("Confirm merge?");
+  expect(isContextMenuOpen()).toBe(true);
+  press("Enter");
+  await expect(result).resolves.toBe("merge");
+});
+
+it("disarms a confirm action when focus leaves it", () => {
+  using _fixture = setup();
+  void showContextMenuFallback([
+    { id: "merge", label: "Merge pull request", confirmLabel: "Confirm merge?" },
+    { id: "stack", label: "Stack a new thread" },
+  ]);
+  press("Enter");
+  expect(label()).toBe("Confirm merge?");
+  press("ArrowDown");
+  expect(label()).toBe("Stack a new thread");
+  press("ArrowUp");
+  expect(label()).toBe("Merge pull request");
+});
+
 it("closes on Tab and returns focus to the opener so Tab continues from there", async () => {
   using fixture = setup();
   const result = showContextMenuFallback(items);

@@ -232,7 +232,7 @@ export function TimelineMinimap({
                 className="pointer-events-none absolute left-8 w-80 -translate-y-1/2"
                 style={{ top: `${activeTopPercent}%` }}
               >
-                <span className="dropdown-glass block rounded-xl p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
+                <span className="dropdown-glass block rounded-glass p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
                   <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
                     {activeItem.userText ?? <T>User message</T>}
                   </span>

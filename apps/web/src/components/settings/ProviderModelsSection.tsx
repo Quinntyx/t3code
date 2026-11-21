@@ -2,39 +2,31 @@ import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } fro
 import { msg, T, useGT, useMessages } from "gt-react";
 import { memo, useEffect, useRef, useState } from "react";
 import {
-  ProviderDriverKind,
+  type ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { isReasoningControl } from "@t3tools/client-runtime/model-traits";
-import { type CustomModelDefinition, normalizeCustomModelSlug } from "@t3tools/shared/model";
+import {
+  CUSTOM_MODEL_PLACEHOLDER_BY_KIND,
+  groupModelsForDisplay,
+  hasReasoningControl,
+  nextHiddenModelsForBulkToggle,
+  validateCustomModelSlug,
+} from "@t3tools/client-runtime/provider-settings/models";
+import { type CustomModelDefinition, createModelHiddenPredicate } from "@t3tools/shared/model";
 
 import { useStableCallback } from "../../hooks/useStableCallback";
 import type { MessageResolver } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
-import { sortModelsForProviderInstance } from "../../modelOrdering";
-import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { CustomModelEditor } from "./CustomModelEditor";
 
-const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, string>> = {
-  [ProviderDriverKind.make("codex")]: "gpt-6.7-codex-ultra-preview",
-  [ProviderDriverKind.make("claudeAgent")]: "claude-sonnet-5",
-  [ProviderDriverKind.make("cursor")]: "claude-sonnet-4-6",
-  [ProviderDriverKind.make("opencode")]: "openai/gpt-5",
-  [ProviderDriverKind.make("pi")]: "anthropic/claude-sonnet-5",
-};
-
 const FILTER_THRESHOLD = 8;
-
+const NO_ENABLED_MODELS: ReadonlyArray<string> = [];
 const PROVIDER_ALIAS_SLUGS = new Set(["default", "auto"]);
-
-function hasReasoningControl(model: ServerProviderModel): boolean {
-  return (model.capabilities?.optionDescriptors ?? []).some(isReasoningControl);
-}
 
 // Reasoning is the norm, so only its absence is labeled, and only when other models have it.
 // Custom and null capabilities are fallbacks or user-written, not discovered, so they prove nothing.
@@ -66,42 +58,6 @@ function describeModelCapabilities(
   return labels;
 }
 
-function groupModelsForDisplay<T extends { readonly slug: string; readonly isCustom: boolean }>(
-  models: ReadonlyArray<T>,
-  options: {
-    readonly favoriteModels: ReadonlySet<string>;
-    readonly hiddenModels: ReadonlySet<string>;
-    readonly modelOrder: ReadonlyArray<string>;
-  },
-): T[] {
-  const ordered = sortModelsForProviderInstance(models, {
-    favoriteModels: options.favoriteModels,
-    groupFavorites: true,
-    modelOrder: options.modelOrder,
-  });
-  const isHidden = (model: T) => !model.isCustom && options.hiddenModels.has(model.slug);
-  return [
-    ...ordered.filter((model) => options.favoriteModels.has(model.slug)),
-    ...ordered.filter((model) => !options.favoriteModels.has(model.slug) && !isHidden(model)),
-    ...ordered.filter((model) => !options.favoriteModels.has(model.slug) && isHidden(model)),
-  ];
-}
-
-function nextHiddenModelsForBulkToggle(
-  models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
-  hiddenModels: ReadonlyArray<string>,
-): string[] {
-  const builtInSlugs = models.filter((model) => !model.isCustom).map((model) => model.slug);
-  const builtInSlugSet = new Set(builtInSlugs);
-  const allBuiltInModelsHidden = builtInSlugs.every((slug) => hiddenModels.includes(slug));
-
-  if (allBuiltInModelsHidden) {
-    return hiddenModels.filter((slug) => !builtInSlugSet.has(slug));
-  }
-
-  return [...new Set([...hiddenModels, ...builtInSlugs])];
-}
-
 interface ProviderModelsSectionProps {
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind | null;
@@ -110,6 +66,9 @@ interface ProviderModelsSectionProps {
   readonly canManageCustomModels: boolean;
   readonly canWritePreferences?: boolean;
   readonly hiddenModels: ReadonlyArray<string>;
+  readonly newModelsEnabled?: boolean;
+  readonly enabledModels?: ReadonlyArray<string>;
+  readonly onNewModelsEnabledChange?: (enabled: boolean) => void;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
   /** Resolves true once the custom models are saved. */
@@ -130,7 +89,10 @@ export function ProviderModelsSection({
   customModels,
   canManageCustomModels,
   canWritePreferences = true,
-  hiddenModels,
+  hiddenModels: savedHiddenModels,
+  newModelsEnabled = true,
+  enabledModels = NO_ENABLED_MODELS,
+  onNewModelsEnabledChange,
   favoriteModels,
   modelOrder,
   onChange,
@@ -140,6 +102,7 @@ export function ProviderModelsSection({
   onModelOrderChange,
 }: ProviderModelsSectionProps) {
   const gt = useGT();
+  const m = useMessages();
   const [input, setInput] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -150,6 +113,15 @@ export function ProviderModelsSection({
   const editAttemptRef = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
   const scrollToSlugRef = useRef<string | null>(null);
+  const isHidden = createModelHiddenPredicate({
+    hiddenModels: savedHiddenModels,
+    modelOrder,
+    newModelsEnabled,
+    enabledModels,
+  });
+  const hiddenModels = [
+    ...new Set([...savedHiddenModels, ...models.filter(isHidden).map((model) => model.slug)]),
+  ];
   const hiddenModelSet = new Set(hiddenModels);
   const favoriteModelSet = new Set(favoriteModels);
   const reportedSlugs = new Set(models.map((model) => model.slug));
@@ -199,25 +171,12 @@ export function ProviderModelsSection({
 
   const handleAdd = async () => {
     if (!canManageCustomModels || driverKind === "antigravity" || isSaving) return;
-    const normalized = normalizeCustomModelSlug(input);
-    if (!normalized) {
-      setError(gt("Enter a model slug."));
+    const validated = validateCustomModelSlug(input, models, customModels, m);
+    if ("error" in validated) {
+      setError(validated.error);
       return;
     }
-    if (models.some((model) => !model.isCustom && model.slug === normalized)) {
-      setError(gt("That model is already built in."));
-      return;
-    }
-    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-      setError(
-        gt("Model slugs must be {max} characters or less.", { max: MAX_CUSTOM_MODEL_LENGTH }),
-      );
-      return;
-    }
-    if (customModels.some((entry) => entry.slug === normalized)) {
-      setError(gt("That custom model is already saved."));
-      return;
-    }
+    const normalized = validated.slug;
 
     addAttemptRef.current += 1;
     const attempt = addAttemptRef.current;
@@ -337,6 +296,22 @@ export function ProviderModelsSection({
 
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+      <label className="mb-3 flex items-center justify-between gap-3">
+        <span>
+          <span className="block text-sm">
+            <T>Enable new models by default</T>
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            <T>Existing model choices stay unchanged. Custom models are always enabled.</T>
+          </span>
+        </span>
+        <Switch
+          checked={newModelsEnabled}
+          disabled={!canWritePreferences || !onNewModelsEnabledChange}
+          onCheckedChange={(checked) => onNewModelsEnabledChange?.(Boolean(checked))}
+          aria-label={gt("Enable new models by default")}
+        />
+      </label>
       <div className="flex flex-wrap items-center justify-between gap-2">
         {showFilter ? (
           <Input

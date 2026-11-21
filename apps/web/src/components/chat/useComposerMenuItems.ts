@@ -5,7 +5,7 @@ import {
 } from "@t3tools/client-runtime/thread-pull-requests";
 import {
   matchComposerEnvironmentItems,
-  matchComposerThreadItems,
+  matchComposerThreadTriggerItems,
 } from "@t3tools/client-runtime/composerThreadItems";
 import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
@@ -62,7 +62,7 @@ const COMPOSER_PULL_REQUEST_RESULT_LIMIT = 12;
 const EMPTY_PULL_REQUEST_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> =
   [];
 
-/** Builds the @, /, $ and # suggestion lists, running the searches each trigger needs. */
+/** Builds the @, /, $, # and % suggestion lists, running the searches each trigger needs. */
 export function useComposerMenuItems({
   composerTrigger,
   environmentId,
@@ -125,12 +125,13 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
-  const environmentThreadShells = useVisibleThreadShells(isPathTrigger);
+  const mentionsThreads = composerTriggerKind === "thread";
+  const environmentThreadShells = useVisibleThreadShells(mentionsThreads);
   // Mounts older settled threads matching the mention, here and on linked machines, which shells
   // may leave out.
   useThreadSearch(
-    isPathTrigger ? [environmentId, ...linkedEnvironments.keys()] : [],
-    pathTriggerQuery,
+    mentionsThreads ? [environmentId, ...linkedEnvironments.keys()] : [],
+    mentionsThreads ? (composerTrigger?.query ?? "") : "",
     { titlesOnly: true },
   );
   // The user's machines feed `@` machine matches; the catalog summary is cheap and stable.
@@ -212,17 +213,6 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
-        ...matchComposerThreadItems(
-          {
-            shells: environmentThreadShells,
-            environmentId,
-            linkedEnvironments,
-            excludeThreadId: activeThreadId,
-            query: composerTrigger.query,
-            now,
-          },
-          messages,
-        ),
         // An answer to an agent's question carries thread links, not machines.
         ...(questionAttachmentTarget === null && offersMachines
           ? matchComposerEnvironmentItems(
@@ -249,6 +239,19 @@ export function useComposerMenuItems({
           description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
         })),
       ];
+    }
+    if (composerTrigger.kind === "thread") {
+      return matchComposerThreadTriggerItems(
+        {
+          shells: environmentThreadShells,
+          environmentId,
+          linkedEnvironments,
+          excludeThreadId: activeThreadId,
+          query: composerTrigger.query,
+          now,
+        },
+        messages,
+      );
     }
     if (composerTrigger.kind === "slash-command") {
       const builtInSlashCommandItems = [
@@ -426,6 +429,9 @@ export function useComposerMenuItems({
   const emptyState = (() => {
     if (composerTriggerKind === "skill") {
       return gt("No skills found. Try / to browse provider commands.");
+    }
+    if (composerTriggerKind === "thread") {
+      return gt("No matching threads.");
     }
     if (composerTriggerKind === "pull-request") {
       if (pullRequestProjectId === null || pullRequestRepository === null) {

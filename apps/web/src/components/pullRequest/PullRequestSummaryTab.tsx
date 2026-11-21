@@ -101,6 +101,8 @@ import { canReactPullRequestComment } from "@t3tools/client-runtime/pull-request
 import { PullRequestResolveThreadButton } from "./PullRequestResolveThreadButton";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
+import { PullRequestStackTree } from "./PullRequestStackTree";
+import type { DerivedPullRequestStack } from "./pullRequestStack.logic";
 
 import { changeRequestTermKind } from "./changeRequestTerm";
 
@@ -483,6 +485,8 @@ export function PullRequestSummaryTab({
   onAddToChat,
   onRefresh,
   onRefreshChecks = onRefresh,
+  stack = null,
+  onSelectStackMember,
 }: {
   /** A clicked link to scroll to, until onRevealSettled reports it shown. */
   revealUrl?: string | undefined;
@@ -503,6 +507,8 @@ export function PullRequestSummaryTab({
   onAddToChat?: (subject: PullRequestChatSubject) => void;
   onRefresh: () => void;
   onRefreshChecks?: () => void;
+  stack?: DerivedPullRequestStack | null;
+  onSelectStackMember?: ((number: number) => void) | undefined;
 }) {
   const gt = useGT();
   const resolve = useMessages();
@@ -982,6 +988,22 @@ export function PullRequestSummaryTab({
           ) : null}
         </div>
       </section>
+
+      {stack !== null && stack.rows.length > 1 ? (
+        <PullRequestSection
+          key={`stack:${detail.url}`}
+          title={gt("Stack")}
+          actions={
+            stack.rootBase === null ? null : (
+              <span className="min-w-0 truncate font-mono text-2xs text-muted-foreground">
+                {gt("base: {branch}", { branch: stack.rootBase })}
+              </span>
+            )
+          }
+        >
+          <PullRequestStackTree rows={stack.rows} onSelect={onSelectStackMember} />
+        </PullRequestSection>
+      ) : null}
 
       <PullRequestSection
         key={`description:${detail.url}`}

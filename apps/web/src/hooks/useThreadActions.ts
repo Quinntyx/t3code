@@ -25,6 +25,9 @@ import { msg } from "gt-react";
 import { useRouter } from "@tanstack/react-router";
 
 import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
+import { evictAssetCacheForThreads } from "../assets/assetBytesCache";
+import { threadContinuationRunId } from "../components/threadActionMenu.logic";
+import { newMessageId } from "../lib/utils";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { environmentSession, readEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -224,6 +227,36 @@ export async function navigateAfterThreadDeletion(navigate: () => Promise<void>)
       }),
     );
   }
+}
+
+export function useContinueThread() {
+  const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
+    reportFailure: false,
+  });
+  return async (target: ScopedThreadRef) => {
+    const permissionFailure = threadOperationFailure(target);
+    if (permissionFailure) return permissionFailure;
+    const thread = readThreadShell(target);
+    const runId = thread ? threadContinuationRunId(thread) : null;
+    if (!thread || runId === null) return AsyncResult.success(undefined);
+    return startThreadTurn({
+      environmentId: target.environmentId,
+      input: {
+        threadId: target.threadId,
+        manualContinuationOfRunId: runId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          // oxlint-disable-next-line t3code/no-untranslated-copy -- agent prompt sent to continue a run
+          text: "Continue where you left off.",
+          attachments: [],
+        },
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        dispatchMode: "start",
+      },
+    });
+  };
 }
 
 function useMarkThreadUnread() {
@@ -867,6 +900,10 @@ export function useThreadActions() {
       action.finish();
       return result;
     }
+    // Re-settling a thread that is already settled emits no state transition.
+    void evictAssetCacheForThreads([
+      { environmentId: target.environmentId, threadId: target.threadId },
+    ]);
     if (wokeAt !== null) {
       markThreadVisited(scopedThreadKey(target), wokeAt);
     }

@@ -1,6 +1,7 @@
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -9,6 +10,7 @@ import {
   resolveCommandPaletteProject,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  filterNewProjectPublishTargets,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
@@ -985,5 +987,37 @@ describe("newThreadNoProjectIndex", () => {
   it("keeps a pinned or current scratch project in its own place", () => {
     expect(newThreadNoProjectIndex([entry(false, true, true), entry()])).toBe(0);
     expect(newThreadNoProjectIndex([entry(true), entry(true, false, true), entry()])).toBe(1);
+  });
+});
+
+describe("filterNewProjectPublishTargets", () => {
+  const targets = (["github", "gitlab"] as const).map((kind) => ({
+    definition: sourceControlClients.get(kind),
+    owner: "acme",
+  }));
+
+  it("keeps every host for an empty query", () => {
+    expect(filterNewProjectPublishTargets(targets, "  ")).toEqual(targets);
+  });
+
+  it("matches a host's label, picker label, or extra search words", () => {
+    expect(filterNewProjectPublishTargets(targets, "gitl").map((t) => t.definition.kind)).toEqual([
+      "gitlab",
+    ]);
+    expect(
+      filterNewProjectPublishTargets(
+        [
+          {
+            definition: sourceControlClients.get("github"),
+            owner: null,
+          },
+        ],
+        "GHES",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("finds nothing when no host matches", () => {
+    expect(filterNewProjectPublishTargets(targets, "bitbucket")).toEqual([]);
   });
 });

@@ -5,6 +5,7 @@ import {
   type OrchestrationV2LimitRecovery,
   type OrchestrationV2LimitRecoveryUpdate,
   type RunId,
+  type ThreadConsumptionCapHit,
 } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { deadlineStore } from "@t3tools/client-runtime/clock";
@@ -33,6 +34,7 @@ type RecoveryProps = {
   requestPending: boolean;
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
+  consumptionCapHit?: ThreadConsumptionCapHit | null;
   timestampFormat: TimestampFormat;
   onChange: (recovery: OrchestrationV2LimitRecoveryUpdate) => Promise<void>;
 };
@@ -52,6 +54,20 @@ export function usageLimitRecoveryBannerItem(
     snoozedUntil,
     timestampFormat,
   } = props;
+  if (props.consumptionCapHit) {
+    return {
+      id: `usage-limit-recovery:${runId}`,
+      variant: "warning",
+      group: "environment",
+      icon: <GaugeIcon />,
+      title: resolve(msg("Consumption cap reached")),
+      description: resolve(
+        msg("{reason} Raise or remove the thread's consumption cap to continue.", {
+          reason: props.consumptionCapHit.reason,
+        }),
+      ),
+    };
+  }
   // The server refuses recovery changes while a request is pending.
   const canSchedule =
     !settled && !requestPending && resetAt !== null && Date.parse(resetAt) > Date.parse(stoppedAt);

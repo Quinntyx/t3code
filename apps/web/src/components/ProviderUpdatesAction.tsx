@@ -14,8 +14,7 @@ import { serverEnvironment } from "~/state/server";
 import { useEnvironmentsWithScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
-  canOneClickUpdateProviderCandidate,
-  collectProviderUpdateCandidates,
+  collectProviderMaintenanceCandidates,
   getProviderUpdateRunToastView,
   type ProviderUpdateRun,
 } from "./ProviderUpdateLaunchNotification.logic";
@@ -86,9 +85,7 @@ export function useProviderUpdates() {
     ) {
       return [];
     }
-    const candidates = collectProviderUpdateCandidates(providers).filter((candidate) =>
-      canOneClickUpdateProviderCandidate(candidate, providers),
-    );
+    const candidates = collectProviderMaintenanceCandidates(providers);
     return candidates.length > 0
       ? [{ environmentId: environment.environmentId, label: environment.label, candidates }]
       : [];
@@ -104,7 +101,11 @@ export function useProviderUpdates() {
           instanceId: candidate.instanceId,
           result: await updateProvider({
             environmentId,
-            input: { provider: candidate.driver, instanceId: candidate.instanceId },
+            input: {
+              provider: candidate.driver,
+              instanceId: candidate.instanceId,
+              ...(candidate.extensionsOnly ? { extensionsOnly: true } : {}),
+            },
           }),
         })),
       ),
@@ -121,10 +122,17 @@ export function useProviderUpdates() {
     return runs;
   };
 
-  return { machines, updateAll };
+  return {
+    machines,
+    updateAll,
+    hasUpdates: machines.some((machine) =>
+      machine.candidates.some((candidate) => !candidate.extensionsOnly),
+    ),
+  };
 }
 
 export function ProviderUpdatesAction() {
+  const gt = useGT();
   const { machines, updateAll } = useProviderUpdates();
   const pending = useRef(false);
   const [isPending, setIsPending] = useState(false);
@@ -160,7 +168,12 @@ export function ProviderUpdatesAction() {
           <div key={machine.environmentId}>
             {machine.label}:{" "}
             {machine.candidates
-              .map((candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver)
+              .map((candidate) => {
+                const name = PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver;
+                return candidate.extensionsOnly
+                  ? gt("{provider} extensions", { provider: name })
+                  : name;
+              })
               .join(", ")}
           </div>
         ))}

@@ -1,5 +1,7 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { setThreadHiddenOnClient } from "../lib/threadVisibility";
+import { useUiStateStore } from "../uiStateStore";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
 import {
@@ -21,6 +23,7 @@ import { pickSnoozePreset, resolveSnoozePresets } from "../components/Sidebar.sn
 import {
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
+  threadContinuationRunId,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
 import { titleRegenerationToast } from "../components/threadTitleRegenerationToast";
@@ -50,7 +53,7 @@ import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
-import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
+import { canTurnThreadIntoProject, useContinueThread, useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -92,6 +95,7 @@ export function useThreadActionMenu(input: {
     markThreadUnread,
     turnThreadIntoProject,
   } = useThreadActions();
+  const continueThread = useContinueThread();
   const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
     reportFailure: false,
   });
@@ -140,10 +144,12 @@ export function useThreadActionMenu(input: {
       const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId);
       const items = buildThreadActionMenuItems({
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+        canContinue: threadContinuationRunId(thread) !== null,
         canFind: onFind !== undefined,
         branch: thread.branch ?? null,
         projectFilter: null,
         isPinned: thread.pinnedAt != null,
+        isHidden: useUiStateStore.getState().hiddenThreadKeys.includes(scopedThreadKey(threadRef)),
         isSettled: supports.settlement && thread.settledOverride === "settled",
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
         isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
@@ -195,8 +201,17 @@ export function useThreadActionMenu(input: {
         }
       };
       switch (action) {
+        case "continue":
+          await reportFailure(m(msg("Failed to continue thread")), () => continueThread(threadRef));
+          return;
         case "find":
           onFind?.(threadRef);
+          return;
+        case "hide":
+          setThreadHiddenOnClient(threadRef, true);
+          return;
+        case "unhide":
+          setThreadHiddenOnClient(threadRef, false);
           return;
         case "project-settings": {
           const project = projects.find(

@@ -18,6 +18,7 @@ import {
   buildAddProjectRemoteSourceReadiness,
   type AddProjectRemoteSource,
   type AddProjectRemoteSourceReadiness,
+  type NewProjectPublishTarget,
 } from "@t3tools/client-runtime/operations/projects";
 import {
   type ScopedThreadRef,
@@ -896,6 +897,25 @@ export function remoteProjectInputPlaceholder(
       source: addProjectRemoteSourceLabel(flow.source, resolve),
       hint: addProjectRemoteSourcePathHint(flow.source, resolve),
     }),
+  );
+}
+
+/** The publish hosts a query names, matched case-insensitively across each host's own words. */
+export function filterNewProjectPublishTargets(
+  targets: ReadonlyArray<NewProjectPublishTarget>,
+  query: string,
+): ReadonlyArray<NewProjectPublishTarget> {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return targets;
+  return targets.filter((target) =>
+    [
+      target.definition.label,
+      target.definition.pickerLabel,
+      ...(target.definition.searchKeywords ?? []),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle),
   );
 }
 

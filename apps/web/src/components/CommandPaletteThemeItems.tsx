@@ -1,11 +1,15 @@
 import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { MonitorIcon, MoonIcon, PaletteIcon, SunIcon } from "lucide-react";
+import { LayersIcon, MonitorIcon, MoonIcon, PaletteIcon, SunIcon } from "lucide-react";
 
 import { m } from "../i18n/messages";
 import { useCustomThemes } from "../hooks/useCustomThemes";
-import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
+import {
+  useEnvironmentStyleDefinitions,
+  useEnvironmentThemeDefinitions,
+} from "../hooks/useEnvironmentTheme";
 import { useTheme } from "../hooks/useTheme";
+import { BUILT_IN_STYLE_DEFINITIONS } from "../themeEffects";
 import { getThemeDefinition } from "../themePalette";
 import {
   ADDON_ICON_CLASS,
@@ -55,17 +59,30 @@ function useThemeCards() {
   ];
 }
 
+function useStyleOptions() {
+  const environmentStyles = useEnvironmentStyleDefinitions();
+  const seen = new Set<string>();
+  return [...BUILT_IN_STYLE_DEFINITIONS, ...environmentStyles].filter((definition) => {
+    if (seen.has(definition.id)) return false;
+    seen.add(definition.id);
+    return true;
+  });
+}
+
 export function useCommandPaletteThemeItems() {
   const {
     theme,
+    themeStyle,
     themeHalves,
     resolvedTheme,
     appearanceMode,
     setAppearanceMode,
     setTheme,
+    setThemeStyle,
     setThemeHalf,
   } = useTheme();
   const themeCards = useThemeCards();
+  const styleOptions = useStyleOptions();
   const gt = useGT();
   const messages = useMessages();
 
@@ -124,6 +141,58 @@ export function useCommandPaletteThemeItems() {
     ],
   };
 
+  const changeStyleItem: CommandPaletteSubmenuItem = {
+    kind: "submenu",
+    value: "action:change-style",
+    searchTerms: ["change style", "style", "liquid glass", "floating panels", "appearance"],
+    title: gt("Style"),
+    icon: <LayersIcon className={ITEM_ICON_CLASS} />,
+    addonIcon: <LayersIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      {
+        value: "styles",
+        label: gt("Style"),
+        items: [
+          {
+            kind: "action",
+            value: "style:none",
+            title: gt("None"),
+            searchTerms: [gt("None"), "none", "style", "default", "appearance"],
+            icon: <LayersIcon className={ITEM_ICON_CLASS} />,
+            titleTrailingContent:
+              themeStyle === null ? (
+                <span className="text-xs text-muted-foreground/70">
+                  <T context="the theme or mode in use now">Current</T>
+                </span>
+              ) : undefined,
+            run: async () => {
+              if (!setThemeStyle(null)) notifyThemeSaveFailure();
+            },
+          },
+          ...styleOptions.map((style) => {
+            const label = style.builtIn ? messages(style.label) : style.label;
+            return {
+              kind: "action" as const,
+              value: `style:${style.id}`,
+              title: label,
+              searchTerms: [label, style.id, "style", "appearance"],
+              icon: <LayersIcon className={ITEM_ICON_CLASS} />,
+              titleTrailingContent:
+                themeStyle === style.id ? (
+                  <span className="text-xs text-muted-foreground/70">
+                    <T context="the theme or mode in use now">Current</T>
+                  </span>
+                ) : undefined,
+              run: async () => {
+                if (!setThemeStyle(style.id)) notifyThemeSaveFailure();
+              },
+            };
+          }),
+        ],
+      },
+    ],
+  };
+
   const changeAppearanceItem: CommandPaletteSubmenuItem = {
     kind: "submenu",
     value: "action:change-appearance",
@@ -172,5 +241,5 @@ export function useCommandPaletteThemeItems() {
     },
   };
 
-  return { changeThemeItem, changeAppearanceItem, themeEditorItem };
+  return { changeThemeItem, changeStyleItem, changeAppearanceItem, themeEditorItem };
 }

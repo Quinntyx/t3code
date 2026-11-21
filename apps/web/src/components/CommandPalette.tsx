@@ -17,7 +17,9 @@ import {
   getCloneDestinationPath,
   getCloneDirectoryLeafName,
   getCloneDirectoryPath,
+  getProjectCloneCheckoutPath,
   getDefaultCloneUrl,
+  getNewProjectDefaultParent,
   getNewProjectPathPreview,
   getNewProjectPublishTarget,
   getNewProjectPublishTargets,
@@ -54,6 +56,7 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
+  type ProjectCloneLayout,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
@@ -61,6 +64,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  AudioLinesIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -70,6 +74,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  GitBranchIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -85,6 +90,7 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
+import { toggleVoice } from "../voice/controller";
 import { dispatchPreviewAction } from "./preview/previewActionBus";
 import { previewBridge } from "./preview/previewBridge";
 import {
@@ -158,6 +164,7 @@ import {
 } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
+  ensureBrowseDirectoryPath,
   findProjectByPath,
   getBrowseDirectoryPath,
   hasTrailingPathSeparator,
@@ -215,6 +222,7 @@ import {
   type CommandPaletteSubmenuItem,
   type CommandPaletteView,
   filterCommandPaletteGroups,
+  filterNewProjectPublishTargets,
   buildNestedSearchItems,
   filterPinnedBrowseEntries,
   getCommandPaletteInputPlaceholder,
@@ -247,7 +255,6 @@ import {
 } from "./CommandPaletteProjectItems";
 import {
   CommandPaletteSubmitButton,
-  NewProjectPublishHostPicker,
   NewProjectSummary,
   RemoteRepositorySummary,
   remoteProjectSourceIcon,
@@ -292,6 +299,7 @@ import { readIssueListPreferences } from "~/components/issue/issueListPreference
 import { IssueGlyph } from "~/components/issue/issuePresentation";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { threadRecentUse } from "@t3tools/shared/paletteSearch";
+import { useUiStateStore } from "~/uiStateStore";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const ADD_PROJECT_ENTRY_GROUP = "add-project";
@@ -550,7 +558,8 @@ function OpenCommandPaletteDialog(props: {
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
-  const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
+  const { changeThemeItem, changeStyleItem, changeAppearanceItem, themeEditorItem } =
+    useCommandPaletteThemeItems();
   const portForwardItem = useCommandPalettePortForwardItem({
     activeThread: activeThread ?? null,
     query: deferredQuery,
@@ -564,13 +573,18 @@ function OpenCommandPaletteDialog(props: {
   );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
+  const [cloneLayout, setCloneLayout] = useState<ProjectCloneLayout>("standard");
   const [newProjectFlow, setNewProjectFlow] = useState<{
     readonly environmentId: EnvironmentId;
     readonly sourcesEnvironmentId: EnvironmentId | null;
+    readonly step: "name" | "location" | "host";
+    /** null: the environment's default parent. */
+    readonly parentDirectory: string | null;
   } | null>(null);
   const [newProjectPublishes, setNewProjectPublishes] = useState(false);
   const [newProjectPublishKind, setNewProjectPublishKind] =
     useState<SourceControlProviderKind | null>(null);
+  const [newProjectLayout, setNewProjectLayout] = useState<ProjectCloneLayout>("standard");
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
   // State lags a render behind, so a repeated Enter could start a second create.
   const newProjectSubmittingRef = useRef(false);
@@ -704,7 +718,9 @@ function OpenCommandPaletteDialog(props: {
         )
       : "";
   const canBrowsePaths =
-    browseEnvironmentId !== null && !isRemoteProjectRepositoryStep && newProjectFlow === null;
+    browseEnvironmentId !== null &&
+    !isRemoteProjectRepositoryStep &&
+    (newProjectFlow === null || newProjectFlow.step === "location");
   const browsePath = getFilesystemBrowsePath(query, browseEnvironmentPlatform, canBrowsePaths);
   const isBrowsing = browsePath.isBrowsing;
   const browseDirectoryPath = browsePath.directoryPath;
@@ -988,6 +1004,12 @@ function OpenCommandPaletteDialog(props: {
 
   function popView(): void {
     browseNavigation.invalidate();
+    if (newProjectFlow !== null && newProjectFlow.step !== "name") {
+      setNewProjectFlow((flow) => (flow === null ? flow : { ...flow, step: "name" }));
+      dispatchSearch({ type: "back" });
+      setHighlightedItemValue(null);
+      return;
+    }
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
     if (viewStack.length <= 1) {
@@ -1051,6 +1073,7 @@ function OpenCommandPaletteDialog(props: {
     source: AddProjectRemoteSource,
   ): void => {
     setAddProjectEnvironmentId(environmentId);
+    setCloneLayout("standard");
     setAddProjectCloneFlow({ step: "repository", environmentId, source });
     pushPaletteView({
       addonIcon: remoteProjectSourceIcon(source, ADDON_ICON_CLASS),
@@ -1071,11 +1094,13 @@ function OpenCommandPaletteDialog(props: {
     environmentId: EnvironmentId,
     sourcesEnvironmentId: EnvironmentId | null,
   ): void => {
+    const remembered = useUiStateStore.getState();
     setAddProjectEnvironmentId(environmentId);
     setAddProjectCloneFlow(null);
-    setNewProjectFlow({ environmentId, sourcesEnvironmentId });
+    setNewProjectFlow({ environmentId, sourcesEnvironmentId, step: "name", parentDirectory: null });
     setNewProjectPublishes(false);
-    setNewProjectPublishKind(null);
+    setNewProjectPublishKind(remembered.newProjectPublishHost);
+    setNewProjectLayout(remembered.newProjectLayout);
     pushPaletteView({
       addonIcon: <FolderGit2Icon className={ADDON_ICON_CLASS} />,
       groups: [],
@@ -1672,6 +1697,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   actionItems.push(changeThemeItem);
+  actionItems.push(changeStyleItem);
   actionItems.push(changeAppearanceItem);
 
   actionItems.push(themeEditorItem);
@@ -1777,6 +1803,17 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (activeThread)
+    actionItems.push({
+      kind: "action",
+      value: "action:voice",
+      searchTerms: ["voice", "assistant", "talk", "microphone"],
+      title: gt("Toggle Voice"),
+      icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        toggleVoice(scopeThreadRef(activeThread.environmentId, activeThread.id));
+      },
+    });
   actionItems.push({
     kind: "action",
     value: "action:settings",
@@ -1898,9 +1935,11 @@ function OpenCommandPaletteDialog(props: {
             ? portForwardItem.groups
             : currentView?.groups[0]?.value === "themes"
               ? changeThemeItem.groups
-              : currentView?.groups[0]?.value === "appearance"
-                ? changeAppearanceItem.groups
-                : (currentView?.groups ?? rootGroups);
+              : currentView?.groups[0]?.value === "styles"
+                ? changeStyleItem.groups
+                : currentView?.groups[0]?.value === "appearance"
+                  ? changeAppearanceItem.groups
+                  : (currentView?.groups ?? rootGroups);
 
   const isLinkedThreadSearch =
     linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;
@@ -2129,30 +2168,83 @@ function OpenCommandPaletteDialog(props: {
     newProjectPublishTargets,
     newProjectPublishKind,
   );
-  const newProjectName = query.trim();
+  const newProjectStep = newProjectFlow?.step ?? null;
+  const supportsNewProjectPlacement =
+    (newProjectFlow === null
+      ? null
+      : environments.find(
+          (environment) => environment.environmentId === newProjectFlow.environmentId,
+        )?.serverConfig
+    )?.newProjectPlacement === true;
+  // A pushed step stashes the typed name as its parent query.
+  const newProjectName =
+    newProjectStep === "name"
+      ? query.trim()
+      : newProjectStep === null
+        ? ""
+        : (viewStack.at(-1)?.parentQuery.trim() ?? "");
+  const newProjectsRoot = newProjectFlow ? newProjectsRootFor(newProjectFlow.environmentId) : null;
+  const newProjectDefaultParent = getNewProjectDefaultParent({
+    addProjectBaseDirectory:
+      newProjectFlow === null
+        ? null
+        : (environments.find(
+            (environment) => environment.environmentId === newProjectFlow.environmentId,
+          )?.serverConfig?.settings.addProjectBaseDirectory ?? null),
+    newProjectsRoot,
+  });
+  const newProjectParent = supportsNewProjectPlacement
+    ? (newProjectFlow?.parentDirectory ?? newProjectDefaultParent)
+    : newProjectsRoot;
+  const newProjectEffectiveLayout: ProjectCloneLayout = supportsNewProjectPlacement
+    ? newProjectLayout
+    : "standard";
+  const newProjectFolderPreview =
+    newProjectParent === null || newProjectName.length === 0
+      ? null
+      : getNewProjectPathPreview(newProjectParent, newProjectName);
+  const newProjectCheckoutPreview =
+    newProjectFolderPreview === null
+      ? null
+      : getProjectCloneCheckoutPath(newProjectFolderPreview, newProjectEffectiveLayout);
   const canSubmitNewProject =
-    newProjectFlow !== null &&
+    newProjectStep === "name" &&
     newProjectName.length > 0 &&
     !isCreatingNewProject &&
     canCreateProjectInEnvironment(browseEnvironment?.connection.phase);
 
   async function submitNewProject(): Promise<void> {
-    if (newProjectFlow === null || !canSubmitNewProject || newProjectSubmittingRef.current) {
+    if (
+      newProjectFlow === null ||
+      newProjectStep !== "name" ||
+      !canSubmitNewProject ||
+      newProjectSubmittingRef.current
+    ) {
       return;
     }
+    const { environmentId } = newProjectFlow;
+    const layout = supportsNewProjectPlacement ? newProjectLayout : null;
+    const publishTo = newProjectPublishes ? newProjectPublishTarget : null;
     newProjectSubmittingRef.current = true;
     setIsCreatingNewProject(true);
     const created = await settlePromise(() =>
       createNewProject({
-        environmentId: newProjectFlow.environmentId,
+        environmentId,
         name: newProjectName,
-        publishTo: newProjectPublishes ? newProjectPublishTarget : null,
+        parentDirectory: supportsNewProjectPlacement ? newProjectParent : null,
+        layout,
+        publishTo,
       }),
     );
     newProjectSubmittingRef.current = false;
     setIsCreatingNewProject(false);
     if (created._tag === "Failure") throw squashAtomCommandFailure(created);
-    if (created.value) setOpen(false);
+    if (!created.value) return;
+    if (layout !== null) useUiStateStore.getState().setNewProjectLayout(layout);
+    if (publishTo !== null) {
+      useUiStateStore.getState().setNewProjectPublishHost(publishTo.definition.kind);
+    }
+    setOpen(false);
   }
 
   function getDefaultCloneDestination(
@@ -2332,7 +2424,7 @@ function OpenCommandPaletteDialog(props: {
         // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,
-        destinationPath,
+        destinationPath: getProjectCloneCheckoutPath(destinationPath, cloneLayout),
       },
     });
     setIsRemoteProjectCloning(false);
@@ -2429,10 +2521,92 @@ function OpenCommandPaletteDialog(props: {
     group.value === "directories" ? { ...group, label: gt("Select where to clone") } : group,
   );
 
-  const newProjectsRoot = newProjectFlow ? newProjectsRootFor(newProjectFlow.environmentId) : null;
-  const newProjectPathPreview =
-    newProjectsRoot === null ? null : getNewProjectPathPreview(newProjectsRoot, newProjectName);
+  const newProjectSummaryParent =
+    newProjectStep === "location" && resolvedAddProjectPath.length > 0
+      ? resolvedAddProjectPath
+      : newProjectParent;
+  const newProjectSummaryCheckout =
+    newProjectStep === "location" && newProjectSummaryParent !== null
+      ? // The folder the browser points at previews live; the typed name stays stashed.
+        newProjectName.length === 0
+        ? null
+        : getProjectCloneCheckoutPath(
+            getNewProjectPathPreview(newProjectSummaryParent, newProjectName),
+            newProjectEffectiveLayout,
+          )
+      : newProjectCheckoutPreview;
+
   const newProjectPublishToggleValue = "new-project:publish";
+  const newProjectLayoutToggleValue = "new-project:layout";
+  const newProjectLocationValue = "new-project:location";
+  const newProjectHostValue = "new-project:host";
+  const newProjectHostIcon = <FolderGit2Icon className={ADDON_ICON_CLASS} />;
+
+  const confirmNewProjectLocation = (rawPath: string): void => {
+    const trimmedPath = rawPath.trim();
+    if (trimmedPath.length === 0) return;
+    if (isUnsupportedWindowsProjectPath(trimmedPath, browseEnvironmentPlatform)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Location unavailable"),
+          description: gt("Windows-style paths are only supported on Windows."),
+        }),
+      );
+      return;
+    }
+    if (isExplicitRelativeProjectPath(trimmedPath) && !currentProjectCwdForBrowse) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Location unavailable"),
+          description: gt("Relative paths require an active project."),
+        }),
+      );
+      return;
+    }
+    const resolved = resolveProjectPathForDispatch(trimmedPath, currentProjectCwdForBrowse);
+    if (resolved.length === 0) return;
+    browseNavigation.invalidate();
+    setNewProjectFlow((flow) =>
+      flow === null ? flow : { ...flow, step: "name", parentDirectory: resolved },
+    );
+    dispatchSearch({ type: "back" });
+    setHighlightedItemValue(null);
+  };
+
+  const openNewProjectLocationStep = async (): Promise<void> => {
+    const initialQuery = ensureBrowseDirectoryPath(newProjectParent ?? "");
+    const initialBrowsePath = getBrowseDirectoryPath(initialQuery);
+    await browseNavigation.run(
+      () =>
+        initialBrowsePath.length > 0
+          ? prefetchBrowsePath(
+              initialBrowsePath,
+              newProjectFlow?.environmentId ?? null,
+              getBrowseCwdForEnvironment(newProjectFlow?.environmentId ?? null),
+            )
+          : Promise.resolve(),
+      () => {
+        setNewProjectFlow((flow) => (flow === null ? flow : { ...flow, step: "location" }));
+        pushPaletteView({
+          addonIcon: <FolderIcon className={ADDON_ICON_CLASS} />,
+          groups: [],
+          initialQuery,
+        });
+      },
+    );
+  };
+
+  const openNewProjectHostStep = (): void => {
+    setNewProjectFlow((flow) => (flow === null ? flow : { ...flow, step: "host" }));
+    pushPaletteView({
+      addonIcon: newProjectHostIcon,
+      groups: [],
+      initialQuery: "",
+    });
+  };
+
   const showExistingProjectSources = (environmentId: EnvironmentId) => {
     const sourcesEnvironmentId = newProjectFlow?.sourcesEnvironmentId ?? null;
     if (sourcesEnvironmentId === environmentId) {
@@ -2446,7 +2620,9 @@ function OpenCommandPaletteDialog(props: {
     startAddProjectSourceSelection(environmentId);
   };
   const switchNewProjectEnvironment = (environmentId: EnvironmentId) => {
-    setNewProjectFlow((flow) => (flow === null ? flow : { ...flow, environmentId }));
+    setNewProjectFlow((flow) =>
+      flow === null ? flow : { ...flow, environmentId, parentDirectory: null },
+    );
     setAddProjectEnvironmentId(environmentId);
   };
   const selectedNewProjectEnvironment =
@@ -2510,65 +2686,155 @@ function OpenCommandPaletteDialog(props: {
             },
           ],
         };
+  const newProjectOptionItems: CommandPaletteActionItem[] = [];
+  if (supportsNewProjectPlacement && newProjectParent !== null) {
+    newProjectOptionItems.push({
+      kind: "action",
+      value: newProjectLocationValue,
+      searchTerms: [],
+      title: gt("Location"),
+      description: newProjectParent,
+      icon: <FolderIcon className={ITEM_ICON_CLASS} />,
+      titleTrailingContent: (
+        <ChevronRightIcon className="-me-0.5 ms-auto size-4 shrink-0 text-muted-foreground/70" />
+      ),
+      ...(isCreatingNewProject ? { disabled: true } : {}),
+      keepOpen: true,
+      run: async () => {
+        await openNewProjectLocationStep();
+      },
+    });
+    newProjectOptionItems.push({
+      kind: "action",
+      value: newProjectLayoutToggleValue,
+      searchTerms: [],
+      title: gt("Create in main; use sibling worktrees"),
+      description:
+        newProjectCheckoutPreview !== null
+          ? gt("Checkout: {path}", { path: newProjectCheckoutPreview })
+          : gt("Puts the checkout in {path}", { path: "<project>/main" }),
+      icon: <GitBranchIcon className={ITEM_ICON_CLASS} />,
+      titleTrailingContent: (
+        <span className="pointer-events-none ms-auto flex">
+          <Checkbox checked={newProjectLayout === "worktree-container"} tabIndex={-1} aria-hidden />
+        </span>
+      ),
+      ...(isCreatingNewProject ? { disabled: true } : {}),
+      keepOpen: true,
+      checked: newProjectLayout === "worktree-container",
+      run: async () => {
+        setNewProjectLayout((layout) =>
+          layout === "standard" ? "worktree-container" : "standard",
+        );
+      },
+    });
+  }
+  if (newProjectPublishTarget !== null) {
+    newProjectOptionItems.push({
+      kind: "action",
+      value: newProjectPublishToggleValue,
+      searchTerms: [],
+      title: gt("Create private repository on {host}", {
+        host: newProjectPublishTarget.definition.label,
+      }),
+      description:
+        newProjectCheckoutPreview !== null
+          ? getNewProjectRepository(
+              newProjectPublishTarget,
+              newProjectCheckoutPreview,
+              newProjectEffectiveLayout,
+            )
+          : (newProjectPublishTarget.owner ??
+            gt("Your {host} account", {
+              host: newProjectPublishTarget.definition.label,
+            })),
+      icon: sourceControlHostIcon(newProjectPublishTarget.definition, ITEM_ICON_CLASS),
+      titleTrailingContent: (
+        <span className="pointer-events-none ms-auto flex">
+          <Checkbox checked={newProjectPublishes} tabIndex={-1} aria-hidden />
+        </span>
+      ),
+      ...(isCreatingNewProject ? { disabled: true } : {}),
+      keepOpen: true,
+      checked: newProjectPublishes,
+      run: async () => {
+        setNewProjectPublishes((publishes) => !publishes);
+      },
+    });
+  }
+  if (newProjectPublishTargets.length > 1 && newProjectPublishTarget !== null) {
+    newProjectOptionItems.push({
+      kind: "action",
+      value: newProjectHostValue,
+      searchTerms: [],
+      title: gt("Repository host"),
+      description: newProjectPublishTarget.definition.label,
+      icon: sourceControlHostIcon(newProjectPublishTarget.definition, ITEM_ICON_CLASS),
+      titleTrailingContent: (
+        <ChevronRightIcon className="-me-0.5 ms-auto size-4 shrink-0 text-muted-foreground/70" />
+      ),
+      ...(isCreatingNewProject ? { disabled: true } : {}),
+      keepOpen: true,
+      run: async () => {
+        openNewProjectHostStep();
+      },
+    });
+  }
   const newProjectOptionGroups: CommandPaletteView["groups"] =
-    newProjectPublishTarget === null || newProjectPathPreview === null
+    newProjectOptionItems.length === 0
+      ? []
+      : [{ value: "new-project-options", label: gt("Options"), items: newProjectOptionItems }];
+  const newProjectLocationBrowseGroups = browseGroups.map((group) =>
+    group.value === "directories" ? { ...group, label: gt("Select where to create") } : group,
+  );
+  const newProjectHostGroups: CommandPaletteView["groups"] =
+    newProjectStep !== "host"
       ? []
       : [
           {
-            value: "new-project-options",
-            label: gt("Options"),
-            items: [
-              {
+            value: "new-project-hosts",
+            label: gt("Repository host"),
+            items: filterNewProjectPublishTargets(newProjectPublishTargets, query).map(
+              (target): CommandPaletteActionItem => ({
                 kind: "action",
-                value: newProjectPublishToggleValue,
-                searchTerms: [],
-                title:
-                  newProjectPublishTargets.length > 1
-                    ? gt("Create private repository")
-                    : gt("Create private repository on {host}", {
-                        host: newProjectPublishTarget.definition.label,
-                      }),
-                description:
-                  newProjectName.length > 0
-                    ? getNewProjectRepository(newProjectPublishTarget, newProjectPathPreview)
-                    : (newProjectPublishTarget.owner ??
-                      gt("Your {host} account", {
-                        host: newProjectPublishTarget.definition.label,
-                      })),
-                icon: sourceControlHostIcon(newProjectPublishTarget.definition, ITEM_ICON_CLASS),
-                titleTrailingContent: (
-                  <span className="ms-auto flex items-center gap-2">
-                    {newProjectPublishTargets.length > 1 ? (
-                      <NewProjectPublishHostPicker
-                        disabled={isCreatingNewProject}
-                        targets={newProjectPublishTargets}
-                        value={newProjectPublishTarget.definition.kind}
-                        onValueChange={setNewProjectPublishKind}
-                      />
-                    ) : null}
-                    <span className="pointer-events-none flex">
-                      <Checkbox checked={newProjectPublishes} tabIndex={-1} aria-hidden />
-                    </span>
-                  </span>
-                ),
-                ...(isCreatingNewProject ? { disabled: true } : {}),
+                value: `new-project:host:${target.definition.kind}`,
+                searchTerms: [
+                  target.definition.label,
+                  target.definition.pickerLabel,
+                  ...(target.definition.searchKeywords ?? []),
+                ],
+                title: target.definition.label,
+                description: target.owner ?? "",
+                icon: sourceControlHostIcon(target.definition, ITEM_ICON_CLASS),
+                ...(target.definition.kind === newProjectPublishTarget?.definition.kind
+                  ? {
+                      titleTrailingContent: (
+                        <CheckIcon className="ms-auto size-4 shrink-0 text-muted-foreground/70" />
+                      ),
+                    }
+                  : {}),
                 keepOpen: true,
-                checked: newProjectPublishes,
                 run: async () => {
-                  setNewProjectPublishes((publishes) => !publishes);
+                  setNewProjectPublishKind(target.definition.kind);
+                  setNewProjectPublishes(true);
+                  popView();
                 },
-              },
-            ],
+              }),
+            ),
           },
         ];
 
   let displayedGroups: CommandPaletteView["groups"] = filteredGroups;
-  if (newProjectFlow !== null) {
+  if (newProjectStep === "name") {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),
       ...newProjectOptionGroups,
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];
+  } else if (newProjectStep === "location") {
+    displayedGroups = relativePathNeedsActiveProject ? [] : newProjectLocationBrowseGroups;
+  } else if (newProjectStep === "host") {
+    displayedGroups = newProjectHostGroups;
   } else if (addProjectCloneFlow?.step === "repository") {
     displayedGroups = [];
   } else if (addProjectCloneFlow?.step === "confirm") {
@@ -2578,13 +2844,15 @@ function OpenCommandPaletteDialog(props: {
   }
   const resultRows = buildCommandPaletteRows(displayedGroups);
   const autoHighlightsFirstRow =
-    !isBrowsing && !isRemoteProjectCloneFlow && newProjectFlow === null;
+    newProjectStep === null ? !isBrowsing && !isRemoteProjectCloneFlow : newProjectStep === "host";
 
   const inputPlaceholder =
-    newProjectFlow !== null
+    newProjectStep === "name"
       ? gt("Project name")
-      : (remoteProjectInputPlaceholder(addProjectCloneFlow, messages) ??
-        getCommandPaletteInputPlaceholder(paletteMode, messages));
+      : newProjectStep === "host"
+        ? gt("Repository host")
+        : (remoteProjectInputPlaceholder(addProjectCloneFlow, messages) ??
+          getCommandPaletteInputPlaceholder(paletteMode, messages));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canWriteSourceControl = useEnvironmentScope(
@@ -2620,7 +2888,7 @@ function OpenCommandPaletteDialog(props: {
       ? gt("Create & Add")
       : gt("Add");
   const addShortcutLabel = hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter";
-  const hasHighlightedNewProjectItem = newProjectFlow !== null && highlightedItemValue !== null;
+  const hasHighlightedNewProjectItem = newProjectStep === "name" && highlightedItemValue !== null;
   const createShortcutLabel = hasHighlightedNewProjectItem
     ? `${submitModifierLabel} Enter`
     : "Enter";
@@ -2742,7 +3010,21 @@ function OpenCommandPaletteDialog(props: {
     }
 
     if (
-      newProjectFlow !== null &&
+      newProjectStep === "location" &&
+      event.key === "Enter" &&
+      (!hasHighlightedBrowseItem || isPrimaryModifierPressed(event)) &&
+      !event.nativeEvent.isComposing &&
+      event.keyCode !== 229
+    ) {
+      // Base UI would otherwise also click the highlighted folder row.
+      (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
+      event.preventDefault();
+      confirmNewProjectLocation(resolvedAddProjectPath);
+      return;
+    }
+
+    if (
+      newProjectStep === "name" &&
       event.key === "Enter" &&
       (!hasHighlightedNewProjectItem || isPrimaryModifierPressed(event)) &&
       // Enter that confirms an IME composition is part of typing the name.
@@ -2901,6 +3183,15 @@ function OpenCommandPaletteDialog(props: {
     if (!pickedPath) {
       return;
     }
+    if (newProjectStep === "location") {
+      // A WSL share is a Linux path only to the WSL backend; Windows takes the share itself.
+      confirmNewProjectLocation(
+        isWindowsPlatform(browseEnvironmentPlatform)
+          ? pickedPath
+          : (parseWslUncPath(pickedPath)?.linuxPath ?? pickedPath),
+      );
+      return;
+    }
     if (parseWslUncPath(pickedPath)) {
       if (desktopWslState === null) {
         desktopWslState = (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
@@ -2992,7 +3283,7 @@ function OpenCommandPaletteDialog(props: {
         ? `${submitActionLabel} (${addShortcutLabel})`
         : gt("This connection cannot add projects.");
   const inputAccessory =
-    newProjectFlow !== null ? (
+    newProjectStep === "name" ? (
       <CommandPaletteSubmitButton
         id={submitButtonId}
         label={isCreatingNewProject ? gt("Creating") : gt("Create")}
@@ -3002,6 +3293,22 @@ function OpenCommandPaletteDialog(props: {
         disabled={!canSubmitNewProject}
         onSubmit={() => {
           void submitNewProject();
+        }}
+      />
+    ) : newProjectStep === "location" ? (
+      <CommandPaletteSubmitButton
+        id={submitButtonId}
+        label={gt("Choose")}
+        shortcutLabel={addShortcutLabel}
+        ariaLabel={gt("Choose ({shortcut})", { shortcut: addShortcutLabel })}
+        tooltip={gt("Choose ({shortcut})", { shortcut: addShortcutLabel })}
+        disabled={
+          !canCreateProject ||
+          !canCreateProjectInEnvironment(browseEnvironment?.connection.phase) ||
+          relativePathNeedsActiveProject
+        }
+        onSubmit={() => {
+          confirmNewProjectLocation(resolvedAddProjectPath);
         }}
       />
     ) : addProjectCloneFlow?.step === "repository" ? (
@@ -3043,17 +3350,24 @@ function OpenCommandPaletteDialog(props: {
     ) : null;
 
   const footerActionLabel =
-    newProjectFlow !== null
+    newProjectStep === "name"
       ? highlightedItemValue === null
         ? gt("Create")
-        : highlightedItemValue === newProjectPublishToggleValue
+        : highlightedItemValue === newProjectLayoutToggleValue ||
+            highlightedItemValue === newProjectPublishToggleValue
           ? gt("Toggle")
           : gt("Select")
-      : addProjectCloneFlow?.step === "repository"
-        ? (remoteProjectButtonLabel ?? gt("Continue"))
-        : !canSubmitBrowsePath || hasHighlightedBrowseItem
+      : newProjectStep === "location"
+        ? hasHighlightedBrowseItem
           ? gt("Select")
-          : undefined;
+          : gt("Choose")
+        : newProjectStep === "host"
+          ? gt("Select")
+          : addProjectCloneFlow?.step === "repository"
+            ? (remoteProjectButtonLabel ?? gt("Continue"))
+            : !canSubmitBrowsePath || hasHighlightedBrowseItem
+              ? gt("Select")
+              : undefined;
 
   const footerTrailing = canOpenProjectFromFileManager ? (
     <CommandFooterAction
@@ -3074,7 +3388,7 @@ function OpenCommandPaletteDialog(props: {
 
   return (
     <CommandPaletteContent
-      key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${newProjectFlow ? "new-project" : (addProjectCloneFlow?.step ?? "none")}`}
+      key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${newProjectStep === null ? (addProjectCloneFlow?.step ?? "none") : `new-project-${newProjectStep}`}`}
       aria-label={gt("Command palette")}
       autoHighlight={autoHighlightsFirstRow ? "always" : false}
       footerActionLabel={footerActionLabel}
@@ -3083,11 +3397,11 @@ function OpenCommandPaletteDialog(props: {
       inputProps={{
         className: hasHighlightedNewProjectItem
           ? "*:data-[slot=autocomplete-input]:pe-38!"
-          : addProjectCloneFlow?.step === "repository" || newProjectFlow !== null
+          : addProjectCloneFlow?.step === "repository" || newProjectStep === "name"
             ? "*:data-[slot=autocomplete-input]:pe-32!"
             : isBrowsing
               ? browseInputEndPaddingClass({
-                  willCreateProjectPath,
+                  willCreateProjectPath: newProjectStep === null && willCreateProjectPath,
                   hasHighlightedBrowseItem,
                 })
               : undefined,
@@ -3132,22 +3446,42 @@ function OpenCommandPaletteDialog(props: {
       showBackHint={isSubmenu}
       value={query}
     >
-      {newProjectPathPreview !== null ? (
+      {(newProjectStep === "name" || newProjectStep === "location") &&
+      newProjectSummaryParent !== null ? (
         <NewProjectSummary
           name={newProjectName}
-          pathPreview={newProjectPathPreview}
-          projectsRoot={newProjectsRoot}
+          checkoutPath={newProjectSummaryCheckout}
+          parent={newProjectSummaryParent}
           environmentLabel={newProjectEnvironmentLabel}
         />
       ) : null}
       {addProjectCloneFlow?.step === "confirm" ? (
-        <RemoteRepositorySummary
-          source={addProjectCloneFlow.source}
-          title={
-            addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput
-          }
-          description={addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl}
-        />
+        <div className="shrink-0">
+          <RemoteRepositorySummary
+            source={addProjectCloneFlow.source}
+            title={
+              addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput
+            }
+            description={addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl}
+          />
+          <div className="flex flex-col gap-2 px-4 pb-3 text-xs">
+            <label className="flex items-center gap-2">
+              <Checkbox
+                checked={cloneLayout === "worktree-container"}
+                onCheckedChange={(checked) =>
+                  setCloneLayout(checked ? "worktree-container" : "standard")
+                }
+                disabled={isRemoteProjectCloning}
+              />
+              <T>Clone into main; use sibling worktrees</T>
+            </label>
+            <p className="truncate font-mono text-muted-foreground">
+              {gt("Checkout: {path}", {
+                path: getProjectCloneCheckoutPath(resolvedAddProjectPath, cloneLayout),
+              })}
+            </p>
+          </div>
+        </div>
       ) : null}
       {browseAccessError ? (
         <div role="alert" className="px-4 py-3 text-sm text-muted-foreground">
@@ -3176,17 +3510,19 @@ function OpenCommandPaletteDialog(props: {
             ? { emptyStateMessage: gt("Choose a destination path and press Enter to clone.") }
             : relativePathNeedsActiveProject
               ? { emptyStateMessage: gt("Relative paths require an active project.") }
-              : willCreateProjectPath
-                ? {
-                    emptyStateMessage: gt(
-                      "Press Enter to create this folder and add it as a project.",
-                    ),
-                  }
-                : isThreadSearchPending
-                  ? { emptyStateMessage: gt("Searching thread messages…") }
-                  : isThreadSearchFailed
-                    ? { emptyStateMessage: gt("Couldn't search thread messages.") }
-                    : {})}
+              : newProjectStep === "location"
+                ? { emptyStateMessage: gt("Choose a folder and press Enter.") }
+                : willCreateProjectPath
+                  ? {
+                      emptyStateMessage: gt(
+                        "Press Enter to create this folder and add it as a project.",
+                      ),
+                    }
+                  : isThreadSearchPending
+                    ? { emptyStateMessage: gt("Searching thread messages…") }
+                    : isThreadSearchFailed
+                      ? { emptyStateMessage: gt("Couldn't search thread messages.") }
+                      : {})}
       />
     </CommandPaletteContent>
   );

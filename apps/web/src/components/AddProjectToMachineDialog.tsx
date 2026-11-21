@@ -6,10 +6,12 @@ import {
   getAddProjectInitialQuery,
   getCloneDestinationPath,
   getCloneDirectoryPath,
+  getProjectCloneCheckoutPath,
 } from "@t3tools/client-runtime/operations/projects";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import {
   type EnvironmentId,
+  type ProjectCloneLayout,
   type ProjectIgnoredFile,
   type ScopedProjectRef,
   resolveEnvironmentMachineKind,
@@ -63,6 +65,7 @@ import { Toggle, ToggleGroup } from "./ui/toggle-group";
 interface AddProjectToMachineRequest {
   readonly projectRef: ScopedProjectRef;
   readonly targetEnvironmentId: EnvironmentId | null;
+  readonly onReady?: (project: ScopedProjectRef) => void;
 }
 
 const useRequest = create<{ request: AddProjectToMachineRequest | null; session: number }>(() => ({
@@ -126,7 +129,9 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
     ),
   );
   const [pathOverride, setPathOverride] = useState<string | null>(null);
-  const destinationPath = pathOverride ?? defaultPath;
+  const [layout, setLayout] = useState<ProjectCloneLayout>("standard");
+  const repositoryPath = pathOverride ?? defaultPath;
+  const destinationPath = getProjectCloneCheckoutPath(repositoryPath, layout);
 
   const capabilities = source?.serverConfig?.environment.capabilities;
   const canListFiles = capabilities?.ignoredFileListing === true;
@@ -233,6 +238,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
         remoteUrl,
         destinationPath: destinationPath.trim(),
         files: [...selectedFiles.keys()],
+        ...(request.onReady ? { onReady: request.onReady } : {}),
       });
       close();
       openClonedProject(scopeProjectRef(target.environmentId, projectId));
@@ -360,18 +366,56 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`${id}-path`}>
                 {target
-                  ? gt("Folder on {machine}", { machine: target.label })
-                  : gt("Folder on the other machine")}
+                  ? gt("Repository folder on {machine}", { machine: target.label })
+                  : gt("Repository folder on the other machine")}
               </Label>
               <Input
                 id={`${id}-path`}
-                value={destinationPath}
+                value={repositoryPath}
                 onChange={(event) =>
-                  setPathOverride(resolvePastedPath(destinationPath, event.target.value))
+                  setPathOverride(resolvePastedPath(repositoryPath, event.target.value))
                 }
                 spellCheck={false}
                 autoComplete="off"
               />
+              <Select
+                value={layout}
+                onValueChange={(value) => {
+                  if (value) setLayout(value);
+                }}
+                items={[
+                  { value: "standard", label: gt("Clone into this folder") },
+                  {
+                    value: "worktree-container",
+                    label: gt("Clone into main; use sibling worktrees"),
+                  },
+                ]}
+              >
+                <SelectTrigger aria-label={gt("Clone layout")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="standard">
+                    <T>Clone into this folder</T>
+                  </SelectItem>
+                  <SelectItem value="worktree-container">
+                    <T>Clone into main; use sibling worktrees</T>
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+              <p className="font-mono text-muted-foreground text-xs">
+                <T>
+                  Checkout: <Var>{destinationPath}</Var>
+                </T>
+              </p>
+              {layout === "worktree-container" ? (
+                <p className="text-muted-foreground text-xs">
+                  <T>
+                    Threads use sibling worktrees when enabled by the destination&apos;s worktree
+                    settings.
+                  </T>
+                </p>
+              ) : null}
             </div>
 
             {canListFiles ? (

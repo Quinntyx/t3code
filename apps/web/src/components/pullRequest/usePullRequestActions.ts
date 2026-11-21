@@ -1,18 +1,20 @@
 import { useAtomCommand } from "~/state/use-atom-command";
+import { allowedPullRequestMergeMethods } from "@t3tools/client-runtime/pull-request-merge";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  EnvironmentId,
-  ProjectId,
-  PullRequestAction,
-  PullRequestDetail,
-  PullRequestMergeMethod,
-  PullRequestRef,
-  PullRequestSummary,
-  ScopedThreadRef,
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type EnvironmentId,
+  type ProjectId,
+  type PullRequestAction,
+  type PullRequestDetail,
+  type PullRequestMergeMethod,
+  type PullRequestRef,
+  type PullRequestSummary,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { msg } from "gt-react";
 import { useRef, useState } from "react";
@@ -21,15 +23,24 @@ import {
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { useClientSettings, useEnvironmentSettings } from "~/hooks/useSettings";
+import {
+  getClientSettings,
+  mergeEnvironmentSettings,
+  useClientSettings,
+  useEnvironmentSettings,
+} from "~/hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { buildPhysicalToLogicalProjectKeyMap } from "~/sidebarProjectGrouping";
-import { useProjects } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { readProjects, useProjects } from "~/state/entities";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { readPrimaryEnvironmentId, usePrimaryEnvironmentId } from "~/state/environments";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { serverEnvironment } from "~/state/server";
+import { useUiStateStore } from "~/uiStateStore";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -45,10 +56,37 @@ import {
   checkoutFailureDescription,
   appendHandoff,
   readableFailure,
+  resolvePullRequestMergeMethod,
 } from "./pullRequestDetail.logic";
 import { pullRequestEntryKey, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 
 import { changeRequestTermKind, type ChangeRequestTermKind } from "./changeRequestTerm";
+
+function resolveDefaultMergeMethod(input: {
+  readonly projectDefault: PullRequestMergeMethod | null;
+  readonly legacyOverrides: Readonly<Partial<Record<string, PullRequestMergeMethod>>>;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly grouping: ReturnType<typeof selectProjectGroupingSettings>;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId | null;
+}): PullRequestMergeMethod | undefined {
+  if (input.projectDefault != null) return input.projectDefault;
+  if (Object.keys(input.legacyOverrides).length === 0) return undefined;
+  const project = input.projects.find(
+    (candidate) =>
+      candidate.environmentId === input.environmentId && candidate.id === input.projectId,
+  );
+  if (!project) return undefined;
+  const key =
+    buildPhysicalToLogicalProjectKeyMap({
+      projects: input.projects,
+      settings: input.grouping,
+      primaryEnvironmentId: input.primaryEnvironmentId,
+    }).get(derivePhysicalProjectKey(project)) ??
+    deriveLogicalProjectKeyFromSettings(project, input.grouping);
+  return input.legacyOverrides[key];
+}
 
 export function usePullRequestDefaultMergeMethodResolver(
   environmentId: EnvironmentId,
@@ -62,22 +100,53 @@ export function usePullRequestDefaultMergeMethodResolver(
   const grouping = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  return () => {
-    if (projectDefault != null) return projectDefault;
-    if (Object.keys(legacyOverrides).length === 0) return undefined;
-    const project = projects.find(
-      (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
-    );
-    if (!project) return undefined;
-    const key =
-      buildPhysicalToLogicalProjectKeyMap({
-        projects,
-        settings: grouping,
-        primaryEnvironmentId,
-      }).get(derivePhysicalProjectKey(project)) ??
-      deriveLogicalProjectKeyFromSettings(project, grouping);
-    return legacyOverrides[key];
-  };
+  return () =>
+    resolveDefaultMergeMethod({
+      projectDefault,
+      legacyOverrides,
+      projects,
+      grouping,
+      primaryEnvironmentId,
+      environmentId,
+      projectId,
+    });
+}
+
+/** Reads the same default at click time, for callers outside a rendered control. */
+export function readPullRequestDefaultMergeMethod(
+  environmentId: EnvironmentId,
+  projectId: ProjectId | null,
+): PullRequestMergeMethod | undefined {
+  const clientSettings = getClientSettings();
+  const settings = mergeEnvironmentSettings(
+    appAtomRegistry.get(serverEnvironment.settingsValueAtom(environmentId)) ??
+      DEFAULT_SERVER_SETTINGS,
+    clientSettings,
+  );
+  return resolveDefaultMergeMethod({
+    projectDefault: resolveProjectSettings(settings, projectId).settings.pullRequestMergeMethod,
+    legacyOverrides: clientSettings.pullRequestMergeMethodOverrides,
+    projects: readProjects(),
+    grouping: selectProjectGroupingSettings(clientSettings),
+    primaryEnvironmentId: readPrimaryEnvironmentId(),
+    environmentId,
+    projectId,
+  });
+}
+
+export function resolvePullRequestMergeMethodForDetail(
+  detail: PullRequestDetail,
+  projectDefault: PullRequestMergeMethod | undefined,
+): PullRequestMergeMethod {
+  const allowed = allowedPullRequestMergeMethods(detail);
+  if (allowed.length === 0)
+    throw new Error(m(msg("No merge method is available for this repository.")));
+  return resolvePullRequestMergeMethod(
+    allowed,
+    null,
+    projectDefault,
+    useUiStateStore.getState().pullRequestMergeMethod,
+  );
 }
 
 const actionSuccessLabels = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({

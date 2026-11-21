@@ -25,6 +25,7 @@ import {
 } from "@t3tools/contracts";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
 import { composerTargetKey } from "../../composerDraftStore";
+import { stripInlineContextReferences } from "../../lib/composerContextReferences";
 import {
   type ComposerListEdit,
   listContinuationForEnter,
@@ -32,6 +33,14 @@ import {
   listOutdentForTab,
 } from "../../composer-list-continuation";
 import type { Dispatch, RefObject, SetStateAction } from "react";
+
+/** Context chips are composer content, not typed text, so an attachment-only draft counts as empty. */
+function shouldClearComposerAttachmentsOnEscape(input: {
+  readonly prompt: string;
+  readonly hasAttachments: boolean;
+}): boolean {
+  return input.hasAttachments && stripInlineContextReferences(input.prompt).trim().length === 0;
+}
 
 /**
  * The composer's key handling inside the editor: send shortcuts, the slash/mention menu,
@@ -96,6 +105,7 @@ export function composerCommandKeyHandler(input: {
     dispatchMode: ComposerDispatchMode,
     submissionIntent: ComposerSubmissionIntent,
   ) => void;
+  readonly clearComposerAttachments: () => boolean;
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
@@ -137,6 +147,7 @@ export function composerCommandKeyHandler(input: {
     readComposerSnapshot,
     applyPromptReplacement,
     submitComposer,
+    clearComposerAttachments,
     promptSuggestion,
     dismissPromptSuggestion,
   } = input;
@@ -240,14 +251,25 @@ export function composerCommandKeyHandler(input: {
       !isLiteralPendingAnswer && (composerMenuOpenRef.current || trigger !== null);
     if (key === "Escape") {
       if (event.isComposing || event.keyCode === 229) return false;
-      if (!menuIsActive && promptSuggestion !== null && promptRef.current.length === 0) {
+      if (menuIsActive) {
+        dismissComposerTrigger(trigger);
+        composerMenuOpenRef.current = false;
+        return true;
+      }
+      if (promptSuggestion !== null && promptRef.current.length === 0) {
         dismissPromptSuggestion();
         return true;
       }
-      if (!menuIsActive) return false;
-      dismissComposerTrigger(trigger);
-      composerMenuOpenRef.current = false;
-      return true;
+      if (
+        shouldClearComposerAttachmentsOnEscape({
+          prompt: promptRef.current,
+          hasAttachments:
+            composerImagesRef.current.length > 0 || composerFilesRef.current.length > 0,
+        })
+      ) {
+        return clearComposerAttachments();
+      }
+      return false;
     }
     if (menuIsActive && (submissionIntent === null || submissionIntent === "foreground")) {
       const currentItems = composerMenuItemsRef.current;

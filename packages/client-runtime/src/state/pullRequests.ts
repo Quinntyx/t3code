@@ -1386,6 +1386,13 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       }),
       (_registry, { input }) => actionEdit(input),
     ),
+    // Not routed: the stack is read from this environment's threads, which restack the layers.
+    mergeStack: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:merge-stack",
+      tag: WS_METHODS.pullRequestsMergeStack,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     update: showWhileInFlight(
       createEnvironmentRpcCommand(runtime, {
         label: "environment-data:pull-requests:update",

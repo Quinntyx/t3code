@@ -329,13 +329,13 @@ export default function BinaryViewer(props: {
             <thead className="sticky top-0 bg-background text-muted-foreground">
               <tr>
                 <th scope="col" className="px-3 py-2 text-left font-normal">
-                  <T $context="column header, file name">Name</T>
+                  <T context="column header, file name">Name</T>
                 </th>
                 <th scope="col" className="px-3 py-2 text-right font-normal">
-                  <T $context="column header, file size">Size</T>
+                  <T context="column header, file size">Size</T>
                 </th>
                 <th scope="col" className="px-3 py-2 text-right font-normal">
-                  <T $context="column header, last modified date">Modified</T>
+                  <T context="column header, last modified date">Modified</T>
                 </th>
               </tr>
             </thead>

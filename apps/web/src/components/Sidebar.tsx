@@ -10,8 +10,9 @@ import {
   moveThreadContextDrag as moveThreadContextDragGhost,
 } from "./chat/threadContextDrag";
 import { discardComposerDraft } from "../lib/discardComposerDraft";
+import { setThreadHiddenOnClient } from "../lib/threadVisibility";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
@@ -35,9 +36,19 @@ import {
 import {
   asLaunchingThread,
   createInboxReturnTracker,
-  isThreadWorking,
+  isThreadWorkingInShelf,
 } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  buildThreadStackForest,
+  flattenThreadStack,
+  partitionThreadStacks,
+  rankThreadStacks,
+  resolveThreadBranchOwners,
+  resolveThreadStackParents,
+  threadBranchKey,
+  type ThreadStackNode,
+} from "@t3tools/client-runtime/threadStacks";
 import {
   nextShownOrder,
   threadSearchMatchKey,
@@ -63,14 +74,13 @@ import {
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
-import {
-  resolveListedAncestorThreadRef,
-  type OlderSettledScope,
-} from "@t3tools/client-runtime/state/threads";
+import { isShownUnderParent, type OlderSettledScope } from "@t3tools/client-runtime/state/threads";
 
 import {
   CheckIcon,
   ChevronDownIcon,
+  EyeIcon,
+  EyeOffIcon,
   FolderIcon,
   ListFilterIcon,
   PlusIcon,
@@ -111,6 +121,7 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarFolderDrop } from "./sidebar/SidebarFolderDrop";
 import {
   pickableProjectGroups,
+  resolveFocusProjectKeys,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
@@ -119,7 +130,7 @@ import {
   getSidebarProjectSettingsKey,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import { resolveProjectExpanded, useUiStateStore } from "../uiStateStore";
+import { resolveProjectExpanded, showHiddenThreadsAtom, useUiStateStore } from "../uiStateStore";
 import {
   getThreadKeysToDeselectAfterDelete,
   useThreadSelectionStore,
@@ -127,6 +138,7 @@ import {
 import {
   canTurnThreadIntoProject,
   useAcknowledgeThreadWoke,
+  useContinueThread,
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -179,6 +191,7 @@ import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
+  threadContinuationRunId,
 } from "./threadActionMenu.logic";
 import {
   applySidebarThreadDrop,
@@ -196,6 +209,7 @@ import {
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
+  resolveSidebarRowThreadRef,
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
@@ -268,10 +282,14 @@ import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 import {
   SidebarSearchResultRow,
   SortableThreadRow,
+  SortableThreadStack,
+  StackedThreadRow,
   type SidebarProviderEntry,
   type SidebarSweepAction,
+  type SidebarThreadRowProps,
 } from "./sidebar/SidebarThreadRow";
-import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { SidebarDraftBlock, StackedSidebarDraftRow } from "./sidebar/SidebarDraftBlock";
+import { SidebarStackBranch } from "./sidebar/SidebarThreadStack";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -361,6 +379,10 @@ interface SidebarThreadPartitionInput {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
+  /** Each stacked thread's parent, by thread key. */
+  readonly stackParents: ReadonlyMap<string, EnvironmentThreadShell>;
+  /** Threads with an unsent draft stacked on their branch. */
+  readonly draftParentKeys: ReadonlySet<string>;
   readonly workingShelfEnabled: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
@@ -419,6 +441,42 @@ function routeThreadOnly(
   return routeThread === undefined ? EMPTY_THREADS : [routeThread];
 }
 
+type SidebarStackNode = ThreadStackNode<EnvironmentThreadShell>;
+
+function stackMembers(
+  root: EnvironmentThreadShell,
+  stackByRootKey: ReadonlyMap<string, SidebarStackNode>,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const node = stackByRootKey.get(threadShellKey(root));
+  return node === undefined ? [root] : flattenThreadStack(node);
+}
+
+/** A closed shelf or folder still shows the stack holding the open thread. */
+function routeStackOnly(
+  roots: readonly EnvironmentThreadShell[],
+  stackByRootKey: ReadonlyMap<string, SidebarStackNode>,
+  routeThreadKey: string | null,
+): readonly EnvironmentThreadShell[] {
+  if (routeThreadKey === null) return EMPTY_THREADS;
+  const root = roots.find((candidate) =>
+    stackMembers(candidate, stackByRootKey).some(
+      (thread) => threadShellKey(thread) === routeThreadKey,
+    ),
+  );
+  return root === undefined ? EMPTY_THREADS : [root];
+}
+
+/** A stack's threads as `depth key` lines, root first; one primitive keeps hover cards memoized. */
+function sidebarStackLayout(root: SidebarStackNode): string {
+  const lines: string[] = [];
+  const visit = (node: SidebarStackNode, depth: number) => {
+    lines.push(`${depth} ${threadShellKey(node.thread)}`);
+    for (const child of node.children) visit(child, depth + 1);
+  };
+  visit(root, 0);
+  return lines.join("\n");
+}
+
 // Separate hooks cache maps independently of later Sidebar hooks and preserve dnd-kit inputs.
 function useSidebarThreads(input: {
   readonly projectScopeKey: string | null;
@@ -428,6 +486,8 @@ function useSidebarThreads(input: {
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly delegatedUnderParent: ReadonlySet<string>;
+  readonly stackParents: ReadonlyMap<string, EnvironmentThreadShell>;
+  readonly draftParentKeys: ReadonlySet<string>;
   readonly routeRowThreadKey: string | null;
   // Set in boring mode: the project groups to fold active threads into, in order.
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
@@ -442,6 +502,8 @@ function useSidebarThreads(input: {
     optimisticDrop,
     threads,
     delegatedUnderParent,
+    stackParents,
+    draftParentKeys,
     routeRowThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
@@ -491,13 +553,23 @@ function useSidebarThreads(input: {
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
+    stackParents,
+    draftParentKeys,
     workingShelfEnabled,
     sortActiveBySend: folderGroups !== null,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
-  const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
-    partition;
+  const {
+    pinnedThreads,
+    activeThreads,
+    workingThreads,
+    snoozedThreads,
+    settledThreads,
+    stackByRootKey,
+  } = partition;
+  const rowsOfStacks = (roots: readonly EnvironmentThreadShell[]) =>
+    roots.flatMap((root) => stackMembers(root, stackByRootKey));
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -506,8 +578,7 @@ function useSidebarThreads(input: {
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
-  const settledCount =
-    settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
+  const settledCount = settledThreads.length + olderSettledShelf.unloadedCount();
   const visibleSettledThreads = (() => {
     const visible = listedSettledThreads.slice(0, settledVisibleCount);
     if (
@@ -529,7 +600,7 @@ function useSidebarThreads(input: {
     : routeThreadOnly(snoozedThreads, routeRowThreadKey);
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
-    : routeThreadOnly(workingThreads, routeRowThreadKey);
+    : routeStackOnly(workingThreads, stackByRootKey, routeRowThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -541,29 +612,33 @@ function useSidebarThreads(input: {
           return {
             group: folder.group,
             collapsed,
-            // A closed folder still shows the open thread, and hints at the rest.
+            // A closed folder still shows the open thread's stack, and hints at the rest.
             threads: collapsed
-              ? routeThreadOnly(folder.threads, routeRowThreadKey)
+              ? routeStackOnly(folder.threads, stackByRootKey, routeRowThreadKey)
               : folder.threads,
             hiddenThreads: collapsed
-              ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
+              ? folder.threads
+                  .flatMap((root) => stackMembers(root, stackByRootKey))
+                  .filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
               : EMPTY_THREADS,
           };
         });
   const orderedThreads = [
     ...pinnedThreads,
-    ...(projectFolders === null
-      ? activeThreads
-      : projectFolders.flatMap((folder) => folder.threads)),
-    ...visibleWorkingThreads,
+    ...rowsOfStacks(
+      projectFolders === null ? activeThreads : projectFolders.flatMap((folder) => folder.threads),
+    ),
+    ...rowsOfStacks(visibleWorkingThreads),
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
+  const activeMembers = activeThreads.flatMap((root) => stackMembers(root, stackByRootKey));
+  const workingMembers = workingThreads.flatMap((root) => stackMembers(root, stackByRootKey));
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
-    [activeThreads, "active"],
-    [workingThreads, "working"],
+    [activeMembers, "active"],
+    [workingMembers, "working"],
     [snoozedThreads, "snoozed"],
     [settledThreads, "settled"],
   ] as const) {
@@ -573,10 +648,11 @@ function useSidebarThreads(input: {
     ...partition,
     threads,
     workingShelfEnabled,
+    workingThreadCount: workingMembers.length,
     searchableThreads: [
       ...pinnedThreads,
-      ...activeThreads,
-      ...workingThreads,
+      ...activeMembers,
+      ...workingMembers,
       ...snoozedThreads,
       ...settledThreads,
     ],
@@ -626,20 +702,37 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     delegatedUnderParent,
     serverConfigs,
     optimisticDrop,
+    stackParents,
+    draftParentKeys,
     workingShelfEnabled,
     sortActiveBySend,
   } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
+  const visible = filterSidebarV2VisibleThreads(
+    threads,
+    scopedProjectKeys,
+    delegatedUnderParent,
+    stackParents,
+  );
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
+  const shownUnderParent = (thread: EnvironmentThreadShell) =>
+    isShownUnderParent(
+      { environmentId: thread.environmentId, threadId: thread.id },
+      thread.lineage,
+      delegatedUnderParent,
+    );
   const pinned: EnvironmentThreadShell[] = [];
-  const active: EnvironmentThreadShell[] = [];
-  const working: EnvironmentThreadShell[] = [];
-  const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) =>
-    workingShelfEnabled &&
-    (manuallyMoved ? isThreadWorking(thread) : inboxObservation.isWorking(thread))
-      ? working
-      : active;
+  const inboxThreads: EnvironmentThreadShell[] = [];
+  const shelfWorking = new Set<EnvironmentThreadShell>();
+  const pushInbox = (thread: EnvironmentThreadShell, manuallyMoved = false) => {
+    inboxThreads.push(thread);
+    if (
+      workingShelfEnabled &&
+      (manuallyMoved ? isThreadWorkingInShelf(thread) : inboxObservation.isWorking(thread))
+    ) {
+      shelfWorking.add(thread);
+    }
+  };
   const snoozed: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
   const { draggableThreadKeys, activeReorderableThreadKeys } = resolveSidebarReorderableThreadKeys({
@@ -657,39 +750,78 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         optimisticDrop.occurredAt,
         optimisticDrop.assignedKeys.get(threadKey),
       );
-      (optimisticDrop.section === "pinned"
-        ? pinned
-        : optimisticDrop.section === "settled"
-          ? settled
-          : inbox(projected, true)
-      ).push(
-        optimisticDrop.clearsSnooze
-          ? projected
-          : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
-      );
+      const placed = optimisticDrop.clearsSnooze
+        ? projected
+        : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil };
+      if (optimisticDrop.section === "pinned") pinned.push(placed);
+      else if (optimisticDrop.section === "settled") settled.push(placed);
+      else pushInbox(placed, true);
     } else {
       const section = resolveSidebarThreadSection({
         snoozed: configLoaded && effectiveSnoozed(thread, { now: preciseNow }),
         settled: configLoaded && thread.settledOverride === "settled",
         pinned: thread.pinnedAt != null,
       });
-      (section === "snoozed"
-        ? snoozed
-        : section === "settled"
-          ? settled
-          : section === "pinned"
-            ? pinned
-            : inbox(thread)
-      ).push(thread);
+      if (section !== "snoozed" && section !== "settled" && section !== "pinned") pushInbox(thread);
+      // A subagent is listed only as a member of the stack it works in.
+      else if (shownUnderParent(thread)) continue;
+      else if (section === "snoozed") snoozed.push(thread);
+      else if (section === "settled") settled.push(thread);
+      else pinned.push(thread);
     }
   }
+  const inboxKeys = new Set(inboxThreads.map(threadShellKey));
+  const stackedInInbox = (thread: EnvironmentThreadShell) => {
+    const seen = new Set<string>();
+    let current = thread;
+    while (shownUnderParent(current)) {
+      const key = threadShellKey(current);
+      const parent = stackParents.get(key);
+      if (seen.has(key) || parent === undefined || !inboxKeys.has(threadShellKey(parent))) {
+        return false;
+      }
+      seen.add(key);
+      current = parent;
+    }
+    return true;
+  };
+  const listedInbox = inboxThreads.filter(stackedInInbox);
+  // A stack is one item: it waits on the shelf only while every member works.
+  const { matching: working, others: active } = workingShelfEnabled
+    ? partitionThreadStacks(
+        listedInbox,
+        stackParents,
+        (thread) => shelfWorking.has(thread) && !draftParentKeys.has(threadShellKey(thread)),
+      )
+    : { matching: EMPTY_THREADS, others: listedInbox };
   // Availability gates dragging only; sorting must stay consistent across clients.
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
+  const timeOrdered = sortActiveBySend || workingShelfEnabled;
   const sortedActive = sortActiveBySend
     ? sortWorkingThreadsBySend(active)
     : workingShelfEnabled
       ? sortInboxThreadsByReturn(active, inboxObservation.returnedAt)
       : sortThreadsForSidebar(active);
+  const activeForest = buildThreadStackForest(sortedActive, stackParents);
+  // Time-ordered sections place a stack at its newest member; manual order follows its root.
+  const rankedActive = timeOrdered ? rankThreadStacks(activeForest, sortedActive) : activeForest;
+  const activeStacks =
+    optimisticDrop?.section !== "active" || optimisticDrop.order === null
+      ? rankedActive
+      : orderItemsByPreferredIds({
+          items: rankedActive,
+          preferredIds: optimisticDrop.order,
+          getId: (node) => threadShellKey(node.thread),
+        });
+  const sortedWorking = sortWorkingThreadsBySend(working);
+  const workingStacks = rankThreadStacks(
+    buildThreadStackForest(sortedWorking, stackParents),
+    sortedWorking,
+  );
+  const stackByRootKey = new Map<string, ThreadStackNode<EnvironmentThreadShell>>();
+  for (const node of [...activeStacks, ...workingStacks]) {
+    stackByRootKey.set(threadShellKey(node.thread), node);
+  }
   return {
     pinnedThreads:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -701,15 +833,10 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
           }),
     draggableThreadKeys,
     activeReorderableThreadKeys,
-    activeThreads:
-      optimisticDrop?.section !== "active" || optimisticDrop.order === null
-        ? sortedActive
-        : orderItemsByPreferredIds({
-            items: sortedActive,
-            preferredIds: optimisticDrop.order,
-            getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-          }),
-    workingThreads: sortWorkingThreadsBySend(working),
+    // Stack roots; their members are in `stackByRootKey`.
+    activeThreads: activeStacks.map((node) => node.thread),
+    workingThreads: workingStacks.map((node) => node.thread),
+    stackByRootKey,
     snoozedThreads: snoozed.toSorted(
       (left, right) =>
         firstValidTimestampMs(left.snoozedUntil ?? null) -
@@ -944,6 +1071,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     archiveThread,
     deleteThread,
   } = useThreadActions();
+  const continueThread = useContinueThread();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -1118,10 +1246,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             ? asLaunchingThread(thread)
             : thread,
         );
+  const unarchivedThreads = listedThreads.filter((thread) => thread.archivedAt === null);
+  const stackParents = resolveThreadStackParents(unarchivedThreads);
+  const branchOwners = resolveThreadBranchOwners(unarchivedThreads);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
-      : scopedThreadKey(resolveListedAncestorThreadRef(routeThreadRef, threads));
+      : scopedThreadKey(
+          resolveSidebarRowThreadRef(routeThreadRef, threads, (thread) =>
+            stackParents.has(threadShellKey(thread)),
+          ),
+        );
+  const focusProjectKeys = resolveFocusProjectKeys(
+    projectGroups.map((group) => group.memberProjectRefs),
+    (routeRowThreadKey === null
+      ? null
+      : threads.find((candidate) => threadShellKey(candidate) === routeRowThreadKey)) ??
+      routeDraftThread ??
+      null,
+  );
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   // The open draft's first send names its thread in place; a finalized draft reached by
   // navigation resolves through its redirect instead, and still reveals.
@@ -1221,6 +1364,45 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return count;
   });
 
+  // Worktree drafts started from a branch; each joins the stack of the thread that owns it.
+  const stackDraftLines = useComposerDraftStore((store) => {
+    const lines: string[] = [];
+    for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
+      if (session.promotedTo != null || session.envMode !== "worktree" || session.branch === null) {
+        continue;
+      }
+      if (
+        draftKey !== routeDraftIdForRows &&
+        !composerDraftHasUserContent(store.draftsByThreadKey[draftKey])
+      ) {
+        continue;
+      }
+      lines.push(
+        [
+          session.createdAt,
+          draftKey,
+          session.environmentId,
+          session.projectId,
+          session.branch,
+        ].join("\t"),
+      );
+    }
+    // Newest first, as the draft block lists them.
+    return lines.toSorted().toReversed().join("\n");
+  });
+  const draftIdsByOwnerKey = new Map<string, DraftId[]>();
+  for (const line of stackDraftLines === "" ? [] : stackDraftLines.split("\n")) {
+    const [, draftId, environmentId, projectId, branch] = line.split("\t");
+    const owner = branchOwners.get(threadBranchKey(environmentId!, projectId!, branch!));
+    if (owner === undefined) continue;
+    const ownerKey = threadShellKey(owner);
+    draftIdsByOwnerKey.set(ownerKey, [
+      ...(draftIdsByOwnerKey.get(ownerKey) ?? []),
+      DraftId.make(draftId!),
+    ]);
+  }
+  const draftParentKeys = new Set(draftIdsByOwnerKey.keys());
+
   const openProjectSettings = useStableCallback(
     (projectGroup: SidebarProjectSnapshot, projectRef?: ScopedProjectRef) => {
       if (isMobile) {
@@ -1307,6 +1489,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
+  const hiddenThreadKeys = useUiStateStore((state) => state.hiddenThreadKeys);
+  const hiddenThreadKeySet = new Set(hiddenThreadKeys);
+  const [showHiddenThreads, setShowHiddenThreads] = useAtom(showHiddenThreadsAtom);
+
   const {
     workingShelfEnabled,
     pinnedThreads,
@@ -1314,6 +1500,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     activeReorderableThreadKeys,
     activeThreads,
     workingThreads,
+    workingThreadCount,
+    stackByRootKey,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -1351,6 +1539,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     optimisticDrop,
     threads: listedThreads,
     delegatedUnderParent,
+    stackParents,
+    draftParentKeys,
     routeRowThreadKey,
     folderGroups: boringSidebarEnabled
       ? scopedProjectGroups.length === 0
@@ -1361,6 +1551,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
+
+  // A draft joins its owner's stack only where that owner is listed in a stacking section.
+  const stackedDraftsByParentKey = new Map(
+    [...draftIdsByOwnerKey].filter(([ownerKey]) => {
+      const section = sectionByThreadKey.get(ownerKey);
+      return threadByKey.has(ownerKey) && (section === "active" || section === "working");
+    }),
+  );
+  const stackedDraftIds = [...stackedDraftsByParentKey.values()].flat().join("\n");
 
   // Ranked across environments as the palette ranks them, so one
   // environment's list does not sit above another's better matches; rows
@@ -2017,6 +2216,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       .join("\n") ?? "",
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
+    // Stack members nest without changing the sortable items.
+    orderedThreadKeys.join("\n"),
+    stackedDraftIds,
   ].join("\0");
   const listMotionAnimate =
     dragState === null && sidebarListItems.length + visibleDraftSessionCount > 0;
@@ -2664,6 +2866,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
               ),
+              canContinue: threadContinuationRunId(thread) !== null,
               branch: thread.branch ?? null,
               // An archived project is not a filter choice.
               projectFilter:
@@ -2674,6 +2877,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     }
                   : null,
               isPinned,
+              isHidden: useUiStateStore.getState().hiddenThreadKeys.includes(threadKey),
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
               isSnoozed,
@@ -2714,6 +2918,26 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         switch (clicked.value) {
+          case "continue": {
+            const result = await continueThread(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: gt("Failed to continue thread"),
+                  description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+                }),
+              );
+            }
+            return;
+          }
+          case "hide":
+            setThreadHiddenOnClient(threadRef, true);
+            return;
+          case "unhide":
+            setThreadHiddenOnClient(threadRef, false);
+            return;
           case "filter-by-project":
             if (threadProjectGroup) {
               setProjectScopeKeys(
@@ -3003,6 +3227,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
+              threadVisibility={
+                <SidebarHeaderIconButton
+                  label={
+                    showHiddenThreads
+                      ? gt("Stop showing hidden threads")
+                      : gt("Show hidden threads on this device")
+                  }
+                  aria-pressed={showHiddenThreads}
+                  onClick={() => setShowHiddenThreads((value) => !value)}
+                >
+                  {showHiddenThreads ? <EyeIcon /> : <EyeOffIcon />}
+                </SidebarHeaderIconButton>
+              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}
@@ -3409,12 +3646,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     )}
                   >
                     {(() => {
-                      const renderThreadRow = (
+                      const rowPropsFor = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
-                        folderRow?: string,
-                      ) => {
+                        folderRow: string | undefined,
+                        stack?: {
+                          readonly parentKey: string | undefined;
+                          readonly foreignBranches: string;
+                          readonly layout: string;
+                        },
+                      ): Omit<SidebarThreadRowProps, "sortable"> => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
@@ -3427,107 +3669,191 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           : isCard
                             ? "card"
                             : "slim";
+                        return {
+                          thread,
+                          variant: rowVariant,
+                          navigationParent:
+                            stack?.parentKey ??
+                            folderRow ??
+                            (section === "working" || section === "snoozed" || section === "settled"
+                              ? `shelf:${section}`
+                              : undefined),
+                          hideProject: stack?.parentKey !== undefined,
+                          stackForeignBranches: stack?.foreignBranches,
+                          stackLayout: stack?.layout ?? null,
+                          variantAction:
+                            section === "snoozed"
+                              ? "unsnooze"
+                              : section === "settled"
+                                ? "unsettle"
+                                : "settle",
+                          settlementSupported: serverConfigs.has(thread.environmentId),
+                          snoozeSupported: serverConfigs.has(thread.environmentId),
+                          pinningSupported: serverConfigs.has(thread.environmentId),
+                          isPinned: thread.pinnedAt != null,
+                          dropVerb:
+                            dragState?.activeKey === threadKey
+                              ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
+                              : null,
+                          dragOverPinned:
+                            dragState?.activeKey === threadKey && dragTargetSection === "pinned",
+                          sweepAction: actionSweep?.keys.has(threadKey) ? actionSweep.action : null,
+                          snoozeWakeLabelText:
+                            section === "snoozed" && thread.snoozedUntil != null
+                              ? snoozeWakeLabel(
+                                  thread.snoozedUntil,
+                                  { now: new Date().toISOString() },
+                                  messages,
+                                )
+                              : null,
+                          wokeAt: threadWokeAt(thread, { now: snoozeNow }),
+                          isActive: routeRowThreadKey === threadKey,
+                          isOffFocusProject:
+                            focusProjectKeys !== null &&
+                            (section === "active" || section === "pinned") &&
+                            !focusProjectKeys.has(`${thread.environmentId}:${thread.projectId}`),
+                          revealRef: routeRowThreadKey === threadKey ? revealActiveRow : undefined,
+                          isRouteThread: routeThreadKey === threadKey,
+                          readOpensPullRequestsInRightPanel,
+                          jumpLabel: showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null,
+                          currentEnvironmentId: primaryEnvironmentId,
+                          environmentLabel: environmentLabelById.get(thread.environmentId) ?? null,
+                          environmentMachine:
+                            environmentMachineById.get(thread.environmentId) ?? "server",
+                          scratchMachineLabel: scratchMachineLabelFor(thread),
+                          project:
+                            projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+                          projectDisplayName:
+                            projectDisplayNameByKey.get(
+                              `${thread.environmentId}:${thread.projectId}`,
+                            ) ?? null,
+                          providerEntryByInstanceId:
+                            providerEntriesByEnvironment.get(thread.environmentId) ??
+                            EMPTY_PROVIDER_ENTRIES,
+                          timestampFormat,
+                          onThreadClick: handleThreadClick,
+                          onThreadActivate: navigateToThread,
+                          onStartRename: startThreadRename,
+                          onRenameTitleChange: setRenamingTitle,
+                          onCommitRename: commitThreadRename,
+                          onCancelRename: cancelThreadRename,
+                          isRenaming: renamingThreadKey === threadKey,
+                          renamingTitle: renamingThreadKey === threadKey ? renamingTitle : "",
+                          onContextMenu: handleThreadContextMenu,
+                          isHidden: hiddenThreadKeySet.has(threadKey),
+                          onHiddenChange: setThreadHiddenOnClient,
+                          onSettle: attemptSettle,
+                          onActionSweepStart: startActionSweep,
+                          onUnsettle: attemptUnsettle,
+                          onSnooze: attemptSnooze,
+                          onUnsnooze: attemptUnsnooze,
+                          onUnpin: attemptUnpin,
+                          onAcknowledgeWoke: acknowledgeWoke,
+                          onFileDropThreads: handleThreadFileDrop,
+                        };
+                      };
+                      const sortableDisabledFor = (threadKey: string) =>
+                        renamingThreadKey === threadKey ||
+                        !draggableThreadKeys.has(threadKey) ||
+                        optimisticDrop !== null;
+                      const renderThreadRow = (
+                        thread: EnvironmentThreadShell,
+                        section: SidebarSection,
+                        folderRow?: string,
+                      ) => {
+                        const threadKey = threadShellKey(thread);
+                        const node = stackByRootKey.get(threadKey);
+                        if (
+                          node !== undefined &&
+                          (node.children.length > 0 ||
+                            flattenThreadStack(node).some((member) =>
+                              stackedDraftsByParentKey.has(threadShellKey(member)),
+                            ))
+                        ) {
+                          return renderThreadStack(node, section, folderRow);
+                        }
                         return (
                           <SortableThreadRow
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
-                            sortableDisabled={
-                              renamingThreadKey === threadKey ||
-                              !draggableThreadKeys.has(threadKey) ||
-                              optimisticDrop !== null
-                            }
-                            thread={thread}
-                            variant={rowVariant}
-                            navigationParent={
-                              folderRow ??
-                              (section === "working" ||
-                              section === "snoozed" ||
-                              section === "settled"
-                                ? `shelf:${section}`
-                                : undefined)
-                            }
-                            variantAction={
-                              section === "snoozed"
-                                ? "unsnooze"
-                                : section === "settled"
-                                  ? "unsettle"
-                                  : "settle"
-                            }
-                            settlementSupported={serverConfigs.has(thread.environmentId)}
-                            snoozeSupported={serverConfigs.has(thread.environmentId)}
-                            pinningSupported={serverConfigs.has(thread.environmentId)}
-                            isPinned={thread.pinnedAt != null}
-                            dropVerb={
-                              dragState?.activeKey === threadKey
-                                ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
-                                : null
-                            }
-                            dragOverPinned={
-                              dragState?.activeKey === threadKey && dragTargetSection === "pinned"
-                            }
-                            sweepAction={
-                              actionSweep?.keys.has(threadKey) ? actionSweep.action : null
-                            }
-                            snoozeWakeLabelText={
-                              section === "snoozed" && thread.snoozedUntil != null
-                                ? snoozeWakeLabel(
-                                    thread.snoozedUntil,
-                                    { now: new Date().toISOString() },
-                                    messages,
-                                  )
-                                : null
-                            }
-                            wokeAt={threadWokeAt(thread, { now: snoozeNow })}
-                            isActive={routeRowThreadKey === threadKey}
-                            revealRef={
-                              routeRowThreadKey === threadKey ? revealActiveRow : undefined
-                            }
-                            isRouteThread={routeThreadKey === threadKey}
-                            readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
-                            jumpLabel={
-                              showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
-                            }
-                            currentEnvironmentId={primaryEnvironmentId}
-                            environmentLabel={
-                              environmentLabelById.get(thread.environmentId) ?? null
-                            }
-                            environmentMachine={
-                              environmentMachineById.get(thread.environmentId) ?? "server"
-                            }
-                            scratchMachineLabel={scratchMachineLabelFor(thread)}
-                            project={
-                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
-                            }
-                            projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
-                            }
-                            providerEntryByInstanceId={
-                              providerEntriesByEnvironment.get(thread.environmentId) ??
-                              EMPTY_PROVIDER_ENTRIES
-                            }
-                            timestampFormat={timestampFormat}
-                            onThreadClick={handleThreadClick}
-                            onThreadActivate={navigateToThread}
-                            onStartRename={startThreadRename}
-                            onRenameTitleChange={setRenamingTitle}
-                            onCommitRename={commitThreadRename}
-                            onCancelRename={cancelThreadRename}
-                            isRenaming={renamingThreadKey === threadKey}
-                            renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
-                            onContextMenu={handleThreadContextMenu}
-                            onSettle={attemptSettle}
-                            onActionSweepStart={startActionSweep}
-                            onUnsettle={attemptUnsettle}
-                            onSnooze={attemptSnooze}
-                            onUnsnooze={attemptUnsnooze}
-                            onUnpin={attemptUnpin}
-                            onAcknowledgeWoke={acknowledgeWoke}
-                            onFileDropThreads={handleThreadFileDrop}
+                            sortableDisabled={sortableDisabledFor(threadKey)}
+                            {...rowPropsFor(thread, section, folderRow)}
                           />
+                        );
+                      };
+                      const renderThreadStack = (
+                        root: SidebarStackNode,
+                        section: SidebarSection,
+                        folderRow: string | undefined,
+                      ) => {
+                        const rootKey = threadShellKey(root.thread);
+                        const members = flattenThreadStack(root);
+                        const layout = sidebarStackLayout(root);
+                        const branches = members.flatMap((member) =>
+                          member.branch === null ? [] : [member.branch],
+                        );
+                        const stackFor = (
+                          thread: EnvironmentThreadShell,
+                          parentKey: string | undefined,
+                        ) => {
+                          return {
+                            parentKey,
+                            foreignBranches: [
+                              ...new Set(branches.filter((branch) => branch !== thread.branch)),
+                            ]
+                              .toSorted()
+                              .join("\n"),
+                            layout,
+                          };
+                        };
+                        const renderMembers = (node: SidebarStackNode): ReactNode[] => {
+                          const nodeKey = threadShellKey(node.thread);
+                          return [
+                            ...(stackedDraftsByParentKey.get(nodeKey) ?? []).map((draftId) => (
+                              <SidebarStackBranch key={`draft:${draftId}`}>
+                                <StackedSidebarDraftRow
+                                  draftId={draftId}
+                                  isActive={draftId === routeDraftIdForRows}
+                                  navigationParent={nodeKey}
+                                  onNavigate={navigateToDraft}
+                                  onContextMenu={handleDraftContextMenu}
+                                />
+                              </SidebarStackBranch>
+                            )),
+                            ...node.children.map((child) => {
+                              const childKey = threadShellKey(child.thread);
+                              return (
+                                <SidebarStackBranch key={childKey}>
+                                  <StackedThreadRow
+                                    {...rowPropsFor(
+                                      child.thread,
+                                      section,
+                                      folderRow,
+                                      stackFor(child.thread, nodeKey),
+                                    )}
+                                  />
+                                  {renderMembers(child)}
+                                </SidebarStackBranch>
+                              );
+                            }),
+                          ];
+                        };
+                        return (
+                          <SortableThreadStack
+                            key={`stack:${rootKey}`}
+                            sortableId={rootKey}
+                            contextDrag={isContextDrag}
+                            sortableDisabled={sortableDisabledFor(rootKey)}
+                            root={rowPropsFor(
+                              root.thread,
+                              section,
+                              folderRow,
+                              stackFor(root.thread, undefined),
+                            )}
+                          >
+                            {renderMembers(root)}
+                          </SortableThreadStack>
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
@@ -3537,6 +3863,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
+                          stackedDraftIds={stackedDraftIds}
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
@@ -3622,7 +3949,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 marker="working-header"
                                 className="mt-auto"
                                 label={gt("Working", { $context: "sidebar section" })}
-                                count={workingThreads.length}
+                                count={workingThreadCount}
                                 toggle={{
                                   expanded: workingShelfExpanded,
                                   onToggle: toggleWorkingShelf,

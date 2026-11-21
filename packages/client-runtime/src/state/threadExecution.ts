@@ -1,8 +1,8 @@
 import {
-  latestExecutedRun,
   latestRootProviderFailure,
   latestRootProviderFailureItem,
   latestUnheldRun,
+  resumableContinuationRun,
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -14,7 +14,7 @@ import {
   type ModelSelection,
   type OrchestrationV2NotificationSource,
   type OrchestrationV2PendingBackgroundTask,
-  type OrchestrationV2ProviderGoal,
+  type OrchestrationV2Goal,
   type OrchestrationV2ProviderSession,
   type ServerProvider,
   type ServerProviderModel,
@@ -24,10 +24,12 @@ import {
   orchestrationV2RunWorkStartedAt,
   type RunId,
   type ThreadId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  findPullRequestForWatchTask,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   getModelSelectionStringOptionValue,
@@ -319,23 +321,38 @@ export function formatProviderSubagentStatus(
 
 /** The run a manual continuation resumes; the server holds the queue until it does. */
 export function deriveResumableRunId(
-  projection: Pick<
-    ThreadStructure,
-    "runs" | "turnItems" | "attempts" | "providerTurns" | "providerThreads" | "providerSessions"
-  >,
-  runtime: Pick<ThreadStructureRuntime, "lastErrorClass"> | null,
+  projection: Pick<ThreadStructure, "runs"> &
+    Partial<
+      Pick<
+        ThreadStructure,
+        "turnItems" | "attempts" | "providerTurns" | "providerThreads" | "providerSessions"
+      >
+    >,
+  _runtime?: Pick<ThreadStructureRuntime, "lastErrorClass"> | null,
 ): RunId | null {
-  const run = latestExecutedRun(projection.runs);
-  const resumable =
-    run?.status === "interrupted" ||
-    (run?.status === "failed" &&
-      runtime?.lastErrorClass === "usage_limit" &&
-      latestRootProviderFailure(run, projection.turnItems)?.class === "usage_limit");
-  if (!resumable) return null;
+  const run = resumableContinuationRun(projection.runs);
+  if (run === null) return null;
   // Without native resume the server can only resend a message the provider never received.
   if (
-    runProviderSession(projection, run)?.capabilities.turns.supportsNativeResume === false &&
-    unsentManualContinuationSource({ manualContinuationOfRunId: run.id }, projection) === undefined
+    projection.providerThreads !== undefined &&
+    projection.providerSessions !== undefined &&
+    projection.attempts !== undefined &&
+    projection.providerTurns !== undefined &&
+    runProviderSession(
+      {
+        providerThreads: projection.providerThreads,
+        providerSessions: projection.providerSessions,
+      },
+      run,
+    )?.capabilities.turns.supportsNativeResume === false &&
+    unsentManualContinuationSource(
+      { manualContinuationOfRunId: run.id },
+      {
+        runs: projection.runs,
+        attempts: projection.attempts,
+        providerTurns: projection.providerTurns,
+      },
+    ) === undefined
   ) {
     return null;
   }
@@ -387,6 +404,7 @@ export function deriveThreadStructureRuntime(
     (session) => session.providerInstanceId === projection.thread.providerInstanceId,
   );
   const usageLimitedRun = presentedUsageLimitRun(projection);
+  const capHit = projection.thread.consumptionCapHit ?? null;
   const latestRunProjection = presentedLatestRun(projection);
   const activityRun = deriveThreadActivityRun(projection);
   const liveActivityRun = latestMatchingRun(projection, (run) =>
@@ -400,20 +418,23 @@ export function deriveThreadStructureRuntime(
       activeProviderThreadId: projection.thread.activeProviderThreadId,
       runs: projection.runs,
       pullRequests: projection.thread.pullRequests,
+      awaitedScheduledTaskIds: projection.thread.awaitedScheduledTaskIds,
+      threadWatches: projection.thread.threadWatches,
     }),
   );
   // A pull request watch can hold a thread that never ran.
-  if (latestRun === null && !backgroundWorkHoldsRun) return null;
+  if (latestRun === null && !backgroundWorkHoldsRun && capHit === null) return null;
   const activeRunId =
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
   const failureItem = latestRootProviderFailureItem(latestRunProjection, projection.turnItems);
   const sessionError = providerSession?.lastError ?? null;
   return {
-    status: usageLimitedRun
-      ? "failed"
-      : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
-        ? "idle"
-        : (activityRun?.status ?? "idle"),
+    status:
+      capHit !== null || usageLimitedRun
+        ? "failed"
+        : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
+          ? "idle"
+          : (activityRun?.status ?? "idle"),
     activeRunId,
     activityStartedAt:
       liveActivityRun === null
@@ -421,8 +442,18 @@ export function deriveThreadStructureRuntime(
         : DateTime.formatIso(orchestrationV2RunWorkStartedAt(liveActivityRun)),
     providerInstanceId: projection.thread.providerInstanceId,
     providerName: providerSession?.driver ?? null,
-    ...threadErrorSummary(failureItem?.failure ?? null, sessionError),
-    lastErrorSource: threadErrorSource(failureItem, sessionError, projection),
+    ...(capHit === null
+      ? threadErrorSummary(failureItem?.failure ?? null, sessionError)
+      : {
+          lastError: capHit.reason,
+          lastErrorClass: "usage_limit" as const,
+          lastErrorCode: "consumption_cap",
+          usageLimitResetAt: null,
+        }),
+    lastErrorSource:
+      capHit === null
+        ? threadErrorSource(failureItem, sessionError, projection)
+        : `consumption_cap@${capHit.at}`,
   };
 }
 
@@ -646,6 +677,8 @@ export interface PendingBackgroundWorkItem {
   readonly taskId: string;
   readonly kind: BackgroundWorkKind;
   readonly label: string;
+  /** False when the label is only the kind's noun, such as "command". */
+  readonly named: boolean;
   readonly childThreadId: ThreadId | undefined;
 }
 
@@ -699,14 +732,18 @@ export function presentPendingBackgroundWork(
             : task.kind === "command" || task.kind === "monitor"
               ? commandDisplayText(description)
               : description;
+      const named = label !== undefined && label.length > 0;
       return {
         taskId: task.taskId,
         kind: task.kind,
-        label:
-          label === undefined || label.length === 0
-            ? resolve(BACKGROUND_WORK_KINDS[task.kind].singular)
-            : label,
-        childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
+        label: named ? label : resolve(BACKGROUND_WORK_KINDS[task.kind].singular),
+        named,
+        childThreadId:
+          task.kind === "subagent"
+            ? task.childThreadId
+            : task.kind === "monitor"
+              ? task.watchedThreadId
+              : undefined,
       };
     })
     // `map` returned a new array; Hermes has no `toSorted`.
@@ -716,9 +753,7 @@ export function presentPendingBackgroundWork(
     );
   const [only] = items;
   if (items.length === 1 && only !== undefined) {
-    const noun = resolve(BACKGROUND_WORK_KINDS[only.kind].singular);
-    const named = only.label !== noun;
-    const title = named
+    const title = only.named
       ? waiting
         ? resolve(msg("Waiting · {label}", { label: only.label }))
         : resolve(msg("Running · {label}", { label: only.label }))
@@ -759,6 +794,74 @@ function backgroundWorkSingleTitle(
   }
 }
 
+export function backgroundCommandOutputFile(output: string | undefined): string | null {
+  const path = output?.match(/Output is being written to: (\S+?)(?:\.(?=\s|$)|$)/u)?.[1];
+  return path || null;
+}
+
+export function followOutputFileCommand(path: string): string {
+  return `tail -n +1 -F '${path.replaceAll("'", "'\\''")}'`;
+}
+
+export interface BackgroundWorkDetail {
+  readonly item: PendingBackgroundWorkItem;
+  readonly awaited: boolean;
+  readonly turnItem: ThreadStructure["turnItems"][number] | undefined;
+  readonly command: string | null;
+  readonly isRawCommand: boolean;
+  readonly outputFile: string | null;
+  readonly startedAtMs: number | null;
+  readonly updatedAtMs: number;
+  readonly activity: string | null;
+  readonly childThreadId: ThreadId | undefined;
+  readonly pullRequest: ThreadPullRequestLink | undefined;
+}
+
+export function deriveBackgroundWorkDetails(input: {
+  readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly turnItems: ThreadStructure["turnItems"];
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+  readonly resolve?: MFunctionType | undefined;
+}): {
+  readonly presentation: PendingBackgroundWorkPresentation;
+  readonly details: ReadonlyArray<BackgroundWorkDetail>;
+} | null {
+  const presentation = presentPendingBackgroundWork(input.tasks, input.resolve);
+  if (presentation === null) return null;
+  const tasksById = new Map(input.tasks.map((task) => [task.taskId, task]));
+  const details = presentation.items.map((item): BackgroundWorkDetail => {
+    const task = tasksById.get(item.taskId);
+    const itemId = task?.itemId;
+    const nativeKey = task?.nativeItemId ?? item.taskId;
+    const turnItem =
+      itemId !== undefined
+        ? input.turnItems.findLast((candidate) => candidate.id === itemId)
+        : input.turnItems.findLast(
+            (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === nativeKey,
+          );
+    const subagent = turnItem?.type === "subagent" ? turnItem : undefined;
+    const commandItem = turnItem?.type === "command_execution" ? turnItem : undefined;
+    const command = commandItem?.input.trim() || task?.command?.trim() || null;
+    return {
+      item,
+      awaited: task?.awaited === true,
+      turnItem,
+      command,
+      isRawCommand: command !== null && commandDisplayText(command) === item.label,
+      outputFile: backgroundCommandOutputFile(commandItem?.output),
+      startedAtMs: turnItem?.startedAt ? DateTime.toEpochMillis(turnItem.startedAt) : null,
+      updatedAtMs:
+        turnItem !== undefined && "updatedAt" in turnItem
+          ? DateTime.toEpochMillis(turnItem.updatedAt)
+          : 0,
+      activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
+      childThreadId: item.childThreadId ?? subagent?.childThreadId ?? undefined,
+      pullRequest: findPullRequestForWatchTask(item.taskId, input.pullRequests),
+    };
+  });
+  return { presentation, details };
+}
+
 export interface ProviderGoalPresentation {
   readonly title: string;
   readonly objective: string;
@@ -766,7 +869,7 @@ export interface ProviderGoalPresentation {
   readonly canResume: boolean;
 }
 
-const PROVIDER_GOAL_TITLES: Record<OrchestrationV2ProviderGoal["status"], string> = {
+const PROVIDER_GOAL_TITLES: Record<OrchestrationV2Goal["status"], string> = {
   active: msg("Pursuing goal"),
   paused: msg("Goal paused"),
   blocked: msg("Goal blocked"),
@@ -783,7 +886,7 @@ function formatGoalTokens(tokens: number): string {
 }
 
 export function presentProviderGoal(
-  goal: OrchestrationV2ProviderGoal,
+  goal: OrchestrationV2Goal,
   working: boolean,
   resolve: MFunctionType = mFallback,
 ): ProviderGoalPresentation {

@@ -380,6 +380,8 @@ function resolveToggleEffect(
   return resolveBooleanBinding(effect.enabled, values, false);
 }
 
+const SAFE_CSS_UNITS = new Set<string>(["px", "%", "rem", "em", "ms", "s", "deg"]);
+
 function formatSettingCssValue(
   definition: ThemeSettingDefinition,
   value: ThemeSettingValue,
@@ -387,8 +389,10 @@ function formatSettingCssValue(
   switch (definition.type) {
     case "boolean":
       return value === true ? "1" : "0";
-    case "number":
-      return `${value}${definition.unit ?? ""}`;
+    case "number": {
+      const unit = definition.unit && SAFE_CSS_UNITS.has(definition.unit) ? definition.unit : "";
+      return `${value}${unit}`;
+    }
     case "select":
     case "color":
       return String(value);
@@ -611,6 +615,58 @@ export function applyResolvedThemeSettingBindings(
   appliedRootAttributeNames = Object.keys(resolved.rootAttributes);
 }
 
+function applyLegacyForkVisualSettingsRecord(parsed: Record<string, unknown>): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.localStorage.getItem(THEME_STYLE_STORAGE_KEY) !== null) return false;
+
+  const liquidGlassEnabled = parsed.liquidGlassEnabled === true;
+  const floatingPanelsEnabled = parsed.floatingPanelsEnabled === true;
+  const ambientShimmerEnabled = parsed.ambientShimmerEnabled === true;
+  if (!liquidGlassEnabled && !floatingPanelsEnabled && !ambientShimmerEnabled) {
+    return false;
+  }
+
+  window.localStorage.setItem(THEME_STYLE_STORAGE_KEY, BUILT_IN_LIQUID_GLASS_STYLE.id);
+  const schema = BUILT_IN_LIQUID_GLASS_STYLE.settings;
+  const overrides: Record<string, ThemeSettingValue> = {
+    liquidGlass: liquidGlassEnabled,
+    floatingPanels: floatingPanelsEnabled,
+    ambientShimmer: ambientShimmerEnabled,
+  };
+  const numericMapping = [
+    ["liquidGlassBlur", "blur"],
+    ["liquidGlassCenterBlur", "centerBlur"],
+    ["liquidGlassSaturation", "saturation"],
+    ["liquidGlassRefraction", "refraction"],
+    ["liquidGlassDispersion", "dispersion"],
+    ["liquidGlassGlare", "glare"],
+  ] as const;
+  for (const [legacyKey, settingKey] of numericMapping) {
+    const value = parsed[legacyKey];
+    const def = schema?.[settingKey];
+    if (def && typeof value === "number" && Number.isFinite(value)) {
+      overrides[settingKey] = coerceThemeSettingValue(def, value);
+    }
+  }
+  const pruned: Record<string, ThemeSettingValue> = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    if (schema?.[key]?.default !== value) {
+      pruned[key] = value;
+    }
+  }
+  if (Object.keys(pruned).length > 0) {
+    const existing = readThemeSettingOverrides();
+    saveThemeSettingOverrides({
+      ...existing,
+      [BUILT_IN_LIQUID_GLASS_STYLE.id]: {
+        ...existing[BUILT_IN_LIQUID_GLASS_STYLE.id],
+        ...pruned,
+      },
+    });
+  }
+  return true;
+}
+
 /**
  * One-time migration for existing fork users upgrading from legacy client-settings visual toggles
  * (`liquidGlassEnabled`, `floatingPanelsEnabled`, `ambientShimmerEnabled`, and slider knobs)
@@ -620,60 +676,34 @@ export function migrateLegacyForkVisualSettings(): boolean {
   if (typeof window === "undefined") return false;
   try {
     if (window.localStorage.getItem(LEGACY_VISUAL_MIGRATED_KEY) === "1") return false;
-    window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
-
-    if (window.localStorage.getItem(THEME_STYLE_STORAGE_KEY) !== null) return false;
     const rawSettings = window.localStorage.getItem(LEGACY_CLIENT_SETTINGS_STORAGE_KEY);
-    if (!rawSettings) return false;
-    const parsed: unknown = JSON.parse(rawSettings);
-    if (!isRecord(parsed)) return false;
-
-    const liquidGlassEnabled = parsed.liquidGlassEnabled === true;
-    const floatingPanelsEnabled = parsed.floatingPanelsEnabled === true;
-    const ambientShimmerEnabled = parsed.ambientShimmerEnabled === true;
-    if (!liquidGlassEnabled && !floatingPanelsEnabled && !ambientShimmerEnabled) {
+    if (!rawSettings) {
+      // On Electron desktop, settings live in the main-process JSON file, so leave the flag unset
+      // for `migrateLegacyDesktopForkVisualSettings()` when `desktopBridge` is present.
+      if (!window.desktopBridge?.getLegacyVisualSettings) {
+        window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
+      }
       return false;
     }
+    window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
+    const parsed: unknown = JSON.parse(rawSettings);
+    if (!isRecord(parsed)) return false;
+    return applyLegacyForkVisualSettingsRecord(parsed);
+  } catch {
+    return false;
+  }
+}
 
-    window.localStorage.setItem(THEME_STYLE_STORAGE_KEY, BUILT_IN_LIQUID_GLASS_STYLE.id);
-    const schema = BUILT_IN_LIQUID_GLASS_STYLE.settings;
-    const overrides: Record<string, ThemeSettingValue> = {
-      liquidGlass: liquidGlassEnabled,
-      floatingPanels: floatingPanelsEnabled,
-      ambientShimmer: ambientShimmerEnabled,
-    };
-    const numericMapping = [
-      ["liquidGlassBlur", "blur"],
-      ["liquidGlassCenterBlur", "centerBlur"],
-      ["liquidGlassSaturation", "saturation"],
-      ["liquidGlassRefraction", "refraction"],
-      ["liquidGlassDispersion", "dispersion"],
-      ["liquidGlassGlare", "glare"],
-    ] as const;
-    for (const [legacyKey, settingKey] of numericMapping) {
-      const value = parsed[legacyKey];
-      const def = schema?.[settingKey];
-      if (def && typeof value === "number" && Number.isFinite(value)) {
-        overrides[settingKey] = coerceThemeSettingValue(def, value);
-      }
-    }
-    const pruned: Record<string, ThemeSettingValue> = {};
-    for (const [key, value] of Object.entries(overrides)) {
-      if (schema?.[key]?.default !== value) {
-        pruned[key] = value;
-      }
-    }
-    if (Object.keys(pruned).length > 0) {
-      const existing = readThemeSettingOverrides();
-      saveThemeSettingOverrides({
-        ...existing,
-        [BUILT_IN_LIQUID_GLASS_STYLE.id]: {
-          ...existing[BUILT_IN_LIQUID_GLASS_STYLE.id],
-          ...pruned,
-        },
-      });
-    }
-    return true;
+export async function migrateLegacyDesktopForkVisualSettings(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  const readLegacy = window.desktopBridge?.getLegacyVisualSettings;
+  if (!readLegacy) return false;
+  try {
+    if (window.localStorage.getItem(LEGACY_VISUAL_MIGRATED_KEY) === "1") return false;
+    const parsed = await readLegacy();
+    window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
+    if (!isRecord(parsed)) return false;
+    return applyLegacyForkVisualSettingsRecord(parsed);
   } catch {
     return false;
   }

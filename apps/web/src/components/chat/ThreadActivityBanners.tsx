@@ -1,20 +1,19 @@
 import type {
   EnvironmentId,
+  OrchestrationV2Goal,
   OrchestrationV2PendingBackgroundTask,
-  OrchestrationV2ProviderGoal,
   OrchestrationV2ProviderSession,
   ThreadId,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
-  presentPendingBackgroundWork,
+  deriveBackgroundWorkDetails,
   presentProviderGoal,
   type RunStopPresentation,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
-import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import { formatDuration } from "@t3tools/shared/orchestrationTimingCopy";
-import * as DateTime from "effect/DateTime";
 import { msg, T, Var } from "gt-react";
 import {
   CircleDashedIcon,
@@ -96,7 +95,7 @@ export function childInputNowItem(
 export function goalNowItem(
   input: {
     readonly threadId: ThreadId;
-    readonly goal: OrchestrationV2ProviderGoal;
+    readonly goal: OrchestrationV2Goal;
     readonly isWorking: boolean;
     readonly onSendCommand: (text: string, failureMessage: string) => Promise<void>;
   },
@@ -198,6 +197,8 @@ export function runStopNowItem(input: {
 export function backgroundWorkNowItem(
   input: {
     readonly environmentId: EnvironmentId;
+    readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+    readonly onRunInTerminal?: ((command: string) => void) | undefined;
     readonly threadId: ThreadId;
     readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
     readonly turnItems: ThreadStructure["turnItems"];
@@ -209,52 +210,43 @@ export function backgroundWorkNowItem(
   resolve: MessageResolver = m,
 ): ThreadNowItem | null {
   const { onOpenThread } = input;
-  const presentation = presentPendingBackgroundWork(input.tasks, resolve);
-  if (presentation === null) return null;
-  const rows = presentation.items.map((task) => {
-    const itemKey =
-      input.tasks.find((pending) => pending.taskId === task.taskId)?.nativeItemId ?? task.taskId;
-    // Same key derivePendingBackgroundWork gives turn-item tasks; subagent items carry progress.
-    const item = input.turnItems.findLast(
-      (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === itemKey,
-    );
-    const subagent = item?.type === "subagent" ? item : undefined;
-    return {
-      task,
-      label:
-        item?.type === "command_execution" && commandDisplayText(item.input) === task.label ? (
-          <span className="font-mono in-data-[slot=popover-popup]:whitespace-pre-wrap">
-            {task.label}
-          </span>
-        ) : task.label.includes("\n") ? (
-          <span className="in-data-[slot=popover-popup]:whitespace-pre-wrap">{task.label}</span>
-        ) : (
-          task.label
-        ),
-      activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
-      startedAtMs: item?.startedAt ? DateTime.toEpochMillis(item.startedAt) : null,
-      updatedAtMs: subagent ? DateTime.toEpochMillis(subagent.updatedAt) : 0,
-    };
-  });
+  const backgroundWork = deriveBackgroundWorkDetails({ ...input, resolve });
+  if (backgroundWork === null) return null;
+  const { presentation, details: rows } = backgroundWork;
   const [only] = rows.length === 1 ? rows : [];
   const newest = rows
     .filter((row) => row.activity)
     .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
-  const isCommand = (row: (typeof rows)[number]) => row.task.kind !== "subagent";
+  // The overflow popover clones the line, so multi-line labels wrap only there.
+  const label = (row: (typeof rows)[number]) =>
+    row.isRawCommand ? (
+      <span className="font-mono in-data-[slot=popover-popup]:whitespace-pre-wrap">
+        {row.item.label}
+      </span>
+    ) : row.item.label.includes("\n") ? (
+      <span className="in-data-[slot=popover-popup]:whitespace-pre-wrap">{row.item.label}</span>
+    ) : (
+      row.item.label
+    );
+  const onlyThreadId = only?.childThreadId;
   const startedAtMs = only?.startedAtMs ?? null;
   return {
     id: `background-work:${input.threadId}`,
-    icon: rows.every(isCommand) ? <TerminalIcon /> : <CircleDashedIcon />,
+    icon: rows.every((row) => row.item.kind !== "subagent") ? (
+      <TerminalIcon />
+    ) : (
+      <CircleDashedIcon />
+    ),
     title:
-      only && typeof only.label !== "string" && only.task.label !== only.task.kind ? (
+      only?.item.named === true && (only.isRawCommand || only.item.label.includes("\n")) ? (
         <>
           {presentation.waiting ? (
             <T>
-              Waiting · <Var>{only.label}</Var>
+              Waiting · <Var>{label(only)}</Var>
             </T>
           ) : (
             <T>
-              Running · <Var>{only.label}</Var>
+              Running · <Var>{label(only)}</Var>
             </T>
           )}
         </>
@@ -265,35 +257,46 @@ export function backgroundWorkNowItem(
       only.activity
     ) : newest ? (
       <>
-        {newest.label}: {newest.activity}
+        {label(newest)}: {newest.activity}
       </>
     ) : (
       rows.map((row, index) => (
-        <Fragment key={row.task.taskId}>
+        <Fragment key={row.item.taskId}>
           {index > 0 ? ", " : null}
-          {row.label}
+          {label(row)}
         </Fragment>
       ))
     ),
     actions: (
       <>
         {startedAtMs === null ? null : (
-          <span
-            ref={tickTextContent(
-              (nowMs) => formatDuration(Math.max(1_000, nowMs - startedAtMs), m),
-              true,
-            )}
-            className="tabular-nums"
-          />
+          <>
+            <span
+              ref={tickTextContent(
+                (nowMs) => formatDuration(Math.max(1_000, nowMs - startedAtMs), m),
+                true,
+              )}
+              className="tabular-nums"
+            />
+            <span aria-hidden>·</span>
+          </>
         )}
         <BackgroundWorkDetails
           environmentId={input.environmentId}
-          threadId={input.threadId}
-          tasks={input.tasks}
-          turnItems={input.turnItems}
+          details={rows}
           onOpenThread={onOpenThread}
+          onRunInTerminal={input.onRunInTerminal}
         />
-        <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
+        {onlyThreadId === undefined ? null : (
+          <InlineButton tone="muted" onClick={() => onOpenThread(onlyThreadId)}>
+            <T context="verb, opens background subagent thread">Open</T>
+          </InlineButton>
+        )}
+        <InlineButton
+          tone="muted"
+          disabled={input.stopDisabled}
+          onClick={() => void input.onStop()}
+        >
           {input.stopping ? <T>Stopping...</T> : <T context="verb, stops background work">Stop</T>}
         </InlineButton>
       </>

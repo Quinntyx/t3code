@@ -23,6 +23,7 @@ import {
   useQuietThreadShell,
 } from "../../state/entities";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { CommandOutputMessage } from "./CommandOutputMessage";
 import { AssistantCitationSource } from "./AssistantCitationSource";
 import { resolveAssistantMessageCopyState } from "./MessagesTimeline.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -50,6 +51,27 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
   const text = liveText ?? row.message.text;
   const messageText =
     text || (row.message.streaming || row.suppressEmptyResponse ? "" : gt("(empty response)"));
+
+  if (row.message.localCommand !== undefined) {
+    return (
+      <div className="relative min-w-0 px-1 py-0.5">
+        <MessageAuthorHeading>{gt("Command output")}</MessageAuthorHeading>
+        <CommandOutputMessage
+          text={row.message.text}
+          localCommand={row.message.localCommand}
+          streaming={row.assistantCopyStreaming}
+        />
+        {row.showAssistantMeta ? (
+          <AssistantMessageMeta
+            className="mt-1.5"
+            message={row.message}
+            showCopyButton={false}
+            copyStreaming={row.assistantCopyStreaming}
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <>

@@ -43,6 +43,7 @@ const openDetail: Detail = {
   state: "open",
   isDraft: false,
   headBranch: "feature",
+  repository: "owner/repo",
   maintainerCanModify: true,
   observedAt: 1,
   capabilities: {
@@ -68,7 +69,10 @@ const openDetail: Detail = {
 function setup() {
   mocks.update.mockReset().mockResolvedValue({ _tag: "Success" });
   mocks.notify.mockReset();
-  return (detail: Detail = openDetail) => (
+  return (
+    detail: Detail = openDetail,
+    overrides: Partial<Parameters<typeof PullRequestActionsMenu>[0]> = {},
+  ) => (
     <PullRequestActionsMenu
       environmentId={environmentId}
       reference={reference}
@@ -106,14 +110,40 @@ function setup() {
       environmentConnected={true}
       canWriteSourceControl={true}
       onMaintainerEditsSaved={() => {}}
-      confirmDeleteBranch={async () => {}}
       pendingAction={null}
       perform={async () => true}
       openOnHostText="Open on GitHub"
       copyReference={() => {}}
+      {...overrides}
     />
   );
 }
+
+it("requires two clicks to delete the remote branch and disarms when the menu closes", async () => {
+  const control = setup();
+  const perform = vi.fn().mockResolvedValue(true);
+  await using screen = await render(control(openDetail, { showsDeleteBranch: true, perform }));
+  const menu = screen.getByRole("button", { name: "More pull request actions" });
+  const remove = page.getByRole("menuitem", { name: /^Delete branch/ });
+  const confirm = page.getByRole("menuitem", {
+    name: "Confirm delete branch feature?",
+    exact: true,
+  });
+
+  await menu.click();
+  await remove.click();
+  await expect.element(confirm).toBeVisible();
+  expect(confirm.element().textContent).toContain("Local branches and worktrees are not changed.");
+  expect(perform).not.toHaveBeenCalled();
+  await menu.click();
+  await expect.element(confirm).not.toBeInTheDocument();
+  await menu.click();
+  await expect.element(remove).toBeVisible();
+  await remove.click();
+  await confirm.click();
+  expect(perform).toHaveBeenCalledExactlyOnceWith("delete-branch");
+  await expect.element(confirm).not.toBeInTheDocument();
+});
 
 it("saves maintainer edits, locks while saving, and restores the saved value when a save fails", async () => {
   const control = setup();

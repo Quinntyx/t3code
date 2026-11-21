@@ -14,6 +14,10 @@ import { m } from "./i18n/messages";
 
 let cachedApi: LocalApi | undefined;
 
+// macOS menus already match the app; GTK and Win32 menus are flat, full-width, and opaque.
+const nativeContextMenuBridge = () =>
+  window.desktopBridge?.getClientPlatform() === "darwin" ? window.desktopBridge : undefined;
+
 export function createLocalApi(): LocalApi {
   return {
     dialogs: {
@@ -49,19 +53,24 @@ export function createLocalApi(): LocalApi {
       },
     },
     contextMenu: {
+      // Read per use: the bridge is exposed by the preload script, not this module.
+      get supportsInPlaceConfirm() {
+        return nativeContextMenuBridge() === undefined;
+      },
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },
         source?: ContextMenuSource,
       ): Promise<T | null> => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.showContextMenu(items, position, source) as Promise<T | null>;
+        const nativeMenu = nativeContextMenuBridge();
+        if (nativeMenu) {
+          return nativeMenu.showContextMenu(items, position, source) as Promise<T | null>;
         }
         return showContextMenuFallback(items, position);
       },
       // Unlike native menus, the DOM fallback needs dismissal when underlying state disappears.
       close: async () => {
-        if (!window.desktopBridge) {
+        if (!nativeContextMenuBridge()) {
           dismissContextMenu();
         }
       },

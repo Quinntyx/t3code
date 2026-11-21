@@ -46,8 +46,10 @@ import {
   LinkIcon,
 } from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
+import { cacheLoadedAsset, createAssetCacheKey } from "../../assets/assetBytesCache";
 import { FreshSessionRow, ModelSwitchRow } from "./V2LifecycleRow";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
+import { useCachedAssetSrcs } from "../../assets/useCachedAssetSrc";
 import { AttachmentImage } from "../media/AttachmentImage";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import {
@@ -94,6 +96,7 @@ import {
   TimelineRowTimestamp,
 } from "./TimelineRowParts";
 import { UserMessageContextReferenceChip } from "./UserMessageContextChips";
+import { UNSENT_MESSAGE_ANNOUNCEMENT, unsentMessageBubbleClassName } from "./unsentMessageStyle";
 import {
   resolvePreviewAnnotationImage,
   userMessageFileLabel,
@@ -284,6 +287,8 @@ export function UserMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mes
 
 function UserMessageContent({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  // Until the provider consumes it, an unsent message wears the queue's dashed look.
+  const unsent = row.projectedItem?.item.status === "pending";
   return ctx.workflowOpening?.messageId === row.message.id ? (
     <WorkflowOpeningBlock
       opening={ctx.workflowOpening}
@@ -291,14 +296,20 @@ function UserMessageContent({ row }: { row: Extract<TimelineRow, { kind: "messag
       onOpenThread={(threadId) => ctx.onOpenThread(ThreadId.make(threadId))}
     />
   ) : resolveUserMessagePresentation(row.message).attribution === "automation" ? (
-    <AutomationMessageRow row={row} />
+    <AutomationMessageRow row={row} unsent={unsent} />
   ) : (
-    <UserTimelineRow row={row} />
+    <UserTimelineRow row={row} unsent={unsent} />
   );
 }
 
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
-function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+function AutomationMessageRow({
+  row,
+  unsent,
+}: {
+  row: Extract<TimelineRow, { kind: "message" }>;
+  unsent: boolean;
+}) {
   const ctx = use(TimelineRowCtx);
   const gt = useGT();
   const [expanded, setExpanded] = useState(false);
@@ -316,22 +327,18 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 
   return (
     <div className="group flex flex-col items-end gap-1" data-user-message-attribution="automation">
-      {row.message.inputIntent === "steer" ||
-      row.message.inputIntent === "promoted_queued_to_steer" ? (
-        <UserMessageIntentMarker
-          intent={row.message.inputIntent}
-          unread={row.projectedItem?.item.status === "pending"}
-        />
-      ) : null}
+      <UserMessageIntentNote row={row} hidden={unsent} />
       <div
         className={cn(
-          "min-w-0 max-w-[80%] rounded-2xl bg-message text-message-foreground",
+          "min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
+          unsent ? cn(unsentMessageBubbleClassName(), "text-foreground") : "bg-message",
           expanded && "w-full",
         )}
         data-user-message-bubble=""
       >
         <MessageAuthorHeading>{gt("Automation")}</MessageAuthorHeading>
+        {unsent ? <span className="sr-only">{UNSENT_MESSAGE_ANNOUNCEMENT}</span> : null}
         <FoldedMessageHeader
           icon={CalendarClockIcon}
           label={gt("Automation")}
@@ -457,7 +464,13 @@ function UserMessageProjectedStatus({ row }: { row: Extract<TimelineRow, { kind:
   );
 }
 
-function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+function UserTimelineRow({
+  row,
+  unsent,
+}: {
+  row: Extract<TimelineRow, { kind: "message" }>;
+  unsent: boolean;
+}) {
   const ctx = use(TimelineRowCtx);
   const gt = useGT();
   const m = useMessages();
@@ -470,7 +483,30 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ? null
       : scopeThreadRef(ctx.activeThreadEnvironmentId, row.message.senderThreadId));
   const resources = selectMessageImageResources(row.message.attachments);
-  const previewUrls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
+  const signedPreviewUrls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
+  const previewCacheKeys = new Map(
+    resources.flatMap((resource) =>
+      ctx.threadRef
+        ? [
+            [
+              resource.attachmentId,
+              createAssetCacheKey({
+                environmentId: ctx.activeThreadEnvironmentId,
+                threadId: ctx.threadRef.threadId,
+                resource,
+                revision: null,
+              }),
+            ] as const,
+          ]
+        : [],
+    ),
+  );
+  const previewUrls = useCachedAssetSrcs(
+    resources.map((resource, index) => ({
+      key: previewCacheKeys.get(resource.attachmentId),
+      url: signedPreviewUrls[index] ?? null,
+    })),
+  );
   const [projectPreviews] = useState(createMessageAttachmentPreviewProjector);
   const previewUrlsById = new Map(
     resources.flatMap((resource, index) => {
@@ -588,6 +624,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         ? ""
         : reference.label,
     ).trim() === "";
+  // Media, file cards, and voice notes sent alone draw no bubble around them.
+  const bubbleless = mediaOnly || fileCardsOnly || audioOnly;
   const annotationRecordIds = resolvedContext.records
     .filter((record) => record.kind === "preview-annotation")
     .map((record) => record.contextId);
@@ -796,6 +834,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                   mimeType={image.mimeType}
                   src={image.previewUrl}
                   alt={image.name}
+                  onLoad={() => {
+                    const key = previewCacheKeys.get(image.id);
+                    if (key !== undefined && image.previewUrl)
+                      cacheLoadedAsset(key, image.previewUrl);
+                  }}
                   decoding="async"
                   loading="lazy"
                   className={cn(
@@ -919,14 +962,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <GuestMessageName name={userMessage.guestName} />
         </div>
       ) : null}
-      {(row.message.inputIntent === "steer" ||
-        row.message.inputIntent === "promoted_queued_to_steer") &&
-      !row.continuesSteer ? (
-        <UserMessageIntentMarker
-          intent={row.message.inputIntent}
-          unread={row.projectedItem?.item.status === "pending"}
-        />
-      ) : null}
+      <UserMessageIntentNote row={row} hidden={unsent} />
       {mediaAboveText ? (
         <div className="flex max-w-[80%] justify-end">
           {/* The heading leads the media so screen readers reach it before the images. */}
@@ -942,10 +978,19 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-md",
           row.groupedWithNext && "rounded-br-md",
           BUBBLE_CHIP_CLASS_NAME,
-          userMessage.attribution === "guest"
-            ? guestBubbleClassName(false)
-            : !mediaOnly && !fileCardsOnly && !audioOnly && "bg-message",
-          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "p-3",
+          unsent && !bubbleless
+            ? cn(
+                unsentMessageBubbleClassName(
+                  userMessage.attribution === "guest" ? "guest" : "default",
+                ),
+                "text-foreground",
+              )
+            : userMessage.attribution === "guest"
+              ? guestBubbleClassName(false)
+              : !bubbleless && "bg-message",
+          !folded && !bubbleless && "p-3",
+          // Bubbleless shapes have no edge to dash, so they fade until the agent receives them.
+          unsent && bubbleless && "opacity-60",
           folded && expanded && "w-full",
         )}
         data-user-message-bubble=""
@@ -960,6 +1005,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 : gt("{name} (guest)", { name: userMessage.guestName })}
           </MessageAuthorHeading>
         )}
+        {unsent ? <span className="sr-only">{UNSENT_MESSAGE_ANNOUNCEMENT}</span> : null}
         {folded ? (
           <FoldedMessageHeader
             icon={MessagesSquareIcon}
@@ -1135,15 +1181,30 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
 }
 
+/** The marker keeps its row while pending, so delivery does not move the bubble. */
+function UserMessageIntentNote({
+  row,
+  hidden,
+}: {
+  readonly row: Extract<TimelineRow, { kind: "message" }>;
+  readonly hidden: boolean;
+}) {
+  const intent = row.message.inputIntent;
+  // A burst of steers carries one label, on its first message.
+  if ((intent !== "steer" && intent !== "promoted_queued_to_steer") || row.continuesSteer)
+    return null;
+  return <UserMessageIntentMarker intent={intent} hidden={hidden} />;
+}
+
 const ACTIONS_REVEAL_CLASS_NAME =
   "items-center text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100";
 
 function UserMessageIntentMarker({
   intent,
-  unread,
+  hidden,
 }: {
   readonly intent: "steer" | "promoted_queued_to_steer";
-  readonly unread: boolean;
+  readonly hidden: boolean;
 }) {
   const gt = useGT();
   return (
@@ -1151,24 +1212,21 @@ function UserMessageIntentMarker({
       <TooltipTrigger
         render={
           <div
-            className="me-1 flex items-center justify-end gap-1 text-xs leading-none text-muted-foreground"
+            className={cn(
+              "me-1 flex items-center justify-end gap-1 text-xs leading-none text-muted-foreground",
+              hidden && "invisible",
+            )}
             data-user-message-intent={intent}
           />
         }
       >
         <Redo2Icon aria-hidden="true" className="size-3" />
-        {unread
-          ? gt("Steer · waiting to be read")
-          : gt("Steer", { $context: "noun, a message that steers the running turn" })}
+        {gt("Steer", { $context: "noun, a message that steers the running turn" })}
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {unread
-          ? gt(
-              "Waiting for the agent to read this. It reads steers between steps, after a running command finishes.",
-            )
-          : intent === "promoted_queued_to_steer"
-            ? gt("Originally queued, then promoted to steer the active turn")
-            : gt("Steered the active turn")}
+        {intent === "promoted_queued_to_steer"
+          ? gt("Originally queued, then promoted to steer the active turn")
+          : gt("Steered the active turn")}
       </TooltipPopup>
     </Tooltip>
   );

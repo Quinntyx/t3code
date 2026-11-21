@@ -38,7 +38,11 @@ import {
 import { startDefaultThemeAdoption } from "./hooks/useDefaultTheme";
 import { startEnvironmentThemeRepaint } from "./hooks/useEnvironmentTheme";
 import { startThemeBackground } from "./themeBackground";
-import { migrateLegacyForkVisualSettings, startThemeEffectController } from "./themeEffects";
+import {
+  migrateLegacyDesktopForkVisualSettings,
+  migrateLegacyForkVisualSettings,
+  startThemeEffectController,
+} from "./themeEffects";
 import { readLocalStorageValue, subscribeLocalStorageKey } from "./hooks/useLocalStorage";
 import { startHostEnvironmentLookup } from "./state/primaryEnvironment";
 import {
@@ -61,6 +65,7 @@ import {
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
 import { getRouter, type AppRouter } from "./router";
 import { appAtomRegistry } from "./rpc/atomRegistry";
+import { startWebThreadPrefetch } from "./state/threadPrefetch";
 import { environmentProjects } from "./state/projects";
 import { primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
@@ -278,6 +283,11 @@ export function startAppServices(): AppRouter {
   if (migrateLegacyForkVisualSettings()) {
     refreshTheme({ preservePreview: true });
   }
+  void migrateLegacyDesktopForkVisualSettings().then((migrated) => {
+    if (migrated) {
+      refreshTheme({ preservePreview: true });
+    }
+  });
   startClientAppearance();
   startI18n();
   startDocumentTitle(router);
@@ -313,6 +323,7 @@ export function startAppServices(): AppRouter {
   startWorkspaceFocus(router);
   startBackgroundThreadAnnouncements(appAtomRegistry, router);
   startThreadVisitedMigration(appAtomRegistry);
+  startWebThreadPrefetch(appAtomRegistry);
   startSshPasswordPromptQueue();
 
   startKeybindingsUpdateToasts();

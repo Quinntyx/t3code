@@ -75,7 +75,7 @@ import {
 import { ComboboxItem, ComboboxTrigger } from "./ui/combobox";
 import { ComposerControl } from "./chat/ComposerControl";
 import { MiddleTruncate } from "./ui/middle-truncate";
-import { BranchPicker, BranchPickerRefItem } from "./BranchPicker";
+import { BranchPicker, BranchPickerRefItem, useBranchPickerRemoteView } from "./BranchPicker";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 export interface BranchToolbarBranchSelectorHandle {
@@ -256,6 +256,8 @@ export function BranchToolbarBranchSelector({
 
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
+  const remoteView = useBranchPickerRemoteView(environmentId, activeProject?.id ?? null);
+  const isDefaultRemoteView = remoteView.view.kind === "default";
 
   const branchStatusQuery = useEnvironmentQuery(
     branchCwd === null
@@ -279,6 +281,7 @@ export function BranchToolbarBranchSelector({
       // Substring search needs sanitized names to detect new-branch collisions; refs cannot contain ASCII
       // spaces.
       query: sanitizeNewRefName(trimmedBranchQuery),
+      ...remoteView.refTarget,
     },
     messages,
   );
@@ -303,11 +306,14 @@ export function BranchToolbarBranchSelector({
           }).nextWorktreePath,
     });
   const checkoutPullRequestItemValue =
-    canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
+    isDefaultRemoteView && canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
       : null;
   const canCreateBranch =
-    canChangeThreadBranch && !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
+    isDefaultRemoteView &&
+    canChangeThreadBranch &&
+    !isSelectingWorktreeBase &&
+    trimmedBranchQuery.length > 0;
   const newRefName = sanitizeNewRefName(trimmedBranchQuery);
   const hasExactBranchMatch = branchByName.has(newRefName);
   const createBranchItemValue = canCreateBranch
@@ -786,6 +792,7 @@ export function BranchToolbarBranchSelector({
         projectCwd={activeProjectCwd}
         index={index}
         value={itemValue}
+        withinRemote={!isDefaultRemoteView}
         disabled={
           !canUpdateThreadBranch ||
           (!canWriteSourceControl &&
@@ -837,6 +844,7 @@ export function BranchToolbarBranchSelector({
           ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
           : undefined
       }
+      remotes={remoteView.remotes(branchRefState.data?.remoteNames)}
       popupProps={{
         align: displayMode === "panel" ? "start" : "end",
         side: displayMode === "panel" ? "bottom" : "top",

@@ -9,10 +9,12 @@ import { AsyncResult } from "effect/reactivity";
 import {
   shouldCreateNewThreadInCurrentProject,
   deleteSelectedThreadEntries,
+  filterSidebarV2VisibleThreads,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
+  resolveSidebarRowThreadRef,
   resolveSidebarSweepKeys,
   resolveSidebarRowStatus,
   resolveSidebarThreadStatus,
@@ -60,6 +62,100 @@ import {
 } from "./sidebar/routeReveal";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("filterSidebarV2VisibleThreads", () => {
+  it("omits archived and delegated rows within the selected project scope", () => {
+    const thread = {
+      id: ThreadId.make("thread-1"),
+      environmentId: localEnvironmentId,
+      projectId: ProjectId.make("project-1"),
+      archivedAt: null,
+      lineage: {
+        rootThreadId: ThreadId.make("thread-1"),
+        parentThreadId: null,
+        relationshipToParent: null,
+      },
+    } as const;
+    const otherEnvironment = { ...thread, environmentId: EnvironmentId.make("other") };
+    const archived = {
+      ...thread,
+      id: ThreadId.make("archived"),
+      archivedAt: "2026-10-27T12:00:00Z",
+    };
+    const threads = [thread, otherEnvironment, archived];
+
+    const delegated = new Set(["other\u0000thread-1"]);
+    expect(filterSidebarV2VisibleThreads(threads, null, delegated)).toEqual([thread]);
+    expect(filterSidebarV2VisibleThreads(threads, null)).toEqual([thread, otherEnvironment]);
+    expect(
+      filterSidebarV2VisibleThreads(threads, new Set(["environment-local:project-1"])),
+    ).toEqual([thread]);
+    expect(threads).toEqual([thread, otherEnvironment, archived]);
+  });
+
+  it("lists a subagent stacked on a listed thread, and only that subagent", () => {
+    const listed = (id: string, parentId: string | null = null) =>
+      ({
+        id: ThreadId.make(id),
+        environmentId: localEnvironmentId,
+        projectId: ProjectId.make("project-1"),
+        archivedAt: null,
+        lineage: {
+          rootThreadId: ThreadId.make(parentId ?? id),
+          parentThreadId: parentId === null ? null : ThreadId.make(parentId),
+          relationshipToParent: parentId === null ? null : ("subagent" as const),
+        },
+      }) as const;
+    const parent = listed("parent");
+    const stacked = listed("stacked", "parent");
+    const nested = listed("nested", "stacked");
+    const sharing = listed("sharing", "parent");
+    const underArchived = listed("under-archived", "archived");
+    const archivedParent = { ...listed("archived"), archivedAt: "2026-01-01T00:00:00.000Z" };
+    const stackParents = new Map<string, Pick<typeof parent, "environmentId" | "id">>([
+      ["environment-local:stacked", parent],
+      ["environment-local:nested", stacked],
+      ["environment-local:under-archived", archivedParent],
+    ]);
+    const threads = [parent, stacked, nested, sharing, underArchived, archivedParent];
+    expect(
+      filterSidebarV2VisibleThreads(threads, null, new Set(), stackParents).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["parent", "stacked", "nested"]);
+  });
+
+  it("stops row resolution at a subagent stacked on its parent's branch", () => {
+    const subagent = (id: string, parentId: string | null) =>
+      ({
+        id: ThreadId.make(id),
+        environmentId: localEnvironmentId,
+        archivedAt: null,
+        delegatedFrom: null,
+        lineage: {
+          rootThreadId: ThreadId.make("root"),
+          parentThreadId: parentId === null ? null : ThreadId.make(parentId),
+          relationshipToParent: parentId === null ? null : ("subagent" as const),
+        },
+      }) as const;
+    const root = subagent("root", null);
+    const child = subagent("child", "root");
+    const grandchild = subagent("grandchild", "child");
+    const threads = [root, child, grandchild];
+
+    expect(
+      resolveSidebarRowThreadRef(scopeThreadRef(localEnvironmentId, grandchild.id), threads)
+        .threadId,
+    ).toBe(root.id);
+    expect(
+      resolveSidebarRowThreadRef(
+        scopeThreadRef(localEnvironmentId, grandchild.id),
+        threads,
+        (thread) => thread === child,
+      ).threadId,
+    ).toBe(child.id);
+  });
+});
 
 describe("deleteSelectedThreadEntries", () => {
   const entries = [{ threadKey: "one" }, { threadKey: "two" }, { threadKey: "three" }] as const;
@@ -242,6 +338,24 @@ describe("resolveSidebarThreadStatus", () => {
         isSelected: false,
       }),
     ).toBe(false);
+  });
+
+  it("shows a client-side pull request generation as PRing over an idle thread", () => {
+    expect(
+      resolveSidebarThreadStatus(
+        { ...idle, runtime: { ...runtime, status: "completed" as const } },
+        { pullRequestGenerating: true },
+      ),
+    ).toBe("pring");
+    expect(
+      shouldRecedeSidebarThread({
+        status: "pring",
+        isUnread: false,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(true);
   });
 
   it("reports worktree setup as preparing, and failed only while the latest run failed", () => {
@@ -435,11 +549,11 @@ describe("resolveThreadStatusPill", () => {
     },
   };
 
-  it("shows an active thread wait without a pulse and resumes Working when it ends", () => {
+  it("shows an active thread wait as Delegating and resumes Working when it ends", () => {
     const blocked = { ...baseThread, blockedOnThreadWait: true };
     expect(resolveSidebarThreadStatus(blocked)).toBe("waiting");
     expect(resolveThreadStatusPill({ thread: blocked })).toMatchObject({
-      label: "Waiting",
+      label: "Delegating",
       pulse: false,
     });
 
@@ -449,6 +563,18 @@ describe("resolveThreadStatusPill", () => {
       label: "Working",
       pulse: true,
     });
+  });
+
+  it("shows PRing in place of Working while the pull request is generated", () => {
+    expect(
+      resolveThreadStatusPill({ thread: baseThread, pullRequestInFlight: true }),
+    ).toMatchObject({ label: "PRing", pulse: true });
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...baseThread, hasPendingApprovals: true },
+        pullRequestInFlight: true,
+      }),
+    ).toMatchObject({ label: "Pending Approval" });
   });
 
   it("shows waiting for an idle thread with pending background tasks", () => {
@@ -525,7 +651,7 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Completed", pulse: false });
   });
 
-  it("shows failed, not completed, when the unseen run failed", () => {
+  it("shows failed, not completed or waiting, when the unseen run failed", () => {
     const failed = {
       ...baseThread,
       interactionMode: "default" as const,
@@ -556,14 +682,68 @@ describe("resolveThreadStatusPill", () => {
     };
     expect(isSidebarThreadWorking(watching)).toBe(false);
     expect(resolveThreadStatusPill({ thread: watching })).toMatchObject({ label: "Failed" });
-    // A run blocked on another thread is still waiting, as its sidebar row says.
+    // A run blocked on another thread is still delegating, as its sidebar row says.
     const blocked = {
       ...watching,
       runtime: { ...failed.runtime, status: "running" as const },
       blockedOnThreadWait: true,
     };
     expect(resolveSidebarThreadStatus(blocked)).toBe("waiting");
-    expect(resolveThreadStatusPill({ thread: blocked })).toMatchObject({ label: "Waiting" });
+    expect(resolveThreadStatusPill({ thread: blocked })).toMatchObject({ label: "Delegating" });
+  });
+
+  it("shows delegating instead of failed when an unseen root run failed while a subagent or workflow is still running", () => {
+    const delegatingThread = {
+      ...baseThread,
+      interactionMode: "default" as const,
+      latestRun: { ...makeLatestRun(), status: "failed" as const },
+      lastVisitedAt: "2026-03-09T10:04:00.000Z",
+      pendingBackgroundTasks: [
+        { taskId: "wf-1", description: "Workflow", kind: "subagent" as const },
+      ],
+      runtime: {
+        ...baseThread.runtime,
+        status: "idle" as const,
+        activeRunId: null,
+        lastError: "Usage limit reached",
+        lastErrorClass: "usage_limit" as const,
+      },
+    };
+    expect(resolveThreadStatusPill({ thread: delegatingThread })).toMatchObject({
+      label: "Delegating",
+      pulse: false,
+    });
+    expect(resolveSidebarThreadStatus(delegatingThread)).toBe("waiting");
+    expect(isSidebarThreadWorking(delegatingThread)).toBe(true);
+  });
+
+  it("does not fall through to delegating or waiting when runtime remains failed (e.g. consumption cap hit)", () => {
+    const capBlockedBase = {
+      ...baseThread,
+      interactionMode: "default" as const,
+      latestRun: { ...makeLatestRun(), status: "failed" as const },
+      pendingBackgroundTasks: [
+        { taskId: "wf-1", description: "Workflow", kind: "subagent" as const },
+      ],
+      runtime: {
+        ...baseThread.runtime,
+        status: "failed" as const,
+        activeRunId: null,
+        lastError: "Consumption cap hit",
+      },
+    };
+    const unseen = { ...capBlockedBase, lastVisitedAt: "2026-03-09T10:04:00.000Z" };
+    expect(resolveThreadStatusPill({ thread: unseen })).toMatchObject({
+      label: "Failed",
+      pulse: false,
+    });
+    expect(resolveSidebarThreadStatus(unseen)).toBe("failed");
+    expect(isSidebarThreadWorking(unseen)).toBe(false);
+
+    const seen = { ...capBlockedBase, lastVisitedAt: "2026-03-09T10:06:00.000Z" };
+    expect(resolveThreadStatusPill({ thread: seen })).toBeNull();
+    expect(resolveSidebarThreadStatus(seen)).toBe("failed");
+    expect(isSidebarThreadWorking(seen)).toBe(false);
   });
 
   it("shows failed, not plan ready, when a plan run proposed a plan and then failed", () => {
@@ -1075,6 +1255,30 @@ describe("Working shelf (beta)", () => {
         ...waiting,
         interactionMode: "plan",
         hasActionableProposedPlan: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a plan-mode thread in working while delegated agents run", () => {
+    const delegating = {
+      ...waiting,
+      interactionMode: "plan" as const,
+      hasActionableProposedPlan: true,
+      pendingBackgroundTasks: [
+        { taskId: "workflow-1", kind: "subagent" as const, description: "Review council" },
+      ],
+    };
+    expect(isSidebarThreadWorking(delegating)).toBe(true);
+    expect(
+      isSidebarThreadWorking({
+        ...delegating,
+        runtime: {
+          ...runtime,
+          status: "failed" as const,
+          lastError: "Daily limit reached",
+          lastErrorClass: "usage_limit" as const,
+          lastErrorCode: "consumption_cap",
+        },
       }),
     ).toBe(false);
   });

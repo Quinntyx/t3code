@@ -41,9 +41,11 @@ import { isElectron } from "~/env";
 import { FileSurfaceLoading } from "./fileSurfaceChrome";
 import type { PdfViewState } from "./PdfViewer";
 
+import { useGT } from "gt-react";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "~/components/chat/ExpandedImagePreview";
+import { Skeleton } from "~/components/ui/skeleton";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { shortcutConflictKey } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
@@ -302,6 +304,7 @@ export function HtmlRenderDocument(props: {
   /** Reports fullscreen changes so virtualized rows can stay mounted. */
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
 }) {
+  const gt = useGT();
   const theme = useHtmlRenderTheme();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [src] = useState(
@@ -438,25 +441,31 @@ export function HtmlRenderDocument(props: {
   }, []);
   return (
     <>
-      <iframe
-        ref={frameRef}
-        src={src}
-        title={props.title}
-        // Never allow-same-origin: the opaque origin keeps the page out of the app's session.
-        sandbox="allow-scripts allow-forms"
-        // Lets a page's video or image viewer take the screen.
-        allow="fullscreen"
-        loading="lazy"
-        onLoad={() => {
-          setLoaded(true);
-          // Covers a theme change that landed while the page was loading.
-          postTheme();
-          postShortcuts();
-        }}
-        // Match the blank document's scheme to avoid dark-mode white flashes, then follow the app after load.
-        className={cn("border-0 scheme-light", props.className)}
-        style={loaded ? { colorScheme: theme.appearance } : undefined}
-      />
+      <div className={cn("relative", props.className)}>
+        {loaded ? null : (
+          <Skeleton role="status" aria-label={gt("Loading page")} className="absolute inset-0" />
+        )}
+        {/* Visibility would stall lazy loading, so the frame fades in over the skeleton. */}
+        <iframe
+          ref={frameRef}
+          src={src}
+          title={props.title}
+          // Never allow-same-origin: the opaque origin keeps the page out of the app's session.
+          sandbox="allow-scripts allow-forms"
+          // Lets a page's video or image viewer take the screen.
+          allow="fullscreen"
+          loading="lazy"
+          onLoad={() => {
+            setLoaded(true);
+            // Covers a theme change that landed while the page was loading.
+            postTheme();
+            postShortcuts();
+          }}
+          // Match the blank document's scheme to avoid dark-mode white flashes, then follow the app after load.
+          className={cn("block size-full border-0 scheme-light", !loaded && "opacity-0")}
+          style={loaded ? { colorScheme: theme.appearance } : undefined}
+        />
+      </div>
       {expandedImage !== null ? (
         <ExpandedImageDialog preview={expandedImage} onClose={() => setExpandedImage(null)} />
       ) : null}

@@ -29,6 +29,8 @@ import { m, type MessageResolver } from "~/i18n/messages";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
+import { ModelViewer } from "~/components/chat/ModelViewer";
+import { createAssetCacheKey } from "~/assets/assetBytesCache";
 import { maskMarkdownFrontmatter } from "@t3tools/shared/markdownFrontmatter";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { toastManager } from "~/components/ui/toast";
@@ -199,6 +201,15 @@ export function AttachmentFilePreview(props: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reauthorize the remote file.
   }, [props.file, refresh, revision]);
   const url = props.file ? localUrl : remoteUrl;
+  const modelCacheKey =
+    !props.file && resource !== null
+      ? createAssetCacheKey({
+          environmentId: props.asset?.environmentId,
+          threadId: props.threadRef?.threadId,
+          resource,
+          revision: resource._tag === "attachment" ? null : url,
+        })
+      : undefined;
   const streamsText =
     kind === "text" &&
     (props.sizeBytes > FILE_TEXT_PREVIEW_MAX_BYTES ||
@@ -380,6 +391,16 @@ export function AttachmentFilePreview(props: {
         aria-label={props.name}
         className="max-h-full max-w-full"
         onError={() => setError(gt("Unable to load video."))}
+      />
+    </div>
+  ) : kind === "model" ? (
+    <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+      <ModelViewer
+        key={url}
+        src={url}
+        name={props.name}
+        cacheKey={modelCacheKey}
+        className="aspect-auto h-full max-h-none w-full max-w-none"
       />
     </div>
   ) : kind === "image" ? (

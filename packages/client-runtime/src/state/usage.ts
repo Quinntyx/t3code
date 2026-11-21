@@ -1,4 +1,11 @@
-import type { EnvironmentId, UsageModelFilter, UsageSummaryInput } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+  UsageModelFilter,
+  UsageSummaryInput,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import type { AtomRegistry } from "effect/reactivity";
 
@@ -15,6 +22,40 @@ export function usageSummaryInput(
   modelFilter: UsageModelFilter | undefined,
 ): UsageSummaryInput {
   return modelFilter === undefined ? input : { ...input, modelFilter };
+}
+
+type UsageThread = Pick<
+  OrchestrationV2ThreadShell,
+  "id" | "lineage" | "latestRunId" | "latestRunCompletedAt" | "activeRunId"
+>;
+
+export function threadUsageRevision(threadId: ThreadId, threads: readonly UsageThread[]): string {
+  const children = new Map<ThreadId, UsageThread[]>();
+  for (const thread of threads) {
+    const { parentThreadId, relationshipToParent, sideChat } = thread.lineage;
+    if (parentThreadId === null || relationshipToParent !== "subagent" || sideChat === true)
+      continue;
+    const siblings = children.get(parentThreadId);
+    if (siblings === undefined) children.set(parentThreadId, [thread]);
+    else siblings.push(thread);
+  }
+  const ids = new Set([threadId]);
+  for (const id of ids) {
+    for (const child of children.get(id) ?? []) ids.add(child.id);
+  }
+  return JSON.stringify(
+    threads
+      .filter((thread) => ids.has(thread.id))
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((thread) => [
+        thread.id,
+        thread.latestRunId,
+        thread.latestRunCompletedAt == null
+          ? null
+          : DateTime.toEpochMillis(thread.latestRunCompletedAt),
+        thread.activeRunId,
+      ]),
+  );
 }
 
 const limitsRefreshAfter = new Map<EnvironmentId, number>();

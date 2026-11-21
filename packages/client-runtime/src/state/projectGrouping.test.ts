@@ -8,6 +8,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   pickableProjectGroups,
   derivePhysicalProjectKey,
+  resolveFocusProjectKeys,
   resolveScratchProjectScopeKey,
   sortProjectsByGroupOrder,
   type ProjectGroupingSettings,
@@ -492,5 +493,25 @@ describe("sortProjectsByGroupOrder", () => {
       ],
     );
     expect(sorted.map((entry) => entry.id)).toEqual(["pinned", "recent", "archived", "unlisted"]);
+  });
+});
+
+describe("resolveFocusProjectKeys", () => {
+  const remote = EnvironmentId.make("remote");
+  const ref = (projectId: string, env = environmentId) => ({
+    environmentId: env,
+    projectId: ProjectId.make(projectId),
+  });
+
+  it("widens the focused project to its whole group", () => {
+    const groups = [[ref("t3code"), ref("t3code-remote", remote)], [ref("fleet")]];
+
+    expect(resolveFocusProjectKeys(groups, ref("t3code-remote", remote))).toEqual(
+      new Set([`${environmentId}:t3code`, `${remote}:t3code-remote`]),
+    );
+    expect(resolveFocusProjectKeys(groups, ref("ungrouped"))).toEqual(
+      new Set([`${environmentId}:ungrouped`]),
+    );
+    expect(resolveFocusProjectKeys(groups, null)).toBeNull();
   });
 });

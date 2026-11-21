@@ -107,16 +107,23 @@ import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
-import { readCodexSetupMode } from "./CodexSetupSection.logic";
+import { readCodexSetupMode } from "@t3tools/client-runtime/provider-settings/codex-setup";
+import {
+  backgroundActivityOverrideSettings,
+  durationToSeconds,
+  PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
+} from "@t3tools/client-runtime/provider-settings/background-activity";
+import {
+  deriveProviderInstanceRows,
+  managedAcpRegistryAgentId,
+  modelListChanges,
+  providerInstanceRemovalPrompt,
+  type ProviderInstanceRow as ProviderInstanceRowModel,
+} from "@t3tools/client-runtime/provider-settings/instance";
 import { providerClients } from "./providerDriverMeta";
 import { useSearchableSetting } from "./settingsSearch";
 import { CompactIdleThreadsRow } from "./SettingsPanels";
-import {
-  backgroundActivityOverrideSettings,
-  buildProviderInstanceUpdatePatch,
-  durationToSeconds,
-  PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
-} from "./SettingsPanels.logic";
+import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
 import {
   PolicyTooltip,
   SettingResetButton,
@@ -136,43 +143,16 @@ import {
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 
-function providerInstanceName(instance: ProviderInstanceConfig): string {
-  return (
-    instance.displayName?.trim() ||
-    providerClients.get(instance.driver)?.label ||
-    String(instance.driver)
-  );
-}
-
 async function confirmProviderInstanceRemoval(
-  question: string,
-  consequence = "",
+  operation: "remove" | "reset",
+  instance: ProviderInstanceConfig,
 ): Promise<boolean> {
-  const message = `${question}\n${resolveNow(msg("Its saved settings, including any custom binary path, will be removed."))}${consequence}`;
+  const { question, detail } = providerInstanceRemovalPrompt(operation, instance, resolveNow);
   const confirmed = await settlePromise(() =>
-    ensureLocalApi().dialogs.confirm(message, { variant: "destructive" }),
+    ensureLocalApi().dialogs.confirm(`${question}\n${detail}`, { variant: "destructive" }),
   );
   return confirmed._tag === "Success" && confirmed.value;
 }
-
-function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<string>) {
-  const currentSet = new Set(current);
-  const nextSet = new Set(next.map((model) => model.trim()).filter(Boolean));
-  return [...new Set([...currentSet, ...nextSet])]
-    .filter((model) => currentSet.has(model) !== nextSet.has(model))
-    .map((model) => ({ model, selected: nextSet.has(model) }));
-}
-
-function providerConfigString(config: unknown, key: string): string | null {
-  if (config === null || typeof config !== "object") return null;
-  const value = (config as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
-  provider: definition.driverKind,
-  hasDefaultInstance: definition.hasDefaultInstance !== false,
-}));
 
 function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
@@ -647,14 +627,6 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  const visibleProviderSettings = PROVIDER_SETTINGS.filter(
-    (providerSettings) =>
-      providerSettings.provider !== "cursor" ||
-      serverProviders.some(
-        (provider) =>
-          provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
-      ),
-  );
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const providerHealthPreset = getBackgroundActivityPresetSettings(
     resolvedBackgroundActivity.profile,
@@ -734,80 +706,11 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  interface InstanceRow {
-    readonly instanceId: ProviderInstanceId;
-    /** Undefined for a default slot the user never configured. */
-    readonly explicitInstance: ProviderInstanceConfig | undefined;
-    readonly driver: ProviderDriverKind;
-    readonly isDefault: boolean;
-    readonly isDirty?: boolean;
-  }
-
-  const instancesByDriver = new Map<
-    ProviderDriverKind,
-    Array<[ProviderInstanceId, ProviderInstanceConfig]>
-  >();
-  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
-    const driver = instance.driver;
-    const list = instancesByDriver.get(driver) ?? [];
-    list.push([rawId as ProviderInstanceId, instance]);
-    instancesByDriver.set(driver, list);
-  }
-
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
-  const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
-
-  for (const providerSettings of visibleProviderSettings) {
-    const driver = providerSettings.provider;
-    const defaultInstanceId = defaultInstanceIdForDriver(driver);
-    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
-    const isDirty = explicitInstance !== undefined;
-    const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
-    if (
-      hasDefaultSlot &&
-      (driver === "codex" ||
-        driver === "claudeAgent" ||
-        isDirty ||
-        resolveProviderInstanceEnabled(explicitInstance ?? { driver }) ||
-        defaultInstanceId === targetInstanceId)
-    ) {
-      rows.push({
-        instanceId: defaultInstanceId,
-        explicitInstance,
-        driver,
-        isDefault: true,
-        isDirty,
-      });
-    }
-    for (const [id, instance] of instancesByDriver.get(providerSettings.provider) ?? []) {
-      if (id === defaultInstanceId) continue;
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: false,
-      });
-    }
-  }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
+  const rows = deriveProviderInstanceRows({
+    providerInstances: settings.providerInstances,
+    serverProviders,
+    targetInstanceId,
+  });
 
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
@@ -874,11 +777,7 @@ export function EnvironmentProviderSettings({
 
   const deleteInstance = useStableCallback(
     async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) => {
-      const confirmed = await confirmProviderInstanceRemoval(
-        gt("Remove the {provider} provider instance?", {
-          provider: providerInstanceName(instance),
-        }),
-      );
+      const confirmed = await confirmProviderInstanceRemoval("remove", instance);
       if (!confirmed) return;
       const updateResult = await persistProviderInstance({
         operation: "remove",
@@ -897,9 +796,7 @@ export function EnvironmentProviderSettings({
         return;
       }
 
-      if (instance.driver !== ProviderDriverKind.make("acpRegistry")) return;
-      if (providerConfigString(instance.config, "source") === "local") return;
-      const agentId = providerConfigString(instance.config, "agentId");
+      const agentId = managedAcpRegistryAgentId(instance);
       if (agentId === null) return;
 
       // Concurrent removals race client snapshots; let the server decide whether the agent remains in use.
@@ -924,15 +821,7 @@ export function EnvironmentProviderSettings({
   const resetDefaultInstance = useStableCallback(async (driverKind: ProviderDriverKind) => {
     const instanceId = defaultInstanceIdForDriver(driverKind);
     const instance = settings.providerInstances?.[instanceId] ?? { driver: driverKind };
-    const turnsOff =
-      resolveProviderInstanceEnabled(instance) &&
-      !resolveProviderInstanceEnabled({ driver: driverKind });
-    const confirmed = await confirmProviderInstanceRemoval(
-      gt("Reset the {provider} provider to its defaults?", {
-        provider: providerInstanceName(instance),
-      }),
-      turnsOff ? ` ${gt("It will also be turned off.")}` : "",
-    );
+    const confirmed = await confirmProviderInstanceRemoval("reset", instance);
     if (!confirmed) return;
     const result = await persistProviderInstance({ operation: "remove", instanceId });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -979,7 +868,7 @@ export function EnvironmentProviderSettings({
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
-  const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
+  const renderProviderInstance = (row: ProviderInstanceRowModel, mode: "list" | "editor") => {
     const showProjectOverride =
       representativeProjectId !== undefined && supportsProjectProviderOverrides;
     return (
@@ -1325,7 +1214,7 @@ function ProviderInstanceRow({
   readonly projectOverrideValue: boolean | undefined;
   readonly projectOverrideEffectiveEnabled: boolean;
   readonly modelPreferences:
-    | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
+    | UnifiedSettings["providerModelPreferences"][ProviderInstanceId]
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
@@ -1472,6 +1361,19 @@ function ProviderInstanceRow({
         ) : null
       }
       hiddenModels={hiddenModels}
+      newModelsEnabled={modelPreferences?.newModelsEnabled ?? true}
+      enabledModels={modelPreferences?.enabledModels ?? NO_MODELS}
+      onNewModelsEnabledChange={(enabled) => {
+        void actions.updateModelPreferences({
+          setProviderNewModelsEnabled: {
+            provider: instanceId,
+            enabled,
+            models: (liveProvider?.models ?? [])
+              .filter((model) => !model.isCustom)
+              .map((model) => model.slug),
+          },
+        });
+      }}
       favoriteModels={favoriteModels}
       modelOrder={modelOrder}
       onHiddenModelsChange={(next, affectedModels) => {

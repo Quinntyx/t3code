@@ -77,7 +77,9 @@ export function useUpdateEverything(
   const restarts = collectRestartingMachines(machines, moving, localUpdateVersion !== null);
   const providerUpdates = useProviderUpdates();
   // A track switch moves app and servers only; provider updates stay a separate choice.
-  const providers = channelSwitch ? { machines: [], updateAll: async () => [] } : providerUpdates;
+  const providers = channelSwitch
+    ? { machines: [], hasUpdates: false, updateAll: async () => [] }
+    : providerUpdates;
   const updateServer = useServerUpdate();
   const stageServerUpdate = useAtomCommand(serverEnvironment.stageServerUpdate, {
     reportFailure: false,
@@ -92,16 +94,22 @@ export function useUpdateEverything(
       providerMachines: providers.machines.map((machine) => ({
         environmentId: machine.environmentId,
         label: machine.label,
-        providers: machine.candidates.map(
-          (candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver,
-        ),
+        providers: machine.candidates.map((candidate) => {
+          const name = PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver;
+          return candidate.extensionsOnly
+            ? resolve(msg("{provider} extensions", { provider: name }))
+            : name;
+        }),
       })),
     },
     resolve,
   );
 
   return {
-    hasUpdates: servers.length > 0 || providers.machines.length > 0,
+    hasUpdates:
+      servers.length > 0 ||
+      providers.hasUpdates ||
+      (localUpdateVersion !== null && providers.machines.length > 0),
     ...view,
     restarts,
     run: async ({

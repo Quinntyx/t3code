@@ -2,6 +2,7 @@ import {
   CHATGPT_USAGE_URL,
   collectLimitAccounts,
   collectLimitPools,
+  describeUsageAmount,
   displayLimitWindows,
   type LimitAccount,
   type LimitPool,
@@ -38,6 +39,7 @@ import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { PaceIcon, ResetCreditDialog, barColor, usePaceMark, useResetCredit } from "./UsageLimits";
+import { formatAmountResetsIn } from "./UsageAmountLines";
 import {
   collectExternalUsageLinks,
   collectLimitNotices,
@@ -59,8 +61,15 @@ function accountHue(email: string): number {
   return Math.abs(hash) % 360;
 }
 
-function AccountChip({ email }: { readonly email: string }) {
-  const hue = accountHue(email);
+function AccountChip({
+  email,
+  workspaceId,
+}: {
+  readonly email: string;
+  // One e-mail can hold seats in several workspaces; each seat gets its own color.
+  readonly workspaceId: string | undefined;
+}) {
+  const hue = accountHue(workspaceId ? `${email}\0${workspaceId}` : email);
   const gt = useGT();
   return (
     <span
@@ -98,7 +107,9 @@ function AccountAvatar({
       />
     );
   }
-  return account.email ? <AccountChip email={account.email} /> : null;
+  return account.email ? (
+    <AccountChip email={account.email} workspaceId={account.workspaceId} />
+  ) : null;
 }
 
 function AccountName({
@@ -112,7 +123,7 @@ function AccountName({
   if (account.email) {
     return (
       <span className={cn("inline-flex min-w-0 items-center", className)}>
-        <AccountChip email={account.email} />
+        <AccountChip email={account.email} workspaceId={account.workspaceId} />
       </span>
     );
   }
@@ -161,6 +172,7 @@ function SegmentPopover({
     redeem && account.redeem && account.limits.resetCredits?.availableCount
       ? resetCreditChoices(account.limits.resetCredits, account.redeem.input, now, true, m)
       : [];
+  const budget = window.amount ? describeUsageAmount(window.amount) : null;
   return (
     <div className="flex w-72 max-w-[calc(100vw-3rem)] flex-col gap-2.5 text-xs">
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -198,6 +210,11 @@ function SegmentPopover({
       </div>
       <div className="flex flex-col gap-1 border-t border-border/60 pt-2.5">
         <Row label={gt("Left", { $context: "remaining usage" })}>{remaining}%</Row>
+        {budget ? (
+          <Row label={gt("Budget")}>
+            {budget.value} {budget.qualifier}
+          </Row>
+        ) : null}
         {window.resetsAt ? (
           <Row label={gt("Resets", { $context: "when the usage window resets" })}>
             {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now, undefined, m)}
@@ -603,6 +620,7 @@ function PoolWindowCard({
   readonly description?: string | undefined;
 }) {
   const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
+  const budget = pool.amount ? describeUsageAmount(pool.amount) : null;
   return (
     <div className="grid items-center gap-x-6 gap-y-3 rounded-lg border border-border/60 p-4 md:grid-cols-[11rem_minmax(0,1fr)]">
       <div className="flex flex-col gap-1">
@@ -620,6 +638,11 @@ function PoolWindowCard({
             {pool.pace ? <PaceIcon pace={pool.pace} /> : null}
           </span>
         </span>
+        {budget ? (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {budget.value} {budget.qualifier}
+          </span>
+        ) : null}
         {nextRefill && pool.columns.length > 1 ? (
           <span className="text-xs font-medium text-foreground tabular-nums">
             ↻ +{nextRefill.restoresPercent}%
@@ -630,6 +653,74 @@ function PoolWindowCard({
       {description ? (
         <p className="text-xs text-muted-foreground md:col-span-2">{description}</p>
       ) : null}
+    </div>
+  );
+}
+
+function PoolAmountsCard({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+  const m = useMessages();
+  const showAccounts = pool.accounts.length > 1;
+  const columns = { gridTemplateColumns: `repeat(${pool.accounts.length}, minmax(0, 1fr))` };
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-4">
+      {showAccounts ? (
+        <div className="hidden gap-x-6 md:grid md:grid-cols-[11rem_minmax(0,1fr)]">
+          <div className="col-start-2 grid gap-x-1" style={columns}>
+            {pool.accounts.map((account) => (
+              <AccountName
+                key={account.key}
+                account={account}
+                className="min-w-0 truncate text-xs text-muted-foreground"
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {pool.amounts.map((line) => {
+        const total = line.total ? describeUsageAmount(line.total) : null;
+        return (
+          <div
+            key={line.id}
+            className="grid items-center gap-x-6 gap-y-1 md:grid-cols-[11rem_minmax(0,1fr)]"
+          >
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="text-sm text-muted-foreground">{line.label}</span>
+              {showAccounts && total ? (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {total.value} {total.qualifier}
+                </span>
+              ) : null}
+            </div>
+            <div className="grid gap-x-1 gap-y-1" style={columns}>
+              {line.columns.map((column) => {
+                const amount = column.amount ? describeUsageAmount(column.amount) : null;
+                const resetsIn = formatAmountResetsIn(column, now, m);
+                return (
+                  <div key={column.account.key} className="flex min-w-0 flex-col gap-0.5">
+                    {showAccounts && amount ? (
+                      <AccountName
+                        account={column.account}
+                        className="min-w-0 truncate text-xs text-muted-foreground md:hidden"
+                      />
+                    ) : null}
+                    {amount ? (
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+                        <span className="text-sm font-medium text-foreground tabular-nums">
+                          {amount.value}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {amount.qualifier}
+                          {resetsIn ? ` · ${resetsIn}` : ""}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -665,6 +756,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
           />
         );
       })}
+      {pool.amounts.length > 0 ? <PoolAmountsCard pool={pool} now={now} /> : null}
     </section>
   );
 }

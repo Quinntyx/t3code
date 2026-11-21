@@ -90,7 +90,10 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
+    expect(searchSettings("glass").map((item) => item.id)).toEqual([
+      "setting-glass-opacity",
+      "theme-style",
+    ]);
     expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
     expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
     const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");
@@ -373,6 +376,9 @@ describe("movedSettingsPath", () => {
   it("sends old links to the page their row moved to", () => {
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
       "/settings/threads",
+    );
+    expect(movedSettingsPath("/settings/general", "hide-window-controls")).toBe(
+      "/settings/appearance",
     );
     expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBe(
       "/settings/access",

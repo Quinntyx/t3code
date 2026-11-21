@@ -9,7 +9,7 @@ import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, use, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, type ReactNode, use, useRef, useState } from "react";
 
 import { m, type MessageResolver } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
@@ -198,6 +198,7 @@ function ColumnRow(props: {
   isDefault?: boolean | undefined;
   disabled?: boolean;
   onPick: () => void;
+  onContextMenu?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
 }) {
   const gt = useGT();
   const rowProps = {
@@ -212,6 +213,7 @@ function ColumnRow(props: {
     tabIndex: props.tabStop ? 0 : -1,
     className: COLUMN_ROW,
     onClick: props.onPick,
+    onContextMenu: props.onContextMenu,
   } as const;
   const content = (
     <>
@@ -341,6 +343,7 @@ function EffortRows(props: { control: ColumnControl; traits: TraitsSelection; lo
   const { locked } = props;
   const value = traits.selectValue(control.descriptor);
   const choices = selectableProviderOptionChoices(control.descriptor);
+  const defaultOptionId = traits.defaultOptionId(control.descriptor);
   // An "Ultrathink:" prefix selects a level the column does not offer.
   const shown = choices.some((option) => option.id === value);
   return (
@@ -357,9 +360,10 @@ function EffortRows(props: { control: ColumnControl; traits: TraitsSelection; lo
           selected={option.id === value}
           tabStop={shown ? option.id === value : index === 0}
           description={option.description}
-          isDefault={option.isDefault}
+          isDefault={option.id === defaultOptionId}
           disabled={locked}
           onPick={() => traits.changeSelect(control.descriptor, option.id)}
+          onContextMenu={(event) => traits.showDefaultLevelMenu(event, control.descriptor, option)}
         />
       ))}
     </div>

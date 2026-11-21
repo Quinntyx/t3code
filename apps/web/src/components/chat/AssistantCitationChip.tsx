@@ -27,6 +27,8 @@ import { cn } from "~/lib/utils";
 import { useQuietThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipAction, ContextChipLabel } from "../ContextChip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import ChatMarkdown from "../ChatMarkdown";
+import type { ComposerPromptEditorHandle } from "../ComposerPromptEditorTiptap";
 import { AssistantCitationCommentEditor } from "./AssistantCitationCommentEditor";
 import { resolveAssistantCitationCommentDismissal } from "./assistantCitationCommentDismissal";
 import { observeAssistantCitationCommentSource } from "./AssistantCitationSource";
@@ -105,8 +107,8 @@ function ResponseCard({
         </span>
       </Link>
       {comment ? (
-        <span className="mt-1.5 block whitespace-pre-wrap" dir={textDirection(comment)}>
-          {comment}
+        <span className="mt-1.5 block">
+          <ChatMarkdown text={comment} cwd={undefined} lineBreaks parseRawHtml={false} />
         </span>
       ) : null}
     </span>
@@ -197,7 +199,7 @@ export function AssistantCitationChip({
 }) {
   const gt = useGT();
   const sourceLinkProps = useCitationSourceLinkProps(citation);
-  const commentInputRef = useRef<HTMLTextAreaElement>(null);
+  const commentEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const commentPopupRef = useRef<HTMLDivElement>(null);
   const draftCommentRef = useRef<string | null>(null);
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
@@ -305,13 +307,7 @@ export function AssistantCitationChip({
               align="end"
               anchor={popupAnchor}
               initialFocus={() => {
-                const input = commentInputRef.current;
-                if (input) {
-                  input.focus({ preventScroll: true });
-                  input.setSelectionRange(input.value.length, input.value.length);
-                  // Moving the caret doesn't scroll a long comment to it.
-                  input.scrollTop = input.scrollHeight;
-                }
+                commentEditorRef.current?.focusAtEnd();
                 return false;
               }}
               finalFocus={
@@ -337,7 +333,7 @@ export function AssistantCitationChip({
               <AssistantCitationCommentEditor
                 key={serializeAssistantCitation(citation)}
                 citation={citation}
-                inputRef={commentInputRef}
+                editorRef={commentEditorRef}
                 onVoiceSetupOpenChange={setVoiceSetupOpen}
                 onDraftChange={(comment) => {
                   draftCommentRef.current = comment;

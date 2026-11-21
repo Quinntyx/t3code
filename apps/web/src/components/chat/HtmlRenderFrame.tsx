@@ -14,6 +14,7 @@ import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { Button } from "../ui/button";
+import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { HtmlRenderDialog } from "./HtmlRenderDialog";
@@ -145,7 +146,9 @@ export function HtmlRenderFrame(props: {
             Unable to load <Var>{title}</Var>
           </T>
         </p>
-      ) : null}
+      ) : (
+        <Skeleton role="status" aria-label={gt("Loading page")} className="size-full" />
+      )}
     </div>
   );
 }

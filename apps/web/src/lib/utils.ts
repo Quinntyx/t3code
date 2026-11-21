@@ -7,11 +7,14 @@ import { extendTailwindMerge } from "tailwind-merge";
 import { DraftId } from "../composerDraftStore";
 import { m, type MessageResolver } from "../i18n/messages";
 
-// Register extra font sizes and background images so tailwind-merge does not
-// treat text-2xs or bg-composer-seam-below as colors.
+// Register extra font sizes, radii, and background images so tailwind-merge groups them:
+// text-2xs is not a color, and rounded-glass yields to a later rounded-* override.
 const twMerge = extendTailwindMerge({
   extend: {
-    theme: { text: ["2xs", "3xs", "4xs", "5xs"] },
+    theme: {
+      text: ["2xs", "3xs", "4xs", "5xs"],
+      radius: ["glass", "glass-item", "glass-list-item"],
+    },
     classGroups: { "bg-image": [{ bg: ["composer-seam-below", "composer-seam-above"] }] },
   },
 });

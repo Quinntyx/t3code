@@ -2,13 +2,20 @@ import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/con
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  beginPullRequestGeneration,
   createInboxReturnTracker,
+  isPullRequestGenerating,
   isThreadWorking,
+  isThreadWorkingInShelf,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
 } from "./threadInbox.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
+
+function pullRequestKey(thread: { id: ThreadId; environmentId: EnvironmentId }) {
+  return { environmentId: thread.environmentId, threadId: thread.id };
+}
 
 function thread(id: string, working: boolean) {
   return {
@@ -43,6 +50,46 @@ describe("createInboxReturnTracker", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
+  it("counts a pull request generation as working for as many generations as are open", () => {
+    const idle = thread("pr", false);
+    expect(isThreadWorkingInShelf(idle)).toBe(false);
+
+    const first = beginPullRequestGeneration(pullRequestKey(idle));
+    const second = beginPullRequestGeneration(pullRequestKey(idle));
+    expect(isPullRequestGenerating(pullRequestKey(idle))).toBe(true);
+    expect(isThreadWorkingInShelf(idle)).toBe(true);
+    expect(isThreadWorking(idle)).toBe(false);
+
+    first();
+    expect(isThreadWorkingInShelf(idle)).toBe(true);
+    second();
+    second();
+    expect(isPullRequestGenerating(pullRequestKey(idle))).toBe(false);
+    expect(isThreadWorkingInShelf(idle)).toBe(false);
+  });
+
+  it("moves a thread into the working shelf while its pull request is generated", () => {
+    const tracker = createInboxReturnTracker();
+    const notify = vi.fn();
+    const unsubscribe = tracker.subscribe(notify);
+    const idle = thread("pr-shelf", false);
+    tracker.observe([idle]);
+    expect(tracker.isWorking(idle)).toBe(false);
+
+    const release = beginPullRequestGeneration(pullRequestKey(idle));
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(tracker.observe([idle]).isWorking(idle)).toBe(true);
+
+    release();
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(tracker.observe([idle]).isWorking(idle)).toBe(true);
+    vi.advanceTimersByTime(2_000);
+    expect(tracker.isWorking(idle)).toBe(false);
+    expect(tracker.returnedAt(idle)).toBe(12_000);
+    expect(notify).toHaveBeenCalledTimes(3);
+    unsubscribe();
+  });
+
   it("stamps a thread when it stops working, but never on the first observation", () => {
     const tracker = createInboxReturnTracker();
     const first = tracker.observe([thread("a", true), thread("b", false)]);

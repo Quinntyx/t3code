@@ -24,7 +24,9 @@ const RIGHT_PANEL_KINDS = [
   "pull-request",
   "pull-requests",
   "issue",
+  "notebook",
   "side-chat",
+  "voice",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -96,7 +98,9 @@ export type RightPanelSurface =
       key: string;
       url?: string;
     }
-  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
+  | { id: "notebook"; kind: "notebook" }
+  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId }
+  | { id: "voice"; kind: "voice" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 15;
@@ -133,7 +137,7 @@ export interface ThreadPanelVisibility {
   popoverOpen: boolean;
 }
 
-interface RightPanelStoreState {
+export interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   pendingMaximizeThreadKey: string | null;
   requestMaximize: (ref: ScopedThreadRef) => void;
@@ -250,12 +254,16 @@ const singletonSurface = (
   >,
 ): RightPanelSurface => {
   switch (kind) {
+    case "notebook":
+      return { id: "notebook", kind };
     case "diff":
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
+    case "voice":
+      return { id: "voice", kind };
     case "device":
       return { id: "device", kind };
   }

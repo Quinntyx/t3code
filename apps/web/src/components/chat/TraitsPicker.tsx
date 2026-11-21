@@ -7,6 +7,7 @@ import {
   isReasoningSelect,
 } from "@t3tools/client-runtime/model-traits";
 import {
+  defaultInstanceIdForDriver,
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -23,7 +24,7 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import { msg, T, useMessages } from "gt-react";
-import { memo } from "react";
+import { memo, type MouseEvent } from "react";
 import { GaugeIcon } from "lucide-react";
 import {
   Menu,
@@ -35,6 +36,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
+import { readLocalApi } from "../../localApi";
 import { getProviderModelCapabilities, keepsUnavailableModelOptions } from "../../providerModels";
 import { m, type MessageResolver } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
@@ -44,6 +46,7 @@ import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "
 import { useComposerMenuState } from "./useComposerMenuState";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
+type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
 
 /**
  * All the picker reads from the prompt while rendering. Passing this instead of
@@ -326,6 +329,34 @@ export function useTraitsSelection({
   const modelSelection =
     instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const setProviderModelOptionsDefault = useComposerDraftStore(
+    (store) => store.setProviderModelOptionsDefault,
+  );
+  const defaultOptionsModelKey = normalizeModelSlug(model, provider) ?? model ?? null;
+  const storedDefaultOptions = useComposerDraftStore((store) =>
+    defaultOptionsModelKey === null
+      ? undefined
+      : store.stickyOptionsByModelByProvider[instanceId ?? defaultInstanceIdForDriver(provider)]?.[
+          defaultOptionsModelKey
+        ],
+  );
+  // Settings surfaces persist their own default through onModelOptionsChange; a stored default is
+  // the composer's per-model memory, and only a reasoning level is one a user can own.
+  const ownsStoredDefaults = !("onModelOptionsChange" in persistence);
+  const storedDefaultValue = (descriptor: SelectDescriptor): string | null => {
+    if (!ownsStoredDefaults || !isReasoningSelect(descriptor)) return null;
+    const stored = storedDefaultOptions?.find((option) => option.id === descriptor.id)?.value;
+    return typeof stored === "string" && descriptor.options.some((option) => option.id === stored)
+      ? stored
+      : null;
+  };
+  const setDefaultLevel = (descriptor: SelectDescriptor, value: string | null) => {
+    if (!model) return;
+    // Keep only what the user chose, so traits they never set keep following the provider.
+    const others = (storedDefaultOptions ?? []).filter((option) => option.id !== descriptor.id);
+    const options = value === null ? others : [...others, { id: descriptor.id, value }];
+    setProviderModelOptionsDefault({ provider, instanceId, model, options });
+  };
   const resolve = useMessages();
   const updateModelOptions = (nextOptions: ProviderOptions | undefined) => {
     if ("onModelOptionsChange" in persistence) {
@@ -380,6 +411,45 @@ export function useTraitsSelection({
           replaceDescriptorCurrentValue(selected.descriptors, descriptorId, value),
         ),
       );
+    },
+    /** The one level that reads as Default: the user's default for this model, else the provider's. */
+    defaultOptionId: (descriptor: SelectDescriptor): string | null =>
+      storedDefaultValue(descriptor) ??
+      selectableProviderOptionChoices(descriptor).find((choice) => choice.isDefault)?.id ??
+      null,
+    /** Right-clicking a reasoning level offers to make it, or stop it being, the model's default. */
+    showDefaultLevelMenu: (
+      event: MouseEvent<HTMLElement>,
+      descriptor: SelectDescriptor,
+      option: { readonly id: string; readonly label: string },
+    ) => {
+      const api = readLocalApi();
+      if (!api || !model || !ownsStoredDefaults || !isReasoningSelect(descriptor)) return;
+      const hasStoredDefault = storedDefaultValue(descriptor) !== null;
+      event.preventDefault();
+      void api.contextMenu
+        .show(
+          [
+            {
+              id: "set-default",
+              label: resolve(msg("Set {label} as default", { label: option.label })),
+            },
+            ...(hasStoredDefault
+              ? [
+                  {
+                    id: "reset-default",
+                    label: resolve(msg("Reset to provider default")),
+                    separatorBefore: true,
+                  },
+                ]
+              : []),
+          ],
+          { x: event.clientX, y: event.clientY },
+        )
+        .then((action) => {
+          if (action === "set-default") setDefaultLevel(descriptor, option.id);
+          if (action === "reset-default") setDefaultLevel(descriptor, null);
+        });
     },
   };
 }

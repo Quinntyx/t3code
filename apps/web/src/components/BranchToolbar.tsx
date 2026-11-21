@@ -46,6 +46,7 @@ import {
 } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { openAddProjectToMachine } from "./AddProjectToMachineDialog";
+import { openMachineHandoff, useMachineHandoffRequest } from "./machineHandoffRequest";
 import { type AddProjectTarget, useAddProjectTargets } from "../hooks/useAddProjectTargets";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
@@ -213,7 +214,8 @@ const RunContextSelector = memo(function RunContextSelector({
         ? resolveEnvModeLabel("worktree", m)
         : resolveCurrentWorkspaceLabel(activeWorktreePath, m);
   const isPanel = displayMode === "panel";
-  const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
+  const isLocked =
+    envLocked || (envModeLocked && !showEnvironmentPicker && addTargets.length === 0);
   const workspacePath =
     forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
       ? null
@@ -644,7 +646,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   availableEnvironments,
-  onEnvironmentChange,
+  onEnvironmentChange: onDraftEnvironmentChange,
   trailing,
 }: BranchToolbarProps) {
   const m = useMessages();
@@ -699,16 +701,37 @@ export const BranchToolbar = memo(function BranchToolbar({
     ],
   );
 
+  const machineHandoffBusy = useMachineHandoffRequest((state) =>
+    state.requests.some((attempt) => attempt.status === "running"),
+  );
+  const environmentLocked = isServerThread ? machineHandoffBusy : envLocked;
   const addTargets = useAddProjectTargets(activeProject, availableEnvironments);
+  const onEnvironmentChange = isServerThread
+    ? (targetEnvironmentId: EnvironmentId) => {
+        if (targetEnvironmentId === environmentId) return;
+        const target = availableEnvironments?.find(
+          (environment) => environment.environmentId === targetEnvironmentId,
+        );
+        if (!target?.projectId) return;
+        openMachineHandoff({
+          threadRef,
+          destination: scopeProjectRef(targetEnvironmentId, target.projectId),
+        });
+      }
+    : onDraftEnvironmentChange;
   const onAddToMachine = (targetEnvironmentId: EnvironmentId | null) =>
-    openAddProjectToMachine({ projectRef: activeProjectRef, targetEnvironmentId });
+    openAddProjectToMachine({
+      projectRef: activeProjectRef,
+      targetEnvironmentId,
+      ...(isServerThread
+        ? { onReady: (destination) => openMachineHandoff({ threadRef, destination }) }
+        : {}),
+    });
   // A project on one machine still gets the picker when it can be added to another.
   const hasMultipleEnvironments = (availableEnvironments?.length ?? 0) > 1 || addTargets.length > 0;
   const showEnvironmentPicker = hasMultipleEnvironments && onEnvironmentChange !== undefined;
   const activeEnvironmentOption =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
-  // Started threads get no handler but still show which machine they run on,
-  // matching the strip visibility ChatView computes from the same inputs.
   const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
     canPickEnvironment: hasMultipleEnvironments,
@@ -727,7 +750,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             forceNewWorktree={forceNewWorktree}
             autoEnvironmentLabel={autoEnvironmentLabel}
             onAutoEnvironment={onAutoEnvironment}
-            envLocked={envLocked}
+            envLocked={environmentLocked}
             envModeLocked={envModeLocked}
             environmentId={environmentId}
             availableEnvironments={availableEnvironments}
@@ -777,7 +800,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             forceNewWorktree={forceNewWorktree}
             autoEnvironmentLabel={autoEnvironmentLabel}
             onAutoEnvironment={onAutoEnvironment}
-            envLocked={envLocked}
+            envLocked={environmentLocked}
             envModeLocked={envModeLocked}
             environmentId={environmentId}
             availableEnvironments={availableEnvironments}
@@ -808,7 +831,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               <BranchToolbarEnvironmentSelector
                 autoEnvironmentLabel={autoEnvironmentLabel}
                 onAutoEnvironment={onAutoEnvironment}
-                envLocked={envLocked}
+                envLocked={environmentLocked}
                 environmentId={environmentId}
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker ? { onEnvironmentChange } : {})}

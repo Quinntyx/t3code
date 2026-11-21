@@ -1,6 +1,11 @@
 import * as DateTime from "effect/DateTime";
 import { msg } from "gt-react";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import {
+  summarizeAgentTrajectory,
+  trajectorySummariesEqual,
+  type AgentTrajectorySummary,
+} from "@t3tools/client-runtime/work-log/trajectory-summary";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import {
   isLiveSubagentTurnItem,
@@ -561,6 +566,7 @@ type MessagesTimelineRowContent =
       kind: "working";
       id: string;
       createdAt: string | null;
+      trajectory?: AgentTrajectorySummary;
       /** A running compaction owns the working row, so its divider appears only once it ends. */
       compacting?: true;
     }
@@ -601,6 +607,7 @@ type MessagesTimelineRowContent =
       createdAt: string;
       runId: RunId;
       label: string;
+      trajectory: AgentTrajectorySummary;
       expanded: boolean;
     }
   | {
@@ -769,6 +776,20 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
   return new Set(lastAssistantMessageIdByResponseKey.values());
 }
 
+function summarizeTimelineTrajectory(entries: ReadonlyArray<TimelineEntry>) {
+  return summarizeAgentTrajectory(
+    entries.flatMap((entry) => {
+      const item =
+        entry.kind === "work"
+          ? entry.entry.structuredPayload
+          : entry.kind === "event"
+            ? entry.projectedItem.item
+            : undefined;
+      return item ? [item] : [];
+    }),
+  );
+}
+
 interface TurnFold {
   runId: RunId;
   anchorEntryId: string;
@@ -777,6 +798,7 @@ interface TurnFold {
   /** Every entry in the segment, including the cards a fold never hides. */
   entryIds: ReadonlySet<string>;
   label: string;
+  trajectory: AgentTrajectorySummary;
 }
 
 interface SupersededAttemptFold {
@@ -1051,24 +1073,6 @@ function failedTimelineRunIds(
   return failed;
 }
 
-/** Usage-limit pauses keep their tool groups; any other failure itemizes the run's work. */
-function itemizedFailedRunIds(
-  entries: ReadonlyArray<TimelineEntry>,
-  failedRunIds: ReadonlySet<RunId>,
-) {
-  const usageLimited = new Set<RunId>();
-  const otherFailures = new Set<RunId>();
-  for (const entry of entries) {
-    const item = timelineEntryFailedItem(entry);
-    if (item?.runId) {
-      (item.failure.class === "usage_limit" ? usageLimited : otherFailures).add(item.runId);
-    }
-  }
-  return new Set(
-    [...failedRunIds].filter((runId) => !usageLimited.has(runId) || otherFailures.has(runId)),
-  );
-}
-
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1077,6 +1081,7 @@ function deriveTurnFolds(input: {
   runlessWorkActive: boolean;
   liveSubagentEntryIds: ReadonlySet<string>;
   retainedAssistantReplyEntryIds: ReadonlySet<string>;
+  foldContextCompactions: boolean;
   resolve: MessageResolver;
 }): ReadonlyMap<string, TurnFold> {
   const interruptedRunIds = new Set<RunId>();
@@ -1198,16 +1203,21 @@ function deriveTurnFolds(input: {
       if (entry.id === group.terminalEntry?.id) {
         continue;
       }
-      const isCompaction = timelineEntryIsCompaction(entry);
+      const isFailedCompaction =
+        timelineEntryIsCompaction(entry) &&
+        entry.kind === "work" &&
+        entry.entry.structuredPayload?.status === "failed";
+      const keepsCompaction =
+        isFailedCompaction || (!input.foldContextCompactions && entry.id === visibleCompactionId);
       const isFoldableTrailingActivity =
         entry.kind === "work" &&
         entry.entry.toolLifecycleStatus !== "inProgress" &&
         !workEntryDisplayIndicatesToolFailure(entry.entry);
-      if (!isCompaction && index > terminalEntryIndex && !isFoldableTrailingActivity) {
+      if (!keepsCompaction && index > terminalEntryIndex && !isFoldableTrailingActivity) {
         continue;
       }
       if (
-        entry.id === visibleCompactionId ||
+        keepsCompaction ||
         timelineEntryIsPersistentResourceCard(entry) ||
         input.liveSubagentEntryIds.has(entry.id) ||
         input.retainedAssistantReplyEntryIds.has(entry.id)
@@ -1216,6 +1226,8 @@ function deriveTurnFolds(input: {
       }
       if (entry.kind === "work" && entry.entry.itemType === "notification") continue;
       if (entry.kind === "work" && entry.entry.questionAnswer !== undefined) continue;
+      // The failure card is why the turn is visible at all; it never folds away.
+      if (timelineEntryFailedItem(entry) !== null) continue;
       hiddenEntryIds.add(entry.id);
     }
     if (hiddenEntryIds.size === 0) {
@@ -1281,6 +1293,7 @@ function deriveTurnFolds(input: {
       hiddenEntryIds: segmentHiddenIds(firstSegment),
       entryIds: new Set(firstSegment.map((entry) => entry.id)),
       label,
+      trajectory: summarizeTimelineTrajectory(group.entries),
     });
     for (const [index, { startIndex, steer }] of group.steerSegments.entries()) {
       const entries = group.entries.slice(startIndex, group.steerSegments[index + 1]?.startIndex);
@@ -1305,6 +1318,7 @@ function deriveTurnFolds(input: {
                 msg("Continued for {duration}", { duration: formatDuration(segmentMs, resolve) }),
               )
             : resolve(msg("Continued")),
+        trajectory: summarizeTimelineTrajectory(entries),
       });
     }
   }
@@ -1325,6 +1339,7 @@ function attachTrailingToolGroupsToAssistant(
     if (
       row.kind !== "message" ||
       row.message.role !== "assistant" ||
+      row.message.localCommand !== undefined ||
       !row.showAssistantMeta ||
       runId === null
     ) {
@@ -1583,12 +1598,12 @@ function deriveTimelineTurnFolds(
     | "runningRunId"
     | "toolCallVisibility"
     | "revealedMessageId"
+    | "foldContextCompactions"
   >,
 ) {
   if (input.toolCallVisibility === "zen") return new Map<string, TurnFold>();
   const timelineEntries = timelineRowEntries(input);
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null, input.runningRunId ?? null);
-  const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const activeVisualResponseRunIds = deriveActiveVisualResponseRunIds({
     timelineEntries,
     unsettledRunId,
@@ -1598,10 +1613,11 @@ function deriveTimelineTurnFolds(
     timelineEntries,
     terminalAssistantMessageIds: deriveTerminalAssistantMessageIds(timelineEntries),
     latestRun: input.latestRun ?? null,
-    unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
+    unfoldedRunIds: activeVisualResponseRunIds,
     runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
     liveSubagentEntryIds: liveSubagentCardEntryIds(timelineEntries),
     retainedAssistantReplyEntryIds: retainedAssistantReplyEntryIds(timelineEntries),
+    foldContextCompactions: input.foldContextCompactions === true,
     resolve: m,
   });
 }
@@ -1626,6 +1642,7 @@ export function deriveMessagesTimelineRows(
     worktreeSetup?: WorktreeSetupSnapshot | null;
     toolCallVisibility?: ToolCallVisibility;
     revealedMessageId?: MessageId | null;
+    foldContextCompactions?: boolean;
   },
   resolve: MessageResolver = m,
 ): MessagesTimelineRow[] {
@@ -1662,7 +1679,6 @@ export function deriveMessagesTimelineRows(
   const nextRows: MessagesTimelineRow[] = [];
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
-  const itemizedRunIds = itemizedFailedRunIds(timelineEntries, failedRunIds);
   const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
   const retainedAssistantReplyIds = retainedAssistantReplyEntryIds(timelineEntries);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(
@@ -1687,10 +1703,11 @@ export function deriveMessagesTimelineRows(
           timelineEntries: timelineEntries,
           terminalAssistantMessageIds,
           latestRun: input.latestRun ?? null,
-          unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
+          unfoldedRunIds: activeVisualResponseRunIds,
           runlessWorkActive,
           liveSubagentEntryIds,
           retainedAssistantReplyEntryIds: retainedAssistantReplyIds,
+          foldContextCompactions: input.foldContextCompactions === true,
           resolve,
         });
   const timelineEntryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
@@ -1898,6 +1915,7 @@ export function deriveMessagesTimelineRows(
         (compactsOnReturn ? undefined : resumeCompactionEntry?.entry.createdAt) ??
         input.activeTurnStartedAt ??
         null,
+      trajectory: summarizeTimelineTrajectory(timelineEntries.slice(activeTurnHeaderIndex)),
       ...(activeCompactionRunId !== null ? { compacting: true as const } : {}),
     });
   };
@@ -1969,6 +1987,7 @@ export function deriveMessagesTimelineRows(
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
         label: turnFold.label,
+        trajectory: turnFold.trajectory,
         expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
       });
     }
@@ -2053,7 +2072,6 @@ export function deriveMessagesTimelineRows(
     if (timelineEntry.kind === "work") {
       if (
         isPendingApproval(timelineEntry.entry) ||
-        (timelineEntry.entry.runId != null && itemizedRunIds.has(timelineEntry.entry.runId)) ||
         (timelineEntry.entry.itemType === "error" &&
           timelineEntry.entry.toolLifecycleStatus === "failed") ||
         timelineEntry.entry.tone === "error" ||
@@ -2532,6 +2550,7 @@ export function timelineTurnFoldRunIdsByEntryId(
     | "runningRunId"
     | "toolCallVisibility"
     | "revealedMessageId"
+    | "foldContextCompactions"
   >,
 ): ReadonlyMap<string, RunId> {
   const byEntryId = new Map<string, RunId>();
@@ -2767,10 +2786,14 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   if (a.kind !== b.kind || a.id !== b.id) return false;
 
   switch (a.kind) {
-    case "working":
+    case "working": {
+      const bw = b as typeof a;
       return (
-        a.createdAt === (b as typeof a).createdAt && a.compacting === (b as typeof a).compacting
+        a.createdAt === bw.createdAt &&
+        a.compacting === bw.compacting &&
+        trajectorySummariesEqual(a.trajectory ?? [], bw.trajectory ?? [])
       );
+    }
     case "thinking": {
       const bt = b as typeof a;
       return (
@@ -2803,6 +2826,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.createdAt === bf.createdAt &&
         a.label === bf.label &&
         a.expanded === bf.expanded &&
+        (a.kind !== "turn-fold" ||
+          (bf.kind === "turn-fold" && trajectorySummariesEqual(a.trajectory, bf.trajectory))) &&
         anchors.length === nextAnchors.length &&
         anchors.every((id, index) => id === nextAnchors[index])
       );

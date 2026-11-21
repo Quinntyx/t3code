@@ -117,6 +117,46 @@ describe("revisionedQuery", () => {
     release();
   });
 
+  it("evicts an idleTTL-0 query even under a non-zero defaultIdleTTL and fetches once on remount", async () => {
+    let fetches = 0;
+    const scheduled: Array<() => void> = [];
+    const registry = AtomRegistry.make({
+      defaultIdleTTL: 60_000,
+      scheduleTask: (task) => {
+        scheduled.push(task);
+        return () => {};
+      },
+    });
+    const connection = Atom.make(1);
+    const query = Atom.make((get) => {
+      get(connection);
+      fetches += 1;
+      return fetches;
+    }).pipe(Atom.setIdleTTL(0));
+
+    const wrapped = revisionedQuery(query, "mutation-1");
+    const first = registry.mount(wrapped);
+    await Promise.resolve();
+    expect(fetches).toBe(1);
+
+    first();
+    while (scheduled.length > 0) {
+      for (const task of scheduled.splice(0)) task();
+    }
+    expect(registry.getNodes().has(wrapped)).toBe(false);
+    expect(registry.getNodes().has(query)).toBe(false);
+
+    // Reconnect while unmounted must not refetch the evicted query.
+    registry.set(connection, 2);
+    await Promise.resolve();
+    expect(fetches).toBe(1);
+
+    const second = registry.mount(revisionedQuery(query, "mutation-2"));
+    await Promise.resolve();
+    expect(fetches).toBe(2);
+    second();
+  });
+
   it("drops a pending refetch when the registry is disposed before it runs", async () => {
     const { registry, query, mount } = setup();
 

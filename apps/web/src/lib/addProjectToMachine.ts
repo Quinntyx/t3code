@@ -5,6 +5,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { scopedProjectKey } from "@t3tools/client-runtime/environment";
+import { CommandId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectCloneSnapshot,
@@ -17,9 +18,11 @@ import { create } from "zustand";
 import { m } from "../i18n/messages";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { suggestAppAccessForRemote } from "../components/sourceControlAppAccessToast";
+import { waitForProject } from "../state/entities";
 import { environmentProjectClonesAtom, silenceProjectCloneToasts } from "../state/projectClones";
 import { projectEnvironment } from "../state/projects";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { newProjectId, randomUUID } from "./utils";
 
 /** Matches the server's read cap: a larger file would arrive truncated. */
 export const COPYABLE_FILE_MAX_BYTES = 1024 * 1024;
@@ -45,6 +48,7 @@ export interface AddProjectToMachineInput {
   readonly remoteUrl: string;
   readonly destinationPath: string;
   readonly files: ReadonlyArray<string>;
+  readonly onReady?: (project: ScopedProjectRef) => void;
 }
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0]): string {
@@ -166,7 +170,7 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
     }
   }
   void suggestAppAccessForRemote(input.target.environmentId, input.remoteUrl);
-  if (reads.length === 0) return projectId;
+  if (reads.length === 0 && !input.onReady) return projectId;
 
   void (async () => {
     const clone = await waitForClone(input.target.environmentId, projectId);
@@ -211,6 +215,48 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
             failures: failed,
           },
     );
+    if (failed.length > 0 || !input.onReady) return;
+    let continuationRef = targetRef;
+    if (input.subdirectory) {
+      const subdirectoryProjectId = newProjectId();
+      const registered = await runAtomCommand(
+        appAtomRegistry,
+        projectEnvironment.create,
+        {
+          environmentId: targetRef.environmentId,
+          input: {
+            commandId: CommandId.make(randomUUID()),
+            projectId: subdirectoryProjectId,
+            title: input.title,
+            workspaceRoot: `${started.value.cwd.replace(/[/\\]+$/, "")}/${input.subdirectory}`,
+            createWorkspaceRootIfMissing: true,
+            defaultModelSelection: null,
+          },
+        },
+        { label: "Prepare cloned project folder", reportFailure: false },
+      );
+      continuationRef = {
+        environmentId: targetRef.environmentId,
+        projectId: subdirectoryProjectId,
+      };
+      if (registered._tag === "Failure" || !(await waitForProject(continuationRef))) {
+        setFileCopy(copyKey, {
+          phase: "failed",
+          title: msg("Could not prepare the cloned project folder"),
+          failures: [
+            registered._tag === "Failure"
+              ? failureMessage(registered)
+              : m(
+                  msg(
+                    "The new project has not reached this client yet. Reopen handoff when it appears.",
+                  ),
+                ),
+          ],
+        });
+        return;
+      }
+    }
+    input.onReady(continuationRef);
   })();
   return projectId;
 }

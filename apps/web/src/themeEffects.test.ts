@@ -5,6 +5,7 @@ import {
   BUILT_IN_LIQUID_GLASS_STYLE,
   coerceThemeSettingValue,
   isThemeSettingVisible,
+  migrateLegacyDesktopForkVisualSettings,
   migrateLegacyForkVisualSettings,
   readThemeSettingOverrides,
   resolveThemeEffectsAndSettings,
@@ -216,5 +217,54 @@ describe("migrateLegacyForkVisualSettings", () => {
     expect(migrateLegacyForkVisualSettings()).toBe(false);
     expect(store.get(THEME_STYLE_STORAGE_KEY)).toBeUndefined();
     expect(store.get(THEME_SETTING_OVERRIDES_STORAGE_KEY)).toBeUndefined();
+  });
+
+  it("migrates legacy visual settings from Electron desktopBridge when browser localStorage is empty", async () => {
+    const store = withMockLocalStorage({});
+    const prevBridge = window.desktopBridge;
+    (window as unknown as { desktopBridge?: unknown }).desktopBridge = {
+      getLegacyVisualSettings: async () => ({
+        liquidGlassEnabled: true,
+        floatingPanelsEnabled: true,
+        ambientShimmerEnabled: false,
+        liquidGlassBlur: 9,
+      }),
+    };
+    try {
+      expect(migrateLegacyForkVisualSettings()).toBe(false);
+      expect(await migrateLegacyDesktopForkVisualSettings()).toBe(true);
+      expect(store.get(THEME_STYLE_STORAGE_KEY)).toBe("liquid-glass");
+      expect(readThemeSettingOverrides()).toEqual({
+        "liquid-glass": {
+          blur: 9,
+        },
+      });
+      // Second call is a no-op once migrated.
+      store.delete(THEME_STYLE_STORAGE_KEY);
+      expect(await migrateLegacyDesktopForkVisualSettings()).toBe(false);
+    } finally {
+      (window as unknown as { desktopBridge?: unknown }).desktopBridge = prevBridge;
+    }
+  });
+
+  it("drops unsafe CSS unit strings from emitted custom properties", () => {
+    const resolved = resolveThemeEffectsAndSettings({
+      palette: null,
+      style: {
+        id: "unsafe-unit-test",
+        settings: {
+          radius: {
+            type: "number",
+            label: "Radius",
+            min: 0,
+            max: 20,
+            default: 8,
+            unit: "%url(//evil.example)" as unknown as "px",
+          },
+        },
+      },
+      overrides: {},
+    });
+    expect(resolved.cssVariables["--theme-style-setting-radius"]).toBe("8");
   });
 });

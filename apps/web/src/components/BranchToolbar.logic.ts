@@ -71,6 +71,7 @@ export function shouldShowEnvironmentIndicator(input: {
 export function shouldShowComposerContextStrip(input: {
   isDraftHeroState: boolean;
   persistInActiveThreads: boolean;
+  canChangeMachine?: boolean;
   hasActiveProject: boolean;
   isGitRepo: boolean;
   showEnvironmentIndicator: boolean;
@@ -79,6 +80,7 @@ export function shouldShowComposerContextStrip(input: {
   return (
     input.hasActiveProject &&
     (input.isDraftHeroState ||
+      input.canChangeMachine === true ||
       (input.persistInActiveThreads && (input.isGitRepo || input.showEnvironmentIndicator)))
   );
 }

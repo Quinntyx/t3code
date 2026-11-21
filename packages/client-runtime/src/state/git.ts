@@ -23,5 +23,9 @@ export function createGitEnvironmentAtoms<R, E>(
       onSettled: ({ environmentId, input }, registry) =>
         invalidateCachedVcsRefs(registry, { environmentId, cwd: input.cwd }),
     }),
+    restackThreads: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git:restack-threads",
+      tag: WS_METHODS.gitRestackThreads,
+    }),
   };
 }

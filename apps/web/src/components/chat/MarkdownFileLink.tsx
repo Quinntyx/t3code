@@ -51,6 +51,7 @@ interface MarkdownFileLinkProps {
   onOpenMedia?: (() => void) | undefined;
   onReveal?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   revealLabel?: string | undefined;
+  onHandOff?: (() => void) | undefined;
 }
 
 const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
@@ -77,6 +78,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   revealLabel,
   resolveCopyPaths,
   resolveDragPath,
+  onHandOff,
 }: MarkdownFileLinkProps) {
   const gt = useGT();
   const nativeDrag = useNativeFileDrag(environmentId, resolveDragPath);
@@ -258,6 +260,9 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
       const copyItems = markdownFileCopyMenuItems({ targetPath, workspaceRelativePath });
       const clicked = await api.contextMenu.show(
         [
+          ...(onHandOff
+            ? ([{ id: "hand-off", label: gt("Hand off to new thread") }] as const)
+            : []),
           ...(onOpenMedia ? ([{ id: "preview-media", label: gt("Preview media") }] as const) : []),
           ...(onOpen ? ([{ id: "open", label: openInEditorMenuLabel }] as const) : []),
           ...(onOpenInBrowser
@@ -270,6 +275,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         source,
       );
 
+      if (clicked === "hand-off") {
+        onHandOff?.();
+        return;
+      }
       if (clicked === "preview-media") {
         onOpenMedia?.();
         return;
@@ -431,7 +440,8 @@ function areMarkdownFileLinkPropsEqual(
     previous.onReveal === next.onReveal &&
     previous.resolveCopyPaths === next.resolveCopyPaths &&
     previous.resolveDragPath === next.resolveDragPath &&
-    previous.revealLabel === next.revealLabel
+    previous.revealLabel === next.revealLabel &&
+    previous.onHandOff === next.onHandOff
   );
 }
 

@@ -277,6 +277,49 @@ describe("deriveMessagesTimelineRows", () => {
     expect(first.kind === "work" && first.entry.toolLifecycleStatus).toBe("inProgress");
   });
 
+  it("shows the live trajectory on the working row", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: fixture.visibleTurnItems,
+        optimisticMessages: [],
+      }),
+      isWorking: true,
+      runningRunId: fixture.runId,
+      activeTurnStartedAt: fixture.time(5),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    const working = rows.find((row) => row.kind === "working");
+    expect(working?.kind === "working" ? working.trajectory : null).toMatchObject([
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls" },
+    ]);
+    if (working?.kind !== "working" || !working.trajectory)
+      throw new Error("Expected working row with trajectory");
+    const initial = computeStableMessagesTimelineRows([{ ...working, trajectory: [] }], {
+      result: [],
+      byId: new Map(),
+    });
+    const live = computeStableMessagesTimelineRows([working], initial);
+    expect(live.result[0]).toBe(working);
+
+    const changed = {
+      ...working,
+      trajectory: working.trajectory.map((segment) => ({
+        ...segment,
+        details: ["Read · 1 call"],
+      })),
+    };
+    const updated = computeStableMessagesTimelineRows([changed], live);
+    expect(updated.result[0]).toBe(changed);
+    expect(
+      computeStableMessagesTimelineRows(
+        [{ ...changed, trajectory: changed.trajectory.map((segment) => ({ ...segment })) }],
+        updated,
+      ),
+    ).toBe(updated);
+  });
+
   it("recovers the failed Sky call stored as a generic js integration", () => {
     const fixture = makeStreamingTimelineFixture();
     const source = fixture.visibleTurnItems.find((row) => row.item.type === "dynamic_tool")!;
@@ -871,6 +914,70 @@ describe("deriveMessagesTimelineRows", () => {
       { tokenCounts: { before: "100K", after: "20K" } },
       { tokenCounts: { before: "90K", after: "30K" } },
     ]);
+  });
+
+  it("folds a mid-turn compaction divider with its work only when the setting asks", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const [, , , liveUser, liveWork, liveAssistant] = fixture.visibleTurnItems;
+    if (!liveUser || !liveWork || liveAssistant?.item.type !== "assistant_message")
+      throw new Error("Expected live fixture items");
+    const assistantItem = liveAssistant.item;
+    const at = (item: typeof liveWork, position: number) => ({ ...item, position });
+    const timelineEntriesFor = (status: "completed" | "failed") =>
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: [
+          at(liveUser, 0),
+          at(liveWork, 1),
+          at(
+            {
+              ...liveWork,
+              item: {
+                ...assistantItem,
+                id: TurnItemId.make("mid-turn-compaction"),
+                type: "compaction",
+                driver: null,
+                status,
+                beforeTokenCount: 100_000,
+                afterTokenCount: 20_000,
+              },
+            },
+            2,
+          ),
+          at({ ...liveWork, item: { ...liveWork.item, id: TurnItemId.make("after-work") } }, 3),
+          at(
+            {
+              ...liveAssistant,
+              item: { ...assistantItem, text: "Done", streaming: false, status: "completed" },
+            },
+            4,
+          ),
+        ],
+        optimisticMessages: [],
+      });
+    const rowsFor = (foldContextCompactions: boolean, status: "completed" | "failed") =>
+      deriveMessagesTimelineRows({
+        timelineEntries: timelineEntriesFor(status),
+        isWorking: false,
+        latestRun: {
+          runId: fixture.runId,
+          status: "completed",
+          startedAt: fixture.time(5),
+          completedAt: fixture.time(8),
+        },
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        foldContextCompactions,
+      });
+
+    for (const [foldContextCompactions, status, shown] of [
+      [false, "completed", true],
+      [true, "completed", false],
+      [true, "failed", true],
+    ] as const) {
+      const rows = rowsFor(foldContextCompactions, status);
+      expect(rows.filter((row) => row.kind === "turn-fold")).toHaveLength(1);
+      expect(rows.some((row) => row.kind === "context-compaction")).toBe(shown);
+    }
   });
 
   it("folds an answered compact-on-return question into its compaction row", () => {
@@ -2098,7 +2205,11 @@ describe("deriveMessagesTimelineRows", () => {
     const items = (resume: ResumeState) =>
       [
         prompt("launch", 1, 0),
-        { ...base("launch-ls", 2, 4), type: "command_execution" as const, input: "ls src" },
+        {
+          ...base("launch-ls", 2, 4),
+          type: "command_execution" as const,
+          input: "cat /skills/git/SKILL.md",
+        },
         {
           ...base("launch-thinking", 3, 8),
           type: "reasoning" as const,
@@ -2177,6 +2288,16 @@ describe("deriveMessagesTimelineRows", () => {
 
     const launchFold = settled.find((row) => row.kind === "turn-fold");
     if (launchFold?.kind !== "turn-fold") throw new Error("Expected the launch fold");
+    expect(launchFold.trajectory).toEqual([
+      { kind: "skills", label: "Used 1 skill", title: "Skills used", details: ["git"] },
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls", details: ["Shell · 1 call"] },
+    ]);
+    const resumeFold = settled.find(
+      (row) => row.kind === "turn-fold" && row.runId !== launchFold.runId,
+    );
+    expect(resumeFold?.kind === "turn-fold" ? resumeFold.trajectory : null).toEqual([
+      { kind: "tools", label: "Called 1 tool", title: "Tool calls", details: ["Shell · 1 call"] },
+    ]);
     const expanded = rows({
       resume: "completed",
       working: false,
@@ -3653,6 +3774,7 @@ it.each([
     runId: RunId.make("run"),
     createdAt: "2026-01-01T00:00:00Z",
     label: "Worked for 1m",
+    trajectory: [],
     expanded: true,
     ...(before === undefined ? {} : { deferredWorkItemIds: before }),
   };
@@ -4364,6 +4486,39 @@ describe("linked timeline resources", () => {
     ]);
   });
 
+  it.each(["config", ""])(
+    "keeps command output metadata on its card with trailing resources (%s)",
+    (localCommand) => {
+      const rows = deriveMessagesTimelineRows({
+        ...common,
+        timelineEntries: [
+          {
+            kind: "message",
+            id: "command-output",
+            createdAt: "2026-09-08T10:00:00Z",
+            message: {
+              id: MessageId.make("command-output"),
+              role: "assistant",
+              localCommand,
+              text: "Command finished",
+              runId,
+              streaming: false,
+              createdAt: "2026-09-08T10:00:00Z",
+              updatedAt: "2026-09-08T10:00:00Z",
+            },
+          },
+          event("created", "thread_created"),
+        ],
+      });
+      expect(rows.some((row) => row.kind === "assistant-meta")).toBe(false);
+      expect(rows.find((row) => row.id === "command-output")).toMatchObject({
+        kind: "message",
+        showAssistantMeta: true,
+      });
+      expect(rows.some((row) => row.kind === "event" && row.resourceSummary)).toBe(true);
+    },
+  );
+
   it("shows a created chat after a steer only when that steer's segment is open", () => {
     const message = (id: string, role: "user" | "assistant", second: number) => ({
       kind: "message" as const,
@@ -4626,9 +4781,10 @@ describe("failed turn transcript", () => {
   it.each([
     { position: "historical", failureClass: "provider_error" },
     { position: "historical", failureClass: "usage_limit" },
+    { position: "latest", failureClass: "provider_error" },
     { position: "latest", failureClass: "usage_limit" },
   ] as const)(
-    "keeps $position $failureClass failures visible with preceding work grouped appropriately",
+    "folds $position $failureClass failures while keeping the failure card visible",
     ({ position, failureClass }) => {
       const isLatest = position === "latest";
       const commands = isLatest ? ["pwd", "ls", "false"] : ["pwd"];
@@ -4688,6 +4844,21 @@ describe("failed turn transcript", () => {
           position: commands.length + 1,
           visibility: "local",
           sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("thought"),
+          item: {
+            ...base,
+            id: TurnItemId.make("thought"),
+            ordinal: commands.length + 1,
+            status: "completed",
+            type: "reasoning",
+            text: "Look at the tree first.",
+            streaming: false,
+          },
+        },
+        {
+          position: commands.length + 2,
+          visibility: "local",
+          sourceThreadId: threadId,
           sourceItemId: TurnItemId.make("failure"),
           item: {
             ...base,
@@ -4703,7 +4874,7 @@ describe("failed turn transcript", () => {
           },
         },
       ];
-      const rows = deriveMessagesTimelineRows({
+      const input = {
         timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
           visibleTurnItems: items,
           optimisticMessages: [],
@@ -4724,24 +4895,40 @@ describe("failed turn transcript", () => {
         ),
         latestRun: {
           runId: isLatest ? runId : RunId.make("newer-run"),
-          status: isLatest ? "failed" : "completed",
+          status: isLatest ? ("failed" as const) : ("completed" as const),
           startedAt: DateTime.formatIso(at),
           completedAt: DateTime.formatIso(at),
         },
         isWorking: false,
         turnDiffSummaries: [],
         supportsConversationRollback: false,
+      };
+      const rows = deriveMessagesTimelineRows(input);
+      expect(rows.map((row) => row.kind)).toEqual(["message", "turn-fold", "work"]);
+      expect(rows.some((row) => row.kind === "thinking")).toBe(false);
+      const fold = rows.find((row) => row.kind === "turn-fold");
+      expect(fold).toMatchObject({ runId, expanded: false });
+      expect(fold?.kind === "turn-fold" ? fold.trajectory.length : 0).toBeGreaterThan(0);
+
+      // Expanding the fold shows grouped tool rows, never one row per tool call.
+      const expandedRows = deriveMessagesTimelineRows({
+        ...input,
+        expandedRunIds: new Set([runId]),
       });
-      expect(rows.some((row) => row.kind === "turn-fold" || row.kind === "attempt-fold")).toBe(
-        false,
-      );
+      expect(expandedRows.map((row) => row.kind)).toEqual([
+        "message",
+        "turn-fold",
+        "work-toggle",
+        "work",
+      ]);
+      expect(expandedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
+        hiddenCount: isLatest ? 4 : 2,
+        expanded: false,
+      });
+      expect(expandedRows.some((row) => row.kind === "thinking")).toBe(false);
+
       const work = rows.flatMap((row) => (row.kind === "work" ? row.groupedEntries : []));
-      expect(rows.find((row) => row.kind === "work-toggle")).toEqual(
-        isLatest ? expect.objectContaining({ hiddenCount: 3, expanded: false }) : undefined,
-      );
-      expect(work.map((entry) => entry.id)).toEqual(
-        isLatest ? ["failure"] : ["command", "failure"],
-      );
+      expect(work.map((entry) => entry.id)).toEqual(["failure"]);
       expect(work.at(-1)?.detail).toBe("The provider stopped this turn.\nRetry later.");
       expect(work.at(-1)?.createdAt).toBe("2026-09-20T12:00:00.000Z");
       if (isLatest) return;
@@ -4771,11 +4958,12 @@ describe("failed turn transcript", () => {
       });
       expect(compactRows.map((row) => row.kind)).toEqual([
         "message",
+        "turn-fold",
         "message",
         "work",
         "assistant-meta",
       ]);
-      expect(compactRows[1]).toMatchObject({ showAssistantMeta: false });
+      expect(compactRows[2]).toMatchObject({ showAssistantMeta: false });
       expect(compactRows.at(-1)).toMatchObject({
         kind: "assistant-meta",
         showAssistantCopyButton: true,

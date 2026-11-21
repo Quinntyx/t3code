@@ -15,7 +15,10 @@ import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../../i18n/messages";
 
-import { deriveProviderSettingsFields, type SettingsFormDefinition } from "./ProviderSettingsForm";
+import {
+  deriveProviderSettingsFields,
+  type SettingsFormDefinition,
+} from "@t3tools/client-runtime/provider-settings/form";
 
 type SecretUseSettings = Pick<
   ServerSettings,

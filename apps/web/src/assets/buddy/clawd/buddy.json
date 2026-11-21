@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "clawd",
+  "name": "Clawd",
+  "description": "Claude",
+  "author": "Anthropic; art from clawd-on-desk",
+  "license": "All rights reserved",
+  "aspectRatio": 1.1541666666666666,
+  "clips": {
+    "idle": "idle.webm",
+    "roam": "roam.webm",
+    "thinking": "thinking.webm",
+    "working": "working.webm",
+    "working2": "working2.webm",
+    "working3": "working3.webm",
+    "juggling": "juggling.webm",
+    "juggling2": "juggling2.webm",
+    "waiting": "waiting.webm",
+    "sweeping": "sweeping.webm",
+    "carrying": "carrying.webm",
+    "dozing": "dozing.webm",
+    "sleeping": "sleeping.webm",
+    "yawning": "yawning.webm",
+    "collapsing": "collapsing.webm",
+    "waking": "waking.webm",
+    "success": "success.webm",
+    "error": "error.webm",
+    "angry": "angry.webm",
+    "drag": "drag.webm"
+  }
+}
