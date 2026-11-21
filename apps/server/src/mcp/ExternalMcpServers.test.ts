@@ -57,7 +57,7 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
           environmentVariables: [
             { name: "FIXTURE_START_FAILURE" },
             { name: "FIXTURE_PID_FILE" },
-            { name: "FIXTURE_PING_BEFORE_LIST" },
+            { name: "FIXTURE_REQUESTS_BEFORE_LIST" },
             { name: "FIXTURE_PAGINATE" },
             { name: "FIXTURE_TOOL_NAMES" },
             { name: "FIXTURE_LABEL" },
@@ -123,7 +123,7 @@ const layerTest = (
 
 /** Each reconcile announces once, so this waits for the change rather than polling. */
 const watcher = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
-  servers.changes.pipe(Stream.take(1), Stream.runDrain, Effect.timeout("20 seconds"));
+  servers.changes.pipe(Stream.take(1), Stream.runDrain);
 
 /** Subscribes before returning, so the change a following write causes cannot be missed. */
 const watch = (servers: ExternalMcpServers.ExternalMcpServers["Service"]) =>
@@ -174,21 +174,27 @@ it.live("launches an enabled server and lists its tools under the configured pre
   ),
 );
 
-it.live("answers a server's ping instead of taking it for a reply, and follows its pages", () =>
-  runTest(
-    [entry({ config: { FIXTURE_PING_BEFORE_LIST: "1", FIXTURE_PAGINATE: "1" } })],
-    (servers) =>
-      Effect.gen(function* () {
-        // The ping reuses the tools/list id; only the real reply lists, so a misread resolves nothing
-        // and the start fails. The pages come back in the server's order.
-        expect(yield* servers.tools).toEqual([
-          expect.objectContaining({ name: "fixture_echo" }),
-          expect.objectContaining({ name: "fixture_image" }),
-          expect.objectContaining({ name: "fixture_crash-on-call" }),
-        ]);
-        expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
-      }),
-  ),
+it.live(
+  "answers a server's own requests instead of taking them for replies, and follows its pages",
+  () =>
+    runTest(
+      [
+        entry({
+          config: { FIXTURE_REQUESTS_BEFORE_LIST: "ping,roots/list", FIXTURE_PAGINATE: "1" },
+        }),
+      ],
+      (servers) =>
+        Effect.gen(function* () {
+          // Each request reuses the tools/list id, and the fixture exits on a wrong or missing answer,
+          // so a misread or an unanswered request fails the start. Pages keep the server's order.
+          expect(yield* servers.tools).toEqual([
+            expect.objectContaining({ name: "fixture_echo" }),
+            expect.objectContaining({ name: "fixture_image" }),
+            expect.objectContaining({ name: "fixture_crash-on-call" }),
+          ]);
+          expect(yield* servers.states).toEqual([expect.objectContaining({ running: true })]);
+        }),
+    ),
 );
 
 it.live("gives a colliding tool name to the first server", () =>

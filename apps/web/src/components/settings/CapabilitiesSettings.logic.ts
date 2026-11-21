@@ -1,9 +1,12 @@
 import { mcpServerIdFromName, type RegisteredMcpServerEntry } from "@t3tools/contracts";
 import { isValidMcpToolName } from "@t3tools/shared/mcpRegistration";
 
-/** The tool prefix a new server gets: its name, slugged, or the server's own when that is usable. */
+/**
+ * The tool prefix a new server gets: its name slugged, without a registry name's reverse-DNS
+ * namespace, which would spend most of a tool name's length (`io.github.acme/notes` is `notes`).
+ */
 export const defaultToolName = (name: string) => {
-  const slug = mcpServerIdFromName(name).replaceAll("-", "_");
+  const slug = mcpServerIdFromName(name.slice(name.lastIndexOf("/") + 1)).replaceAll("-", "_");
   return isValidMcpToolName(slug) ? slug : "mcp";
 };
 

@@ -24,8 +24,8 @@ import { McpSchema } from "effect/ai";
 import * as ServerSettings from "../serverSettings.ts";
 import { nativeToolNames } from "./nativeToolNames.ts";
 
-const START_TIMEOUT = Duration.seconds(30);
-const CALL_TIMEOUT = Duration.seconds(60);
+// Long enough for a first `npx -y`, `uvx` or `docker run` to fetch the package or image.
+const START_TIMEOUT = Duration.minutes(2);
 const PROTOCOL_VERSION = "2025-06-18";
 
 export interface ExternalMcpTool {
@@ -168,6 +168,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     readonly command: string;
     readonly args: ReadonlyArray<string>;
     readonly env: Readonly<Record<string, string>>;
+    readonly cwd?: string | undefined;
   },
 ) {
   const child = yield* spawner
@@ -175,6 +176,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
       ChildProcess.make(launch.command, [...launch.args], {
         env: launch.env,
         extendEnv: true,
+        ...(launch.cwd === undefined ? {} : { cwd: launch.cwd }),
         stdin: "pipe",
         stderr: "ignore",
       }),
@@ -190,6 +192,8 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
 
   const replies = new Map<number, Deferred.Deferred<JsonRpcReply>>();
   const exited = yield* Deferred.make<string>();
+  // Added first so it runs last: a stop that interrupts the exit watch still settles `exited`.
+  yield* Effect.addFinalizer(() => Deferred.succeed(exited, `${launch.command} stopped.`));
   let nextId = 1;
 
   // One queued writer keeps stdin open for the child's lifetime. Ending the sink would close it.
@@ -203,6 +207,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   const write = (message: Readonly<Record<string, unknown>>) =>
     Queue.offer(input, `${JSON.stringify(message)}\n`).pipe(Effect.asVoid);
 
+  // Untraced: one per JSON-RPC message, already inside the caller's span.
   const request = Effect.fnUntraced(function* (
     method: string,
     params: Readonly<Record<string, unknown>>,
@@ -247,10 +252,17 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
         const message = decodeJsonLine(line);
         if (!isJsonRpcReply(message) || message.id === undefined) return Effect.void;
         if (message.method !== undefined) {
-          // `ping` is the one request a server sends us; its id is whatever the server chose.
-          return message.method === "ping"
-            ? write({ jsonrpc: "2.0", id: message.id, result: {} })
-            : Effect.void;
+          // T3 offers no client capabilities, so every request but `ping` is answered as unknown
+          // rather than left to hang the server's call. Its id is whatever the server chose.
+          return write(
+            message.method === "ping"
+              ? { jsonrpc: "2.0", id: message.id, result: {} }
+              : {
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  error: { code: -32601, message: `Method not found: ${message.method}` },
+                },
+          );
         }
         // Only replies to T3's own requests are correlated, and T3 always uses numeric ids.
         const reply = typeof message.id === "number" ? replies.get(message.id) : undefined;
@@ -284,13 +296,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     protocolVersion: PROTOCOL_VERSION,
     capabilities: {},
     clientInfo: { name: "t3-code", version: "1" },
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: START_TIMEOUT,
-      orElse: () =>
-        new ExternalMcpServerError({ message: `${launch.command} did not answer initialize.` }),
-    }),
-  );
+  });
   yield* initialize.pipe(
     Effect.flatMap((reply) => settled(reply, () => undefined)),
     Effect.mapError((cause) =>
@@ -304,13 +310,6 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   /** One `tools/list` page: its tools and the cursor for the next one, if the server has more. */
   const listToolsPage = (cursor: string | undefined) =>
     request("tools/list", cursor === undefined ? {} : { cursor }).pipe(
-      Effect.timeoutOrElse({
-        duration: START_TIMEOUT,
-        orElse: () =>
-          new ExternalMcpServerError({
-            message: `${launch.command} did not list its tools in time.`,
-          }),
-      }),
       Effect.flatMap((reply) =>
         settled(reply, (result) => {
           const page = result as
@@ -345,13 +344,6 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
 
   const callTool = (toolName: string, args: Readonly<Record<string, unknown>>) =>
     request("tools/call", { name: toolName, arguments: args }).pipe(
-      Effect.timeoutOrElse({
-        duration: CALL_TIMEOUT,
-        orElse: () =>
-          new ExternalMcpServerError({
-            message: `${launch.command} did not finish the call in time.`,
-          }),
-      }),
       // Schema decoding converts wire base64 images, audio and blobs; `make` expects them already
       // decoded, so it rejects the child's raw content.
       Effect.flatMap((reply) => settled(reply, decodeCallToolResult)),
@@ -416,12 +408,21 @@ const make = Effect.gen(function* () {
     if (!launch.ok) return yield* new ExternalMcpServerError({ message: launch.message });
 
     const scope = yield* Scope.fork(serviceScope, "sequential");
-    // The child's scope closes on every way out before the child is recorded as running.
-    const connection = yield* connect(spawner, launch.launch).pipe(
+    // One deadline covers the handshake and every page of the listing, so a server that never
+    // finishes either fails instead of holding the reconcile. The child's scope closes on every
+    // way out before the child is recorded as running.
+    const { connection, tools } = yield* Effect.gen(function* () {
+      const connection = yield* connect(spawner, launch.launch);
+      return { connection, tools: yield* connection.listTools };
+    }).pipe(
       Effect.provideService(Scope.Scope, scope),
-      Effect.onError(() => Scope.close(scope, Exit.void)),
-    );
-    const tools = yield* connection.listTools.pipe(
+      Effect.timeoutOrElse({
+        duration: START_TIMEOUT,
+        orElse: () =>
+          new ExternalMcpServerError({
+            message: `${launch.launch.command} did not start in time.`,
+          }),
+      }),
       Effect.onError(() => Scope.close(scope, Exit.void)),
     );
     const running: RunningServer = {
@@ -442,10 +443,9 @@ const make = Effect.gen(function* () {
       tools: running.tools.length,
     });
 
-    // A child that exits on its own is a failure until a toggle or settings change restarts it.
-    // Detached so it outlives the start scope, which closes when the server is stopped. Cleanup
-    // yields, so a settings change can start a replacement meanwhile; the write re-checks that this
-    // child still owns the entry, or it would report the replacement failed and withdraw its tools.
+    // A child that exits on its own fails until a toggle or settings change restarts it. Forked
+    // after the child's scope, so shutdown interrupts this first and logs no crash. A replacement
+    // can start while cleanup yields, so the write re-checks that this child still owns the entry.
     yield* connection.exited.pipe(
       Effect.flatMap((message) =>
         Scope.close(scope, Exit.void).pipe(
@@ -467,7 +467,7 @@ const make = Effect.gen(function* () {
           Effect.andThen(announce),
         ),
       ),
-      Effect.forkDetach,
+      Effect.forkIn(serviceScope),
     );
   });
 
@@ -497,25 +497,34 @@ const make = Effect.gen(function* () {
       }
     }
 
-    for (const entry of desired) {
-      if (!entry.enabled) continue;
-      const state = (yield* Ref.get(runtimeStates)).get(entry.id);
-      if (state?.running !== undefined) continue;
+    const states = yield* Ref.get(runtimeStates);
+    const toStart = desired.filter((entry) => {
+      const state = states.get(entry.id);
       // A failed server retries only once its entry changes, or after it is turned off and on.
-      if (state?.failedEntry !== undefined && sameEntry(state.failedEntry, entry)) continue;
-      yield* start(entry).pipe(
-        Effect.catchCause((cause) =>
-          setState(entry.id, { failedEntry: entry }).pipe(
-            Effect.andThen(
-              Effect.logWarning("registered MCP server failed to start", {
-                server: entry.name,
-                detail: causeText(cause),
-              }),
+      return (
+        entry.enabled &&
+        state?.running === undefined &&
+        (state?.failedEntry === undefined || !sameEntry(state.failedEntry, entry))
+      );
+    });
+    // Started together, so one slow first download does not hold up the others.
+    yield* Effect.forEach(
+      toStart,
+      (entry) =>
+        start(entry).pipe(
+          Effect.catchCause((cause) =>
+            setState(entry.id, { failedEntry: entry }).pipe(
+              Effect.andThen(
+                Effect.logWarning("registered MCP server failed to start", {
+                  server: entry.name,
+                  detail: causeText(cause),
+                }),
+              ),
             ),
           ),
         ),
-      );
-    }
+      { concurrency: "unbounded", discard: true },
+    );
     yield* announce;
   }).pipe(reconcileLock.withPermits(1));
 

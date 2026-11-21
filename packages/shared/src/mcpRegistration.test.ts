@@ -40,13 +40,17 @@ const npmPackage = stdioPackage({
 const argumentsPackage = stdioPackage({
   packageArguments: [
     { type: "positional", valueHint: "workspace", isRequired: true },
-    { type: "named", name: "--port", valueHint: "port", format: "number", default: "8080" },
+    // No valueHint, but a format and a default: it takes a value, unlike a bare flag.
+    { type: "named", name: "--port", format: "number", default: "8080" },
     { type: "named", name: "--stdio" },
     {
       type: "named",
       name: "--auth",
       value: "Bearer {api_key}",
-      variables: { api_key: { isSecret: true, description: "API key." } },
+      // The template's own flags cover the variable it is built from.
+      isSecret: true,
+      isRequired: true,
+      variables: { api_key: { description: "API key." } },
     },
     { type: "named", name: "--debug", valueHint: "debug", format: "boolean", default: "true" },
   ],
@@ -140,7 +144,7 @@ describe("parseMcpRegistration", () => {
           label: "Api Key",
           description: "API key.",
           type: "string",
-          required: false,
+          required: true,
           secret: true,
         },
         {
@@ -356,6 +360,7 @@ describe("resolveMcpLaunch", () => {
         // The list default expands to one argument per item, with `${HOME}` resolved.
         args: ["/bundles/notes/dist/index.js", "--data", "/home/me/notes", "/home/me/Desktop"],
         env: { ACME_TOKEN: "${HOME}-token", ACME_HOME: "/home/me" },
+        cwd: "/bundles/notes",
       },
     });
   });

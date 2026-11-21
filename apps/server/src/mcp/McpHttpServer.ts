@@ -1068,6 +1068,7 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
         tool.descriptor.description,
         tool.descriptor.title,
         tool.descriptor.inputSchema,
+        tool.descriptor.outputSchema,
         tool.descriptor.annotations,
       ]);
 
@@ -1078,6 +1079,9 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
           name: tool.name,
           description: tool.descriptor.description,
           inputSchema: tool.descriptor.inputSchema,
+          ...(tool.descriptor.outputSchema === undefined
+            ? {}
+            : { outputSchema: tool.descriptor.outputSchema }),
           ...(tool.descriptor.title === undefined ? {} : { title: tool.descriptor.title }),
           ...(tool.descriptor.annotations === undefined
             ? {}

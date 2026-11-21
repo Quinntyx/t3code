@@ -66,7 +66,11 @@ import {
   SpeechModelUnloadTimeout,
   SpeechPostProcessingPromptSettings,
 } from "./speech.ts";
-import { registeredMcpServersDefault, RegisteredMcpServerEntry } from "./registeredMcpServer.ts";
+import {
+  registeredMcpServersDefault,
+  RegisteredMcpServerEdit,
+  RegisteredMcpServerEntry,
+} from "./registeredMcpServer.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -1987,9 +1991,12 @@ export const ServerSettingsPatch = Schema.Struct({
   emailNotmuchConfigFile: Schema.optionalKey(TrimmedString),
   emailInboxAccounts: Schema.optionalKey(Schema.Array(EmailInboxAccountConfig)),
   emailRefreshCommand: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  /** Merge per id, keeping list order; null removes an entry. */
+  /** Per id, keeping list order: a whole entry adds or replaces, an edit merges, null removes. */
   registeredMcpServers: Schema.optionalKey(
-    Schema.Record(RegisteredMcpServerEntry.fields.id, Schema.NullOr(RegisteredMcpServerEntry)),
+    Schema.Record(
+      RegisteredMcpServerEntry.fields.id,
+      Schema.NullOr(Schema.Union([RegisteredMcpServerEntry, RegisteredMcpServerEdit])),
+    ),
   ),
   ghqCloneLayout: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),

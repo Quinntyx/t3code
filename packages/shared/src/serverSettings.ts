@@ -19,6 +19,8 @@ import {
   ProjectSettingsOverrides,
   ProviderDriverKind,
   ProviderInstanceId,
+  type RegisteredMcpServerEdit,
+  type RegisteredMcpServerEntry,
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
@@ -248,23 +250,39 @@ function mergeSettingsEntries<Value>(
   return Object.fromEntries(next);
 }
 
-function mergeSettingsEntriesInOrder<Value extends { readonly id: string }>(
-  current: ReadonlyArray<Value>,
-  patch: Readonly<Record<string, Value | null>>,
-): Array<Value> {
-  const next: Array<Value> = [];
-  const patchedIds = new Set<string>();
+function mergeRegisteredMcpServers(
+  current: ReadonlyArray<RegisteredMcpServerEntry>,
+  patch: Readonly<Record<string, RegisteredMcpServerEntry | RegisteredMcpServerEdit | null>>,
+): Array<RegisteredMcpServerEntry> {
+  const next: Array<RegisteredMcpServerEntry> = [];
   for (const entry of current) {
     if (!Object.hasOwn(patch, entry.id)) {
       next.push(entry);
       continue;
     }
-    patchedIds.add(entry.id);
-    const patched = patch[entry.id]!;
-    if (patched !== null) next.push(patched);
+    const change = patch[entry.id]!;
+    if (change === null) continue;
+    if ("source" in change) {
+      next.push(change);
+      continue;
+    }
+    const { config, ...fields } = change;
+    next.push({
+      ...entry,
+      ...fields,
+      config:
+        config === undefined
+          ? entry.config
+          : Object.fromEntries(
+              Object.entries({ ...entry.config, ...config }).flatMap(([key, value]) =>
+                value === null ? [] : [[key, value]],
+              ),
+            ),
+    });
   }
-  for (const [id, entry] of Object.entries(patch)) {
-    if (entry !== null && !patchedIds.has(id)) next.push(entry);
+  const existing = new Set(current.map((entry) => entry.id));
+  for (const [id, change] of Object.entries(patch)) {
+    if (change !== null && "source" in change && !existing.has(id)) next.push(change);
   }
   return next;
 }
@@ -678,7 +696,7 @@ export function applyServerSettingsPatch(
       : {}),
     ...(registeredMcpServersPatch !== undefined
       ? {
-          registeredMcpServers: mergeSettingsEntriesInOrder(
+          registeredMcpServers: mergeRegisteredMcpServers(
             current.registeredMcpServers,
             registeredMcpServersPatch,
           ),

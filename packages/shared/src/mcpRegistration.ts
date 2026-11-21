@@ -45,6 +45,8 @@ export interface McpLaunch {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string>>;
+  /** An MCPB bundle runs from its directory, so a relative command or path resolves there. */
+  readonly cwd?: string;
 }
 
 export type McpLaunchResult =
@@ -138,9 +140,17 @@ interface ServerJsonValue {
 const valueFields = (value: ServerJsonValue, label: string): ReadonlyArray<McpConfigField> =>
   value.template === undefined
     ? [readInputField(value.key, value.input, label)]
-    : placeholderKeys(value.template).map((key) =>
-        readInputField(key, asRecord(value.variables[key]), labelOf(key)),
-      );
+    : placeholderKeys(value.template).map((key) => {
+        const variable = asRecord(value.variables[key]);
+        // A template's own secret and required flags cover the variables it is built from.
+        const either = (flag: string) =>
+          asBoolean(variable?.[flag]) === true || asBoolean(value.input[flag]) === true;
+        return readInputField(
+          key,
+          { ...variable, isSecret: either("isSecret"), isRequired: either("isRequired") },
+          labelOf(key),
+        );
+      });
 
 const resolveValue = (value: ServerJsonValue, values: ReadonlyMap<string, string>) =>
   value.template === undefined ? (values.get(value.key) ?? "") : substitute(value.template, values);
@@ -148,7 +158,7 @@ const resolveValue = (value: ServerJsonValue, values: ReadonlyMap<string, string
 interface ServerJsonArgument extends ServerJsonValue {
   /** `--flag` for a named argument; absent for a positional one. */
   readonly flag?: string | undefined;
-  /** A named argument with neither a value nor a value hint is passed as a bare flag. */
+  /** A named argument with nothing describing a value is passed as a bare flag. */
   readonly bare: boolean;
 }
 
@@ -169,7 +179,11 @@ const readArguments = (raw: unknown): ReadonlyArray<ServerJsonArgument> =>
         template,
         variables: asRecord(input.variables) ?? {},
         flag,
-        bare: flag !== undefined && template === undefined && hint === undefined,
+        bare:
+          flag !== undefined &&
+          [template, hint, input.default, input.format, input.choices].every(
+            (described) => described === undefined,
+          ),
       },
     ];
   });
@@ -472,7 +486,12 @@ const resolveMcpbLaunch = (
   );
   return {
     ok: true,
-    launch: { command: fill(asString(mcpConfig.command) ?? ""), args, env },
+    launch: {
+      command: fill(asString(mcpConfig.command) ?? ""),
+      args,
+      env,
+      cwd: source.bundleDir,
+    },
   };
 };
 

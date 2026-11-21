@@ -39,6 +39,17 @@ export const RegisteredMcpServerEntry = Schema.Struct({
 });
 export type RegisteredMcpServerEntry = typeof RegisteredMcpServerEntry.Type;
 
+/** A change to an existing entry: only the fields it names, so two edits cannot undo each other. */
+export const RegisteredMcpServerEdit = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  toolName: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Merged per key; null clears a value. */
+  config: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.NullOr(RegisteredMcpServerConfigValue)),
+  ),
+});
+export type RegisteredMcpServerEdit = typeof RegisteredMcpServerEdit.Type;
+
 export const maxMcpToolPrefixLength = 40;
 
 /** `name` as a stable settings id: lowercase letters, digits and single dashes. */

@@ -6,7 +6,7 @@ Only servers T3 Code launches itself are supported: a local stdio package from t
 
 ## Register a server
 
-Paste the whole `server.json` (or an MCPB `manifest.json`) into **Settings → Capabilities → General**. For an MCPB bundle, also give the directory its files live in, so `${__dirname}` resolves.
+Paste the whole `server.json` (or an MCPB `manifest.json`) into **Settings → Capabilities → General**. For an MCPB bundle, also give the directory its files live in. T3 Code runs the server from there, so `${__dirname}` and relative paths resolve.
 
 Each server then gets its own entry under **Capabilities**, where you can:
 
@@ -14,7 +14,7 @@ Each server then gets its own entry under **Capabilities**, where you can:
 - change its **Tool name**, the prefix agents see. A server's `search` tool becomes `notes_search` under the tool name `notes`.
 - fill in the settings its document declares. Secret fields are kept in the server's secret store.
 
-A server that fails to start or exits stays off until you change its settings or turn it off and on again. The reason is in T3 Code's server log.
+A server that fails to start or exits stays off until you change its settings or turn it off and on again. The reason is in T3 Code's server log. A server has two minutes to start, which covers the first download of its package or image.
 
 ## What agents see
 

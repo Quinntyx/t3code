@@ -73,7 +73,7 @@ export function CapabilitiesSettingsPanel() {
                   checked={entry.enabled}
                   onChange={(enabled) =>
                     updateSettings({
-                      registeredMcpServers: { [entry.id]: { ...entry, enabled } },
+                      registeredMcpServers: { [entry.id]: { enabled } },
                     })
                   }
                 />

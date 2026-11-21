@@ -654,7 +654,7 @@ describe("serverSettings helpers", () => {
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
-  it("upserts and removes registered MCP servers per entry so concurrent edits cannot clobber", () => {
+  it("adds, edits and removes registered MCP servers so concurrent edits cannot clobber", () => {
     const server = (id: string, name: string, enabled = true) => ({
       id,
       name,
@@ -682,13 +682,22 @@ describe("serverSettings helpers", () => {
       "calendar",
     ]);
 
-    const edited = applyServerSettingsPatch(added, {
-      registeredMcpServers: { notes: { ...notes, enabled: false } },
-    });
-    expect(edited.registeredMcpServers.map((entry) => [entry.id, entry.enabled])).toEqual([
-      ["notes", false],
-      ["mail", false],
-      ["calendar", true],
+    // Two edits made from the same snapshot, as a field's blur and a toggle's click are.
+    const edited = [
+      { notes: { config: { REGION: "eu", HOME: "/notes" } } },
+      { notes: { enabled: false } },
+      { notes: { config: { HOME: null } } },
+    ].reduce(
+      (settings, registeredMcpServers) =>
+        applyServerSettingsPatch(settings, { registeredMcpServers }),
+      added,
+    );
+    expect(
+      edited.registeredMcpServers.map((entry) => [entry.id, entry.enabled, entry.config]),
+    ).toEqual([
+      ["notes", false, { REGION: "eu" }],
+      ["mail", false, {}],
+      ["calendar", true, {}],
     ]);
 
     const removed = applyServerSettingsPatch(edited, {

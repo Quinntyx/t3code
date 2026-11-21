@@ -1,4 +1,8 @@
-import { maxMcpToolPrefixLength, type RegisteredMcpServerEntry } from "@t3tools/contracts";
+import {
+  maxMcpToolPrefixLength,
+  type RegisteredMcpServerEdit,
+  type RegisteredMcpServerEntry,
+} from "@t3tools/contracts";
 import {
   isValidMcpToolName,
   parseMcpRegistration,
@@ -60,8 +64,8 @@ export function McpServerSettingsPanel() {
     );
   }
 
-  const save = (edit: Partial<Pick<RegisteredMcpServerEntry, "enabled" | "toolName" | "config">>) =>
-    updateSettings({ registeredMcpServers: { [entry.id]: { ...entry, ...edit } } });
+  const save = (edit: RegisteredMcpServerEdit) =>
+    updateSettings({ registeredMcpServers: { [entry.id]: edit } });
 
   const parsed = parseMcpRegistration(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
@@ -109,21 +113,12 @@ export function McpServerSettingsPanel() {
             <SettingsRow
               key={field.key}
               title={field.label}
-              description={field.description ?? field.key}
+              description={`${field.required ? "Required. " : ""}${field.description ?? field.key}`}
               control={
                 <FieldControl
                   field={field}
                   entry={entry}
-                  onChange={(value) =>
-                    save({
-                      config:
-                        value === undefined
-                          ? Object.fromEntries(
-                              Object.entries(entry.config).filter(([key]) => key !== field.key),
-                            )
-                          : { ...entry.config, [field.key]: value },
-                    })
-                  }
+                  onChange={(value) => save({ config: { [field.key]: value ?? null } })}
                 />
               }
             />

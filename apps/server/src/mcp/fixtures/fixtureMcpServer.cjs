@@ -49,10 +49,10 @@ if (failingTool !== undefined) {
 }
 
 // A test sets these to exercise the protocol around listing: a server request mid-request and pages.
-const pingBeforeList = process.env.FIXTURE_PING_BEFORE_LIST === "1";
+const requestsBeforeList = process.env.FIXTURE_REQUESTS_BEFORE_LIST?.split(",") ?? [];
 const paginate = process.env.FIXTURE_PAGINATE === "1";
-/** Our ping id to the tools/list request waiting on it, which can use a different id. */
-const awaitingPing = new Map();
+/** The tools/list request waiting on our own requests, keyed by the id they reuse. */
+const awaiting = new Map();
 
 const answerList = (id, cursor) => {
   if (!paginate) return reply(id, { tools });
@@ -61,16 +61,26 @@ const answerList = (id, cursor) => {
     : reply(id, { tools: tools.slice(2) });
 };
 
+// Each request reuses the tools/list id, so a client that takes it for a reply misreads it.
+const askNext = (listId, cursor, [method, ...rest]) => {
+  awaiting.set(listId, { cursor, method, rest });
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: listId, method })}\n`);
+};
+
 readline
   .createInterface({ input: process.stdin })
   .on("line", (line) => {
     if (line.trim() === "") return;
     const message = JSON.parse(line);
-    // Our ping is answered first; only now do we answer the tools/list request waiting on it.
-    if (message.method === undefined && awaitingPing.has(message.id)) {
-      const { listId, cursor } = awaitingPing.get(message.id);
-      awaitingPing.delete(message.id);
-      return answerList(listId, cursor);
+    // Our requests are answered first, ping with a result and anything else as unknown; only
+    // then do we answer the tools/list request waiting on them.
+    if (message.method === undefined && awaiting.has(message.id)) {
+      const { cursor, method, rest } = awaiting.get(message.id);
+      awaiting.delete(message.id);
+      const answered =
+        method === "ping" ? message.result !== undefined : message.error?.code === -32601;
+      if (!answered) process.exit(1);
+      return rest.length > 0 ? askNext(message.id, cursor, rest) : answerList(message.id, cursor);
     }
     if (message.method === "initialize") {
       return reply(message.id, {
@@ -81,11 +91,8 @@ readline
     }
     if (message.method === "notifications/initialized") return;
     if (message.method === "tools/list") {
-      if (pingBeforeList) {
-        awaitingPing.set(message.id, { listId: message.id, cursor: message.params?.cursor });
-        return process.stdout.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: message.id, method: "ping" })}\n`,
-        );
+      if (requestsBeforeList.length > 0) {
+        return askNext(message.id, message.params?.cursor, requestsBeforeList);
       }
       return answerList(message.id, message.params?.cursor);
     }

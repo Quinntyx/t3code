@@ -866,6 +866,7 @@ const fixtureTools: ReadonlyArray<ExternalMcpServers.ExternalMcpTool> = [
         properties: { text: { type: "string", description: "What to echo." } },
         required: ["text"],
       },
+      outputSchema: { type: "object", properties: { echoed: { type: "string" } } },
       annotations: { readOnlyHint: true },
     }),
   },
@@ -1130,6 +1131,7 @@ it.effect("proxies a registered MCP server's tools with its own schema", () =>
       expect(proxied.inputSchema).toMatchObject({
         properties: { text: { type: "string", description: "What to echo." } },
       });
+      expect(proxied.outputSchema).toMatchObject({ properties: { echoed: { type: "string" } } });
       expect(proxied.annotations).toMatchObject({ readOnlyHint: true });
 
       const result = yield* server
