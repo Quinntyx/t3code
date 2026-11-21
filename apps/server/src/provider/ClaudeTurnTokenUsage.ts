@@ -336,6 +336,8 @@ export function sealClaudeSegment(input: {
   readonly canonicalModel?: (model: string) => string;
   // The model the process's ledger names each raw model id, for windows without growth.
   readonly ledgerModelNames?: ReadonlyMap<string, string>;
+  // Steering and interrupts abort a window with a result that can still read as a success.
+  readonly aborted?: boolean;
 }): ClaudeSegmentUsage {
   const { result, ledgerGrowth: growth, ledgerModelNames: names } = input;
   const ledgerModel = (model: string) => growth?.get(model)?.model ?? names?.get(model) ?? model;
@@ -356,7 +358,7 @@ export function sealClaudeSegment(input: {
   // Closes other than a valid success can under-report, so take the larger source wholesale.
   const fromResult =
     measured !== undefined &&
-    (hasValidSuccessUsage(result) ||
+    ((input.aborted !== true && hasValidSuccessUsage(result)) ||
       (measured.inputTokens ?? 0) + (measured.outputTokens ?? 0) >=
         (liveTotal?.inputTokens ?? 0) + (liveTotal?.outputTokens ?? 0))
       ? measured
@@ -410,9 +412,7 @@ export function sealClaudeSegment(input: {
       [...liveDelegates.countsByModel].every(([model, live]) => {
         const measured = delegatesByModel.get(canonicalModel(model));
         return (
-          measured !== undefined &&
-          live.inputTokens <= measured.inputTokens &&
-          live.outputTokens <= measured.outputTokens
+          measured !== undefined && TOKEN_FIELDS.every((field) => live[field] <= measured[field])
         );
       }),
   };

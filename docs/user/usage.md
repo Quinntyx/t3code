@@ -78,7 +78,8 @@ estimated cost.
 
 Right-click **Consumption** in the thread details card to add consumption limits for that thread. Add as
 many as you need; the thread stops when any one of them is reached, and delegates count toward the
-same thread.
+same thread. A running turn counts toward a limit as it goes, so a thread can stop partway through
+a turn.
 
 Each limit is either **API spend** or **Usage quota**, and applies to **All** models or to a chosen
 set of them. A spend limit compares the models it covers with your estimated API-list cost, and a
