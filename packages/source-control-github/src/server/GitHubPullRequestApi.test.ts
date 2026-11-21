@@ -798,6 +798,17 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("retargets a pull request's base with one REST edit", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(() => Effect.succeed(output(encodeJson({}))));
+      const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* api.changePullRequestBase({ ...pullRequestInput, baseBranch: "main" });
+      expect(
+        restCallsTo("/pulls/7").map(({ method, path, body }) => ({ method, path, body })),
+      ).toEqual([{ method: "PATCH", path: "repos/acme/web/pulls/7", body: { base: "main" } }]);
+    }),
+  );
+
   it.effect("tails Actions job logs and re-runs a run's failed jobs together", () =>
     Effect.gen(function* () {
       const runOf: Record<string, number> = {

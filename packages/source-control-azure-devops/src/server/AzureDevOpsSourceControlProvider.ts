@@ -131,6 +131,7 @@ export const make = Effect.gen(function* () {
           .listPullRequests({
             cwd: input.cwd,
             ...remoteOf(input),
+            ...(input.targetRepository ? { targetRepository: input.targetRepository } : {}),
             headSelector: input.headSelector,
             ...(source !== undefined ? { source } : {}),
             state: input.state,

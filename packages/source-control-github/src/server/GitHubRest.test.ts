@@ -614,6 +614,7 @@ describe("GitHubCredentials", () => {
       Layer.provide(NodeCrypto.layer),
       Layer.provide(FileSystem.layerNoop({})),
       Layer.provide(Layer.succeed(HttpClient.HttpClient, unexpectedHttp)),
+      Layer.provide(Layer.succeed(HostProcess.Environment, {})),
     );
 
   it.effect("reports a gh timeout as a timeout and does not cache it", () => {

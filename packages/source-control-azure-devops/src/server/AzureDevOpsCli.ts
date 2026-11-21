@@ -228,6 +228,7 @@ export class AzureDevOpsCli extends Context.Service<
 
     readonly listPullRequests: (input: {
       readonly cwd: string;
+      readonly targetRepository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -335,6 +336,12 @@ function parseRepositorySpecifier(repository: string): {
     project: parts.length > 1 ? (parts.at(-2) ?? null) : null,
     name: parts.at(-1) ?? repository.trim(),
   };
+}
+
+function targetRepositoryArgs(repository: string | undefined): ReadonlyArray<string> {
+  if (repository === undefined) return [];
+  const { project, name } = parseRepositorySpecifier(repository);
+  return [`--repository=${name}`, ...(project ? [`--project=${project}`] : [])];
 }
 
 function decodeAzureDevOpsJson<S extends Schema.Top>(
@@ -616,6 +623,7 @@ export const make = Effect.gen(function* () {
           toAzureStatus(input.state),
           "--top",
           String(input.limit ?? 20),
+          ...targetRepositoryArgs(input.targetRepository),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -746,6 +754,7 @@ export const make = Effect.gen(function* () {
           title.arg,
           // Joined: az expands a separate `@file` value again, so a body of `@path` read that file.
           `--description=@${input.bodyFile}`,
+          ...targetRepositoryArgs(input.target?.repository),
         ],
         ...(title.stdin === undefined ? {} : { stdin: title.stdin }),
       }).pipe(Effect.asVoid);

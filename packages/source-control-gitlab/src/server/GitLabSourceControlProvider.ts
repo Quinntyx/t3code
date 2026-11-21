@@ -240,6 +240,7 @@ export const make = Effect.gen(function* () {
         return gitlab
           .listMergeRequests({
             cwd: input.cwd,
+            ...(input.targetRepository ? { targetRepository: input.targetRepository } : {}),
             headSelector: input.headSelector,
             ...(source ? { source } : {}),
             state: input.state,

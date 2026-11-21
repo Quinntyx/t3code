@@ -295,6 +295,35 @@ layer("GitLabCli.layer", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("creates merge requests in the recorded base project", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const bodyFile = yield* fileSystem.makeTempFileScoped({ prefix: "t3-gitlab-mr-body-" });
+      mockedRun.mockReturnValueOnce(
+        Effect.succeed(processOutput(JSON.stringify({ id: 100, path: "Base" }))),
+      );
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+      const glab = yield* GitLabCli.GitLabCli;
+      yield* glab.createMergeRequest({
+        cwd: "/repo",
+        baseBranch: "main",
+        headSelector: "feature",
+        source: { repository: "Group/Fork", refName: "feature" },
+        target: { repository: "Group/Nested/Base", refName: "main" },
+        title: "Changes",
+        bodyFile,
+      });
+      assert.deepEqual(mockedRun.mock.calls[0]?.[0].args, [
+        "api",
+        "projects/Group%2FNested%2FBase",
+      ]);
+      const args = mockedRun.mock.calls[1]?.[0].args ?? [];
+      assert.include(args, "projects/Group%2FFork/merge_requests");
+      assert.include(args, "target_project_id=100");
+      assert.notInclude(args, "source_project_id=Group/Fork");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("surfaces a friendly error when the merge request is not found", () =>
     Effect.gen(function* () {
       const cause = new VcsProcessExitError({

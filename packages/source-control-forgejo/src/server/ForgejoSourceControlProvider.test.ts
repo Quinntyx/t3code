@@ -22,6 +22,9 @@ import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
 import { markRequiredForgejoChecks } from "./forgejoRequiredChecks.ts";
 
+const makePullRequestProvider = ForgejoPullRequestProvider.make.pipe(
+  Effect.provide(TestSourceControlHost.layer()),
+);
 const processOutput = TestSourceControlHost.processOutput;
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -140,27 +143,30 @@ const requiredChecksLayer = (
   statuses = requiredChecksStatuses,
   pull: Readonly<Record<string, unknown>> = requiredChecksPullRequest,
 ) =>
-  Layer.mock(ForgejoCli.ForgejoCli)({
-    api: (input) => {
-      const [path, query] = input.path.split("?");
-      const respond = (response: unknown) =>
-        encodeJsonEffect(response).pipe(Effect.orDie, Effect.map(processOutput));
-      switch (path) {
-        case "repos/acme/web/pulls/7":
-          return respond(pull);
-        case "repos/acme/web/statuses/head":
-          return respond(new URLSearchParams(query).get("page") === "1" ? statuses : []);
-        case "repos/acme/web/branches/release/1.x":
-          return Effect.flatMap(branch, respond);
-        case "repos/acme/web":
-          return respond({ full_name: "acme/web", permissions: { push: true, admin: false } });
-        case "user":
-          return respond({ login: "maria" });
-        default:
-          return Effect.die(`Unexpected Forgejo request: ${input.path}`);
-      }
-    },
-  });
+  Layer.mergeAll(
+    TestSourceControlHost.layer(),
+    Layer.mock(ForgejoCli.ForgejoCli)({
+      api: (input) => {
+        const [path, query] = input.path.split("?");
+        const respond = (response: unknown) =>
+          encodeJsonEffect(response).pipe(Effect.orDie, Effect.map(processOutput));
+        switch (path) {
+          case "repos/acme/web/pulls/7":
+            return respond(pull);
+          case "repos/acme/web/statuses/head":
+            return respond(new URLSearchParams(query).get("page") === "1" ? statuses : []);
+          case "repos/acme/web/branches/release/1.x":
+            return Effect.flatMap(branch, respond);
+          case "repos/acme/web":
+            return respond({ full_name: "acme/web", permissions: { push: true, admin: false } });
+          case "user":
+            return respond({ login: "maria" });
+          default:
+            return Effect.die(`Unexpected Forgejo request: ${input.path}`);
+        }
+      },
+    }),
+  );
 
 it.effect.each([
   ["ci/required-deploy", true],
@@ -168,7 +174,7 @@ it.effect.each([
   ["ci/[ab]", false],
 ] as const)("keeps missing required pattern %s pending (supported: %s)", ([missing, supported]) =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const readChecks = provider.getChangeRequestChecks;
     if (readChecks === undefined) return yield* Effect.die("checks read missing");
     const summary = yield* readChecks(requiredChecksInput);
@@ -270,7 +276,7 @@ it.effect.each([
   ["oldest first", tiedStatuses.toReversed()],
 ] as const)("reads the status created last when two share a second, listed %s", ([, statuses]) =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const readChecks = provider.getChangeRequestChecks;
     if (readChecks === undefined) return yield* Effect.die("checks read missing");
     const summary = yield* readChecks(requiredChecksInput);
@@ -286,12 +292,20 @@ it.effect.each([
 
 const forgejoMergeProvider = (repository: Effect.Effect<string, ForgejoCli.ForgejoCliError>) => {
   const writes: Array<ForgejoCli.ForgejoApiInput> = [];
-  const provider = ForgejoPullRequestProvider.make.pipe(
+  const provider = makePullRequestProvider.pipe(
     Effect.provide(
       Layer.mock(ForgejoCli.ForgejoCli)({
         api: (input) => {
           if (input.method !== undefined && input.method !== "GET") writes.push(input);
-          return (input.path === "repos/reviewer/project" ? repository : Effect.succeed("")).pipe(
+          return (
+            input.path === "repos/reviewer/project"
+              ? repository
+              : Effect.succeed(
+                  input.path === "repos/reviewer/project/pulls/1"
+                    ? encodeJson({ ...requiredChecksPullRequest, number: 1 })
+                    : "",
+                )
+          ).pipe(
             Effect.map((stdout) => ({
               exitCode: ChildProcessSpawner.ExitCode(0),
               stdout,
@@ -375,7 +389,7 @@ it.effect.each([
       reason: "forbidden",
     });
     return Effect.gen(function* () {
-      const provider = yield* ForgejoPullRequestProvider.make;
+      const provider = yield* makePullRequestProvider;
       const exit = yield* Effect.exit(
         provider.runAction({ ...requiredChecksInput, action: "merge", mergeMethod: "merge" }),
       );
@@ -411,7 +425,7 @@ it.effect.each([
 ] as const)("propagates branch metadata %s", ([detail, fields, reason]) => {
   const cause = new ForgejoCli.ForgejoCliError({ command: "fj", cwd: "/repo", detail, ...fields });
   return Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const readChecks = provider.getChangeRequestChecks;
     if (readChecks === undefined) return yield* Effect.die("checks read missing");
     for (const read of [readChecks, provider.getChangeRequest]) {
@@ -424,7 +438,7 @@ it.effect.each([
 
 it.effect("reads a merged pull request's merge commit and who merged it", () =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const detail = yield* provider.getChangeRequest(requiredChecksInput);
     assert.strictEqual(detail.state, "merged");
     assert.strictEqual(detail.mergeCommitSha, "394a757942c5c3a9fb3cca31e348849e8c6a6dbe");
@@ -446,7 +460,7 @@ it.effect("reads a merged pull request's merge commit and who merged it", () =>
 
 it.effect("reads Forgejo jobs that did not run as finished checks", () =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const read = provider.getChangeRequestChecks;
     if (read === undefined) return yield* Effect.die("checks read missing");
     const result = yield* read({
@@ -512,7 +526,7 @@ it.effect("reads Forgejo jobs that did not run as finished checks", () =>
 
 it.effect("opens Forgejo Actions check links on the pull request's server", () =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const read = provider.getChangeRequestChecks;
     if (read === undefined) return yield* Effect.die("checks read missing");
     const result = yield* read({
@@ -575,13 +589,19 @@ it.effect("opens Forgejo Actions check links on the pull request's server", () =
 );
 
 it.effect.each([
-  ["Ready", false, true, false, "mergeable"],
-  ["Draft", true, false, true, "unknown"],
+  ["Ready", false, true, false, "mergeable", 1],
+  ["Conflict", false, false, false, "conflicting", 1],
+  ["Checking", false, false, false, "unknown", 0],
+  ["Missing commits or failed Git check", false, false, false, "unknown", 128],
+  ["Unavailable Git", false, false, false, "unknown", -1],
+  ["Invalid revision", false, false, false, "unknown", 1, false],
+  ["Missing mergeability", false, undefined, false, "unknown", 1],
+  ["Draft", true, false, true, "unknown", 1],
   ["WIP: Legacy draft", undefined, false, true, "unknown"],
-  ["WIP: Explicitly ready", false, false, false, "unknown"],
+  ["WIP: Explicitly ready", false, false, false, "conflicting", 1],
 ] as const)(
   "reads Forgejo mergeability for %s (draft=%s, mergeable=%s) across list, summary and detail",
-  ([title, draft, mergeable, isDraft, mergeability]) => {
+  ([title, draft, mergeable, isDraft, mergeability, exitCode, hasTree = true]) => {
     const pr = {
       number: 42,
       title,
@@ -592,8 +612,8 @@ it.effect.each([
       merged: false,
       ...(draft === undefined ? {} : { draft }),
       ...(mergeable === undefined ? {} : { mergeable }),
-      head: { ref: "feature", sha: "head", repo: null },
-      base: { ref: "main", sha: "base", repo: null },
+      head: { ref: "feature", sha: "a".repeat(40), repo: null },
+      base: { ref: "main", sha: "b".repeat(40), repo: null },
       created_at: "2026-09-16T00:00:00Z",
       updated_at: "2026-09-16T00:00:00Z",
       closed_at: null,
@@ -630,7 +650,7 @@ it.effect.each([
       const summary = yield* readSummary(input);
       const detail = yield* provider.getChangeRequest(input);
       assert.strictEqual(list.items.length, 1);
-      assert.strictEqual(detail.headSha, "head");
+      assert.strictEqual(detail.headSha, pr.head.sha);
       assert.deepStrictEqual(detail.labels, [
         { name: "bug", color: "ee0701", description: "Something is broken" },
         { name: "triage", color: "c5def5", description: null },
@@ -639,38 +659,79 @@ it.effect.each([
         assert.strictEqual(result.mergeability, mergeability);
         assert.strictEqual(result.isDraft, isDraft);
       }
+      if (mergeability === "conflicting") {
+        const error = yield* Effect.flip(provider.runAction({ ...input, action: "merge" }));
+        assert.include(error.detail, "merge conflicts");
+        assert.isFalse(requests.some((path) => path.endsWith("/merge")));
+      }
     }).pipe(
       Effect.provide(
-        Layer.mock(ForgejoCli.ForgejoCli)({
-          api: (input) => {
-            requests.push(input.path);
-            const [path, query] = input.path.split("?");
-            let response: unknown;
-            switch (path) {
-              case "repos/maria/project/pulls":
-                response = new URLSearchParams(query).get("page") === "1" ? [pr] : [];
-                break;
-              case "repos/maria/project/pulls/42":
-                response = pr;
-                break;
-              case "repos/maria/project":
-                response = { full_name: "maria/project", permissions: { push: true, admin: true } };
-                break;
-              case "user":
-                response = pr.user;
-                break;
-              case "repos/maria/project/statuses/head":
-                response = [];
-                break;
-              case "repos/maria/project/branches/main":
-                response = { name: "main", protected: false };
-                break;
-              default:
-                return Effect.die(`Unexpected Forgejo request: ${input.path}`);
-            }
-            return encodeJsonEffect(response).pipe(Effect.orDie, Effect.map(processOutput));
-          },
-        }),
+        Layer.merge(
+          Layer.mock(ForgejoCli.ForgejoCli)({
+            api: (input) => {
+              requests.push(input.path);
+              const [path, query] = input.path.split("?");
+              let response: unknown;
+              switch (path) {
+                case "repos/maria/project/pulls":
+                  response = new URLSearchParams(query).get("page") === "1" ? [pr] : [];
+                  break;
+                case "repos/maria/project/pulls/42":
+                  response = pr;
+                  break;
+                case "repos/maria/project":
+                  response = {
+                    full_name: "maria/project",
+                    permissions: { push: true, admin: true },
+                  };
+                  break;
+                case "user":
+                  response = pr.user;
+                  break;
+                case `repos/maria/project/statuses/${pr.head.sha}`:
+                  response = [];
+                  break;
+                case "repos/maria/project/branches/main":
+                  response = { name: "main", protected: false };
+                  break;
+                default:
+                  return Effect.die(`Unexpected Forgejo request: ${input.path}`);
+              }
+              return encodeJsonEffect(response).pipe(Effect.orDie, Effect.map(processOutput));
+            },
+          }),
+          TestSourceControlHost.layer({
+            process: {
+              run: (input) => {
+                assert.strictEqual(mergeable, false);
+                assert.isFalse(isDraft);
+                assert.deepStrictEqual(input.args, [
+                  "merge-tree",
+                  "--write-tree",
+                  "--name-only",
+                  "--no-messages",
+                  "-z",
+                  pr.base.sha,
+                  pr.head.sha,
+                ]);
+                return exitCode === -1
+                  ? Effect.fail(
+                      new VcsProcessSpawnError({
+                        operation: input.operation,
+                        command: "git",
+                        cwd: input.cwd,
+                        cause: new Error("git unavailable"),
+                      }),
+                    )
+                  : Effect.succeed(
+                      processOutput(hasTree ? `${"d".repeat(40)}\0file.txt\0` : "", {
+                        exitCode: ChildProcessSpawner.ExitCode(exitCode ?? 1),
+                      }),
+                    );
+              },
+            },
+          }),
+        ),
       ),
     );
   },
@@ -679,7 +740,7 @@ it.effect.each([
 it.effect("asks Forgejo for one required label by id and the author by login", () => {
   const paths: Array<string> = [];
   return Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     yield* provider.listChangeRequests({
       cwd: "/repo",
       repository: "maria/project",
@@ -711,7 +772,7 @@ it.effect("asks Forgejo for one required label by id and the author by login", (
 
 it.effect("lists nothing for an author Forgejo has no account for", () =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const page = yield* provider.listChangeRequests({
       cwd: "/repo",
       repository: "maria/project",
@@ -749,7 +810,7 @@ it.effect.each([
   const paths: string[] = [];
   const users = Array.from({ length: count }, (_, index) => ({ login: `dev-${index}` }));
   return Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const search = provider.searchRepositoryAuthors;
     if (search === undefined) return yield* Effect.die("author search missing");
     const found = yield* search({
@@ -779,7 +840,7 @@ it.effect.each([
 
 it.effect("says an author search was cut short by a server that pages below its limit", () =>
   Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const search = provider.searchRepositoryAuthors;
     if (search === undefined) return yield* Effect.die("author search missing");
     const found = yield* search({
@@ -939,6 +1000,42 @@ it.effect("names the web server behind an SSH alias from the login that serves i
     ),
   ),
 );
+
+it.effect("lists Forgejo pull requests in the target repository it is given", () => {
+  const paths: string[] = [];
+  return Effect.gen(function* () {
+    const provider = yield* ForgejoSourceControlProvider.make;
+    yield* provider.listChangeRequests({
+      cwd: "/repo",
+      targetRepository: "team/project",
+      headSelector: "maria:feature",
+      state: "open",
+    });
+    assert.deepStrictEqual(
+      paths.map((path) => path.split("?")[0]),
+      ["repos/team/project/pulls"],
+    );
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        TestSourceControlHost.layer({ process: {} }),
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          resolveRepository: () =>
+            Effect.succeed({
+              login: "work",
+              repository: "maria/project",
+              baseUrl: "https://forgejo.test",
+            }),
+          api: (input) => {
+            paths.push(input.path);
+            return encodeJsonEffect([]).pipe(Effect.orDie, Effect.map(processOutput));
+          },
+        }),
+      ),
+    ),
+  );
+});
 
 it.effect("loads Forgejo pull request references from files and commits views", () =>
   Effect.gen(function* () {
@@ -1357,7 +1454,7 @@ it.effect(
     const writes: ForgejoCli.ForgejoApiInput[] = [];
     let reactionReads = 0;
     return Effect.gen(function* () {
-      const provider = yield* ForgejoPullRequestProvider.make;
+      const provider = yield* makePullRequestProvider;
       const input = { cwd: "/repo", repository: "maria/project", host: "forgejo.test", number: 2 };
       const activity = yield* provider.getChangeRequestActivity(input);
       assert.deepStrictEqual(
@@ -1475,7 +1572,7 @@ it.effect(
 it.effect("lists each Forgejo assignee once as a reviewer candidate", () => {
   const paths: string[] = [];
   return Effect.gen(function* () {
-    const provider = yield* ForgejoPullRequestProvider.make;
+    const provider = yield* makePullRequestProvider;
     const result = yield* provider.listReviewerCandidates(requiredChecksInput);
     assert.deepStrictEqual(
       result.candidates.map((candidate) => [candidate.id, candidate.isRequested]),

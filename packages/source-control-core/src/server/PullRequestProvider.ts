@@ -257,7 +257,9 @@ export interface ProviderChangeRequestStat {
   readonly deletions: number;
 }
 
-export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
+export interface ProviderChangeRequestDetail extends Omit<ProviderChangeRequest, "stack"> {
+  /** Null means no stack; absent means not requested. */
+  readonly stack?: PullRequestStackMembership | null;
   readonly maintainerCanModify?: boolean;
   readonly headSha?: string | null;
   readonly body: string;
@@ -591,6 +593,11 @@ export interface PullRequestProviderApi {
       readonly title?: string | undefined;
       readonly body?: string | undefined;
     },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /** Points an open change request at another base branch. Absent where the host cannot. */
+  readonly changeBaseBranch?: (
+    input: ProviderRepositoryRef & { readonly number: number; readonly baseBranch: string },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
   readonly comment: (

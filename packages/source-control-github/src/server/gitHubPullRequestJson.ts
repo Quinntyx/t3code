@@ -1027,7 +1027,9 @@ export function toPullRequestWatchFingerprint(
   };
 }
 
-export interface GitHubPullRequestCore extends GitHubPullRequestDetail {
+export interface GitHubPullRequestCore extends Omit<GitHubPullRequestDetail, "stack"> {
+  /** Null means no stack; absent means not requested. */
+  readonly stack?: PullRequestStackMembership | null;
   readonly mergeQueueRemoval?: PullRequestMergeQueueRemoval;
   readonly maintainerCanModify: boolean;
   readonly canEditMaintainerEdits: boolean;
@@ -1088,6 +1090,7 @@ export function toPullRequestCore(result: PullRequestCore.Result): GitHubPullReq
       statusCheckRollup: toCheckContexts(nodesOf(contexts)),
     }),
     headRepositoryNameWithOwner: trimmed(pr.headRepository?.nameWithOwner),
+    ...(pr.stack === undefined ? {} : { stack: toStackMembership(pr) ?? null }),
     maintainerCanModify: pr.maintainerCanModify,
     canEditMaintainerEdits:
       pr.state === "OPEN" &&

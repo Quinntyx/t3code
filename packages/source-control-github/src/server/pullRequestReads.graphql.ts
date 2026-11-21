@@ -283,6 +283,24 @@ export const AutoMergeRequest = Schema.Struct({
 })
 export interface AutoMergeRequest extends Schema.Struct.Type<typeof AutoMergeRequest.fields> {}
 
+/** A stack of PullRequests */
+export const PullRequestStack = Schema.Struct({
+  /** A number uniquely identifying the stack within its repository */
+  number: Shared.Int,
+  /** The total number of pull requests in the stack */
+  size: Shared.Int,
+  /** The branch that the stack's pull requests target */
+  baseRefName: Schema.String
+})
+export interface PullRequestStack extends Schema.Struct.Type<typeof PullRequestStack.fields> {}
+
+/** A member of a PullRequestStack */
+export const PullRequestStackEntry = Schema.Struct({
+  /** This entry's position in the stack, where 1 is the closest to the base branch, 2 is stacked on top of 1, etc. */
+  position: Shared.Int
+})
+export interface PullRequestStackEntry extends Schema.Struct.Type<typeof PullRequestStackEntry.fields> {}
+
 /** Represents a 'removed_from_merge_queue' event on a given pull request. */
 export const RemovedFromMergeQueueEvent = Schema.Struct({
   __typename: Schema.Literal("RemovedFromMergeQueueEvent"),
@@ -510,6 +528,10 @@ export const PullRequestCoreRepositoryPullRequestPullRequest = Schema.Struct({
   ])),
   /** Returns the auto-merge request object if one exists for this pull request. */
   autoMergeRequest: Schema.NullOr(AutoMergeRequest),
+  /** The stack this Pull Request belongs to, or null if it is not part of a stack */
+  stack: Schema.optionalKey(Schema.NullOr(PullRequestStack)),
+  /** The stack entry for this Pull Request, or null if it is not part of a stack */
+  stackEntry: Schema.optionalKey(Schema.NullOr(PullRequestStackEntry)),
   /** A list of events, comments, commits, etc. associated with the pull request. */
   mergeQueueRemovals: Schema.optionalKey(PullRequestTimelineItemsConnection),
   /** Check if the current viewer can update this object. */
@@ -559,10 +581,11 @@ export const PullRequestCore = GraphQL.query("PullRequestCore", {
       { name: "headRef", body: "String!" },
       { name: "required", body: "Boolean!" },
       { name: "requestedReviewers", body: "Int!" },
-      { name: "mergeQueue", body: "Boolean!" }
+      { name: "mergeQueue", body: "Boolean!" },
+      { name: "stacks", body: "Boolean!" }
     ],
     selections: [
-      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$", "number", "){number title url body state isDraft mergeable mergeStateStatus reviewDecision additions deletions changedFiles createdAt updatedAt mergedAt mergeCommit{oid}mergedBy{__typename login avatarUrl...on User{name}}closedAt headRefName baseRefName headRefOid isCrossRepository maintainerCanModify headRepositoryOwner{__typename login}headRepository{nameWithOwner viewerPermission}headRef{id}author{__typename login avatarUrl...on User{id name}}autoMergeRequest{mergeMethod}mergeQueueRemovals:timelineItems(last:1 itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT])@include(if:$", "mergeQueue", "){nodes{__typename...on RemovedFromMergeQueueEvent{id createdAt reason}}}viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch baseRef{compare(headRef:$", "headRef", "){behindBy}}reviewRequests(first:$", "requestedReviewers", "){nodes{requestedReviewer{__typename...on User{login name}...on Bot{login}...on Team{slug combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}labels(first:100){nodes{name color description}}commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename...", "CheckContext", "}pageInfo{hasNextPage endCursor}}}}}}}}"] }
+      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$", "number", "){number title url body state isDraft mergeable mergeStateStatus reviewDecision additions deletions changedFiles createdAt updatedAt mergedAt mergeCommit{oid}mergedBy{__typename login avatarUrl...on User{name}}closedAt headRefName baseRefName headRefOid isCrossRepository maintainerCanModify headRepositoryOwner{__typename login}headRepository{nameWithOwner viewerPermission}headRef{id}author{__typename login avatarUrl...on User{id name}}autoMergeRequest{mergeMethod}stack@include(if:$", "stacks", "){number size baseRefName}stackEntry@include(if:$", "stacks", "){position}mergeQueueRemovals:timelineItems(last:1 itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT])@include(if:$", "mergeQueue", "){nodes{__typename...on RemovedFromMergeQueueEvent{id createdAt reason}}}viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch baseRef{compare(headRef:$", "headRef", "){behindBy}}reviewRequests(first:$", "requestedReviewers", "){nodes{requestedReviewer{__typename...on User{login name}...on Bot{login}...on Team{slug combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}labels(first:100){nodes{name color description}}commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename...", "CheckContext", "}pageInfo{hasNextPage endCursor}}}}}}}}"] }
     ],
     fragments: [
       { name: "CheckContext", body: ["on StatusCheckRollupContext{__typename...on StatusContext{context state targetUrl createdAt description isRequired(pullRequestNumber:$", "number", ")@include(if:$", "required", ")}...on CheckRun{name status conclusion startedAt completedAt detailsUrl isRequired(pullRequestNumber:$", "number", ")@include(if:$", "required", ")checkSuite{workflowRun{workflow{name}}}}}"] }
@@ -575,7 +598,8 @@ export const PullRequestCore = GraphQL.query("PullRequestCore", {
     headRef: Schema.String,
     required: Schema.Boolean,
     requestedReviewers: Shared.Int,
-    mergeQueue: Schema.Boolean
+    mergeQueue: Schema.Boolean,
+    stacks: Schema.Boolean
   },
   result: Schema.Struct({
     /** Lookup a given repository by the owner and repository name. */

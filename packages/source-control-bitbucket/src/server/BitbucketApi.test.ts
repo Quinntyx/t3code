@@ -366,6 +366,7 @@ it.effect("lists pull requests with Bitbucket state and source branch query para
     const result = yield* bitbucket.listPullRequests({
       cwd: "/repo",
       headSelector: "origin:feature/merged",
+      repository: "base/upstream",
       state: "merged",
       limit: 10,
     });
@@ -374,7 +375,7 @@ it.effect("lists pull requests with Bitbucket state and source branch query para
     const request = execute.mock.calls[0]?.[0];
     assert.strictEqual(
       request?.url,
-      "https://api.test.local/2.0/repositories/pingdotgg/t3code/pullrequests",
+      "https://api.test.local/2.0/repositories/base/upstream/pullrequests",
     );
     assert.deepStrictEqual(request?.urlParams.params, [
       ["pagelen", "10"],
@@ -645,6 +646,8 @@ it.effect("creates pull requests using the official REST payload shape", () => {
       cwd: "/repo",
       baseBranch: "main",
       headSelector: "owner:feature/provider",
+      source: { owner: "owner", repository: "owner/fork", refName: "feature/provider" },
+      target: { repository: "base/upstream", refName: "main" },
       title: "Provider PR",
       bodyFile,
     });
@@ -652,7 +655,7 @@ it.effect("creates pull requests using the official REST payload shape", () => {
     const request = execute.mock.calls[0]?.[0];
     assert.strictEqual(
       request?.url,
-      "https://api.test.local/2.0/repositories/pingdotgg/t3code/pullrequests",
+      "https://api.test.local/2.0/repositories/base/upstream/pullrequests",
     );
     assert.strictEqual(request?.method, "POST");
     assert.ok(request);
@@ -663,7 +666,7 @@ it.effect("creates pull requests using the official REST payload shape", () => {
       description: "PR body",
       source: {
         branch: { name: "feature/provider" },
-        repository: { full_name: "owner/t3code" },
+        repository: { full_name: "owner/fork" },
       },
       destination: {
         branch: { name: "main" },

@@ -60,6 +60,7 @@ query PullRequestCore(
   $required: Boolean!
   $requestedReviewers: Int!
   $mergeQueue: Boolean!
+  $stacks: Boolean!
 ) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed
@@ -121,6 +122,15 @@ query PullRequestCore(
       }
       autoMergeRequest {
         mergeMethod
+      }
+      # Lets the header decide single-merge from this read alone; github.com only.
+      stack @include(if: $stacks) {
+        number
+        size
+        baseRefName
+      }
+      stackEntry @include(if: $stacks) {
+        position
       }
       # Merge queue checks run on a commit of the queue's own, so a pull request the queue drops
       # can keep a green head. Only this event says it left without merging.

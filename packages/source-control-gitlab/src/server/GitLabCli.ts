@@ -312,6 +312,7 @@ export class GitLabCli extends Context.Service<
 
     readonly listMergeRequests: (input: {
       readonly cwd: string;
+      readonly targetRepository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -574,6 +575,7 @@ export const make = Effect.gen(function* () {
             ...(page > 1 ? ["--page", String(page)] : []),
             "--output",
             "json",
+            ...(input.targetRepository ? ["--repo", input.targetRepository] : []),
           ],
           maxOutputBytes: MERGE_REQUEST_LIST_MAX_BYTES,
         });
@@ -744,8 +746,11 @@ export const make = Effect.gen(function* () {
       );
       let project = ":fullpath";
       let targetProjectId: number | undefined;
-      if (input.source?.repository || input.source?.owner) {
-        const result = yield* execute({ cwd: input.cwd, args: ["api", "projects/:fullpath"] });
+      if (input.source?.repository || input.source?.owner || input.target?.repository) {
+        const targetPath = input.target?.repository
+          ? encodeURIComponent(input.target.repository)
+          : ":fullpath";
+        const result = yield* execute({ cwd: input.cwd, args: ["api", `projects/${targetPath}`] });
         const targetProject = yield* decodeGitLabMergeRequestProject(result.stdout).pipe(
           Effect.mapError(
             (cause) =>
@@ -757,9 +762,11 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-        project = encodeURIComponent(
-          input.source.repository ?? `${input.source.owner}/${targetProject.path}`,
-        );
+        if (input.source?.repository || input.source?.owner) {
+          project = encodeURIComponent(
+            input.source.repository ?? `${input.source.owner}/${targetProject.path}`,
+          );
+        }
         targetProjectId = targetProject.id;
       }
       yield* execute({

@@ -276,6 +276,26 @@ describe("GitCafeSourceControlProvider", () => {
     );
   });
 
+  it.effect("lists pull requests in the target repository it is given", () => {
+    const sent: Array<string> = [];
+    const client = HttpClient.make((request) => {
+      sent.push(new URL(request.url).pathname);
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(request, new Response(encodeJson({ items: [], next: null }))),
+      );
+    });
+    return Effect.gen(function* () {
+      const provider = yield* GitCafeSourceControlProvider.make;
+      yield* provider.listChangeRequests({
+        cwd: "/repo",
+        targetRepository: "team/project",
+        headSelector: "fork:feature",
+        state: "open",
+      });
+      assert.deepStrictEqual(sent, ["/api/repos/team/project/pulls"]);
+    }).pipe(Effect.provide(layerFor(client)));
+  });
+
   it.effect("opens a pull request from a fork over REST with the body file's text", () => {
     const sent: Array<{ method: string; url: string; body: unknown }> = [];
     const client = HttpClient.make((request) => {

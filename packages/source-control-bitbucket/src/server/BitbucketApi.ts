@@ -351,6 +351,7 @@ export class BitbucketApi extends Context.Service<
     }) => Effect.Effect<{ readonly body: string; readonly truncated: boolean }, BitbucketApiError>;
     readonly listPullRequests: (input: {
       readonly cwd: string;
+      readonly repository?: string;
       readonly context?: SourceControlProvider.SourceControlProviderContext;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
@@ -1128,7 +1129,10 @@ export const make = Effect.gen(function* () {
       );
     }),
     createPullRequest: Effect.fn("BitbucketApi.createPullRequest")(function* (input) {
-      const repository = yield* resolveRepository(input);
+      const repository = yield* resolveRepository({
+        ...input,
+        ...(input.target?.repository ? { repository: input.target.repository } : {}),
+      });
       const description = yield* fileSystem.readFileString(input.bodyFile).pipe(
         Effect.mapError(
           (cause) =>
@@ -1140,6 +1144,12 @@ export const make = Effect.gen(function* () {
         ),
       );
       const sourceOwner = sourceWorkspace(input);
+      const sourceRepository = input.source?.repository;
+      const sourceRepositoryName = sourceRepository?.includes("/")
+        ? sourceRepository
+        : sourceOwner
+          ? `${sourceOwner}/${sourceRepository ?? repository.repoSlug}`
+          : undefined;
       const body = {
         title: input.title,
         description,
@@ -1147,10 +1157,10 @@ export const make = Effect.gen(function* () {
           branch: {
             name: SourceControlProvider.sourceBranch(input),
           },
-          ...(sourceOwner
+          ...(sourceRepositoryName
             ? {
                 repository: {
-                  full_name: `${sourceOwner}/${input.source?.repository ?? repository.repoSlug}`,
+                  full_name: sourceRepositoryName,
                 },
               }
             : {}),
