@@ -173,6 +173,23 @@ describe("V2 storage cleanup eligibility", () => {
     },
   );
 
+  it("retains a failed thread's worktree while its run is retried", () => {
+    const stalled = {
+      ...candidateWithStatus("failed"),
+      latestRunId: RunId.make("run:stalled"),
+      stalled: true,
+    };
+    expect(storageCleanupThreadIdle(stalled, NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(false);
+    // Settling pauses the retries, so the stall no longer holds the worktree.
+    expect(
+      storageCleanupThreadIdle(
+        { ...stalled, settledOverride: "settled" },
+        NOW_MS,
+        DEFAULT_SERVER_SETTINGS,
+      ),
+    ).toBe(true);
+  });
+
   it("retains an active run even if the shell status is idle", () => {
     expect(
       storageCleanupThreadIdle(

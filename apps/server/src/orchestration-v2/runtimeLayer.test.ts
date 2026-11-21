@@ -68,6 +68,10 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ModelManifest from "../provider/ModelManifest.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ThreadWatchReactor from "./ThreadWatchReactor.ts";
+import { threadWatchStartCommand } from "./threadWatch.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -14566,6 +14570,613 @@ const layerQueueResumeDisabledInstanceTest = Layer.mergeAll(
   Layer.provide(layerProjectServiceTest),
   Layer.provide(layerPlatformTest),
 );
+
+it.layer(layerTest)("stall recovery", (it) => {
+  const stallThread = (suffix: string) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make(`stall:${suffix}`);
+      const projectId = ProjectId.make(`stall:project:${suffix}`);
+      yield* seedProject({
+        projectId,
+        title: "Stall project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`stall:create:${suffix}`),
+        threadId,
+        projectId,
+        title: "Stall recovery",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`stall:message:${suffix}`),
+        threadId,
+        messageId: MessageId.make(`stall:message:${suffix}`),
+        text: "Work on this.",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      const now = yield* DateTime.now;
+      const failRun = (overloaded: boolean) =>
+        events.write({
+          commandId: CommandId.make(`stall:fail:${suffix}:${overloaded}`),
+          events: [
+            {
+              id: EventId.make(`stall:error:${suffix}:${overloaded}`),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`stall:error:${suffix}`),
+                type: "error",
+                threadId,
+                runId: run.id,
+                nodeId: run.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 2,
+                status: "failed",
+                title: "Provider failure",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "provider_error",
+                  message: "The API is overloaded.",
+                  code: "api_error_529",
+                  retryable: true,
+                  ...(overloaded ? { overloaded: true } : {}),
+                },
+              },
+            },
+            {
+              id: EventId.make(`stall:failed:${suffix}:${overloaded}`),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...run, status: "failed", completedAt: now },
+            },
+          ],
+        });
+      return { threadId, orchestrator, events, run, now, failRun };
+    });
+
+  const shell = (threadId: ThreadId) =>
+    Effect.flatMap(Orchestrator.OrchestratorV2, (orchestrator) =>
+      orchestrator
+        .getShellSnapshot()
+        .pipe(Effect.map((snapshot) => snapshot.threads.find((row) => row.id === threadId))),
+    );
+
+  const stallCandidateIds = Effect.flatMap(ProjectionStore.ProjectionStoreV2, (projections) =>
+    projections
+      .getStallRecoveryCandidates()
+      .pipe(Effect.map((candidates) => candidates.map((candidate) => candidate.id))),
+  );
+
+  const arm = (threadId: ThreadId, runId: RunId, nextAttemptAt: string, attempt = 1) =>
+    Effect.flatMap(Orchestrator.OrchestratorV2, (orchestrator) =>
+      orchestrator.autoArmStallRecovery({
+        commandId: CommandId.make(`stall:arm:${threadId}:${attempt}`),
+        threadId,
+        stallRecovery: { runId, attempt, nextAttemptAt },
+      }),
+    );
+
+  const retry = (threadId: ThreadId, runId: RunId) =>
+    Effect.flatMap(ThreadManagementService.ThreadManagementService, (threads) =>
+      threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`stall:retry:${threadId}:${runId}`),
+        threadId,
+        messageId: MessageId.make(`stall:retry:${threadId}:${runId}`),
+        stallContinuationOfRunId: runId,
+        text: "Continue where you left off.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "agent",
+        creationSource: "server",
+      }),
+    );
+
+  it.effect("arms an overloaded failure and starts the retry it sends", () =>
+    Effect.gen(function* () {
+      const { threadId, events, run, failRun } = yield* stallThread("recover");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      assert.deepInclude((yield* shell(threadId))?.stallRecovery, {
+        runId: run.id,
+        attempt: 1,
+      });
+      yield* retry(threadId, run.id);
+      const projection = yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(threadId);
+      assert.lengthOf(projection.runs, 2);
+      assert.equal(projection.runs[1]?.status, "starting");
+      assert.equal(projection.runs[1]?.stallContinuationOfRunId, run.id);
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make("stall:recover:retry-running"),
+            type: "run.updated",
+            threadId,
+            occurredAt: yield* DateTime.now,
+            payload: { ...projection.runs[1]!, status: "running" },
+          },
+        ],
+      });
+      // A retry that is still running has not ended, so only its end decides whether the record
+      // stays.
+      assert.deepInclude((yield* shell(threadId))?.stallRecovery, { runId: run.id });
+    }),
+  );
+
+  it.effect("a retry that finishes without another overload ends the stall", () =>
+    Effect.gen(function* () {
+      const { threadId, events, run, failRun } = yield* stallThread("cleared");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      yield* retry(threadId, run.id);
+      const projection = yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(threadId);
+      const retryRun = projection.runs[1]!;
+      const now = yield* DateTime.now;
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make("stall:cleared:completed"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...retryRun, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      // The schedule is left as it was; the runs decide, and the retry's completion ends it.
+      assert.isFalse((yield* shell(threadId))?.stalled);
+      assert.notInclude(yield* stallCandidateIds, threadId);
+    }),
+  );
+
+  it.effect("does not start a retry whose run has been replaced", () =>
+    Effect.gen(function* () {
+      const { threadId, run, failRun } = yield* stallThread("stale");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      yield* retry(threadId, RunId.make("run:stale:gone"));
+      const projection = yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(threadId);
+      assert.lengthOf(projection.runs, 1);
+    }),
+  );
+
+  it.effect("a Stop ends the retry loop", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("stop");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      assert.isTrue((yield* shell(threadId))?.stalled);
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make("stall:stop"),
+        threadId,
+      });
+      // The Stop mark is the one fact that says the user ended it.
+      assert.isFalse((yield* shell(threadId))?.stalled);
+      assert.notInclude(yield* stallCandidateIds, threadId);
+    }),
+  );
+
+  it.effect("Stop retrying keeps the sweep from arming the run again", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("stop-retrying");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      assert.include(yield* stallCandidateIds, threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("stall:stop-retrying"),
+        threadId,
+        stallRecovery: null,
+      });
+      assert.isFalse((yield* shell(threadId))?.stalled);
+      assert.notInclude(yield* stallCandidateIds, threadId);
+    }),
+  );
+
+  it.effect("Stop retrying ends a retry the sweep has not armed yet", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, failRun } = yield* stallThread("stop-unarmed");
+      yield* failRun(true);
+      // No record: the failure alone says the thread is stalled.
+      assert.isTrue((yield* shell(threadId))?.stalled);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("stall:stop-unarmed"),
+        threadId,
+        stallRecovery: null,
+      });
+      assert.isFalse((yield* shell(threadId))?.stalled);
+      assert.notInclude(yield* stallCandidateIds, threadId);
+    }),
+  );
+
+  it.effect("a watcher keeps waiting on a stalled thread until Stop retrying ends it", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("watched");
+      const { threadId: watcherId } = yield* stallThread("watcher");
+      const reactor = yield* ThreadWatchReactor.ThreadWatchReactor.pipe(
+        Effect.provide(
+          ThreadWatchReactor.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(PeerForwarding.PeerForwarding)({}),
+                Layer.mock(ServerEnvironment.ServerEnvironment)({
+                  getEnvironmentId: Effect.succeed(EnvironmentId.make("here")),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      const watcher = () => orchestrator.getThreadProjection(watcherId);
+      yield* orchestrator.dispatch(
+        threadWatchStartCommand(watcherId, {
+          threadId,
+          runId: run.id,
+          title: "Stalled work",
+          startedAt: DateTime.formatIso(yield* DateTime.now),
+        }),
+      );
+      yield* reactor.handle({
+        type: "thread.metadata-updated",
+        threadId: watcherId,
+        payload: (yield* watcher()).thread,
+      } as OrchestrationV2DomainEvent);
+
+      yield* failRun(true);
+      yield* reactor.handle({
+        type: "run.updated",
+        threadId,
+        payload: { ...run, status: "failed" },
+      } as OrchestrationV2DomainEvent);
+      assert.lengthOf((yield* watcher()).thread.threadWatches ?? [], 1);
+
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("stall:watched:stop-retrying"),
+        threadId,
+        stallRecovery: null,
+      });
+      const stop = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.type === "run_interrupt_request",
+      );
+      assert.isDefined(stop);
+      yield* reactor.handle({
+        type: "turn-item.updated",
+        threadId,
+        payload: stop,
+      } as OrchestrationV2DomainEvent);
+      assert.deepEqual((yield* watcher()).thread.threadWatches ?? [], []);
+    }),
+  );
+
+  it.effect("a user message supersedes the retry", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("message");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("stall:user-message"),
+        threadId,
+        messageId: MessageId.make("stall:user-message"),
+        text: "Do something else.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      // The schedule may still name the old run; the new run is the one on show.
+      assert.isFalse((yield* shell(threadId))?.stalled);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.lengthOf(projection.runs, 2);
+    }),
+  );
+
+  it.effect("a stale retry for an older run leaves a newer run's schedule alone", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, events, run, failRun } = yield* stallThread("stale-later");
+      yield* failRun(true);
+      // A second message runs and stalls too, and the sweep arms that run.
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("stall:stale-later:second"),
+        threadId,
+        messageId: MessageId.make("stall:stale-later:second"),
+        text: "Next.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const second = (yield* orchestrator.getThreadProjection(threadId)).runs[1]!;
+      const now = yield* DateTime.now;
+      yield* events.write({
+        commandId: CommandId.make("stall:stale-later:fail"),
+        events: [
+          {
+            id: EventId.make("stall:stale-later:error"),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("stall:stale-later:error"),
+              type: "error",
+              threadId,
+              runId: second.id,
+              nodeId: second.rootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Provider failure",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: "provider_error",
+                message: "The API is overloaded.",
+                code: "api_error_529",
+                retryable: true,
+                overloaded: true,
+              },
+            },
+          },
+          {
+            id: EventId.make("stall:stale-later:failed"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...second, status: "failed", completedAt: now },
+          },
+        ],
+      });
+      const secondAttempt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+      yield* arm(threadId, second.id, secondAttempt, 2);
+      // A delayed retry for the first run arrives; it must not erase the newer schedule.
+      yield* retry(threadId, run.id);
+      assert.deepInclude((yield* shell(threadId))?.stallRecovery, {
+        runId: second.id,
+        attempt: 2,
+        nextAttemptAt: secondAttempt,
+      });
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+    }),
+  );
+
+  it.effect("a retry that finds the thread archived goes out once it is unarchived", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("archived");
+      yield* failRun(true);
+      // Archiving races the arm too; the schedule still has to land for the retry to follow.
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("stall:archived:archive"),
+        threadId,
+      });
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      // An archived thread has no shell row, so the schedule is read from its projection.
+      const armed = () =>
+        orchestrator
+          .getThreadProjection(threadId)
+          .pipe(Effect.map((projection) => projection.thread.stallRecovery?.nextAttemptAt));
+      const armedAt = yield* armed();
+      assert.isString(armedAt);
+      const retryAt = (nextAttemptAt: string) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`stall:retry:archived:${nextAttemptAt}`),
+          threadId,
+          messageId: MessageId.make(`stall:retry:archived:${nextAttemptAt}`),
+          stallContinuationOfRunId: run.id,
+          text: "Continue where you left off.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      yield* retryAt(armedAt!);
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+      const moved = yield* armed();
+      assert.isString(moved);
+      assert.notEqual(moved, armedAt);
+      yield* orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("stall:archived:unarchive"),
+        threadId,
+      });
+      yield* retryAt(moved!);
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+    }),
+  );
+
+  it.effect("Stop retrying is refused once the retry has started", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("stop-late");
+      yield* failRun(true);
+      yield* arm(threadId, run.id, DateTime.formatIso(yield* DateTime.now));
+      yield* retry(threadId, run.id);
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+      const refused = yield* orchestrator
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("stall:stop-late:stop-retrying"),
+          threadId,
+          stallRecovery: null,
+        })
+        .pipe(Effect.flip);
+      assert.include(String(refused.cause), "not stalled");
+    }),
+  );
+
+  it.effect("a retry blocked by a pending question goes out once the question is answered", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, events, run, failRun } = yield* stallThread("waiting");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      const now = yield* DateTime.now;
+      const requestId = RuntimeRequestId.make("stall:waiting:request");
+      const request = {
+        id: requestId,
+        nodeId: NodeId.make("node:stall-waiting"),
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "command" as const,
+        responseCapability: { type: "message" as const },
+        createdAt: now,
+      };
+      yield* events.write({
+        commandId: CommandId.make("stall:waiting:request"),
+        events: [
+          {
+            id: EventId.make("stall:waiting:request"),
+            type: "runtime-request.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...request, status: "pending", resolvedAt: null },
+          },
+        ],
+      });
+      const retryFor = (nextAttemptAt: string) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`stall:retry:waiting:${nextAttemptAt}`),
+          threadId,
+          messageId: MessageId.make(`stall:retry:waiting:${nextAttemptAt}`),
+          stallContinuationOfRunId: run.id,
+          text: "Continue where you left off.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      const armedAt = (yield* shell(threadId))!.stallRecovery!.nextAttemptAt;
+      // The blocked retry is a no-op, and the armed time moves so the sweep names a new one.
+      yield* retryFor(armedAt);
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+      const moved = (yield* shell(threadId))!.stallRecovery!.nextAttemptAt;
+      assert.notEqual(moved, armedAt);
+      yield* events.write({
+        commandId: CommandId.make("stall:waiting:answered"),
+        events: [
+          {
+            id: EventId.make("stall:waiting:answered"),
+            type: "runtime-request.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...request, status: "resolved", resolvedAt: now },
+          },
+        ],
+      });
+      yield* retryFor(moved);
+      const runs = (yield* orchestrator.getThreadProjection(threadId)).runs;
+      assert.lengthOf(runs, 2);
+      assert.equal(runs[1]?.stallContinuationOfRunId, run.id);
+    }),
+  );
+
+  it.effect("a retry does not end a snooze the user set", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("snooze");
+      yield* failRun(true);
+      yield* arm(
+        threadId,
+        run.id,
+        DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 1 })),
+      );
+      const snoozedUntil = DateTime.formatIso(DateTime.add(yield* DateTime.now, { hours: 2 }));
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("stall:snooze:snooze"),
+        threadId,
+        snoozedUntil,
+      });
+      yield* retry(threadId, run.id);
+      const thread = yield* (yield* ProjectionStore.ProjectionStoreV2).getThread(threadId);
+      assert.equal(thread.snoozedUntil && DateTime.formatIso(thread.snoozedUntil), snoozedUntil);
+    }),
+  );
+
+  it.effect("retrying now arms the stalled run on the server's clock", () =>
+    Effect.gen(function* () {
+      const { threadId, orchestrator, run, failRun } = yield* stallThread("retry-now");
+      yield* failRun(true);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("stall:retry-now"),
+        threadId,
+        stallRetryNow: true,
+      });
+      assert.deepInclude((yield* shell(threadId))?.stallRecovery, {
+        runId: run.id,
+        attempt: 1,
+        // The server's clock, not the run's end: the sweep dispatches it straight away.
+        nextAttemptAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      const candidates = yield* stallCandidateIds;
+      assert.include(candidates, threadId);
+    }),
+  );
+});
 
 it.layer(layerQueueResumeDisabledInstanceTest)(
   "queue.resume on a project-disabled instance",

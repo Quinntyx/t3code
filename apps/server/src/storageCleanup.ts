@@ -168,6 +168,10 @@ function threadIdle(
 ): boolean {
   return (
     thread.activeRunId === null &&
+    // A stalled thread's retry is work still ahead of it, unless archiving or settling paused it.
+    (thread.stalled !== true ||
+      thread.archivedAt !== null ||
+      thread.settledOverride === "settled") &&
     (thread.status === "idle" ||
       thread.status === "completed" ||
       thread.status === "interrupted" ||

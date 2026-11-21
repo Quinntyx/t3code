@@ -239,6 +239,73 @@ function taskFixture() {
   return { projection: { ...projection, runs: [run] }, run };
 }
 
+it("reports a run the upstream overload ended as still working, not as its result", () => {
+  const { projection, run } = taskFixture();
+  const failedRun = { ...run, status: "failed" as const };
+  const failure = {
+    id: TurnItemId.make("item:overload"),
+    type: "error" as const,
+    threadId: parentThreadId,
+    runId: failedRun.id,
+    nodeId: failedRun.rootNodeId,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 2,
+    status: "failed" as const,
+    title: "Provider failure",
+    startedAt: parentCreatedAt,
+    completedAt: parentCreatedAt,
+    updatedAt: parentCreatedAt,
+    failure: {
+      class: "provider_error" as const,
+      message: "The API is overloaded.",
+      code: "api_error_529",
+      retryable: true,
+      overloaded: true,
+    },
+  };
+  const stalled = { ...projection, runs: [failedRun], turnItems: [failure] };
+  const progress = delegatedTaskProgress(stalled);
+  assert.equal(progress.state, "working");
+  assert.isUndefined(progress.resultRun);
+  // Without the overload the same failure is the task's ordinary result.
+  const ended = delegatedTaskProgress({ ...stalled, turnItems: [] });
+  assert.equal(ended.state, "result_available");
+  assert.equal(ended.resultRun?.id, failedRun.id);
+  // A Stop reached it, so the user ended it and there is no retry still coming.
+  const stopped = delegatedTaskProgress({
+    ...stalled,
+    turnItems: [
+      failure,
+      {
+        ...failure,
+        id: TurnItemId.make("item:stop"),
+        type: "run_interrupt_request",
+        title: "Interrupt requested",
+      },
+    ] as unknown as typeof stalled.turnItems,
+  });
+  assert.equal(stopped.state, "result_available");
+  assert.equal(stopped.resultRun?.id, failedRun.id);
+  // A completed retry leaves the overloaded run behind, so the record naming it cannot hide it.
+  const completedRetry = {
+    ...failedRun,
+    id: RunId.make("retry"),
+    ordinal: 2,
+    status: "completed" as const,
+    startedAt: childCreatedAt,
+    completedAt: childCreatedAt,
+  };
+  const recovered = delegatedTaskProgress({
+    ...stalled,
+    runs: [failedRun, completedRetry],
+  });
+  assert.equal(recovered.state, "result_available");
+  assert.equal(recovered.resultRun?.id, completedRetry.id);
+});
+
 it("reports the run that ended last, not the highest ordinal", () => {
   const { projection, run } = taskFixture();
   const ended = (ordinal: number, completedAt: string): OrchestrationV2Run => ({

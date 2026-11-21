@@ -340,6 +340,51 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe(false);
   });
 
+  it("keeps a stalled thread working, with a pill that does not pulse and no failure badge", () => {
+    const stalled = {
+      ...runtime,
+      status: "failed" as const,
+      lastError: "Claude API overloaded.",
+      stalled: true as const,
+      stallNextAttemptAt: "2026-03-09T10:01:00.000Z",
+    };
+    const thread = {
+      hasActionableProposedPlan: false,
+      interactionMode: "default" as const,
+      ...idle,
+      runtime: stalled,
+      latestRun: {
+        runId: RunId.make("run-overloaded"),
+        status: "failed" as const,
+        requestedAt: "2026-03-09T10:00:00.000Z",
+        startedAt: "2026-03-09T10:00:00.000Z",
+        completedAt: "2026-03-09T10:00:30.000Z",
+        assistantMessageId: null,
+      },
+      lastVisitedAt: "2026-03-09T09:00:00.000Z",
+    };
+    expect(resolveSidebarThreadStatus(thread)).toBe("stalled");
+    expect(resolveThreadStatusPill({ thread })).toMatchObject({ label: "Stalled", pulse: false });
+    expect(
+      shouldRecedeSidebarThread({
+        status: "working",
+        isUnread: false,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(true);
+
+    // Stopping the retry leaves an ordinary failure, badged once it is unseen.
+    const { stalled: _stalled, stallNextAttemptAt: _next, ...stoppedRuntime } = stalled;
+    const stopped = { ...thread, runtime: stoppedRuntime };
+    expect(resolveSidebarThreadStatus(stopped)).toBe("failed");
+    expect(resolveThreadStatusPill({ thread: stopped })).toMatchObject({
+      label: "Failed",
+      pulse: false,
+    });
+  });
+
   it("shows a client-side pull request generation as PRing over an idle thread", () => {
     expect(
       resolveSidebarThreadStatus(

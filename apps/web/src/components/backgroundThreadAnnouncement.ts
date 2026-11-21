@@ -17,6 +17,8 @@ export interface BackgroundThreadSnapshot {
   readonly requestId: string | null;
   readonly runId: RunId | null;
   readonly runStatus: OrchestrationV2RunStatus | null;
+  /** The latest run's failure is one the server retries, so it has not ended. */
+  readonly stalled?: boolean | undefined;
   /** The run doing work now, which can be older than a queued run cancelled while it ran. */
   readonly activeRunId: RunId | null;
   /** A snoozed thread stays hidden until its timer, so it stays quiet too. */
@@ -63,8 +65,10 @@ export function nextBackgroundThreadAnnouncement(
   const announcements: string[] = [];
   for (const thread of threads) {
     const before = previous.get(thread.key);
-    const outcome = runOutcomeText(thread.runStatus, resolve);
-    const settled = outcome !== null || thread.runStatus === "rolled_back";
+    // A failure the server retries has not ended the run, so it says nothing yet.
+    const retried = thread.stalled === true && thread.runStatus === "failed";
+    const outcome = retried ? null : runOutcomeText(thread.runStatus, resolve);
+    const settled = retried || outcome !== null || thread.runStatus === "rolled_back";
     memory.set(thread.key, {
       request: thread.request,
       requestId: thread.requestId,

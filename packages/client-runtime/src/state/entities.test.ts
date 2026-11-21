@@ -53,6 +53,56 @@ describe("V2 client presentation", () => {
     expect(effectiveSnoozed(active, { now: "2026-06-20T00:05:00.000Z" })).toBe(false);
   });
 
+  it("presents the server's stalled flag, with the retry time only when the record names the run", () => {
+    const runId = RunId.make("run-overloaded");
+    const stalledUntil = "2026-06-20T00:01:00.000Z";
+    const overloaded = { ...v2ThreadShell, latestRunId: runId, status: "failed" as const };
+    const armed = presentThreadShell(environmentId, {
+      ...overloaded,
+      stalled: true,
+      stallRecovery: { runId, attempt: 1, nextAttemptAt: stalledUntil },
+    });
+    expect(armed.runtime).toMatchObject({
+      status: "failed",
+      stalled: true,
+      stallNextAttemptAt: stalledUntil,
+    });
+    expect(isThreadWorking(armed)).toBe(true);
+
+    // Stalled from the moment the run fails: the server has not scheduled the retry yet.
+    const unarmed = presentThreadShell(environmentId, { ...overloaded, stalled: true });
+    expect(unarmed.runtime?.stalled).toBe(true);
+    expect(unarmed.runtime?.stallNextAttemptAt).toBeUndefined();
+    expect(isThreadWorking(unarmed)).toBe(true);
+
+    // A record left from an earlier outage lends neither its state nor its time.
+    const stale = { runId: RunId.make("run-earlier"), attempt: 3, nextAttemptAt: stalledUntil };
+    const failed = presentThreadShell(environmentId, { ...overloaded, stallRecovery: stale });
+    expect(failed.runtime?.stalled).toBeUndefined();
+    expect(isThreadWorking(failed)).toBe(false);
+    const again = presentThreadShell(environmentId, {
+      ...overloaded,
+      stalled: true,
+      stallRecovery: stale,
+    });
+    expect(again.runtime?.stalled).toBe(true);
+    expect(again.runtime?.stallNextAttemptAt).toBeUndefined();
+
+    // A consumption cap outranks the stall: the thread waits on the cap, not a retry.
+    const capped = presentThreadShell(environmentId, {
+      ...overloaded,
+      stalled: true,
+      stallRecovery: { runId, attempt: 1, nextAttemptAt: stalledUntil },
+      consumptionCapHit: {
+        at: DateTime.formatIso(v2ThreadShell.updatedAt),
+        reason: "5h usage 90% reached 80% cap.",
+      },
+    });
+    expect(capped.runtime?.stalled).toBeUndefined();
+    expect(capped.runtime?.lastErrorCode).toBe("consumption_cap");
+    expect(isThreadWorking(capped)).toBe(false);
+  });
+
   it("presents a consumption cap hit as a usage_limit failure on the shell", () => {
     const shell = presentThreadShell(environmentId, {
       ...v2ThreadShell,

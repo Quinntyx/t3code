@@ -29,6 +29,7 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2LinkedSender,
   type OrchestrationV2Run,
+  type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadTranscript,
@@ -44,6 +45,7 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
+import { stalledRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { createModelHiddenPredicate, readCustomModelEntries } from "@t3tools/shared/model";
@@ -582,17 +584,32 @@ export function latestRun(
   return projection.runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
 }
 
-function latestRestartContinuation(
+/** Every run from `run` to the end of its restart and stall continuation chain. */
+function continuationChain(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  run: OrchestrationV2Run,
+): ReadonlyArray<OrchestrationV2Run> {
+  const chain = [run];
+  let current = run;
+  for (let hops = 0; hops < runs.length; hops++) {
+    const next = runs.find(
+      (candidate) =>
+        candidate.restartContinuationOfRunId === current.id ||
+        candidate.stallContinuationOfRunId === current.id,
+    );
+    if (next === undefined) break;
+    chain.push(next);
+    current = next;
+  }
+  return chain;
+}
+
+/** A restart and an overload retry both cut a run into a new one on the same thread. */
+function latestContinuation(
   runs: ReadonlyArray<OrchestrationV2Run>,
   run: OrchestrationV2Run,
 ): OrchestrationV2Run {
-  let current = run;
-  for (let hops = 0; hops < runs.length; hops++) {
-    const next = runs.find((candidate) => candidate.restartContinuationOfRunId === current.id);
-    if (next === undefined) break;
-    current = next;
-  }
-  return current;
+  return continuationChain(runs, run).at(-1) ?? run;
 }
 
 export function latestActiveRun(
@@ -1052,7 +1069,12 @@ const make = Effect.gen(function* () {
     const afterSequence = yield* orchestrator
       .getThreadEventSequence(input.threadId)
       .pipe(Effect.mapError(loadError));
-    const target = yield* getProjectThreadRecords(input, ["runs"]);
+    // Both the failure and the Stop mark decide whether a failed run is stalled.
+    const loadWaitRecords = () =>
+      getProjectThreadRecords(input, ["runs", "turnItems"], {
+        turnItemTypes: ["error", "run_interrupt_request"],
+      });
+    const target = yield* loadWaitRecords();
     const selectedRun =
       input.runId === undefined
         ? latestRun(target)
@@ -1069,7 +1091,8 @@ const make = Effect.gen(function* () {
     // A restart cuts a run and continues it as a new run. Follow that chain,
     // so a cut run is not the answer while its continuation is pending.
     // Runs per matching event and is already covered by the waitForThread span.
-    const outcome = Effect.fnUntraced(function* (runs: ReadonlyArray<OrchestrationV2Run>) {
+    const outcome = Effect.fnUntraced(function* (records: ProjectionRecords<"runs" | "turnItems">) {
+      const runs = records.runs;
       const current = runs.find((candidate) => candidate.id === selectedRun.id);
       if (current === undefined) {
         return yield* new ThreadManagementRunNotFoundError({
@@ -1077,17 +1100,24 @@ const make = Effect.gen(function* () {
           runId: selectedRun.id,
         });
       }
-      const run = latestRestartContinuation(runs, current);
+      const run = latestContinuation(runs, current);
+      // A stalled run is not the answer either: its overload retry is still coming.
       const pending =
-        isTerminalRunStatus(run.status) && (yield* orchestrator.restartContinuationPending(run));
+        isTerminalRunStatus(run.status) &&
+        ((yield* orchestrator.restartContinuationPending(run)) ||
+          stalledRun(runs, records.turnItems)?.id === run.id);
       return { run, pending, settled: isTerminalRunStatus(run.status) && !pending };
     });
     const untilDelegatedWorkSettled = input.untilDelegatedWorkSettled === true;
     const delegatedWorkResult = Effect.gen(function* () {
       const records = yield* getProjectThreadRecords(
         input,
-        ["runs", "messages", "subagents", "providerThreads"],
-        { messageRoles: ["user"], monitorNotificationsOnly: true },
+        ["runs", "messages", "subagents", "providerThreads", "turnItems"],
+        {
+          messageRoles: ["user"],
+          monitorNotificationsOnly: true,
+          turnItemTypes: ["error", "run_interrupt_request"],
+        },
       );
       const progress = delegatedTaskProgress(records);
       // A thread rolled back past all its work, with nothing left running, has no answer to wait for.
@@ -1104,9 +1134,9 @@ const make = Effect.gen(function* () {
       return pending ? undefined : progress.resultRun;
     });
     const evaluate = Effect.fn("orchestrationV2.threadManagement.evaluate")(function* (
-      runs: ReadonlyArray<OrchestrationV2Run>,
+      records: ProjectionRecords<"runs" | "turnItems">,
     ) {
-      const current = yield* outcome(runs);
+      const current = yield* outcome(records);
       if (!current.settled || !untilDelegatedWorkSettled) {
         return { ...current, resultRun: undefined };
       }
@@ -1119,18 +1149,39 @@ const make = Effect.gen(function* () {
       timedOut: !current.settled,
       ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
     });
-    const initial = yield* evaluate(target.runs);
+    const initial = yield* evaluate(target);
     // No timeout only looks, without subscribing.
     if (initial.settled || input.timeoutMs <= 0) return settledResult(initial);
 
+    const wakesWait = (stored: OrchestrationV2StoredEvent) => {
+      if (untilDelegatedWorkSettled) return true;
+      switch (stored.event.type) {
+        // Any run can change the answer: a retry continues the one waited on, and an unrelated
+        // new run supersedes a stalled one. The projection read decides.
+        case "run.created":
+        case "run.updated":
+          return true;
+        // A deleted thread fails the wait at once instead of at its timeout.
+        case "thread.deleted":
+          return true;
+        // Stop retrying writes only a mark, and it can end the retry the wait was following.
+        case "turn-item.updated":
+          return stored.event.payload.type === "run_interrupt_request";
+        default:
+          return false;
+      }
+    };
     // A declined continuation records no event, so its effect settling wakes
     // the wait too.
     const wait = Stream.merge(
       Stream.mergeAll(
         (
           [
+            "run.created",
             "run.updated",
             "thread.deleted",
+            // A Stop mark on the run ends the stall the wait was following.
+            "turn-item.updated",
             // What delegated work reads besides runs: tasks and their
             // deliveries, and a provider thread's background tasks.
             ...(untilDelegatedWorkSettled
@@ -1145,25 +1196,12 @@ const make = Effect.gen(function* () {
           }),
         ),
         { concurrency: "unbounded" },
-      ).pipe(
-        Stream.mapError(loadError),
-        Stream.filter(
-          (stored) =>
-            untilDelegatedWorkSettled ||
-            stored.event.type !== "run.updated" ||
-            stored.event.payload.id === selectedRun.id ||
-            stored.event.payload.restartContinuationOfRunId !== undefined,
-        ),
-      ),
+      ).pipe(Stream.mapError(loadError), Stream.filter(wakesWait)),
       initial.pending
         ? Stream.fromEffect(orchestrator.awaitRestartContinuation(initial.run))
         : Stream.empty,
     ).pipe(
-      Stream.mapEffect(() =>
-        getProjectThreadRecords(input, ["runs"]).pipe(
-          Effect.flatMap((current) => evaluate(current.runs)),
-        ),
-      ),
+      Stream.mapEffect(() => loadWaitRecords().pipe(Effect.flatMap(evaluate))),
       Stream.filter((current) => current.settled),
       Stream.runHead,
       Effect.timeoutOption(Duration.millis(Math.max(1, input.timeoutMs))),
@@ -1173,7 +1211,7 @@ const make = Effect.gen(function* () {
     // The run may have reached a terminal status while the timeout was
     // winning the race; the final projection read decides what actually
     // happened, so only a still-active run counts as timed out.
-    return settledResult(yield* evaluate((yield* getProjectThreadRecords(input, ["runs"])).runs));
+    return settledResult(yield* evaluate(yield* loadWaitRecords()));
   });
 
   const settleAfterRun: ThreadManagementServiceShape["settleAfterRun"] = Effect.fn(

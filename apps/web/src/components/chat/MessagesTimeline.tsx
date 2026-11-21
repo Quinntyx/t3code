@@ -261,6 +261,8 @@ interface MessagesTimelineProps {
   latestRun: TimelineLatestRun | null;
   /** The run the screen reader announcer follows; see announcedRun. */
   announcedRun?: { readonly runId: RunId; readonly status: TimelineLatestRun["status"] } | null;
+  /** The thread is waiting on the server's retry of an overloaded run, so it is still working. */
+  stalled?: boolean;
   /** See isDetailBehindShell. */
   detailBehindShell?: boolean;
   runningRunId?: RunId | null;
@@ -382,6 +384,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   findNavigationId = 0,
   latestRun,
   announcedRun = null,
+  stalled = false,
   detailBehindShell = false,
   runningRunId = null,
   turnDiffSummaries,
@@ -1204,6 +1207,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       requestId={awaitingRequestId}
       runId={announcedRun?.runId ?? null}
       runStatus={announcedRun?.status ?? null}
+      stalled={stalled}
       detailBehind={detailBehindShell}
       level={screenReaderAnnouncements}
       entries={screenReaderAnnouncements === "status" ? EMPTY_TIMELINE_ENTRIES : timelineEntries}

@@ -3,6 +3,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ProviderThread,
@@ -377,6 +378,306 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
   }),
 );
 
+it.effect("waitForThread follows a stall retry instead of the failed run it continues", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-stall");
+    const threadId = ThreadId.make("thread:thread-management:wait-stall");
+    const runId = RunId.make("run:thread-management:wait-stall");
+    const retryId = RunId.make("run:thread-management:wait-stall:retry");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    const overload = (run: RunId) => ({
+      type: "error" as const,
+      status: "failed" as const,
+      runId: run,
+      nodeId: NodeId.make("node-root"),
+      failure: { class: "provider_error", message: "Overloaded.", overloaded: true },
+    });
+    let runs: Array<OrchestrationV2Run> = [
+      { id: runId, status: "failed", rootNodeId: NodeId.make("node-root") } as OrchestrationV2Run,
+    ];
+    // No retry record is armed: the failure alone is what makes the run stalled.
+    let turnItems: Array<ReturnType<typeof overload>> = [overload(runId)];
+    let deleted = false;
+    const stored = (sequence: number, event: object) =>
+      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          awaitRestartContinuation: () => Effect.never,
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.created"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: {
+                    id: threadId,
+                    projectId,
+                    deletedAt: deleted ? DateTime.makeUnsafe(1) : null,
+                  },
+                  runs,
+                  turnItems,
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    // The failed run is not the answer while its retry is still coming, even unarmed.
+    expect(
+      yield* service.waitForThread({ projectId, threadId, runId, timeoutMs: 0 }),
+    ).toMatchObject({ timedOut: true, run: { id: runId, status: "failed" } });
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    const retry = {
+      id: retryId,
+      ordinal: 2,
+      stallContinuationOfRunId: runId,
+    } as OrchestrationV2Run;
+    runs = [...runs, { ...retry, status: "running" }];
+    yield* Queue.offer(events, stored(1, { type: "run.created", payload: retry }));
+    // The retry stalls too, and the wait follows the new run.
+    runs = [runs[0]!, { ...retry, status: "failed", completedAt: DateTime.makeUnsafe(0) }];
+    turnItems = [overload(runId), overload(retryId)];
+    yield* Queue.offer(events, stored(2, { type: "run.updated", payload: runs[1]! }));
+    // It ends without another overload, and that ending is the wait's answer.
+    runs = [runs[0]!, { ...runs[1]!, status: "completed", completedAt: DateTime.makeUnsafe(1) }];
+    yield* Queue.offer(events, stored(3, { type: "run.updated", payload: runs[1]! }));
+    const result = yield* Fiber.join(fiber);
+
+    expect(result).toMatchObject({
+      timedOut: false,
+      run: { id: retryId, status: "completed" },
+    });
+  }),
+);
+
+it.effect(
+  "waitForThread follows a retry that already exists when it waits on the run before it",
+  () =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.make("project:thread-management:wait-stall-existing");
+      const threadId = ThreadId.make("thread:thread-management:wait-stall-existing");
+      const runId = RunId.make("run:thread-management:wait-stall-existing");
+      const retryId = RunId.make("run:thread-management:wait-stall-existing:retry");
+      const at = (seconds: number) => DateTime.makeUnsafe(seconds * 1_000);
+      let runs = [
+        { id: runId, ordinal: 1, status: "failed", completedAt: at(1) },
+        { id: retryId, ordinal: 2, status: "running", stallContinuationOfRunId: runId },
+      ] as unknown as Array<OrchestrationV2Run>;
+      let turnItems = [
+        {
+          type: "error",
+          status: "failed",
+          runId,
+          nodeId: NodeId.make("node-root"),
+          failure: { class: "provider_error", message: "Overloaded.", overloaded: true },
+        },
+      ];
+      const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+      const subscribed = yield* Deferred.make<void>();
+      const stored = (sequence: number, event: object) =>
+        ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
+      const layerTest = ThreadManagementService.layer.pipe(
+        Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+        Layer.provide(
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadEventSequence: () => Effect.succeed(0),
+            restartContinuationPending: () => Effect.succeed(false),
+            awaitRestartContinuation: () => Effect.never,
+            streamStoredEventsFrom: (input) =>
+              input?.eventType === "run.updated"
+                ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                    Stream.drain,
+                    Stream.concat(Stream.fromQueue(events)),
+                  )
+                : Stream.never,
+            getThreadRecords: () =>
+              Effect.sync(
+                () =>
+                  ({
+                    thread: { id: threadId, projectId, deletedAt: null },
+                    runs,
+                    turnItems,
+                  }) as unknown as OrchestrationV2ThreadProjection,
+              ),
+          }),
+        ),
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(layerReceiptsTest),
+      );
+      const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+        Effect.provide(layerTest),
+      );
+      const fiber = yield* service
+        .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(subscribed);
+      runs = [runs[0]!, { ...runs[1]!, status: "completed", completedAt: at(2) }];
+      yield* Queue.offer(events, stored(1, { type: "run.updated", payload: runs[1]! }));
+      const result = yield* Fiber.join(fiber);
+
+      // The retry the wait never asked for is still its answer.
+      expect(result).toMatchObject({
+        timedOut: false,
+        run: { id: retryId, status: "completed" },
+      });
+    }),
+);
+
+it.effect("waitForThread fails at once when the thread is deleted", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-deleted");
+    const threadId = ThreadId.make("thread:thread-management:wait-deleted");
+    const runId = RunId.make("run:thread-management:wait-deleted");
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    const subscribed = yield* Deferred.make<void>();
+    let deleted = false;
+    const stored = (sequence: number, event: object) =>
+      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          awaitRestartContinuation: () => Effect.never,
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "thread.deleted"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: {
+                    id: threadId,
+                    projectId,
+                    deletedAt: deleted ? DateTime.makeUnsafe(1) : null,
+                  },
+                  runs: [{ id: runId, status: "running" }],
+                  turnItems: [],
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    deleted = true;
+    yield* Queue.offer(events, stored(1, { type: "thread.deleted" }));
+    const exit = yield* Fiber.await(fiber);
+
+    expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+      _tag: "ThreadManagementThreadNotFoundError",
+    });
+  }),
+);
+
+it.effect("waitForThread ends a wait on a stalled run when a new run supersedes it", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-superseded");
+    const threadId = ThreadId.make("thread:thread-management:wait-superseded");
+    const stalledId = RunId.make("run:thread-management:wait-superseded:stalled");
+    const laterId = RunId.make("run:thread-management:wait-superseded:later");
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    const subscribed = yield* Deferred.make<void>();
+    const rootNodeId = "node:wait-superseded:root";
+    const stalled = {
+      id: stalledId,
+      ordinal: 1,
+      status: "failed",
+      rootNodeId,
+      startedAt: DateTime.makeUnsafe(1_000),
+      completedAt: DateTime.makeUnsafe(2_000),
+    };
+    const later = { id: laterId, ordinal: 2, status: "running", rootNodeId, completedAt: null };
+    let superseded = false;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          awaitRestartContinuation: () => Effect.never,
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.created"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: { id: threadId, projectId, deletedAt: null },
+                  runs: superseded ? [stalled, later] : [stalled],
+                  turnItems: [
+                    {
+                      id: "item:wait-superseded:overload",
+                      type: "error",
+                      status: "failed",
+                      runId: stalledId,
+                      nodeId: rootNodeId,
+                      ordinal: 1,
+                      updatedAt: DateTime.makeUnsafe(2_000),
+                      failure: { class: "provider_error", overloaded: true },
+                    },
+                  ],
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId: stalledId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    superseded = true;
+    // The new run is no continuation of the stalled one, so only the projection can tell.
+    yield* Queue.offer(events, {
+      sequence: 1,
+      event: { threadId, type: "run.created", payload: later },
+    } as unknown as OrchestrationV2StoredEvent);
+
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      timedOut: false,
+      run: { id: stalledId, status: "failed" },
+    });
+  }),
+);
+
 it.effect("waitForThread can wait past an ended run for the thread's delegated work", () =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:wait-delegated");
@@ -744,6 +1045,7 @@ it.effect.each([
                 ({
                   thread: { id: threadId, projectId, deletedAt: null },
                   runs: raced ? [...runs, nextRun] : runs,
+                  turnItems: [],
                   messages: [
                     { id: MessageId.make("original"), runId, role: "user" as const },
                     {

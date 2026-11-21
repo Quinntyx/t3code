@@ -255,6 +255,24 @@ describe("threadRaisedHandWhileSnoozed", () => {
       ),
     ).toBe(true);
   });
+
+  it("stays quiet for a failure the server retries", () => {
+    const failed = makeShell({ snoozedUntil: FUTURE_WAKE });
+    const runtime = {
+      status: "failed",
+      lastError: "Claude API overloaded.",
+      stalled: true,
+      updatedAt: "2026-04-10T11:00:00.000Z",
+    };
+    expect(threadRaisedHandWhileSnoozed({ ...failed, runtime, latestRun: null })).toBe(false);
+    expect(
+      threadRaisedHandWhileSnoozed({
+        ...failed,
+        runtime: { ...runtime, stalled: false },
+        latestRun: null,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("canSnooze", () => {

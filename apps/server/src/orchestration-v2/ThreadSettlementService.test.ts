@@ -136,6 +136,28 @@ function persistedLink(
 }
 
 describe("isAutoSettlementCandidate", () => {
+  it("never settles a stalled thread whose failed run is being retried", () => {
+    const stalled = shell({
+      status: "failed",
+      latestRunId: RunId.make("run:stalled"),
+      stalled: true,
+    });
+    expect(ThreadSettlementService.isAutoSettlementCandidate(stalled, NOW_MS)).toBe(false);
+    expect(
+      ThreadSettlementService.resolveAutoSettlementAt({
+        thread: stalled,
+        pullRequest: null,
+        nowMs: NOW_MS,
+        autoSettleAfterDays: 3,
+        autoSettleOnMerge: false,
+      }),
+    ).toBeNull();
+    // Once the loop ends, the failure is an ordinary one and settles as it always has.
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate({ ...stalled, stalled: false }, NOW_MS),
+    ).toBe(true);
+  });
+
   it("settles a thread whose only background work is a command left running", () => {
     expect(
       ThreadSettlementService.isAutoSettlementCandidate(

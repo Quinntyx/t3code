@@ -966,6 +966,7 @@ export type SidebarThreadStatus =
   | "pring"
   | "preparing"
   | "working"
+  | "stalled"
   | "waiting"
   | "failed"
   | "limited"
@@ -989,6 +990,7 @@ export function shouldRecedeSidebarThread(input: {
   if (
     input.status === "preparing" ||
     input.status === "working" ||
+    input.status === "stalled" ||
     input.status === "pring" ||
     input.status === "waiting"
   ) {
@@ -1040,6 +1042,10 @@ export function resolveSidebarThreadStatus(
   ) {
     return "working";
   }
+  // The server is retrying an overloaded run; the thread is still working, not failed.
+  if (thread.runtime?.stalled === true) {
+    return "stalled";
+  }
   if (thread.runtime?.status === "idle") {
     return "waiting";
   }
@@ -1074,6 +1080,8 @@ export function resolveWindowTitleThreadStatus(
     case "preparing":
     case "working":
       return resolve(THREAD_STATUS_TEXT.working);
+    case "stalled":
+      return resolve(THREAD_STATUS_TEXT.stalled);
     case "waiting":
       // Waiting on a child thread is still this turn, so it must not read as finished.
       return thread.runtime?.status === "running" ? resolve(THREAD_STATUS_TEXT.working) : null;
@@ -1104,7 +1112,8 @@ export function resolveSidebarFolderDot(
     (thread) => resolveSidebarRowStatus(thread) === "ready" && hasUnseenCompletion(thread),
   );
   if (hasUnread) return "unread";
-  if (statuses.has("working") || statuses.has("preparing")) return "working";
+  if (statuses.has("working") || statuses.has("stalled") || statuses.has("preparing"))
+    return "working";
   return null;
 }
 
@@ -1374,6 +1383,17 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+    };
+  }
+
+  // Working placement, but the run itself ended: the server retries it on its own. A thread
+  // that is waiting on a timer does not pulse.
+  if (thread.runtime?.stalled === true) {
+    return {
+      label: msg("Stalled"),
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
     };
   }
 

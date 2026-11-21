@@ -12,6 +12,17 @@ import { type McpInvocationScope, threadLinkFor } from "./McpInvocationContext.t
 
 const THREAD_PULL_REQUEST_PREVIEW_LIMIT = 5;
 
+/**
+ * The status an agent reads. A stalled thread's failed run is retried by the server, so it
+ * reports the work it is still doing instead of an ending that never happened.
+ */
+export function agentVisibleThreadStatus(input: {
+  readonly status: OrchestratorMcpThreadListItem["status"];
+  readonly stalled: OrchestrationV2ThreadShell["stalled"];
+}): OrchestratorMcpThreadListItem["status"] {
+  return input.stalled === true ? "running" : input.status;
+}
+
 export function threadSettlement(
   thread: Pick<OrchestrationV2ThreadShell, "settledOverride" | "settledAt">,
 ): Pick<OrchestratorMcpThreadListItem, "settled" | "settledAt"> {
@@ -99,7 +110,10 @@ export function threadStatus(
 }
 
 export function listedThreadStatus(shell: OrchestrationV2ThreadShell) {
-  return threadStatus(shell.activityRunStatus, shell.status, shell.pendingBackgroundTasks);
+  return agentVisibleThreadStatus({
+    status: threadStatus(shell.activityRunStatus, shell.status, shell.pendingBackgroundTasks),
+    stalled: shell.stalled,
+  });
 }
 
 export function threadListItemFromShell(

@@ -127,6 +127,7 @@ import {
   threadLinkFor,
 } from "./McpInvocationContext.ts";
 import {
+  agentVisibleThreadStatus,
   listedThreadStatus,
   threadBackgroundWork,
   threadListItemFromShell,
@@ -924,7 +925,10 @@ function threadDetail(
     link: threadLinkFor(scope, projection.thread.id, projection.thread.title),
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
-    status: threadStatus(active?.status, latest?.status ?? "idle", shell.pendingBackgroundTasks),
+    status: agentVisibleThreadStatus({
+      status: threadStatus(active?.status, latest?.status ?? "idle", shell.pendingBackgroundTasks),
+      stalled: shell.stalled,
+    }),
     latestRunId: latest?.id ?? null,
     activeRunId: active?.id ?? null,
     providerInstanceId: projection.thread.modelSelection.instanceId,
@@ -1723,9 +1727,16 @@ const make = Effect.gen(function* () {
           "providerTurns",
           "runtimeRequests",
           "nodes",
+          "turnItems",
         ],
-        // Progress reads only active or undelivered tasks under the child.
-        { messageRoles: ["user"], omitSettledLeafNodes: true, omitSettledSubagents: true },
+        // Progress reads only active or undelivered tasks under the child, plus what decides
+        // whether its failed run is still being retried.
+        {
+          messageRoles: ["user"],
+          omitSettledLeafNodes: true,
+          omitSettledSubagents: true,
+          turnItemTypes: ["error", "run_interrupt_request"],
+        },
       )
       .pipe(Effect.mapError(threadManagementFailure));
     const childRun = delegatedTaskRun(childControls, task);

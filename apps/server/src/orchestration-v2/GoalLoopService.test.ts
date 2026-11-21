@@ -74,6 +74,29 @@ const run = (id: string, status: OrchestrationV2Run["status"]) =>
     rootNodeId: "node-root",
   }) as unknown as OrchestrationV2Run;
 
+/** A failed run and the root error that ended it, which is what decides a stall. */
+const overloadedRunFact = (id = "run-1", stopped = false) => ({
+  runs: [run(id, "failed")],
+  turnItems: [
+    {
+      type: "error" as const,
+      status: "failed",
+      runId: RunId.make(id),
+      nodeId: NodeId.make("node-root"),
+      failure: { class: "provider_error", overloaded: true },
+    },
+    ...(stopped
+      ? [
+          {
+            type: "run_interrupt_request" as const,
+            status: "completed",
+            runId: RunId.make(id),
+          },
+        ]
+      : []),
+  ],
+});
+
 const completedRun = (id: string, thread = threadId): OrchestrationV2DomainEvent =>
   ({
     type: "run.updated",
@@ -96,6 +119,7 @@ const dispatchedFor = (input: {
   readonly runtimeRequests?: ReadonlyArray<{ readonly status: string }>;
   readonly turnItems?: ReadonlyArray<{ readonly type: string; readonly status: string }>;
   readonly subagents?: ReadonlyArray<OrchestrationV2Subagent>;
+  readonly review?: ReturnType<typeof overloadedRunFact>;
 }) =>
   Effect.gen(function* () {
     const dispatched: Array<OrchestrationV2Command> = [];
@@ -114,10 +138,10 @@ const dispatchedFor = (input: {
             id === reviewThreadId
               ? {
                   thread: reviewThread(),
-                  runs: [run("review-run-1", "completed")],
+                  runs: input.review?.runs ?? [run("review-run-1", "completed")],
                   messages: [],
                   runtimeRequests: [],
-                  turnItems: [],
+                  turnItems: input.review?.turnItems ?? [],
                   subagents: [],
                 }
               : {
@@ -217,6 +241,63 @@ it.effect("continues the parent when the review failed", () =>
   }),
 );
 
+it.effect.each([
+  { label: "waits for a stalled review's retry", stopped: false, expected: [] },
+  {
+    label: "continues once the review's retries are stopped",
+    stopped: true,
+    expected: ["message.dispatch"],
+  },
+])("$label", ({ stopped, expected }) =>
+  Effect.gen(function* () {
+    const dispatched = yield* dispatchedFor({
+      events: [
+        {
+          type: "run.updated",
+          threadId: reviewThreadId,
+          payload: run("review-run-1", "failed"),
+        } as unknown as OrchestrationV2DomainEvent,
+      ],
+      subagents: [reviewTask()],
+      review: overloadedRunFact("review-run-1", stopped),
+    });
+
+    assert.deepEqual(
+      dispatched.map((command) => command.type),
+      expected,
+    );
+  }),
+);
+
+it.effect.each([
+  {
+    label: "continues when a stalled review's retries are stopped",
+    review: overloadedRunFact("review-run-1", true),
+    expected: ["message.dispatch"],
+  },
+  // An ordinary Stop on a review ends with its own run event; the mark alone decides nothing.
+  { label: "leaves a Stop on a review that was not overloaded alone", expected: [] },
+])("$label", ({ review, expected }) =>
+  Effect.gen(function* () {
+    const dispatched = yield* dispatchedFor({
+      events: [
+        {
+          type: "turn-item.updated",
+          threadId: reviewThreadId,
+          payload: { type: "run_interrupt_request" },
+        } as unknown as OrchestrationV2DomainEvent,
+      ],
+      subagents: [reviewTask()],
+      ...(review === undefined ? {} : { review }),
+    });
+
+    assert.deepEqual(
+      dispatched.map((command) => command.type),
+      expected,
+    );
+  }),
+);
+
 it.effect("starts a goal that is resumed on an idle thread", () =>
   Effect.gen(function* () {
     const dispatched = yield* dispatchedFor({ events: [goalUpdated("active")] });
@@ -224,6 +305,28 @@ it.effect("starts a goal that is resumed on an idle thread", () =>
     assert.deepEqual(
       dispatched.map((command) => command.type),
       ["message.dispatch"],
+    );
+  }),
+);
+
+it.effect("reviews a completed retry whose stale record still names the run it replaced", () =>
+  Effect.gen(function* () {
+    // The retry finished, but the schedule was never cleaned up; the run itself decides.
+    const dispatched = yield* dispatchedFor({
+      events: [completedRun("run-2")],
+      runs: [run("run-1", "failed"), run("run-2", "completed")],
+      thread: appThread({
+        stallRecovery: {
+          runId: RunId.make("run-1"),
+          attempt: 1,
+          nextAttemptAt: "2099-01-01T00:10:00.000Z",
+        },
+      }),
+    });
+
+    assert.deepEqual(
+      dispatched.map((command) => command.type),
+      ["delegated_task.request"],
     );
   }),
 );
@@ -241,6 +344,9 @@ it.effect.each(
         { thread: appThread({ snoozedUntil: DateTime.makeUnsafe(4_102_444_800_000) }) },
       ],
       ["a pending question", { runtimeRequests: [{ status: "pending" }] }],
+      ["a stalled thread", { ...overloadedRunFact(), thread: appThread() }],
+      // A Stop ended the retries; the user asked for rest, so no goal turn starts.
+      ["a stopped overload", { ...overloadedRunFact("run-1", true), thread: appThread() }],
       ["an email draft", { turnItems: [{ type: "email_request", status: "waiting" }] }],
       ["a secret request", { turnItems: [{ type: "secret_request", status: "waiting" }] }],
       ["an earlier live run", { runs: [run("run-0", "running"), run("run-1", "completed")] }],

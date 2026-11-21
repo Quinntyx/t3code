@@ -71,6 +71,18 @@ describe("nextBackgroundThreadAnnouncement", () => {
     ]);
   });
 
+  it("says nothing for a failure the server retries", () => {
+    expect(
+      speak([
+        { threads: [login()] },
+        { threads: [login({ runStatus: "failed", stalled: true })] },
+        // The retry runs, and that turn's own ending is announced.
+        { threads: [login({ runId: secondRun, runStatus: "running" })] },
+        { threads: [login({ runId: secondRun, runStatus: "completed" })] },
+      ]),
+    ).toEqual(["Done: Fix login redirect"]);
+  });
+
   it("announces each run's ending once", () => {
     expect(
       speak([

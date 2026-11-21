@@ -48,6 +48,7 @@ export const ThreadActivityAnnouncer = memo(function ThreadActivityAnnouncer({
   requestId,
   runId,
   runStatus,
+  stalled,
   detailBehind,
   level,
   entries,
@@ -113,7 +114,7 @@ export const ThreadActivityAnnouncer = memo(function ThreadActivityAnnouncer({
     const previous = memoryRef.current?.threadKey === threadKey ? memoryRef.current : null;
     const turn = nextThreadAnnouncement(
       previous?.memory ?? null,
-      { status, requestId, runId, runStatus },
+      { status, requestId, runId, runStatus, stalled },
       m,
     );
     // A new level starts from what the turn already holds, so raising it mid-turn replays nothing.
@@ -168,6 +169,7 @@ export const ThreadActivityAnnouncer = memo(function ThreadActivityAnnouncer({
     requestId,
     runId,
     runStatus,
+    stalled,
     detailBehind,
     level,
     entries,

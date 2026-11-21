@@ -23,6 +23,8 @@ interface SettlementRuntimeLike {
   readonly activeTurnId?: unknown;
   readonly lastError?: unknown;
   readonly status: string;
+  /** Set while the server retries the failed run; legacy sessions never carry it. */
+  readonly stalled?: boolean;
   readonly updatedAt?: string;
 }
 
@@ -122,6 +124,8 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
 function failureEdgeAt(shell: ThreadSnoozeShell): string | null | undefined {
   const runtime = shell.runtime ?? shell.session ?? null;
   if (runtime?.status !== "error" && runtime?.status !== "failed") return undefined;
+  // A failure the server retries is not a new failure to wake for.
+  if (shell.runtime?.stalled === true) return undefined;
   const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
   if (latestRun?.status === "failed") {
     return latestRun.completedAt ?? null;
@@ -469,8 +473,14 @@ export function isThreadWokeUnseen(input: {
 export function hasUnseenRunFailure(
   thread: Pick<EnvironmentThreadShell, "latestRun"> & {
     readonly lastVisitedAt?: string | null | undefined;
+    readonly runtime?:
+      | Pick<NonNullable<EnvironmentThreadShell["runtime"]>, "stalled">
+      | null
+      | undefined;
   },
 ): boolean {
+  // The server is retrying the run, so the thread is working and has not failed.
+  if (thread.runtime?.stalled === true) return false;
   const run = thread.latestRun;
   if (run?.status !== "failed") return false;
   if (!thread.lastVisitedAt) return true;

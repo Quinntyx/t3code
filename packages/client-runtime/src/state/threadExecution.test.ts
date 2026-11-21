@@ -29,6 +29,7 @@ import {
   deriveBackgroundWorkDetails,
   deriveReportedModelSelection,
   deriveLatestThreadRun,
+  deriveStallNoticeRows,
   deriveProviderSubagentStatus,
   deriveProviderExtensionStatuses,
   deriveResumableRunId,
@@ -42,6 +43,7 @@ import {
   presentProviderGoal,
   presentRunStop,
   threadRuntimeHasInterruptibleRun,
+  withoutStallNoticeRows,
 } from "./threadExecution.ts";
 
 const now = DateTime.makeUnsafe("2026-07-28T10:00:00.000Z");
@@ -582,6 +584,214 @@ describe("thread execution presentation", () => {
       activeRunId: null,
     });
     expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(false);
+  });
+
+  it("derives a stalled run from the projection the way the shell derives it", () => {
+    const failed = {
+      ...run("run-overloaded", 1, "failed"),
+      rootNodeId: NodeId.make("root"),
+      completedAt: now,
+    };
+    const stalledUntil = "2026-07-28T10:01:00.000Z";
+    const overload = {
+      id: TurnItemId.make("overloaded-error"),
+      threadId: v2Projection.thread.id,
+      runId: failed.id,
+      nodeId: failed.rootNodeId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      type: "error" as const,
+      status: "failed" as const,
+      title: "API overloaded",
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      failure: {
+        class: "provider_error" as const,
+        message: "Claude API overloaded.",
+        code: null,
+        retryable: true,
+        overloaded: true,
+      },
+    };
+    const retrying = (nextAttemptAt: string) => ({
+      ...v2Projection,
+      runs: [failed],
+      turnItems: [overload],
+      thread: {
+        ...v2Projection.thread,
+        stallRecovery: { runId: failed.id, attempt: 2, nextAttemptAt },
+      },
+      updatedAt: now,
+    });
+
+    expect(deriveThreadRuntime(retrying(stalledUntil))).toMatchObject({
+      status: "failed",
+      stalled: true,
+      stallNextAttemptAt: stalledUntil,
+      lastError: "Claude API overloaded.",
+    });
+    // Stalled as soon as the overload ends the run, before the server schedules the retry.
+    const unarmed = deriveThreadRuntime({ ...retrying(stalledUntil), thread: v2Projection.thread });
+    expect(unarmed).toMatchObject({ status: "failed", stalled: true });
+    expect(unarmed?.stallNextAttemptAt).toBeUndefined();
+
+    // A Stop on the run ends the retries, and the thread is an ordinary failure again.
+    const stopped = deriveThreadRuntime({
+      ...retrying(stalledUntil),
+      turnItems: [
+        overload,
+        {
+          ...overload,
+          id: TurnItemId.make("stop-request"),
+          ordinal: 2,
+          type: "run_interrupt_request" as const,
+          status: "completed" as const,
+          title: "Interrupt requested",
+          message: "Stopped by user",
+        },
+      ],
+    });
+    expect(stopped).toMatchObject({ status: "failed", lastError: "Claude API overloaded." });
+    expect(stopped?.stalled).toBeUndefined();
+
+    // A record pointing at an older run says nothing about the one presented now.
+    expect(
+      deriveThreadRuntime({
+        ...retrying(stalledUntil),
+        runs: [failed, run("run-later", 2, "running")],
+      }),
+    ).toMatchObject({ status: "running" });
+    expect(
+      deriveThreadRuntime({
+        ...retrying(stalledUntil),
+        runs: [failed, run("run-later", 2, "running")],
+      })?.stalled,
+    ).toBeUndefined();
+
+    // A usage limit outranks a stale overload record.
+    expect(
+      deriveThreadRuntime({
+        ...retrying(stalledUntil),
+        turnItems: [{ ...overload, failure: { ...overload.failure, class: "usage_limit" } }],
+      }),
+    ).toMatchObject({ status: "failed", lastErrorClass: "usage_limit" });
+  });
+
+  it("folds a three-attempt outage into one notice and returns the rows afterwards", () => {
+    const rootNodeId = NodeId.make("root");
+    const names = ["first", "second", "third"] as const;
+    const attempts = names.map((name, index) => ({
+      run: {
+        ...run(`run-${name}`, index + 1, "failed"),
+        rootNodeId,
+        completedAt: now,
+        ...(index === 0 ? {} : { stallContinuationOfRunId: RunId.make(`run-${names[index - 1]}`) }),
+      },
+      // The first attempt is the user's own prompt; each retry's is the server's notice.
+      prompt: {
+        id: TurnItemId.make(`prompt-${name}`),
+        threadId: v2Projection.thread.id,
+        runId: RunId.make(`run-${name}`),
+        nodeId: rootNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status: "completed" as const,
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        ...(index === 0
+          ? {
+              type: "user_message" as const,
+              createdBy: "user" as const,
+              creationSource: "web" as const,
+              messageId: MessageId.make(`message-${name}`),
+              inputIntent: "turn_start" as const,
+              text: "Fix the login redirect.",
+              attachments: [],
+            }
+          : {
+              type: "notification" as const,
+              source: { kind: "system" as const },
+              outcome: "updated" as const,
+              summary: "T3 Code resumed",
+              detail: "Continue where you left off.",
+            }),
+      },
+      error: {
+        id: TurnItemId.make(`error-${name}`),
+        threadId: v2Projection.thread.id,
+        runId: RunId.make(`run-${name}`),
+        nodeId: rootNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        type: "error" as const,
+        status: "failed" as const,
+        title: "API overloaded",
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        failure: {
+          class: "provider_error" as const,
+          message: "Claude API overloaded.",
+          code: null,
+          retryable: true,
+          overloaded: true,
+        },
+      },
+    }));
+    const runs = attempts.map(({ run }) => run);
+    const turnItems = attempts.flatMap(({ prompt, error }) => [prompt, error]);
+    const stalled = {
+      ...v2Projection,
+      runs,
+      turnItems,
+      thread: {
+        ...v2Projection.thread,
+        stallRecovery: {
+          runId: runs[2]!.id,
+          attempt: 3,
+          nextAttemptAt: "2026-07-28T10:03:00.000Z",
+        },
+      },
+      visibleTurnItems: turnItems.map((item, position) => ({
+        position,
+        visibility: "local" as const,
+        sourceThreadId: v2Projection.thread.id,
+        sourceItemId: item.id,
+        item,
+      })),
+    };
+
+    const notice = deriveStallNoticeRows(stalled);
+    // Both later retry prompts and all three overloads fold; the user's own prompt stays.
+    expect(notice?.itemIds.size).toBe(5);
+    expect(
+      withoutStallNoticeRows(stalled.visibleTurnItems, notice).map(({ item }) => item.id),
+    ).toEqual([attempts[0]!.prompt.id]);
+    // The projection keeps every row for other readers.
+    expect(stalled.visibleTurnItems).toHaveLength(6);
+
+    // Any other run ending ends the outage, and the attempt rows come back.
+    const recovered = {
+      ...stalled,
+      thread: v2Projection.thread,
+      runs: [...runs, run("run-recovered", 4, "completed")],
+    };
+    expect(deriveStallNoticeRows(recovered)).toBeNull();
+    expect(withoutStallNoticeRows(recovered.visibleTurnItems, null)).toEqual(
+      recovered.visibleTurnItems,
+    );
   });
 });
 

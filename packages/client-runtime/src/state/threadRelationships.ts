@@ -96,7 +96,7 @@ export function deriveThreadRelationshipGraph(input: {
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
       kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-      status: thread.activityRunStatus ?? thread.status,
+      status: relationshipThreadStatus(thread),
     });
   }
 
@@ -159,6 +159,25 @@ export function isParentThreadRelationship(
   return edge.kind !== "transfer" && edge.targetThreadId === currentThreadId;
 }
 
+/**
+ * A thread's status for a relationship row. A failure the server retries is work, so the row
+ * says stalled rather than failed; see presentThreadStall.
+ */
+function relationshipThreadStatus(
+  thread:
+    | {
+        readonly activityRunStatus?: string | null | undefined;
+        readonly status?: string | null | undefined;
+        readonly stalled?: boolean | undefined;
+      }
+    | null
+    | undefined,
+): string | null {
+  if (thread == null) return null;
+  if (thread.stalled === true) return "stalled";
+  return thread.activityRunStatus ?? thread.status ?? null;
+}
+
 export function threadRelationshipRowStatus(
   graph: ThreadRelationshipGraph,
   row: Pick<ThreadRelationshipWalkRow, "threadId" | "edge">,
@@ -166,8 +185,7 @@ export function threadRelationshipRowStatus(
   if (row.edge.kind === "transfer" || row.threadId === row.edge.targetThreadId) {
     return row.edge.status;
   }
-  const thread = graph.nodes.get(row.threadId)?.thread;
-  return thread?.activityRunStatus ?? thread?.status ?? null;
+  return relationshipThreadStatus(graph.nodes.get(row.threadId)?.thread);
 }
 
 function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number | null {

@@ -8,10 +8,13 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 import {
+  failedRunIsStalled,
   latestExecutedRun,
   latestRootProviderFailure,
   orchestrationV2WorktreePending,
+  overloadedRun,
   runRanAfter,
+  stalledRun,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadIssueKeysEqual } from "@t3tools/contracts";
@@ -38,6 +41,7 @@ import {
   type OrchestrationV2InternalCommand,
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2Notification,
+  type OrchestrationV2StallRecoveryUpdate,
   type OrchestrationV2ServerCommand,
   type ThreadPullRequestLink,
   type ThreadPullRequestWatch,
@@ -432,6 +436,11 @@ export interface OrchestratorV2Shape {
     readonly commandId: CommandId;
     readonly threadId: ThreadId;
     readonly limitRecovery: OrchestrationV2LimitRecoveryUpdate;
+  }) => Effect.Effect<void, OrchestratorV2Error>;
+  readonly autoArmStallRecovery: (input: {
+    readonly commandId: CommandId;
+    readonly threadId: ThreadId;
+    readonly stallRecovery: OrchestrationV2StallRecoveryUpdate;
   }) => Effect.Effect<void, OrchestratorV2Error>;
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
@@ -905,7 +914,8 @@ function mayStartSubagentFollowup(
   return (
     command.createdBy === "user" ||
     command.creationSource === "mcp" ||
-    command.usageLimitContinuationOfRunId !== undefined
+    command.usageLimitContinuationOfRunId !== undefined ||
+    command.stallContinuationOfRunId !== undefined
   );
 }
 
@@ -1332,7 +1342,7 @@ function runForSourcePoint(
 const DELEGATED_CHILD_RUN_WINDOW = 20;
 
 type DelegatedChildControls = ProjectionRecords<
-  "runs" | "messages" | "subagents" | "providerThreads"
+  "runs" | "messages" | "subagents" | "providerThreads" | "turnItems"
 > & {
   /** Set when `runs` holds only what ran since this run, plus older unfinished and task runs. */
   readonly runsFloor?: OrchestrationV2Run | undefined;
@@ -4931,6 +4941,55 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       restoredUnsettledAt = parsed.value;
     }
     let snoozedUntil: DateTime.Utc | null = null;
+    // "Retry now" is the user's clock, so the server names the record and its time.
+    let stallRetryNowRecovery: OrchestrationV2StallRecoveryUpdate | null = null;
+    if (command.type === "thread.metadata.update" && command.stallRetryNow === true) {
+      const projection = yield* loadProjectionForCommand(
+        command,
+        ["runs", "runtimeRequests", "turnItems"],
+        { turnItemTypes: ["error", "run_interrupt_request"] },
+      );
+      const run = stalledRun(projection.runs, projection.turnItems);
+      if (
+        run === null ||
+        thread.archivedAt !== null ||
+        thread.settledOverride === "settled" ||
+        projection.runtimeRequests.some((request) => request.status === "pending")
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The thread is no longer stalled, so there is no retry to hurry.",
+        });
+      }
+      const previous = thread.stallRecovery;
+      stallRetryNowRecovery = {
+        runId: run.id,
+        attempt: previous?.runId === run.id ? previous.attempt : 1,
+        nextAttemptAt: DateTime.formatIso(now),
+      };
+    }
+    if (command.type === "thread.metadata.update" && command.stallRecovery != null) {
+      const projection = yield* loadProjectionForCommand(
+        command,
+        ["runs", "runtimeRequests", "turnItems"],
+        { turnItemTypes: ["error", "run_interrupt_request"] },
+      );
+      const stallRecovery = command.stallRecovery;
+      const nextAttemptMs = Date.parse(stallRecovery.nextAttemptAt);
+      const run = stalledRun(projection.runs, projection.turnItems);
+      // Arming is only a schedule, so a pending question does not refuse it: the retry itself
+      // waits, and a refusal would be receipted against the sweep's next identical command.
+      // Archived or settled only pauses the retries. Refusing would be receipted under an id the
+      // sweep derives again after the thread comes back, so the schedule lands either way.
+      if (!Number.isFinite(nextAttemptMs) || run?.id !== stallRecovery.runId) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The overloaded run changed before its retry could be configured.",
+        });
+      }
+    }
     if (command.type === "thread.snooze") {
       const projection = yield* loadProjectionForCommand(command, ["runs", "runtimeRequests"], {
         turnItemTypes: [],
@@ -5220,6 +5279,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ),
                 }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
+            ...(command.stallRecovery === undefined
+              ? {}
+              : { stallRecovery: command.stallRecovery }),
+            ...(stallRetryNowRecovery === null ? {} : { stallRecovery: stallRetryNowRecovery }),
             // Removing the cap clears its hit at once. Any other edit waits for the
             // sweep to re-evaluate, so saving cannot lift a hit it still meets.
             ...(command.consumptionCap === undefined
@@ -5712,6 +5775,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: updatedThread,
     });
+    // Stop retrying leaves the mark a Stop leaves, or the next sweep would arm the run again.
+    if (command.type === "thread.metadata.update" && command.stallRecovery === null) {
+      const projection = yield* loadProjectionForCommand(command, ["runs", "turnItems"], {
+        turnItemTypes: ["error", "run_interrupt_request"],
+      });
+      // Mark the run the retries belong to, which the schedule alone may not name yet.
+      const run = stalledRun(projection.runs, projection.turnItems);
+      // A retry that already started is running work, which only a Stop ends. Accepting this
+      // would stop nothing and let that retry stall again.
+      if (run === null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The thread is not stalled, so there are no retries to stop.",
+        });
+      }
+      yield* markStoppedRun({ command, events, thread: updatedThread, run, now });
+    }
     // Archiving ends the guest share, so its waiting files go too.
     yield* releaseGuestAttachments(command, thread.guestShare, updatedThread.guestShare, effects);
 
@@ -7434,6 +7515,69 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
 
+    if (command.stallContinuationOfRunId !== undefined) {
+      const run = overloadedRun(projection.runs, projection.turnItems);
+      const recovery = projection.thread.stallRecovery;
+      const now = yield* DateTime.now;
+      // A Stop mark on the run stops its retries for good; this read is scoped to that run.
+      const stopped =
+        run !== null &&
+        (yield* stopReachedRun(command, command.threadId, command.stallContinuationOfRunId));
+      const stalled = failedRunIsStalled(
+        latestRootProviderFailure(run, projection.turnItems),
+        stopped,
+      );
+      if (
+        run?.id !== command.stallContinuationOfRunId ||
+        !stalled ||
+        recovery?.runId !== run.id ||
+        projection.thread.deletedAt !== null ||
+        projection.thread.providerInstanceId !== run.providerInstanceId
+      ) {
+        // A stale retry still gets its accepted receipt, and the schedule it cannot use stays.
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: projection.thread,
+        });
+        return;
+      }
+      // These can all be undone: a question answered, a thread or its parent unarchived or
+      // unsettled. A rejected command is receipted, so its id could never go out again; moving
+      // the armed time makes the sweep name the same attempt's retry anew once the block lifts.
+      if (
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        projection.thread.archivedAt !== null ||
+        projection.thread.settledOverride === "settled" ||
+        (yield* delegatedParentAbandoned(command, projection.thread))
+      ) {
+        const armedMs = Date.parse(recovery.nextAttemptAt);
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: {
+            ...projection.thread,
+            stallRecovery: {
+              runId: run.id,
+              attempt: recovery.attempt,
+              nextAttemptAt: DateTime.formatIso(
+                DateTime.makeUnsafe(Math.max(DateTime.toEpochMillis(now), armedMs + 1)),
+              ),
+            },
+          },
+        });
+        return;
+      }
+    }
+
     if (command.restartContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
       if (
@@ -7517,11 +7661,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection = applyToProjection(projection, event);
     }
 
-    // A run the thread queues for itself continues the task of the run that sent it.
+    // A continuation or self-queued run still answers for the task of the run it continues.
     const continuedTaskId = projection.runs.find((run) =>
-      command.restartContinuationOfRunId === undefined
-        ? command.senderThreadId === command.threadId && isActiveRun(run)
-        : run.id === command.restartContinuationOfRunId,
+      command.restartContinuationOfRunId !== undefined
+        ? run.id === command.restartContinuationOfRunId
+        : command.stallContinuationOfRunId !== undefined
+          ? run.id === command.stallContinuationOfRunId
+          : command.senderThreadId === command.threadId && isActiveRun(run),
     )?.delegatedTaskId;
 
     if (projection.thread.settledOverride !== null) {
@@ -7549,9 +7695,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection = applyToProjection(projection, event);
     }
     // Background wakes and delegated completions continue work the user already snoozed, so
-    // only a message someone actually sent ends the snooze.
+    // only a message someone actually sent ends the snooze. A stall retry carries no
+    // notification of its own; the system one is synthesized later.
     const automaticWake =
-      command.notification !== undefined || command.delegatedCompletion !== undefined;
+      command.notification !== undefined ||
+      command.delegatedCompletion !== undefined ||
+      command.stallContinuationOfRunId !== undefined;
     if (projection.thread.snoozedUntil != null && !automaticWake) {
       const now = yield* DateTime.now;
       const thread: OrchestrationV2AppThread = {
@@ -7901,6 +8050,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             summary: "Resumed thread",
           }
         : command.usageLimitContinuationOfRunId !== undefined ||
+            command.stallContinuationOfRunId !== undefined ||
             command.restartContinuationOfRunId !== undefined
           ? {
               source: { kind: "system" },
@@ -8361,6 +8511,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.usageLimitContinuationOfRunId === undefined
           ? {}
           : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
+        ...(command.stallContinuationOfRunId === undefined
+          ? {}
+          : { stallContinuationOfRunId: command.stallContinuationOfRunId }),
         ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
         ...(freshContext ? { freshContext: true } : {}),
       };
@@ -8797,6 +8950,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.usageLimitContinuationOfRunId === undefined
           ? {}
           : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
+        ...(command.stallContinuationOfRunId === undefined
+          ? {}
+          : { stallContinuationOfRunId: command.stallContinuationOfRunId }),
         ...(dispatchMode.type === "defer_start" && dispatchMode.workspaceStrategy !== undefined
           ? { workspacePreparation: dispatchMode.workspaceStrategy }
           : {}),
@@ -9630,6 +9786,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.usageLimitContinuationOfRunId === undefined
         ? {}
         : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
+      ...(command.stallContinuationOfRunId === undefined
+        ? {}
+        : { stallContinuationOfRunId: command.stallContinuationOfRunId }),
       ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
       ...wakeWorkStartedAt(projection, command),
     };
@@ -10433,6 +10592,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (command.notification === undefined &&
         command.createdBy !== "user" &&
         command.usageLimitContinuationOfRunId === undefined &&
+        command.stallContinuationOfRunId === undefined &&
         command.senderThreadId !== undefined &&
         command.senderThreadId !== parentThreadId)
     )
@@ -13502,10 +13662,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     runId: RunId,
   ) => projectionStore.hasRunInterruptRequest(threadId, runId).pipe(mapDispatchError(command));
 
+  /** Mirrors the stall sweep's exclusion: a subagent of a settled, archived or deleted parent. */
+  const delegatedParentAbandoned = (
+    command: OrchestrationV2ServerCommand,
+    thread: Pick<OrchestrationV2AppThread, "lineage">,
+  ) => {
+    const parentThreadId = thread.lineage.parentThreadId;
+    if (thread.lineage.relationshipToParent !== "subagent" || parentThreadId === null) {
+      return Effect.succeed(false);
+    }
+    return projectionStore.getThread(parentThreadId).pipe(
+      Effect.map(
+        (parent) =>
+          parent.settledOverride === "settled" ||
+          parent.archivedAt !== null ||
+          parent.deletedAt !== null,
+      ),
+      mapDispatchError(command),
+    );
+  };
+
   const markStoppedRun = Effect.fnUntraced(function* (input: {
     readonly command: Extract<
       OrchestrationV2ServerCommand,
-      { readonly type: "run.interrupt" | "thread.stop" }
+      { readonly type: "run.interrupt" | "thread.stop" | "thread.metadata.update" }
     >;
     readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
     readonly thread: OrchestrationV2AppThread;
@@ -13549,7 +13729,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "run_interrupt_request",
-        message: command.reason ?? RunExecutionService.USER_STOP_REASON,
+        message:
+          (command.type === "thread.metadata.update" ? undefined : command.reason) ??
+          RunExecutionService.USER_STOP_REASON,
       },
     });
   });
@@ -13608,6 +13790,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: thread,
       });
     }
+    // A Stop ends the overload retry too; the mark it leaves on the run is what says so.
     const queuedRuns = runs.filter((run) => run.status === "queued");
     const queuedMessages =
       queuedRuns.length === 0
@@ -15263,6 +15446,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // timer keeps their process pinned.
           if (
             progress.state !== "result_available" ||
+            stalledRun(child.runs, child.turnItems) !== null ||
             child.providerThreads.some((thread) => (thread.pendingBackgroundTasks ?? []).length > 0)
           )
             return;
@@ -15298,8 +15482,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const readAllDelegatedChildControls = (childThreadId: ThreadId) =>
     projectionStore.getThreadRecords(
       childThreadId,
-      ["runs", "messages", "subagents", "providerThreads"],
-      { messageRoles: ["user"], delegatedTaskMessagesOnly: true },
+      ["runs", "messages", "subagents", "providerThreads", "turnItems"],
+      {
+        messageRoles: ["user"],
+        delegatedTaskMessagesOnly: true,
+        turnItemTypes: ["error", "run_interrupt_request"],
+      },
     );
 
   const readDelegatedChildControls = Effect.fn("Orchestrator.readDelegatedChildControls")(
@@ -15353,6 +15541,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : delegatedTaskResultRun(taskRuns);
       if (childRun === undefined) return;
       let outcome = runOutcome(childRun);
+      // A stalled child's failure is not the task's answer: its retry still owes one.
+      if (stalledRun(childControls.runs, childControls.turnItems)?.id === childRun.id) return;
       let terminalStatus = delegatedTaskTerminalStatus(outcome);
       if (terminalStatus === null) {
         if (childRun.delegatedTaskId === undefined || childRun.id !== options.syncRunId) return;
@@ -15685,6 +15875,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       childThreadId,
       openTasks.map((task) => task.id),
     );
+    // An overloaded child is retried rather than failed, and a Stop leaves it an ordinary
+    // failure, so only `stalledRun` decides whether its retry still owes an answer.
+    if (stalledRun(childControls.runs, childControls.turnItems) !== null) return;
     for (const task of openTasks) {
       // A cancelled task does not wait for the work its cancel is stopping.
       const cancelled = task.cancelledRunId !== undefined;
@@ -17123,6 +17316,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.forkScoped,
   );
 
+  // Stop retrying writes a mark but no run update, so no other subscriber finalizes the child.
+  yield* eventSink
+    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "turn-item.updated" })
+    .pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "turn-item.updated" &&
+          stored.event.payload.type === "run_interrupt_request",
+      ),
+      Stream.runForEach((stored) =>
+        threadReactions.run(
+          stored.event.threadId,
+          Effect.gen(function* () {
+            const childThreadId = stored.event.threadId;
+            const parentThreadId = yield* appOwnedSubagentParentThreadId(childThreadId);
+            if (parentThreadId === undefined) return;
+            yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(childThreadId));
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to finalize a delegated child after a Stop", {
+                threadId: stored.event.threadId,
+                sequence: stored.sequence,
+                cause,
+              }),
+            ),
+          ),
+        ),
+      ),
+      Effect.forkScoped,
+    );
+
   const recoverDelegatedTasks = Effect.gen(function* () {
     yield* projectionStore.getRecoveryThreadIds("subagent-results").pipe(
       Effect.tap((threadIds) =>
@@ -17243,8 +17467,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     function* (childThreadId: ThreadId, taskId?: NodeId) {
       const child = yield* projectionStore.getThreadRecords(
         childThreadId,
-        ["runs", "messages", "subagents", "providerThreads", "providerTurns", "attempts"],
-        { messageRoles: ["user"] },
+        [
+          "runs",
+          "messages",
+          "subagents",
+          "providerThreads",
+          "providerTurns",
+          "attempts",
+          "turnItems",
+        ],
+        { messageRoles: ["user"], turnItemTypes: ["error", "run_interrupt_request"] },
       );
       if (taskId !== undefined) {
         const runs = delegatedTaskRuns(child, taskId);
@@ -17255,6 +17487,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           delegatedTaskAwaitsWork(runs, child)
         )
           return true;
+        // A stalled run is still working: its retry is the task's answer, not this failure.
+        if (stalledRun(child.runs, child.turnItems)?.id === run.id) return true;
         return yield* childAwaitsRestartContinuation(runs, run);
       }
       const progress = delegatedTaskProgress(child);
@@ -17507,6 +17741,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             undefined,
             stopped ? undefined : { requireNoLimitRecoveryBlockers: true },
           );
+        }),
+      );
+    }),
+    autoArmStallRecovery: Effect.fn("OrchestratorV2.autoArmStallRecovery")(function (input) {
+      return threadDispatch.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const thread = yield* projectionStore
+            .getThread(input.threadId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestratorProjectionError({ threadId: input.threadId, cause }),
+              ),
+            );
+          // A Stop, a new message or an earlier arm can commit after the sweep reads its candidate.
+          if (thread.stallRecovery?.runId === input.stallRecovery.runId) return;
+          const command = { type: "thread.metadata.update", ...input } as const;
+          // A Stop that reached the run before its overload landed had nothing to disarm, and its
+          // mark is what keeps the next sweep away, so there is nothing to write.
+          if (yield* stopReachedRun(command, input.threadId, input.stallRecovery.runId)) return;
+          yield* dispatchWithReceiptEffect(command);
         }),
       );
     }),

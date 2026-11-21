@@ -271,6 +271,12 @@ const make = Effect.gen(function* () {
         case "runtime-request.updated":
           if (event.payload.status === "pending") yield* checkWatchersOf(event.threadId);
           return;
+        case "turn-item.updated":
+          // A Stop on a stalled thread ends it with no further run event.
+          if (event.payload.type === "run_interrupt_request") {
+            yield* checkWatchersOf(event.threadId);
+          }
+          return;
         case "thread.deleted":
           watchesByWatcher.delete(event.threadId);
           yield* checkWatchersOf(event.threadId);

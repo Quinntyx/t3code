@@ -22,6 +22,7 @@ const STATUS_LABEL: Record<
 > = {
   preparing: { label: msg("Setting up"), className: "text-info-foreground" },
   working: { label: msg("Working"), className: "text-info-foreground" },
+  stalled: { label: msg("Stalled"), className: "text-info-foreground" },
   pring: { label: msg("PRing"), className: "text-teal-600 dark:text-teal-300/90" },
   waiting: { label: msg("Waiting"), className: "text-muted-foreground" },
   approval: { label: msg("Approval"), className: "text-warning-foreground" },

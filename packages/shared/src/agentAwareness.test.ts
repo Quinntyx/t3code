@@ -32,6 +32,7 @@ describe("projectThreadAwarenessV2", () => {
         | "pendingRuntimeRequest"
         | "lineage"
         | "settledOverride"
+        | "stalled"
       >
     > = {},
   ) => ({
@@ -135,6 +136,24 @@ describe("projectThreadAwarenessV2", () => {
         thread: v2Thread({ status: "cancelled", activityRunStatus: "running" }),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
+  });
+
+  it("publishes a stalled thread as working, not as the failure being retried", () => {
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({ status: "failed", stalled: true }),
+      }),
+    ).toMatchObject({ phase: "running", headline: "Agent is working" });
+    // A stopped overload is an ordinary failure and is announced as before.
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({ status: "failed", stalled: false }),
+      }),
+    ).toMatchObject({ phase: "failed", headline: "Agent failed" });
   });
 
   it.each([

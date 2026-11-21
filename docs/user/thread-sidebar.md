@@ -304,6 +304,14 @@ the snooze. Enable **Snooze until limits reset** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
+**Stalled** means the provider's API was overloaded, so the turn ended through no
+fault of the thread's. T3 Code retries it on its own, waiting a minute at first
+and doubling up to an hour between attempts, and keeps going until the work
+finishes or you stop it. The conversation shows when the next attempt goes out.
+A stalled thread stays with your working threads and does not count as failed.
+Choose **Retry now** to send the next attempt immediately, or **Stop retrying**
+to leave the thread failed and pick it up yourself with **Resume**.
+
 On web and desktop, use **Agents** to follow work delegated to subagents.
 On mobile, open a subagent from its conversation card or **Agents**. On iOS
 layouts with an inspector, its thread opens beside the parent. Maximize it to

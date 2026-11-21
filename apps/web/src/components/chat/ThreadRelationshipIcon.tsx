@@ -32,6 +32,8 @@ export function threadRelationshipStatusLabel(
     case "failed":
     case "error":
       return resolve(msg("Failed", { $context: "agent status" }));
+    case "stalled":
+      return resolve(msg("Stalled", { $context: "agent status" }));
     case "cancelled":
     case "interrupted":
       return resolve(msg("Stopped", { $context: "agent status" }));
@@ -97,7 +99,8 @@ export function ThreadRelationshipIcon({
           status === "running" ||
             status === "in_progress" ||
             status === "pending" ||
-            status === "waiting"
+            status === "waiting" ||
+            status === "stalled"
             ? "bg-info"
             : status === "failed" || status === "error"
               ? "bg-destructive"
