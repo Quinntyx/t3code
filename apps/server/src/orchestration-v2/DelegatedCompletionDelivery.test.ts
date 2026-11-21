@@ -2842,6 +2842,304 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
       }),
     );
 
+    it.effect(
+      "leaves a child task open while the upstream overload retries it, then delivers the retry's result",
+      () =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+          const now = yield* DateTime.now;
+          const parentThreadId = ThreadId.make("thread:stall-child-parent");
+          const projectId = ProjectId.make("project:stall-child");
+          const parentRunId = RunId.make("run:stall-child-parent");
+          const rootNodeId = NodeId.make("node:stall-child-parent");
+          yield* seedParentWithTerminalTask({
+            threadId: parentThreadId,
+            projectId,
+            runId: parentRunId,
+            rootNodeId,
+            taskId: NodeId.make("node:stall-child-seed"),
+            deliveryState: "acknowledged",
+            parentRunStatus: "completed",
+            now,
+          });
+          const child = yield* seedRestartCancelledChild({
+            parentThreadId,
+            projectId,
+            parentRunId,
+            rootNodeId,
+            name: "stall-child",
+            completionWake: "always",
+            continuationPending: false,
+            runStatus: "completed",
+            now,
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          let wake = yield* requests.take;
+          while (wake.threadId !== parentThreadId) wake = yield* requests.take;
+          yield* orchestrator.dispatch({
+            type: "delegated_task.completion-delivery.acknowledge",
+            commandId: CommandId.make("command:stall-child-ack"),
+            parentThreadId,
+            taskId: child.taskId,
+            observedByRunId: parentRunId,
+          });
+          const send = yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "agent",
+            creationSource: "mcp",
+            commandId: CommandId.make("command:stall-child-send"),
+            threadId: child.childThreadId,
+            senderThreadId: parentThreadId,
+            messageId: MessageId.make("message:stall-child-send"),
+            text: "Keep going.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          });
+          void send;
+          const childRun = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs.find(
+            (run) => run.delegatedTaskId !== undefined && run.ordinal > 1,
+          )!;
+          const taskId = childRun.delegatedTaskId!;
+          // The provider's upstream API reports an overload, and recovery arms a retry.
+          yield* eventSink.write({
+            commandId: CommandId.make("command:stall-child-overloaded"),
+            events: [
+              {
+                id: EventId.make("event:stall-child-overloaded"),
+                type: "turn-item.updated",
+                threadId: child.childThreadId,
+                occurredAt: now,
+                payload: {
+                  id: TurnItemId.make("item:stall-child-overloaded"),
+                  type: "error",
+                  threadId: child.childThreadId,
+                  runId: childRun.id,
+                  nodeId: childRun.rootNodeId,
+                  providerThreadId: null,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: 2,
+                  status: "failed",
+                  title: "Provider failure",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  failure: {
+                    class: "provider_error",
+                    message: "The API is overloaded.",
+                    code: "api_error_529",
+                    retryable: true,
+                    overloaded: true,
+                  },
+                },
+              },
+              {
+                id: EventId.make("event:stall-child-failed"),
+                type: "run.updated",
+                threadId: child.childThreadId,
+                runId: childRun.id,
+                occurredAt: now,
+                payload: { ...childRun, status: "failed", startedAt: now, completedAt: now },
+              },
+            ],
+          });
+          yield* orchestrator.autoArmStallRecovery({
+            commandId: CommandId.make("command:stall-child-arm"),
+            threadId: child.childThreadId,
+            stallRecovery: {
+              runId: childRun.id,
+              attempt: 1,
+              nextAttemptAt: DateTime.formatIso(now),
+            },
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          const stalled = yield* orchestrator.getThreadProjection(parentThreadId);
+          // The parent is not told the task failed; it is still working.
+          const held = stalled.subagents.find((task) => task.id === taskId)!;
+          assert.isNull(held.result);
+          assert.isTrue(
+            yield* orchestrator.delegatedTaskResultPending(child.childThreadId, taskId),
+          );
+          // The retry finishes, and its result is what the task reports.
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "agent",
+            creationSource: "server",
+            commandId: CommandId.make("command:stall-child-retry"),
+            threadId: child.childThreadId,
+            messageId: MessageId.make("message:stall-child-retry"),
+            stallContinuationOfRunId: childRun.id,
+            text: "Continue where you left off.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          });
+          const retry = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs.find(
+            (run) => run.stallContinuationOfRunId === childRun.id,
+          )!;
+          assert.equal(retry.delegatedTaskId, taskId);
+          yield* eventSink.write({
+            commandId: CommandId.make("command:stall-child-retry-completed"),
+            events: [
+              {
+                id: EventId.make("event:stall-child-retry-message"),
+                type: "message.updated",
+                threadId: child.childThreadId,
+                runId: retry.id,
+                occurredAt: now,
+                payload: {
+                  id: MessageId.make("message:stall-child-retry-result"),
+                  threadId: child.childThreadId,
+                  runId: retry.id,
+                  nodeId: null,
+                  role: "assistant",
+                  text: "The audit passed on the second try.",
+                  attachments: [],
+                  streaming: false,
+                  createdBy: "agent",
+                  creationSource: "server",
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              },
+              {
+                id: EventId.make("event:stall-child-retry-completed"),
+                type: "run.updated",
+                threadId: child.childThreadId,
+                runId: retry.id,
+                occurredAt: now,
+                payload: {
+                  ...retry,
+                  status: "completed",
+                  startedAt: now,
+                  completedAt: now,
+                },
+              },
+            ],
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          const finished = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+            (task) => task.id === taskId,
+          )!;
+          assert.equal(finished.status, "completed");
+          assert.equal(finished.result, "The audit passed on the second try.");
+        }),
+    );
+
+    it.effect("fails a child task whose overload retries the user stopped", () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make("thread:stopped-stall-parent");
+        const projectId = ProjectId.make("project:stopped-stall");
+        const parentRunId = RunId.make("run:stopped-stall-parent");
+        const rootNodeId = NodeId.make("node:stopped-stall-parent");
+        yield* seedParentWithTerminalTask({
+          threadId: parentThreadId,
+          projectId,
+          runId: parentRunId,
+          rootNodeId,
+          taskId: NodeId.make("node:stopped-stall-seed"),
+          deliveryState: "acknowledged",
+          parentRunStatus: "completed",
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId,
+          projectId,
+          parentRunId,
+          rootNodeId,
+          name: "stopped-stall-child",
+          completionWake: "always",
+          continuationPending: false,
+          runStatus: "completed",
+          now,
+        });
+        yield* orchestrator.recoverDelegatedTasks;
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "mcp",
+          commandId: CommandId.make("command:stopped-stall-send"),
+          threadId: child.childThreadId,
+          senderThreadId: parentThreadId,
+          messageId: MessageId.make("message:stopped-stall-send"),
+          text: "Keep going.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+        });
+        const childRun = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs.find(
+          (run) => run.delegatedTaskId !== undefined && run.ordinal > 1,
+        )!;
+        const taskId = childRun.delegatedTaskId!;
+        // The overload ends the run; nothing has armed a retry record yet.
+        yield* eventSink.write({
+          commandId: CommandId.make("command:stopped-stall-overloaded"),
+          events: [
+            {
+              id: EventId.make("event:stopped-stall-overloaded"),
+              type: "turn-item.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("item:stopped-stall-overloaded"),
+                type: "error",
+                threadId: child.childThreadId,
+                runId: childRun.id,
+                nodeId: childRun.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 2,
+                status: "failed",
+                title: "Provider failure",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "provider_error",
+                  message: "The API is overloaded.",
+                  code: "api_error_529",
+                  retryable: true,
+                  overloaded: true,
+                },
+              },
+            },
+            {
+              id: EventId.make("event:stopped-stall-failed"),
+              type: "run.updated",
+              threadId: child.childThreadId,
+              runId: childRun.id,
+              occurredAt: now,
+              payload: { ...childRun, status: "failed", startedAt: now, completedAt: now },
+            },
+          ],
+        });
+        yield* orchestrator.recoverDelegatedTasks;
+        const held = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+          (task) => task.id === taskId,
+        )!;
+        assert.isNull(held.result);
+        // The user stops the retries; no run event follows, so the Stop itself must close it.
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("command:stopped-stall-stop"),
+          threadId: child.childThreadId,
+          stallRecovery: null,
+        });
+        const finished = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+          (task) => task.id === taskId,
+        )!;
+        assert.equal(finished.status, "failed");
+        assert.isNotNull(finished.result);
+        assert.isFalse(yield* orchestrator.delegatedTaskResultPending(child.childThreadId, taskId));
+      }),
+    );
+
     it.effect("serializes a recovered child answer with its parent and tracks the follow-up", () =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;

@@ -6,6 +6,7 @@ import {
   type OrchestrationV2RunStatus,
   type ThreadId,
 } from "@t3tools/contracts";
+import { overloadedRun, stalledRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -21,6 +22,12 @@ const LIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2RunStatus> = new Set([
   "running",
   "waiting",
 ]);
+
+/** Reading the overload failure and the waiting cards is all the gates need. */
+const GOAL_TURN_ITEM_TYPES = ["error", "secret_request", "email_request"] as const;
+
+const isWaitingUserInputCard = (item: { readonly type: string; readonly status: string }) =>
+  (item.type === "secret_request" || item.type === "email_request") && item.status === "waiting";
 
 /**
  * T3 Code drives `/goal` itself where the provider has no native goal. Each turn ends with a
@@ -45,12 +52,21 @@ export const make = Effect.gen(function* () {
     return review === undefined ? undefined : parentThreadId;
   });
 
+  /** How an overload left this thread: still being retried, stopped by the user, or neither. */
+  const overloadState = Effect.fn("GoalLoopService.overloadState")(function* (threadId: ThreadId) {
+    const records = yield* projections.getThreadRecords(threadId, ["runs", "turnItems"], {
+      turnItemTypes: ["error", "run_interrupt_request"],
+    });
+    if (stalledRun(records.runs, records.turnItems) !== null) return "stalled" as const;
+    return overloadedRun(records.runs, records.turnItems) === null ? null : ("stopped" as const);
+  });
+
   const continueGoal = Effect.fn("GoalLoopService.continueGoal")(
     function* (threadId: ThreadId) {
       const records = yield* projections.getThreadRecords(
         threadId,
         ["runs", "runtimeRequests", "turnItems"],
-        { turnItemTypes: ["secret_request", "email_request"], turnItemStatuses: ["waiting"] },
+        { turnItemTypes: GOAL_TURN_ITEM_TYPES },
       );
       const goal = records.thread.goal ?? null;
       if (goal?.status !== "active") return;
@@ -64,7 +80,10 @@ export const make = Effect.gen(function* () {
           DateTime.toEpochMillis(records.thread.snoozedUntil) > now) ||
         // The agent is waiting on an answer, not on more work.
         records.runtimeRequests.some((request) => request.status === "pending") ||
-        records.turnItems.length > 0 ||
+        // An overloaded latest run is the recovery worker's job; a goal turn here would replace
+        // its retry, and after a Stop the user asked for rest.
+        overloadedRun(records.runs, records.turnItems) !== null ||
+        records.turnItems.some(isWaitingUserInputCard) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
@@ -101,7 +120,7 @@ export const make = Effect.gen(function* () {
       const records = yield* projections.getThreadRecords(
         threadId,
         ["runs", "runtimeRequests", "turnItems"],
-        { turnItemTypes: ["secret_request", "email_request"], turnItemStatuses: ["waiting"] },
+        { turnItemTypes: GOAL_TURN_ITEM_TYPES },
       );
       const goal = records.thread.goal ?? null;
       if (goal?.status !== "active") return;
@@ -113,7 +132,10 @@ export const make = Effect.gen(function* () {
         (records.thread.snoozedUntil != null &&
           DateTime.toEpochMillis(records.thread.snoozedUntil) > now) ||
         records.runtimeRequests.some((request) => request.status === "pending") ||
-        records.turnItems.length > 0 ||
+        // The recovery worker owns an overloaded latest run; reviewing it here would replace
+        // its retry, and after a Stop the user asked for rest.
+        overloadedRun(records.runs, records.turnItems) !== null ||
+        records.turnItems.some(isWaitingUserInputCard) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
@@ -159,15 +181,37 @@ export const make = Effect.gen(function* () {
               ),
             );
           }
-          // A reviewer that failed still leaves the goal to the next turn.
+          // A reviewer that failed still leaves the goal to the next turn, unless the server is
+          // retrying it: then its verdict is still coming.
           if (status === "failed") {
             return reviewParentOf(event.threadId).pipe(
               Effect.flatMap((parentThreadId) =>
-                parentThreadId === undefined ? Effect.void : continueGoal(parentThreadId),
+                parentThreadId === undefined
+                  ? Effect.void
+                  : overloadState(event.threadId).pipe(
+                      Effect.flatMap((state) =>
+                        state === "stalled" ? Effect.void : continueGoal(parentThreadId),
+                      ),
+                    ),
               ),
             );
           }
           return Effect.void;
+        }
+        // Stopping a stalled reviewer's retries ends it with no run event, so its Stop mark is
+        // what tells the goal the review will not come.
+        if (event.type === "turn-item.updated" && event.payload.type === "run_interrupt_request") {
+          return reviewParentOf(event.threadId).pipe(
+            Effect.flatMap((parentThreadId) =>
+              parentThreadId === undefined
+                ? Effect.void
+                : overloadState(event.threadId).pipe(
+                    Effect.flatMap((state) =>
+                      state === "stopped" ? continueGoal(parentThreadId) : Effect.void,
+                    ),
+                  ),
+            ),
+          );
         }
         // A goal set or resumed on an idle thread starts its first turn here.
         if (event.type === "thread.metadata-updated" && event.payload.goal?.status === "active") {

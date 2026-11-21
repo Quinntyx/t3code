@@ -125,6 +125,15 @@ describe("nextThreadAnnouncement", () => {
     expect(speak([busy(), idle(secondRun, "failed")])).toEqual(["Failed"]);
   });
 
+  it("says a retried overload is stalled rather than failed", () => {
+    const stalled = { ...idle(secondRun, "failed"), stalled: true };
+    expect(speak([busy(), stalled, stalled])).toEqual(["Stalled"]);
+    // Once the retry runs, the thread is working again, and nothing more is said.
+    expect(speak([busy(), stalled, busy("working", secondRun, "running")])).toEqual(["Stalled"]);
+    // A thread opened while stalled says nothing about a turn already in progress.
+    expect(speak([stalled, stalled])).toEqual([]);
+  });
+
   it("says how the turn ended when a queued message was cancelled before it started", () => {
     const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
     const run = (id: RunId, ordinal: number, status: OrchestrationV2Run["status"]) =>

@@ -16,6 +16,7 @@ import type {
 import {
   latestRootProviderFailure,
   latestUnheldRun,
+  stalledRun,
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -245,6 +246,23 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   readonly hasLinkedPullRequest: boolean;
 };
 
+export type ProjectionStallRecoveryCandidate = Pick<
+  OrchestrationV2ThreadShell,
+  | "id"
+  | "lastErrorClass"
+  | "archivedAt"
+  | "settledOverride"
+  | "pendingRuntimeRequest"
+  | "stallRecovery"
+> & {
+  /** The failed run the row was selected by, which every candidate has. */
+  readonly latestRunId: RunId;
+  /** Epoch ms of that run's end, which the retry's clock counts from. */
+  readonly latestRunCompletedAtMs: number | null;
+  /** Set when the failed run was itself the retry of another, so consecutive stalls chain. */
+  readonly stallContinuationOfRunId: RunId | null;
+};
+
 export interface ProjectionConsumptionCapCandidate {
   readonly thread: OrchestrationV2AppThread;
   readonly activeRunId: RunId | null;
@@ -290,10 +308,15 @@ export type ProjectionSettlementCandidate = Pick<
   | "pendingBackgroundTasks"
   | "pendingGuestMessageCount"
   | "goal"
+  | "stallRecovery"
+  | "stalled"
 > &
   Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt"> & {
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   };
+
+/** Matches the orchestrator's marker for the worktree setup turn item. */
+const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
 
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
@@ -639,6 +662,20 @@ export interface ProjectionStoreV2Shape {
   readonly getLimitRecoveryWakeAt: (
     now: DateTime.Utc,
   ) => Effect.Effect<number | null, ProjectionStoreV2Error>;
+  /**
+   * Threads whose latest executed run ended on an upstream overload, with their armed recovery.
+   * A thread with no armed recovery has not been retried yet.
+   */
+  readonly getStallRecoveryCandidates: () => Effect.Effect<
+    ReadonlyArray<ProjectionStallRecoveryCandidate>,
+    ProjectionStoreV2Error
+  >;
+  /** Epoch ms of the next armed retry after `now`. */
+  readonly getStallRecoveryWakeAt: (
+    now: DateTime.Utc,
+  ) => Effect.Effect<number | null, ProjectionStoreV2Error>;
+  /** Whether the run's provider turn did any work before it ended. */
+  readonly stallRunMadeProgress: (runId: RunId) => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
@@ -1120,6 +1157,7 @@ type ShellThreadRow = {
   readonly latest_run_started_at: string | null;
   readonly latest_run_completed_at: string | null;
   readonly latest_run_stop_requested: number;
+  readonly stalled: number;
   readonly active_run_id: string | null;
   readonly active_run_status: string | null;
   readonly activity_run_status: string | null;
@@ -1157,6 +1195,7 @@ type SettlementThreadRow = Pick<
   | "latest_run_completed_at"
   | "latest_user_message_at"
   | "latest_user_authored_message_at"
+  | "stalled"
 >;
 
 type ShellRunItemCountRow = {
@@ -1708,6 +1747,8 @@ export function threadShellFromProjection(
     }
   }
   const latestUserMessage = userMessages[0] ?? null;
+  // The latest executed run decides, so a cancelled run that never started cannot hide a stall.
+  const stalled = stalledRun(runs, projection.turnItems) !== null;
   const pendingBackgroundTasks = derivePendingBackgroundWork({
     latestRun,
     providerThreads: projection.providerThreads,
@@ -1762,6 +1803,7 @@ export function threadShellFromProjection(
       projection.turnItems.some(
         (item) => item.runId === latestRun.id && item.type === "run_interrupt_request",
       ),
+    stalled,
     activeRunId: activeRun?.id ?? null,
     blockedOnThreadWait: deriveBlockedOnThreadWait({ activeRun, turnItems: projection.turnItems }),
     activityRunStatus: activityRun?.status ?? null,
@@ -1807,6 +1849,7 @@ export function threadShellFromProjection(
     opens: projection.thread.opens ?? null,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
     limitRecovery: projection.thread.limitRecovery ?? null,
+    stallRecovery: projection.thread.stallRecovery ?? null,
     deletedAt: projection.thread.deletedAt,
   };
 }
@@ -1881,6 +1924,7 @@ type ShellThreadState = {
   readonly latestRunStartedAt: DateTime.Utc | null;
   readonly latestRunCompletedAt: DateTime.Utc | null;
   readonly latestRunStopRequested: boolean;
+  readonly stalled: boolean;
   readonly activeRunId: RunId | null;
   readonly blockedOnThreadWait: boolean;
   readonly activityRunStatus: ShellActivityRunStatus | null;
@@ -2052,6 +2096,7 @@ function shellFromState(input: {
     latestRunStartedAt: input.state.latestRunStartedAt,
     latestRunCompletedAt: input.state.latestRunCompletedAt,
     latestRunStopRequested: input.state.latestRunStopRequested,
+    stalled: input.state.stalled,
     activeRunId: input.state.activeRunId,
     blockedOnThreadWait: input.state.blockedOnThreadWait,
     activityRunStatus: input.state.activityRunStatus,
@@ -2089,6 +2134,7 @@ function shellFromState(input: {
     opens: input.state.thread.opens ?? null,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
     limitRecovery: input.state.thread.limitRecovery ?? null,
+    stallRecovery: input.state.thread.stallRecovery ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
 }
@@ -4459,6 +4505,151 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
 
+    // Narrowed like the limit-recovery query: shortlist threads holding an overload failure,
+    // then resolve each one's latest executed run, rather than sorting every run of every thread.
+    const stallRecoveryRows = Effect.fn("ProjectionStore.stallRecoveryRows")(function* () {
+      const rows = yield* sql<{
+        readonly payload_json: string;
+        readonly run_id: string;
+        readonly completed_at: string | null;
+        readonly stall_continuation_of_run_id: string | null;
+      }>`
+        SELECT t.payload_json, r.run_id, r.completed_at,
+          json_extract(r.payload_json, '$.stallContinuationOfRunId') AS stall_continuation_of_run_id
+        FROM orchestration_v2_projection_threads t
+        INNER JOIN orchestration_v2_projection_runs r ON r.run_id = (
+          SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+          WHERE latest.thread_id = t.thread_id
+            AND latest.status <> 'queued'
+            AND NOT (
+              latest.status = 'cancelled'
+              AND json_extract(latest.payload_json, '$.startedAt') IS NULL
+            )
+          -- latestExecutedRun: the run that ended last (runRanAfter).
+          ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
+            latest.ordinal DESC, latest.run_id DESC
+          LIMIT 1
+        ) AND r.status = 'failed'
+        WHERE t.deleted_at IS NULL
+          AND t.thread_id IN (
+            SELECT failure.thread_id FROM orchestration_v2_projection_turn_items failure
+            WHERE failure.type = 'error' AND failure.status = 'failed'
+              AND json_extract(failure.payload_json, '$.failure.overloaded') = 1
+          )
+          AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+          AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+          -- A thread waiting on the user cannot be retried underneath the question.
+          AND NOT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+            WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+          )
+          AND json_extract((
+            SELECT error.payload_json FROM orchestration_v2_projection_turn_items error
+            WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
+              AND error.type = 'error' AND error.status = 'failed'
+              AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
+            ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+            LIMIT 1
+          ), '$.failure.overloaded') = 1
+          -- A Stop that reached the run ended its retries for good.
+          AND NOT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_turn_items stopped
+            WHERE stopped.thread_id = t.thread_id AND stopped.run_id = r.run_id
+              AND stopped.type = 'run_interrupt_request'
+          )
+          -- A subagent of a settled, archived or deleted parent is abandoned work.
+          AND NOT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_threads parent
+            WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+              AND (
+                json_extract(parent.payload_json, '$.settledOverride') = 'settled'
+                OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
+                OR parent.deleted_at IS NOT NULL
+              )
+          )
+        ORDER BY t.thread_id
+      `;
+      return rows;
+    });
+
+    const getStallRecoveryCandidates = Effect.fn("ProjectionStore.getStallRecoveryCandidates")(
+      function* () {
+        const rows = yield* stallRecoveryRows();
+        const candidates: Array<ProjectionStallRecoveryCandidate> = [];
+        for (const row of rows) {
+          const thread = yield* decodeThreadPayload(row.payload_json);
+          candidates.push({
+            id: thread.id,
+            lastErrorClass: "provider_error",
+            latestRunId: RunId.make(row.run_id),
+            latestRunCompletedAtMs:
+              row.completed_at === null
+                ? null
+                : DateTime.toEpochMillis(DateTime.makeUnsafe(row.completed_at)),
+            stallContinuationOfRunId:
+              row.stall_continuation_of_run_id === null
+                ? null
+                : RunId.make(row.stall_continuation_of_run_id),
+            archivedAt: thread.archivedAt,
+            settledOverride: thread.settledOverride,
+            pendingRuntimeRequest: null,
+            stallRecovery: thread.stallRecovery ?? null,
+          });
+        }
+        return candidates;
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
+    const getStallRecoveryWakeAt = Effect.fn("ProjectionStore.getStallRecoveryWakeAt")(
+      function* (now: DateTime.Utc) {
+        const nowIso = DateTime.formatIso(now);
+        const rows = yield* sql<{ readonly next_ms: number | null }>`
+          SELECT MIN(CASE WHEN julianday(next_at) > julianday(${nowIso})
+            THEN (julianday(next_at) - 2440587.5) * 86400000 END) AS next_ms
+          FROM (
+            SELECT json_extract(payload_json, '$.stallRecovery.nextAttemptAt') AS next_at
+            FROM orchestration_v2_projection_threads
+            WHERE deleted_at IS NULL
+              AND json_extract(payload_json, '$.stallRecovery.runId') IS NOT NULL
+          )
+        `;
+        const next = rows[0]?.next_ms;
+        return next == null ? null : Math.round(next);
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
+    const stallRunMadeProgress = Effect.fn("ProjectionStore.stallRunMadeProgress")(
+      function* (runId: RunId) {
+        // A retry that ran a tool got real work done before failing again, so the overload let it
+        // through. Assistant text alone does not count: a failed reply can stream before the error,
+        // and searching for or reading a file proves nothing the user would keep. Writing one,
+        // running a command, or a finished subagent is work the next attempt builds on.
+        const rows = yield* sql<{ readonly progressed: number }>`
+          SELECT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_turn_items item
+            WHERE item.run_id = ${runId}
+              AND (
+                (
+                  item.type IN ('command_execution', 'file_change', 'dynamic_tool')
+                  AND item.status = 'completed'
+                )
+                -- Workspace preparation is the harness, not the provider.
+                AND NOT (
+                  item.type = 'command_execution'
+                  AND json_extract(item.payload_json, '$.input') = ${WORKSPACE_PREPARATION_INPUT}
+                )
+                OR (item.type = 'subagent' AND item.status = 'completed')
+              )
+          ) AS progressed
+        `;
+        return (rows[0]?.progressed ?? 0) === 1;
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
     const getRecoveryThreadIds = Effect.fn("ProjectionStore.getRecoveryThreadIds")(
       function* (
         kind: ProjectionRecoveryKind,
@@ -6559,6 +6750,45 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE stop_request.thread_id = t.thread_id AND stop_request.run_id = presented.run_id
                   AND stop_request.type = 'run_interrupt_request'
               ) AS latest_run_stop_requested,
+              -- stalledRun: the latest executed run's newest root error is an upstream overload,
+              -- and no Stop reached it.
+              (
+                SELECT CASE WHEN EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_turn_items stopped
+                  WHERE stopped.thread_id = t.thread_id AND stopped.run_id = executed.run_id
+                    AND stopped.type = 'run_interrupt_request'
+                ) THEN 0 ELSE 1 END
+                FROM orchestration_v2_projection_runs executed
+                WHERE executed.run_id = (
+                  SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+                  WHERE latest.thread_id = t.thread_id
+                    AND latest.status <> 'queued'
+                    AND NOT (
+                      latest.status = 'cancelled'
+                      AND json_extract(latest.payload_json, '$.startedAt') IS NULL
+                    )
+                  ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
+                    latest.ordinal DESC, latest.run_id DESC
+                  LIMIT 1
+                )
+                  AND executed.status = 'failed'
+                  AND json_extract((
+                    SELECT error.payload_json FROM orchestration_v2_projection_turn_items error
+                    WHERE error.thread_id = t.thread_id AND error.run_id = executed.run_id
+                      AND error.type = 'error' AND error.status = 'failed'
+                      AND error.node_id IS json_extract(executed.payload_json, '$.rootNodeId')
+                    ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+                    LIMIT 1
+                  ), '$.failure.overloaded') IS 1
+                  AND json_extract((
+                    SELECT error.payload_json FROM orchestration_v2_projection_turn_items error
+                    WHERE error.thread_id = t.thread_id AND error.run_id = executed.run_id
+                      AND error.type = 'error' AND error.status = 'failed'
+                      AND error.node_id IS json_extract(executed.payload_json, '$.rootNodeId')
+                    ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+                    LIMIT 1
+                  ), '$.failure.class') IS NOT 'usage_limit'
+              ) AS stalled,
               active.run_id AS active_run_id,
               active.status AS active_run_status,
               (
@@ -6925,7 +7155,46 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND NOT ${isIdleCompactionMessage("message")}
                 ORDER BY message.updated_at DESC, message.message_id DESC
                 LIMIT 1
-              ) AS latest_user_authored_message_at
+              ) AS latest_user_authored_message_at,
+              -- stalledRun, over the latest executed run rather than the presented one.
+              (
+                SELECT CASE WHEN EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_turn_items stopped
+                  WHERE stopped.thread_id = t.thread_id AND stopped.run_id = executed.run_id
+                    AND stopped.type = 'run_interrupt_request'
+                ) THEN 0 ELSE 1 END
+                FROM orchestration_v2_projection_runs executed
+                WHERE executed.run_id = (
+                  SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+                  WHERE latest.thread_id = t.thread_id
+                    AND NOT ${isSilentShellRun("latest")}
+                    AND latest.status <> 'queued'
+                    AND NOT (
+                      latest.status = 'cancelled'
+                      AND json_extract(latest.payload_json, '$.startedAt') IS NULL
+                    )
+                  ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
+                    latest.ordinal DESC, latest.run_id DESC
+                  LIMIT 1
+                )
+                  AND executed.status = 'failed'
+                  AND json_extract((
+                    SELECT error.payload_json FROM orchestration_v2_projection_turn_items error
+                    WHERE error.thread_id = t.thread_id AND error.run_id = executed.run_id
+                      AND error.type = 'error' AND error.status = 'failed'
+                      AND error.node_id IS json_extract(executed.payload_json, '$.rootNodeId')
+                    ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+                    LIMIT 1
+                  ), '$.failure.overloaded') IS 1
+                  AND json_extract((
+                    SELECT error.payload_json FROM orchestration_v2_projection_turn_items error
+                    WHERE error.thread_id = t.thread_id AND error.run_id = executed.run_id
+                      AND error.type = 'error' AND error.status = 'failed'
+                      AND error.node_id IS json_extract(executed.payload_json, '$.rootNodeId')
+                    ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+                    LIMIT 1
+                  ), '$.failure.class') IS NOT 'usage_limit'
+              ) AS stalled
             FROM orchestration_v2_projection_threads t
             LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = (
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest
@@ -7012,6 +7281,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   activityRunStatus: null,
                   activityRunStartedAt: null,
                   pendingRuntimeRequest: null,
+                  stallRecovery: thread.stallRecovery ?? null,
+                  stalled: row.stalled === 1,
                   pendingGuestMessageCount: pendingGuestMessageCount(thread.guestShare),
                   pendingBackgroundTasks: derivePendingBackgroundWork({
                     latestRun:
@@ -7215,6 +7486,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ? null
             : DateTime.makeUnsafe(row.latest_run_completed_at);
         let latestRunStopRequested = row.latest_run_stop_requested === 1;
+        const stalled = row.stalled === 1;
         if (row.blocking_run_id !== null && row.blocking_failure_payload_json !== null) {
           const blockingFailure = yield* decodeTurnItemPayload(
             row.blocking_failure_payload_json,
@@ -7270,6 +7542,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunStartedAt,
           latestRunCompletedAt,
           latestRunStopRequested,
+          stalled,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
           blockedOnThreadWait: deriveBlockedOnThreadWait({
             activeRun:
@@ -7561,6 +7834,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               activityRunStatus: state.activityRunStatus,
               latestRunCompletedAt: state.latestRunCompletedAt,
               latestRunStopRequested: state.latestRunStopRequested,
+              stalled: state.stalled,
               pendingRuntimeRequest: state.pendingRuntimeRequest,
               pendingBackgroundTasks: state.pendingBackgroundTasks,
             })),
@@ -8009,6 +8283,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
       hasActivePullRequestThread: readOnReader(hasActivePullRequestThread),
       getLimitRecoveryWakeAt: readOnReader(getLimitRecoveryWakeAt),
+      getStallRecoveryCandidates: readOnReader(getStallRecoveryCandidates),
+      getStallRecoveryWakeAt: readOnReader(getStallRecoveryWakeAt),
+      stallRunMadeProgress: readOnReader(stallRunMadeProgress),
       getRecoveryThreadIds: readOnReader(getRecoveryThreadIds),
       getUnreadableThreadIds: readOnReader(getUnreadableThreadIds),
       getThreadSnapshot: readOnReader(getThreadSnapshot),

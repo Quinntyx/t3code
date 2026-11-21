@@ -4760,6 +4760,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     class: codexUsageLimitError(notificationCode, payload.error.codexErrorInfo)
                       ? "usage_limit"
                       : "provider_error",
+                    ...(notificationCode === "serverOverloaded" ? { overloaded: true } : {}),
                   }),
                   payload.error,
                 ),
@@ -4789,6 +4790,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ? "transport_error"
                     : "provider_error",
                 retryable: true,
+                ...(code === "serverOverloaded" ? { overloaded: true } : {}),
               }),
               payload.error,
             );
@@ -5870,6 +5872,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         message: input.failureMessage,
                         code: failureCode,
                         class: failureClass,
+                        // Exhausted capacity retries end here; hand the overload to recovery.
+                        ...(failureCode === "serverOverloaded" ? { overloaded: true } : {}),
                       }),
                       input.failureMessage,
                     );

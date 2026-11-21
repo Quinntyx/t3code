@@ -11,6 +11,7 @@ import {
   CheckpointScopeId,
   MessageId,
   type ModelSelection,
+  type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
   type OrchestrationV2ThreadHistoryPage,
@@ -7137,7 +7138,9 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           (detail) =>
             /^SEARCH (?:item|error) /.test(detail) && !detail.includes("(turn_item_id=?)"),
         );
-        assert.lengthOf(errorLookups, marker.includes("blocking") ? 2 : 1, marker);
+        // The shell query resolves the presented run, the blocking run, and the stalled one,
+        // which reads the newest error twice: its overload flag, then its class.
+        assert.lengthOf(errorLookups, marker.includes("blocking") ? 4 : 1, marker);
         for (const errorLookup of errorLookups) {
           assert.include(errorLookup, "turn_items_failed_error_idx");
           assert.include(errorLookup, "(thread_id=? AND run_id=? AND node_id=?)");
@@ -9295,6 +9298,526 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           hasActiveBackgroundWork: true,
         },
       ]);
+    }),
+  );
+
+  it.effect(
+    "offers only a thread whose latest run the overload ended, until it waits on the user",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        const threadId = ThreadId.make("thread:stall-recovery");
+        const runId = RunId.make("run:stall-recovery");
+        const rootNodeId = NodeId.make("node:stall-recovery");
+        const now = yield* DateTime.now;
+        const run = {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:stall-recovery"),
+          rootNodeId,
+          activeAttemptId: null,
+          status: "running" as const,
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        };
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:thread-created"),
+          type: "thread.created",
+          threadId,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: threadId,
+            projectId: ProjectId.make("project:stall-recovery"),
+            title: "Stalled",
+            providerInstanceId,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        });
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:run-created"),
+          type: "run.created",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          providerInstanceId,
+          occurredAt: now,
+          payload: run,
+        });
+        const overload = (overloaded: boolean) => ({
+          id: TurnItemId.make("item:stall-recovery:error"),
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "failed" as const,
+          title: "Provider failure",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "error" as const,
+          failure: {
+            class: "provider_error" as const,
+            message: "The API is overloaded.",
+            code: "api_error_529",
+            retryable: true,
+            overloaded,
+          },
+        });
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:plain-error"),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: overload(false),
+        });
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:failed"),
+          type: "run.updated",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: { ...run, status: "failed", completedAt: now },
+        });
+        assert.isEmpty(yield* store.getStallRecoveryCandidates());
+        assert.isNull(yield* store.getStallRecoveryWakeAt(now));
+
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:overload"),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: overload(true),
+        });
+        const [candidate] = yield* store.getStallRecoveryCandidates();
+        assert.equal(candidate?.id, threadId);
+        assert.equal(candidate?.latestRunId, runId);
+        assert.equal(candidate?.latestRunCompletedAtMs, DateTime.toEpochMillis(now));
+        assert.isNull(candidate?.stallRecovery ?? null);
+        assert.isNull(candidate?.stallContinuationOfRunId ?? null);
+
+        const nextAttemptAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+        const armed = {
+          runId,
+          attempt: 1 as const,
+          nextAttemptAt,
+        };
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:armed"),
+          type: "thread.metadata-updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...(yield* store.getThread(threadId)), stallRecovery: armed },
+        });
+        assert.deepEqual((yield* store.getStallRecoveryCandidates())[0]?.stallRecovery, armed);
+        assert.equal(yield* store.getStallRecoveryWakeAt(now), Date.parse(nextAttemptAt));
+        assert.isNull(yield* store.getStallRecoveryWakeAt(DateTime.makeUnsafe(nextAttemptAt)));
+
+        // A thread waiting on the user is not retried underneath the question.
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO orchestration_v2_projection_runtime_requests
+        (runtime_request_id, thread_id, node_id, kind, status, created_at, payload_json)
+        VALUES ('stall-recovery:pending', ${threadId}, ${rootNodeId}, 'approval', 'pending', ${DateTime.formatIso(now)}, '{}')`;
+        assert.isEmpty(yield* store.getStallRecoveryCandidates());
+        yield* sql`DELETE FROM orchestration_v2_projection_runtime_requests WHERE runtime_request_id = 'stall-recovery:pending'`;
+        for (const [field, value] of [
+          ["archivedAt", now],
+          ["settledOverride", "settled"],
+        ] as const) {
+          yield* store.apply({
+            id: EventId.make(`event:stall-recovery:${field}`),
+            type: "thread.metadata-updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...(yield* store.getThread(threadId)), [field]: value },
+          });
+          assert.isEmpty(yield* store.getStallRecoveryCandidates());
+          yield* store.apply({
+            id: EventId.make(`event:stall-recovery:${field}:restored`),
+            type: "thread.metadata-updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...(yield* store.getThread(threadId)),
+              archivedAt: null,
+              settledOverride: null,
+            },
+          });
+        }
+        assert.lengthOf(yield* store.getStallRecoveryCandidates(), 1);
+      }),
+  );
+
+  it.effect("keeps showing a stall under a queued run that never started", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:stall-behind-queued");
+      const runId = RunId.make("run:stall-behind-queued");
+      const rootNodeId = NodeId.make("node:stall-behind-queued");
+      const now = yield* DateTime.now;
+      const run = (id: RunId, ordinal: number, status: "failed" | "queued") => ({
+        id,
+        threadId,
+        ordinal,
+        providerInstanceId,
+        modelSelection,
+        providerThreadId: null,
+        userMessageId: MessageId.make(`message:${id}`),
+        rootNodeId,
+        activeAttemptId: null,
+        status,
+        requestedAt: now,
+        startedAt: status === "failed" ? now : null,
+        completedAt: status === "failed" ? now : null,
+        checkpointId: null,
+        contextHandoffId: null,
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-behind-queued:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:stall-behind-queued"),
+          title: "Stalled behind a queued run",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-behind-queued:run"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: run(runId, 1, "failed"),
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-behind-queued:error"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("item:stall-behind-queued"),
+          type: "error",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "failed",
+          title: "Provider failure",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          failure: {
+            class: "provider_error",
+            message: "The API is overloaded.",
+            code: "api_error_529",
+            retryable: true,
+            overloaded: true,
+          },
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-behind-queued:queued"),
+        type: "run.created",
+        threadId,
+        runId: RunId.make("run:stall-behind-queued:queued"),
+        nodeId: rootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: run(RunId.make("run:stall-behind-queued:queued"), 2, "queued"),
+      });
+      const projection = yield* store.getThreadProjection(threadId);
+      // The queued run is what the thread shows, but the failed executed run is still stalled.
+      assert.equal(
+        ProjectionStore.threadShellFromProjection(projection).latestRunId,
+        "run:stall-behind-queued:queued",
+      );
+      assert.isTrue(ProjectionStore.threadShellFromProjection(projection).stalled);
+    }),
+  );
+
+  it.effect("leaves a subagent of a settled, archived or deleted parent alone", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("thread:stall-abandoned-parent");
+      const childThreadId = ThreadId.make("thread:stall-abandoned-child");
+      const projectId = ProjectId.make("project:stall-abandoned");
+      const childRunId = RunId.make("run:stall-abandoned");
+      const childRootNodeId = NodeId.make("node:stall-abandoned");
+      const thread: (
+        id: ThreadId,
+        lineage: OrchestrationV2AppThread["lineage"],
+        forkedFrom: OrchestrationV2AppThread["forkedFrom"],
+      ) => OrchestrationV2AppThread = (id, lineage, forkedFrom) => ({
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+        id,
+        projectId,
+        title: id,
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage,
+        forkedFrom,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-abandoned:parent"),
+        type: "thread.created",
+        threadId: parentThreadId,
+        occurredAt: now,
+        payload: thread(
+          parentThreadId,
+          { parentThreadId: null, relationshipToParent: null, rootThreadId: parentThreadId },
+          null,
+        ),
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-abandoned:child"),
+        type: "thread.created",
+        threadId: childThreadId,
+        occurredAt: now,
+        payload: thread(
+          childThreadId,
+          {
+            parentThreadId,
+            relationshipToParent: "subagent",
+            rootThreadId: parentThreadId,
+          },
+          { type: "node", nodeId: NodeId.make("node:stall-abandoned-task") },
+        ),
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-abandoned:run"),
+        type: "run.created",
+        threadId: childThreadId,
+        runId: childRunId,
+        nodeId: childRootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: childRunId,
+          threadId: childThreadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:stall-abandoned"),
+          rootNodeId: childRootNodeId,
+          activeAttemptId: null,
+          status: "failed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:stall-abandoned:error"),
+        type: "turn-item.updated",
+        threadId: childThreadId,
+        runId: childRunId,
+        nodeId: childRootNodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("item:stall-abandoned"),
+          type: "error",
+          threadId: childThreadId,
+          runId: childRunId,
+          nodeId: childRootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "failed",
+          title: "Provider failure",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          failure: {
+            class: "provider_error",
+            message: "The API is overloaded.",
+            code: "api_error_529",
+            retryable: true,
+            overloaded: true,
+          },
+        },
+      });
+      const candidates = () =>
+        store
+          .getStallRecoveryCandidates()
+          .pipe(Effect.map((rows) => rows.map((candidate) => candidate.id)));
+      assert.include(yield* candidates(), childThreadId);
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET deleted_at = ${DateTime.formatIso(now)}
+        WHERE thread_id = ${parentThreadId}`;
+      assert.notInclude(yield* candidates(), childThreadId);
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET deleted_at = NULL, payload_json = json_set(payload_json, '$.archivedAt', ${DateTime.formatIso(now)})
+        WHERE thread_id = ${parentThreadId}`;
+      assert.notInclude(yield* candidates(), childThreadId);
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(
+          json_remove(payload_json, '$.archivedAt'),
+          '$.settledOverride',
+          'settled'
+        )
+        WHERE thread_id = ${parentThreadId}`;
+      assert.notInclude(yield* candidates(), childThreadId);
+    }),
+  );
+
+  it.effect("counts only real work a failed run did before the overload", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("stall-progress");
+      const original = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      const now = yield* DateTime.now;
+      const item = (
+        id: string,
+        type: "reasoning" | "command_execution" | "file_change" | "subagent",
+        status: "completed" | "running",
+        input?: string,
+      ) => ({
+        id: TurnItemId.make(id),
+        threadId,
+        runId: original.id,
+        nodeId: original.rootNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        status,
+        title: null,
+        startedAt: now,
+        completedAt: status === "completed" ? now : null,
+        updatedAt: now,
+        ...(type === "reasoning"
+          ? { type, text: "Thinking", streaming: false }
+          : type === "command_execution"
+            ? { type, input: input ?? "pnpm test" }
+            : type === "file_change"
+              ? { type, fileName: "src/index.ts" }
+              : {
+                  type,
+                  subagentId: NodeId.make(`${id}:node`),
+                  origin: "provider_native" as const,
+                  driver,
+                  providerInstanceId,
+                  childThreadId: null,
+                  prompt: "Do it",
+                  result: "Done",
+                  promptOmitted: true,
+                  resultOmitted: true,
+                }),
+      });
+      const apply = (payload: ReturnType<typeof item>) =>
+        store.apply({
+          id: EventId.make(`event:${payload.id}`),
+          type: "turn-item.updated",
+          threadId,
+          runId: original.id,
+          nodeId: original.rootNodeId,
+          driver,
+          occurredAt: now,
+          payload,
+        } as never);
+      assert.isFalse(yield* store.stallRunMadeProgress(original.id));
+      yield* apply(item("progress:text", "reasoning", "completed"));
+      assert.isFalse(yield* store.stallRunMadeProgress(original.id));
+      // Workspace preparation is the harness, not the provider's work.
+      yield* apply(
+        item("progress:prepare", "command_execution", "completed", "Preparing workspace"),
+      );
+      assert.isFalse(yield* store.stallRunMadeProgress(original.id));
+      yield* apply(item("progress:running", "command_execution", "running"));
+      assert.isFalse(yield* store.stallRunMadeProgress(original.id));
+      yield* apply(item("progress:command", "command_execution", "completed"));
+      assert.isTrue(yield* store.stallRunMadeProgress(original.id));
+      yield* apply(item("progress:file", "file_change", "completed"));
+      assert.isTrue(yield* store.stallRunMadeProgress(original.id));
     }),
   );
 });

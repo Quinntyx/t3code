@@ -52,6 +52,7 @@ export function startBackgroundThreadAnnouncements(
         ...resolveBackgroundThreadRequest(thread),
         runId: thread.latestRun?.runId ?? null,
         runStatus: thread.latestRun?.status ?? null,
+        stalled: thread.runtime?.stalled === true,
         activeRunId: thread.runtime?.activeRunId ?? null,
         snoozed: effectiveSnoozed(thread, { now }),
       });

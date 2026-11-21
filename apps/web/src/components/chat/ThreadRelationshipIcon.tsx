@@ -23,6 +23,8 @@ export function threadRelationshipStatusLabel(status: string | null): string {
     case "failed":
     case "error":
       return "Failed";
+    case "stalled":
+      return "Stalled";
     case "cancelled":
     case "interrupted":
       return "Stopped";
@@ -85,7 +87,8 @@ export function ThreadRelationshipIcon({
           status === "running" ||
             status === "in_progress" ||
             status === "pending" ||
-            status === "waiting"
+            status === "waiting" ||
+            status === "stalled"
             ? "bg-info"
             : status === "failed" || status === "error"
               ? "bg-destructive"

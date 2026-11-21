@@ -77,6 +77,7 @@ export type ThreadListV2Status =
   | "input"
   | "request"
   | "working"
+  | "stalled"
   | "waiting"
   | "failed"
   | "limited"
@@ -295,6 +296,10 @@ export function resolveThreadListV2Status(
     ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
   ) {
     return "working";
+  }
+  // The server is retrying an overloaded run; the thread is still working, not failed.
+  if (thread.runtime?.stalled === true) {
+    return "stalled";
   }
   if (thread.runtime?.status === "idle") {
     return "waiting";

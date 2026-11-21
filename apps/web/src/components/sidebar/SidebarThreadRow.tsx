@@ -25,6 +25,7 @@ import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state
 import {
   formatWorkingDurationLabel,
   resolveThreadProviderStack,
+  threadFailureIsRetried,
 } from "@t3tools/client-runtime/state/models";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -367,7 +368,7 @@ function SidebarThreadTooltip({
             </div>
           </div>
         ) : null}
-        {thread.runtime?.lastError ? (
+        {thread.runtime?.lastError && threadFailureIsRetried(thread.runtime) !== true ? (
           <div
             className={cn(
               "flex min-w-0 items-center gap-2",
@@ -844,16 +845,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isSelected,
   });
   const topStatus =
-    status === "preparing" || status === "working" || status === "pring"
+    status === "preparing" || status === "working" || status === "stalled" || status === "pring"
       ? {
           label:
             status === "preparing"
               ? "Setting up"
               : status === "pring"
                 ? "PRing"
-                : thread.goal?.status === "active"
-                  ? "Goal"
-                  : "Working",
+                : status === "stalled"
+                  ? // The upstream is overloaded; T3 Code retries on its own.
+                    "Stalled"
+                  : thread.goal?.status === "active"
+                    ? "Goal"
+                    : "Working",
           icon: "working" as const,
           className:
             status === "pring" ? "text-teal-600 dark:text-teal-300/90" : "text-info-foreground",
@@ -1082,7 +1086,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   };
 
   const isBusy =
-    status === "preparing" || status === "working" || status === "pring" || status === "waiting";
+    status === "preparing" ||
+    status === "working" ||
+    status === "stalled" ||
+    status === "pring" ||
+    status === "waiting";
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-(--sidebar-row-radius) text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&

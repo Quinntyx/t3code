@@ -154,6 +154,8 @@ export function isAutoSettlementCandidate(
   // A guest is waiting on the owner; settling would hide the Request.
   if ((thread.pendingGuestMessageCount ?? 0) > 0) return false;
   if (thread.activityRunStatus != null) return false;
+  // A stalled thread's failed run is being retried; settling would hide work still coming.
+  if (thread.stalled) return false;
   if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
   // Interrupted runs must keep the same snooze protection the sidebar shows.
@@ -170,6 +172,7 @@ export function isSnoozed(
     | "status"
     | "pendingRuntimeRequest"
     | "pendingGuestMessageCount"
+    | "stalled"
   >,
   nowMs: number,
 ): boolean {
@@ -187,7 +190,9 @@ export function isSnoozed(
     return false;
   }
   const completedAtMs = toMillis(thread.latestRunCompletedAt);
+  // A stalled thread's failure is retried, so it is not an error that wakes a snooze.
   const wokeOnError =
+    thread.stalled !== true &&
     thread.status === "failed" &&
     (snoozedAtMs === null || (completedAtMs !== null && completedAtMs > snoozedAtMs));
   return !wokeOnError;

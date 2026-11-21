@@ -3821,6 +3821,47 @@ describe("OrchestratorMcpService thread list", () => {
       ),
     ),
   );
+  // A failed thread still waiting on its overload retry, and one that ended for good.
+  const stalled: OrchestrationV2ThreadShell = {
+    ...liveThreadShell(ThreadId.make("thread:stalled")),
+    projectId: ProjectId.make("project:stalled"),
+    activeRunId: null,
+    latestRunId: RunId.make("run:stalled"),
+    status: "failed",
+    stalled: true,
+  };
+  const ended: OrchestrationV2ThreadShell = {
+    ...stalled,
+    id: ThreadId.make("thread:ended"),
+    projectId: ProjectId.make("project:ended"),
+    latestRunId: RunId.make("run:ended"),
+    stalled: false,
+  };
+  const liveService = layerOrchestratorService.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          listProjectThreads: (input) =>
+            Effect.succeed(
+              [stalled, ended].filter(
+                (thread) => input.projectId === undefined || thread.projectId === input.projectId,
+              ),
+            ),
+        }),
+        ServerSettings.layerTest(),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+          list: () => Effect.succeed([]),
+        }),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      ),
+    ),
+  );
 
   it.effect("lists snoozed threads across every project with allProjects", () =>
     Effect.gen(function* () {
@@ -3839,6 +3880,21 @@ describe("OrchestratorMcpService thread list", () => {
         ],
       );
     }).pipe(Effect.provide(service)),
+  );
+
+  it.effect("reports a stalled thread as running, not as the failure being retried", () =>
+    Effect.gen(function* () {
+      const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const listed = yield* mcp.listThreads(client, { allProjects: true });
+      assert.deepStrictEqual(
+        listed.threads.map((thread) => [thread.threadId, thread.status]),
+        [
+          ["thread:stalled", "running"],
+          // The same failure without the retry record is the ending an agent reads today.
+          ["thread:ended", "failed"],
+        ],
+      );
+    }).pipe(Effect.provide(liveService)),
   );
 });
 
