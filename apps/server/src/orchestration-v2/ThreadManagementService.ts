@@ -46,6 +46,7 @@ import {
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { createModelHiddenPredicate, readCustomModelEntries } from "@t3tools/shared/model";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -60,6 +61,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import { isActiveRun } from "./CommandPolicy.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
@@ -72,6 +74,8 @@ import { cancelledBeforeStart } from "./RestartBackgroundNote.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
+
+export { isActiveRun } from "./CommandPolicy.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -98,8 +102,12 @@ export function withCreationProvenance(
     case "message.dispatch":
     case "thread.fork":
     case "thread.merge_back":
-    case "delegated_task.request":
       return { ...command, ...provenance };
+    case "delegated_task.request": {
+      // Only the server starts a goal review, so a caller cannot name a settled parent run.
+      const { purpose: _purpose, ...rest } = command;
+      return { ...rest, ...provenance };
+    }
     default:
       return command;
   }
@@ -349,6 +357,15 @@ export class ThreadManagementProviderInstanceDisabledError extends Schema.Tagged
   }
 }
 
+export class ThreadManagementDelegationModelDisabledError extends Schema.TaggedError<ThreadManagementDelegationModelDisabledError>()(
+  "ThreadManagementDelegationModelDisabledError",
+  { instanceId: ProviderInstanceId, model: Schema.String },
+) {
+  override get message(): string {
+    return `Delegation to disabled model "${this.model}" is blocked for provider instance "${this.instanceId}". Enable the model or turn off "Block delegation for disabled models" in provider settings.`;
+  }
+}
+
 export class ThreadManagementBackgroundWaitError extends Schema.TaggedError<ThreadManagementBackgroundWaitError>()(
   "ThreadManagementBackgroundWaitError",
   {
@@ -381,11 +398,16 @@ export const ThreadManagementError = Schema.Union([
   ThreadManagementProjectThreadsListError,
   ThreadManagementDurableRunProjectionError,
   ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementDelegationModelDisabledError,
   ThreadManagementWorktreeRestoreError,
 ]);
 export type ThreadManagementError = typeof ThreadManagementError.Type;
 
 type ThreadManagementFailure = ThreadManagementError | Orchestrator.OrchestratorV2Error;
+export type ThreadManagementDispatchError =
+  | Orchestrator.OrchestratorV2Error
+  | ThreadManagementProviderInstanceDisabledError
+  | ThreadManagementDelegationModelDisabledError;
 
 export interface ThreadManagementServiceShape {
   readonly searchThreadStream: (
@@ -399,10 +421,7 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
-  ) => Effect.Effect<
-    Orchestrator.OrchestratorV2DispatchResult,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-  >;
+  ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, ThreadManagementDispatchError>;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
@@ -454,6 +473,7 @@ export interface ThreadManagementServiceShape {
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
   readonly listAppOwnedChildThreadIds: Orchestrator.OrchestratorV2["Service"]["listAppOwnedChildThreadIds"];
   readonly getThreadLinkMetadata: Orchestrator.OrchestratorV2["Service"]["getThreadLinkMetadata"];
+  readonly listPreviousAgents: Orchestrator.OrchestratorV2["Service"]["listPreviousAgents"];
   readonly getThreadTitles: Orchestrator.OrchestratorV2["Service"]["getThreadTitles"];
   /** Omit `projectId` to list every project's threads. Side chats are never listed. */
   readonly listProjectThreads: (input: {
@@ -468,6 +488,10 @@ export interface ThreadManagementServiceShape {
     readonly commandId: CommandId;
     readonly instanceId: ProviderInstanceId;
   }) => Effect.Effect<void, ThreadManagementProviderInstanceDisabledError>;
+  readonly assertDelegationModelEnabled: (input: {
+    readonly commandId: CommandId;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<void, ThreadManagementDelegationModelDisabledError>;
   readonly isProviderInstanceEnabledForProject: (input: {
     readonly projectId: ProjectId;
     readonly instanceId: ProviderInstanceId;
@@ -490,7 +514,7 @@ export interface ThreadManagementServiceShape {
     readonly byOwnAgent: boolean;
   }) => Effect.Effect<
     { readonly sequence: number } | { readonly settlesWhenTurnEnds: true },
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    ThreadManagementDispatchError
   >;
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
@@ -518,10 +542,7 @@ export interface ThreadManagementServiceShape {
     readonly threadId: ThreadId;
     readonly commandId: CommandId;
     readonly reason?: string | undefined;
-  }) => Effect.Effect<
-    void,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-  >;
+  }) => Effect.Effect<void, ThreadManagementDispatchError>;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
   readonly cancelDelegatedTask: Orchestrator.OrchestratorV2["Service"]["cancelDelegatedTask"];
@@ -542,10 +563,6 @@ export const ACTIVE_RUN_STATUSES = [
   "running",
   "waiting",
 ] as const satisfies ReadonlyArray<OrchestrationV2Run["status"]>;
-
-export function isActiveRun(run: OrchestrationV2Run): boolean {
-  return (ACTIVE_RUN_STATUSES as ReadonlyArray<OrchestrationV2Run["status"]>).includes(run.status);
-}
 
 export function isTerminalRunStatus(
   status: OrchestrationV2Run["status"],
@@ -653,6 +670,25 @@ const make = Effect.gen(function* () {
       Effect.map(Option.isSome),
     );
 
+  const assertDelegationModelEnabled: ThreadManagementServiceShape["assertDelegationModelEnabled"] =
+    Effect.fn("ThreadManagementService.assertDelegationModelEnabled")(function* (input) {
+      if (yield* hasReceipt(input.commandId)) return;
+      const current = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const { instanceId, model } = input.modelSelection;
+      const instance = current.providerInstances[instanceId];
+      if (instance?.blockDelegationForDisabledModels !== true) return;
+      const config = instance.config;
+      const customModels = readCustomModelEntries(
+        config !== null && typeof config === "object" && "customModels" in config
+          ? config.customModels
+          : undefined,
+      );
+      const isHidden = createModelHiddenPredicate(current.providerModelPreferences?.[instanceId]);
+      if (isHidden({ slug: model, isCustom: customModels.some((entry) => entry.slug === model) })) {
+        return yield* new ThreadManagementDelegationModelDisabledError({ instanceId, model });
+      }
+    });
+
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
   )(function* (threadId: ThreadId) {
@@ -757,6 +793,16 @@ const make = Effect.gen(function* () {
 
   const assertDispatchTargetEnabled = (command: OrchestrationV2ServerCommand) => {
     switch (command.type) {
+      case "thread.create":
+        return command.delegatedFrom === undefined
+          ? Effect.void
+          : assertDelegationModelEnabled(command);
+      case "thread.machine-import":
+        return assertProviderInstanceEnabled({
+          projectId: command.projectId,
+          commandId: command.commandId,
+          instanceId: command.modelSelection.instanceId,
+        });
       case "thread.metadata.update":
         return command.continuation === undefined
           ? Effect.void
@@ -780,7 +826,8 @@ const make = Effect.gen(function* () {
           ),
         );
       case "delegated_task.request":
-        return orchestrator.getThreadRecords(command.parentThreadId, []).pipe(
+        return assertDelegationModelEnabled(command).pipe(
+          Effect.andThen(orchestrator.getThreadRecords(command.parentThreadId, [])),
           Effect.flatMap((parent) =>
             assertProviderInstanceEnabled({
               projectId: parent.thread.projectId,
@@ -1073,7 +1120,8 @@ const make = Effect.gen(function* () {
       ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
     });
     const initial = yield* evaluate(target.runs);
-    if (initial.settled) return settledResult(initial);
+    // No timeout only looks, without subscribing.
+    if (initial.settled || input.timeoutMs <= 0) return settledResult(initial);
 
     // A declined continuation records no event, so its effect settling wakes
     // the wait too.
@@ -1225,7 +1273,6 @@ const make = Effect.gen(function* () {
           .streamStoredEventsFrom({
             threadId: input.threadId,
             afterSequence,
-            eventType: "run.updated",
           })
           .pipe(Stream.mapEffect(() => trySettle)),
       ),
@@ -1620,9 +1667,7 @@ const make = Effect.gen(function* () {
     "ThreadManagementService.stopDelegatedTasks",
   )(function* (input) {
     const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
-    const failures: Array<
-      Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-    > = [];
+    const failures: Array<ThreadManagementDispatchError> = [];
     const stoppedChildThreadIds = new Set<ThreadId>();
     for (const task of subagents) {
       if (task.origin !== "app_owned") continue;
@@ -1775,10 +1820,12 @@ const make = Effect.gen(function* () {
       },
     ),
     getThreadTitles: orchestrator.getThreadTitles,
+    listPreviousAgents: orchestrator.listPreviousAgents,
     getThreadLinkMetadata: orchestrator.getThreadLinkMetadata,
     listProjectThreads,
     sendToThread,
     assertProviderInstanceEnabled,
+    assertDelegationModelEnabled,
     isProviderInstanceEnabledForProject,
     hasReceipt,
     waitForThread,

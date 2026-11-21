@@ -23,7 +23,6 @@ import { hasPendingBackgroundSubagent } from "@t3tools/shared/orchestrationV2Pen
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
-import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
 import { fencingLinkOrigin } from "./linkOrigin.ts";
@@ -104,10 +103,9 @@ export const unavailable = () =>
     message: "The operation could not be completed.",
   });
 
-export const dispatchFailure = (
-  error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
-) =>
+export const dispatchFailure = (error: ThreadManagement.ThreadManagementDispatchError) =>
   error._tag === "ThreadManagementProviderInstanceDisabledError" ||
+  error._tag === "ThreadManagementDelegationModelDisabledError" ||
   error._tag === "OrchestratorRuntimeModeAboveCeilingError" ||
   error._tag === "OrchestratorProviderSelectionBusyError"
     ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })

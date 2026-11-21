@@ -68,6 +68,7 @@ const options = () => ({
   executable: vi.fn(async () => "/test/chromium"),
   env: {},
   chrome: { version: "157.0.8103.78", platform: "linux" as NodeJS.Platform },
+  rendering: async () => ({ args: ["--disable-gpu"], scale: 2 }),
 });
 
 const withLauncher = () => {
@@ -341,6 +342,61 @@ describe("ServerBrowserContexts", () => {
     expect(launches.launch).toHaveBeenCalledTimes(2);
     expect(launches.launch).toHaveBeenLastCalledWith(
       expect.objectContaining({ chromiumSandbox: true }),
+    );
+    await pool.close();
+  });
+
+  it("relaunches every browser with the rendering options current at the next launch", async () => {
+    const human = makeContext();
+    const browsers = [makeBrowser(), makeBrowser()];
+    launches.launch
+      .mockResolvedValueOnce(browsers[0] as unknown as Browser)
+      .mockResolvedValueOnce(browsers[1] as unknown as Browser);
+    launches.persistent.mockResolvedValue(human as unknown as BrowserContext);
+    let rendering = { args: ["--disable-gpu"], scale: 2 };
+    let pause = false;
+    const pendingRendering = Promise.withResolvers<void>();
+    const resumeRendering = Promise.withResolvers<void>();
+    const onContextClose = vi.fn();
+    const pool = new ServerBrowserContexts({
+      ...options(),
+      rendering: async () => {
+        if (pause) {
+          pause = false;
+          pendingRendering.resolve();
+          await resumeRendering.promise;
+        }
+        return rendering;
+      },
+      onContextClose,
+    });
+    await pool.contextFor("default");
+    pause = true;
+    const opening = pool.contextFor("default", "agent");
+    await pendingRendering.promise;
+
+    rendering = { args: ["--enable-gpu"], scale: 1 };
+    const restarting = pool.relaunch();
+    resumeRendering.resolve();
+    await restarting;
+    await opening;
+    expect(human.close).toHaveBeenCalledTimes(1);
+    expect(browsers[0]!.close).toHaveBeenCalledTimes(1);
+    expect(onContextClose).toHaveBeenCalledTimes(2);
+
+    await pool.contextFor("default", "agent");
+    expect(launches.launch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args: [
+          "--enable-gpu",
+          "--force-device-scale-factor=1",
+          "--disable-blink-features=AutomationControlled",
+          expect.stringMatching(/^--user-agent=/),
+        ],
+      }),
+    );
+    expect(browsers[1]!.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceScaleFactor: 1 }),
     );
     await pool.close();
   });

@@ -266,6 +266,7 @@ export const make = Effect.gen(function* () {
       threadTitleRegeneration: true,
       commandOutputStreaming: true,
       threadVisitedTracking: true,
+      machineHandoff: hostPlatform !== "win32",
       threadPullRequests: true,
       threadPullRequestWatch: true,
       pullRequestStackActions: true,

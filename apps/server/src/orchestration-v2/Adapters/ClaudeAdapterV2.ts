@@ -32,8 +32,9 @@ import {
   claudeModelLedger,
   claudeReportedContextWindows,
   normalizeClaudeTurnTokenUsage,
-  type ClaudeLedgerUsage,
+  recordClaudeMainMessageUsage,
   type ClaudeModelLedger,
+  type ClaudeTurnLedger,
 } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
 import {
@@ -106,7 +107,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
-  OrchestrationV2ProviderGoal,
+  OrchestrationV2Goal,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
   type OrchestrationV2PendingBackgroundTask,
@@ -132,6 +133,7 @@ import {
   type ProviderThreadId,
   type RunId,
   type ThreadId,
+  type TurnModelTokenUsage,
   resolveIdleCompaction,
   isDelegatedAppThread,
 } from "@t3tools/contracts";
@@ -2635,9 +2637,9 @@ const CLAUDE_GOAL_SET_PREFIX = "Goal set: ";
 const CLAUDE_GOAL_ACTIVE = /^Goal active: ([\s\S]+?) \((?:not yet evaluated|(\d+) turns?)\)/u;
 
 function nextClaudeGoal(
-  current: OrchestrationV2ProviderGoal | null,
+  current: OrchestrationV2Goal | null,
   message: SDKMessage,
-): OrchestrationV2ProviderGoal | null | undefined {
+): OrchestrationV2Goal | null | undefined {
   // The CLI drops a goal on a context-limit, auth, or billing failure and reports it only here.
   if (
     message.type === "system" &&
@@ -2701,7 +2703,7 @@ function isClaudeGoalAcknowledgement(message: SDKMessage): boolean {
   return text.startsWith(CLAUDE_GOAL_SET_PREFIX) || text.startsWith("Goal cleared: ");
 }
 
-const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2ProviderGoal));
+const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2Goal));
 
 function normalizeClaudeResultText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -3899,10 +3901,15 @@ function claudePendingBackgroundTasksFromRoster(
   );
 }
 
+type ClaudeBackgroundTaskLaunch = Pick<
+  OrchestrationV2PendingBackgroundTask,
+  "nativeItemId" | "itemId" | "sourceThreadId" | "command"
+>;
+
 function parseClaudeBackgroundTaskEntry(
   entry: unknown,
   monitorTasks: ReadonlyMap<string, unknown>,
-  toolUseIds: ReadonlyMap<string, string>,
+  launches: ReadonlyMap<string, ClaudeBackgroundTaskLaunch>,
 ): OrchestrationV2PendingBackgroundTask | null {
   if (entry === null || typeof entry !== "object") {
     return null;
@@ -3917,14 +3924,17 @@ function parseClaudeBackgroundTaskEntry(
     return null;
   }
   const description = Reflect.get(entry, "description");
-  return claudePendingBackgroundTask({
-    taskId,
-    taskType,
-    startedByMonitor: monitorTasks.has(taskId),
-    description: typeof description === "string" ? description : undefined,
-    parentTaskId: Reflect.get(entry, "parent_task_id"),
-    toolUseId: toolUseIds.get(taskId),
-  });
+  return {
+    ...claudePendingBackgroundTask({
+      taskId,
+      taskType,
+      startedByMonitor: monitorTasks.has(taskId),
+      description: typeof description === "string" ? description : undefined,
+      parentTaskId: Reflect.get(entry, "parent_task_id"),
+      toolUseId: undefined,
+    }),
+    ...launches.get(taskId),
+  };
 }
 
 function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
@@ -4955,6 +4965,7 @@ function buildAssistantArtifacts(input: {
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly nativeItemId: string;
   readonly text: string;
+  readonly localCommand?: string;
   readonly ordinal: number;
   readonly status?: "running" | "completed" | "interrupted";
   readonly startedAt: DateTime.Utc;
@@ -5014,6 +5025,7 @@ function buildAssistantArtifacts(input: {
       nodeId,
       role: "assistant",
       text: input.text,
+      ...(input.localCommand === undefined ? {} : { localCommand: input.localCommand }),
       attachments: [],
       streaming,
       createdAt: input.createdAt ?? input.completedAt,
@@ -5037,6 +5049,7 @@ function buildAssistantArtifacts(input: {
       type: "assistant_message",
       messageId,
       text: input.text,
+      ...(input.localCommand === undefined ? {} : { localCommand: input.localCommand }),
       streaming,
     },
   };
@@ -5103,6 +5116,7 @@ interface ActiveClaudeTurnContext {
     // Result-only replies of steered segments that ended before the current one.
     earlierFallbackText: string;
     fallbackNativeItemId: string;
+    localCommand: string | undefined;
     emittedNativeItemIds: Set<string>;
     // Text blocks stream as `${message.id}:text:${n}`; the block's snapshot has its own uuid.
     readonly streamBlocks: Map<number, string>;
@@ -5174,9 +5188,12 @@ interface ActiveClaudeTurnContext {
   // Set as finalization starts: a steer admitted later would stay pending
   // forever, so it fails and the orchestrator follows up instead.
   steersClosed: boolean;
-  // Ledger growth of the steered segments; undefined once any segment's growth is unknown.
-  steeredLedgerUsage: ClaudeLedgerUsage | undefined;
+  // Ledger growth of the steered segments; incomplete once any segment's growth is unknown.
+  steeredLedgerUsage: ClaudeTurnLedger;
   readonly rootModels: Set<string>;
+  // Root messages' usage by id and the main agent's latest model split its usage by model.
+  readonly mainMessages: Map<string, TurnModelTokenUsage>;
+  mainUsageModel: string;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly promptUuid: string | null;
@@ -6002,7 +6019,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         // Wake buffers replay result frames, so ledger growth is measured once on arrival.
-        const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeLedgerUsage>();
+        const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeModelLedger>();
         const resultsReportingNewContextWindow = new WeakSet<SDKMessage>();
         // A worktree handoff changes the project settings even within one session.
         let bypassCache: { cwd: string | null; availability: ClaudeBypassAvailability } | null =
@@ -6079,7 +6096,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const lastProviderThreadByNativeThread = yield* Ref.make(
           new Map<string, OrchestrationV2ProviderThread>(),
         );
-        const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
+        const goalsByNativeThread = new Map<string, OrchestrationV2Goal | null>();
         // The title T3 last applied to each native session, so a turn renames it only when the
         // thread title changed. A native `/rename` T3 never applied survives later turns.
         const appliedSessionTitles = new Map<string, string>();
@@ -6168,7 +6185,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           new Map<string, OrchestrationV2PendingBackgroundTask>(),
         );
         // Roster entries carry only Claude's task id; the timeline item is keyed by the tool call.
-        const toolUseIdsByTaskId = yield* Ref.make(new Map<string, string>());
+        const launchesByTaskId = yield* Ref.make(new Map<string, ClaudeBackgroundTaskLaunch>());
         const claudeMonitors = yield* Ref.make<{
           readonly calls: ReadonlySet<string>;
           readonly tasks: ReadonlyMap<
@@ -9510,7 +9527,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             input.context.assistant.earlierFallbackText,
             input.context.assistant.fallbackText,
           );
-          if (input.context.assistant.emittedNativeItemIds.size === 0 && fallbackText.length > 0) {
+          if (
+            (input.context.assistant.emittedNativeItemIds.size === 0 ||
+              input.context.assistant.localCommand !== undefined) &&
+            fallbackText.length > 0
+          ) {
             const ordinal = yield* resolveItemOrdinal(
               input.context,
               input.context.assistant.fallbackNativeItemId,
@@ -9521,6 +9542,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               providerTurnId: input.context.providerTurnId,
               nativeItemId: input.context.assistant.fallbackNativeItemId,
               text: fallbackText,
+              ...(input.context.assistant.localCommand === undefined
+                ? {}
+                : { localCommand: input.context.assistant.localCommand }),
               ordinal,
               startedAt: input.context.startedAt,
               completedAt: input.completedAt,
@@ -9672,14 +9696,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     input.context.steeredSegmentUsage,
                     {
                       rootModels: input.context.rootModels,
-                      ...(input.result === undefined
-                        ? {}
-                        : {
-                            ledger: addClaudeLedgerUsage(
-                              input.context.steeredLedgerUsage,
-                              resultLedgerUsage.get(input.result),
-                            ),
-                          }),
+                      // Without a final result the turn's last segment is unmeasured.
+                      ledger: addClaudeLedgerUsage(
+                        input.context.steeredLedgerUsage,
+                        input.result === undefined
+                          ? undefined
+                          : resultLedgerUsage.get(input.result),
+                      ),
+                      mainMessages: input.context.mainMessages,
+                      mainModel: input.context.mainUsageModel,
                     },
                   ),
                 },
@@ -10489,19 +10514,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (taskId, task) =>
                 task.nativeThreadId === input.nativeThreadId && !listedTaskIds.has(taskId),
             );
-            const toolUseIds = new Map(yield* Ref.get(toolUseIdsByTaskId));
-            // A live task keeps its tool call after the bounded map evicts it.
+            const launches = new Map(yield* Ref.get(launchesByTaskId));
+            // A live task keeps its launch metadata after the bounded map evicts it.
             const current = rosterForNativeThread(
               yield* Ref.get(pendingBackgroundTasksByNativeThread),
               input.nativeThreadId,
             );
             for (const [taskId, task] of current) {
-              if (task.nativeItemId !== undefined && !toolUseIds.has(taskId)) {
-                toolUseIds.set(taskId, task.nativeItemId);
+              if (!launches.has(taskId)) {
+                launches.set(taskId, {
+                  ...(task.nativeItemId === undefined ? {} : { nativeItemId: task.nativeItemId }),
+                  ...(task.itemId === undefined
+                    ? {}
+                    : { itemId: task.itemId, sourceThreadId: task.sourceThreadId }),
+                  ...(task.command === undefined ? {} : { command: task.command }),
+                });
               }
             }
             for (const entry of roster) {
-              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks, toolUseIds);
+              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks, launches);
               if (task !== null) {
                 // A foreground command Claude moved to the background first appears here.
                 nextTasks.push({
@@ -10517,22 +10548,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               return false;
             }
             const toolUseId = message.tool_use_id?.trim() || undefined;
-            if (toolUseId !== undefined) {
-              // A foreground command can move to the background later, so remember every one.
-              yield* Ref.update(toolUseIdsByTaskId, (current) => {
-                const updated = new Map(current).set(message.task_id, toolUseId);
-                for (const oldest of updated.keys()) {
-                  if (updated.size <= 64) break;
-                  updated.delete(oldest);
-                }
-                return updated;
-              });
-            }
+            const taskLaunch: ClaudeBackgroundTaskLaunch = {
+              ...(toolUseId === undefined ? {} : { nativeItemId: toolUseId }),
+              ...backgroundTaskLaunch(input.activeContext, toolUseId),
+            };
+            // Foreground commands can move to the background after the turn ends.
+            yield* Ref.update(launchesByTaskId, (current) => {
+              const updated = new Map(current).set(message.task_id, taskLaunch);
+              for (const oldest of updated.keys()) {
+                if (updated.size <= 64) break;
+                updated.delete(oldest);
+              }
+              return updated;
+            });
             if (message.is_backgrounded === false) {
               return false;
             }
             yield* upsertPendingBackgroundTask(input.nativeThreadId, {
-              ...backgroundTaskLaunch(input.activeContext, message.tool_use_id),
+              ...taskLaunch,
               ...claudePendingBackgroundTask({
                 taskId: message.task_id,
                 taskType: claudeTaskTypeFromSdkMessage(message),
@@ -10544,13 +10577,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 description:
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
-                toolUseId,
+                toolUseId: undefined,
               }),
             });
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
-            yield* Ref.update(toolUseIdsByTaskId, (current) => {
+            yield* Ref.update(launchesByTaskId, (current) => {
               if (!current.has(message.task_id)) return current;
               const updated = new Map(current);
               updated.delete(message.task_id);
@@ -10890,12 +10923,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const usage: ClaudeMessageUsage | undefined = event.message.usage;
               context.streamUsage =
                 usage === undefined ? null : { messageId: event.message.id, usage };
-              if (usage !== undefined) yield* emitContextUsage(context, usage, true);
+              if (usage !== undefined) {
+                context.mainUsageModel = event.message.model;
+                recordClaudeMainMessageUsage(
+                  context.mainMessages,
+                  event.message.id,
+                  event.message.model,
+                  usage,
+                );
+                yield* emitContextUsage(context, usage, true);
+              }
             } else if (event.type === "message_delta") {
               const usage: typeof event.usage | undefined = event.usage;
               const stream = context.streamUsage;
               if (stream?.usage && usage !== undefined) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
+                recordClaudeMainMessageUsage(
+                  context.mainMessages,
+                  stream.messageId,
+                  context.mainUsageModel,
+                  stream.usage,
+                );
                 yield* emitContextUsage(context, stream.usage);
               }
             } else if (
@@ -11365,6 +11413,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
+              recordClaudeMainMessageUsage(
+                context.mainMessages,
+                message.message.id,
+                message.message.model,
+                snapshotUsage,
+              );
               const stream = context.streamUsage;
               if (stream === null || stream.messageId !== message.message.id) {
                 context.streamUsage = { messageId: message.message.id, usage: snapshotUsage };
@@ -11382,6 +11436,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
+            if (parentToolUseId === null && message.message.model !== "<synthetic>") {
+              context.mainUsageModel = message.message.model;
+            }
             const snapshotModel =
               typeof message.message.model === "string" ? message.message.model.trim() : "";
             // "<synthetic>" identifies CLI notices, not the subagent model.
@@ -11932,14 +11989,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
             return;
           }
-          // Claude Code echoes /compact's stdout ("Not enough messages to compact.") as a
-          // synthetic assistant message. The compaction item reports that outcome; it is not a
-          // reply.
           if (
-            message.type === "assistant" &&
-            "local_command_source" in message &&
-            isCompactionCommandMessage({ role: "user", ...context.input.message })
+            (message.type === "system" && message.subtype === "local_command_output") ||
+            (message.type === "assistant" && "local_command_source" in message)
           ) {
+            if (isCompactionCommandMessage({ role: "user", ...context.input.message })) return;
+            const text = message.type === "system" ? message.content : assistantText?.text;
+            if (text !== undefined && text.length > 0) {
+              // Buffer the CLI's duplicate echoes until the result supplies the command name.
+              if (context.assistant.fallbackText.length === 0) {
+                context.assistant.fallbackText = text;
+                context.assistant.fallbackNativeItemId = message.uuid;
+              }
+              context.assistant.localCommand ??= "";
+            }
             return;
           }
           if (assistantText !== null && assistantText.text.length > 0) {
@@ -12002,6 +12065,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               terminalStatusFromResult(message) === "failed")
               ? null
               : resultTextFromSdkMessage(message);
+          if (
+            message.type === "result" &&
+            message.subtype === "success" &&
+            message.local_command !== undefined
+          ) {
+            if (message.local_command === "compact") {
+              context.assistant.fallbackText = "";
+              context.assistant.localCommand = undefined;
+            } else {
+              context.assistant.localCommand = message.local_command;
+            }
+          }
           if (
             // A /compact's result text reports the compaction ("Not enough messages to
             // compact."), which its compaction item already carries; it is not a reply.
@@ -13470,6 +13545,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 fallbackText: "",
                 earlierFallbackText: "",
                 fallbackNativeItemId: `assistant:${turnInput.runId}`,
+                localCommand: undefined,
                 emittedNativeItemIds: new Set(),
                 streamBlocks: new Map(),
                 nextBlockIndex: new Map(),
@@ -13501,8 +13577,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               nativeSessionTitle: null,
               steeredSegmentUsage: [],
               steersClosed: false,
-              steeredLedgerUsage: { inputTokens: 0, outputTokens: 0 },
+              steeredLedgerUsage: { growth: new Map(), complete: true },
               rootModels: new Set(),
+              mainMessages: new Map(),
+              mainUsageModel: turnInput.modelSelection.model,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               promptUuid,

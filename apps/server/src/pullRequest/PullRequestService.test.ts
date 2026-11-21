@@ -1618,11 +1618,15 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
       repository: " ACME/WEB ",
       action: "merge",
       mergeMethod: "merge",
+      restackDependents: true,
     });
 
     assert.deepStrictEqual(Option.getOrThrow(yield* Fiber.join(observedMerge)), {
       ...reference,
       mergedAt,
+      headBranch: "feat/1",
+      baseBranch: "main",
+      restackDependents: true,
     });
   }),
 );
@@ -1684,6 +1688,9 @@ it.effect("returns the host's merged reply as a summary and trusts it without an
     assert.deepStrictEqual(Option.getOrThrow(yield* Fiber.join(observedMerge)), {
       ...reference,
       mergedAt,
+      headBranch: "feat/1",
+      baseBranch: "main",
+      restackDependents: false,
     });
   }),
 );

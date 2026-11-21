@@ -2,6 +2,9 @@ import {
   ProviderDriverKind,
   UsageLimitSourceError,
   type ProviderConsumeResetCreditResult,
+  type ServerProviderUsageAmountLine,
+  type ServerProviderUsageLimits,
+  type ServerProviderUsageWindow,
   type UsageLimitSourceAccount,
   type UsageLimitSourceConfig,
 } from "@t3tools/contracts";
@@ -86,6 +89,8 @@ const ClaudeUsage = Schema.Struct({
         monthly_limit: Schema.NullOr(Schema.Number),
         used_credits: Schema.NullOr(Schema.Number),
         utilization: Schema.NullOr(Schema.Number),
+        currency: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        decimal_places: Schema.optionalKey(Schema.NullOr(Schema.Number)),
       }),
     ),
   ),
@@ -117,7 +122,51 @@ const CreditList = Schema.Struct({
   ),
 });
 
+// Wire contract of GET /v8/management/providers and /providers/:id/usage.
+const HubProviders = Schema.Struct({
+  providers: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      disabled: Schema.optional(Schema.Boolean),
+      model_ids: Schema.optional(Schema.Array(Schema.String)),
+      usage_supported: Schema.optional(Schema.Boolean),
+    }),
+  ),
+});
+type HubManagementProvider = (typeof HubProviders.Type)["providers"][number];
+// GET /v8/management/models, the hub's exposed catalog in OpenAI list form.
+const HubModels = Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) });
+const OptionalNumber = Schema.optional(Schema.NullOr(Schema.Number));
+const HubUsageWindow = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  used_percent: OptionalNumber,
+  used: OptionalNumber,
+  limit: OptionalNumber,
+  remaining: OptionalNumber,
+  unit: Schema.optional(Schema.NullOr(Schema.String)),
+  resets_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const HubUsageAccount = Schema.Struct({
+  id: Schema.String,
+  label: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.String,
+  plan: Schema.optional(Schema.NullOr(Schema.String)),
+  checked_at: Schema.optional(Schema.NullOr(Schema.String)),
+  error: Schema.optional(Schema.NullOr(Schema.String)),
+  windows: Schema.optional(Schema.NullOr(Schema.Array(HubUsageWindow))),
+});
+type HubUsageAccount = typeof HubUsageAccount.Type;
+const HubUsage = Schema.Struct({
+  provider_id: Schema.String,
+  accounts: Schema.Array(HubUsageAccount),
+});
+
 const decodeAuthFiles = Schema.decodeUnknownEffect(AuthFiles);
+const decodeHubProviders = Schema.decodeUnknownEffect(HubProviders);
+const decodeHubUsage = Schema.decodeUnknownEffect(HubUsage);
+const decodeHubModels = Schema.decodeUnknownEffect(HubModels);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeApiResponse = Schema.decodeUnknownEffect(ApiResponse);
 const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(CreditList));
@@ -398,13 +447,132 @@ const HUB_PROVIDERS = new Map<string, HubProvider>([
   ],
 ]);
 
+const hubProviderDriver = (id: string) =>
+  ProviderDriverKind.make(
+    id === "claude"
+      ? "claudeAgent"
+      : id === "xai"
+        ? "grok"
+        : /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(id)
+          ? id
+          : `hub-${id.replace(/[^a-zA-Z0-9_-]+/g, "-")}`.slice(0, 64),
+  );
+
+const isoOrUndefined = (value: string | null | undefined) => {
+  const millis = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(millis) ? DateTime.formatIso(DateTime.makeUnsafe(millis)) : undefined;
+};
+
+const finite = (value: number | null | undefined): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const hubWindowKind = (id: string): ServerProviderUsageWindow["kind"] =>
+  /(^|-)(five-hour|5h|rolling|session)$/.test(id)
+    ? "session"
+    : /(^|-)weekly$/.test(id)
+      ? "weekly"
+      : /(^|-)monthly$/.test(id)
+        ? "monthly"
+        : "other";
+
+// A window without a share of its allowance has no bar; it is omitted, never shown as 0%.
+const hubWindowUsedPercent = (window: typeof HubUsageWindow.Type) => {
+  if (finite(window.used_percent)) return window.used_percent;
+  if (!finite(window.limit) || window.limit <= 0) return undefined;
+  if (finite(window.used)) return (window.used / window.limit) * 100;
+  if (finite(window.remaining)) return ((window.limit - window.remaining) / window.limit) * 100;
+  return undefined;
+};
+
+// Units like `tokens` or `requests` measure volume, not money, so only a bare ISO 4217 code counts.
+const hubWindowCurrency = (window: typeof HubUsageWindow.Type) => {
+  const unit = window.unit?.trim().toLowerCase();
+  return unit !== undefined && /^[a-z]{3}$/.test(unit) ? unit : undefined;
+};
+
+const hubUsageAmount = (
+  window: typeof HubUsageWindow.Type,
+  currency: string,
+  fields: ReadonlyArray<"used" | "limit" | "remaining">,
+): NonNullable<ServerProviderUsageWindow["amount"]> => ({
+  currency,
+  ...(fields.includes("used") && finite(window.used) ? { used: window.used } : {}),
+  ...(fields.includes("limit") && finite(window.limit) ? { limit: window.limit } : {}),
+  ...(fields.includes("remaining") && finite(window.remaining)
+    ? { remaining: window.remaining }
+    : {}),
+});
+
+const hubAccountLimits = (
+  account: HubUsageAccount,
+  checkedAt: string,
+): ServerProviderUsageLimits => {
+  if (account.status !== "ok") {
+    const message = account.error?.trim().slice(0, 160);
+    return makeUnavailableUsageLimits({
+      checkedAt,
+      reason: account.status === "unsupported" ? "unsupported" : "probeFailed",
+      message:
+        message ||
+        (account.status === "unsupported"
+          ? "The hub cannot read usage for this provider."
+          : "The hub could not read this account's usage."),
+    });
+  }
+  const windows: ServerProviderUsageWindow[] = [];
+  const amounts: Array<ServerProviderUsageAmountLine> = [];
+  for (const window of account.windows ?? []) {
+    const id = window.id.trim();
+    if (!id) continue;
+    const label = window.label.trim() || id;
+    const usedPercent = hubWindowUsedPercent(window);
+    if (usedPercent !== undefined) {
+      const resetsAt = isoOrUndefined(window.resets_at);
+      const currency = hubWindowCurrency(window);
+      const amount =
+        currency !== undefined &&
+        (finite(window.used) || finite(window.limit) || finite(window.remaining))
+          ? hubUsageAmount(window, currency, ["used", "limit", "remaining"])
+          : undefined;
+      windows.push({
+        id,
+        kind: hubWindowKind(id),
+        label,
+        usedPercent: Math.min(100, Math.max(0, usedPercent)),
+        ...(resetsAt ? { resetsAt } : {}),
+        ...(id === "five-hour" ? { windowDurationMins: 300 } : {}),
+        ...(amount ? { amount } : {}),
+      });
+      continue;
+    }
+    const currency = hubWindowCurrency(window);
+    if (currency === undefined) continue;
+    const amount = hubUsageAmount(window, currency, ["used", "remaining"]);
+    if (amount.used === undefined && amount.remaining === undefined) continue;
+    const resetsAt = isoOrUndefined(window.resets_at);
+    amounts.push({ id, label, amount, ...(resetsAt ? { resetsAt } : {}) });
+  }
+  if (windows.length === 0 && amounts.length === 0) {
+    return makeUnavailableUsageLimits({
+      checkedAt,
+      reason: "unsupported",
+      message: "The hub reports no usage allowance for this account.",
+    });
+  }
+  return {
+    checkedAt,
+    windows,
+    ...(amounts.length > 0 ? { amounts } : {}),
+  };
+};
+
 export const makeCliproxyApi = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
   const digest = yield* Digest.Digest;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
 
-  const management = Effect.fn("CliproxyApi.management")(function* (
+  const managementRequest = Effect.fn("CliproxyApi.managementRequest")(function* (
     hub: CliproxyHub,
     path: string,
     body?: unknown,
@@ -414,25 +582,30 @@ export const makeCliproxyApi = Effect.gen(function* () {
         const base = new URL(hub.url);
         // Users often paste the hub's web panel URL, which ends in management.html.
         base.pathname = base.pathname.replace(/(\/management\.html)?\/?$/i, "/");
-        return new URL(`v0/management/${path}`, base).toString();
+        return new URL(path, base).toString();
       },
       catch: () => new UsageLimitSourceError({ detail: "The hub URL is not valid." }),
     });
     const request = (
       body === undefined ? HttpClientRequest.get(url) : HttpClientRequest.post(url)
     ).pipe(HttpClientRequest.setHeader("Authorization", `Bearer ${hub.managementKey}`));
-    const response = yield* client
+    return yield* client
       .execute(body === undefined ? request : request.pipe(HttpClientRequest.bodyJsonUnsafe(body)))
       .pipe(
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((response) => response.json),
         Effect.timeout("15 seconds"),
-        Effect.mapError(
-          (error) => new UsageLimitSourceError({ detail: describeManagementFailure(error) }),
-        ),
       );
-    return response;
   });
+
+  const management = (hub: CliproxyHub, path: string, body?: unknown) =>
+    managementRequest(hub, `v0/management/${path}`, body).pipe(
+      Effect.mapError((error) =>
+        isUsageLimitSourceError(error)
+          ? error
+          : new UsageLimitSourceError({ detail: describeManagementFailure(error) }),
+      ),
+    );
 
   const authFiles = Effect.fn("CliproxyApi.authFiles")(function* (hub: CliproxyHub) {
     const response = yield* management(hub, "auth-files");
@@ -484,8 +657,9 @@ export const makeCliproxyApi = Effect.gen(function* () {
     return { id: account.id, driver: provider.driver, ...reading };
   });
 
-  const readAccounts = Effect.fn("CliproxyApi.readAccounts")(function* (
+  const readNativeAccounts = Effect.fn("CliproxyApi.readNativeAccounts")(function* (
     hub: CliproxyHub,
+    providers?: ReadonlySet<string>,
   ): Effect.fn.Return<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError> {
     const accounts = yield* authFiles(hub).pipe(
       Effect.mapError((error) =>
@@ -496,12 +670,126 @@ export const makeCliproxyApi = Effect.gen(function* () {
     );
     return yield* Effect.forEach(
       accounts.flatMap((account) => {
+        if (account.disabled) return [];
+        if (providers !== undefined && !providers.has(account.provider)) return [];
         const provider = HUB_PROVIDERS.get(account.provider);
-        return provider && !account.disabled ? [{ account, provider }] : [];
+        return provider ? [{ account, provider }] : [];
       }),
       ({ account, provider }) => readAccount(hub, account, provider),
       { concurrency: 4 },
     );
+  });
+
+  const readProviderUsage = Effect.fn("CliproxyApi.readProviderUsage")(function* (
+    hub: CliproxyHub,
+    provider: HubManagementProvider,
+  ) {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const driver = hubProviderDriver(provider.id);
+    const name = provider.name.trim() || provider.id;
+    const usage = yield* managementRequest(
+      hub,
+      `v8/management/providers/${encodeURIComponent(provider.id)}/usage`,
+    ).pipe(Effect.flatMap(decodeHubUsage), Effect.result);
+    if (usage._tag === "Failure") {
+      return [
+        {
+          id: provider.id,
+          driver,
+          label: name,
+          usageLimits: makeUnavailableUsageLimits({
+            checkedAt: now,
+            reason: "probeFailed",
+            message: "The hub could not read this provider's usage.",
+          }),
+        },
+      ];
+    }
+    return usage.success.accounts.flatMap((account): Array<UsageLimitSourceAccount> => {
+      const id = account.id.trim();
+      if (!id) return [];
+      const label = account.label?.trim();
+      const plan = account.plan?.trim();
+      const email = label && /^[^\s@]+@[^\s@]+$/.test(label) ? label : undefined;
+      return [
+        {
+          // Auth indexes are per credential, but "unconfigured" placeholders repeat per provider.
+          id: `${provider.id}:${id}`,
+          driver,
+          ...(email ? { email } : { label: label || name }),
+          ...(plan ? { plan } : {}),
+          usageLimits: hubAccountLimits(account, isoOrUndefined(account.checked_at) ?? now),
+        },
+      ];
+    });
+  });
+
+  const readAccounts = Effect.fn("CliproxyApi.readAccounts")(function* (
+    hub: CliproxyHub,
+  ): Effect.fn.Return<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError> {
+    const providers = yield* managementRequest(hub, "v8/management/providers").pipe(
+      Effect.flatMap(decodeHubProviders),
+      Effect.map((response) => response.providers),
+      // Only a hub without the endpoint keeps the legacy reader; auth and other failures surface.
+      Effect.catch((error) =>
+        HttpClientError.isHttpClientError(error) &&
+        error.reason._tag === "StatusCodeError" &&
+        error.reason.response.status === 404
+          ? Effect.succeed(null)
+          : Effect.fail(
+              isUsageLimitSourceError(error)
+                ? error
+                : new UsageLimitSourceError({
+                    detail:
+                      HttpClientError.isHttpClientError(error) || Cause.isTimeoutError(error)
+                        ? describeManagementFailure(error)
+                        : "The hub returned an unexpected provider list.",
+                  }),
+            ),
+      ),
+    );
+    if (providers === null) return yield* readNativeAccounts(hub);
+    const enabled = providers.filter((provider) => !provider.disabled);
+    const native = enabled.filter((provider) => HUB_PROVIDERS.has(provider.id));
+    const readHubUsage = (list: ReadonlyArray<HubManagementProvider>) =>
+      Effect.forEach(list, (provider) => readProviderUsage(hub, provider), {
+        concurrency: 4,
+      }).pipe(Effect.map((accounts) => accounts.flat()));
+    const [nativeAccounts, hubAccounts] = yield* Effect.all(
+      [
+        native.length === 0
+          ? Effect.succeed([])
+          : readNativeAccounts(hub, new Set(native.map((provider) => provider.id))).pipe(
+              Effect.catch(() => readHubUsage(native)),
+            ),
+        readHubUsage(
+          enabled.filter(
+            (provider) => provider.usage_supported === true && !HUB_PROVIDERS.has(provider.id),
+          ),
+        ),
+      ],
+      { concurrency: 2 },
+    );
+    return [...nativeAccounts, ...hubAccounts];
+  });
+
+  const clearAccountCooldowns = Effect.fn("CliproxyApi.clearAccountCooldowns")(function* (
+    hub: CliproxyHub,
+    workspaceId: string,
+  ) {
+    const accounts = yield* authFiles(hub);
+    const results = yield* Effect.forEach(
+      accounts.filter(
+        (account) =>
+          !account.disabled &&
+          account.provider === "codex" &&
+          account.id_token?.chatgpt_account_id?.trim() === workspaceId,
+      ),
+      (account) =>
+        management(hub, "reset-quota", { auth_index: account.auth_index }).pipe(Effect.result),
+    );
+    const failed = results.find((result) => result._tag === "Failure");
+    if (failed) return yield* failed.failure;
   });
 
   const consume = Effect.fn("CliproxyApi.consume")(function* (
@@ -562,5 +850,25 @@ export const makeCliproxyApi = Effect.gen(function* () {
       ),
     );
   });
-  return { readAccounts, consume };
+
+  const readModels = Effect.fn("CliproxyApi.readModels")(function* (
+    hub: CliproxyHub,
+  ): Effect.fn.Return<ReadonlyArray<string>, UsageLimitSourceError> {
+    return yield* managementRequest(hub, "v8/management/models").pipe(
+      Effect.flatMap(decodeHubModels),
+      Effect.map((response) => [...new Set(response.data.map((model) => model.id))]),
+      Effect.mapError((error) =>
+        isUsageLimitSourceError(error)
+          ? error
+          : new UsageLimitSourceError({
+              detail:
+                HttpClientError.isHttpClientError(error) || Cause.isTimeoutError(error)
+                  ? describeManagementFailure(error)
+                  : "The hub returned an unexpected model list.",
+            }),
+      ),
+    );
+  });
+
+  return { readAccounts, readModels, consume, clearAccountCooldowns };
 });

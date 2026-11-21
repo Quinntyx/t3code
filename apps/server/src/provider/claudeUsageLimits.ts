@@ -1,6 +1,7 @@
 import type { SDKControlGetUsageResponse, SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
 import type {
   ProviderUsageLimitsUpdate,
+  ServerProviderUsageAmount,
   ServerProviderUsageLimits,
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
@@ -93,7 +94,9 @@ function percentFromAmounts(used: number | null | undefined, limit: number | nul
   return Number.isFinite(percent) ? clampPercent(percent) : undefined;
 }
 
-function readSpendPercent(rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>) {
+const readSpend = (
+  rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>,
+): { readonly usedPercent: number; readonly amount?: ServerProviderUsageAmount } | undefined => {
   const spend = Option.getOrUndefined(
     decodeSpendBudget((rateLimits as { readonly spend?: unknown }).spend),
   );
@@ -105,16 +108,46 @@ function readSpendPercent(rateLimits: NonNullable<SDKControlGetUsageResponse["ra
     spend.used.exponent === spend.limit.exponent
   ) {
     const percent = percentFromAmounts(spend.used.amount_minor, spend.limit.amount_minor);
-    if (percent !== undefined) return percent;
+    if (percent !== undefined) {
+      const used = spend.used.amount_minor / 10 ** spend.used.exponent;
+      const limit = spend.limit.amount_minor / 10 ** spend.limit.exponent;
+      return {
+        usedPercent: percent,
+        amount: {
+          currency: spend.used.currency.trim().toLowerCase(),
+          used,
+          limit,
+          remaining: Math.max(0, limit - used),
+        },
+      };
+    }
   }
 
   const extra = rateLimits.extra_usage;
   if (extra?.is_enabled !== true) return undefined;
   const percent = percentFromAmounts(extra.used_credits, extra.monthly_limit) ?? extra.utilization;
-  return typeof percent === "number" && Number.isFinite(percent) && percent >= 0
-    ? clampPercent(percent)
-    : undefined;
-}
+  if (typeof percent !== "number" || !Number.isFinite(percent) || percent < 0) return undefined;
+  // `decimal_places` ships in responses ahead of the SDK typings we pin.
+  const decimals = (extra as { readonly decimal_places?: unknown }).decimal_places;
+  const currency = extra.currency?.trim().toLowerCase();
+  if (
+    !currency ||
+    typeof decimals !== "number" ||
+    !Number.isInteger(decimals) ||
+    decimals < 0 ||
+    typeof extra.used_credits !== "number" ||
+    typeof extra.monthly_limit !== "number" ||
+    percentFromAmounts(extra.used_credits, extra.monthly_limit) === undefined
+  ) {
+    return { usedPercent: clampPercent(percent) };
+  }
+  const used = extra.used_credits / 10 ** decimals;
+  const limit = extra.monthly_limit / 10 ** decimals;
+  return {
+    usedPercent: clampPercent(percent),
+    amount: { currency, used, limit, remaining: Math.max(0, limit - used) },
+  };
+};
 
 /**
  * `model_scoped` shipped in the CLI after the SDK typings we pin, so it is
@@ -213,14 +246,15 @@ export function claudeUsageResponseToLimits(input: {
     );
     overageIncluded ??= entry.display_name;
   }
-  const spendPercent = readSpendPercent(response.rate_limits);
+  const spend = readSpend(response.rate_limits);
   const extra = response.rate_limits.extra_usage;
-  if (spendPercent !== undefined) {
+  if (spend !== undefined) {
     windows.push({
       id: "monthly_spend",
       kind: "monthly",
       label: "Monthly spend",
-      usedPercent: spendPercent,
+      usedPercent: spend.usedPercent,
+      ...(spend.amount ? { amount: spend.amount } : {}),
     });
   }
   return {

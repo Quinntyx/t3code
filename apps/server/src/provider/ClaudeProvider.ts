@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import {
+  ProviderDriverKind,
   type ClaudeSettings,
   type ModelCapabilities,
   type ServerProvider,
@@ -680,7 +681,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   never,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
-  const resolvedEnvironment = environment ?? process.env;
+  const resolvedEnvironment = environment ?? (yield* HostProcess.Environment);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const allModels = claudeProviderModels(
     modelCatalog.models.map((entry) => entry.model),
@@ -802,6 +803,18 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
+  // First-party account fields cannot verify custom endpoint credentials.
+  const baseUrl =
+    (yield* readClaudeSettingsEnv(claudeSettings, cwd, resolvedEnvironment)).ANTHROPIC_BASE_URL ??
+    resolvedEnvironment.ANTHROPIC_BASE_URL;
+  const customApiEndpoint = customClaudeApiEndpointHost(baseUrl) !== undefined;
+  const endpoint = customApiEndpoint ? URL.parse(baseUrl?.trim() ?? "")?.origin : undefined;
+  // Routes are a configuration fact, so a failed capabilities probe must not hide them.
+  const usageRoutes =
+    endpoint !== undefined
+      ? [{ driver: ProviderDriverKind.make("claudeAgent"), origin: endpoint }]
+      : [];
+
   if (!capabilities) {
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
@@ -809,6 +822,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       checkedAt,
       models,
       updateRequiredModels,
+      usageRoutes,
       slashCommands: dedupedSlashCommands,
       skills,
       probe: {
@@ -825,12 +839,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  // First-party account fields cannot verify custom endpoint credentials.
-  const baseUrl =
-    (yield* readClaudeSettingsEnv(claudeSettings, cwd, resolvedEnvironment)).ANTHROPIC_BASE_URL ??
-    resolvedEnvironment.ANTHROPIC_BASE_URL;
-  const customApiEndpoint = customClaudeApiEndpointHost(baseUrl) !== undefined;
-  const endpoint = customApiEndpoint ? URL.parse(baseUrl?.trim() ?? "")?.origin : undefined;
   if (!customApiEndpoint && claudeAuthStatus(capabilities) === "unauthenticated") {
     const path = yield* Path.Path;
     const configDir = (yield* makeClaudeEnvironment(claudeSettings, resolvedEnvironment))
@@ -892,6 +900,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     checkedAt,
     models,
     updateRequiredModels,
+    usageRoutes,
     slashCommands: dedupedSlashCommands,
     skills,
     probe: {

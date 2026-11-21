@@ -28,6 +28,7 @@ import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchS
 import { resolveTarget, type ResolvedTarget } from "../../../pullRequest/pullRequestTarget.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import * as PullRequestStackService from "../../../pullRequest/PullRequestStackService.ts";
 import { reviewPositionInPatch } from "../../../pullRequest/pullRequestReviewPosition.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -399,34 +400,6 @@ const make = Effect.gen(function* () {
 
   const forgeFailure = (error: { readonly message: string }) =>
     new PullRequestForgeError({ detail: error.message, cause: error });
-
-  // Layers below the target are pinned to the heads read here; the host refuses if any moved.
-  const stackMergeScope = Effect.fnUntraced(function* (
-    ref: PullRequestRef,
-    input: { readonly expectedHeadSha: string; readonly auto?: boolean | undefined },
-  ) {
-    if (input.auto === true)
-      return yield* new PullRequestForgeError({ detail: "A stack merge cannot wait with auto." });
-    const stack = yield* pullRequests
-      .stack(ref, { bypassCache: true })
-      .pipe(Effect.mapError(forgeFailure));
-    const end = stack?.layers.findIndex((layer) => layer.number === ref.number) ?? -1;
-    if (stack === null || end === -1)
-      return yield* new PullRequestForgeError({
-        detail: `PR #${ref.number} is not in a stack this host can merge. Merge it without stack.`,
-      });
-    const expectedStackHeads: Array<{ readonly number: number; readonly headSha: string }> = [];
-    for (const layer of stack.layers.slice(0, end + 1)) {
-      if (layer.state === "merged") continue;
-      const headSha = layer.number === ref.number ? input.expectedHeadSha : layer.headSha;
-      if (headSha === undefined)
-        return yield* new PullRequestForgeError({
-          detail: `The host did not report PR #${layer.number}'s head, so the stack cannot be pinned. Try again.`,
-        });
-      expectedStackHeads.push({ number: layer.number, headSha });
-    }
-    return { stackNumber: stack.number, expectedStackHeads };
-  });
 
   /** A login or org/team, matched to the host's own reviewer id. */
   const reviewerNamed = (ref: PullRequestRef, name: string) =>
@@ -1159,16 +1132,65 @@ const make = Effect.gen(function* () {
     pull_request_merge: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const { target, ref } = yield* locate(input);
-        const stack = input.stack === true ? yield* stackMergeScope(ref, input) : {};
-        yield* pullRequests
-          .runAction({
-            ...ref,
-            action: input.auto === true ? "enable-auto-merge" : "merge",
-            expectedHeadSha: input.expectedHeadSha,
-            ...(input.method === undefined ? {} : { mergeMethod: input.method }),
-            ...stack,
-          })
-          .pipe(Effect.mapError(forgeFailure));
+        if (input.stack === true) {
+          if (input.auto === true)
+            return yield* new PullRequestForgeError({
+              detail: "A stack merge cannot wait with auto.",
+            });
+          const nativeStack = yield* pullRequests
+            .stack(ref, { bypassCache: true })
+            .pipe(Effect.mapError(forgeFailure));
+          const end = nativeStack?.layers.findIndex((layer) => layer.number === ref.number) ?? -1;
+          if (nativeStack !== null && end !== -1) {
+            const expectedStackHeads: Array<{ readonly number: number; readonly headSha: string }> =
+              [];
+            for (const layer of nativeStack.layers.slice(0, end + 1)) {
+              if (layer.state === "merged") continue;
+              const headSha = layer.number === ref.number ? input.expectedHeadSha : layer.headSha;
+              if (headSha === undefined)
+                return yield* new PullRequestForgeError({
+                  detail: `The host did not report PR #${layer.number}'s head, so the stack cannot be pinned. Try again.`,
+                });
+              expectedStackHeads.push({ number: layer.number, headSha });
+            }
+            yield* pullRequests
+              .runAction({
+                ...ref,
+                action: "merge",
+                expectedHeadSha: input.expectedHeadSha,
+                ...(input.method === undefined ? {} : { mergeMethod: input.method }),
+                stackNumber: nativeStack.number,
+                expectedStackHeads,
+              })
+              .pipe(Effect.mapError(forgeFailure));
+          } else {
+            const stacks = yield* Effect.serviceOption(
+              PullRequestStackService.PullRequestStackService,
+            );
+            if (Option.isNone(stacks)) {
+              return yield* new PullRequestForgeError({
+                detail: `PR #${ref.number} is not in a stack this host can merge. Merge it without stack.`,
+              });
+            }
+            yield* stacks.value
+              .mergeStack({
+                ...ref,
+                expectedHeadSha: input.expectedHeadSha,
+                requireMultiLayer: true,
+                ...(input.method === undefined ? {} : { mergeMethod: input.method }),
+              })
+              .pipe(Effect.mapError(forgeFailure));
+          }
+        } else {
+          yield* pullRequests
+            .runAction({
+              ...ref,
+              action: input.auto === true ? "enable-auto-merge" : "merge",
+              expectedHeadSha: input.expectedHeadSha,
+              ...(input.method === undefined ? {} : { mergeMethod: input.method }),
+            })
+            .pipe(Effect.mapError(forgeFailure));
+        }
         const after = yield* pullRequests
           .summary({ ...ref, allowStale: false })
           .pipe(Effect.mapError(forgeFailure));

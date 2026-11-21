@@ -434,7 +434,8 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       });
     }
     const download =
-      input.resource._tag === "media-file" && input.resource.disposition === "attachment";
+      (input.resource._tag === "media-file" || input.resource._tag === "draft-workspace-file") &&
+      input.resource.disposition === "attachment";
     if (!download && hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
       return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
     }
@@ -505,11 +506,12 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
             }),
         ),
       );
-    const isDraftMedia =
+    const isDraftFile =
       input.resource._tag === "draft-workspace-file" &&
-      (isWorkspaceAudioPreviewPath(resolved.relativePath) ||
+      (input.resource.disposition === "attachment" ||
+        isWorkspaceAudioPreviewPath(resolved.relativePath) ||
         isWorkspaceVideoPreviewPath(resolved.relativePath));
-    if (!isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
+    if (!isDraftFile && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
         resource: input.resource,
       });
@@ -531,7 +533,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
         resource: input.resource,
       });
     }
-    if (isDraftMedia) {
+    if (isDraftFile) {
       return yield* finalizeAbsoluteMediaFileAsset({
         ...input,
         requestedPath: canonicalFile,

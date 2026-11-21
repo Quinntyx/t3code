@@ -152,6 +152,10 @@ export interface McpInvocationScope {
   readonly client: McpClientCaller | undefined;
   /** False while the Linked environments beta is off here; `/mcp` reads it per request. */
   readonly linkedEnvironments?: boolean;
+  /** False while agent email is off here; `/mcp` reads it per request. */
+  readonly email?: boolean;
+  readonly emailInbox?: boolean;
+  readonly emailTagging?: boolean;
   /**
    * The origin this `/mcp` request reached, e.g. a T3 Connect tunnel. Hosted clients cannot
    * see the URL they were configured with, so links they must fetch carry it. Unset in-process.
@@ -218,6 +222,25 @@ export const hiddenWhileLinksOff = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.linkedEnvironments !== false;
+};
+
+/** `hiddenFromOutsideClients`, and hidden while agent email is off. */
+export const hiddenWhileEmailOff = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope === undefined || (scope.thread !== undefined && scope.email !== false);
+};
+
+export const hiddenWhileInboxOff = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread !== undefined && scope.emailInbox === true;
+};
+
+export const hiddenWhileEmailTaggingOff = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread !== undefined && scope.emailInbox === true && scope.emailTagging === true;
 };
 
 /** `McpSchema.EnabledWhen` for tools that act on the thread's forge, hidden where it has none. */

@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import { pipe } from "effect/Function";
 
-import type { UsageRecord } from "@t3tools/provider-core/server/usage";
+import { normalizeUsageTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -356,13 +356,16 @@ function usageCandidates(
               ? generation.model
               : "";
         const outputTokens = Math.max(numberAt(usage, 3), numberAt(usage, 9) + numberAt(usage, 10));
-        const totals = {
-          uncachedInputTokens: numberAt(usage, 2),
-          cachedInputTokens: numberAt(usage, 5),
-          cacheCreationTokens: numberAt(usage, 4),
-          outputTokens,
-          reasoningTokens: Math.min(outputTokens, numberAt(usage, 9)),
-        };
+        const totals = normalizeUsageTokens(
+          {
+            inputTokens: numberAt(usage, 2),
+            cachedInputTokens: numberAt(usage, 5),
+            cacheCreationTokens: numberAt(usage, 4),
+            outputTokens,
+            reasoningTokens: numberAt(usage, 9),
+          },
+          "uncached",
+        );
         if (
           totals.uncachedInputTokens +
             totals.cachedInputTokens +

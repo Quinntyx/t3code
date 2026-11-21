@@ -258,6 +258,14 @@ export class ScheduledTaskService extends Context.Service<
   ScheduledTaskService,
   {
     readonly list: () => Effect.Effect<ScheduledTaskListResult, ScheduledTaskError>;
+    readonly awaitTasks: (input: {
+      readonly threadId: ThreadId;
+      readonly taskIds: ReadonlyArray<string>;
+      readonly awaited: boolean;
+    }) => Effect.Effect<
+      { readonly matched: ReadonlyArray<string>; readonly unmatched: ReadonlyArray<string> },
+      ScheduledTaskError
+    >;
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
     readonly upsert: (
       input: ScheduledTaskUpsertInput,
@@ -513,6 +521,7 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    const mutationPermit = yield* Semaphore.make(1);
     // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const dueTasks = DueHint.make();
@@ -751,6 +760,67 @@ export const layer = Layer.effect(
         ),
       );
 
+    const updateAwait = Effect.fn("ScheduledTaskService.updateAwait")(function* (
+      threadId: ThreadId,
+      taskIds: ReadonlyArray<ScheduledTaskId>,
+      awaited: boolean,
+    ) {
+      const { thread } = yield* threadManagement
+        .getThreadRecords(threadId, [])
+        .pipe(
+          Effect.mapError((cause) => taskError("Could not load automation wait state.", { cause })),
+        );
+      if (thread.deletedAt !== null) return;
+      const current = new Set(thread.awaitedScheduledTaskIds ?? []);
+      if (!taskIds.some((id) => current.has(id) !== awaited)) return;
+      const uuid = yield* random.uuidV4();
+      yield* threadManagement
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`scheduled-task-wait:${uuid}`),
+          threadId,
+          scheduledTaskWait: { taskIds, awaited },
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            taskError("Could not update automation wait state.", { cause }),
+          ),
+        );
+    });
+
+    const awaitTasks: ScheduledTaskService["Service"]["awaitTasks"] = Effect.fn(
+      "ScheduledTaskService.awaitTasks",
+    )(function* (input) {
+      const rows = yield* sql<{ task_id: string }>`SELECT task_id FROM scheduled_tasks
+        WHERE thread_id = ${input.threadId} AND ${sql.in("task_id", input.taskIds)}
+          AND (${input.awaited ? 1 : 0} = 0 OR (
+            enabled = 1 AND thread_mode != 'new_thread'
+            AND (json_extract(schedule_json, '$.type') != 'once'
+              OR next_run_at IS NOT NULL OR last_run_status = 'running')
+          ))`.pipe(
+        Effect.mapError((cause) => taskError("Could not load scheduled tasks.", { cause })),
+      );
+      const matched = rows.map((row) => ScheduledTaskId.make(row.task_id));
+      if (matched.length > 0) yield* updateAwait(input.threadId, matched, input.awaited);
+      return {
+        matched,
+        unmatched: input.taskIds.filter((id) => !matched.includes(ScheduledTaskId.make(id))),
+      };
+    }, mutationPermit.withPermits(1));
+
+    const releaseExhaustedAwait = Effect.fn("ScheduledTaskService.releaseExhaustedAwait")(
+      function* (task: ScheduledTask) {
+        if (
+          task.schedule.type === "once" &&
+          task.nextRunAt === null &&
+          task.lastRunStatus !== "running" &&
+          task.threadId !== null
+        ) {
+          yield* updateAwait(ThreadId.make(task.threadId), [task.id], false);
+        }
+      },
+    );
+
     const deleteRow = (id: ScheduledTaskId) =>
       sql
         .withTransaction(
@@ -835,6 +905,8 @@ export const layer = Layer.effect(
               ) THEN 0 ELSE 1 END
           WHERE task_id = ${task.id} AND last_run_status = 'running'
         `;
+        const released = yield* findTask(task.id);
+        if (released !== null) yield* releaseExhaustedAwait(released);
         yield* notifyChanged;
       },
       (effect, task, _startedAtIso, _message, _pendingDeliveryId) =>
@@ -1211,7 +1283,10 @@ export const layer = Layer.effect(
                   ),
             ),
           );
-        if (written) yield* notifyChanged;
+        if (written) {
+          yield* releaseExhaustedAwait(recorded);
+          yield* notifyChanged;
+        }
         if (written && threadId !== null) {
           yield* recordRunOutcome(active.id, startedAtIso, threadId, messageId).pipe(
             Effect.catchCause((cause) =>
@@ -1372,6 +1447,11 @@ export const layer = Layer.effect(
                     ) THEN 0 ELSE 1 END
                 WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
               `;
+              yield* releaseExhaustedAwait({
+                ...decoded.success,
+                lastRunStatus: "failed",
+                nextRunAt: nextRunAfterRun(decoded.success, now),
+              });
               return;
             }
             yield* Effect.logWarning(
@@ -1606,6 +1686,12 @@ export const layer = Layer.effect(
         lastRunError: existingTask?.lastRunError ?? null,
         runCount: existingTask?.runCount ?? 0,
       };
+      if (
+        existingTask?.threadId != null &&
+        (!task.enabled || task.threadId !== existingTask.threadId)
+      ) {
+        yield* updateAwait(ThreadId.make(existingTask.threadId), [id], false);
+      }
       yield* saveTask(
         task,
         input.requireExisting === true,
@@ -1614,7 +1700,7 @@ export const layer = Layer.effect(
       );
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
-    });
+    }, mutationPermit.withPermits(1));
 
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = Effect.fn(
       "ScheduledTaskService.setEnabled",
@@ -1642,6 +1728,9 @@ export const layer = Layer.effect(
         input.id,
       );
       const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
+      if (!input.enabled && existing.threadId !== null) {
+        yield* updateAwait(ThreadId.make(existing.threadId), [existing.id], false);
+      }
       // RETURNING so a task deleted between the load and this UPDATE is a
       // visible not-found error, not a false success.
       const updated = yield* sql<{ task_id: string }>`
@@ -1663,7 +1752,7 @@ export const layer = Layer.effect(
       return {
         task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
       };
-    });
+    }, mutationPermit.withPermits(1));
 
     const forgetWebhookTask = (id: ScheduledTaskId) =>
       Effect.all(
@@ -1697,12 +1786,17 @@ export const layer = Layer.effect(
         { discard: true },
       );
 
-    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(forgetWebhookTask(input.id)),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
-      );
+    const deleteTask: ScheduledTaskService["Service"]["delete"] = Effect.fn(
+      "ScheduledTaskService.delete",
+    )(function* (input) {
+      const existing = yield* findTask(input.id);
+      if (existing?.threadId != null)
+        yield* updateAwait(ThreadId.make(existing.threadId), [existing.id], false);
+      yield* deleteRow(input.id);
+      yield* forgetWebhookTask(input.id);
+      yield* notifyChanged;
+      return { id: input.id };
+    }, mutationPermit.withPermits(1));
 
     const deleteForThread = Effect.fn("ScheduledTaskService.deleteForThread")(function* (
       threadId: ThreadId,
@@ -2674,6 +2768,7 @@ export const layer = Layer.effect(
 
     return ScheduledTaskService.of({
       list,
+      awaitTasks,
       subscribeList,
       upsert,
       setEnabled,

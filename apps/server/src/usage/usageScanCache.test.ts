@@ -245,7 +245,7 @@ describe("scan cache round trip", () => {
         position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
       });
       expect(restored.get("/gone-pi.jsonl")).toEqual(
-        version >= 6
+        version >= 12
           ? original.get("/gone-pi.jsonl")
           : {
               ...original.get("/gone-pi.jsonl"),
@@ -338,6 +338,27 @@ describe("scan cache round trip", () => {
       position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
     });
   });
+
+  it.each([
+    { provider: "claude", version: 9 },
+    { provider: "pi", version: 11 },
+    { provider: "grok", version: 11 },
+    { provider: "muse", version: 11 },
+  ] as const)(
+    "re-parses $provider v$version after accounting changes without dropping history",
+    ({ provider, version }) => {
+      const original = cacheWith([["/history.jsonl", 100, [record({ provider })]]]);
+      original.set("/history.jsonl", { ...original.get("/history.jsonl")!, provider });
+      const previous = { ...parse(makeScanCacheWriter()(original, {})), version };
+
+      const restored = decodeScanCache(JSON.parse(JSON.stringify(previous)), TEST_FORMAT_MAP);
+      expect(restored.get("/history.jsonl")).toEqual({
+        ...original.get("/history.jsonl"),
+        size: -1,
+        position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+      });
+    },
+  );
 
   it.each(["s:p:grok-4.5", "s:p:1786000000000:grok-4.5"])(
     "re-parses v16 Grok transcripts with key %s",

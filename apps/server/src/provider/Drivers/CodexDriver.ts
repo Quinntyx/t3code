@@ -355,7 +355,10 @@ export const CodexDriver: ProviderDriver<
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
     const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
-    const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
+    const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = (
+      _creditId,
+      onConsumed,
+    ) =>
       resetCreditCoordinator
         .redeem(accountKey, (idempotencyKey) =>
           Effect.gen(function* () {
@@ -383,6 +386,7 @@ export const CodexDriver: ProviderDriver<
                 cause,
               }),
           ),
+          Effect.tap((outcome) => onConsumed?.(outcome) ?? Effect.void),
           Effect.tap((outcome) =>
             ResetCreditCoordinator.refreshAfterRedemption({
               outcome,

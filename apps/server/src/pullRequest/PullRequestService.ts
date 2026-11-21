@@ -106,6 +106,10 @@ import { toChangeBreakdown } from "./pullRequestChangeBreakdown.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  /** Rebase the threads stacked on the merged branch as well as retargeting their pull requests. */
+  readonly restackDependents: boolean;
 }
 
 type PullRequestReading = Pick<
@@ -288,6 +292,9 @@ export class PullRequestService extends Context.Service<
       input: PullRequestRef & { readonly check?: string },
     ) => Effect.Effect<ReadonlyArray<ProviderCheckRerun>, PullRequestError>;
     readonly update: (input: PullRequestUpdateInput) => Effect.Effect<void, PullRequestError>;
+    readonly changeBaseBranch: (
+      input: PullRequestRef & { readonly baseBranch: string },
+    ) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
     readonly updateComment: (
       input: PullRequestCommentUpdateInput,
@@ -649,6 +656,9 @@ function withRateLimitBackoff(
       : {
           updateChangeRequest: interactive("updateChangeRequest", api.updateChangeRequest),
         }),
+    ...(api.changeBaseBranch === undefined
+      ? {}
+      : { changeBaseBranch: interactive("changeBaseBranch", api.changeBaseBranch) }),
     comment: interactive("comment", api.comment),
     ...(api.updateComment === undefined
       ? {}
@@ -2466,6 +2476,28 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const changeBaseBranch: PullRequestService["Service"]["changeBaseBranch"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        const retarget = project.api.changeBaseBranch;
+        if (retarget === undefined) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "changeBaseBranch",
+              detail: "This host cannot change a change request's base branch.",
+            }),
+          );
+        }
+        return retarget({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+          baseBranch: input.baseBranch,
+        }).pipe(Effect.mapError(toPullRequestError("changeBaseBranch")));
+      }),
+    );
+
   const updateComment: PullRequestService["Service"]["updateComment"] = (input) =>
     (input.body.trim().length === 0
       ? Effect.fail(
@@ -3980,6 +4012,9 @@ export const make = Effect.gen(function* () {
           repository,
           number: input.number,
           mergedAt: confirmed.mergedAt ?? DateTime.formatIso(yield* DateTime.now),
+          headBranch: confirmed.headBranch,
+          baseBranch: confirmed.baseBranch,
+          restackDependents: input.restackDependents === true,
         });
       }
     }
@@ -4155,6 +4190,7 @@ export const make = Effect.gen(function* () {
     checkLogs,
     rerunChecks,
     update: invalidatedByMutation(update),
+    changeBaseBranch: invalidatedByMutation(changeBaseBranch),
     comment: invalidatedByMutation(comment),
     updateComment: invalidatedByMutation(updateComment),
     submitReview: invalidatedByMutation(submitReview),

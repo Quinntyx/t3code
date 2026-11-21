@@ -48,6 +48,7 @@ import { managedUpdateMirror, managedUpdateRefusal } from "../policy/managedUpda
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { managedUpdateMessage, resolveManagedPackage } from "./packageManager.ts";
 import { createUpdateProgress } from "./updateProgress.ts";
 import * as CliService from "./service.ts";
 
@@ -363,6 +364,10 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   );
   if (refusal !== undefined) {
     return yield* new CliUpdateError({ reason: refusal });
+  }
+  const managed = yield* resolveManagedPackage;
+  if (managed !== undefined) {
+    return yield* new CliUpdateError({ reason: managedUpdateMessage(managed) });
   }
   if (input.requestedVersion !== undefined && !isExactServiceVersion(input.requestedVersion)) {
     return yield* new CliUpdateError({

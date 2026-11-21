@@ -3,9 +3,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  yield* sql`DROP INDEX IF EXISTS orchestration_v2_projection_turn_items_voice_idx`;
   yield* sql`
-    CREATE INDEX IF NOT EXISTS orchestration_v2_projection_turn_items_voice_idx
+    CREATE INDEX orchestration_v2_projection_turn_items_voice_idx
     ON orchestration_v2_projection_turn_items(updated_at DESC, ordinal DESC, turn_item_id DESC)
-    WHERE type = 'system_notice' AND json_type(payload_json, '$.voiceNotification') = 'object'
+    WHERE type = 'system_notice'
+      AND json_valid(payload_json)
+      AND json_type(payload_json, '$.voiceNotification') = 'object'
   `;
 });

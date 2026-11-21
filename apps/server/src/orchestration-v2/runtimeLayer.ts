@@ -56,10 +56,14 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
+import * as MachineHandoffService from "./MachineHandoffService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as EmailRequests from "../email/EmailRequests.ts";
+import * as Mailer from "../email/Mailer.ts";
+import * as MailInbox from "../email/MailInbox.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -304,6 +308,11 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
 const layerSecretRequestsProvided = SecretRequests.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
+const layerEmailRequestsProvided = EmailRequests.layer.pipe(
+  Layer.provideMerge(Mailer.layer),
+  Layer.provideMerge(MailInbox.layer),
+  Layer.provide(layerThreadManagementProvided),
+);
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -402,9 +411,20 @@ export const layerProduction = Layer.mergeAll(
   layer,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
+  MachineHandoffService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerThreadManagementProvided,
+        ProjectStore.layer,
+        layerCommandReceiptStoreProvided,
+        ThreadCommandExecutor.layer,
+      ),
+    ),
+  ),
   layerScheduledTaskProvided,
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
+  layerEmailRequestsProvided,
   GuestShareService.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, layerCommandOutputHubProvided)),
   ),
@@ -412,6 +432,8 @@ export const layerProduction = Layer.mergeAll(
     Layer.provide(
       Layer.mergeAll(
         ProjectionStore.layer,
+        layerEventSink,
+        IdAllocator.layer,
         layerThreadManagementProvided,
         layerOrchestratorProvided,
       ),

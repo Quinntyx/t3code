@@ -13,6 +13,7 @@ import * as ServerConfig from "../config.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as ServerLifecycleEvents from "../serverLifecycleEvents.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeHubModelCatalogs } from "../usage/HubModelCatalogs.ts";
 import * as DocumentText from "./DocumentText.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
@@ -101,3 +102,13 @@ export const layer = Layer.effect(
     });
   }),
 );
+
+/** The host provider drivers get: `layer` plus the usage hubs' model catalogs. */
+export const layerWithHubModels = Layer.effect(
+  ProviderHost.ProviderHost,
+  Effect.gen(function* () {
+    const host = yield* ProviderHost.ProviderHost;
+    const hubModels = yield* makeHubModelCatalogs;
+    return ProviderHost.ProviderHost.of({ ...host, hubModels });
+  }),
+).pipe(Layer.provide(layer));

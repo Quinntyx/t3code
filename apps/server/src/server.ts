@@ -8,6 +8,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as ThreadWatchReactor from "./orchestration-v2/ThreadWatchReactor.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
@@ -93,6 +94,7 @@ import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as DiscoveryHost from "./discover/DiscoveryHost.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -127,6 +129,8 @@ import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.t
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
+import * as ConsumptionCapWorker from "./orchestration-v2/ConsumptionCapWorker.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -149,6 +153,7 @@ import * as SourceControlProviderRegistry from "./sourceControl/SourceControlPro
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import { layer as layerBuddySources } from "./buddySources/buddySourceRoute.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as Observability from "./observability/Observability.ts";
 import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
@@ -212,6 +217,9 @@ import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
+import * as ThreadNotebookService from "./notebook/ThreadNotebookService.ts";
+import * as PycellsLauncher from "./notebook/PycellsLauncher.ts";
+import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
@@ -219,6 +227,8 @@ import * as ThreadViewers from "./orchestration-v2/ThreadViewers.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
+import * as PullRequestStackService from "./pullRequest/PullRequestStackService.ts";
+import * as GoalLoopService from "./orchestration-v2/GoalLoopService.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
@@ -419,8 +429,12 @@ const layerRepositoryIdentityResolver = Layer.effect(
   RepositoryIdentityResolver.RepositoryIdentityResolver,
   Effect.gen(function* () {
     const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+    const git = yield* GitVcsDriver.GitVcsDriver;
     return yield* RepositoryIdentityResolver.make({
-      refine: Effect.fn(function* (identity: RepositoryIdentity) {
+      refine: Effect.fn("RepositoryIdentityResolver.refine")(function* (
+        identity: RepositoryIdentity,
+      ) {
+        let result = identity;
         for (const { kind } of BUILT_IN_SOURCE_CONTROL_DRIVER_LIST) {
           const provider = yield* registry.get(kind);
           if (provider.refineRepositoryIdentity === undefined) continue;
@@ -429,13 +443,30 @@ const layerRepositoryIdentityResolver = Layer.effect(
             resolveContext: (input) =>
               registry.resolveHandle(input).pipe(Effect.map((handle) => handle.context)),
           });
-          if (refined !== identity) return refined;
+          if (refined !== identity) {
+            result = refined;
+            break;
+          }
         }
-        return identity;
+        if (!result.rootPath) return result;
+        const placement = yield* git
+          .resolveWorktreePlacement({
+            cwd: result.rootPath,
+            path: null,
+            refName: "HEAD",
+          })
+          .pipe(Effect.option);
+        return Option.isSome(placement)
+          ? { ...result, cloneLayout: placement.value.layout }
+          : result;
       }),
     });
   }),
-).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
+).pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(GitVcsDriver.layer),
+  Layer.provide(ProcessRunner.layer),
+);
 
 const layerPullRequestService = PullRequestService.layer.pipe(
   Layer.provide(PullRequestProviderRegistry.layer),
@@ -639,6 +670,10 @@ const layerIdleCompactionWorker = Layer.effectDiscard(
   IdleCompactionService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(ProjectionStoreV2.layer));
 
+const layerGoalLoopWorker = Layer.effectDiscard(
+  GoalLoopService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(ProjectionStoreV2.layer));
+
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
@@ -691,9 +726,12 @@ const layerServerRestart = Layer.effect(
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
+  ThreadUsageService.layer,
+  ThreadNotebookService.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
+  layerGoalLoopWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
@@ -812,7 +850,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   ),
 );
 
-const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
+const layerRuntimeDependenciesCore = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
   // The same layer the event sink uses; memoized, subscriptions and batch ranking share it.
@@ -830,6 +868,15 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   // fetch interval goes in context here, before the first build captures it.
   Layer.provideMerge(VcsAutomaticFetchInterval.layer.pipe(Layer.provide(layerServerSettings))),
   Layer.provide(NetService.layer),
+);
+
+const layerRuntimeDependencies = Layer.merge(
+  layerRuntimeDependenciesCore,
+  ConsumptionCapWorker.layer.pipe(
+    Layer.provide(Scheduler.layer),
+    Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerRuntimeDependenciesCore))),
+    Layer.provide(layerRuntimeDependenciesCore),
+  ),
 );
 
 const layerCommandReadiness = HttpRouter.middleware(
@@ -855,6 +902,8 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
+    // Buddy art lives outside the app, in sources cloned through the configured providers.
+    layerBuddySources,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,
@@ -874,14 +923,34 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Wakes threads whose watched threads end, here or over a link, including after a restart.
+  Layer.effectDiscard(
+    ThreadWatchReactor.ThreadWatchReactor.pipe(Effect.flatMap((watches) => watches.start())),
+  ).pipe(
+    Layer.provide(
+      ThreadWatchReactor.layer.pipe(
+        Layer.provide(ProjectionStoreV2.layer),
+        Layer.provide(RuntimeLayer.layerEventSink),
+      ),
+    ),
+  ),
+  // Retargets and restacks pull requests stacked on one T3 merged.
+  Layer.effectDiscard(
+    PullRequestStackService.PullRequestStackService.pipe(
+      Effect.flatMap((stacks) => stacks.start()),
+    ),
+  ),
 ).pipe(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
+  // WebSocket, /mcp, and the merge follower above share one instance.
+  Layer.provide(PullRequestStackService.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // delegate_task to a linked environment, from /mcp and the follower above.
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
+  Layer.provide(DiscoveryHost.layer),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
   Layer.provide(layerPullRequestService),
   Layer.provide(layerThreadIssueService),
@@ -1379,6 +1448,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(PycellsLauncher.layer),
       Layer.provideMerge(layerPlatformServices),
       Layer.provide(Layer.succeed(HostProcess.InvokedAs, invokedAs)),
     );

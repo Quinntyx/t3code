@@ -128,17 +128,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       enabled,
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
     } satisfies ClaudeSettings;
-    const resolveMaintenance = yield* makeClaudeMaintenanceResolution({
-      binaryPath: effectiveConfig.binaryPath,
-      env: processEnv,
-    }).pipe(
+    const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
+    const resolveMaintenance = yield* makeClaudeMaintenanceResolution(
+      { binaryPath: effectiveConfig.binaryPath, env: processEnv },
+      { configDir, cwd: stateDir },
+    ).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
     const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig, processEnv);
-    const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
     const accountConfigPath = yield* ClaudeResetCredits.claudeAccountConfigPath(
       effectiveConfig.homePath.trim() || processEnv.CLAUDE_CONFIG_DIR?.trim()
         ? configDir
@@ -346,7 +346,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = Effect.fn(
       "ClaudeDriver.consumeResetCredit",
     )(
-      function* (creditId) {
+      function* (creditId, onConsumed) {
         const current = yield* snapshot.getSnapshot;
         const credits = current.usageLimits?.resetCredits;
         const grantId =
@@ -357,7 +357,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               : undefined;
         if (!grantId || !current.version) return "noCredit" as const;
         const version = current.version;
-        return yield* resetCreditCoordinator.redeem(
+        const outcome = yield* resetCreditCoordinator.redeem(
           configDir,
           (requestId) =>
             ClaudeResetCredits.consumeClaudeResetCredit({
@@ -369,6 +369,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             }),
           ClaudeResetCredits.isSettledClaudeResetCreditFailure,
         );
+        yield* onConsumed?.(outcome) ?? Effect.void;
+        return outcome;
       },
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.provideService(FileSystem.FileSystem, fileSystem),

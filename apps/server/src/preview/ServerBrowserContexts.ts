@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import type { Browser, BrowserContext, CDPSession } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
 
@@ -68,6 +68,11 @@ interface Options {
   /** Closes the shared browser once it has held no context for this long. */
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
+  /** GPU flags and device scale, read at each launch so a relaunch applies new settings. */
+  readonly rendering: () => Promise<{
+    readonly args: ReadonlyArray<string>;
+    readonly scale: number;
+  }>;
 }
 
 const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
@@ -139,6 +144,7 @@ export class ServerBrowserContexts {
   private readonly clearing = new Map<string, Promise<void>>();
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
+  private relaunching: Promise<void> | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingSharedContexts = 0;
 
@@ -149,14 +155,15 @@ export class ServerBrowserContexts {
   private async launchOptions() {
     const executable = await this.options.executable();
     const env = this.options.env ?? process.env;
+    const rendering = await this.options.rendering();
     // A page's override never reaches its workers, so the browser itself must name Chrome.
     const userAgent = chromeUserAgent(this.options.chrome);
     return {
       executable,
       env,
       args: [
-        "--disable-gpu",
-        "--force-device-scale-factor=2",
+        ...rendering.args,
+        `--force-device-scale-factor=${rendering.scale}`,
         "--disable-blink-features=AutomationControlled",
         ...(userAgent ? [`--user-agent=${userAgent}`] : []),
       ],
@@ -217,7 +224,8 @@ export class ServerBrowserContexts {
 
   private retireWhenIdle(launched: Promise<Browser>) {
     const delay = this.options.idleBrowserMs;
-    if (delay === undefined || this.closing || this.pendingSharedContexts > 0) return;
+    if (delay === undefined || this.closing || this.relaunching || this.pendingSharedContexts > 0)
+      return;
     clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => void this.retire(launched), delay);
     this.idleTimer.unref();
@@ -234,6 +242,8 @@ export class ServerBrowserContexts {
 
   contextFor(profileId: string, isolationKey?: string): Promise<BrowserContext> {
     if (this.closing) return Promise.reject(new Error("The preview browser is closed."));
+    if (this.relaunching)
+      return this.relaunching.then(() => this.contextFor(profileId, isolationKey));
     const key = JSON.stringify([profileId, isolationKey ?? null]);
     const cached = this.contexts.get(key);
     if (cached) return cached;
@@ -260,7 +270,8 @@ export class ServerBrowserContexts {
   }
 
   private async createContext(profileId: string, isolationKey?: string) {
-    const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 };
+    const { scale } = await this.options.rendering();
+    const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: scale };
     if (isolationKey !== undefined || profileId === INCOGNITO_BROWSER_PROFILE_ID) {
       return this.sharedContext(contextOptions);
     }
@@ -287,7 +298,11 @@ export class ServerBrowserContexts {
     );
   }
 
-  async scratchPage() {
+  async scratchPage(): Promise<Page> {
+    if (this.relaunching) {
+      await this.relaunching;
+      return this.scratchPage();
+    }
     if (this.closing) throw new Error("The preview browser is closed.");
     const context = await this.sharedContext();
     try {
@@ -339,7 +354,27 @@ export class ServerBrowserContexts {
     return this.closing;
   }
 
+  /** Closes every browser so the next page launches with the current rendering options. */
+  relaunch() {
+    if (this.closing) return this.closing;
+    this.relaunching ??= this.restart().finally(() => {
+      this.relaunching = undefined;
+    });
+    return this.relaunching;
+  }
+
+  private async restart() {
+    clearTimeout(this.idleTimer);
+    const contexts = [...this.contexts.values()];
+    this.contexts.clear();
+    await Promise.allSettled(contexts.map(async (pending) => (await pending).close()));
+    const browser = this.browser;
+    this.browser = undefined;
+    await (await browser?.catch(() => undefined))?.close().catch(constVoid);
+  }
+
   private async dispose() {
+    await this.relaunching;
     clearTimeout(this.idleTimer);
     await Promise.allSettled(
       [...this.contexts.values()].map(async (pending) => (await pending).close()),

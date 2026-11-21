@@ -132,7 +132,7 @@ const vaultConfigs = (settings: ServerSettings) =>
   Object.entries(settings.secretProviders).map(([id, { kind, config }]) => [id, kind, config]);
 
 // A host built earlier (for the ACP registry) lacks PortDiscovery; build this one fresh.
-export const providerHostLayer = Layer.fresh(ProviderHostLive.layer);
+export const providerHostLayer = Layer.fresh(ProviderHostLive.layerWithHubModels);
 
 export const layerSettingsWatcher = (
   settingsChanges: Stream.Stream<ServerSettings>,

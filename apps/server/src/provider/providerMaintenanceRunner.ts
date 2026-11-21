@@ -46,6 +46,16 @@ const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 const UPDATE_TIMEOUT_MINUTES = 30;
 const UPDATE_TIMEOUT_MS = UPDATE_TIMEOUT_MINUTES * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
+const decodeClaudePlugins = Schema.decodeOption(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String.check(Schema.isPattern(/^[^-\s][^\s]*$/u), Schema.isMaxLength(256)),
+        scope: Schema.String,
+      }),
+    ),
+  ),
+);
 // Sample installer output because every progress update resends the provider list to all clients.
 const UPDATE_PROGRESS_INTERVAL = Duration.seconds(1);
 const UPDATE_PROGRESS_MAX_LENGTH = 200;
@@ -69,6 +79,7 @@ export interface ProviderMaintenanceRunnerShape {
           readonly provider: ProviderDriverKind;
           readonly instanceId?: ProviderInstanceId | undefined;
           readonly targetVersion?: string | undefined;
+          readonly extensionsOnly?: boolean | undefined;
         },
   ) => Effect.Effect<ServerProviderUpdatedPayload, ServerProviderUpdateError>;
 }
@@ -112,6 +123,8 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
     readonly command: string;
     readonly args: ReadonlyArray<string>;
     readonly env?: NodeJS.ProcessEnv;
+    readonly cwd?: string;
+    readonly maxOutputBytes?: number;
     readonly onProgress?: (line: string) => Effect.Effect<void>;
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
@@ -125,6 +138,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
               shell: resolved.shell,
               // Nothing answers an update command, so one that reads stdin must see EOF, not wait.
               stdin: "ignore",
+              ...(input.cwd ? { cwd: input.cwd } : {}),
               ...env,
             }),
           )
@@ -170,7 +184,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           [
             collectUint8StreamText({
               stream: trackProgress(child.stdout),
-              maxBytes: UPDATE_OUTPUT_MAX_BYTES,
+              maxBytes: input.maxOutputBytes ?? UPDATE_OUTPUT_MAX_BYTES,
             }),
             collectUint8StreamText({
               stream: trackProgress(child.stderr),
@@ -327,14 +341,68 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const runMaintenanceCommand = (
     update: ProviderMaintenanceCommandAction,
     onProgress: (line: string) => Effect.Effect<void>,
+    maxOutputBytes?: number,
   ) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
       command: update.executable,
       args: update.args,
       onProgress,
+      ...(maxOutputBytes ? { maxOutputBytes } : {}),
+      ...(update.cwd ? { cwd: update.cwd } : {}),
       ...(update.env ? { env: update.env } : {}),
     });
+  const runExtensionUpdates = Effect.fn("ProviderMaintenanceRunner.runExtensionUpdates")(function* (
+    capabilities: ProviderMaintenanceCapabilities,
+    update: ProviderMaintenanceCommandAction,
+    onProgress: (line: string) => Effect.Effect<void>,
+  ) {
+    const outputs: string[] = [];
+    const run = Effect.fn("ProviderMaintenanceRunner.runExtensionCommand")(function* (
+      args: ReadonlyArray<string>,
+      listing = false,
+    ) {
+      const command = { ...update, args };
+      yield* onProgress(`Running ${describeCommand(command)}`);
+      const result = yield* runMaintenanceCommand(
+        command,
+        listing ? () => Effect.void : onProgress,
+        listing ? 1_024 * 1_024 : undefined,
+      );
+      if (!listing || result.exitCode !== 0 || result.timedOut) {
+        outputs.push(commandOutput(result) ?? "");
+      }
+      return result;
+    });
+    let result = yield* run(update.args);
+    if (result.exitCode === 0 && !result.timedOut && capabilities.provider === "claudeAgent") {
+      const listed = yield* run(["plugin", "list", "--json"], true);
+      result = listed;
+      if (listed.exitCode === 0 && !listed.timedOut) {
+        const plugins = decodeClaudePlugins(listed.stdout);
+        if (listed.stdoutTruncated || Option.isNone(plugins)) {
+          return {
+            ...listed,
+            exitCode: 1,
+            stderr: "Claude returned an invalid or truncated plugin list.",
+            stdout: "",
+          };
+        }
+        const ids = new Set(
+          plugins.value.filter((plugin) => plugin.scope === "user").map((plugin) => plugin.id),
+        );
+        for (const id of ids) {
+          result = yield* run(["plugin", "update", id, "--scope", "user"]);
+          if (result.exitCode !== 0 || result.timedOut) break;
+        }
+      }
+    }
+    return {
+      ...result,
+      stdout: outputs.join("\n\n").slice(-UPDATE_OUTPUT_MAX_BYTES),
+      stderr: result.stderr,
+    };
+  });
   // Instances with other homes or accounts can still run the binary this update replaces. The
   // lock key names the package manager location, so other drivers there keep their own package.
   const instancesSharingInstallation = Effect.fn(
@@ -429,13 +497,14 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         ? defaultInstanceIdForDriver(provider)
         : (target.instanceId ?? defaultInstanceIdForDriver(provider));
     const targetVersion = typeof target === "string" ? undefined : target.targetVersion;
+    const extensionsOnly = typeof target !== "string" && target.extensionsOnly === true;
     const targetKey = `instance:${instanceId}`;
     const capabilities = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
       instanceId,
       provider,
     );
-    const update = capabilities.update;
-    if (!update) {
+    const update = extensionsOnly ? capabilities.updateExtensions : capabilities.update;
+    if (!update || (extensionsOnly && targetVersion !== undefined)) {
       return yield* new ServerProviderUpdateError({
         provider,
         reason: "This provider does not support one-click updates.",
@@ -491,7 +560,8 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               provider,
               { fresh: true },
             );
-            if (!fresh.update || fresh.update.lockKey !== update.lockKey) {
+            const freshUpdate = extensionsOnly ? fresh.updateExtensions : fresh.update;
+            if (!freshUpdate || freshUpdate.lockKey !== update.lockKey) {
               return yield* finish(
                 makeUpdateState({
                   status: "failed",
@@ -502,111 +572,160 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               );
             }
 
-            const manifest = yield* manifestService.current;
-            // Check compatibility against what an unpinned command would install now.
-            const candidateVersion =
-              targetVersion ??
-              (yield* invalidateLatestProviderVersion(fresh).pipe(
-                Effect.andThen(resolveLatestProviderVersion(fresh)),
-                Effect.provideService(HttpClient.HttpClient, httpClient),
-                Effect.provideService(
-                  ProviderLatestVersions.ProviderLatestVersions,
-                  latestVersions,
-                ),
-              ));
-            const advisory = ModelManifest.providerCompatibility(
-              manifest,
-              provider,
-              candidateVersion,
-            );
-            const command =
-              targetVersion !== undefined
-                ? makeTargetedProviderUpdateAction(fresh, targetVersion)
-                : resolveLatestProviderUpdateAction(fresh, candidateVersion);
-            const rejected =
-              targetVersion !== undefined
-                ? !command ||
-                  advisory?.recommendedVersion !== targetVersion ||
-                  advisory.status !== "supported"
-                : advisory?.status === "broken" || advisory?.status === "unsupported";
-            if (rejected || !command) {
-              return yield* finish(
-                makeUpdateState({
-                  status: "failed",
-                  startedAt,
-                  finishedAt: yield* nowIso,
-                  message:
-                    targetVersion !== undefined
-                      ? "This version is no longer recommended or this installer cannot install a specific version. Refresh provider settings."
-                      : "The latest provider version is incompatible with this T3 Code release. Review provider settings.",
-                }),
-              );
-            }
-
-            if (targetVersion === undefined) {
-              const prior = (yield* providerRegistry.getProviders).find(
-                (candidate) => candidate.instanceId === instanceId,
-              );
-              const precheck = yield* verifyFromRefresh(
-                providerRegistry.refreshInstance(instanceId),
+            let output: string | null = null;
+            let alreadyCurrent = false;
+            let precheckVerifiedProviders: ReadonlyArray<ServerProvider> = [];
+            if (!extensionsOnly) {
+              const manifest = yield* manifestService.current;
+              // Check compatibility against what an unpinned command would install now.
+              const candidateVersion =
+                targetVersion ??
+                (yield* invalidateLatestProviderVersion(fresh).pipe(
+                  Effect.andThen(resolveLatestProviderVersion(fresh)),
+                  Effect.provideService(HttpClient.HttpClient, httpClient),
+                  Effect.provideService(
+                    ProviderLatestVersions.ProviderLatestVersions,
+                    latestVersions,
+                  ),
+                ));
+              const advisory = ModelManifest.providerCompatibility(
+                manifest,
                 provider,
-                fresh,
-                instanceId,
-                "pre-update",
+                candidateVersion,
               );
-              const alreadyCurrent =
-                precheck.advisoryEnriched &&
-                prior !== undefined &&
-                precheck.verifiedProviders.length > 0 &&
-                precheck.verifiedProviders.every(
-                  (verified) =>
-                    verified.checkedAt !== prior.checkedAt &&
-                    verified.installed &&
-                    verified.status !== "error" &&
-                    verified.versionAdvisory?.status === "current",
-                );
-              if (alreadyCurrent) {
+              const command =
+                targetVersion !== undefined
+                  ? makeTargetedProviderUpdateAction(fresh, targetVersion)
+                  : resolveLatestProviderUpdateAction(fresh, candidateVersion);
+              const rejected =
+                targetVersion !== undefined
+                  ? !command ||
+                    advisory?.recommendedVersion !== targetVersion ||
+                    advisory.status !== "supported"
+                  : advisory?.status === "broken" || advisory?.status === "unsupported";
+              if (rejected || !command) {
                 return yield* finish(
                   makeUpdateState({
-                    status: "succeeded",
+                    status: "failed",
                     startedAt,
                     finishedAt: yield* nowIso,
-                    message: needsOpenCodeServerRestart(precheck.verifiedProviders)
-                      ? OPENCODE_SERVER_RESTART_MESSAGE
-                      : "Already up to date.",
+                    message:
+                      targetVersion !== undefined
+                        ? "This version is no longer recommended or this installer cannot install a specific version. Refresh provider settings."
+                        : "The latest provider version is incompatible with this T3 Code release. Review provider settings.",
+                  }),
+                );
+              }
+
+              if (targetVersion === undefined) {
+                const prior = (yield* providerRegistry.getProviders).find(
+                  (candidate) => candidate.instanceId === instanceId,
+                );
+                const precheck = yield* verifyFromRefresh(
+                  providerRegistry.refreshInstance(instanceId),
+                  provider,
+                  fresh,
+                  instanceId,
+                  "pre-update",
+                );
+                precheckVerifiedProviders = precheck.verifiedProviders;
+                alreadyCurrent =
+                  precheck.advisoryEnriched &&
+                  prior !== undefined &&
+                  precheck.verifiedProviders.length > 0 &&
+                  precheck.verifiedProviders.every(
+                    (verified) =>
+                      verified.checkedAt !== prior.checkedAt &&
+                      verified.installed &&
+                      verified.status !== "error" &&
+                      verified.versionAdvisory?.status === "current",
+                  );
+                if (alreadyCurrent && !fresh.updateExtensions) {
+                  return yield* finish(
+                    makeUpdateState({
+                      status: "succeeded",
+                      startedAt,
+                      finishedAt: yield* nowIso,
+                      message: needsOpenCodeServerRestart(precheck.verifiedProviders)
+                        ? OPENCODE_SERVER_RESTART_MESSAGE
+                        : "Already up to date.",
+                    }),
+                  );
+                }
+              }
+
+              if (!alreadyCurrent) {
+                const sharingInstances = yield* instancesSharingInstallation(
+                  instanceId,
+                  provider,
+                  update.lockKey,
+                );
+                yield* setRunningMessage("Waiting for running provider work to finish.");
+                const result = yield* installationGate.update(
+                  sharingInstances,
+                  setRunningMessage(`Running ${describeCommand(command)}`).pipe(
+                    Effect.andThen(runMaintenanceCommand(command, setRunningMessage)),
+                  ),
+                );
+                if (result.timedOut || result.exitCode !== 0) {
+                  yield* Effect.logWarning("Provider update command failed", {
+                    provider,
+                    command: describeCommand(command),
+                    exitCode: result.exitCode,
+                    timedOut: result.timedOut,
+                    output: commandOutput(result),
+                  });
+                  return yield* finish(
+                    makeUpdateState({
+                      status: "failed",
+                      startedAt,
+                      finishedAt: yield* nowIso,
+                      message: failureMessage(result),
+                      output: commandOutput(result),
+                    }),
+                  );
+                }
+                output = commandOutput(result);
+              }
+            }
+
+            if (fresh.updateExtensions) {
+              const result = yield* runExtensionUpdates(
+                fresh,
+                fresh.updateExtensions,
+                setRunningMessage,
+              );
+              output =
+                [output, commandOutput(result)]
+                  .filter(Boolean)
+                  .join("\n\n")
+                  .slice(-UPDATE_OUTPUT_MAX_BYTES) || null;
+              if (result.timedOut || result.exitCode !== 0) {
+                return yield* finish(
+                  makeUpdateState({
+                    status: "failed",
+                    startedAt,
+                    finishedAt: yield* nowIso,
+                    message: `Extension update failed: ${failureMessage(result)}`,
+                    output,
                   }),
                 );
               }
             }
 
-            const sharingInstances = yield* instancesSharingInstallation(
-              instanceId,
-              provider,
-              update.lockKey,
-            );
-            yield* setRunningMessage("Waiting for running provider work to finish.");
-            const result = yield* installationGate.update(
-              sharingInstances,
-              setRunningMessage(`Running ${describeCommand(command)}`).pipe(
-                Effect.andThen(runMaintenanceCommand(command, setRunningMessage)),
-              ),
-            );
-            const finishedAt = yield* nowIso;
-            if (result.timedOut || result.exitCode !== 0) {
-              yield* Effect.logWarning("Provider update command failed", {
-                provider,
-                command: describeCommand(command),
-                exitCode: result.exitCode,
-                timedOut: result.timedOut,
-                output: commandOutput(result),
-              });
+            if (extensionsOnly || alreadyCurrent) {
+              yield* providerRegistry.refreshAfterUpdate(provider, instanceId);
               return yield* finish(
                 makeUpdateState({
-                  status: "failed",
+                  status: "succeeded",
                   startedAt,
-                  finishedAt,
-                  message: failureMessage(result),
-                  output: commandOutput(result),
+                  finishedAt: yield* nowIso,
+                  message: alreadyCurrent
+                    ? needsOpenCodeServerRestart(precheckVerifiedProviders)
+                      ? OPENCODE_SERVER_RESTART_MESSAGE
+                      : "Already up to date. Provider extensions updated."
+                    : "Provider extensions updated.",
+                  output,
                 }),
               );
             }
@@ -651,7 +770,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               makeUpdateState({
                 status: couldNotVerify || stillOutdated ? "unchanged" : "succeeded",
                 startedAt,
-                finishedAt,
+                finishedAt: yield* nowIso,
                 message: couldNotVerify
                   ? "Update command completed, but T3 Code could not verify the provider version."
                   : stillOutdated
@@ -659,7 +778,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                     : needsOpenCodeServerRestart(verifiedProviders)
                       ? OPENCODE_SERVER_RESTART_MESSAGE
                       : "Provider updated.",
-                output: commandOutput(result),
+                output,
               }),
             );
           },

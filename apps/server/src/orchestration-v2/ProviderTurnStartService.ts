@@ -14,6 +14,7 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  goalTurnPrompt,
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
@@ -677,6 +678,36 @@ export const layer: Layer.Layer<
           });
         },
       );
+      if (projection.thread.consumptionCapHit != null) {
+        const now = yield* DateTime.now;
+        yield* settleRunBeforeStart({
+          run,
+          rootNode,
+          attempt,
+          turnItems: projection.turnItems,
+          signal: "consumption-cap",
+          status: "failed",
+          now,
+          providerInstanceId: run.providerInstanceId,
+          itemProviderThreadId: providerThread.id,
+          item: {
+            type: "error",
+            title: "Consumption cap reached",
+            failure: makeProviderFailure({
+              class: "usage_limit",
+              code: "consumption_cap",
+              message: projection.thread.consumptionCapHit.reason,
+              retryable: false,
+            }),
+          },
+          providerThreadUpdate: {
+            ...providerThread,
+            status: providerThread.nativeThreadRef === null ? "not_loaded" : "idle",
+            updatedAt: now,
+          },
+        });
+        return;
+      }
       if (
         expandAssistantCitationsForProvider(providerMessage.text).length >
         PROVIDER_SEND_TURN_MAX_INPUT_CHARS
@@ -986,19 +1017,23 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const userText = withMessageSenderNote(
-        providerMessage,
-        projectComposerContextForProvider({
-          text: providerMessage.text,
-          records: providerMessage.context?.records ?? [],
-        }),
-      );
+      const parsedGoal = parseGoalCommand(providerMessage);
       // Native goal commands go verbatim; handoff history waits a turn.
       const goalDriver =
         session.driver === "codex" ||
         session.driver === "claudeAgent" ||
         session.providerSession.capabilities.turns.supportsNativeGoals === true;
-      const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
+      const goalCommand = goalDriver && parsedGoal !== null;
+      // Elsewhere T3 Code owns the goal, so the provider gets the objective as an instruction.
+      const userText = withMessageSenderNote(
+        providerMessage,
+        !goalDriver && parsedGoal?.type === "set"
+          ? goalTurnPrompt(parsedGoal.objective)
+          : projectComposerContextForProvider({
+              text: providerMessage.text,
+              records: providerMessage.context?.records ?? [],
+            }),
+      );
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,

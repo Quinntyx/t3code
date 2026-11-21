@@ -4,6 +4,7 @@ import * as Path from "effect/Path";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
+  normalizeUsageTokens,
   parseTimestampMs,
   tokenCount,
   type ProviderUsageReader,
@@ -69,14 +70,15 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
     timestampMs,
     model,
     sessionId: typeof record["sessionId"] === "string" ? record["sessionId"] : "",
-    totals: {
-      uncachedInputTokens: tokenCount(usageRecord["input_tokens"]),
-      cachedInputTokens: tokenCount(usageRecord["cache_read_input_tokens"]),
-      cacheCreationTokens: tokenCount(usageRecord["cache_creation_input_tokens"]),
-      outputTokens: tokenCount(usageRecord["output_tokens"]),
-      // Anthropic folds thinking tokens into output and does not break them out.
-      reasoningTokens: 0,
-    },
+    totals: normalizeUsageTokens(
+      {
+        inputTokens: usageRecord["input_tokens"],
+        cachedInputTokens: usageRecord["cache_read_input_tokens"],
+        cacheCreationTokens: usageRecord["cache_creation_input_tokens"],
+        outputTokens: usageRecord["output_tokens"],
+      },
+      "uncached",
+    ),
     ...cacheCreation1h(usageRecord),
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
@@ -102,13 +104,15 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
       timestampMs,
       model: advisorModel,
       sessionId: executor.sessionId,
-      totals: {
-        uncachedInputTokens: tokenCount(advisor["input_tokens"]),
-        cachedInputTokens: tokenCount(advisor["cache_read_input_tokens"]),
-        cacheCreationTokens: tokenCount(advisor["cache_creation_input_tokens"]),
-        outputTokens: tokenCount(advisor["output_tokens"]),
-        reasoningTokens: 0,
-      },
+      totals: normalizeUsageTokens(
+        {
+          inputTokens: advisor["input_tokens"],
+          cachedInputTokens: advisor["cache_read_input_tokens"],
+          cacheCreationTokens: advisor["cache_creation_input_tokens"],
+          outputTokens: advisor["output_tokens"],
+        },
+        "uncached",
+      ),
       ...cacheCreation1h(advisor),
       reportedCostUsd: null,
       speed: executor.speed,

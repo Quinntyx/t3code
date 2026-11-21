@@ -214,6 +214,7 @@ function threadCreatedEvent(
         rootThreadId: threadId,
       },
       forkedFrom: null,
+      goal: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

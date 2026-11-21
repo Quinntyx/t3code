@@ -1,9 +1,11 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   UsageLimitSourceError,
+  type ProviderConsumeResetCreditOutcome,
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
   type ProviderDriverKind,
+  type ServerProvider,
   type ServerSettings,
   UsageLimitSourceConfig,
   settingsSecretLiteral,
@@ -13,6 +15,7 @@ import {
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -39,6 +42,10 @@ export class UsageLimitSources extends Context.Service<
     readonly consumeResetCredit: (
       input: UsageLimitSourceConsumeResetCreditInput,
     ) => Effect.Effect<ProviderConsumeResetCreditResult, UsageLimitSourceError>;
+    readonly notifyResetCreditConsumed: (
+      provider: Pick<ServerProvider, "driver" | "auth">,
+      outcome: ProviderConsumeResetCreditOutcome,
+    ) => Effect.Effect<ProviderConsumeResetCreditResult>;
   }
 >()("t3/usage/UsageLimitSources") {}
 
@@ -93,18 +100,23 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
     : "Could not read the management key from its secret provider.";
 }
 
+export const readSourceManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
+  secrets: SecretResolver.SecretResolver["Service"],
+  config: UsageLimitSourceConfig,
+) {
+  const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
+  return settingsSecretLiteral(resolved.managementKey);
+});
+
 /** @public */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const settingsService = yield* Settings.ServerSettingsService;
   const secrets = yield* SecretResolver.SecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-  const readManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
-    config: UsageLimitSourceConfig,
-  ) {
-    const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
-    return settingsSecretLiteral(resolved.managementKey);
-  });
+  const serviceScope = yield* Effect.scope;
+  const readManagementKey = (config: UsageLimitSourceConfig) =>
+    readSourceManagementKey(secrets, config);
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
@@ -121,6 +133,7 @@ export const make = Effect.gen(function* () {
       id,
       kind: config.kind,
       label: sourceLabel(id, config),
+      url: config.url,
       ...(url && /^https?:$/.test(url.protocol)
         ? {
             origin: url.origin,
@@ -154,7 +167,8 @@ export const make = Effect.gen(function* () {
 
   // Serialize refreshes so slow old-settings reads cannot resurrect removed sources after newer refreshes.
   const refreshLock = yield* Semaphore.make(1);
-  const refresh = Effect.gen(function* () {
+  let queuedRefresh: Deferred.Deferred<void> | null = null;
+  const runRefresh = Effect.gen(function* () {
     const settings = yield* settingsService.getSettings.pipe(
       Effect.orElseSucceed((): ServerSettings | null => null),
     );
@@ -167,7 +181,30 @@ export const make = Effect.gen(function* () {
       { concurrency: 4 },
     );
     yield* publish(keepLastGoodReadings(yield* Ref.get(stateRef), snapshots));
-  }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
+  }).pipe(Effect.ignoreCause({ log: true }));
+
+  // Coalesce concurrent callers into at most one queued follow-up on the service scope.
+  const refresh: Effect.Effect<void> = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      let pending = queuedRefresh;
+      if (pending === null) {
+        const candidate = Deferred.makeUnsafe<void>();
+        queuedRefresh = candidate;
+        pending = candidate;
+        const release = () => {
+          if (queuedRefresh === candidate) queuedRefresh = null;
+        };
+        const fiber = yield* refreshLock
+          .withPermits(1)(Effect.sync(release).pipe(Effect.andThen(runRefresh)))
+          .pipe(Effect.forkIn(serviceScope, { startImmediately: true }));
+        fiber.addObserver(() => {
+          release();
+          Deferred.doneUnsafe(candidate, Effect.void);
+        });
+      }
+      yield* restore(Deferred.await(pending));
+    }),
+  );
 
   // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
   const consumeResetCredit = Effect.fn("UsageLimitSources.consumeResetCredit")(function* (
@@ -197,6 +234,49 @@ export const make = Effect.gen(function* () {
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
     return result;
   }, refreshLock.withPermits(1));
+
+  const notifyResetCreditConsumed = Effect.fn("UsageLimitSources.notifyResetCreditConsumed")(
+    function* (
+      provider: Pick<ServerProvider, "driver" | "auth">,
+      outcome: ProviderConsumeResetCreditOutcome,
+    ): Effect.fn.Return<ProviderConsumeResetCreditResult> {
+      const workspaceId = provider.auth.workspaceId?.trim();
+      if (
+        provider.driver !== "codex" ||
+        !workspaceId ||
+        (outcome !== "reset" && outcome !== "alreadyRedeemed")
+      ) {
+        return { outcome };
+      }
+      const failed = yield* Effect.gen(function* () {
+        const settings = yield* settingsService.getSettings;
+        const results = yield* Effect.forEach(
+          Object.values(settings.usageLimitSources).filter((config) => config.enabled),
+          (config) =>
+            readManagementKey(config).pipe(
+              Effect.flatMap((managementKey) =>
+                managementKey.length === 0
+                  ? Effect.void
+                  : api.clearAccountCooldowns({ url: config.url, managementKey }, workspaceId),
+              ),
+              Effect.result,
+            ),
+          { concurrency: 4 },
+        );
+        return results.some((result) => result._tag === "Failure");
+      }).pipe(Effect.orElseSucceed(() => true));
+      yield* refresh;
+      return {
+        outcome,
+        ...(failed
+          ? {
+              warning:
+                "Credit redeemed, but some hub cooldowns could not be cleared. Routing may resume after their cooldowns expire.",
+            }
+          : {}),
+      };
+    },
+  );
 
   yield* settingsService.streamChanges.pipe(
     Stream.map((settings) => settings.usageLimitSources),
@@ -230,6 +310,7 @@ export const make = Effect.gen(function* () {
   return {
     current: Ref.get(stateRef),
     consumeResetCredit,
+    notifyResetCreditConsumed,
     refresh,
     get streamChanges() {
       return Stream.unwrap(

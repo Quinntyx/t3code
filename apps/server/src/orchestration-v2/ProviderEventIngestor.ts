@@ -16,24 +16,27 @@ import {
   RunAttemptId,
   RunId,
   type RuntimeRequestId,
+  type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
 import {
   ProviderTurnAnalytics,
   type ProviderTurnAnalyticsContext,
 } from "../telemetry/ProviderUsageAnalytics.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -257,9 +260,29 @@ export const layer: Layer.Layer<
     const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-    const usageLimitResets = yield* UsageLimitResetFallback;
+    const usageLimitResets = yield* UsageLimitSources.UsageLimitResetFallback;
+    const usageSources = Option.getOrUndefined(
+      yield* Effect.serviceOption(UsageLimitSources.UsageLimitSources),
+    );
     const scope = yield* Effect.scope;
     const completedTurnAnalytics = new Set<string>();
+
+    const fallbackUsageLimitResetAt = Effect.fnUntraced(function* (
+      snapshot: ServerProvider | undefined,
+      occurredAt: DateTime.Utc,
+      model: string | undefined,
+    ) {
+      const now = DateTime.toEpochMillis(occurredAt);
+      return (
+        usageLimitResetAt(snapshot, now, model) ??
+        usageLimitSourceResetAt(
+          usageSources ? yield* usageSources.current : [],
+          snapshot,
+          now,
+          model,
+        )
+      );
+    });
 
     const makeDomainEvent =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -272,6 +295,7 @@ export const layer: Layer.Layer<
           readonly runId?: RunId | null;
           readonly nodeId?: NodeId | null;
           readonly occurredAt?: DateTime.Utc;
+          readonly skipUsageLimitResetFallback?: boolean;
         },
       ) {
         const threadId = payloadInput.threadId ?? input.threadId;
@@ -280,6 +304,21 @@ export const layer: Layer.Layer<
           providerSessionId: input.providerSessionId,
         });
         const occurredAt = payloadInput.occurredAt ?? (yield* DateTime.now);
+        let payload = payloadInput.payload;
+        if (
+          payloadInput.skipUsageLimitResetFallback !== true &&
+          payloadInput.type === "turn-item.updated" &&
+          "type" in payload &&
+          payload.type === "error" &&
+          payload.failure.class === "usage_limit" &&
+          payload.failure.resetAt == null
+        ) {
+          const instance = yield* instances.getInstance(input.providerInstanceId);
+          const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
+          const model = input.analyticsContext?.modelSelection.model;
+          const resetAt = yield* fallbackUsageLimitResetAt(snapshot, occurredAt, model);
+          if (resetAt !== null) payload = { ...payload, failure: { ...payload.failure, resetAt } };
+        }
         return yield* decodeDomainEvent(
           compactUndefined({
             id: eventId,
@@ -291,7 +330,7 @@ export const layer: Layer.Layer<
             providerInstanceId: input.providerInstanceId,
             rawEventId: input.rawEventId,
             occurredAt,
-            payload: payloadInput.payload,
+            payload,
           }),
         );
       });
@@ -656,7 +695,7 @@ export const layer: Layer.Layer<
             case "prompt_suggestion.updated":
               // The session manager serves these to clients before ingestion.
               return [];
-            case "turn.terminal":
+            case "turn.terminal": {
               const dismissed = yield* dismissNativeUserInputs(
                 input,
                 input.event.providerTurnId,
@@ -671,17 +710,20 @@ export const layer: Layer.Layer<
                 ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
                 : input.event.failure;
               // A proxied CLI can drop the reset time; the hub still knows when its pool refills.
-              const endpoint =
-                reported.class === "usage_limit" && reported.resetAt == null
-                  ? (yield* Effect.flatMap(
-                      instances.getInstance(input.providerInstanceId),
-                      (instance) => instance?.snapshot.getSnapshot ?? Effect.undefined,
-                    ))?.auth.endpoint
-                  : undefined;
-              const hubResetAt =
-                endpoint === undefined
-                  ? null
-                  : yield* Effect.gen(function* () {
+              const needsUsageLimitReset =
+                reported.class === "usage_limit" && reported.resetAt == null;
+              const snapshot = needsUsageLimitReset
+                ? yield* Effect.flatMap(
+                    instances.getInstance(input.providerInstanceId),
+                    (instance) => instance?.snapshot.getSnapshot ?? Effect.undefined,
+                  )
+                : undefined;
+              const endpoint = snapshot?.auth.endpoint;
+              const failingModel =
+                needsUsageLimitReset &&
+                (endpoint !== undefined ||
+                  input.analyticsContext?.modelSelection.model === undefined)
+                  ? yield* Effect.gen(function* () {
                       // The failing run's model, which may differ from a selection changed mid-turn.
                       const { runs } =
                         input.runId === undefined
@@ -693,17 +735,26 @@ export const layer: Layer.Layer<
                         runs[0]?.modelSelection ??
                         (yield* projections.getThread(input.threadId)).modelSelection
                       ).model;
-                    }).pipe(
-                      Effect.orElseSucceed(() => null),
-                      Effect.flatMap((model) =>
-                        usageLimitResets.resetAt(input.event.driver, endpoint, model),
-                      ),
-                    );
-              const failure = hubResetAt === null ? reported : { ...reported, resetAt: hubResetAt };
+                    }).pipe(Effect.orElseSucceed(() => null))
+                  : null;
+              const hubResetAt =
+                endpoint === undefined
+                  ? null
+                  : yield* usageLimitResets.resetAt(input.event.driver, endpoint, failingModel);
+              const resetAt = needsUsageLimitReset
+                ? (hubResetAt ??
+                  (yield* fallbackUsageLimitResetAt(
+                    snapshot,
+                    occurredAt,
+                    input.analyticsContext?.modelSelection.model ?? failingModel ?? undefined,
+                  )))
+                : null;
+              const failure = resetAt === null ? reported : { ...reported, resetAt };
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {
                   type: "turn-item.updated",
+                  skipUsageLimitResetFallback: needsUsageLimitReset,
                   payload: makeProviderFailureTurnItem({
                     driver: input.event.driver,
                     threadId: input.threadId,
@@ -721,6 +772,7 @@ export const layer: Layer.Layer<
                   }),
                 }),
               ];
+            }
           }
         },
         (effect, input) =>
@@ -796,11 +848,14 @@ export const layer: Layer.Layer<
                   )
                     return;
                   const instance = yield* instances.getInstance(input.providerInstanceId);
-                  if (!instance?.snapshot.refreshUsage) return;
-                  yield* instance.snapshot.refreshUsage.pipe(
-                    Effect.ignoreCause({ log: true }),
-                    Effect.forkIn(scope, { startImmediately: true }),
-                  );
+                  yield* Effect.forEach(
+                    [
+                      instance?.snapshot.refreshUsage ?? Effect.void,
+                      usageSources?.refresh ?? Effect.void,
+                    ],
+                    (refresh) => refresh.pipe(Effect.ignoreCause({ log: true })),
+                    { concurrency: "unbounded", discard: true },
+                  ).pipe(Effect.forkIn(scope, { startImmediately: true }));
                 }),
               ),
               Effect.flatMap((storedEvents) =>

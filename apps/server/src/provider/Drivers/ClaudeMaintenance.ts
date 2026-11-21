@@ -28,6 +28,7 @@ const update = makePackageManagedProviderMaintenanceResolver({
   provider: ProviderDriverKind.make("claudeAgent"),
   npmPackageName: "@anthropic-ai/claude-code",
   mise: { tool: "claude" },
+  extensionUpdateArgs: ["plugin", "marketplace", "update"],
   nativeUpdate: {
     args: ["update"],
     // On Unix the native launcher links into ${XDG_DATA_HOME:-~/.local/share}/claude/versions; a
@@ -102,12 +103,30 @@ const resolveClaudeMaintenance = Effect.fn("ClaudeMaintenance.resolve")(function
 
 export const makeClaudeMaintenanceResolution = Effect.fn("ClaudeMaintenance.make")(function* (
   options: Parameters<typeof resolveProviderMaintenanceCapabilitiesEffect>[1],
+  // Plugins live in the instance's config directory. The server cwd is $HOME in packaged desktop
+  // builds, where wrappers that scope themselves to their cwd refuse to run.
+  extensions?: { readonly configDir: string; readonly cwd: string },
 ) {
   const services = yield* Effect.context<
     ProviderMaintenanceResolverServices | HttpClient.HttpClient
   >();
   const resolveInstallation = yield* makeCachedProviderMaintenanceResolution(
     resolveProviderMaintenanceCapabilitiesEffect(update, options).pipe(
+      Effect.map((capabilities) =>
+        extensions === undefined || capabilities.updateExtensions === undefined
+          ? capabilities
+          : {
+              ...capabilities,
+              updateExtensions: {
+                ...capabilities.updateExtensions,
+                env: {
+                  ...capabilities.updateExtensions.env,
+                  CLAUDE_CONFIG_DIR: extensions.configDir,
+                },
+                cwd: extensions.cwd,
+              },
+            },
+      ),
       Effect.provideContext(services),
     ),
   );

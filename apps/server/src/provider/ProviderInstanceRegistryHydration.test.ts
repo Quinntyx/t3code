@@ -10,8 +10,10 @@ import {
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -226,6 +228,8 @@ describe("providerHostLayer", () => {
     prefix: "provider-host-hydration-test",
   }).pipe(
     Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    Layer.provideMerge(FetchHttpClient.layer),
+    Layer.provideMerge(Layer.mock(SecretResolver.SecretResolver)({})),
     Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
     Layer.provideMerge(Layer.mock(BackgroundPolicy.BackgroundPolicy)({})),
     Layer.provideMerge(ServerSettingsService.layerTest()),

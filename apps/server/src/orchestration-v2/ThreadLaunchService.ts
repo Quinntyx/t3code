@@ -225,7 +225,9 @@ export class ThreadLaunchService extends Context.Service<
       input: ThreadLaunchInput,
     ) => Effect.Effect<
       ThreadLaunchResult,
-      ThreadLaunchError | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ThreadLaunchError
+      | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ThreadManagement.ThreadManagementDelegationModelDisabledError
     >;
     /** Check a new worktree's base ref and branch name before creation for early errors; launch otherwise accepts and reports these failures inside the thread. */
     readonly checkWorktreeBase: (
@@ -246,8 +248,7 @@ export class ThreadLaunchService extends Context.Service<
       input: ThreadLaunchPreparationInput,
     ) => Effect.Effect<
       Orchestrator.OrchestratorV2DispatchResult,
-      | Orchestrator.OrchestratorV2Error
-      | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      ThreadManagement.ThreadManagementDispatchError
     >;
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
@@ -616,6 +617,7 @@ const make = Effect.gen(function* () {
       );
 
       const requestedBranch = input.workspaceStrategy.branch;
+      let baseBranch: string | null = null;
       const generatedTemporaryBranch =
         input.workspaceStrategy.type === "worktree" && requestedBranch === undefined;
       let branch: string | null;
@@ -807,6 +809,7 @@ const make = Effect.gen(function* () {
           );
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
+        baseBranch = worktree.baseBranch ?? null;
         createdWorktreePath = worktreePath;
         createdBranch = branch;
         yield* setupTracker.update(threadId, (snapshot) => ({
@@ -831,6 +834,7 @@ const make = Effect.gen(function* () {
             threadId,
             branch,
             worktreePath,
+            ...(baseBranch === null ? {} : { baseBranch }),
           })
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }
@@ -1276,6 +1280,9 @@ const make = Effect.gen(function* () {
       }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
+      if (input.delegatedFrom !== undefined) {
+        yield* threads.assertDelegationModelEnabled(input);
+      }
       yield* threads.assertProviderInstanceEnabled({
         projectId: input.projectId,
         commandId: input.commandId,
