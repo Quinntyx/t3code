@@ -1046,6 +1046,19 @@ it.effect("exposes a server's tools when it is enabled after the layer is built"
         );
       expect(result.structuredContent).toEqual({ echoed: "hi" });
       expect(fixtureCalls).toEqual([{ server: "other", name: "echo", args: { text: "hi" } }]);
+
+      // A rename that keeps the exposed name and descriptor still forwards to the new name.
+      yield* Ref.set(activeTools, [{ ...adopted, originalName: "echo.v2" }]);
+      yield* publishChange();
+      yield* awaitReads(1);
+      fixtureCalls.length = 0;
+      yield* server
+        .callTool({ name: "fixture_echo", arguments: { text: "hi" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(fixtureCalls).toEqual([{ server: "other", name: "echo.v2", args: { text: "hi" } }]);
     }),
   ),
 );

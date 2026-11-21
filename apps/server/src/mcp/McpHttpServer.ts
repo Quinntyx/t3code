@@ -1063,6 +1063,7 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
     // What the registration advertises: a tool whose owner or schema changed must be re-added.
     const advertisedKey = (tool: ExternalMcpServers.ExternalMcpTool) =>
       JSON.stringify([
+        tool.originalName,
         tool.descriptor.description,
         tool.descriptor.title,
         tool.descriptor.inputSchema,

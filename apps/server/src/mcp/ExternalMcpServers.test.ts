@@ -431,6 +431,21 @@ it.live("redacts secret launch values from the state sent to clients", () =>
   ),
 );
 
+it.live("redacts a secret that the stderr tail would cut through", () => {
+  const failure = secretFailureEntry("fixture-secret-value");
+  // 1,990 characters after the secret leave only its last 10 inside the 2,000-character tail.
+  const detail = `fixture-secret-value${"x".repeat(1_990)}`;
+  return runTest(
+    [{ ...failure, config: { ...failure.config, FIXTURE_ERROR_DETAIL: detail } }],
+    (servers) =>
+      Effect.gen(function* () {
+        const state = (yield* servers.states).servers[0]!;
+        expect(state.status).toBe("failed");
+        expect(state.stderrTail).not.toContain("cret-value");
+      }),
+  );
+});
+
 /** A child that fails while starting: present, then closed, with its state reported as failed. */
 it.live("stops a child whose startup fails and launches it again once its config changes", () =>
   runTest([entry({ config: { FIXTURE_START_FAILURE: "missing token" } })], (servers) =>

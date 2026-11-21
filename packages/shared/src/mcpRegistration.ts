@@ -425,7 +425,6 @@ const readMcpbFields = (raw: unknown): ReadonlyArray<McpConfigField> =>
     const required = asBoolean(config.required) ?? false;
     // A secret is stored only as a string, so a sensitive field is always a secret string field.
     if (asBoolean(config.sensitive) === true) {
-      const secretDefault = asString(config.default);
       return [
         {
           key,
@@ -435,7 +434,7 @@ const readMcpbFields = (raw: unknown): ReadonlyArray<McpConfigField> =>
           type: "string" as const,
           required,
           secret: true,
-          ...(secretDefault === undefined ? {} : { default: secretDefault }),
+          ...(defaultValue === undefined ? {} : { default: defaultValue }),
           ...(asBoolean(config.multiple) === true ? { multiple: true } : {}),
         },
       ];
