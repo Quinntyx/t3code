@@ -502,7 +502,7 @@ it.effect("routes requests for background threads through an environment-level h
   }),
 );
 
-it.effect("never routes a provider session to a host from another environment", () =>
+it.effect("never routes a thread to a host from another environment", () =>
   Effect.gen(function* () {
     const broker = yield* makeBroker;
     const matchingRequests = requestsFrom(
@@ -542,7 +542,7 @@ it.effect("never routes a provider session to a host from another environment", 
   }),
 );
 
-it.effect("pins a provider session to its initial host despite later focus changes", () =>
+it.effect("pins a thread to its initial host despite later focus changes", () =>
   Effect.gen(function* () {
     const broker = yield* makeBroker;
     let firstConnectionId = "";
@@ -596,7 +596,11 @@ it.effect("pins a provider session to its initial host despite later focus chang
 
     const firstPinnedScope = {
       ...scope,
-      thread: { ...scope.thread, providerSessionId: "provider-session-first-pinned" },
+      thread: {
+        ...scope.thread,
+        threadId: ThreadId.make("thread-first-pinned"),
+        providerSessionId: "provider-session-first-pinned",
+      },
     };
     expect(
       yield* broker.invoke<string>({ scope: firstPinnedScope, operation: "status", input: {} }),
@@ -616,7 +620,11 @@ it.effect("pins a provider session to its initial host despite later focus chang
       yield* broker.invoke<string>({
         scope: {
           ...scope,
-          thread: { ...scope.thread, providerSessionId: "provider-session-second-pinned" },
+          thread: {
+            ...scope.thread,
+            threadId: ThreadId.make("thread-second-pinned"),
+            providerSessionId: "provider-session-second-pinned",
+          },
         },
         operation: "status",
         input: {},
@@ -625,7 +633,7 @@ it.effect("pins a provider session to its initial host despite later focus chang
   }),
 );
 
-it.effect("prefers the live tab owner for new sessions without moving existing leases", () =>
+it.effect("prefers the live tab owner for new threads without moving existing leases", () =>
   Effect.gen(function* () {
     const broker = yield* makeBroker;
     const connections = new Map<string, string>();
@@ -644,6 +652,9 @@ it.effect("prefers the live tab owner for new sessions without moving existing l
       ).pipe(Effect.forkScoped);
     }
     yield* Effect.yieldNow;
+    const explicitOwnerThreadId = ThreadId.make("thread-explicit-owner");
+    const anotherThreadId = ThreadId.make("another-thread");
+    const hiddenTabThreadId = ThreadId.make("thread-after-tab-closed");
     yield* broker.focusHost({
       clientId: "owner",
       environmentId: scope.environmentId,
@@ -651,6 +662,7 @@ it.effect("prefers the live tab owner for new sessions without moving existing l
       focused: false,
       liveTabs: [
         { threadId: scope.thread.threadId, tabId: PreviewTabId.make("signed-in"), visible: true },
+        { threadId: explicitOwnerThreadId, tabId: PreviewTabId.make("signed-in"), visible: true },
       ],
     });
     yield* broker.focusHost({
@@ -665,16 +677,28 @@ it.effect("prefers the live tab owner for new sessions without moving existing l
           visible: false,
         },
         {
-          threadId: ThreadId.make("another-thread"),
+          threadId: anotherThreadId,
           tabId: PreviewTabId.make("different-tab"),
           visible: true,
+        },
+        {
+          threadId: hiddenTabThreadId,
+          tabId: PreviewTabId.make("signed-in"),
+          visible: false,
         },
       ],
     });
     expect(yield* broker.invoke<string>({ scope, operation: "evaluate", input: {} })).toBe("owner");
     expect(
       yield* broker.invoke<string>({
-        scope: { ...scope, thread: { ...scope.thread, providerSessionId: "explicit-owner" } },
+        scope: {
+          ...scope,
+          thread: {
+            ...scope.thread,
+            threadId: explicitOwnerThreadId,
+            providerSessionId: "explicit-owner",
+          },
+        },
         tabId: PreviewTabId.make("signed-in"),
         operation: "snapshot",
         input: {},
@@ -682,7 +706,14 @@ it.effect("prefers the live tab owner for new sessions without moving existing l
     ).toBe("owner");
     expect(
       yield* broker.invoke<string>({
-        scope: { ...scope, thread: { ...scope.thread, providerSessionId: "other-tab" } },
+        scope: {
+          ...scope,
+          thread: {
+            ...scope.thread,
+            threadId: anotherThreadId,
+            providerSessionId: "other-tab",
+          },
+        },
         tabId: PreviewTabId.make("different-tab"),
         operation: "evaluate",
         input: {},
@@ -696,10 +727,40 @@ it.effect("prefers the live tab owner for new sessions without moving existing l
       focused: false,
       liveTabs: [],
     });
+    // owner is unfocused with no live tabs while other is focused with scope's hidden tab; only the lease keeps scope on owner.
     expect(yield* broker.invoke<string>({ scope, operation: "evaluate", input: {} })).toBe("owner");
+
+    yield* broker.focusHost({
+      clientId: "other",
+      environmentId: scope.environmentId,
+      connectionId: connections.get("other")!,
+      focused: false,
+      liveTabs: [
+        {
+          threadId: hiddenTabThreadId,
+          tabId: PreviewTabId.make("signed-in"),
+          visible: false,
+        },
+      ],
+    });
+    yield* broker.focusHost({
+      clientId: "owner",
+      environmentId: scope.environmentId,
+      connectionId: connections.get("owner")!,
+      focused: true,
+      liveTabs: [],
+    });
+    // owner is now focused, so hiddenTabThreadId routes to other only because other owns its hidden tab.
     expect(
       yield* broker.invoke<string>({
-        scope: { ...scope, thread: { ...scope.thread, providerSessionId: "after-tab-closed" } },
+        scope: {
+          ...scope,
+          thread: {
+            ...scope.thread,
+            threadId: hiddenTabThreadId,
+            providerSessionId: "after-tab-closed",
+          },
+        },
         operation: "evaluate",
         input: {},
       }),
@@ -1108,4 +1169,58 @@ it.effect("keeps each thread's current tab when threads share a provider session
     ]);
     expect(routed[0]!.agentSessionId).not.toBe(routed[1]!.agentSessionId);
   }),
+);
+
+it.effect(
+  "keeps a thread's host lease, current tab, and ownership key across provider session restarts",
+  () =>
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const connections = new Map<string, string>();
+      const routed: Array<{ clientId: string; request: RoutedRequest }> = [];
+      for (const clientId of ["client-first", "client-second"]) {
+        const requests = requestsFrom(
+          yield* broker.connect(makeHost({ clientId })),
+          (connectionId) => connections.set(clientId, connectionId),
+        );
+        yield* Stream.runForEach(requests, (request) => {
+          routed.push({ clientId, request });
+          return broker.respond({
+            clientId,
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ok: true,
+            result: { tabId: request.tabId ?? PreviewTabId.make("tab-initial") },
+          });
+        }).pipe(Effect.forkScoped);
+      }
+      yield* Effect.yieldNow;
+      yield* broker.focusHost({
+        clientId: "client-first",
+        environmentId: scope.environmentId,
+        connectionId: connections.get("client-first")!,
+        focused: true,
+      });
+
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+
+      yield* broker.focusHost({
+        clientId: "client-second",
+        environmentId: scope.environmentId,
+        connectionId: connections.get("client-second")!,
+        focused: true,
+      });
+
+      const restartedScope = {
+        ...scope,
+        thread: { ...scope.thread, providerSessionId: "provider-session-restarted" },
+      };
+      yield* broker.invoke({ scope: restartedScope, operation: "snapshot", input: {} });
+
+      expect(routed).toHaveLength(2);
+      expect(routed[0]!.clientId).toBe("client-first");
+      expect(routed[1]!.clientId).toBe("client-first");
+      expect(routed[1]!.request.tabId).toBe("tab-initial");
+      expect(routed[1]!.request.agentSessionId).toBe(routed[0]!.request.agentSessionId);
+    }),
 );
