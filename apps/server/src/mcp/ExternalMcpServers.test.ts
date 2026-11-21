@@ -21,6 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
 import * as ExternalMcpServers from "./ExternalMcpServers.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -71,6 +72,33 @@ const entry = (overrides: Partial<Entry> = {}): Entry => ({
   ...overrides,
 });
 
+/** A server whose start failure echoes its secret config value to stderr. */
+const secretFailureEntry = (secret: string): Entry => {
+  const source = entry().source;
+  if (source.kind !== "server.json") throw new Error("unreachable");
+  const document = source.document as {
+    packages: ReadonlyArray<{
+      environmentVariables: ReadonlyArray<unknown>;
+    }>;
+  };
+  return entry({
+    config: { FIXTURE_START_FAILURE: secret },
+    source: {
+      kind: "server.json",
+      document: {
+        ...document,
+        packages: document.packages.map((pkg) => ({
+          ...pkg,
+          environmentVariables: [
+            ...pkg.environmentVariables,
+            { name: "FIXTURE_START_FAILURE", isSecret: true },
+          ],
+        })),
+      },
+    },
+  });
+};
+
 /** Settings that publish each write, as the real service does. */
 const layerTestSettings = (initial: ReadonlyArray<Entry>) =>
   Layer.effect(
@@ -93,14 +121,7 @@ const layerTestSettings = (initial: ReadonlyArray<Entry>) =>
         getSettings: Ref.get(settings),
         updateSettings: (patch) =>
           Ref.get(settings).pipe(
-            Effect.flatMap((current) =>
-              publish({
-                ...current,
-                ...(patch.registeredMcpServers === undefined
-                  ? {}
-                  : { registeredMcpServers: patch.registeredMcpServers }),
-              }),
-            ),
+            Effect.flatMap((current) => publish(applyServerSettingsPatch(current, patch))),
           ),
         updateProviderInstance: () => Effect.die("unused"),
         withSettingsSnapshot: (use) => Ref.get(settings).pipe(Effect.flatMap(use)),
@@ -219,7 +240,9 @@ it.live("disabling a server stops its child and withdraws its tools", () =>
     Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
       const stopped = yield* Effect.forkScoped(watcher(servers));
-      yield* settings.updateSettings({ registeredMcpServers: [entry({ enabled: false })] });
+      yield* settings.updateSettings({
+        registeredMcpServers: { fixture: entry({ enabled: false }) },
+      });
       yield* Fiber.join(stopped);
 
       expect((yield* servers.states).servers).toEqual([
@@ -253,13 +276,25 @@ it.live("records a crash with its stderr instead of restarting", () =>
       const settings = yield* ServerSettings.ServerSettingsService;
       const restarted = yield* Effect.forkScoped(watcher(servers));
       yield* settings.updateSettings({
-        registeredMcpServers: [entry({ config: { RETRY: "1" } })],
+        registeredMcpServers: { fixture: entry({ config: { RETRY: "1" } }) },
       });
       yield* Fiber.join(restarted);
       expect((yield* servers.states).servers).toEqual([
         expect.objectContaining({ id: "fixture", status: "running" }),
       ]);
       expect(yield* servers.tools).toHaveLength(3);
+    }),
+  ),
+);
+
+it.live("redacts secret launch values from the state sent to clients", () =>
+  runTest([secretFailureEntry("fixture-secret-value")], (servers) =>
+    Effect.gen(function* () {
+      const state = (yield* servers.states).servers[0]!;
+      expect(state.status).toBe("failed");
+      expect(state.stderrTail).toContain("fixture cannot start");
+      expect(state.stderrTail).not.toContain("fixture-secret-value");
+      expect(state.stderrTail).toContain("••••••");
     }),
   ),
 );
@@ -278,7 +313,9 @@ it.live("stops a child whose startup fails and launches it again once its config
 
       // Unchanged config is not a reason to try again, and nothing changes, so nothing is announced.
       yield* settings.updateSettings({
-        registeredMcpServers: [entry({ config: { FIXTURE_START_FAILURE: "missing token" } })],
+        registeredMcpServers: {
+          fixture: entry({ config: { FIXTURE_START_FAILURE: "missing token" } }),
+        },
       });
       expect((yield* servers.states).servers).toEqual([
         expect.objectContaining({ status: "failed" }),
@@ -286,7 +323,7 @@ it.live("stops a child whose startup fails and launches it again once its config
 
       // Supplying the value the server asked for is what a failed start waits for.
       const started = yield* Effect.forkScoped(watcher(servers));
-      yield* settings.updateSettings({ registeredMcpServers: [entry()] });
+      yield* settings.updateSettings({ registeredMcpServers: { fixture: entry() } });
       yield* Fiber.join(started);
       expect((yield* servers.states).servers).toEqual([
         expect.objectContaining({ id: "fixture", status: "running" }),
@@ -410,7 +447,7 @@ it.live("leaves a replacement's state alone when the crashed child's cleanup out
       // A settings change arrives while that cleanup waits. Its reconcile may not replace the
       // child behind the crash handler's back, so the crash's own state is what lands first.
       yield* settings.updateSettings({
-        registeredMcpServers: [entry({ config: { RETRY: "1" } })],
+        registeredMcpServers: { fixture: entry({ config: { RETRY: "1" } }) },
       });
       yield* Deferred.succeed(holdStop, undefined);
 

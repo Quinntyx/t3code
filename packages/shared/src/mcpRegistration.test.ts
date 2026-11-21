@@ -27,6 +27,14 @@ const npmPackage = {
   ],
   packageArguments: [{ type: "named", name: "--cache", value: "{TEAM_NOTES_HOME}" }],
 };
+const stdioPackage = (overrides: Record<string, unknown> = {}) => ({
+  registryType: "npm",
+  identifier: "@acme/notes-mcp",
+  version: "1.4.2",
+  transport: { type: "stdio" },
+  ...overrides,
+});
+
 const mcpbManifest = {
   manifest_version: "0.2",
   name: "acme-notes",
@@ -323,6 +331,108 @@ describe("parseMcpRegistration", () => {
       ],
     },
     {
+      label: "a server.json variable with a number or boolean format",
+      source: serverJson([
+        stdioPackage({
+          environmentVariables: [
+            { name: "NOTES_RETRIES", format: "number", default: "3" },
+            { name: "NOTES_VERBOSE", format: "boolean" },
+          ],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "NOTES_RETRIES",
+          label: "NOTES_RETRIES",
+          type: "number",
+          required: false,
+          secret: false,
+          default: "3",
+        },
+        {
+          key: "NOTES_VERBOSE",
+          label: "NOTES_VERBOSE",
+          type: "boolean",
+          required: false,
+          secret: false,
+        },
+      ],
+    },
+    {
+      label: "a server.json argument declared only by its secret flag",
+      source: serverJson([
+        stdioPackage({
+          packageArguments: [{ type: "named", name: "--token", isSecret: true }],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "token",
+          label: "Token",
+          type: "string",
+          required: false,
+          secret: true,
+          description: "Value for --token (package argument 1).",
+        },
+      ],
+    },
+    {
+      label: "a server.json supplied argument's default, choices and format",
+      source: serverJson([
+        stdioPackage({
+          packageArguments: [
+            {
+              type: "positional",
+              valueHint: "notes_mode",
+              description: "Mode to run in.",
+              default: "fast",
+              choices: ["fast", "slow"],
+              format: "string",
+            },
+          ],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "argument_1",
+          label: "Notes Mode",
+          type: "choice",
+          required: false,
+          secret: false,
+          description: "Mode to run in.",
+          default: "fast",
+          choices: ["fast", "slow"],
+        },
+      ],
+    },
+    {
+      label: "a repeated server.json argument",
+      source: serverJson([
+        stdioPackage({
+          packageArguments: [{ type: "positional", valueHint: "directory", isRepeated: true }],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "argument_1",
+          label: "Directory",
+          type: "string",
+          required: false,
+          secret: false,
+          multiple: true,
+          description: "Positional value 1.",
+        },
+      ],
+    },
+    {
       label: "a server.json variable declared secret by only one of its inputs",
       source: serverJson([
         {
@@ -377,6 +487,60 @@ describe("parseMcpRegistration", () => {
       message: "Unsupported package registryType nuget",
     },
     {
+      label: "a package with a custom registry",
+      source: serverJson([stdioPackage({ registryBaseUrl: "https://registry.example.test" })]),
+      message: "registryBaseUrl is not supported",
+    },
+    {
+      label: "a repeated argument with a fixed value",
+      source: serverJson([
+        stdioPackage({
+          packageArguments: [{ type: "positional", value: "fixed", isRepeated: true }],
+        }),
+      ]),
+      message: "A repeated argument with a fixed value or variables is not supported",
+    },
+    {
+      label: "a package with no transport",
+      source: serverJson([{ registryType: "npm", identifier: "@acme/notes-mcp" }]),
+      message: "no declared transport",
+    },
+    {
+      label: "an MCPB user_config type this T3 does not know",
+      source: {
+        ...mcpbManifest,
+        user_config: { colour: { type: "colour", title: "Colour" } },
+      },
+      message: "Unsupported user_config type",
+    },
+    {
+      label: "an MCPB config naming a user_config key that does not exist",
+      source: {
+        ...mcpbManifest,
+        server: {
+          mcp_config: { command: "node", args: ["${user_config.missing}"], env: {} },
+        },
+      },
+      message: "Unknown user_config key missing",
+    },
+    {
+      label: "a bare MCPB user_config substitution",
+      source: {
+        ...mcpbManifest,
+        server: { mcp_config: { command: "node", args: ["${user_config}"], env: {} } },
+      },
+      message: "Bare ${user_config} substitution is not supported",
+    },
+    {
+      label: "an MCPB uv server without a command",
+      source: {
+        manifest_version: "0.4",
+        name: "uv-notes",
+        server: { type: "uv", entry_point: "src/server.py" },
+      },
+      message: "uv",
+    },
+    {
       label: "a document that names nothing",
       source: { hello: "world" },
       message: "server.json has no name",
@@ -391,6 +555,112 @@ describe("parseMcpRegistration", () => {
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.message).toContain(message);
+  });
+
+  it.each([
+    {
+      label: "file and directory fields with array defaults",
+      source: {
+        name: "notes",
+        server: {
+          mcp_config: { command: "node", args: ["index.js", "${user_config.roots}"], env: {} },
+        },
+        user_config: {
+          database: { type: "file", title: "Database", required: true },
+          roots: {
+            type: "directory",
+            title: "Roots",
+            multiple: true,
+            default: ["${HOME}/Notes", "${HOME}/Archive"],
+          },
+        },
+      },
+      expectedFields: [
+        {
+          key: "database",
+          label: "Database",
+          type: "path",
+          required: true,
+          secret: false,
+        },
+        {
+          key: "roots",
+          label: "Roots",
+          type: "path",
+          required: false,
+          secret: false,
+          multiple: true,
+          default: ["${HOME}/Notes", "${HOME}/Archive"],
+        },
+      ],
+    },
+    {
+      label: "platform overrides without changing the user config",
+      source: {
+        ...mcpbManifest,
+        server: {
+          mcp_config: {
+            ...mcpbManifest.server.mcp_config,
+            platform_overrides: { win32: { command: "node.exe" } },
+          },
+        },
+      },
+      expectedFields: [
+        {
+          key: "data_dir",
+          label: "Data folder",
+          type: "path",
+          required: true,
+          secret: false,
+          description: "Where notes live.",
+        },
+        {
+          key: "token",
+          label: "API token",
+          type: "string",
+          required: true,
+          secret: true,
+        },
+        {
+          key: "retries",
+          label: "Retries",
+          type: "number",
+          required: false,
+          secret: false,
+          default: 3,
+          min: 0,
+          max: 10,
+        },
+        {
+          key: "verbose",
+          label: "Verbose logging",
+          type: "boolean",
+          required: false,
+          secret: false,
+        },
+        {
+          key: "labels",
+          label: "Labels",
+          type: "string",
+          required: false,
+          secret: false,
+          multiple: true,
+        },
+        {
+          key: "quota",
+          label: "Quota",
+          type: "string",
+          required: false,
+          secret: true,
+        },
+      ],
+    },
+  ])("reads MCPB: $label", ({ source, expectedFields }) => {
+    const parsed = parseMcpRegistration(source);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.registration.sourceKind).toBe("mcpb");
+    expect(parsed.registration.fields).toEqual(expectedFields);
   });
 });
 
@@ -583,6 +853,188 @@ describe("resolveMcpLaunch", () => {
       ok: false,
       message: "Set TEAM_NOTES_TOKEN before this MCP server can start.",
     });
+  });
+
+  it.each([
+    {
+      label: "a repeated positional argument expands each value",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [{ type: "positional", valueHint: "directory", isRepeated: true }],
+          }),
+        ]),
+      },
+      config: { argument_1: ["/a", "/b c"] },
+      expected: {
+        command: "npx",
+        args: ["-y", "@acme/notes-mcp@1.4.2", "/a", "/b c"],
+        env: {},
+      },
+    },
+    {
+      label: "a repeated named argument repeats its flag",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [
+              { type: "named", name: "--mount", valueHint: "volume", isRepeated: true },
+            ],
+          }),
+        ]),
+      },
+      config: { mount: ["a", "b"] },
+      expected: {
+        command: "npx",
+        args: ["-y", "@acme/notes-mcp@1.4.2", "--mount", "a", "--mount", "b"],
+        env: {},
+      },
+    },
+    {
+      label: "a repeated argument restored as text still expands",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [
+              { type: "named", name: "--mount", valueHint: "volume", isRepeated: true },
+            ],
+          }),
+        ]),
+      },
+      config: { mount: "a,b" },
+      expected: {
+        command: "npx",
+        args: ["-y", "@acme/notes-mcp@1.4.2", "--mount", "a", "--mount", "b"],
+        env: {},
+      },
+    },
+    {
+      label: "a runtime hint replaces the default runner",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([stdioPackage({ runtimeHint: "npx" })]),
+      },
+      config: {},
+      expected: { command: "npx", args: ["@acme/notes-mcp@1.4.2"], env: {} },
+    },
+  ])("launches server.json: $label", ({ source, config, expected }) => {
+    expect(resolveMcpLaunch({ source, config })).toEqual({ ok: true, launch: expected });
+  });
+
+  const mcpbManifestFor = (mcpConfig: Record<string, unknown>, userConfig: unknown = {}) => ({
+    name: "notes",
+    server: { mcp_config: mcpConfig },
+    user_config: userConfig,
+  });
+
+  it.each([
+    {
+      label: "MCPB path substitutions",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor({
+          command: "node",
+          args: [
+            "${__dirname}/index.js",
+            "${HOME}",
+            "${DESKTOP}",
+            "${DOCUMENTS}",
+            "${DOWNLOADS}",
+            "${pathSeparator}",
+            "${/}",
+          ],
+          env: {},
+        }),
+        bundleDir: "/bundle",
+      },
+      config: {},
+      options: { home: "/home/user", platform: "linux" },
+      expected: {
+        command: "node",
+        args: [
+          "/bundle/index.js",
+          "/home/user",
+          "/home/user/Desktop",
+          "/home/user/Documents",
+          "/home/user/Downloads",
+          "/",
+          "/",
+        ],
+        env: {},
+      },
+    },
+    {
+      label: "user config defaults substitute and arrays expand",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor(
+          {
+            command: "node",
+            args: ["index.js", "${user_config.dirs}"],
+            env: { TOKEN: "${user_config.token}" },
+          },
+          {
+            dirs: {
+              type: "directory",
+              multiple: true,
+              default: ["${HOME}/Notes", "${HOME}/Archive"],
+            },
+            token: { type: "string", sensitive: true, default: "literal-token" },
+          },
+        ),
+        bundleDir: "/bundle",
+      },
+      config: {},
+      options: { home: "/home/user" },
+      expected: {
+        command: "node",
+        args: ["index.js", "/home/user/Notes", "/home/user/Archive"],
+        env: { TOKEN: "literal-token" },
+      },
+    },
+    {
+      label: "a platform override applies on its platform",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor({
+          command: "node",
+          args: ["base.js"],
+          env: { MODE: "base" },
+          platform_overrides: {
+            win32: { command: "node.exe", args: ["win.js"] },
+          },
+        }),
+        bundleDir: "/bundle",
+      },
+      config: {},
+      options: { platform: "win32" },
+      expected: {
+        command: "node.exe",
+        args: ["win.js"],
+        env: { MODE: "base" },
+      },
+    },
+    {
+      label: "an unknown substitution is rejected instead of passed through",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor({ command: "node", args: ["${UNKNOWN}"], env: {} }),
+        bundleDir: "/bundle",
+      },
+      config: {},
+      options: {},
+      message: "Unsupported MCPB substitution: ${UNKNOWN}",
+    },
+  ])("launches MCPB: $label", ({ source, config, options, expected, message }) => {
+    const resolved = resolveMcpLaunch({ source, config }, options);
+    if (message === undefined) {
+      expect(resolved).toEqual({ ok: true, launch: expected });
+    } else {
+      expect(resolved).toEqual({ ok: false, message });
+    }
   });
 });
 

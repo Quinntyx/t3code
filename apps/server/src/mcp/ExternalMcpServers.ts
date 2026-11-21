@@ -1,4 +1,8 @@
-import { resolveMcpLaunch, type McpConfigValue } from "@t3tools/shared/mcpRegistration";
+import {
+  parseMcpRegistration,
+  resolveMcpLaunch,
+  type McpConfigValue,
+} from "@t3tools/shared/mcpRegistration";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   type RegisteredMcpServerEntry,
@@ -26,6 +30,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { McpSchema } from "effect/ai";
 
 import * as ServerSettings from "../serverSettings.ts";
+import { SECRET_REDACTED } from "../settingsSecrets.ts";
 
 const START_TIMEOUT = Duration.seconds(30);
 const CALL_TIMEOUT = Duration.seconds(60);
@@ -56,6 +61,7 @@ interface RunningServer {
     toolName: string,
     args: Readonly<Record<string, unknown>>,
   ) => Effect.Effect<McpSchema.CallToolResult, ExternalMcpServerError>;
+  readonly redact: (text: string) => string;
   readonly scope: Scope.Closeable;
 }
 
@@ -108,6 +114,26 @@ const stderrTailOf = (text: string) => {
 
 const isExternalMcpServerError = Schema.is(ExternalMcpServerError);
 
+/** Anything an entry declares secret can reappear in a child's stderr or a JSON-RPC error. */
+const redactorFor = (entry: RegisteredMcpServerEntry) => {
+  const parsed = parseMcpRegistration(
+    entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
+  );
+  const values = parsed.ok
+    ? parsed.registration.fields.flatMap((field) => {
+        if (!field.secret) return [];
+        const value = entry.config[field.key];
+        if (value === undefined) return [];
+        return Array.isArray(value)
+          ? [...value, value.join(",")].filter((part) => part !== "")
+          : [String(value)].filter((part) => part !== "");
+      })
+    : [];
+  const secrets = [...new Set(values)].sort((left, right) => right.length - left.length);
+  return (text: string) =>
+    secrets.reduce((redacted, secret) => redacted.replaceAll(secret, SECRET_REDACTED), text);
+};
+
 const causeText = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.squash(cause);
   return isExternalMcpServerError(error)
@@ -117,10 +143,10 @@ const causeText = (cause: Cause.Cause<unknown>): string => {
       : stderrTailOf(Cause.pretty(cause));
 };
 
-const launchOf = (entry: RegisteredMcpServerEntry, home: string) =>
+const launchOf = (entry: RegisteredMcpServerEntry, home: string, platform: string) =>
   resolveMcpLaunch(
     { source: entry.source, config: entry.config as Readonly<Record<string, McpConfigValue>> },
-    { home },
+    { home, platform },
   );
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -165,6 +191,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     readonly args: ReadonlyArray<string>;
     readonly env: Readonly<Record<string, string>>;
   },
+  redact: (text: string) => string,
 ) {
   const child = yield* spawner
     .spawn(
@@ -178,7 +205,9 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
       Effect.mapError(
         (cause) =>
           new ExternalMcpServerError({
-            message: `Could not start ${launch.command}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            message: redact(
+              `Could not start ${launch.command}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            ),
           }),
       ),
     );
@@ -226,7 +255,9 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
         })
       : Effect.fail(
           new ExternalMcpServerError({
-            message: reply.error.message ?? `JSON-RPC error ${reply.error.code ?? "unknown"}`,
+            message: redact(
+              reply.error.message ?? `JSON-RPC error ${reply.error.code ?? "unknown"}`,
+            ),
           }),
         );
 
@@ -269,7 +300,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   const recordExit = (detail: string) =>
     Ref.get(stderrTail).pipe(
       Effect.flatMap((tail) =>
-        Deferred.succeed(exited, `${launch.command} ${detail}. ${tail}`.trim()),
+        Deferred.succeed(exited, redact(`${launch.command} ${detail}. ${tail}`.trim())),
       ),
     );
   yield* child.exitCode.pipe(
@@ -300,7 +331,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
           Effect.flatMap(
             (tail) =>
               new ExternalMcpServerError({
-                message: `${launch.command} did not answer initialize. ${tail}`.trim(),
+                message: redact(`${launch.command} did not answer initialize. ${tail}`.trim()),
               }),
           ),
         ),
@@ -323,7 +354,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
         duration: START_TIMEOUT,
         orElse: () =>
           new ExternalMcpServerError({
-            message: `${launch.command} did not list its tools in time.`,
+            message: redact(`${launch.command} did not list its tools in time.`),
           }),
       }),
       Effect.flatMap((reply) =>
@@ -364,7 +395,7 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
         duration: CALL_TIMEOUT,
         orElse: () =>
           new ExternalMcpServerError({
-            message: `${launch.command} did not finish the call in time.`,
+            message: redact(`${launch.command} did not finish the call in time.`),
           }),
       }),
       // Schema decoding converts wire base64 images, audio and blobs; `make` expects them already
@@ -385,6 +416,7 @@ const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   // A Reference: reading it falls back to its default, so nothing has to provide it.
   const home = (yield* HostProcess.HomeDirectory) || HostProcess.HomeDirectory.defaultValue();
+  const platform = yield* HostProcess.Platform;
   // Every child scope hangs off this one, so service teardown stops children that never stopped.
   const serviceScope = yield* Effect.scope;
 
@@ -401,7 +433,7 @@ const make = Effect.gen(function* () {
     const runtime = yield* Ref.get(runtimeStates);
     const servers = (configured?.registeredMcpServers ?? []).map((entry) => {
       const state = runtime.get(entry.id);
-      const stderrTail = state?.stderrTail;
+      const stderrTail = state?.stderrTail && redactorFor(entry)(state.stderrTail);
       const skippedTools = state?.skippedTools;
       return {
         id: entry.id,
@@ -448,12 +480,13 @@ const make = Effect.gen(function* () {
 
   const start = Effect.fn("ExternalMcpServers.start")(function* (entry: RegisteredMcpServerEntry) {
     yield* setState(entry.id, { status: "starting" });
-    const launch = launchOf(entry, home);
-    if (!launch.ok) return yield* new ExternalMcpServerError({ message: launch.message });
+    const redact = redactorFor(entry);
+    const launch = launchOf(entry, home, platform);
+    if (!launch.ok) return yield* new ExternalMcpServerError({ message: redact(launch.message) });
 
     const scope = yield* Scope.fork(serviceScope, "sequential");
     // The child's scope closes on every way out before the child is recorded as running.
-    const connection = yield* connect(spawner, launch.launch).pipe(
+    const connection = yield* connect(spawner, launch.launch, redact).pipe(
       Effect.provideService(Scope.Scope, scope),
       Effect.onError(() => Scope.close(scope, Exit.void)),
     );
@@ -470,6 +503,7 @@ const make = Effect.gen(function* () {
         descriptor,
       })),
       call: connection.callTool,
+      redact,
       scope,
     };
     yield* setState(entry.id, { status: "running", running });
@@ -565,7 +599,7 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           setState(entry.id, {
             status: "failed",
-            stderrTail: causeText(cause),
+            stderrTail: redactorFor(entry)(causeText(cause)),
             failedEntry: entry,
           }).pipe(Effect.andThen(announce)),
         ),
