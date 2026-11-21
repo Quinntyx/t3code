@@ -71,6 +71,8 @@ export function isPullRequestGenerating(thread: PullRequestGenerationKey): boole
 export function isThreadWorking(thread: WorkingThreadInput): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
   if (thread.pendingSubagentRequest != null) return false;
+  // A stalled thread's latest run failed, but the server retries it, so it keeps working.
+  if (thread.runtime?.stalled === true) return true;
   if (!threadRuntimeIsActive(thread.runtime) && thread.runtime?.status !== "idle") return false;
   if (waitingOnAgents(thread)) return true;
   const run = thread.latestRun;

@@ -124,6 +124,12 @@ const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> =
     className: "text-adaptive-sky-600-400",
     iconTintClassName: "accent-adaptive-sky-600-400",
   },
+  stalled: {
+    label: "Stalled",
+    icon: "circle.dashed",
+    className: "text-adaptive-sky-600-400",
+    iconTintClassName: "accent-adaptive-sky-600-400",
+  },
   waiting: {
     label: null,
     icon: "circle.dashed.inset.filled",
@@ -149,6 +155,7 @@ const DELEGATING_STATUS_LABEL: StatusLabel = {
   className: "text-adaptive-sky-600-400",
   iconTintClassName: "accent-adaptive-sky-600-400",
 };
+
 const DONE_STATUS_LABEL: StatusLabel = {
   label: "Done",
   icon: "checkmark.circle",
@@ -1377,7 +1384,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       ) : null}
       <View className="mt-1 flex-row items-center gap-2" style={{ paddingLeft: titleTextInset }}>
-        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
+        {(status === "failed" || status === "limited") &&
+        thread.runtime?.lastError &&
+        thread.runtime.stalled !== true ? (
           <Text
             className={cn(
               "flex-1 text-xs",

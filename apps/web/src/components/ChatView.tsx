@@ -35,6 +35,7 @@ import { useComposerResume } from "./chat/useComposerResume";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
+import { stallRecoveryBannerItem } from "./chat/StallRecoveryBanner";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import { resolveDraftHeroState } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
@@ -834,8 +835,11 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
       true;
+  // A stalled thread resumes on its own, so Resume is not offered while the server retries it.
   const resumableRunId =
-    !isServerThread || serverProjection === null ? null : deriveResumableRunId(serverProjection);
+    !isServerThread || serverProjection === null || serverRuntime?.stalled === true
+      ? null
+      : deriveResumableRunId(serverProjection);
   const parentSubagentThreadId =
     activeThread?.lineage.relationshipToParent === "subagent"
       ? activeThread.lineage.parentThreadId
@@ -1013,8 +1017,11 @@ export default function ChatView(props: ChatViewProps) {
     recovery: activeThreadShell?.limitRecovery,
     snoozedUntil: activeThreadShell?.snoozedUntil,
   });
+  // A stalled thread shows the retry notice in place of its error; there is nothing to fix.
+  const stalled = activeThreadShell?.runtime?.stalled === true;
   const timelineThreadError =
-    limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
+    (limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError) ||
+    (stalled && visibleThreadError === serverRuntime?.lastError)
       ? null
       : visibleThreadError;
 
@@ -2595,6 +2602,25 @@ export default function ChatView(props: ChatViewProps) {
     });
     return item ? [item] : [];
   });
+  const stallRecoveryBanner =
+    stalled && activeThreadShell !== null
+      ? stallRecoveryBannerItem({
+          threadId: activeThreadShell.id,
+          nextAttemptAt: activeThreadShell.runtime?.stallNextAttemptAt ?? null,
+          requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+          timestampFormat,
+          onAction: async (action) => {
+            const result = await updateThreadMetadata({
+              environmentId,
+              input: {
+                threadId: activeThreadShell.id,
+                ...(action === "stop" ? { stallRecovery: null } : { stallRetryNow: true }),
+              },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+        })
+      : null;
   const limitRecoveryBanner =
     limitRecoveryRun !== null && activeThreadShell !== null
       ? usageLimitRecoveryBannerItem({
@@ -2664,6 +2690,7 @@ export default function ChatView(props: ChatViewProps) {
           ]
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const stallRecoveryItems = stallRecoveryBanner === null ? [] : [stallRecoveryBanner];
     const extensionStatusBanner = extensionStatusBannerItem(
       deriveProviderExtensionStatuses(serverProjection),
     );
@@ -2680,6 +2707,7 @@ export default function ChatView(props: ChatViewProps) {
         ...feedbackBannerItems,
         ...fallbackItems,
         ...limitRecoveryItems,
+        ...stallRecoveryItems,
         ...extensionStatusItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -2691,6 +2719,7 @@ export default function ChatView(props: ChatViewProps) {
       ...feedbackBannerItems,
       ...fallbackItems,
       ...limitRecoveryItems,
+      ...stallRecoveryItems,
       ...extensionStatusItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -3544,6 +3573,7 @@ export default function ChatView(props: ChatViewProps) {
                   runs={serverProjection?.runs ?? []}
                   latestRun={activeActivityRun}
                   announcedRun={announcedRun(activeActivityRun, serverProjection?.runs ?? [])}
+                  stalled={activeRuntime?.stalled === true}
                   detailBehindShell={isDetailBehindShell(
                     activeLatestRun,
                     activeThreadShell?.latestRun ?? null,

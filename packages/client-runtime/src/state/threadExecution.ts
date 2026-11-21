@@ -2,6 +2,7 @@ import {
   latestRootProviderFailure,
   latestUnheldRun,
   resumableContinuationRun,
+  stalledRun,
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -18,6 +19,7 @@ import {
   type ServerProviderModel,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2LimitRecovery,
+  isUpstreamOverloadFailure,
   type OrchestrationV2ThreadProjection,
   orchestrationV2RunWorkStartedAt,
   type RunId,
@@ -41,6 +43,7 @@ import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
 import {
+  presentThreadStall,
   threadRuntimeIsActive,
   type ThreadRunSummary,
   type ThreadRuntimeSummary,
@@ -340,6 +343,13 @@ export function deriveThreadStructureRuntime(
   }
   const activeRunId =
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
+  const stalledRunId =
+    capHit === null ? (stalledRun(projection.runs, projection.turnItems)?.id ?? null) : null;
+  const stalled = presentThreadStall({
+    stalled: stalledRunId !== null,
+    runId: stalledRunId,
+    recovery: projection.thread.stallRecovery,
+  });
   return {
     // Active subagents/workflows keep the thread parked in Working (Delegating) and intentionally
     // defer the usage-limit recovery notice until delegated work settles (unless cap-blocked).
@@ -371,10 +381,11 @@ export function deriveThreadStructureRuntime(
           lastErrorCode: "consumption_cap",
           usageLimitResetAt: null,
         }),
+    ...stalled,
   };
 }
 
-export interface UsageLimitNoticeRows {
+export interface NoticeRows {
   readonly itemIds: ReadonlySet<ThreadStructureTurnItem["id"]>;
   /** Hidden only when its text reads as the provider's limit message; see PROVIDER_LIMIT_NOTICE. */
   readonly providerNoticeItemId: ThreadStructureTurnItem["id"] | null;
@@ -389,9 +400,7 @@ const PROVIDER_LIMIT_NOTICE =
  * limit failure, Claude's pause notices, and the provider's own limit message. They return to
  * history once another run executes.
  */
-export function deriveUsageLimitNoticeRows(
-  projection: ThreadStructure,
-): UsageLimitNoticeRows | null {
+export function deriveUsageLimitNoticeRows(projection: ThreadStructure): NoticeRows | null {
   const runtime = deriveThreadStructureRuntime(projection);
   const run = presentedLatestRun(projection);
   if (runtime?.status !== "failed" || runtime.lastErrorClass !== "usage_limit" || run === null) {
@@ -439,7 +448,7 @@ export function deriveUsageLimitNoticeRows(
 
 export function withoutUsageLimitNoticeRows<
   Row extends OrchestrationV2ThreadProjection["visibleTurnItems"][number],
->(rows: ReadonlyArray<Row>, notice: UsageLimitNoticeRows | null): ReadonlyArray<Row> {
+>(rows: ReadonlyArray<Row>, notice: NoticeRows | null): ReadonlyArray<Row> {
   if (notice === null) return rows;
   const hidden = ({ item }: Row) =>
     notice.itemIds.has(item.id) ||
@@ -447,6 +456,61 @@ export function withoutUsageLimitNoticeRows<
       item.type === "assistant_message" &&
       PROVIDER_LIMIT_NOTICE.test(item.text.trim()));
   return rows.some(hidden) ? rows.filter((row) => !hidden(row)) : rows;
+}
+
+/**
+ * The timeline rows that repeat an outage while its retry notice shows: the server's own retry
+ * message for each attempt, and the overload failure of every run in the chain. They return to
+ * history once the thread leaves the stalled state.
+ */
+export function deriveStallNoticeRows(projection: ThreadStructure): NoticeRows | null {
+  const runtime = deriveThreadStructureRuntime(projection);
+  const stalled = stalledRun(projection.runs, projection.turnItems);
+  if (runtime?.stalled !== true || stalled === null) return null;
+  // Follow the retry chain back, so an outage that stalled three times folds as one.
+  const runsById = new Map(projection.runs.map((run) => [run.id, run]));
+  const chain = new Set<RunId>([stalled.id]);
+  const retryRunIds = new Set<RunId>();
+  for (let run = stalled; run.stallContinuationOfRunId !== undefined;) {
+    const previous = runsById.get(run.stallContinuationOfRunId);
+    if (previous === undefined || chain.has(previous.id)) break;
+    chain.add(previous.id);
+    retryRunIds.add(run.id);
+    run = previous;
+  }
+  const itemIds = new Set<ThreadStructureTurnItem["id"]>();
+  for (const item of projection.turnItems) {
+    if (item.runId === null || !chain.has(item.runId)) continue;
+    if (
+      item.type === "error" &&
+      item.status === "failed" &&
+      // Each attempt's overload is a root failure of its own run.
+      item.parentItemId === null &&
+      isUpstreamOverloadFailure(item.failure)
+    ) {
+      itemIds.add(item.id);
+      continue;
+    }
+    // The server's own prompt for a retry arrives as its "resumed" notice; the user sent nothing.
+    if (
+      item.type === "notification" &&
+      item.parentItemId === null &&
+      item.source.kind === "system" &&
+      retryRunIds.has(item.runId)
+    ) {
+      itemIds.add(item.id);
+    }
+  }
+  return { itemIds, providerNoticeItemId: null };
+}
+
+export function withoutStallNoticeRows<
+  Row extends OrchestrationV2ThreadProjection["visibleTurnItems"][number],
+>(rows: ReadonlyArray<Row>, notice: NoticeRows | null): ReadonlyArray<Row> {
+  if (notice === null || notice.itemIds.size === 0) return rows;
+  return rows.some(({ item }) => notice.itemIds.has(item.id))
+    ? rows.filter(({ item }) => !notice.itemIds.has(item.id))
+    : rows;
 }
 
 /** Whether a usage-limit recovery holds the thread's snooze, so its notice offers Wake now. */

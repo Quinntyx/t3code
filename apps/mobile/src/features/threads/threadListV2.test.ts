@@ -190,6 +190,29 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status({ ...guest, hasPendingApprovals: true })).toBe("approval");
   });
 
+  it("keeps a stalled thread working while the server retries it", () => {
+    const thread = presentThreadShell(
+      environmentId,
+      makeRawThreadShell({
+        status: "failed",
+        latestRunId: RunId.make("run-overloaded"),
+        stalled: true,
+      }),
+    );
+    expect(resolveThreadListV2Status(thread)).toBe("stalled");
+    expect(threadHasUnseenCompletion(thread)).toBe(false);
+
+    // Clearing the record leaves an ordinary failure.
+    expect(
+      resolveThreadListV2Status(
+        presentThreadShell(
+          environmentId,
+          makeRawThreadShell({ status: "failed", latestRunId: RunId.make("run-overloaded") }),
+        ),
+      ),
+    ).toBe("failed");
+  });
+
   it.each([
     { roster: "dev server", task: { kind: "command" }, status: "ready" },
     { roster: "dev server watchdog", task: { kind: "monitor" }, status: "ready" },

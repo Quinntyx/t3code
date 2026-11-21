@@ -6647,6 +6647,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       result: "API Error: 529 Specific overload detail.",
       apiErrorStatus: 529,
       expected: "Claude API is overloaded (529). Try again shortly.",
+      overloaded: true,
     },
     {
       name: "an HTTP 429 rate limit",
@@ -6699,6 +6700,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminal.failure.class,
         apiErrorStatus === 429 ? "usage_limit" : "provider_error",
       );
+      assert.equal(terminal.failure.overloaded === true, input.overloaded === true);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -10202,6 +10204,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.equal(
             terminal.failure.code,
             terminalReason === "overloaded_status" ? "api_error_529" : terminalReason,
+          );
+          assert.equal(
+            terminal.failure.overloaded === true,
+            terminalReason === "overloaded_status",
           );
         }).pipe(
           Effect.provide(

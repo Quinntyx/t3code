@@ -426,6 +426,34 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * The retry schedule for a run the provider's upstream overload ended. `attempt` counts
+ * consecutive retries that hit the same overload; `nextAttemptAt` is when the next one goes out,
+ * never more than an hour away. It is only a schedule: whether a thread is stalled is decided by
+ * `stalledRun`, and this record may be absent or name an older run.
+ */
+export const OrchestrationV2StallRecovery = Schema.Struct({
+  runId: RunId,
+  attempt: PositiveInt,
+  nextAttemptAt: IsoDateTime,
+});
+export type OrchestrationV2StallRecovery = typeof OrchestrationV2StallRecovery.Type;
+
+export const OrchestrationV2StallRecoveryUpdate = OrchestrationV2StallRecovery;
+export type OrchestrationV2StallRecoveryUpdate = typeof OrchestrationV2StallRecoveryUpdate.Type;
+
+const STALL_RETRY_BASE_MS = 60_000;
+const STALL_RETRY_MAX_MS = 60 * 60_000;
+
+/**
+ * How long to wait before retrying a run that the upstream API's overload ended:
+ * 1m, 2m, 4m, ... capped at one hour. Recovery never gives up on its own.
+ */
+export function stallRetryDelayMs(attempt: number): number {
+  const exponent = Math.min(Math.max(attempt, 1) - 1, 30);
+  return Math.min(STALL_RETRY_BASE_MS * 2 ** exponent, STALL_RETRY_MAX_MS);
+}
+
 export const OrchestrationV2GoalStatus = Schema.Literals([
   "active",
   "paused",
@@ -537,6 +565,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  stallRecovery: Schema.optional(Schema.NullOr(OrchestrationV2StallRecovery)),
   consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
   consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
@@ -776,6 +805,7 @@ export const OrchestrationV2Run = Schema.Struct({
   contextHandoffId: Schema.NullOr(ContextHandoffId),
   restartContinuationOfRunId: Schema.optional(RunId),
   usageLimitContinuationOfRunId: Schema.optional(RunId),
+  stallContinuationOfRunId: Schema.optional(RunId),
   delegatedTaskId: Schema.optional(NodeId),
   workStartedAt: Schema.optional(Schema.DateTimeUtc),
   restartCancelledBackgroundWork: Schema.optional(
@@ -1557,8 +1587,19 @@ export const OrchestrationV2ProviderFailure = Schema.Struct({
   code: Schema.NullOr(OrchestrationV2ProviderFailureCode),
   retryable: Schema.NullOr(Schema.Boolean),
   resetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** The upstream model API reported an overload (an HTTP 529, or the provider's "overloaded"). */
+  overloaded: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2ProviderFailure = typeof OrchestrationV2ProviderFailure.Type;
+
+/**
+ * A failure the provider classified as an upstream API overload. It is a plain flag rather than
+ * another `class` literal so an older client drops it and reads an ordinary provider error
+ * instead of failing to decode every turn item that carries one.
+ */
+export const isUpstreamOverloadFailure = (
+  failure: Pick<OrchestrationV2ProviderFailure, "class" | "overloaded"> | null | undefined,
+): boolean => failure?.overloaded === true && failure.class !== "usage_limit";
 
 export const OrchestrationV2ProviderRetry = Schema.Struct({
   attempt: PositiveInt,
@@ -2236,6 +2277,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStopRequested: Schema.optional(Schema.Boolean),
+  /** The server is retrying the latest executed run after an upstream overload. See `stalledRun`. */
+  stalled: Schema.optional(Schema.Boolean),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   activityRunStatus: Schema.optional(
@@ -2273,6 +2316,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  stallRecovery: Schema.optional(Schema.NullOr(OrchestrationV2StallRecovery)),
   consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
   consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -3253,6 +3297,10 @@ export const OrchestrationV2Command = Schema.Union([
     /** Reject unless no message or run has landed on this thread. */
     expectedEmpty: Schema.optional(Schema.Boolean),
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
+    /** The sweep's retry schedule. Null is the user's Stop retrying, which a Stop mark records. */
+    stallRecovery: Schema.optional(Schema.NullOr(OrchestrationV2StallRecoveryUpdate)),
+    /** Retry a stalled thread now, on the server's clock. */
+    stallRetryNow: Schema.optional(Schema.Literal(true)),
     /** Replaces the whole cap; null clears it and its hit. */
     consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
     /** Worker-written hit marker; removing the cap clears it. */
@@ -3381,6 +3429,8 @@ export const OrchestrationV2Command = Schema.Union([
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),
+    /** Retries a run that ended on an upstream overload; `text` continues its work. */
+    stallContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     /** The provider reported the limit available again, so the recorded reset time no longer holds. */

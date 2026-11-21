@@ -189,6 +189,41 @@ describe("createInboxReturnTracker", () => {
     },
   );
 
+  it("keeps a stalled thread on the working shelf, with no grace when it stops retrying", () => {
+    const tracker = createInboxReturnTracker();
+    const stalled = {
+      ...thread("a", true),
+      latestRun: {
+        runId: RunId.make("overloaded"),
+        status: "failed" as const,
+        requestedAt: "2026-06-01T00:00:00.000Z",
+        startedAt: "2026-06-01T00:00:00.000Z",
+        completedAt: "2026-06-01T00:00:00.000Z",
+        assistantMessageId: null,
+      },
+      runtime: {
+        ...thread("a", true).runtime!,
+        status: "failed" as const,
+        lastError: "Claude API overloaded.",
+        stalled: true as const,
+        stallNextAttemptAt: "2026-06-01T00:01:00.000Z",
+      },
+    };
+    expect(isThreadWorking(stalled)).toBe(true);
+    expect(isThreadWorkingInShelf(stalled)).toBe(true);
+    tracker.observe([{ ...stalled, runtime: thread("a", true).runtime }]);
+    tracker.observe([stalled]);
+    expect(tracker.isWorking(stalled)).toBe(true);
+
+    // Clearing the record ends the placement at once; the thread is a plain failure.
+    const { stalled: _stalled, stallNextAttemptAt: _next, ...idleRuntime } = stalled.runtime;
+    const stopped = { ...stalled, runtime: idleRuntime };
+    tracker.observe([stopped]);
+    expect(isThreadWorking(stopped)).toBe(false);
+    expect(tracker.isWorking(stopped)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("grants grace after a retained expired snooze", () => {
     const tracker = createInboxReturnTracker();
     const retained = {
