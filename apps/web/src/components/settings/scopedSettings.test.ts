@@ -298,6 +298,30 @@ describe("scoped settings writes", () => {
       ).toEqual({ saved: [laptop.label], failed: unsupported });
     });
 
+    it("accepts a registered MCP server edit whose saved form is unchanged", async () => {
+      // A replaced secret comes back as the same redaction marker, so the entry looks unchanged.
+      const notes = {
+        id: "notes",
+        name: "Notes",
+        toolName: "notes",
+        enabled: true,
+        source: { kind: "server.json" as const, document: {} },
+        config: { TOKEN: "••••••" },
+      };
+      const targets = [
+        environment("Laptop", { settings: { registeredMcpServers: [notes] } }),
+        server,
+      ];
+      expect(
+        await outcome(
+          planScopedSettingsPatch(resolveSettingsScope({}, [], targets), targets, {
+            registeredMcpServers: { notes: { config: { TOKEN: "new-secret" } } },
+          }),
+          upgradedLaptop({ registeredMcpServers: [notes] }),
+        ),
+      ).toEqual({ saved: [laptop.label], failed: unsupported });
+    });
+
     it("accepts a write that matches what the environment already had", async () => {
       expect(
         await outcome(

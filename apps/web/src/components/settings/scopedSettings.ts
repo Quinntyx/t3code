@@ -414,6 +414,12 @@ export function planProjectOverridesClear(
 
 function writeWasDropped(value: unknown, before: unknown, saved: unknown): boolean {
   if (value === null) return before != null && Equal.equals(saved, before);
+  // A patch keyed by id over a list: an environment that dropped it lacks an id it wrote. An edit
+  // can save nothing visible, such as a replaced secret that comes back as the same marker.
+  if (isPlainObject(value) && Array.isArray(saved)) {
+    const savedIds = new Set(saved.map((entry) => (isPlainObject(entry) ? entry.id : undefined)));
+    return Object.entries(value).some(([id, next]) => next !== null && !savedIds.has(id));
+  }
   if (isPlainObject(value) && !Array.isArray(before) && !Array.isArray(saved)) {
     const field = (source: unknown, key: string) =>
       isPlainObject(source) ? source[key] : undefined;

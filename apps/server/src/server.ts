@@ -85,6 +85,7 @@ import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as DiscoveryHost from "./discover/DiscoveryHost.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
+import * as ExternalMcpServers from "./mcp/ExternalMcpServers.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -677,6 +678,15 @@ const layerServerRestart = Layer.effect(
   }),
 );
 
+// The registered MCP servers live beside settings and the shared spawner, so /mcp and Settings
+// read the same instance and their children share the server's own process lifetime.
+const layerExternalMcpServers = ExternalMcpServers.layer.pipe(
+  Layer.provideMerge(layerServerSettings),
+);
+const layerExternalMcpServersStartUp = ExternalMcpServers.layerReconciler.pipe(
+  Layer.provide(layerExternalMcpServers),
+);
+
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   ThreadUsageService.layer,
@@ -783,6 +793,8 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(Layer.mergeAll(AssetSigner.layer, EnvironmentKeys.layer)),
   Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(layerExternalMcpServers),
+  Layer.provideMerge(layerExternalMcpServersStartUp),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(

@@ -19,6 +19,8 @@ import {
   ProjectSettingsOverrides,
   ProviderDriverKind,
   ProviderInstanceId,
+  type RegisteredMcpServerEdit,
+  type RegisteredMcpServerEntry,
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
@@ -248,6 +250,43 @@ function mergeSettingsEntries<Value>(
   return Object.fromEntries(next);
 }
 
+function mergeRegisteredMcpServers(
+  current: ReadonlyArray<RegisteredMcpServerEntry>,
+  patch: Readonly<Record<string, RegisteredMcpServerEntry | RegisteredMcpServerEdit | null>>,
+): Array<RegisteredMcpServerEntry> {
+  const next: Array<RegisteredMcpServerEntry> = [];
+  for (const entry of current) {
+    if (!Object.hasOwn(patch, entry.id)) {
+      next.push(entry);
+      continue;
+    }
+    const change = patch[entry.id]!;
+    if (change === null) continue;
+    if ("source" in change) {
+      next.push(change);
+      continue;
+    }
+    const { config, ...fields } = change;
+    next.push({
+      ...entry,
+      ...fields,
+      config:
+        config === undefined
+          ? entry.config
+          : Object.fromEntries(
+              Object.entries({ ...entry.config, ...config }).flatMap(([key, value]) =>
+                value === null ? [] : [[key, value]],
+              ),
+            ),
+    });
+  }
+  const existing = new Set(current.map((entry) => entry.id));
+  for (const [id, change] of Object.entries(patch)) {
+    if (change !== null && "source" in change && !existing.has(id)) next.push(change);
+  }
+  return next;
+}
+
 // Secret persistence keys tokens by trimmed, lowercased host, so merge on the same key.
 const byHost = (tokens: unknown) =>
   Object.fromEntries(
@@ -403,6 +442,7 @@ export function applyServerSettingsPatch(
     usageLimitSources: usageLimitSourcesPatch,
     textGenerators: textGeneratorsPatch,
     secretProviders: secretProvidersPatch,
+    registeredMcpServers: registeredMcpServersPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
@@ -653,6 +693,14 @@ export function applyServerSettingsPatch(
       : {}),
     ...(secretProvidersPatch !== undefined
       ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
+      : {}),
+    ...(registeredMcpServersPatch !== undefined
+      ? {
+          registeredMcpServers: mergeRegisteredMcpServers(
+            current.registeredMcpServers,
+            registeredMcpServersPatch,
+          ),
+        }
       : {}),
     ...(usagePriceOverridesPatch !== undefined
       ? {
