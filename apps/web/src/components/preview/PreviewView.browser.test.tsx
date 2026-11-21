@@ -22,6 +22,8 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
+  refresh: vi.fn(async (_tabId: string): Promise<void> => undefined),
+  hardReload: vi.fn(async (_tabId: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
   readEnvironmentScope: vi.fn((_environmentId?: unknown, _scope?: unknown) => true),
@@ -67,10 +69,10 @@ vi.mock(import("./previewBridge"), async (original) => ({
     annotationVoice: { onEvent: () => () => {}, update: async () => {} },
     setAnnotationSendEnabled: mocks.setAnnotationSendEnabled,
     cancelPickElement: mocks.cancelPickElement,
-    refresh: vi.fn(async () => undefined),
+    refresh: mocks.refresh,
     goBack: vi.fn(async () => undefined),
     goForward: vi.fn(async () => undefined),
-    hardReload: vi.fn(async () => undefined),
+    hardReload: mocks.hardReload,
     openDevTools: vi.fn(async () => undefined),
     setColorScheme: vi.fn(async () => undefined),
     zoomIn: vi.fn(async () => undefined),
@@ -583,5 +585,36 @@ describe("PreviewView", () => {
     await expect.element(address).not.toHaveFocus();
     act(() => dispatchPreviewAction("focus-url"));
     await expect.element(address).toHaveFocus();
+  });
+
+  it("guards refresh shortcuts and Hard reload on idle native desktop tabs", async () => {
+    setup();
+    mocks.navStatus = { _tag: "Idle" };
+    await using screen = await render(view());
+
+    await expect.element(page.getByRole("button", { name: "Refresh" })).toBeDisabled();
+    act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.refresh).not.toHaveBeenCalled();
+
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    const idleHardReload = page.getByRole("menuitem", { name: "Hard reload" });
+    await expect.element(idleHardReload).toBeVisible();
+    expect(idleHardReload.element().getAttribute("aria-disabled")).toBe("true");
+    await userEvent.click(idleHardReload, { force: true });
+    expect(mocks.hardReload).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+
+    mocks.navStatus = { _tag: "Success", url: "http://127.0.0.1:3000/", title: "Local" };
+    await screen.rerender(view());
+
+    await expect.element(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    act(() => dispatchPreviewAction("refresh"));
+    expect(mocks.refresh).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
+
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    const activeHardReload = page.getByRole("menuitem", { name: "Hard reload" });
+    await expect.element(activeHardReload).toBeVisible();
+    await userEvent.click(activeHardReload);
+    expect(mocks.hardReload).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
   });
 });

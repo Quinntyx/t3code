@@ -253,7 +253,9 @@ it("announces phase transitions through one live region, suppresses duplicate ba
         dialog: null,
       }),
     );
-    expect(liveRegions().map((el) => el.textContent)).toEqual(["Waiting for video frame…"]);
+    expect(liveRegions().map((el) => el.textContent)).toEqual([
+      "Waiting for video frame · Watching",
+    ]);
     expect(container.textContent).toContain("Waiting for first frame…");
     expect(container.querySelector("button")?.textContent).toBe("Take control");
 
@@ -267,6 +269,21 @@ it("announces phase transitions through one live region, suppresses duplicate ba
     expect(hiddenPill?.textContent).toContain("Reconnecting to remote browser…");
     expect(container.querySelector("button")).toBeNull();
 
+    // Another viewer holding control before the replacement frame paints names the controller alongside the disabled Take control button.
+    act(() =>
+      emit({
+        type: "control",
+        canOperate: true,
+        controller: "another-viewer",
+        generation: 2,
+        dialog: null,
+      }),
+    );
+    expect(liveRegions().map((el) => el.textContent)).toEqual([
+      "Reconnecting stream · Another viewer has control",
+    ]);
+    expect(container.querySelector("button")?.disabled).toBe(true);
+
     act(() => emit({ type: "status", status: "error", detail: "Stream failed." }));
     expect(liveRegions().map((el) => el.textContent)).toEqual(["Stream failed."]);
     expect(container.textContent).not.toContain("Reconnecting to remote browser…");
@@ -275,9 +292,10 @@ it("announces phase transitions through one live region, suppresses duplicate ba
       expect(mocks.announceWithOptions).not.toHaveBeenCalled();
     } else {
       expect(mocks.announceWithOptions.mock.calls).toEqual([
-        ["Waiting for video frame…", POLITE_IOS_ANNOUNCEMENT],
+        ["Waiting for video frame · Watching", POLITE_IOS_ANNOUNCEMENT],
         ["Watching", POLITE_IOS_ANNOUNCEMENT],
         ["Reconnecting stream…", POLITE_IOS_ANNOUNCEMENT],
+        ["Reconnecting stream · Another viewer has control", POLITE_IOS_ANNOUNCEMENT],
         ["Stream failed.", POLITE_IOS_ANNOUNCEMENT],
       ]);
     }
@@ -298,7 +316,7 @@ it("keeps Take control available during awaiting-frame with or without a pending
         dialog: null,
       }),
     );
-    expect(container.textContent).toContain("Waiting for video frame…");
+    expect(container.textContent).toContain("Waiting for video frame · Watching");
     const buttonWithoutDialog = container.querySelector("button");
     expect(buttonWithoutDialog?.textContent).toBe("Take control");
     act(() => buttonWithoutDialog?.click());
@@ -315,7 +333,7 @@ it("keeps Take control available during awaiting-frame with or without a pending
         dialog: { type: "alert", message: "Confirm action", defaultValue: "" },
       }),
     );
-    expect(container.textContent).toContain("Waiting for video frame…");
+    expect(container.textContent).toContain("Waiting for video frame · Watching");
     expect(container.textContent).toContain("Confirm action");
     const liveTexts = [...container.querySelectorAll('[data-live-region="polite"]')].map(
       (el) => el.textContent,
@@ -334,7 +352,7 @@ it("keeps Take control available during awaiting-frame with or without a pending
     act(() => button?.click());
     expect(mocks.injected.some((script) => script.includes('"takeControl"'))).toBe(true);
 
-    // Gaining control for the same dialog does not re-announce it.
+    // Gaining control for the same dialog announces the new ownership status without re-announcing the dialog.
     act(() =>
       emit({
         type: "control",
@@ -347,6 +365,7 @@ it("keeps Take control available during awaiting-frame with or without a pending
     if (!IS_ANDROID) {
       expect(mocks.announceWithOptions.mock.calls).toEqual([
         ["Browser dialog: Confirm action", POLITE_IOS_ANNOUNCEMENT],
+        ["Waiting for video frame · You have control", POLITE_IOS_ANNOUNCEMENT],
       ]);
     }
 

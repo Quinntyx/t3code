@@ -150,17 +150,19 @@ function PreviewStreamFallback({
         )
       ) : (
         <>
-          {!error ? <AppActivityIndicator colorClassName="accent-icon" /> : null}
+          {!hasError ? <AppActivityIndicator colorClassName="accent-icon" /> : null}
           <AppText
-            accessibilityLiveRegion={error ? "polite" : "none"}
-            selectable={!!error}
+            accessibilityLiveRegion={hasError ? "polite" : "none"}
+            selectable={hasError}
             className={
-              error ? "text-center text-sm text-foreground-muted" : "text-sm text-foreground-muted"
+              hasError
+                ? "text-center text-sm text-foreground-muted"
+                : "text-sm text-foreground-muted"
             }
           >
-            {error || "Connecting to remote browser…"}
+            {hasError ? error : "Connecting to remote browser…"}
           </AppText>
-          {error && (
+          {hasError && (
             <View className="items-center">
               <Button label="Retry" tone="secondary" loading={retrying} onPress={onRetry} />
             </View>

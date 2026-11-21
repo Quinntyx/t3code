@@ -156,7 +156,9 @@ describe("ServerBrowserSurface stream phases", () => {
         dialog: null,
       });
     });
-    await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
+    await expect
+      .element(screen.getByText("Waiting for video frame · You have control"))
+      .toBeVisible();
     await expect.element(screen.getByText("Waiting for first frame…")).toBeVisible();
     expect(input.disabled).toBe(true);
     await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
@@ -180,16 +182,30 @@ describe("ServerBrowserSurface stream phases", () => {
       .element(screen.getByRole("button", { name: "Release control" }))
       .not.toBeInTheDocument();
 
+    // Another viewer holding control during reconnect names the controller alongside the disabled Take control button.
+    await act(() =>
+      handlers().onControl?.({
+        canOperate: true,
+        controller: "another-viewer",
+        generation: 2,
+        dialog: null,
+      }),
+    );
+    await expect
+      .element(screen.getByText("Reconnecting stream · Another viewer has control"))
+      .toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Take control" })).toBeDisabled();
+
     // Control returning before a replacement frame paints keeps reconnecting active and gates input while exposing control recovery.
     await act(() =>
       handlers().onControl?.({
         canOperate: true,
         controller: "you",
-        generation: 2,
+        generation: 3,
         dialog: null,
       }),
     );
-    await expect.element(screen.getByText("Reconnecting stream…")).toBeVisible();
+    await expect.element(screen.getByText("Reconnecting stream · You have control")).toBeVisible();
     await expect.element(screen.getByText("Reconnecting to remote browser…")).toBeVisible();
     expect(input.disabled).toBe(true);
     await expect.element(screen.getByRole("button", { name: "Release control" })).toBeVisible();
@@ -272,7 +288,7 @@ describe("ServerBrowserSurface stream phases", () => {
         dialog: null,
       }),
     );
-    await expect.element(screen.getByText("Waiting for video frame…")).toBeVisible();
+    await expect.element(screen.getByText("Waiting for video frame · Watching")).toBeVisible();
     const takeControl = screen.getByRole("button", { name: "Take control" });
     await expect.element(takeControl).toBeVisible();
     await userEvent.click(takeControl);
@@ -431,6 +447,10 @@ describe("ServerBrowserSurface stream phases", () => {
     await second.flush("tab-2");
     const banner = second.container.querySelector('[data-error-layout="banner"]');
     expect(banner?.textContent).toContain("HTTP 403 Forbidden");
+    const hiddenStatusBar = second.container.querySelector('[aria-hidden="true"]');
+    expect(hiddenStatusBar?.querySelector(".bg-destructive")).not.toBeNull();
+    expect(hiddenStatusBar?.querySelector(".bg-success")).toBeNull();
+    expect(hiddenStatusBar?.querySelector("button")).toBeNull();
     await expect.element(second.screen.getByRole("button", { name: "Reconnect" })).toBeEnabled();
     await userEvent.click(second.screen.getByRole("button", { name: "Reconnect" }));
     expect(mocks.refreshAccess).toHaveBeenCalledTimes(2);

@@ -45,6 +45,17 @@ export const previewStreamPhase = (
         ? "awaiting-frame"
         : "connecting";
 
+const previewStreamControlLabel = (control: PreviewStreamControl): string =>
+  !control.canOperate
+    ? "Read-only"
+    : control.controller === "you"
+      ? "You have control"
+      : control.controller === "agent"
+        ? "Agent has control"
+        : control.controller === "another-viewer"
+          ? "Another viewer has control"
+          : "Watching";
+
 export const previewStreamStatusLabel = (
   phase: PreviewStreamPhase,
   control: PreviewStreamControl | null,
@@ -53,21 +64,15 @@ export const previewStreamStatusLabel = (
     case "connecting":
       return "Connecting to remote stream…";
     case "awaiting-frame":
-      return "Waiting for video frame…";
+      return control
+        ? `Waiting for video frame · ${previewStreamControlLabel(control)}`
+        : "Waiting for video frame…";
     case "reconnecting":
-      return "Reconnecting stream…";
+      return control
+        ? `Reconnecting stream · ${previewStreamControlLabel(control)}`
+        : "Reconnecting stream…";
     case "live":
-      return !control
-        ? "Connecting to remote stream…"
-        : !control.canOperate
-          ? "Read-only"
-          : control.controller === "you"
-            ? "You have control"
-            : control.controller === "agent"
-              ? "Agent has control"
-              : control.controller === "another-viewer"
-                ? "Another viewer has control"
-                : "Watching";
+      return control ? previewStreamControlLabel(control) : "Connecting to remote stream…";
   }
 };
 

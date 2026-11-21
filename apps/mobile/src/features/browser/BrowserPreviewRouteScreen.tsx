@@ -75,6 +75,8 @@ function BrowserPreviewScreen({
   const tabId = tab?.tabId ?? null;
   if (tabId !== null && tabId !== selectedTabId) {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
+    setStreaming(false);
+    setCanControl(false);
     setSelectedTabId(tabId);
   }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the focused route through the navigator once the thread has no browser tabs left
@@ -87,6 +89,8 @@ function BrowserPreviewScreen({
   };
   const selectTab = (next: string) => {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
+    setStreaming(false);
+    setCanControl(false);
     setSelectedTabId(next);
   };
   const live = (focused && foreground) || pictureInPicture.active;

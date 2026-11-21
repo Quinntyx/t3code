@@ -324,8 +324,9 @@ export function PreviewView({
   };
 
   const handleRefresh = () => {
+    if (refreshDisabled) return;
     if (isServerTab) {
-      if (refreshDisabled || serverInputDisabled) return;
+      if (serverInputDisabled) return;
       serverSurfaceRef.current?.reload();
       return;
     }
@@ -468,8 +469,9 @@ export function PreviewView({
   const moreMenuActions: PreviewMoreMenuActions | null = serverOwnsRendering
     ? {
         hardReload: () => {
+          if (refreshDisabled) return;
           if (isServerTab) {
-            if (refreshDisabled || serverInputDisabled) return;
+            if (serverInputDisabled) return;
             serverSurfaceRef.current?.reload({ ignoreCache: true });
             return;
           }
@@ -490,7 +492,10 @@ export function PreviewView({
       }
     : previewBridge
       ? {
-          hardReload: desktopCall(previewBridge.hardReload),
+          hardReload: () => {
+            if (refreshDisabled) return;
+            if (runtimeTabId) void previewBridge?.hardReload(runtimeTabId).catch(() => undefined);
+          },
           setColorScheme: (colorScheme) => {
             if (runtimeTabId)
               void previewBridge?.setColorScheme(runtimeTabId, colorScheme).catch(() => undefined);
@@ -981,7 +986,7 @@ export function PreviewView({
                 runtimeTabId !== null &&
                 (serverOwnsRendering || (desktopOverlay?.hasWebContents ?? false))
               }
-              hardReloadDisabled={isServerTab ? refreshDisabled || serverInputDisabled : false}
+              hardReloadDisabled={refreshDisabled || serverInputDisabled}
               actions={moreMenuActions}
               {...(moveTarget
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }

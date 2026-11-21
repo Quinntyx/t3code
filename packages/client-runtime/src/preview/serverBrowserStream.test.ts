@@ -217,12 +217,24 @@ describe("preview stream phase", () => {
     expect(previewStreamPhase(null, true)).toBe("reconnecting");
   });
 
-  it("never reports ownership before a frame is painted and names the host when connecting", () => {
+  it("preserves known controller ownership while waiting for a frame or reconnecting and names the host when connecting", () => {
     expect(previewStreamStatusLabel("connecting", null)).toBe("Connecting to remote stream…");
-    expect(previewStreamStatusLabel("awaiting-frame", owned)).toBe("Waiting for video frame…");
+    expect(previewStreamStatusLabel("awaiting-frame", null)).toBe("Waiting for video frame…");
+    expect(previewStreamStatusLabel("awaiting-frame", owned)).toBe(
+      "Waiting for video frame · You have control",
+    );
+    expect(
+      previewStreamStatusLabel("awaiting-frame", { ...owned, controller: "another-viewer" }),
+    ).toBe("Waiting for video frame · Another viewer has control");
+    expect(previewStreamStatusLabel("awaiting-frame", { ...owned, canOperate: false })).toBe(
+      "Waiting for video frame · Read-only",
+    );
     expect(previewStreamStatusLabel("live", owned)).toBe("You have control");
     expect(previewStreamStatusLabel("live", { ...owned, canOperate: false })).toBe("Read-only");
     expect(previewStreamStatusLabel("reconnecting", null)).toBe("Reconnecting stream…");
+    expect(
+      previewStreamStatusLabel("reconnecting", { ...owned, controller: "another-viewer" }),
+    ).toBe("Reconnecting stream · Another viewer has control");
 
     expect(previewStreamOverlayDetail("connecting", "work-vps")).toBe(
       "Starting video stream from work-vps…",

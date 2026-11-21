@@ -790,13 +790,16 @@ export function ServerBrowserSurface(props: {
     resetInput(textarea);
   };
 
-  const control = controlState?.targetKey === targetKey ? controlState.control : null;
+  const streamError = accessDenied ? "Browser connection was refused." : accessError;
+  const hasStreamError = streamError !== null;
+  const control =
+    !hasStreamError && hostSetup === null && controlState?.targetKey === targetKey
+      ? controlState.control
+      : null;
   const hasRetainedFrame = retainedFrameTargetKey === targetKey;
   const hasCurrentFrame = hasRetainedFrame && currentFramePainted;
   const phase = previewStreamPhase(control, hasCurrentFrame, hasRetainedFrame);
   const trimmedEnvironmentLabel = environmentLabel?.trim() || undefined;
-  const streamError = accessDenied ? "Browser connection was refused." : accessError;
-  const hasStreamError = streamError !== null;
   const errorOverlayVisible = visible && (hostSetup !== null || hasStreamError);
   const overlaySuppressed = pdfUrl !== null || hostSetup !== null || hasStreamError;
   const dialogAnnouncement = control?.dialog
@@ -823,10 +826,10 @@ export function ServerBrowserSurface(props: {
             aria-hidden
             className={cn(
               "size-2 shrink-0 rounded-full",
-              phase === "live"
-                ? "bg-success"
-                : hasStreamError || hostSetup !== null
-                  ? "bg-destructive"
+              hasStreamError || hostSetup !== null
+                ? "bg-destructive"
+                : phase === "live"
+                  ? "bg-success"
                   : "bg-warning ring-2 ring-warning/30",
             )}
           />
