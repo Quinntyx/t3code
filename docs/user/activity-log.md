@@ -30,6 +30,9 @@ answering, the answer it finished before reading your steer stays too. On web an
 shows the in-between messages while it is open. Approvals, questions, and errors always show. The
 setting applies to this browser or device only.
 
+**Fold context compactions**, next to it in the same settings, moves **Context compacted**
+dividers into a finished turn's collapsed work. By default they stay visible below the fold.
+
 ## Screen reader announcements
 
 On web and desktop, a screen reader hears the open thread's turn as it runs. **Screen reader

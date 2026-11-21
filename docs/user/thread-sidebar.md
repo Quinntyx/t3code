@@ -3,6 +3,18 @@
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.
 
+## Inspect a thread on mobile
+
+On phones, swipe left across the conversation or tap **Thread details** to open
+its workspace and source-control drawer. Dismiss the keyboard before swiping.
+Swipe right, tap outside, or close the drawer to return to the conversation.
+On tablets and wide windows, **Thread details** opens the same details beside the
+conversation, or as a sheet where there is no room.
+
+Use the drawer to run or edit project actions, import actions from `t3.json`,
+review changes, and manage branches and worktrees. Source-control and terminal
+actions need a saved thread; send the first message before using them.
+
 ## Start a thread
 
 On web and desktop, **New thread** opens the project picker when you have more than one
@@ -160,6 +172,23 @@ Pinned threads stay above the folders, and Snoozed and Settled stay below them. 
 can drag a thread onto the composer to mention it, but not within the sidebar, and the Working
 section is off. Each device keeps its own choice.
 
+## Hide work on this device
+
+Choose **Hide on this device** from a thread's menu to remove it from this
+client's thread list without settling or snoozing it. It keeps running and stays
+visible on your other devices. New activity does not unhide it.
+
+On web and desktop, use the thread's **Hide** action beside Snooze and Settle.
+On mobile, swipe opposite the existing thread actions to hide it; on Android
+phones' main list, swipe left. In an Android phone's thread drawer, use the menu
+so the swipe can still close the drawer.
+
+Use **Undo** immediately, or turn on **Show hidden threads on this device** in
+the list filters and choose **Restore on this device** from the thread's menu.
+Hidden threads stay hidden after restarting this client; clearing its local data
+resets them. Hiding does not prevent automatic settlement or change any shared
+thread settings.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
@@ -255,12 +284,18 @@ Do this when the provider reports no reset time, because nothing continues the t
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
-When the provider reports a reset time, choose **Resume at reset** to schedule a
-continuation. You can cancel it from the thread. Enable **Resume after
+When the provider or usage tracker reports a reset time, choose **Resume at reset**
+to schedule a continuation. You can cancel it from the thread. Enable **Resume after
 usage limits** in **Settings → Threads** to schedule limit stops by default.
+Enable **Resume threads with pull requests first** there to give threads with a
+linked pull request the first chance at each new allowance; the other limited
+threads resume after those finish. This keeps quota with work that is closest to
+review.
 The environment must be running when the reset arrives; it resumes overdue
-continuations after a restart. Stopping the thread, sending a new message,
-archiving, or settling it prevents a pending continuation from starting.
+continuations after a restart. When the provider reports the allowance back
+before the scheduled time, as with a redeemed reset credit, the waiting threads
+continue then instead of at the old time. Stopping the thread, sending a new
+message, archiving, or settling it prevents a pending continuation from starting.
 
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without

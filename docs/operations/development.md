@@ -350,6 +350,23 @@ For a cross-architecture or universal build, add the requested Rust targets:
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
 
+### macOS DMGs from Linux
+
+`--platform mac --arch x64` also runs on a Linux host. Other architectures are refused there:
+nothing on Linux signs the app, and Apple silicon will not run unsigned code.
+
+```sh
+SDKROOT=/path/to/MacOSX.sdk vp run dist:desktop:dmg:x64
+```
+
+It needs the Rust target, a C compiler, pkg-config and libsecret headers (the shared desktop bundle
+build needs them on Linux), ImageMagick, `rsvg-convert`, Go, and a macOS SDK for the resource
+monitor to link against; rustup's bundled `rust-lld` does the linking. electron-builder packages
+the app and its update zip, and `scripts/mkdmg` writes the disk image, because electron-builder's
+own DMG target needs `hdiutil`. The result is unsigned: nothing on Linux signs it, so it
+[installs its own updates](../../apps/desktop/src/electron/MacUnsignedUpdater.ts) and has no
+passkey support.
+
 ### Windows installer prerequisites
 
 Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.

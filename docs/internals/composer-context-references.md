@@ -59,7 +59,9 @@ links, so a context link is never mistaken for a mention.
 
 `projectComposerContextForProvider({ text, records })` builds what the provider reads:
 
-1. Every reference becomes an in-place marker: `[Image: shot.png; ref=ctx_1]`.
+1. Every reference becomes an in-place marker: `[Image: shot.png; ref=ctx_1]`. A thread marker
+   names the thread instead, `[Thread: Fix login; threadId=mcp:…]`, because its context id is a
+   folded slug that no tool accepts and agents copy the id they read in place.
 2. A trailing `<t3_context version="1">` envelope holds one `<context kind id>` entry per unique
    referenced id, in first-reference order. Records that are never referenced are not emitted.
    A referenced id with no record becomes `<context … unavailable="true"/>`. Mention and skill

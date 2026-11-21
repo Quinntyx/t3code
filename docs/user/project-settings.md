@@ -48,6 +48,26 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Restrict delegated models
+
+In **Settings → Providers**, select a provider and turn on **Block delegation for disabled
+models** to reject delegated tasks that use models turned off in that provider's model list.
+The setting is off by default and applies only to that provider instance on the selected
+environment, including delegation from linked environments. Direct model use and other provider
+instances are unchanged. Turn it off or enable a model again to allow delegation to it.
+
+## Debug shake on mobile
+
+At the bottom of **Settings → Labs**, under **Developer**, choose the machine and
+project for bug reports, then enable **Debug shake**. Shake your phone to open a
+new draft there with a screenshot and the last 200 lines of mobile console logs.
+Add a description and review the screenshot and logs for sensitive information
+before sending. No agent starts automatically.
+
+Logs are collected only while enabled and are cleared when you disable it or
+restart the app. Long log lines are truncated. This does not collect server or
+native system logs.
+
 ## Pin and archive projects
 
 Pinned projects come first in the project pickers: the project picker on a new thread, the
@@ -208,10 +228,18 @@ This needs Git 2.35 or newer.
 
 ## Worktree location
 
-New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
-such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
+If you keep a project's checkout in `my-project/main` with other worktrees alongside it, you can
+add either `my-project` or `my-project/main` as the project. T3 Code uses `main` as the checkout
+and creates new worktrees beside it. Turn off **Settings → Worktrees → Beside the main checkout** to
+give that project's new worktrees the same location as every other project's. Projects previously
+added at the parent folder are resolved to `main` when the server starts. An ordinary repository
+containing a folder named `main` is not changed.
+
+Other projects create worktrees in the `worktrees` folder of the T3 home directory. To override
+either location, set **Settings → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
-are, and cleanup covers both the default folder and the custom one.
+are, and automatic cleanup covers the default and configured locations, not sibling worktrees
+in your own project folder.
 
 ## Fast worktree checkout on macOS
 

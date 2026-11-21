@@ -88,6 +88,88 @@ opens and approve. The new limit applies the next time you add a machine. If you
 cancel or downgrade T3 Chat, machines you already linked stay linked, but you
 cannot add more until you are under the limit again.
 
+## Self-hosted discovery on a private network
+
+T3 Discover is a small, self-hosted directory for machines already reachable on
+one LAN or tailnet. It uses local SQLite storage, with no hosted account or relay.
+Connections still go directly to each machine through normal pairing.
+
+Run the `t3discover` broker on an always-on machine, bound to its private address:
+
+```bash
+t3discover serve --host <private-ip>
+t3discover pair --origin http://<private-ip>:3775
+```
+
+Paste the printed one-time enrollment URL into **Add environment** on each desktop,
+web, or mobile client. Generate a fresh URL for each device. Joining on desktop
+also makes its local environment discoverable; choose Tailscale or LAN for its
+address when joining. LAN requires network access on that host. Web and mobile
+clients discover environments without advertising the servers they connect to.
+Discovered machines appear automatically in the existing environment list.
+
+The broker is trusted to authorize its members to pair with shared machines. Bind
+it only to your private network and restrict access with your tailnet rules. An
+HTTPS web client also needs an HTTPS broker and host endpoints; use your existing
+private HTTPS proxy for the broker and pass its address to `pair --origin`.
+
+**Disconnect discovery** leaves the directory and removes that desktop's listing,
+while keeping existing direct connections intact. Use `t3discover members` and
+`t3discover revoke <member-id>` on the broker machine to remove a membership;
+revoke existing device sessions separately under **Sharing & access**. Keep the
+broker's `--home` directory consistent across commands and back up its SQLite file.
+
+### Discover and run other services
+
+The broker also advertises services that are not T3 environments, such as a
+CLIProxyAPI hub. A service has two independent settings: whether the broker
+starts it, and whether it is discoverable. A hub you run yourself can be
+discoverable without being managed, and a managed service can stay private.
+
+Describe services in `<home>/services.json` (mode `0600`):
+
+```json
+{
+  "services": [
+    {
+      "serviceId": "cliproxy",
+      "kind": "cliproxyapi",
+      "label": "Model hub",
+      "discoverable": {
+        "endpoints": [{ "transport": "lan", "httpBaseUrl": "http://192.168.1.9:8317" }],
+        "managementKeyEnv": "CLIPROXY_MANAGEMENT_KEY"
+      },
+      "managed": {
+        "command": "cliproxy",
+        "args": ["--config", "/etc/cliproxy/config.yaml"],
+        "autostart": true
+      }
+    }
+  ]
+}
+```
+
+`t3discover services` lists each configured service with its health. `serve`
+starts every service whose `managed.autostart` is true and stops them when it
+exits. `discoverable.protocol` defaults to `openai` with a `/v1` base path; set it
+to `anthropic` to hand clients the bare origin.
+
+Linking is never automatic. Each member links a service from the **Usage** tab,
+which is the moment the broker mints that machine's credential. For CLIProxyAPI
+the broker adds one client key through the management API and revokes it on
+unlink, so each machine gets its own key. The prompt then sets the credential and
+endpoint on whichever providers you pick:
+
+| Harness     | Variables                                                                       |
+| ----------- | ------------------------------------------------------------------------------- |
+| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`                                    |
+| Codex       | `OPENAI_BASE_URL`, `OPENAI_API_KEY`                                             |
+| Pi          | `T3_DISCOVER_<ID>_BASE_URL`, `T3_DISCOVER_<ID>_API_KEY`, `T3_DISCOVER_<ID>_API` |
+
+Pi has no base-URL environment variable, so T3 injects an extension that
+registers the service as a provider and reads those variables. Other harnesses
+ignore the link until you point them at the endpoint yourself.
+
 ## Pair over a LAN or private network
 
 Use direct pairing when the other device can reach the host's network address.
@@ -356,6 +438,12 @@ tab closes. Audio does not play on your device.
 On a phone, tap the floating preview's corner dot to show its controls, then
 **Pop into separate window** to keep watching in picture-in-picture over other
 apps.
+
+The host draws tabs on its CPU at 2× by default. If scrolling or animation is
+choppy and the host has a GPU, pick it under **Settings → Browser → Browser GPU**
+for that environment; Linux hosts list each GPU, other hosts offer
+**Automatic**. **Browser render scale** trades sharpness for speed. Changing
+either reloads the environment's open tabs.
 
 ### Local servers
 

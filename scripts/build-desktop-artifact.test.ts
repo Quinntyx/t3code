@@ -30,6 +30,7 @@ import {
   parseWslRuntimeArchiveMembers,
   readWorkspaceConfig,
   createBuildConfig,
+  encodeIcns,
   DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -545,6 +546,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           releaseType: "release",
         },
       ]);
+      const feedUrl = "https://fork.example/quinntyx/t3code/releases/latest/download/";
+      const withGenericFeed = (version: string) =>
+        createBuildConfig("linux", "AppImage", version, false, false, undefined, undefined).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_DESKTOP_UPDATE_URL: feedUrl,
+                  GITHUB_REPOSITORY: "pingdotgg/t3code",
+                },
+              }),
+            ),
+          ),
+        );
+      const genericRelease = yield* withGenericFeed("0.0.44");
+      assert.deepStrictEqual(genericRelease.publish, [{ provider: "generic", url: feedUrl }]);
+      const genericPreview = yield* withGenericFeed("0.0.44-pr.1.1");
+      assert.isNull(genericPreview.publish);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
@@ -618,6 +637,39 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }
     }),
   );
+
+  it.effect("leaves the disk image and native rebuilds out when packaging macOS elsewhere", () =>
+    Effect.gen(function* () {
+      const configOn = (hostPlatform: NodeJS.Platform) =>
+        createBuildConfig("mac", "dmg", "0.1.0", false, false, undefined, undefined).pipe(
+          Effect.provideService(HostProcess.Platform, hostPlatform),
+        );
+
+      const onMac = yield* configOn("darwin");
+      assert.deepStrictEqual((onMac.mac as { target: unknown }).target, ["dmg", "zip"]);
+      assert.isUndefined(onMac.npmRebuild);
+
+      const onLinux = yield* configOn("linux");
+      assert.deepStrictEqual((onLinux.mac as { target: unknown }).target, ["zip"]);
+      assert.isFalse(onLinux.npmRebuild);
+    }),
+  );
+
+  it("frames each PNG as an icns entry inside a container that states its length", () => {
+    const icns = Buffer.from(
+      encodeIcns([
+        { type: "ic07", png: Uint8Array.of(1, 2, 3) },
+        { type: "ic08", png: Uint8Array.of(4) },
+      ]),
+    );
+    assert.strictEqual(icns.toString("ascii", 0, 4), "icns");
+    assert.strictEqual(icns.readUInt32BE(4), icns.length);
+    assert.strictEqual(icns.toString("ascii", 8, 12), "ic07");
+    assert.strictEqual(icns.readUInt32BE(12), 11);
+    assert.strictEqual(icns.toString("ascii", 19, 23), "ic08");
+    assert.strictEqual(icns.readUInt32BE(23), 9);
+    assert.strictEqual(icns.length, 28);
+  });
 
   // pnpm writes "set this to true or false" placeholders into allowBuilds when a
   // tarball changes. pnpm ignores them, but the release build decode rejects them.

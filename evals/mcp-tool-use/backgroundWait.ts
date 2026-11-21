@@ -6,6 +6,7 @@
  */
 import {
   EnvironmentId,
+  OrchestratorMcpFailure,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
   ProviderDriverKind,
@@ -99,7 +100,36 @@ export const makeBackgroundWait = Effect.fn("evaluateMcpToolUse.makeBackgroundWa
   const context = yield* Layer.build(
     McpHttpServer.toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer).pipe(
       Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
-      Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
+      Layer.provide(
+        Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({
+          awaitBackgroundTasks: Effect.fn("evaluateMcpToolUse.awaitBackgroundTasks")(
+            function* (scope, input) {
+              const caller = yield* McpInvocationContext.requireThreadScope(
+                scope,
+                "t3_background_wait",
+              );
+              return yield* service
+                .awaitBackgroundTasks({
+                  threadId: caller.thread.threadId,
+                  taskIds: input.taskIds,
+                  awaited: input.waiting ?? true,
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestratorMcpFailure({
+                        code:
+                          cause.reason === "unsupported" || cause.reason === "unmatched"
+                            ? "invalid_request"
+                            : "orchestration_error",
+                        message: cause.message,
+                      }),
+                  ),
+                );
+            },
+          ),
+        }),
+      ),
       Layer.provide(Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({})),
       Layer.provide(threads),
       Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),

@@ -147,12 +147,15 @@ from GitHub keep their pull requests on GitHub; open those from the GitHub remot
 
 To start from nothing, choose **New project** in the command palette (`Cmd/Ctrl+K`), or
 **New project** under **Add Project** on any client, and type a name. T3 Code makes a Git
-repository in `~/.t3/projects` (the `projects` folder of your T3 data directory) with a README,
-an icon, and a first commit, then opens a new thread in it. Until the project has a thread, new
-threads work in its folder, even when your default is a new worktree. The folder is named after the project,
-like `pinball-stats` for "Pinball Stats". Turn on **Create private repository on GitHub** to also
-publish it. If Git has no name or email on that machine, the project is created without the
-first commit.
+repository with a README, an icon, and a first commit, then opens a new thread in it. It goes in
+the folder from **Add project starts in** (**Settings → Threads**) when that is set, and in
+`~/.t3/projects` (the `projects` folder of your T3 data directory) otherwise. **Location** picks
+another folder for this project, and you can choose to put the checkout in `<project>/main` so the
+thread worktrees sit beside it. T3 Code remembers the layout and host you used last. The project's
+first thread opens in its folder, even when your default is a new worktree. The
+folder is named after the project, like `pinball-stats` for "Pinball Stats". Turn on **Create
+private repository** to publish it to the host you pick. If Git has no name or email on that
+machine, the project is created without the first commit.
 
 Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository. Choose a hosting
 provider or paste a Git URL, then choose where to save it. Only GitHub is listed at first. To list
@@ -180,6 +183,12 @@ make your first commit before pushing.
 Use a thread's Git actions to commit, push, and create a pull request. T3 Code can generate commit
 messages, review titles, and descriptions from your changes. Descriptions also draw on the work in
 the thread, including the checks it ran.
+
+A pull request targets the repository of the branch you started from. In a fork, a worktree
+created from your fork's `main` opens its PR in your fork, and one created from `upstream/main`
+opens it upstream. A branch with no recorded starting point, such as `main` itself, opens its PR
+in the repository the host picks by default. On GitHub that is the one `gh repo set-default`
+chose, or the parent repository if no default is set.
 
 An existing fork PR can appear beside the branch even if you pushed without setting an upstream.
 If its badge is missing because several remotes hold that branch, set the branch's upstream to
@@ -319,16 +328,29 @@ pull requests with the `link_pull_request` tool.
 
 Agents can also read, open, update, reply on, and merge pull requests in the thread's repository
 through T3 Code's own tools, which use the same sign-in as the Pull requests page. An agent merges
-only the commit it last read: if someone pushed since, the merge is refused. On github.com an
-agent can also land a GitHub stack in one merge, like **Merge stack** below.
+only the commit it last read: if someone pushed since, the merge is refused. An agent can also land
+a GitHub stack or branch stack in one merge, and restack dependent worktree branches with
+`t3_worktree_restack`.
 
 Use **Link pull request to thread** in the command palette to keep a pull request with the thread. From a review
 on the Pull requests page, **Link to thread** lets you search for an active thread. The review header
 also lists the threads that link to it, including archived threads, so you can return to their context.
 
 Thread badges show a stack's layer count or the current review number with a count of additional
-links. Clicking a badge with more than one review opens the **Linked items** panel. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
+links. Clicking a badge with more than one review opens the **Linked items** panel. Right-click
+a badge to open it in the PR viewer, merge it, or stack a new thread on its branch, which opens the
+composer with that branch as the new worktree's base. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
 Linking and unlinking are available in the web and desktop clients.
+
+In the web and desktop sidebar, a thread whose worktree or pull request builds on another thread's
+branch nests under that thread, and the stack moves as one item: it waits in the Working shelf only
+while every thread in it is working. Hover any thread in a stack to see the whole stack.
+
+A pull request in such a stack shows the whole stack on its Summary tab. When the pull request
+below it is still open, merging merges the stack from the bottom up; **Merge only** in the actions
+menu lands just this one in the branch below it. Merging a pull request that others build on moves
+them to its base, and can rebase their threads' branches too. **Restack** in the actions menu
+rebases the threads above a branch after it changes.
 
 The **Linked items** panel lists every review and groups stacks. Unlink a review from its
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;

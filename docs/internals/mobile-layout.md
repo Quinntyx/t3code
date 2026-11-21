@@ -49,7 +49,9 @@ Platform splits live in layers 1, 2 and 4, as `.ios` and `.android` files.
   Android-only in the JS column path is still live on those iPads.
 - Android renders `Home` twice: in the sidebar column and as the root of the content stack. The
   sidebar copy is never the focused route, so hooks that gate on focus (such as Back handling)
-  must also accept `usePaneRole() === "sidebar"`.
+  must also accept `usePaneRole() === "sidebar"`. Without split view, Android also renders the
+  thread list in the left drawer (`ThreadListDrawerPanel`) once it first opens; that copy is
+  never the focused route either.
 - Modals and full-screen pages are presented over the columns and render with no pane role, so
   they get no column chrome.
 - On iOS each inspector pane is a native screen of its own, and only the active one is attached.

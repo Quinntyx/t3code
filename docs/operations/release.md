@@ -2,7 +2,90 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+## Quinntyx's Forgejo fork
+
+The authoritative source is [Forgejo](https://git.quinntyx.dev/quinntyx/t3code).
+Forgejo's server-side push mirror keeps `Quinntyx/t3code` on GitHub available for
+existing package sources; GitHub Actions is disabled on that mirror. Existing
+GitHub releases remain there, but new fork builds are Forgejo artifacts and
+packages, not GitHub releases.
+
+`.forgejo/workflows/ci.yml` runs changed-file checks and builds Linux x64 AppImages
+and Intel macOS DMGs on the local `ubuntu-latest` runner. Successful pushes to `main` publish the stable
+update feed at
+`https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-desktop/stable/`.
+The runner needs an isolated Linux job container with root access for native build
+dependencies. `PACKAGES_TOKEN` is a Forgejo Actions secret scoped to `write:package`.
+Branch and pull-request builds upload artifacts but never advance the feed.
+Versions are `year.month.run-number`, independently of upstream versions.
+
+Download the first AppImage from Forgejo Actions, place it in a **user-writable**
+directory, make it executable, and launch that copy. Keep the stable update channel
+selected. The existing pacman-owned `/opt` installation cannot replace itself:
+keep it as a fallback, but do not point the updater at package-managed files.
+Subsequent AppImage updates use the normal in-app update controls. Both checks and
+downloads require Tailscale; the HTTPS endpoint is served only on the tailnet.
+
+The macOS build is packaged on Linux, so it is unsigned and has no passkey support.
+Download `t3code-mac-x64` from Forgejo Actions and drag the app into Applications.
+macOS blocks its first launch: choose **Open Anyway** in System Settings → Privacy &
+Security, or run `xattr -dr com.apple.quarantine "/Applications/T3 Code (Beta).app"`
+before opening it. Updates then arrive through the same
+in-app controls and feed as the AppImage. Squirrel.Mac refuses unsigned apps, so this
+build unpacks the downloaded zip and replaces its own bundle when it restarts; that
+needs the app in a folder you can write to, which a mounted disk image is not. The
+job downloads Apple's macOS SDK from a third-party mirror pinned by checksum. See
+[macOS DMGs from Linux](./development.md#macos-dmgs-from-linux).
+
+`.forgejo/workflows/mobile.yml` exports Android and iOS updates with Expo's native
+fingerprint and publishes them to tailnet-only Forgejo package feeds on `main`.
+These feeds require a **new fork-native installation**; an upstream or existing
+EAS binary still points to Expo's original update service. JavaScript-only changes
+can update in-app; native dependency/config changes require a new native binary.
+Fork CI builds a standalone ARM64 **T3 Code Preview** APK by default. Manual
+dispatches can set `build_android=false` to skip it. The APK retains package
+`com.t3tools.t3code.preview` and the original Preview debug signing key, so install
+it over the existing Preview app without uninstalling or losing its settings.
+CI verifies the package, display name, and signing certificate before uploading
+`t3code-preview-android-arm64`. Expo OTA updates are disabled for this APK;
+update it by installing a newer Preview APK, not through the production feed.
+
+For a separate native client using those OTA feeds, set `APP_VARIANT=production`,
+`T3CODE_MOBILE_APP_ID=dev.quinntyx.t3code`, and `T3CODE_MOBILE_UPDATE_URL` to
+`https://araveia.tail985727.ts.net:8443/api/packages/quinntyx/generic/t3code-mobile/<android-or-ios>/manifest.json`.
+Use the exported manifest's `runtimeVersion` as
+`T3CODE_MOBILE_RUNTIME_VERSION` when building the matching native client. Existing
+production APKs use the separate `t3code` signing key backed up privately in
+`~/.local/share/t3code-fork/`; preserve that backup for production app upgrades.
+The mobile workflow is called by Fork CI after its quality gate, not independently.
+Publication is serialized, and an obsolete main revision cannot advance a feed.
+The Linux runner can export iOS JavaScript, but an installable iOS binary still
+requires a Mac runner and Apple signing/provisioning. Signed macOS builds, Windows builds
+and upstream npm/AUR publishing are not enabled by the fork workflows.
+
+### Tailnet update endpoint
+
+The adapter in `.forgejo/hosting/` shares the existing `forgejo_default` Docker
+network without changing the Forgejo installation. It adds Expo's required response
+headers and selects the manifest using the client's `expo-runtime-version` header.
+Different native runtimes retain separate package versions and cannot overwrite
+each other's updates. Assets use immutable SHA-256 names.
+
+Deploy only the adapter's two files to a durable directory, not a temporary worktree:
+
+```sh
+mkdir -p ~/.local/share/t3code-fork/hosting
+cp .forgejo/hosting/docker-compose.yml .forgejo/hosting/nginx.conf ~/.local/share/t3code-fork/hosting/
+docker compose -p t3code-updates -f ~/.local/share/t3code-fork/hosting/docker-compose.yml up -d
+tailscale serve --bg --https=8443 http://127.0.0.1:3081
+```
+
+This leaves the existing HTTPS service on port 443 alone. The adapter listens on
+loopback only; Tailscale terminates HTTPS with the machine's trusted tailnet certificate.
+
+## Upstream release checklist
+
+The remaining sections describe upstream's unified stable and nightly releases.
 
 Beta is the product label, not a release channel or version suffix. Release channels
 remain stable and nightly. To ship 0.1.0 Beta, use `channel=stable` and

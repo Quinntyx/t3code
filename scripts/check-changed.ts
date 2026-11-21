@@ -502,7 +502,8 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
     "packages/source-control-github",
   ].filter((dir) => files.some((file) => file.startsWith(`${dir}/`)));
   const filters = (names: ReadonlyArray<string>) => names.flatMap((name) => ["--filter", name]);
-  const typecheckWorkers = Math.min(concurrency, affected.length);
+  // Bound compiler memory on shared CI runners.
+  const typecheckWorkers = ci ? 1 : Math.min(concurrency, affected.length);
   const command = (name: string, args: ReadonlyArray<string>) => ({ name, run: vp(args) });
   const compilerFiles = compilerApps.reduce((count, app) => count + app.names.length, 0);
 
@@ -529,6 +530,7 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
               "run",
               "--cache",
               "--parallel",
+              "--verbose",
               "--concurrency-limit",
               String(typecheckWorkers),
               ...filters(affected),

@@ -712,7 +712,7 @@ it("rebuilds the template from this checkout and sends a child T3's task prompt"
   assert.notEqual(prompt?.text, childCase.prompt);
 });
 
-it("lists link tools only while a case turns the beta on, and sends chips as T3 projects them", () => {
+it("lists enabled feature tools and sends chips as T3 projects them", () => {
   const off = buildBase(template, { model: "claude-sonnet-5-5", keepUserInstructions: false });
   const on = buildBase(template, {
     model: "claude-sonnet-5-5",
@@ -727,6 +727,36 @@ it("lists link tools only while a case turns the beta on, and sends chips as T3 
     on.t3.map((tool) => tool.name),
     "mcp__t3-code__t3_environment_link",
   );
+
+  for (const [email, expected] of [
+    [undefined, []],
+    [{ drafts: true, inbox: false, tagging: true }, ["compose_email"]],
+    [
+      { drafts: false, inbox: true, tagging: false },
+      ["email_accounts", "email_search", "email_read", "email_attachment", "email_refresh"],
+    ],
+    [
+      { drafts: true, inbox: true, tagging: true },
+      [
+        "compose_email",
+        "email_accounts",
+        "email_search",
+        "email_read",
+        "email_tag",
+        "email_attachment",
+        "email_refresh",
+      ],
+    ],
+  ] as const) {
+    const enabled = buildBase(template, {
+      model: "claude-sonnet-5-5",
+      keepUserInstructions: false,
+      email,
+    })
+      .t3.map((tool) => normalizeToolName(tool.name))
+      .filter((name) => name.startsWith("email_") || name === "compose_email");
+    assert.deepEqual(enabled, [...expected]);
+  }
 
   const testCase: McpToolUseCase = {
     ...childCase,

@@ -44,6 +44,7 @@ import * as Contracts from "@t3tools/contracts";
 import {
   EnvironmentId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
+  ORCHESTRATOR_MCP_THREAD_WATCH_NEXT,
   PullRequestState,
   ThreadId,
 } from "@t3tools/contracts";
@@ -54,6 +55,7 @@ import { buildCodexAdditionalContext } from "../../apps/server/src/provider/Code
 import { makeSideChatContext } from "../../apps/server/src/orchestration-v2/ContextHandoffService.ts";
 import { withInlineContext } from "../../apps/server/src/orchestration-v2/ContextHandoffDelivery.ts";
 import { AttachmentToolkit } from "../../apps/server/src/mcp/toolkits/attachment/tools.ts";
+import { ConnectorsToolkit } from "../../apps/server/src/mcp/toolkits/connectors/tools.ts";
 import { DeviceToolkit } from "../../apps/server/src/mcp/toolkits/device/tools.ts";
 import { EnvironmentToolkit } from "../../apps/server/src/mcp/toolkits/environment/tools.ts";
 import { HtmlToolkit } from "../../apps/server/src/mcp/toolkits/html/tools.ts";
@@ -323,6 +325,9 @@ export const McpToolUseCase = Schema.Struct({
     linkedEnvironments: Schema.optional(Schema.Boolean),
     /** false: the project is on no forge T3 reads, so T3 hides its forge tools. */
     forge: Schema.optional(Schema.Boolean),
+    email: Schema.optional(
+      Schema.Struct({ drafts: Schema.Boolean, inbox: Schema.Boolean, tagging: Schema.Boolean }),
+    ),
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
@@ -463,6 +468,7 @@ export const normalizeToolInput = (name: string, input: unknown) => {
 const t3SourceTools: ReadonlyArray<Tool.Any> = [
   OrchestratorToolkit,
   ThreadToolkit,
+  ConnectorsToolkit,
   AttachmentToolkit,
   ProjectToolkit,
   EnvironmentToolkit,
@@ -532,15 +538,24 @@ const hiddenFromSubagents = enabledWhen(McpInvocationContext.hiddenFromSubagents
 const hiddenWhileLinksOff = enabledWhen(McpInvocationContext.hiddenWhileLinksOff);
 // T3 lists PR and CI tools only to a thread whose project is on a forge it reads.
 const hiddenWithoutForge = enabledWhen(McpInvocationContext.hiddenWithoutForge);
+// Email starts off too; `external_connectors` stays listed so agents can find it.
+const hiddenWhileEmailOff = enabledWhen(McpInvocationContext.hiddenWhileEmailOff);
+const hiddenWhileInboxOff = enabledWhen(McpInvocationContext.hiddenWhileInboxOff);
+const hiddenWhileTaggingOff = enabledWhen(McpInvocationContext.hiddenWhileEmailTaggingOff);
 const visibleT3Tools = (options: {
   readonly subagent?: boolean;
   readonly links?: boolean;
   readonly forge?: boolean;
+  readonly email?: McpToolUseCase["setup"]["email"];
 }) =>
   t3Tools.filter(
     (tool) =>
       (options.links === true || !hiddenWhileLinksOff.has(tool.name)) &&
       (options.forge !== false || !hiddenWithoutForge.has(tool.name)) &&
+      (options.email?.drafts === true || !hiddenWhileEmailOff.has(tool.name)) &&
+      (options.email?.inbox === true || !hiddenWhileInboxOff.has(tool.name)) &&
+      ((options.email?.inbox === true && options.email.tagging) ||
+        !hiddenWhileTaggingOff.has(tool.name)) &&
       !(options.subagent === true && hiddenFromSubagents.has(tool.name)),
   );
 
@@ -652,6 +667,7 @@ export const buildBase = (
     readonly subagent?: boolean;
     readonly links?: boolean;
     readonly forge?: boolean;
+    readonly email?: McpToolUseCase["setup"]["email"];
     /** A native subagent starts from its task: T3 appends nothing to its system prompt. */
     readonly nativeSubagent?: boolean;
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
@@ -749,6 +765,7 @@ const buildCodexBase = (
     readonly subagent?: boolean;
     readonly links?: boolean;
     readonly forge?: boolean;
+    readonly email?: McpToolUseCase["setup"]["email"];
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
     readonly deviceAccess?: boolean;
     /** false: the thread has no agent browser access, so T3's text leaves the browser out. */
@@ -1726,6 +1743,11 @@ const withProductFields = (name: string, value: unknown, child: boolean): unknow
       const task = linked(value, "childThreadId") as Record<string, unknown>;
       const running = task.status === "running" && task.next === undefined;
       return running ? { ...task, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : task;
+    }
+    case "t3_thread_wait": {
+      // A top-level agent's timed-out wait on a thread becomes a watch; a child keeps blocking.
+      const watched = value.timedOut === true && value.next === undefined && !child;
+      return watched ? { ...value, next: ORCHESTRATOR_MCP_THREAD_WATCH_NEXT } : value;
     }
     case "t3_thread_read":
       return { ...value, thread: linked(value.thread) };
@@ -2958,6 +2980,7 @@ const main = Effect.gen(function* () {
     browserAccess: boolean,
     links: boolean,
     forge: boolean,
+    email?: McpToolUseCase["setup"]["email"],
   ): Effect.Effect<Base, Schema.SchemaError> =>
     codex
       ? decodeCodexCapture(template).pipe(
@@ -2969,6 +2992,7 @@ const main = Effect.gen(function* () {
               subagent: role === "delegated-child",
               links,
               forge,
+              email,
               deviceAccess,
               browserAccess,
             }),
@@ -2983,6 +3007,7 @@ const main = Effect.gen(function* () {
               nativeSubagent: role === "native-subagent",
               links,
               forge,
+              email,
               deviceAccess,
               browserAccess,
             });
@@ -2995,27 +3020,29 @@ const main = Effect.gen(function* () {
         );
   // Codex has no native subagents; its cases with that role run as top-level threads.
   const baseKey = ({ setup }: McpToolUseCase) =>
-    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}:${setup.forge !== false}`;
+    JSON.stringify([
+      codex && setup.role === "native-subagent" ? "top" : setup.role,
+      setup.world?.deviceAgentAccess !== false,
+      setup.world?.browserAgentAccess !== false,
+      setup.linkedEnvironments === true,
+      setup.forge !== false,
+      setup.email ?? null,
+    ]);
   const base = yield* buildFor("top", true, true, false, true);
-  const bases = new Map<string, Base>([["top:true:true:false:true", base]]);
+  const bases = new Map<string, Base>();
   for (const testCase of selected) {
     const key = baseKey(testCase);
     if (bases.has(key)) continue;
-    const [role = "top", device, browser, links, forge] = key.split(":") as [
-      McpToolUseCase["setup"]["role"],
-      string,
-      string,
-      string,
-      string,
-    ];
+    const { setup } = testCase;
     bases.set(
       key,
       yield* buildFor(
-        role,
-        device === "true",
-        browser === "true",
-        links === "true",
-        forge === "true",
+        codex && setup.role === "native-subagent" ? "top" : setup.role,
+        setup.world?.deviceAgentAccess !== false,
+        setup.world?.browserAgentAccess !== false,
+        setup.linkedEnvironments === true,
+        setup.forge !== false,
+        setup.email,
       ),
     );
   }
