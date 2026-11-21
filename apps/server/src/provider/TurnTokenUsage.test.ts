@@ -522,6 +522,17 @@ describe("billable native turn usage", () => {
       ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 0), cachedInputTokens: 100 }],
     ]);
     expect(cached.unbilled).toEqual([usage("claude-haiku-4-5", 100, 0)]);
+    // The result's own main-agent usage is held back, so a same-model row waits for its message.
+    const reserved = deductClaudeLedgerUsage(
+      new Map([["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)]]),
+      [usage("claude-sonnet-4-6", 40, 1)],
+      undefined,
+      { input_tokens: 100, output_tokens: 20 },
+    );
+    expect([...reserved.growth]).toEqual([
+      ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
+    ]);
+    expect(reserved.unbilled).toEqual([usage("claude-sonnet-4-6", 40, 1)]);
   });
 
   it("adds Claude steering segments to the final measured result once", () => {

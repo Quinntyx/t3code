@@ -11410,6 +11410,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         growth,
                         context.liveBilledUsage,
                         (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+                        message.usage,
                       );
                       resultLedgerUsage.set(message, deducted.growth);
                       context.liveBilledUsage = deducted.unbilled;

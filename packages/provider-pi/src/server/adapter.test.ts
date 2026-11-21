@@ -3295,6 +3295,56 @@ describe("PiAdapterV2", () => {
       // Cumulative per child, not a sum of both snapshots.
       assert.deepEqual(completedUsage.providerTurn.turnTokenUsage?.subagentUsage, [childTotal]);
 
+      // A new child that has not answered yet turns the exact delegate total into a floor.
+      const secondChild = (exitCode: number | null, stopReason?: string) => ({
+        agent: "scout",
+        task: "check the tests",
+        exitCode,
+        ...(stopReason === undefined ? {} : { stopReason }),
+        stderr: "",
+        messages: [],
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: 0,
+        },
+      });
+      yield* fake.emit({
+        type: "tool_execution_update",
+        toolCallId: "call_sub_second",
+        toolName: "subagent",
+        partialResult: {
+          content: [{ type: "text", text: "(running...)" }],
+          details: { mode: "single", results: [secondChild(null)] },
+        },
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.turnTokenUsage?.otherUsageStatus === "partial",
+      );
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_second",
+        toolName: "subagent",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "done" }],
+          details: { mode: "single", results: [secondChild(0, "stop")] },
+        },
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "running" &&
+          event.providerTurn.turnTokenUsage?.subagentUsage !== undefined &&
+          event.providerTurn.turnTokenUsage.otherUsageStatus === undefined,
+      );
+
       yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
       yield* fake.emit({ type: "agent_settled" });
       const settled = yield* takeEvent(

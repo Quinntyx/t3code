@@ -1440,6 +1440,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           driver: PI_PROVIDER,
           nativeItemId: toolCallId,
         });
+        const delegatesPartial = () =>
+          [...turn.subagentUsage.values()].some((child) => !child.complete);
+        const wasPartial = delegatesPartial();
         let subagentUsageChanged = false;
         for (const [index, result] of results.entries()) {
           const agent = recordString(result, "agent");
@@ -1544,11 +1547,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               !samePiMessageUsage(previous.usage, nextUsage));
           if (countsChanged || previous?.complete !== complete) {
             turn.subagentUsage.set(nativeTaskId, { usage: nextUsage, complete });
-            // A child seen before its first answer changes nothing until it finishes.
-            subagentUsageChanged ||= countsChanged || finished;
+            subagentUsageChanged ||= countsChanged;
           }
         }
-        if (!subagentUsageChanged) return;
+        if (!subagentUsageChanged && delegatesPartial() === wasPartial) return;
         yield* emit({
           type: "provider_turn.updated",
           driver: PI_PROVIDER,

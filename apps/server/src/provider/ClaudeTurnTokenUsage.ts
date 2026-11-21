@@ -57,6 +57,14 @@ const TOKEN_FIELDS = [
   "reasoningTokens",
 ] as const;
 
+// Reasoning is part of output; frames and the ledger do not report it alike.
+const BILLED_TOKEN_FIELDS = [
+  "inputTokens",
+  "cachedInputTokens",
+  "cacheCreationTokens",
+  "outputTokens",
+] as const;
+
 type TokenField = (typeof TOKEN_FIELDS)[number];
 type TokenCounts = Record<TokenField, number>;
 type MeasuredTokenCounts = { readonly [Field in TokenField]?: number | undefined };
@@ -162,17 +170,27 @@ function inclusiveCounts(counts: TokenCounts): TokenCounts {
 }
 
 /**
- * Growth less usage already billed from frames of a window that settled without a result. The
- * kept baseline means a later growth holds all of that window's work, of which frames saw a
- * floor; a message still running reaches the ledger only in a later result, so what this growth
- * does not cover stays billed for the next one.
+ * Growth less usage frames billed to a window that settled without a result. What this growth
+ * does not cover (a message still running) stays billed for a later result. The result's own
+ * main-agent usage is not that work, so it is held back first.
  */
 export function deductClaudeLedgerUsage(
   growth: ClaudeModelLedger,
   billed: ReadonlyArray<TurnModelTokenUsage>,
   canonicalModel: (model: string) => string = (model) => model,
+  resultUsage?: unknown,
 ): { readonly growth: ClaudeModelLedger; readonly unbilled: TurnModelTokenUsage[] } {
   const remaining = new Map([...growth].map(([model, usage]) => [model, disjointCounts(usage)]));
+  const main = normalizeClaudeMainAgentTokenUsage(
+    { subtype: undefined, usage: resultUsage },
+    false,
+    "running",
+  );
+  const reserved = disjointCounts(main.usageStatus === "unavailable" ? {} : main);
+  const budget = disjointCounts(sumCounts(growth.values()));
+  for (const field of BILLED_TOKEN_FIELDS) {
+    budget[field] = Math.max(0, budget[field] - reserved[field]);
+  }
   const unbilled: TurnModelTokenUsage[] = [];
   for (const row of billed) {
     const model = canonicalModel(row.model);
@@ -180,13 +198,14 @@ export function deductClaudeLedgerUsage(
     for (const [key, usage] of growth) {
       if (canonicalModel(key) !== model && canonicalModel(usage.model) !== model) continue;
       const counts = remaining.get(key)!;
-      for (const field of TOKEN_FIELDS) {
-        const count = Math.min(counts[field], unclaimed[field]);
+      for (const field of BILLED_TOKEN_FIELDS) {
+        const count = Math.min(counts[field], unclaimed[field], budget[field]);
         counts[field] -= count;
         unclaimed[field] -= count;
+        budget[field] -= count;
       }
     }
-    if (TOKEN_FIELDS.some((field) => unclaimed[field] > 0)) {
+    if (BILLED_TOKEN_FIELDS.some((field) => unclaimed[field] > 0)) {
       unbilled.push(turnModelUsage(row.model, inclusiveCounts(unclaimed), false));
     }
   }
@@ -460,7 +479,7 @@ export function sealClaudeSegment(input: {
         if (measured === undefined) return false;
         const observed = disjointCounts(live);
         const billed = disjointCounts(measured);
-        return TOKEN_FIELDS.every((field) => observed[field] <= billed[field]);
+        return BILLED_TOKEN_FIELDS.every((field) => observed[field] <= billed[field]);
       }),
   };
 }

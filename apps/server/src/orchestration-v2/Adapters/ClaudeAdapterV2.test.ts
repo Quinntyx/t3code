@@ -12503,22 +12503,28 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         // Subagent frames carry message_start output; the ledger records the message once it ends.
-        yield* harness.offerAndWait(
-          claudeSdkFrame({
-            type: "assistant",
-            message: {
-              model: "claude-haiku-4-5",
-              id: "msg_unmeasured_child",
-              type: "message",
-              role: "assistant",
-              content: [{ type: "text", text: "Looking." }],
-              usage: { input_tokens: 30, output_tokens: 1 },
-            },
-            parent_tool_use_id: "toolu_unmeasured_child",
-            uuid: "00000000-0000-4000-8000-000000000793",
-            session_id: WAKE_NATIVE_SESSION,
-          }),
-        );
+        // One child shares the main agent's model, whose next results also bill the main agent.
+        for (const [model, id, inputTokens, uuid] of [
+          ["claude-haiku-4-5", "msg_unmeasured_child", 30, "00000000-0000-4000-8000-000000000793"],
+          ["claude-sonnet-4-6", "msg_unmeasured_peer", 40, "00000000-0000-4000-8000-000000000799"],
+        ] as const) {
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "assistant",
+              message: {
+                model,
+                id,
+                type: "message",
+                role: "assistant",
+                content: [{ type: "text", text: "Looking." }],
+                usage: { input_tokens: inputTokens, output_tokens: 1 },
+              },
+              parent_tool_use_id: `toolu_${id}`,
+              uuid,
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+        }
         yield* Queue.offer(
           harness.sdkMessages,
           claudeSdkFrame({
@@ -12588,7 +12594,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               cache_read_input_tokens: 0,
             },
             modelUsage: {
-              "claude-sonnet-4-6": billedModelUsage(500, 70),
+              "claude-sonnet-4-6": billedModelUsage(540, 75),
               "claude-haiku-4-5": billedModelUsage(30, 7),
             },
           }),
@@ -12621,6 +12627,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   cachedInputTokens: 0,
                   cacheCreationTokens: 0,
                 },
+                {
+                  model: "claude-sonnet-4-6",
+                  inputTokens: 40,
+                  outputTokens: 1,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                },
               ],
             },
             { input: 100, output: 20, subagentUsage: undefined },
@@ -12628,6 +12641,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               input: 100,
               output: 20,
               subagentUsage: [
+                {
+                  model: "claude-sonnet-4-6",
+                  inputTokens: 0,
+                  outputTokens: 4,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                },
                 {
                   model: "claude-haiku-4-5",
                   inputTokens: 0,
