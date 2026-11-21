@@ -8281,7 +8281,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const lastSegment = yield* sealTurnSegment(input.context, input.result);
           if (input.result === undefined) {
             const liveQuery = yield* Ref.get(queryContext);
-            if (liveQuery?.lastTurn === input.context) {
+            if (liveQuery?.lastTurn === input.context && !liveQuery.stopping) {
               liveQuery.liveBilledUsage.push(...lastSegment.mainRows, ...lastSegment.delegateRows);
             }
           }

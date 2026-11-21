@@ -536,6 +536,29 @@ describe("billable native turn usage", () => {
     });
     expect(reserved.delegateRows).toEqual([usage("claude-haiku-4-5", 30, 7)]);
     expect(reserved.carry).toEqual([usage("claude-sonnet-4-6", 40, 1)]);
+    // Frames name a gateway alias that the ledger reports under its canonical id.
+    const alias = {
+      result: { subtype: "success", usage: { input_tokens: 100, output_tokens: 20 } },
+      ledgerGrowth: new Map([
+        ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
+        ["gateway-haiku", usage("claude-haiku-4-5", 30, 7)],
+      ]),
+      mainMessages: new Map(),
+      mainModel: "claude-sonnet-4-6",
+    } as const;
+    const aliasCarry = sealClaudeSegment({
+      ...alias,
+      subagentMessages: new Map(),
+      carry: [usage("gateway-haiku", 30, 1)],
+    });
+    expect(aliasCarry.delegateRows).toEqual([usage("claude-haiku-4-5", 0, 6)]);
+    expect(aliasCarry.carry).toEqual([]);
+    expect(
+      sealClaudeSegment({
+        ...alias,
+        subagentMessages: new Map([["msg_child", usage("gateway-haiku", 30, 1)]]),
+      }).delegatesMeasured,
+    ).toBe(true);
   });
 
   it("adds Claude steering segments to the final measured result once", () => {

@@ -420,6 +420,8 @@ export function sealClaudeSegment(input: {
 
   const liveDelegates = totalsByModel(input.subagentMessages.values());
   const canonicalModel = input.canonicalModel ?? ((model: string) => model);
+  // Frames keep a gateway alias the ledger reports under Claude Code's canonical id.
+  const matchModel = (model: string) => canonicalModel(ledgerModel(model));
   const residual = growth === undefined ? undefined : ledgerResidual(growth, main);
   // Deducted after the main agent's claim, so this result's own work cannot absorb the carry.
   const carried =
@@ -428,7 +430,7 @@ export function sealClaudeSegment(input: {
       : deductClaudeLedgerUsage(
           new Map(residual.map((row) => [row.model, row])),
           input.carry,
-          canonicalModel,
+          matchModel,
         );
   const delegateRows =
     residual === undefined
@@ -447,7 +449,7 @@ export function sealClaudeSegment(input: {
           ),
         );
   const delegatesByModel = totalsByModel(
-    delegateRows.map((usage) => ({ ...usage, model: canonicalModel(usage.model) })),
+    delegateRows.map((usage) => ({ ...usage, model: matchModel(usage.model) })),
   ).countsByModel;
   // The result omits subagent and compaction work that the process-wide ledger records.
   const ledgerTotal = growth === undefined ? undefined : sumCounts(growth.values());
@@ -487,7 +489,7 @@ export function sealClaudeSegment(input: {
     delegatesMeasured:
       growth !== undefined &&
       [...coveredDelegates.countsByModel].every(([model, live]) => {
-        const measured = delegatesByModel.get(canonicalModel(model));
+        const measured = delegatesByModel.get(matchModel(model));
         if (measured === undefined) return false;
         const observed = disjointCounts(live);
         const billed = disjointCounts(measured);
