@@ -171,26 +171,14 @@ function inclusiveCounts(counts: TokenCounts): TokenCounts {
 
 /**
  * Growth less usage frames billed to a window that settled without a result. What this growth
- * does not cover (a message still running) stays billed for a later result. The result's own
- * main-agent usage is not that work, so it is held back first.
+ * does not cover (a message still running) stays billed for a later result.
  */
 export function deductClaudeLedgerUsage(
   growth: ClaudeModelLedger,
   billed: ReadonlyArray<TurnModelTokenUsage>,
   canonicalModel: (model: string) => string = (model) => model,
-  resultUsage?: unknown,
 ): { readonly growth: ClaudeModelLedger; readonly unbilled: TurnModelTokenUsage[] } {
   const remaining = new Map([...growth].map(([model, usage]) => [model, disjointCounts(usage)]));
-  const main = normalizeClaudeMainAgentTokenUsage(
-    { subtype: undefined, usage: resultUsage },
-    false,
-    "running",
-  );
-  const reserved = disjointCounts(main.usageStatus === "unavailable" ? {} : main);
-  const budget = disjointCounts(sumCounts(growth.values()));
-  for (const field of BILLED_TOKEN_FIELDS) {
-    budget[field] = Math.max(0, budget[field] - reserved[field]);
-  }
   const unbilled: TurnModelTokenUsage[] = [];
   for (const row of billed) {
     const model = canonicalModel(row.model);
@@ -199,10 +187,9 @@ export function deductClaudeLedgerUsage(
       if (canonicalModel(key) !== model && canonicalModel(usage.model) !== model) continue;
       const counts = remaining.get(key)!;
       for (const field of BILLED_TOKEN_FIELDS) {
-        const count = Math.min(counts[field], unclaimed[field], budget[field]);
+        const count = Math.min(counts[field], unclaimed[field]);
         counts[field] -= count;
         unclaimed[field] -= count;
-        budget[field] -= count;
       }
     }
     if (BILLED_TOKEN_FIELDS.some((field) => unclaimed[field] > 0)) {
@@ -334,6 +321,8 @@ export interface ClaudeSegmentUsage {
   // The main figure is exact: a valid success, or a tool-boundary abort whose result won.
   readonly mainComplete: boolean;
   readonly delegatesMeasured: boolean;
+  // Frame-billed rows this segment's ledger growth did not yet contain.
+  readonly carry: ReadonlyArray<TurnModelTokenUsage>;
 }
 
 // Splits a result's main usage by the models its messages report; the rest goes to `mainModel`.
@@ -391,6 +380,8 @@ export function sealClaudeSegment(input: {
   readonly abortedBy?: "aborted_streaming" | "aborted_tools" | undefined;
   // Messages of subagents still running at the result; the ledger records them once they end.
   readonly unfinishedMessageIds?: ReadonlySet<string>;
+  // Usage frames billed to windows of this process that settled without a result.
+  readonly carry?: ReadonlyArray<TurnModelTokenUsage>;
 }): ClaudeSegmentUsage {
   const { result, ledgerGrowth: growth, ledgerModelNames: names } = input;
   const ledgerModel = (model: string) => growth?.get(model)?.model ?? names?.get(model) ?? model;
@@ -428,8 +419,25 @@ export function sealClaudeSegment(input: {
   const mainCounts = fromResult ?? liveTotal;
 
   const liveDelegates = totalsByModel(input.subagentMessages.values());
+  const canonicalModel = input.canonicalModel ?? ((model: string) => model);
+  const residual = growth === undefined ? undefined : ledgerResidual(growth, main);
+  // Deducted after the main agent's claim, so this result's own work cannot absorb the carry.
+  const carried =
+    residual === undefined || input.carry === undefined || input.carry.length === 0
+      ? undefined
+      : deductClaudeLedgerUsage(
+          new Map(residual.map((row) => [row.model, row])),
+          input.carry,
+          canonicalModel,
+        );
   const delegateRows =
-    growth === undefined ? modelRows(liveDelegates) : ledgerResidual(growth, main);
+    residual === undefined
+      ? modelRows(liveDelegates)
+      : carried === undefined
+        ? residual
+        : [...carried.growth.values()].filter(
+            (row) => (row.inputTokens ?? 0) + (row.outputTokens ?? 0) > 0,
+          );
   const coveredDelegates =
     input.unfinishedMessageIds === undefined || input.unfinishedMessageIds.size === 0
       ? liveDelegates
@@ -438,12 +446,16 @@ export function sealClaudeSegment(input: {
             input.unfinishedMessageIds!.has(id) ? [] : [usage],
           ),
         );
-  const canonicalModel = input.canonicalModel ?? ((model: string) => model);
   const delegatesByModel = totalsByModel(
     delegateRows.map((usage) => ({ ...usage, model: canonicalModel(usage.model) })),
   ).countsByModel;
   // The result omits subagent and compaction work that the process-wide ledger records.
   const ledgerTotal = growth === undefined ? undefined : sumCounts(growth.values());
+  if (ledgerTotal !== undefined && residual !== undefined && carried !== undefined) {
+    const before = sumCounts(residual);
+    const after = sumCounts(delegateRows);
+    for (const field of TOKEN_FIELDS) ledgerTotal[field] -= before[field] - after[field];
+  }
   return {
     mainUsage:
       fromResult !== undefined
@@ -481,6 +493,7 @@ export function sealClaudeSegment(input: {
         const billed = disjointCounts(measured);
         return BILLED_TOKEN_FIELDS.every((field) => observed[field] <= billed[field]);
       }),
+    carry: carried?.unbilled ?? input.carry ?? [],
   };
 }
 

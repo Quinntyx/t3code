@@ -522,17 +522,20 @@ describe("billable native turn usage", () => {
       ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 0), cachedInputTokens: 100 }],
     ]);
     expect(cached.unbilled).toEqual([usage("claude-haiku-4-5", 100, 0)]);
-    // The result's own main-agent usage is held back, so a same-model row waits for its message.
-    const reserved = deductClaudeLedgerUsage(
-      new Map([["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)]]),
-      [usage("claude-sonnet-4-6", 40, 1)],
-      undefined,
-      { input_tokens: 100, output_tokens: 20 },
-    );
-    expect([...reserved.growth]).toEqual([
-      ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
-    ]);
-    expect(reserved.unbilled).toEqual([usage("claude-sonnet-4-6", 40, 1)]);
+    // The carry comes out of what the main agent left; another model's growth cannot absorb it.
+    const reserved = sealClaudeSegment({
+      result: { subtype: "success", usage: { input_tokens: 100, output_tokens: 20 } },
+      ledgerGrowth: new Map([
+        ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 100, 20)],
+        ["claude-haiku-4-5", usage("claude-haiku-4-5", 30, 7)],
+      ]),
+      mainMessages: new Map(),
+      subagentMessages: new Map(),
+      mainModel: "claude-sonnet-4-6",
+      carry: [usage("claude-sonnet-4-6", 40, 1)],
+    });
+    expect(reserved.delegateRows).toEqual([usage("claude-haiku-4-5", 30, 7)]);
+    expect(reserved.carry).toEqual([usage("claude-sonnet-4-6", 40, 1)]);
   });
 
   it("adds Claude steering segments to the final measured result once", () => {

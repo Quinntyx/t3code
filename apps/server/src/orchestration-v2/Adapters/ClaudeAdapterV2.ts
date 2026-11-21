@@ -31,7 +31,6 @@ import {
   claudeModelLedger,
   claudeReportedContextWindows,
   claudeTurnTokenUsage,
-  deductClaudeLedgerUsage,
   liveClaudeTurnTokenUsage,
   recordClaudeMessageUsage,
   sealClaudeSegment,
@@ -5207,7 +5206,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         // Wake buffers replay result frames, so ledger growth is measured once on arrival.
-        const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeModelLedger>();
+        const resultLedgerUsage = new WeakMap<
+          SDKMessage,
+          { readonly growth: ClaudeModelLedger; readonly query: ClaudeLiveQueryContext }
+        >();
         const resultsReportingNewContextWindow = new WeakSet<SDKMessage>();
         // A worktree handoff changes the project settings even within one session.
         let bypassCache: { cwd: string | null; availability: ClaudeBypassAvailability } | null =
@@ -5557,9 +5559,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               unfinishedMessageIds.add(messageId);
             }
           }
+          const ledger = result === undefined ? undefined : resultLedgerUsage.get(result);
           const segment = sealClaudeSegment({
             result,
-            ledgerGrowth: result === undefined ? undefined : resultLedgerUsage.get(result),
+            ledgerGrowth: ledger?.growth,
+            carry: ledger?.query.liveBilledUsage,
             abortedBy:
               result !== undefined && isClaudeActiveSteeringAbortResult(result)
                 ? result.terminal_reason
@@ -5571,6 +5575,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             canonicalModel: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
             ledgerModelNames: context.ledgerModelNames,
           });
+          if (ledger !== undefined) ledger.query.liveBilledUsage = [...segment.carry];
           for (const id of context.mainMessages.keys()) context.sealedMessageIds.add(id);
           for (const id of context.subagentMessages.keys()) context.sealedMessageIds.add(id);
           context.mainMessages.clear();
@@ -11402,19 +11407,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   if (message.type === "result") {
                     const ledger = claudeModelLedger(message.modelUsage);
                     const growth = claudeLedgerDelta(context.modelLedger, ledger);
-                    if (growth === undefined || context.liveBilledUsage.length === 0) {
-                      if (growth !== undefined) resultLedgerUsage.set(message, growth);
-                      context.liveBilledUsage = [];
-                    } else {
-                      const deducted = deductClaudeLedgerUsage(
-                        growth,
-                        context.liveBilledUsage,
-                        (model) => canonicalClaudeSubagentModel(modelCatalog, model),
-                        message.usage,
-                      );
-                      resultLedgerUsage.set(message, deducted.growth);
-                      context.liveBilledUsage = deducted.unbilled;
-                    }
+                    if (growth === undefined) context.liveBilledUsage = [];
+                    else resultLedgerUsage.set(message, { growth, query: context });
                     for (const [model, usage] of ledger ?? []) {
                       context.ledgerModelNames.set(model, usage.model);
                     }
@@ -11708,6 +11702,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 });
                 const wakeAbsorbed = (yield* Ref.get(absorbedWakes)).has(nativeThreadId);
                 yield* forgetAbsorbedWake(nativeThreadId);
+                // The user turn that absorbed this wake already billed its messages.
+                if (wakeAbsorbed) {
+                  for (const entry of drained) {
+                    if (entry.type === "assistant") context.sealedMessageIds.add(entry.message.id);
+                    if (entry.type === "stream_event" && entry.event.type === "message_start") {
+                      context.sealedMessageIds.add(entry.event.message.id);
+                    }
+                  }
+                }
                 if (drained.length === 0) {
                   const completedAt = yield* DateTime.now;
                   yield* finalizeActiveTurn({ context, status: "completed", completedAt });

@@ -12566,8 +12566,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               cache_creation_input_tokens: 0,
               cache_read_input_tokens: 0,
             },
-            // The child's message has not ended, so this ledger does not bill it yet.
-            modelUsage: { "claude-sonnet-4-6": billedModelUsage(400, 50) },
+            // The Haiku child has ended; the Sonnet child has not, so this ledger bills only Haiku.
+            modelUsage: {
+              "claude-sonnet-4-6": billedModelUsage(400, 50),
+              "claude-haiku-4-5": billedModelUsage(30, 7),
+            },
           }),
         );
         yield* harness.awaitTerminal(2);
@@ -12636,7 +12639,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 },
               ],
             },
-            { input: 100, output: 20, subagentUsage: undefined },
+            {
+              input: 100,
+              output: 20,
+              subagentUsage: [
+                {
+                  model: "claude-haiku-4-5",
+                  inputTokens: 0,
+                  outputTokens: 6,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                },
+              ],
+            },
             {
               input: 100,
               output: 20,
@@ -12645,13 +12660,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   model: "claude-sonnet-4-6",
                   inputTokens: 0,
                   outputTokens: 4,
-                  cachedInputTokens: 0,
-                  cacheCreationTokens: 0,
-                },
-                {
-                  model: "claude-haiku-4-5",
-                  inputTokens: 0,
-                  outputTokens: 6,
                   cachedInputTokens: 0,
                   cacheCreationTokens: 0,
                 },
@@ -13547,6 +13555,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           harness.events.some(
             (event) =>
               event.type === "message.updated" && event.message.text === WAKE_ASSISTANT_TEXT,
+          ),
+        );
+        // The absorbing turn's result billed the wake's message; the replay books it again nowhere.
+        assert.isFalse(
+          harness.events.some(
+            (event) =>
+              event.type === "provider_turn.updated" &&
+              event.providerTurn.ordinal === 3 &&
+              event.providerTurn.turnTokenUsage?.inputTokens !== undefined,
           ),
         );
       }).pipe(
