@@ -674,21 +674,20 @@ function applyLegacyForkVisualSettingsRecord(parsed: Record<string, unknown>): b
  */
 export function migrateLegacyForkVisualSettings(): boolean {
   if (typeof window === "undefined") return false;
+  // On Electron desktop, `migrateLegacyDesktopForkVisualSettings()` owns the migration so
+  // legacy browser localStorage cannot shadow the desktop JSON file or set the flag early.
+  if (window.desktopBridge?.getLegacyVisualSettings) return false;
   try {
     if (window.localStorage.getItem(LEGACY_VISUAL_MIGRATED_KEY) === "1") return false;
     const rawSettings = window.localStorage.getItem(LEGACY_CLIENT_SETTINGS_STORAGE_KEY);
     if (!rawSettings) {
-      // On Electron desktop, settings live in the main-process JSON file, so leave the flag unset
-      // for `migrateLegacyDesktopForkVisualSettings()` when `desktopBridge` is present.
-      if (!window.desktopBridge?.getLegacyVisualSettings) {
-        window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
-      }
+      window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
       return false;
     }
-    window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
     const parsed: unknown = JSON.parse(rawSettings);
-    if (!isRecord(parsed)) return false;
-    return applyLegacyForkVisualSettingsRecord(parsed);
+    const migrated = isRecord(parsed) ? applyLegacyForkVisualSettingsRecord(parsed) : false;
+    window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
+    return migrated;
   } catch {
     return false;
   }
@@ -701,9 +700,20 @@ export async function migrateLegacyDesktopForkVisualSettings(): Promise<boolean>
   try {
     if (window.localStorage.getItem(LEGACY_VISUAL_MIGRATED_KEY) === "1") return false;
     const parsed = await readLegacy();
+    let migrated = false;
+    if (isRecord(parsed)) {
+      migrated = applyLegacyForkVisualSettingsRecord(parsed);
+    } else {
+      const rawSettings = window.localStorage.getItem(LEGACY_CLIENT_SETTINGS_STORAGE_KEY);
+      if (rawSettings) {
+        const localParsed: unknown = JSON.parse(rawSettings);
+        if (isRecord(localParsed)) {
+          migrated = applyLegacyForkVisualSettingsRecord(localParsed);
+        }
+      }
+    }
     window.localStorage.setItem(LEGACY_VISUAL_MIGRATED_KEY, "1");
-    if (!isRecord(parsed)) return false;
-    return applyLegacyForkVisualSettingsRecord(parsed);
+    return migrated;
   } catch {
     return false;
   }

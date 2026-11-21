@@ -6,9 +6,18 @@ import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import VoiceNotificationIndex from "./Migrations/103_VoiceNotificationIndex.ts";
 import SubagentLineageIndex from "./Migrations/104_SubagentLineageIndex.ts";
 import { reconciledForkHistory } from "./reconcileForkMigration.ts";
+
+// Historical fork migration 81 lacked `json_valid(payload_json)` before migration 103 hardened it.
+const LegacyVoiceNotificationIndex = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS orchestration_v2_projection_turn_items_voice_idx
+    ON orchestration_v2_projection_turn_items(updated_at DESC, ordinal DESC, turn_item_id DESC)
+    WHERE type = 'system_notice' AND json_type(payload_json, '$.voiceNotification') = 'object'
+  `;
+});
 
 const readHistory = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -18,12 +27,12 @@ const readHistory = Effect.gen(function* () {
   return rows.map((row) => [row.migration_id, row.name] as const);
 });
 
-const readIndexNames = Effect.gen(function* () {
+const readIndexes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ readonly name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL
+  const rows = yield* sql<{ readonly name: string; readonly sql: string }>`
+    SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL
   `;
-  return rows.map((row) => row.name);
+  return new Map(rows.map((row) => [row.name, row.sql]));
 });
 
 describe("legacy fork migration reconciliation", () => {
@@ -35,7 +44,7 @@ describe("legacy fork migration reconciliation", () => {
         yield* runMigrations({ toMigrationInclusive: 80 });
         yield* Migrator.make({})({
           loader: Migrator.fromRecord({
-            "81_VoiceNotificationIndex": VoiceNotificationIndex,
+            "81_VoiceNotificationIndex": LegacyVoiceNotificationIndex,
             ...(withSubagentIndex ? { "82_SubagentLineageIndex": SubagentLineageIndex } : {}),
           }),
         });
@@ -46,9 +55,20 @@ describe("legacy fork migration reconciliation", () => {
           migrationManifest.filter(([id]) => id >= 81),
         );
         assert.deepStrictEqual(yield* readHistory, migrationManifest);
-        const indexes = yield* readIndexNames;
-        assert.include(indexes, "orchestration_v2_projection_turn_items_voice_idx");
-        assert.include(indexes, "orchestration_v2_projection_threads_subagent_parent_idx");
+        const indexes = yield* readIndexes;
+        const voiceIndexSql = indexes.get("orchestration_v2_projection_turn_items_voice_idx");
+        assert.isDefined(voiceIndexSql);
+        assert.include(voiceIndexSql, "json_valid(payload_json)");
+        assert.isTrue(indexes.has("orchestration_v2_projection_threads_subagent_parent_idx"));
+
+        // Malformed system_notice JSON must not fail index maintenance after migration 103 rebuilds it.
+        yield* sql`
+          INSERT INTO orchestration_v2_projection_turn_items (
+            turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
+          ) VALUES (
+            'item-bad-json', 'thread-1', 1, 'system_notice', 'completed', '2026-01-01T00:00:00.000Z', '{bad'
+          )
+        `;
 
         // Second startup must be an idempotent read-only no-op.
         yield* sql`PRAGMA query_only = ON`;
@@ -63,7 +83,7 @@ describe("legacy fork migration reconciliation", () => {
         yield* runMigrations({ toMigrationInclusive: 80 });
         yield* Migrator.make({})({
           loader: Migrator.fromRecord({
-            "81_VoiceNotificationIndex": VoiceNotificationIndex,
+            "81_VoiceNotificationIndex": LegacyVoiceNotificationIndex,
             "82_SubagentLineageIndex": SubagentLineageIndex,
           }),
         });

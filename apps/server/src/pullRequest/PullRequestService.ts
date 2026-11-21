@@ -212,6 +212,8 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<PullRequestSummary, PullRequestError>;
     /** Whether the reference's host batches summary reads; false when it cannot be resolved. */
     readonly batchesReads: (input: PullRequestRef) => Effect.Effect<boolean>;
+    /** Whether the reference's host supports native stack reads and stack merge actions. */
+    readonly supportsNativeStacks: (input: PullRequestRef) => Effect.Effect<boolean>;
     readonly stack: (
       input: PullRequestRef,
       options?: {
@@ -3247,6 +3249,18 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
 
+  const supportsNativeStacks: PullRequestService["Service"]["supportsNativeStacks"] = Effect.fn(
+    "PullRequestService.supportsNativeStacks",
+  )(
+    function* (input) {
+      const project = yield* requireProject(input);
+      return (
+        project.api.capabilities.stacks === true && project.api.capabilities.stackActions === true
+      );
+    },
+    Effect.orElseSucceed(() => false),
+  );
+
   const stack: PullRequestService["Service"]["stack"] = (input, options) =>
     options?.bypassCache === true
       ? stackUncached(input, options)
@@ -4153,6 +4167,7 @@ export const make = Effect.gen(function* () {
     }),
     summary: credentialCached(summary),
     batchesReads,
+    supportsNativeStacks,
     stack: credentialCached(stack),
     subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),

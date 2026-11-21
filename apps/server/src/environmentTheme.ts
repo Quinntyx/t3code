@@ -419,6 +419,19 @@ const make = Effect.gen(function* () {
         problem: "would replace a file that could not be backed up. Use another theme id.",
       });
     }
+    if (Option.isSome(previous)) {
+      const existingDecoded = decodeEnvironmentThemeFileJsonExit(previous.value);
+      if (existingDecoded._tag === "Success") {
+        const existingKind = environmentThemeKind(existingDecoded.value);
+        const incomingKind = environmentThemeKind(file);
+        if (existingKind !== incomingKind) {
+          return yield* new EnvironmentThemeRefusedError({
+            themeId,
+            problem: `is already published as a ${existingKind}. Pick a different id for this ${incomingKind}.`,
+          });
+        }
+      }
+    }
     const servedBefore = (yield* refresh).themes.map((theme) => theme.id);
     // Puts back what was there, so a failed apply does not take a working theme away.
     const revert = Option.match(previous, {

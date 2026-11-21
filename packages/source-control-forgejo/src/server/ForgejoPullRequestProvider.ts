@@ -602,6 +602,12 @@ export const make = Effect.gen(function* () {
                 "merge",
                 "Resolve this pull request's merge conflicts before merging.",
               );
+            if (input.expectedHeadSha !== undefined && pr.headSha !== input.expectedHeadSha) {
+              return yield* failure(
+                "merge",
+                `The head is now ${pr.headSha ?? "unknown"}, not ${input.expectedHeadSha}. Review the new commits first.`,
+              );
+            }
             yield* write({
               ...input,
               path: `${pullPath(input)}/merge`,
@@ -612,6 +618,9 @@ export const make = Effect.gen(function* () {
                     ? "fast-forward-only"
                     : (input.mergeMethod ?? "merge"),
                 delete_branch_after_merge: deleteBranch,
+                ...(input.expectedHeadSha === undefined
+                  ? {}
+                  : { head_commit_id: input.expectedHeadSha }),
               },
             }).pipe(
               Effect.catchTags({

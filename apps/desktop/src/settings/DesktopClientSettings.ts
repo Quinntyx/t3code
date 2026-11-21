@@ -79,7 +79,8 @@ export class DesktopClientSettings extends Context.Service<
   {
     readonly get: Effect.Effect<Option.Option<ClientSettings>, DesktopClientSettingsReadError>;
     readonly getLegacyVisualSettings: Effect.Effect<
-      Option.Option<Readonly<Record<string, unknown>>>
+      Option.Option<Readonly<Record<string, unknown>>>,
+      DesktopClientSettingsReadError
     >;
     readonly set: (
       settings: ClientSettings,
@@ -204,26 +205,68 @@ const writeClientSettings = Effect.fnUntraced(function* (input: {
 const readLegacyVisualSettings = (
   fileSystem: FileSystem.FileSystem,
   settingsPath: string,
-): Effect.Effect<Option.Option<Readonly<Record<string, unknown>>>> =>
+): Effect.Effect<
+  Option.Option<Readonly<Record<string, unknown>>>,
+  DesktopClientSettingsReadError
+> =>
   fileSystem.readFileString(settingsPath).pipe(
-    Effect.flatMap((raw) => decodeClientSettingsDocument(raw)),
-    Effect.map((document) => {
-      const source =
-        Object.hasOwn(document, "settings") &&
-        typeof document.settings === "object" &&
-        document.settings !== null &&
-        !Array.isArray(document.settings)
-          ? (document.settings as Record<string, unknown>)
-          : document;
-      const legacy: Record<string, unknown> = {};
-      for (const key of LEGACY_VISUAL_SETTING_KEYS) {
-        if (Object.hasOwn(source, key)) {
-          legacy[key] = source[key];
-        }
-      }
-      return Object.keys(legacy).length > 0 ? Option.some(legacy) : Option.none();
+    Effect.asSome,
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        cause.reason._tag === "NotFound"
+          ? Effect.succeed(Option.none<string>())
+          : Effect.logWarning("Could not read legacy desktop visual settings.", cause).pipe(
+              Effect.annotateLogs({ settingsPath }),
+              Effect.andThen(
+                Effect.fail(
+                  new DesktopClientSettingsReadError({
+                    operation: "read-file",
+                    path: settingsPath,
+                    cause,
+                  }),
+                ),
+              ),
+            ),
     }),
-    Effect.orElseSucceed(() => Option.none()),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(Option.none<Readonly<Record<string, unknown>>>()),
+        onSome: (raw) =>
+          decodeClientSettingsDocument(raw).pipe(
+            Effect.map((document) => {
+              const source =
+                Object.hasOwn(document, "settings") &&
+                typeof document.settings === "object" &&
+                document.settings !== null &&
+                !Array.isArray(document.settings)
+                  ? (document.settings as Record<string, unknown>)
+                  : document;
+              const legacy: Record<string, unknown> = {};
+              for (const key of LEGACY_VISUAL_SETTING_KEYS) {
+                if (Object.hasOwn(source, key)) {
+                  legacy[key] = source[key];
+                }
+              }
+              return Object.keys(legacy).length > 0 ? Option.some(legacy) : Option.none();
+            }),
+            Effect.catchTags({
+              SchemaError: (cause) =>
+                Effect.logWarning("Could not decode legacy desktop visual settings.", cause).pipe(
+                  Effect.annotateLogs({ settingsPath }),
+                  Effect.andThen(
+                    Effect.fail(
+                      new DesktopClientSettingsReadError({
+                        operation: "decode-document",
+                        path: settingsPath,
+                        cause,
+                      }),
+                    ),
+                  ),
+                ),
+            }),
+          ),
+      }),
+    ),
   );
 
 export const make = Effect.gen(function* () {

@@ -21,6 +21,7 @@ import {
   parseThemeHalves,
   publishedThemeDefinitions,
   removeCustomTheme,
+  renameTheme,
   replaceCustomThemeCollection,
   resolveDesktopTheme,
   resolveThemeAppearance,
@@ -309,6 +310,43 @@ describe("theme files", () => {
       canvas: canonical("#101827"),
       text: canonical("#eef5ff"),
     });
+  });
+
+  it("round-trips v2 palette settings and effects through export, import, and rename", () => {
+    const v2 = parseThemeFile({
+      version: 2,
+      kind: "palette",
+      id: "frosted-aurora",
+      name: "Frosted Aurora",
+      appearance: "dark",
+      colors: { canvas: "#101827", accent: "#60a5fa" },
+      settings: {
+        blur: { type: "number", label: "Blur", min: 0, max: 24, step: 1, default: 10 },
+      },
+      effects: {
+        liquidGlass: { enabled: true, blur: { setting: "blur" } },
+      },
+    });
+    const serialized = JSON.parse(serializeThemeFile(v2));
+    expect(serialized.version).toBe(2);
+    expect(serialized.kind).toBe("palette");
+    expect(serialized.settings).toEqual(v2.settings);
+    expect(serialized.effects).toEqual(v2.effects);
+    const reimported = parseThemeFile(serialized);
+    expect(reimported.settings).toEqual(v2.settings);
+    expect(reimported.effects).toEqual(v2.effects);
+    const renamed = renameTheme(v2, "Frosted Copy");
+    expect(renamed.id).toBe("frosted-copy");
+    expect(renamed.settings).toEqual(v2.settings);
+    expect(renamed.effects).toEqual(v2.effects);
+    expect(() =>
+      parseThemeFile({
+        version: 2,
+        kind: "style",
+        name: "Style Only",
+        css: "body {}",
+      }),
+    ).toThrow(/Style themes cannot be imported/);
   });
 
   it("preserves valid imported-theme collections and drops malformed metadata", () => {

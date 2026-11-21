@@ -155,6 +155,7 @@ export function forgejoChangeRequest(pr: typeof ForgejoPullRequest.Type) {
       color: label.color ?? null,
       description: label.description || null,
     })),
+    ...(pr.head.sha.trim() === "" ? {} : { headSha: pr.head.sha }),
   } satisfies ProviderChangeRequest;
 }
 

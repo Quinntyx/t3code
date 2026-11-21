@@ -587,6 +587,11 @@ describe("environment theme", () => {
           assert.match(styleAsPalette.message, /is a style, not a palette/);
           const paletteAsStyle = yield* themes.apply({ styleId: "grove" }).pipe(Effect.flip);
           assert.match(paletteAsStyle.message, /is a palette, not a style/);
+          // Publishing a palette under an existing style id (and vice versa) is refused.
+          const overwriteStyleWithPalette = yield* themes
+            .apply({ themeId: "frosted-chrome", theme: NIGHTFALL_THEME })
+            .pipe(Effect.flip);
+          assert.match(overwriteStyleWithPalette.message, /already published as a style/);
           // Invalid setting reference is refused.
           const brokenRef = yield* themes
             .apply({

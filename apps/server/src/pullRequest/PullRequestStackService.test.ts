@@ -134,6 +134,10 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly summaries: ReadonlyArray<PullRequestSummary>;
   readonly failMerge?: number;
+  readonly supportsNativeStacks?: boolean;
+  readonly resolveHeadSha?: (
+    entry: PullRequestSummary,
+  ) => Effect.Effect<string | undefined, PullRequestService.PullRequestError>;
   readonly nativeStack?: Effect.Effect<
     PullRequestStack | null,
     PullRequestService.PullRequestError
@@ -143,6 +147,10 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
   const summaryReads: number[] = [];
   const retargets: Array<{ readonly number: number; readonly baseBranch: string }> = [];
   const merges: number[] = [];
+  const mergeExpectedHeads: Array<{
+    readonly number: number;
+    readonly expectedHeadSha: string | undefined;
+  }> = [];
   const nativeStackMerges: Array<{
     readonly number: number;
     readonly stackNumber: number | undefined;
@@ -160,9 +168,16 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
       Layer.mergeAll(
         Layer.mock(PullRequestService.PullRequestService)({
           summary: (ref) =>
-            Effect.sync(() => summaryReads.push(ref.number)).pipe(
-              Effect.andThen(found(ref.number)),
-            ),
+            Effect.gen(function* () {
+              summaryReads.push(ref.number);
+              const entry = yield* found(ref.number);
+              if (input.resolveHeadSha === undefined) {
+                return entry;
+              }
+              const headSha = yield* input.resolveHeadSha(entry);
+              return headSha === undefined ? entry : { ...entry, headSha };
+            }),
+          supportsNativeStacks: () => Effect.succeed(input.supportsNativeStacks ?? false),
           stack: () => input.nativeStack ?? Effect.succeed(null),
           changeBaseBranch: (ref) =>
             found(ref.number).pipe(
@@ -186,6 +201,10 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
                       });
                     } else {
                       merges.push(ref.number);
+                      mergeExpectedHeads.push({
+                        number: ref.number,
+                        expectedHeadSha: ref.expectedHeadSha,
+                      });
                     }
                     summaries.set(ref.number, { ...entry, state: "merged" });
                     return undefined;
@@ -233,7 +252,15 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
       ),
     ),
   );
-  return { service, summaryReads, retargets, merges, nativeStackMerges, commands };
+  return {
+    service,
+    summaryReads,
+    retargets,
+    merges,
+    mergeExpectedHeads,
+    nativeStackMerges,
+    commands,
+  };
 });
 
 const layerTest = GitVcsDriver.layer.pipe(
@@ -423,6 +450,32 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
   );
 
   describe("merging up to a pull request", () => {
+    const attachOrigin = (root: string, worktrees: { readonly b: string; readonly c: string }) =>
+      Effect.gen(function* () {
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const remote = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-stack-origin-" });
+        yield* git(remote, ["init", "--bare", "--initial-branch=main"]);
+        yield* git(root, ["remote", "add", "origin", remote]);
+        yield* git(root, ["push", "-u", "origin", "main", "a"]);
+        yield* git(worktrees.b, ["push", "-u", "origin", "b"]);
+        yield* git(worktrees.c, ["push", "-u", "origin", "c"]);
+        return {
+          remote,
+          resolveHeadSha: (entry: PullRequestSummary) =>
+            driver
+              .execute({
+                operation: "test.git",
+                cwd: remote,
+                args: ["--git-dir", ".", "rev-parse", `refs/heads/${entry.headBranch}`],
+                timeoutMs: 10_000,
+              })
+              .pipe(
+                Effect.map((result) => result.stdout.trim()),
+                Effect.orDie,
+              ),
+        };
+      });
     const stack = (worktrees: { readonly b: string; readonly c: string }, busy?: "b") => ({
       threads: [
         thread("a", { branch: "a", pullRequests: [link(1, { head: "a", base: "main" })] }),
@@ -447,13 +500,20 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
     it.effect("merges the lowest open layer first and restacks each next one", () =>
       Effect.gen(function* () {
         const { root, worktrees } = yield* makeRepository;
-        const harness = yield* makeService({ root, ...stack(worktrees) });
+        const { resolveHeadSha } = yield* attachOrigin(root, worktrees);
+        const harness = yield* makeService({ root, resolveHeadSha, ...stack(worktrees) });
 
         assert.deepStrictEqual(yield* harness.service.mergeStack(target), { merged: [1, 2, 3] });
         assert.deepStrictEqual(harness.merges, [1, 2, 3]);
         assert.deepStrictEqual(harness.retargets, [
           { number: 2, baseBranch: "main" },
           { number: 3, baseBranch: "main" },
+        ]);
+        const headB = yield* git(worktrees.b, ["rev-parse", "HEAD"]);
+        const headC = yield* git(worktrees.c, ["rev-parse", "HEAD"]);
+        assert.deepStrictEqual(harness.mergeExpectedHeads.slice(1), [
+          { number: 2, expectedHeadSha: headB },
+          { number: 3, expectedHeadSha: headC },
         ]);
         assert.equal(yield* git(worktrees.c, ["log", "--format=%s", "main..HEAD"]), "c work");
       }),
@@ -465,14 +525,14 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
         const nativeSummaries = [
           summary(1, "a", "main"),
           summary(2, "b", "a"),
-          summary(3, "c", "b", "open", {
-            stack: { number: 9, size: 3, base: "main", position: 3 },
-          }),
+          // Even when cached summary omits `stack`, supportsNativeStacks consults host `stack()`.
+          summary(3, "c", "b", "open"),
         ];
         const nativeHarness = yield* makeService({
           root,
           threads: stack(worktrees).threads,
           summaries: nativeSummaries,
+          supportsNativeStacks: true,
           nativeStack: Effect.succeed({
             id: "stack-9",
             number: 9,
@@ -529,6 +589,7 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
           root,
           threads: stack(worktrees).threads,
           summaries: nativeSummaries,
+          supportsNativeStacks: true,
           nativeStack: Effect.fail(
             new PullRequestOperationError({ operation: "stack", detail: "Host stack API down." }),
           ),
@@ -539,16 +600,58 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
       }),
     );
 
+    it.effect(
+      "refuses derived restack when local HEAD diverges or post-restack head is stale",
+      () =>
+        Effect.gen(function* () {
+          const { root, worktrees } = yield* makeRepository;
+          const { resolveHeadSha } = yield* attachOrigin(root, worktrees);
+          // Add an unpushed local commit on branch b so local HEAD differs from PR #2 head.
+          yield* commit(worktrees.b, "unreviewed.txt", "unpushed local commit");
+          const drifted = yield* makeService({ root, resolveHeadSha, ...stack(worktrees) });
+          const driftedErr = yield* drifted.service.mergeStack(target).pipe(Effect.flip);
+          assert.deepStrictEqual(drifted.merges, [1]);
+          assert.include(driftedErr.message, "does not match pull request head");
+
+          // Fresh repo where host fails to report the restacked head SHA after push.
+          const { root: root2, worktrees: worktrees2 } = yield* makeRepository;
+          yield* attachOrigin(root2, worktrees2);
+          const initialA = yield* git(root2, ["rev-parse", "a"]);
+          const initialB = yield* git(worktrees2.b, ["rev-parse", "HEAD"]);
+          const initialC = yield* git(worktrees2.c, ["rev-parse", "HEAD"]);
+          const staleHost = yield* makeService({
+            root: root2,
+            threads: stack(worktrees2).threads,
+            summaries: [
+              summary(1, "a", "main", "open", { headSha: initialA }),
+              summary(2, "b", "a", "open", { headSha: initialB }),
+              summary(3, "c", "b", "open", { headSha: initialC }),
+            ],
+          });
+          const staleErr = yield* staleHost.service.mergeStack(target).pipe(Effect.flip);
+          assert.deepStrictEqual(staleHost.merges, [1]);
+          assert.include(staleErr.message, "does not match the restacked commit");
+        }),
+    );
+
     it.effect("stops at the first layer that cannot merge or restack unattended", () =>
       Effect.gen(function* () {
         const { root, worktrees } = yield* makeRepository;
-        const busy = yield* makeService({ root, ...stack(worktrees, "b") });
+        const { resolveHeadSha } = yield* attachOrigin(root, worktrees);
+        const busy = yield* makeService({ root, resolveHeadSha, ...stack(worktrees, "b") });
         const blocked = yield* busy.service.mergeStack(target).pipe(Effect.flip);
         assert.deepStrictEqual(busy.merges, [1]);
         assert.include(blocked.message, "could not be rebased unattended");
         assert.include(blocked.message, "Merged #1 first.");
 
-        const refused = yield* makeService({ root, ...stack(worktrees), failMerge: 2 });
+        const { root: root2, worktrees: worktrees2 } = yield* makeRepository;
+        const { resolveHeadSha: resolveHeadSha2 } = yield* attachOrigin(root2, worktrees2);
+        const refused = yield* makeService({
+          root: root2,
+          resolveHeadSha: resolveHeadSha2,
+          ...stack(worktrees2),
+          failMerge: 2,
+        });
         const failed = yield* refused.service.mergeStack(target).pipe(Effect.flip);
         assert.deepStrictEqual(refused.merges, [1]);
         assert.include(failed.message, "#2 could not be merged. Merged #1 first.");

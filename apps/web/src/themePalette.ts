@@ -4,6 +4,7 @@ import {
   THEME_CSS_MAX_LENGTH,
   ThemeEffects,
   ThemeSettingsSchema,
+  validateEnvironmentThemeFile,
   type EnvironmentTheme,
 } from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
@@ -78,7 +79,8 @@ export type ThemeVariantOverrides = Readonly<Partial<Record<ThemeAppearance, The
 export type ThemePreferenceMode = ThemeAppearance | "system";
 export type ThemeCollection = Readonly<{ id: string; label: string }>;
 export type ThemeFile = Readonly<{
-  version: typeof THEME_FILE_VERSION;
+  version: typeof THEME_FILE_VERSION | 2;
+  kind?: "palette";
   id: string;
   name: string;
   appearance: ThemeAppearance;
@@ -87,6 +89,8 @@ export type ThemeFile = Readonly<{
   collection?: ThemeCollection;
   managed?: boolean;
   css?: string;
+  settings?: ThemeSettingsSchema;
+  effects?: ThemeEffects;
 }>;
 
 const customThemeListeners = new Set<() => void>();
@@ -1687,7 +1691,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
   if (!isRecord(value)) {
     throw new Error(m(msg("Theme files must contain a JSON object.")));
   }
-  if (value.version !== THEME_FILE_VERSION) {
+  if (value.version !== THEME_FILE_VERSION && value.version !== 2) {
     throw new Error(
       m(
         msg("This theme file uses an unsupported version. Expected {version}.", {
@@ -1695,6 +1699,9 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
         }),
       ),
     );
+  }
+  if (value.kind !== undefined && value.kind !== "palette") {
+    throw new Error("Style themes cannot be imported as color palettes.");
   }
 
   const name = value.name;
@@ -1725,6 +1732,32 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     throw new Error(
       m(msg("Theme CSS must be text of {max} characters or fewer.", { max: THEME_CSS_MAX_LENGTH })),
     );
+  }
+
+  const settings =
+    value.settings === undefined ? undefined : parseOptionalThemeSettings(value.settings);
+  if (value.settings !== undefined && settings === undefined) {
+    throw new Error("Theme settings must use valid v2 setting definitions.");
+  }
+  const effects =
+    value.effects === undefined ? undefined : parseOptionalThemeEffects(value.effects);
+  if (value.effects !== undefined && effects === undefined) {
+    throw new Error("Theme effects must use valid v2 effect definitions.");
+  }
+  if (settings !== undefined || effects !== undefined) {
+    const problem = validateEnvironmentThemeFile({
+      version: 2,
+      kind: "palette",
+      name: name.trim(),
+      appearance,
+      colors: overrides,
+      ...(value.css ? { css: value.css } : {}),
+      ...(settings ? { settings } : {}),
+      ...(effects ? { effects } : {}),
+    });
+    if (problem !== null) {
+      throw new Error(problem);
+    }
   }
 
   const fallback =
@@ -1768,26 +1801,34 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     ...(collection ? { collection } : {}),
     ...(value.managed === true ? { managed: true } : {}),
     ...(value.css ? { css: value.css } : {}),
+    ...(settings && Object.keys(settings).length > 0 ? { settings } : {}),
+    ...(effects && Object.keys(effects).length > 0 ? { effects } : {}),
   };
 }
 
 /** A copy of `theme` under `name` and the id it derives. The collection stays behind. */
 export function renameTheme(theme: ThemeDefinition, name: string): ThemeDefinition {
+  const isV2 = Boolean(theme.settings || theme.effects);
   return parseThemeFile({
-    version: THEME_FILE_VERSION,
+    version: isV2 ? 2 : THEME_FILE_VERSION,
+    ...(isV2 ? { kind: "palette" } : {}),
     name,
     appearance: theme.appearance,
     colors: theme.colors,
     ...(theme.variants ? { variants: theme.variants } : {}),
     ...(theme.managed ? { managed: true } : {}),
     ...(theme.css ? { css: theme.css } : {}),
+    ...(theme.settings ? { settings: theme.settings } : {}),
+    ...(theme.effects ? { effects: theme.effects } : {}),
   });
 }
 
 export function serializeThemeFile(theme: ThemeDefinition): string {
   const canonicalTheme = canonicalizeThemeDefinition(theme);
+  const isV2 = Boolean(canonicalTheme.settings || canonicalTheme.effects);
   const file: ThemeFile = {
-    version: THEME_FILE_VERSION,
+    version: isV2 ? 2 : THEME_FILE_VERSION,
+    ...(isV2 ? { kind: "palette" as const } : {}),
     id: canonicalTheme.id,
     name: canonicalTheme.label,
     appearance: canonicalTheme.appearance,
@@ -1796,6 +1837,8 @@ export function serializeThemeFile(theme: ThemeDefinition): string {
     ...(canonicalTheme.collection ? { collection: canonicalTheme.collection } : {}),
     ...(canonicalTheme.managed ? { managed: true } : {}),
     ...(canonicalTheme.css ? { css: canonicalTheme.css } : {}),
+    ...(canonicalTheme.settings ? { settings: canonicalTheme.settings } : {}),
+    ...(canonicalTheme.effects ? { effects: canonicalTheme.effects } : {}),
   };
   return `${JSON.stringify(file, null, 2)}\n`;
 }

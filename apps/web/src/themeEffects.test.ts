@@ -219,19 +219,31 @@ describe("migrateLegacyForkVisualSettings", () => {
     expect(store.get(THEME_SETTING_OVERRIDES_STORAGE_KEY)).toBeUndefined();
   });
 
-  it("migrates legacy visual settings from Electron desktopBridge when browser localStorage is empty", async () => {
-    const store = withMockLocalStorage({});
-    const prevBridge = window.desktopBridge;
-    (window as unknown as { desktopBridge?: unknown }).desktopBridge = {
-      getLegacyVisualSettings: async () => ({
-        liquidGlassEnabled: true,
-        floatingPanelsEnabled: true,
-        ambientShimmerEnabled: false,
-        liquidGlassBlur: 9,
+  it("migrates legacy visual settings from Electron desktopBridge even when localStorage exists and retries after transient read errors", async () => {
+    const store = withMockLocalStorage({
+      "t3code:client-settings:v1": JSON.stringify({
+        liquidGlassEnabled: false,
       }),
+    });
+    const prevBridge = window.desktopBridge;
+    let shouldFail = true;
+    (window as unknown as { desktopBridge?: unknown }).desktopBridge = {
+      getLegacyVisualSettings: async () => {
+        if (shouldFail) throw new Error("transient read failure");
+        return {
+          liquidGlassEnabled: true,
+          floatingPanelsEnabled: true,
+          ambientShimmerEnabled: false,
+          liquidGlassBlur: 9,
+        };
+      },
     };
     try {
+      // Browser migrator must defer to desktopBridge without setting the migrated flag.
       expect(migrateLegacyForkVisualSettings()).toBe(false);
+      // Transient desktopBridge error leaves the migrated flag unset so the next startup retries.
+      expect(await migrateLegacyDesktopForkVisualSettings()).toBe(false);
+      shouldFail = false;
       expect(await migrateLegacyDesktopForkVisualSettings()).toBe(true);
       expect(store.get(THEME_STYLE_STORAGE_KEY)).toBe("liquid-glass");
       expect(readThemeSettingOverrides()).toEqual({

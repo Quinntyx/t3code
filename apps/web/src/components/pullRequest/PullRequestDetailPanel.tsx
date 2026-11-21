@@ -697,7 +697,10 @@ export function PullRequestDetailPanel({
       : gt("Checking stack membership…");
   const threadShells = useQuietThreadShells();
   const derivedStack =
-    detail === null || nativeStack !== null || liveStackMembership != null
+    detail === null ||
+    nativeStack !== null ||
+    liveStackMembership != null ||
+    (supportsStackActions && (!nativeStackQuery.isFresh || nativeStackQuery.error !== null))
       ? null
       : derivePullRequestStack(
           threadShells.filter(

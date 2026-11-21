@@ -323,12 +323,30 @@ it.effect("merges with Forgejo's fast-forward-only style", () =>
   Effect.gen(function* () {
     const writes: Array<{ path: string; body: unknown }> = [];
     const provider = yield* fastForwardOnlyProvider(writes);
-    yield* provider.runAction({ ...fastForwardOnly, action: "merge", mergeMethod: "fast-forward" });
+    yield* provider.runAction({
+      ...fastForwardOnly,
+      action: "merge",
+      mergeMethod: "fast-forward",
+      expectedHeadSha: "head-sha",
+    });
     assert.deepStrictEqual(writes, [
       {
         path: "repos/maria/project/pulls/3/merge",
-        body: { Do: "fast-forward-only", delete_branch_after_merge: false },
+        body: {
+          Do: "fast-forward-only",
+          delete_branch_after_merge: false,
+          head_commit_id: "head-sha",
+        },
       },
     ]);
+    const mismatch = yield* Effect.flip(
+      provider.runAction({
+        ...fastForwardOnly,
+        action: "merge",
+        expectedHeadSha: "stale-sha",
+      }),
+    );
+    assert.include(mismatch.detail, "head-sha");
+    assert.strictEqual(writes.length, 1);
   }),
 );

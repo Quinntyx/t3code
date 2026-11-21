@@ -1137,50 +1137,20 @@ const make = Effect.gen(function* () {
             return yield* new PullRequestForgeError({
               detail: "A stack merge cannot wait with auto.",
             });
-          const nativeStack = yield* pullRequests
-            .stack(ref, { bypassCache: true })
-            .pipe(Effect.mapError(forgeFailure));
-          const end = nativeStack?.layers.findIndex((layer) => layer.number === ref.number) ?? -1;
-          if (nativeStack !== null && end !== -1) {
-            const expectedStackHeads: Array<{ readonly number: number; readonly headSha: string }> =
-              [];
-            for (const layer of nativeStack.layers.slice(0, end + 1)) {
-              if (layer.state === "merged") continue;
-              const headSha = layer.number === ref.number ? input.expectedHeadSha : layer.headSha;
-              if (headSha === undefined)
-                return yield* new PullRequestForgeError({
-                  detail: `The host did not report PR #${layer.number}'s head, so the stack cannot be pinned. Try again.`,
-                });
-              expectedStackHeads.push({ number: layer.number, headSha });
-            }
-            yield* pullRequests
-              .runAction({
-                ...ref,
-                action: "merge",
-                expectedHeadSha: input.expectedHeadSha,
-                ...(input.method === undefined ? {} : { mergeMethod: input.method }),
-                stackNumber: nativeStack.number,
-                expectedStackHeads,
-              })
-              .pipe(Effect.mapError(forgeFailure));
-          } else {
-            const stacks = yield* Effect.serviceOption(
-              PullRequestStackService.PullRequestStackService,
-            );
-            if (Option.isNone(stacks)) {
-              return yield* new PullRequestForgeError({
-                detail: `PR #${ref.number} is not in a stack this host can merge. Merge it without stack.`,
-              });
-            }
-            yield* stacks.value
-              .mergeStack({
-                ...ref,
-                expectedHeadSha: input.expectedHeadSha,
-                requireMultiLayer: true,
-                ...(input.method === undefined ? {} : { mergeMethod: input.method }),
-              })
-              .pipe(Effect.mapError(forgeFailure));
-          }
+          const stackMergeInput = {
+            ...ref,
+            expectedHeadSha: input.expectedHeadSha,
+            requireMultiLayer: true,
+            ...(input.method === undefined ? {} : { mergeMethod: input.method }),
+          };
+          const stacks = yield* Effect.serviceOption(
+            PullRequestStackService.PullRequestStackService,
+          );
+          yield* (
+            Option.isSome(stacks)
+              ? stacks.value.mergeStack(stackMergeInput)
+              : PullRequestStackService.mergeNativeStack(pullRequests, stackMergeInput)
+          ).pipe(Effect.mapError(forgeFailure));
         } else {
           yield* pullRequests
             .runAction({
