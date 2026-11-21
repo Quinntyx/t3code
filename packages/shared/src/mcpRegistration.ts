@@ -609,13 +609,14 @@ const argumentArgs = (
   if (argument.suppliedKey !== undefined) {
     const supplied = values.get(argument.suppliedKey);
     const configured = config[argument.suppliedKey];
+    // A secret list comes back from the store as comma-joined text, so only that form is split.
     const parts =
       supplied === undefined || supplied === ""
         ? []
-        : argument.repeated
-          ? supplied.split(",")
-          : Array.isArray(configured)
-            ? configured.map(String)
+        : Array.isArray(configured)
+          ? configured.map(String)
+          : argument.repeated
+            ? supplied.split(",")
             : [supplied];
     return parts.flatMap((part) => [...flag, part]);
   }
@@ -679,13 +680,18 @@ export function resolveMcpLaunch(
         ? []
         : [[key, substituteMcpb(template, resolvedValues, substitutions)] as const];
     });
-    const launchCommand = substituteMcpb(command, resolvedValues, substitutions);
-    const unsupported = [launchCommand, ...args, ...env.map(([, value]) => value)].flatMap((text) =>
-      [...text.matchAll(/\$\{[^}]+\}/gu)].map((match) => match[0]),
-    );
-    if (unsupported.length > 0) {
+    // Checked on the manifest's own templates, so a user value containing `${` is never echoed.
+    const unsupported = [
+      command,
+      ...asArray(effective.args),
+      ...Object.values(asRecord(effective.env) ?? {}),
+    ]
+      .flatMap((template) => [...(asString(template) ?? "").matchAll(MCPB_SUBSTITUTION)])
+      .find(([, key]) => !key!.startsWith("user_config.") && !substitutions.has(key!));
+    if (unsupported !== undefined) {
       return failure(`Unsupported MCPB substitution: ${unsupported[0]}`);
     }
+    const launchCommand = substituteMcpb(command, resolvedValues, substitutions);
     return {
       ok: true,
       launch: { command: launchCommand, args, env: Object.fromEntries(env) },

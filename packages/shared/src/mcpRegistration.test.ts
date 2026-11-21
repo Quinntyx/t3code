@@ -866,10 +866,10 @@ describe("resolveMcpLaunch", () => {
           }),
         ]),
       },
-      config: { argument_1: ["/a", "/b c"] },
+      config: { argument_1: ["/a", "/b c", "/d,e"] },
       expected: {
         command: "npx",
-        args: ["-y", "@acme/notes-mcp@1.4.2", "/a", "/b c"],
+        args: ["-y", "@acme/notes-mcp@1.4.2", "/a", "/b c", "/d,e"],
         env: {},
       },
     },
@@ -1016,6 +1016,20 @@ describe("resolveMcpLaunch", () => {
         args: ["win.js"],
         env: { MODE: "base" },
       },
+    },
+    {
+      label: "a secret value that looks like a substitution is passed as typed",
+      source: {
+        kind: "mcpb" as const,
+        manifest: mcpbManifestFor(
+          { command: "node", args: ["index.js"], env: { TOKEN: "${user_config.token}" } },
+          { token: { type: "string", sensitive: true } },
+        ),
+        bundleDir: "/bundle",
+      },
+      config: { token: "pa${ss}word" },
+      options: {},
+      expected: { command: "node", args: ["index.js"], env: { TOKEN: "pa${ss}word" } },
     },
     {
       label: "an unknown substitution is rejected instead of passed through",
