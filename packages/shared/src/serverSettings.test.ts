@@ -654,6 +654,52 @@ describe("serverSettings helpers", () => {
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
+  it("upserts and removes registered MCP servers per entry so concurrent edits cannot clobber", () => {
+    const server = (id: string, name: string, enabled = true) => ({
+      id,
+      name,
+      toolName: name.toLowerCase(),
+      enabled,
+      source: {
+        kind: "server.json" as const,
+        document: { name: `acme/${name}`, packages: [] },
+      },
+      config: {},
+    });
+    const notes = server("notes", "Notes");
+    const calendar = server("calendar", "Calendar");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      registeredMcpServers: [notes, server("mail", "Mail", false)],
+    };
+
+    const added = applyServerSettingsPatch(current, {
+      registeredMcpServers: { calendar },
+    });
+    expect(added.registeredMcpServers.map((entry) => entry.id)).toEqual([
+      "notes",
+      "mail",
+      "calendar",
+    ]);
+
+    const edited = applyServerSettingsPatch(added, {
+      registeredMcpServers: { notes: { ...notes, enabled: false } },
+    });
+    expect(edited.registeredMcpServers.map((entry) => [entry.id, entry.enabled])).toEqual([
+      ["notes", false],
+      ["mail", false],
+      ["calendar", true],
+    ]);
+
+    const removed = applyServerSettingsPatch(edited, {
+      registeredMcpServers: { mail: null, calendar: { ...calendar, toolName: "cal" } },
+    });
+    expect(removed.registeredMcpServers.map((entry) => [entry.id, entry.toolName])).toEqual([
+      ["notes", "notes"],
+      ["calendar", "cal"],
+    ]);
+  });
+
   it("upserts and removes secretProviders per entry so concurrent edits cannot clobber", () => {
     const personal = SecretProviderId.make("personal");
     const work = SecretProviderId.make("work");

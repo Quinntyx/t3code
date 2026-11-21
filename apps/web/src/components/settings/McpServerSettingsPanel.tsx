@@ -96,11 +96,14 @@ export function McpServerSettingsPanel() {
     setDraft(next);
     updateSettings(
       {
-        registeredMcpServers: settings.registeredMcpServers.map((candidate) =>
-          candidate.id === entry.id
-            ? { ...candidate, enabled: next.enabled, toolName: next.toolName, config: next.config }
-            : candidate,
-        ),
+        registeredMcpServers: {
+          [entry.id]: {
+            ...entry,
+            enabled: next.enabled,
+            toolName: next.toolName,
+            config: next.config,
+          },
+        },
       },
       { onFailed: () => setDraft(null) },
     );
@@ -317,7 +320,7 @@ function FieldControl({
         spellCheck={false}
         className="w-full max-w-72"
         aria-label={field.label}
-        placeholder={field.required ? "Required" : "One value per line"}
+        placeholder={field.placeholder ?? (field.required ? "Required" : "One value per line")}
         value={Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : ""}
         onCommit={(next) => {
           const values = next
@@ -406,7 +409,7 @@ function FieldControl({
       className="w-full max-w-72"
       spellCheck={field.type !== "path"}
       aria-label={field.label}
-      placeholder={field.required ? "Required" : "Optional"}
+      placeholder={field.placeholder ?? (field.required ? "Required" : "Optional")}
       value={typeof value === "string" ? value : ""}
       onCommit={(next) => onChange(next === "" ? undefined : next)}
     />

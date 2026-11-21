@@ -91,9 +91,21 @@ const entry: RegisteredMcpServerEntry = {
 const setup = async () => {
   state.registeredMcpServers = [entry];
   state.updateSettings.mockReset().mockImplementation((patch: unknown) => {
-    const next = (patch as { registeredMcpServers: ReadonlyArray<RegisteredMcpServerEntry> })
-      .registeredMcpServers;
-    state.registeredMcpServers = next;
+    const changes = (
+      patch as {
+        registeredMcpServers: Record<string, RegisteredMcpServerEntry | null>;
+      }
+    ).registeredMcpServers;
+    for (const [id, value] of Object.entries(changes)) {
+      state.registeredMcpServers =
+        value === null
+          ? state.registeredMcpServers.filter((candidate) => candidate.id !== id)
+          : state.registeredMcpServers.some((candidate) => candidate.id === id)
+            ? state.registeredMcpServers.map((candidate) =>
+                candidate.id === id ? value : candidate,
+              )
+            : [...state.registeredMcpServers, value];
+    }
   });
   return render(<McpServerSettingsPanel />);
 };
@@ -112,9 +124,9 @@ describe("registered MCP server settings", () => {
     await userEvent.tab();
 
     const [last] = state.updateSettings.mock.lastCall as [
-      { registeredMcpServers: ReadonlyArray<RegisteredMcpServerEntry> },
+      { registeredMcpServers: Record<string, RegisteredMcpServerEntry | null> },
     ];
-    expect(last.registeredMcpServers[0]).toMatchObject({
+    expect(last.registeredMcpServers["notes"]).toMatchObject({
       enabled: false,
       config: { workspace: "acme", region: "eu" },
     });
