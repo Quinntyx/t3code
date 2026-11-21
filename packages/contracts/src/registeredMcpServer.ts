@@ -67,11 +67,6 @@ export const RegisteredMcpServersState = Schema.Struct({
 });
 export type RegisteredMcpServersState = typeof RegisteredMcpServersState.Type;
 
-export class RegisteredMcpServersError extends Schema.TaggedError<RegisteredMcpServersError>()(
-  "RegisteredMcpServersError",
-  { message: Schema.String, cause: Schema.optionalKey(Schema.Defect()) },
-) {}
-
 export const maxMcpToolPrefixLength = 40;
 
 /** `name` as a stable settings id: lowercase letters, digits and single dashes. */

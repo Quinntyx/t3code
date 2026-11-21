@@ -1047,30 +1047,6 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
-/**
- * Every name the toolkits `layerTools` merges register, read without building them: a proxy and a
- * toolkit build concurrently, so a name that is already registered says nothing about the build.
- */
-const nativeToolNames: ReadonlySet<string> = new Set(
-  [
-    HtmlRenderToolkit,
-    HtmlPreviewToolkit,
-    PreviewStandardToolkit,
-    PreviewSnapshotToolkit,
-    OrchestratorToolkit,
-    ThreadToolkit,
-    ConnectorsToolkit,
-    AttachmentToolkit,
-    ProjectToolkit,
-    EnvironmentToolkit,
-    PreviewControlsToolkit,
-    WorktreeToolkit,
-    PullRequestsToolkit,
-    DeviceStandardToolkit,
-    DeviceScreenshotToolkit,
-  ].flatMap((toolkit) => Object.keys(toolkit.tools)),
-);
-
 /** Each registered MCP server's tools as native T3 tools, with its schema and annotations. */
 const registeredMcpToolRegistration = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -1166,21 +1142,8 @@ const registeredMcpToolRegistration = Layer.effectDiscard(
       advertisedEnabled = nextEnabled;
       enabled.clear();
       for (const name of nextEnabled) enabled.add(name);
-      // A name belongs to the first tool that claims it, so a reused name has one owner.
-      const claimed = new Map<string, ExternalMcpServers.ExternalMcpTool>();
       for (const tool of tools) {
-        if (!claimed.has(tool.name)) claimed.set(tool.name, tool);
-      }
-      for (const [name, tool] of claimed) {
-        // Native names are reserved whatever built first, and a descriptor change cannot take one.
-        if (nativeToolNames.has(name)) {
-          yield* Effect.logWarning("skipped a registered MCP tool with a taken name", {
-            server: tool.serverName,
-            tool: name,
-          });
-          yield* externalServers.skipTool(tool, `as ${name}, which another tool uses`);
-          continue;
-        }
+        const name = tool.name;
         const key = advertisedKey(tool);
         const current = registered.get(name);
         // Re-added when the owner or what it advertises changed; `addTool` replaces by name.
