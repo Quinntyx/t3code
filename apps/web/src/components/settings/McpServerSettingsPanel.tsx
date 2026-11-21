@@ -6,7 +6,7 @@ import {
   type McpConfigValue,
 } from "@t3tools/shared/mcpRegistration";
 import { useParams } from "@tanstack/react-router";
-import { useState, type ComponentProps } from "react";
+import { useRef, useState, type ComponentProps } from "react";
 
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -55,6 +55,7 @@ export function McpServerSettingsPanel() {
   // A save is built from the last server-backed settings, so edits made before it round-trips
   // would revert each other. The draft holds this entry's fields and every save starts from it.
   const [draft, setDraft] = useState<McpEntryDraft | null>(null);
+  const savesInFlight = useRef(0);
 
   // The server runs on the machine that registered it, so these settings are that machine's.
   if (scope.kind !== "environment" || environment === null) {
@@ -94,6 +95,7 @@ export function McpServerSettingsPanel() {
   const save = (edit: Partial<Omit<McpEntryDraft, "id">>) => {
     const next: McpEntryDraft = { ...current, ...edit };
     setDraft(next);
+    savesInFlight.current += 1;
     updateSettings(
       {
         registeredMcpServers: {
@@ -105,7 +107,13 @@ export function McpServerSettingsPanel() {
           },
         },
       },
-      { onFailed: () => setDraft(null) },
+      {
+        onFailed: () => setDraft(null),
+        onSettled: () => {
+          savesInFlight.current -= 1;
+          if (savesInFlight.current === 0) setDraft(null);
+        },
+      },
     );
   };
 
@@ -302,6 +310,39 @@ function FieldControl({
 }) {
   const value = valueOf(entry.config, field);
 
+  if (field.secret) {
+    // A saved secret is shown only as "saved"; typing replaces it, and clearing removes it.
+    // A list secret is stored as one string through this control and expands once at launch.
+    return (
+      <div className="flex w-full max-w-72 items-center gap-2">
+        <DraftInput
+          size="sm"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          className="min-w-0 flex-1"
+          aria-label={field.label}
+          value=""
+          placeholder={configuredSecret(entry, field.key) ? "Saved, type to replace" : "Not set"}
+          onCommit={(next) => {
+            if (next === "") return;
+            onChange(next);
+          }}
+        />
+        {configuredSecret(entry, field.key) ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Clear ${field.label}`}
+            // An empty secret is what the settings write removes; no separate call is needed.
+            onClick={() => onChange("")}
+          >
+            Clear
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
   if (field.type === "boolean") {
     return (
       <Switch
@@ -369,38 +410,6 @@ function FieldControl({
           onChange(next.trim() === "" || Number.isNaN(parsed) ? undefined : parsed);
         }}
       />
-    );
-  }
-  if (field.secret) {
-    // A saved secret is shown only as "saved"; typing replaces it, and clearing removes it.
-    return (
-      <div className="flex w-full max-w-72 items-center gap-2">
-        <DraftInput
-          size="sm"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          className="min-w-0 flex-1"
-          aria-label={field.label}
-          value=""
-          placeholder={configuredSecret(entry, field.key) ? "Saved, type to replace" : "Not set"}
-          onCommit={(next) => {
-            if (next === "") return;
-            onChange(next);
-          }}
-        />
-        {configuredSecret(entry, field.key) ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label={`Clear ${field.label}`}
-            // An empty secret is what the settings write removes; no separate call is needed.
-            onClick={() => onChange("")}
-          >
-            Clear
-          </Button>
-        ) : null}
-      </div>
     );
   }
   return (

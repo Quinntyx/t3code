@@ -434,6 +434,84 @@ describe("parseMcpRegistration", () => {
       ],
     },
     {
+      label: "a described positional argument still asks for a value",
+      source: serverJson([
+        stdioPackage({
+          packageArguments: [{ type: "positional", description: "Workspace slug." }],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "argument_1",
+          label: "Argument 1",
+          type: "string",
+          required: false,
+          secret: false,
+          description: "Workspace slug.",
+        },
+      ],
+    },
+    {
+      label: "runtime and package positional arguments share no key",
+      source: serverJson([
+        stdioPackage({
+          runtimeArguments: [{ type: "positional", valueHint: "workspace" }],
+          packageArguments: [{ type: "positional", valueHint: "notes" }],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "runtime_argument_1",
+          label: "Workspace",
+          type: "string",
+          required: false,
+          secret: false,
+          description: "Positional value 1.",
+        },
+        {
+          key: "argument_1",
+          label: "Notes",
+          type: "string",
+          required: false,
+          secret: false,
+          description: "Positional value 1.",
+        },
+      ],
+    },
+    {
+      label: "runtime and package named arguments share no key",
+      source: serverJson([
+        stdioPackage({
+          runtimeArguments: [{ type: "named", name: "--workspace", valueHint: "workspace" }],
+          packageArguments: [{ type: "named", name: "--workspace", valueHint: "notes" }],
+        }),
+      ]),
+      expectedKind: "server.json",
+      expectedName: "io.acme/team-notes",
+      expectedFields: [
+        {
+          key: "runtime_workspace",
+          label: "Workspace",
+          type: "string",
+          required: false,
+          secret: false,
+          description: "Value for --workspace (runtime argument 1).",
+        },
+        {
+          key: "workspace",
+          label: "Notes",
+          type: "string",
+          required: false,
+          secret: false,
+          description: "Value for --workspace (package argument 1).",
+        },
+      ],
+    },
+    {
       label: "a server.json variable declared secret by only one of its inputs",
       source: serverJson([
         {
@@ -958,7 +1036,7 @@ describe("resolveMcpLaunch", () => {
           }),
         ]),
       },
-      config: { volume: '["one","two,three"]' },
+      config: { runtime_volume: '["one","two,three"]' },
       expected: {
         command: "npx",
         args: ["-y", "--volume", "one", "--volume", "two,three", "@acme/notes-mcp@1.4.2"],
@@ -981,6 +1059,92 @@ describe("resolveMcpLaunch", () => {
       expected: {
         command: "npx",
         args: ["-y", "@acme/notes-mcp@1.4.2", "/a", "/b,c"],
+        env: {},
+      },
+    },
+    {
+      label: "a single-value list secret launches as one argument",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [
+              { type: "positional", valueHint: "path", isRepeated: true, isSecret: true },
+            ],
+          }),
+        ]),
+      },
+      config: { argument_1: "two,words" },
+      expected: { command: "npx", args: ["-y", "@acme/notes-mcp@1.4.2", "two,words"], env: {} },
+    },
+    {
+      label: "a described bare flag stays in the launch",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [{ type: "named", name: "--verbose", description: "Log more." }],
+          }),
+        ]),
+      },
+      config: {},
+      expected: { command: "npx", args: ["-y", "@acme/notes-mcp@1.4.2", "--verbose"], env: {} },
+    },
+    {
+      label: "a flag with explicit false value metadata stays in the launch",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            packageArguments: [
+              { type: "named", name: "--verbose", isRequired: false, isSecret: false },
+            ],
+          }),
+        ]),
+      },
+      config: {},
+      expected: { command: "npx", args: ["-y", "@acme/notes-mcp@1.4.2", "--verbose"], env: {} },
+    },
+    {
+      label: "a runtime and a package positional argument with one position stay separate",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            runtimeArguments: [{ type: "positional", valueHint: "workspace" }],
+            packageArguments: [{ type: "positional", valueHint: "notes" }],
+          }),
+        ]),
+      },
+      config: { runtime_argument_1: "workspace", argument_1: "notes" },
+      expected: {
+        command: "npx",
+        args: ["-y", "workspace", "@acme/notes-mcp@1.4.2", "notes"],
+        env: {},
+      },
+    },
+    {
+      label: "a runtime and a package named argument with one flag stay separate",
+      source: {
+        kind: "server.json" as const,
+        document: serverJson([
+          stdioPackage({
+            runtimeArguments: [{ type: "named", name: "--cache", valueHint: "cache" }],
+            packageArguments: [{ type: "named", name: "--cache", valueHint: "label" }],
+          }),
+        ]),
+      },
+      config: { runtime_cache: "runtime-value", cache: "package-value" },
+      expected: {
+        command: "npx",
+        args: [
+          "-y",
+          "--cache",
+          "runtime-value",
+          "@acme/notes-mcp@1.4.2",
+          "--cache",
+          "package-value",
+        ],
         env: {},
       },
     },

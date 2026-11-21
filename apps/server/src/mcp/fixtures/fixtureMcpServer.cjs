@@ -33,8 +33,10 @@ const tools = defaultTools.map((tool, index) => ({ ...tool, name: toolNames[inde
 const defaultNameOf = new Map(tools.map((tool, index) => [tool.name, defaultTools[index].name]));
 const label = process.env.FIXTURE_LABEL;
 
-// A test sets this to make startup fail after the child exists, as a broken server does.
+// A test sets these to make startup fail after the child exists, as a broken server does.
 const failingTool = process.env.FIXTURE_START_FAILURE;
+// A test splits the failure into timed writes so a secret can straddle a stderr chunk boundary.
+const errorChunkSize = Number(process.env.FIXTURE_ERROR_CHUNK_SIZE ?? 0);
 // A test sets this to learn the child it should see stopped when the service scope closes.
 if (process.env.FIXTURE_PID_FILE !== undefined) {
   require("node:fs").writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid));
@@ -44,10 +46,21 @@ const reply = (id, result) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 
 if (failingTool !== undefined) {
-  process.stderr.write(
-    `fixture cannot start: ${process.env.FIXTURE_ERROR_DETAIL ?? failingTool}\n`,
-  );
-  process.exit(1);
+  const detail = `fixture cannot start: ${process.env.FIXTURE_ERROR_DETAIL ?? failingTool}\n`;
+  if (errorChunkSize > 0 && Number.isFinite(errorChunkSize)) {
+    let offset = 0;
+    const writeNext = () => {
+      if (offset >= detail.length) return process.exit(1);
+      process.stderr.write(detail.slice(offset, offset + errorChunkSize));
+      offset += errorChunkSize;
+      setTimeout(writeNext, 15);
+    };
+    writeNext();
+    return;
+  } else {
+    process.stderr.write(detail);
+    process.exit(1);
+  }
 }
 
 // A test sets these to exercise the protocol around listing: a server request mid-request and pages.

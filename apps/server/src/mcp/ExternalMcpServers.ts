@@ -108,8 +108,20 @@ const stderrTailOf = (text: string) => {
 
 const isExternalMcpServerError = Schema.is(ExternalMcpServerError);
 
+interface McpRedactor {
+  readonly redact: (text: string) => string;
+  readonly secrets: ReadonlyArray<string>;
+  /** The buffer must hold this much extra so a whole secret survives until it can be redacted. */
+  readonly longest: number;
+}
+
+interface StderrBuffer {
+  readonly raw: string;
+  readonly capped: boolean;
+}
+
 /** Anything an entry declares secret can reappear in a child's stderr or a JSON-RPC error. */
-const redactorFor = (entry: RegisteredMcpServerEntry) => {
+const redactorFor = (entry: RegisteredMcpServerEntry): McpRedactor => {
   const parsed = parseMcpRegistration(
     entry.source.kind === "server.json" ? entry.source.document : entry.source.manifest,
   );
@@ -127,8 +139,33 @@ const redactorFor = (entry: RegisteredMcpServerEntry) => {
       })
     : [];
   const secrets = [...new Set(values)].sort((left, right) => right.length - left.length);
-  return (text: string) =>
-    secrets.reduce((redacted, secret) => redacted.replaceAll(secret, SECRET_REDACTED), text);
+  return {
+    secrets,
+    longest: secrets[0]?.length ?? 0,
+    redact: (text) =>
+      secrets.reduce((redacted, secret) => redacted.replaceAll(secret, SECRET_REDACTED), text),
+  };
+};
+
+/**
+ * The only place the raw stderr buffer becomes a report. Redaction happens here, never while
+ * accumulating: a chunk boundary or the tail cut would otherwise tear a secret apart.
+ */
+const reportStderr = (buffer: StderrBuffer, redactor: McpRedactor) => {
+  let text = buffer.raw;
+  if (buffer.capped) {
+    for (const secret of redactor.secrets) {
+      // A straddling secret survives only as a leading suffix; check the longest one first.
+      for (let take = secret.length - 1; take > 0; take--) {
+        const suffix = secret.slice(-take);
+        if (text.startsWith(suffix)) {
+          text = `${SECRET_REDACTED}${text.slice(take)}`;
+          break;
+        }
+      }
+    }
+  }
+  return stderrTailOf(redactor.redact(text));
 };
 
 const causeText = (cause: Cause.Cause<unknown>, redact: (text: string) => string): string => {
@@ -222,8 +259,9 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     readonly args: ReadonlyArray<string>;
     readonly env: Readonly<Record<string, string>>;
   },
-  redact: (text: string) => string,
+  redactor: McpRedactor,
 ) {
+  const { redact } = redactor;
   const child = yield* spawner
     .spawn(
       ChildProcess.make(launch.command, [...launch.args], {
@@ -244,7 +282,10 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     );
 
   const replies = new Map<number, Deferred.Deferred<JsonRpcReply>>();
-  const stderrTail = yield* Ref.make("");
+  const stderrBuffer = yield* Ref.make<StderrBuffer>({ raw: "", capped: false });
+  const stderrCap = STDERR_TAIL_BYTES + redactor.longest;
+  const report = () =>
+    Ref.get(stderrBuffer).pipe(Effect.map((buffer) => reportStderr(buffer, redactor)));
   const exited = yield* Deferred.make<string>();
   let nextId = 1;
 
@@ -320,12 +361,18 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     Effect.forkScoped,
   );
 
-  // Keep the end of stderr for a crash report.
+  // Keep the raw end of stderr; the extra room lets a whole secret survive until report time.
   yield* child.stderr.pipe(
     Stream.decodeText(),
-    // Redacted before the cut, so the cut never leaves a secret's unrecognizable remainder.
     Stream.runForEach((chunk) =>
-      Ref.update(stderrTail, (text) => stderrTailOf(redact(`${text}${chunk}`))),
+      Ref.update(stderrBuffer, ({ raw, capped }) => {
+        const combined = `${raw}${chunk}`;
+        const truncated = combined.length > stderrCap;
+        return {
+          raw: truncated ? combined.slice(-stderrCap) : combined,
+          capped: capped || truncated,
+        };
+      }),
     ),
     Effect.forkScoped,
   );
@@ -333,9 +380,9 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
   // Any exit is the crash signal; a signal termination fails `exitCode`, so both count. Requests
   // still waiting fail with the stderr tail.
   const recordExit = (detail: string) =>
-    Ref.get(stderrTail).pipe(
+    report().pipe(
       Effect.flatMap((tail) =>
-        Deferred.succeed(exited, redact(`${launch.command} ${detail}. ${tail}`.trim())),
+        Deferred.succeed(exited, `${launch.command} ${detail}. ${tail}`.trim()),
       ),
     );
   yield* child.exitCode.pipe(
@@ -362,11 +409,11 @@ const connect = Effect.fn("ExternalMcpServers.connect")(function* (
     Effect.timeoutOrElse({
       duration: START_TIMEOUT,
       orElse: () =>
-        Ref.get(stderrTail).pipe(
+        report().pipe(
           Effect.flatMap(
             (tail) =>
               new ExternalMcpServerError({
-                message: redact(`${launch.command} did not answer initialize. ${tail}`.trim()),
+                message: `${launch.command} did not answer initialize. ${tail}`.trim(),
               }),
           ),
         ),
@@ -474,7 +521,7 @@ const make = Effect.gen(function* () {
     const exposure = exposeTools(configured?.registeredMcpServers ?? [], runtime);
     const servers = (configured?.registeredMcpServers ?? []).map((entry) => {
       const state = runtime.get(entry.id);
-      const stderrTail = state?.stderrTail && redactorFor(entry)(state.stderrTail);
+      const stderrTail = state?.stderrTail && redactorFor(entry).redact(state.stderrTail);
       const skipped = exposure.byServer.get(entry.id)?.skipped;
       return {
         id: entry.id,
@@ -506,13 +553,14 @@ const make = Effect.gen(function* () {
 
   const start = Effect.fn("ExternalMcpServers.start")(function* (entry: RegisteredMcpServerEntry) {
     yield* setState(entry.id, { status: "starting" });
-    const redact = redactorFor(entry);
+    const redactor = redactorFor(entry);
     const launch = launchOf(entry, home, platform);
-    if (!launch.ok) return yield* new ExternalMcpServerError({ message: redact(launch.message) });
+    if (!launch.ok)
+      return yield* new ExternalMcpServerError({ message: redactor.redact(launch.message) });
 
     const scope = yield* Scope.fork(serviceScope, "sequential");
     // The child's scope closes on every way out before the child is recorded as running.
-    const connection = yield* connect(spawner, launch.launch, redact).pipe(
+    const connection = yield* connect(spawner, launch.launch, redactor).pipe(
       Effect.provideService(Scope.Scope, scope),
       Effect.onError(() => Scope.close(scope, Exit.void)),
     );
@@ -552,7 +600,7 @@ const make = Effect.gen(function* () {
                     true,
                     new Map(states).set(entry.id, {
                       status: "failed",
-                      stderrTail: stderrTailOf(message),
+                      stderrTail: message,
                       failedEntry: entry,
                     } satisfies ServerRuntimeState),
                   ]
@@ -563,7 +611,7 @@ const make = Effect.gen(function* () {
             recorded
               ? Effect.logWarning("registered MCP server stopped unexpectedly", {
                   server: entry.name,
-                  detail: stderrTailOf(message),
+                  detail: message,
                 }).pipe(Effect.andThen(announce))
               : Effect.void,
           ),
@@ -624,7 +672,7 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           setState(entry.id, {
             status: "failed",
-            stderrTail: causeText(cause, redactorFor(entry)),
+            stderrTail: causeText(cause, redactorFor(entry).redact),
             failedEntry: entry,
           }).pipe(Effect.andThen(announce)),
         ),
