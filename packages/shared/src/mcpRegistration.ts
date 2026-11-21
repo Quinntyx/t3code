@@ -436,6 +436,7 @@ const readMcpbFields = (raw: unknown): ReadonlyArray<McpConfigField> =>
           required,
           secret: true,
           ...(secretDefault === undefined ? {} : { default: secretDefault }),
+          ...(asBoolean(config.multiple) === true ? { multiple: true } : {}),
         },
       ];
     }
@@ -653,10 +654,15 @@ export function resolveMcpLaunch(
   const secretKeys = new Set(
     parsed.registration.fields.flatMap((field) => (field.secret ? [field.key] : [])),
   );
+  const secretListKeys = new Set(
+    parsed.registration.fields.flatMap((field) =>
+      field.secret && field.multiple === true ? [field.key] : [],
+    ),
+  );
   const config = Object.fromEntries(
     Object.entries(entry.config).map(([key, value]) => [
       key,
-      typeof value === "string" && secretKeys.has(key) ? decodeMcpConfigValue(value) : value,
+      typeof value === "string" && secretListKeys.has(key) ? decodeMcpConfigValue(value) : value,
     ]),
   ) as Record<string, McpConfigValue>;
   const resolved = configuredValues(parsed.registration.fields, config);

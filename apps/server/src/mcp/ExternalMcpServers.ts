@@ -119,7 +119,8 @@ const redactorFor = (entry: RegisteredMcpServerEntry) => {
         if (!field.secret) return [];
         const raw = entry.config[field.key];
         if (raw === undefined) return [];
-        const value = typeof raw === "string" ? decodeMcpConfigValue(raw) : raw;
+        const value =
+          typeof raw === "string" && field.multiple === true ? decodeMcpConfigValue(raw) : raw;
         const parts = Array.isArray(value) ? value : [value];
         return [...parts, ...(Array.isArray(value) ? [value.join(","), JSON.stringify(value)] : [])]
           .map(String)
