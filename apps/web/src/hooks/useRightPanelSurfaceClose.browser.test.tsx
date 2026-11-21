@@ -89,9 +89,13 @@ function setup() {
   });
   fixture.confirm = () => confirmation;
   function Harness({ threadRef }: { threadRef: ScopedThreadRef }) {
+    const displayedSurfaces = useRightPanelStore(
+      (state) => selectThreadRightPanelState(state.byThreadKey, threadRef).surfaces,
+    );
     const { closeSurface } = useRightPanelSurfaceClose({
       threadRef,
       terminalLabelsById: new Map(),
+      displayedSurfaces,
     });
     return <button onClick={() => closeSurface(surface)}>Close original terminal</button>;
   }

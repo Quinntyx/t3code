@@ -23,8 +23,11 @@ const RIGHT_PANEL_KINDS = [
   "pull-requests",
   "notebook",
   "side-chat",
-  "voice",
 ] as const;
+/**
+ * Per-thread panel surfaces. Voice is not one: it is a single app-wide surface pinned into every
+ * thread's panel while it is open, so it never lives in `byThreadKey`.
+ */
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type PullRequestDetailTab = "summary" | "guide" | "timeline" | "code";
@@ -36,7 +39,7 @@ export interface DeviceTabTarget {
   name: string;
 }
 
-export type RightPanelSurface =
+export type ThreadRightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
   | { id: "device" | `device:${string}`; kind: "device"; target?: DeviceTabTarget; title?: string }
@@ -79,11 +82,18 @@ export type RightPanelSurface =
     }
   | { id: "pull-requests"; kind: "pull-requests" }
   | { id: "notebook"; kind: "notebook" }
-  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId }
-  | { id: "voice"; kind: "voice" };
+  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
+
+/**
+ * The one app-wide Voice surface. It is pinned into whichever panel is on screen rather than
+ * stored per thread, so it survives navigation and closes only when the user closes it.
+ */
+type VoiceSurface = { readonly id: "voice"; readonly kind: "voice" };
+const VOICE_SURFACE: VoiceSurface = { id: "voice", kind: "voice" };
+export type RightPanelSurface = ThreadRightPanelSurface | VoiceSurface;
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
   EnvironmentId.make("pull-requests-panel"),
@@ -95,7 +105,7 @@ const isPullRequestsPanelKey = (threadKey: string) => threadKey.endsWith(":pull-
 export interface ThreadRightPanelState {
   isOpen: boolean;
   activeSurfaceId: string | null;
-  surfaces: RightPanelSurface[];
+  surfaces: ThreadRightPanelSurface[];
   dismissedDeviceSurfaceIds?: string[];
   maximized?: true;
   proactiveDiffTurnId?: RunId;
@@ -108,6 +118,14 @@ export interface ThreadPanelVisibility {
 
 export interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
+  /** App-wide Voice: open it and every thread's panel shows the Voice tab. */
+  voiceOpen: boolean;
+  voiceActive: boolean;
+  /** The thread whose panel the client is showing, so only its own actions move focus off Voice. */
+  visibleThreadKey: string | null;
+  setVisibleThread: (threadKey: string | null) => void;
+  setVoiceOpen: (open: boolean) => void;
+  setVoiceActive: (active: boolean) => void;
   pendingMaximizeThreadKey: string | null;
   requestMaximize: (ref: ScopedThreadRef) => void;
   consumeMaximizeRequest: (ref: ScopedThreadRef) => boolean;
@@ -213,7 +231,7 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 
 const singletonSurface = (
   kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "side-chat">,
-): RightPanelSurface => {
+): ThreadRightPanelSurface => {
   switch (kind) {
     case "notebook":
       return { id: "notebook", kind };
@@ -223,14 +241,12 @@ const singletonSurface = (
       return { id: "files", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
-    case "voice":
-      return { id: "voice", kind };
     case "device":
       return { id: "device", kind };
   }
 };
 
-const browserSurface = (tabId: string | null): RightPanelSurface =>
+const browserSurface = (tabId: string | null): ThreadRightPanelSurface =>
   tabId
     ? { id: `browser:${tabId}`, kind: "preview", resourceId: tabId }
     : { id: "browser:new", kind: "preview", resourceId: null };
@@ -239,7 +255,7 @@ const fileSurface = (
   relativePath: string,
   revealLine: number | null,
   revealRequestId: number,
-): RightPanelSurface => ({
+): ThreadRightPanelSurface => ({
   id: `file:${relativePath}`,
   kind: "file",
   relativePath,
@@ -247,7 +263,7 @@ const fileSurface = (
   revealRequestId,
 });
 
-const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface => ({
+const attachmentSurface = (attachment: ChatFileAttachment): ThreadRightPanelSurface => ({
   id: `attachment:${attachment.id}`,
   kind: "file",
   relativePath: attachment.name,
@@ -256,7 +272,7 @@ const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface =>
   attachment,
 });
 
-const terminalSurface = (terminalId: string): RightPanelSurface => ({
+const terminalSurface = (terminalId: string): ThreadRightPanelSurface => ({
   id: `terminal:${terminalId}`,
   kind: "terminal",
   resourceId: terminalId,
@@ -303,7 +319,7 @@ export function pullRequestSurface(target: {
 
 const upsertSurface = (
   current: ThreadRightPanelState,
-  surface: RightPanelSurface,
+  surface: ThreadRightPanelSurface,
   activate = true,
 ): ThreadRightPanelState => ({
   ...current,
@@ -417,10 +433,12 @@ const userAction = (
   guestKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
   closesView = false,
+  /** The user picked a thread surface, so the panel should show it rather than Voice. */
+  selectsSurface = false,
 ): Partial<RightPanelStoreState> => {
   const host = panelHosts.get(guestKey);
   const threadKey = host === undefined ? guestKey : scopedThreadKey(host);
-  return userActionOnThread(state, threadKey, updater, closesView);
+  return userActionOnThread(state, threadKey, updater, closesView, selectsSurface);
 };
 
 const userActionOnThread = (
@@ -428,6 +446,7 @@ const userActionOnThread = (
   threadKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
   closesView: boolean,
+  selectsSurface: boolean,
 ): Partial<RightPanelStoreState> => ({
   ...updateThread(state, threadKey, (current) => {
     const next = updater(current);
@@ -447,6 +466,7 @@ const userActionOnThread = (
       ],
     };
   }),
+  ...(showsThreadSurface(state, threadKey, selectsSurface) ? { voiceActive: false } : {}),
   userActionRevisionByThreadKey: {
     ...state.userActionRevisionByThreadKey,
     [threadKey]: (state.userActionRevisionByThreadKey[threadKey] ?? 0) + 1,
@@ -461,6 +481,30 @@ const userActionOnThread = (
     : {}),
 });
 
+/**
+ * Only a thread surface being brought to the front, for the thread whose panel is on screen,
+ * takes the panel off Voice. A background thread's agent reveal or an unrelated tab close never
+ * steals it.
+ */
+const showsThreadSurface = (
+  state: RightPanelStoreState,
+  threadKey: string,
+  selectsSurface: boolean,
+): boolean => state.voiceActive && selectsSurface && state.visibleThreadKey === threadKey;
+
+/**
+ * Agent-driven activation: it brings a surface to the front for the thread on screen but stays out
+ * of the user-action revision, so it does not suppress that thread's proactive panels.
+ */
+const revealAction = (
+  state: RightPanelStoreState,
+  threadKey: string,
+  surfaceId: string,
+): Partial<RightPanelStoreState> => ({
+  ...updateThread(state, threadKey, (current) => activated(current, surfaceId)),
+  ...(showsThreadSurface(state, threadKey, true) ? { voiceActive: false } : {}),
+});
+
 const activated = (current: ThreadRightPanelState, surfaceId: string): ThreadRightPanelState =>
   current.surfaces.some((surface) => surface.id === surfaceId)
     ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
@@ -471,6 +515,37 @@ const closeAction = (
   threadKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
 ): Partial<RightPanelStoreState> => userAction(state, threadKey, updater, true);
+
+/** The thread surfaces a bulk close removes, in the order the panel displays them. Voice is pinned
+ * into that display but belongs to the app, so it is never a target or a victim. */
+export function bulkCloseTargets(
+  displayed: ReadonlyArray<RightPanelSurface>,
+  surfaceId: string,
+  mode: "others" | "right" | "all",
+): ReadonlyArray<ThreadRightPanelSurface> {
+  const threadSurfaces = displayed.filter(
+    (surface): surface is ThreadRightPanelSurface => surface.kind !== "voice",
+  );
+  if (mode === "all") return threadSurfaces;
+  if (mode === "others") return threadSurfaces.filter((surface) => surface.id !== surfaceId);
+  const index = displayed.findIndex((surface) => surface.id === surfaceId);
+  if (index < 0) return [];
+  return displayed
+    .slice(index + 1)
+    .filter((surface): surface is ThreadRightPanelSurface => surface.kind !== "voice");
+}
+
+/** Which bulk closes the displayed tabs allow, so the menu agrees with what is on screen. */
+export function bulkCloseAvailability(
+  displayed: ReadonlyArray<RightPanelSurface>,
+  surfaceId: string,
+): Record<"others" | "right" | "all", boolean> {
+  return {
+    others: bulkCloseTargets(displayed, surfaceId, "others").length > 0,
+    right: bulkCloseTargets(displayed, surfaceId, "right").length > 0,
+    all: bulkCloseTargets(displayed, surfaceId, "all").length > 0,
+  };
+}
 
 function normalizeRevealLine(line: number | undefined): number | null {
   if (line === undefined || !Number.isFinite(line)) return null;
@@ -495,9 +570,10 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
-                ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
+                ? validThreadState.surfaces.flatMap<ThreadRightPanelSurface>((surface) => {
                     const kind = (surface as { kind?: string }).kind;
-                    if (kind === "plan" || kind === "agents") return [];
+                    // Voice is app-wide state now, not a thread's surface.
+                    if (kind === "plan" || kind === "agents" || kind === "voice") return [];
                     if (
                       (surface.kind === "file" || surface.kind === "files") &&
                       "folderTrail" in surface &&
@@ -633,6 +709,21 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
   persist(
     (set, get) => ({
       byThreadKey: {},
+      voiceOpen: false,
+      voiceActive: false,
+      visibleThreadKey: null,
+      setVisibleThread: (threadKey) => {
+        if (get().visibleThreadKey === threadKey) return;
+        set({ visibleThreadKey: threadKey });
+      },
+      setVoiceOpen: (open) => {
+        if (get().voiceOpen === open) return;
+        set({ voiceOpen: open, voiceActive: open });
+      },
+      setVoiceActive: (active) => {
+        if (!get().voiceOpen || get().voiceActive === active) return;
+        set({ voiceActive: active });
+      },
       pendingMaximizeThreadKey: null,
       requestMaximize: (ref) => set({ pendingMaximizeThreadKey: scopedThreadKey(ref) }),
       consumeMaximizeRequest: (ref) => {
@@ -697,41 +788,62 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       },
       open: (ref, kind) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            if (kind === "preview") {
-              const existing = current.surfaces.find((surface) => surface.kind === "preview");
-              return upsertSurface(current, existing ?? browserSurface(null));
-            }
-            return upsertSurface(current, singletonSurface(kind));
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              if (kind === "preview") {
+                const existing = current.surfaces.find((surface) => surface.kind === "preview");
+                return upsertSurface(current, existing ?? browserSurface(null));
+              }
+              return upsertSurface(current, singletonSurface(kind));
+            },
+            false,
+            true,
+          ),
         ),
       openDevice: (ref, target, automatic = false) =>
         set((state) =>
-          (automatic ? automaticUpdate : userAction)(state, scopedThreadKey(ref), (current) => {
-            const id =
-              `device:${encodeURIComponent(target.hostId)}:${encodeURIComponent(target.deviceId)}` as const;
-            if (automatic && current.dismissedDeviceSurfaceIds?.includes(id)) return current;
-            const surface: RightPanelSurface = { id, kind: "device", target };
-            const existing = current.surfaces.find((entry) => entry.id === id);
-            const surfaces = existing
-              ? current.surfaces.filter((entry) => entry.id !== "device")
-              : current.surfaces.map((entry) => (entry.id === "device" ? surface : entry));
-            return upsertSurface(
-              {
-                ...current,
-                surfaces,
-                dismissedDeviceSurfaceIds: (current.dismissedDeviceSurfaceIds ?? []).filter(
-                  (entry) => entry !== id,
-                ),
-              },
-              existing ?? surface,
-            );
-          }),
+          (automatic ? automaticUpdate : userAction)(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const id =
+                `device:${encodeURIComponent(target.hostId)}:${encodeURIComponent(target.deviceId)}` as const;
+              if (automatic && current.dismissedDeviceSurfaceIds?.includes(id)) return current;
+              const surface: ThreadRightPanelSurface = { id, kind: "device", target };
+              const existing = current.surfaces.find((entry) => entry.id === id);
+              const surfaces = existing
+                ? current.surfaces.filter((entry) => entry.id !== "device")
+                : current.surfaces.map((entry) => (entry.id === "device" ? surface : entry));
+              return upsertSurface(
+                {
+                  ...current,
+                  surfaces,
+                  dismissedDeviceSurfaceIds: (current.dismissedDeviceSurfaceIds ?? []).filter(
+                    (entry) => entry !== id,
+                  ),
+                },
+                existing ?? surface,
+              );
+            },
+            false,
+            true,
+          ),
         ),
       openSideChat: (ref, threadId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            upsertSurface(current, { id: `side-chat:${threadId}`, kind: "side-chat", threadId }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) =>
+              upsertSurface(current, {
+                id: `side-chat:${threadId}`,
+                kind: "side-chat",
+                threadId,
+              }),
+            false,
+            true,
           ),
         ),
       renameDevice: (ref, surfaceId, title) =>
@@ -747,30 +859,42 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       openBrowser: (ref, tabId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const surface = browserSurface(tabId);
-            const withoutPlaceholder = tabId
-              ? current.surfaces.filter((entry) => entry.id !== "browser:new")
-              : current.surfaces;
-            return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const surface = browserSurface(tabId);
+              const withoutPlaceholder = tabId
+                ? current.surfaces.filter((entry) => entry.id !== "browser:new")
+                : current.surfaces;
+              return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
+            },
+            false,
+            true,
+          ),
         ),
       openPullRequest: (ref, target) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const surface = pullRequestSurface(target);
-            const next = upsertSurface(current, surface);
-            return target.url
-              ? {
-                  ...next,
-                  surfaces: next.surfaces.map((entry) =>
-                    entry.id === surface.id && entry.kind === "pull-request"
-                      ? { ...entry, ...surface }
-                      : entry,
-                  ),
-                }
-              : next;
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const surface = pullRequestSurface(target);
+              const next = upsertSurface(current, surface);
+              return target.url
+                ? {
+                    ...next,
+                    surfaces: next.surfaces.map((entry) =>
+                      entry.id === surface.id && entry.kind === "pull-request"
+                        ? { ...entry, ...surface }
+                        : entry,
+                    ),
+                  }
+                : next;
+            },
+            false,
+            true,
+          ),
         ),
       setPullRequestDetailTab: (ref, surfaceId, detailTab) =>
         set((state) => {
@@ -791,102 +915,130 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         }),
       openFile: (ref, requestedPath, line) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            if (requestedPath === ".") {
-              return upsertSurface(current, singletonSurface("files"));
-            }
-            // Workspace entry paths use '/', including on Windows.
-            const relativePath = /^[A-Za-z]:\/+$/.test(requestedPath)
-              ? requestedPath
-              : requestedPath.replace(/\/+$/, "") || requestedPath;
-            const withoutStandaloneExplorer = current.surfaces.filter(
-              (surface) => surface.kind !== "files",
-            );
-            const surfaceId = `file:${relativePath}` as const;
-            const existing = withoutStandaloneExplorer.find(
-              (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
-                surface.id === surfaceId && surface.kind === "file",
-            );
-            const surface = fileSurface(
-              relativePath,
-              normalizeRevealLine(line),
-              (existing?.revealRequestId ?? 0) + 1,
-            );
-            return {
-              ...current,
-              isOpen: true,
-              activeSurfaceId: surface.id,
-              surfaces: existing
-                ? withoutStandaloneExplorer.map((entry) =>
-                    entry.id === surface.id ? surface : entry,
-                  )
-                : [...withoutStandaloneExplorer, surface],
-            };
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              if (requestedPath === ".") {
+                return upsertSurface(current, singletonSurface("files"));
+              }
+              // Workspace entry paths use '/', including on Windows.
+              const relativePath = /^[A-Za-z]:\/+$/.test(requestedPath)
+                ? requestedPath
+                : requestedPath.replace(/\/+$/, "") || requestedPath;
+              const withoutStandaloneExplorer = current.surfaces.filter(
+                (surface) => surface.kind !== "files",
+              );
+              const surfaceId = `file:${relativePath}` as const;
+              const existing = withoutStandaloneExplorer.find(
+                (surface): surface is Extract<ThreadRightPanelSurface, { kind: "file" }> =>
+                  surface.id === surfaceId && surface.kind === "file",
+              );
+              const surface = fileSurface(
+                relativePath,
+                normalizeRevealLine(line),
+                (existing?.revealRequestId ?? 0) + 1,
+              );
+              return {
+                ...current,
+                isOpen: true,
+                activeSurfaceId: surface.id,
+                surfaces: existing
+                  ? withoutStandaloneExplorer.map((entry) =>
+                      entry.id === surface.id ? surface : entry,
+                    )
+                  : [...withoutStandaloneExplorer, surface],
+              };
+            },
+            false,
+            true,
+          ),
         ),
       navigateFolder: (ref, surfaceId, relativePath, folderTrail, keepSource = false) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
-            if (index < 0) return current;
-            const trail = folderTrail === relativePath ? {} : { folderTrail };
-            const target: RightPanelSurface =
-              relativePath === ""
-                ? { ...singletonSurface("files"), ...trail }
-                : { ...fileSurface(relativePath, null, 1), ...trail };
-            const source = current.surfaces[index]!;
-            const existing = current.surfaces.some(
-              (surface, i) => i !== index && surface.id === target.id,
-            );
-            const surfaces = current.surfaces.flatMap((surface, i) => {
-              if (i === index) {
-                const kept = keepSource ? [source] : [];
-                return existing ? kept : [...kept, target];
-              }
-              return !existing && target.kind === "file" && surface.kind === "files"
-                ? []
-                : [surface];
-            });
-            return { ...current, isOpen: true, activeSurfaceId: target.id, surfaces };
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+              if (index < 0) return current;
+              const trail = folderTrail === relativePath ? {} : { folderTrail };
+              const target: ThreadRightPanelSurface =
+                relativePath === ""
+                  ? { ...singletonSurface("files"), ...trail }
+                  : { ...fileSurface(relativePath, null, 1), ...trail };
+              const source = current.surfaces[index]!;
+              const existing = current.surfaces.some(
+                (surface, i) => i !== index && surface.id === target.id,
+              );
+              const surfaces = current.surfaces.flatMap((surface, i) => {
+                if (i === index) {
+                  const kept = keepSource ? [source] : [];
+                  return existing ? kept : [...kept, target];
+                }
+                return !existing && target.kind === "file" && surface.kind === "files"
+                  ? []
+                  : [surface];
+              });
+              return { ...current, isOpen: true, activeSurfaceId: target.id, surfaces };
+            },
+            false,
+            true,
+          ),
         ),
       openAttachment: (ref, attachment) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const withoutStandaloneExplorer = current.surfaces.filter(
-              (surface) => surface.kind !== "files",
-            );
-            return upsertSurface(
-              { ...current, surfaces: withoutStandaloneExplorer },
-              attachmentSurface(attachment),
-            );
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const withoutStandaloneExplorer = current.surfaces.filter(
+                (surface) => surface.kind !== "files",
+              );
+              return upsertSurface(
+                { ...current, surfaces: withoutStandaloneExplorer },
+                attachmentSurface(attachment),
+              );
+            },
+            false,
+            true,
+          ),
         ),
       openTerminal: (ref, terminalId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            upsertSurface(current, terminalSurface(terminalId)),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => upsertSurface(current, terminalSurface(terminalId)),
+            false,
+            true,
           ),
         ),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
-            ...current,
-            isOpen: true,
-            activeSurfaceId: surfaceId,
-            surfaces: current.surfaces.map((surface) => {
-              if (surface.id !== surfaceId || surface.kind !== "terminal") return surface;
-              const { splitDirection: _splitDirection, ...baseSurface } = surface;
-              return {
-                ...baseSurface,
-                terminalIds: surface.terminalIds.includes(terminalId)
-                  ? surface.terminalIds
-                  : [...surface.terminalIds, terminalId],
-                activeTerminalId: terminalId,
-                ...(direction === "vertical" ? { splitDirection: "vertical" as const } : {}),
-              };
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => ({
+              ...current,
+              isOpen: true,
+              activeSurfaceId: surfaceId,
+              surfaces: current.surfaces.map((surface) => {
+                if (surface.id !== surfaceId || surface.kind !== "terminal") return surface;
+                const { splitDirection: _splitDirection, ...baseSurface } = surface;
+                return {
+                  ...baseSurface,
+                  terminalIds: surface.terminalIds.includes(terminalId)
+                    ? surface.terminalIds
+                    : [...surface.terminalIds, terminalId],
+                  activeTerminalId: terminalId,
+                  ...(direction === "vertical" ? { splitDirection: "vertical" as const } : {}),
+                };
+              }),
             }),
-          })),
+            false,
+            true,
+          ),
         ),
       activateTerminal: (ref, surfaceId, terminalId) =>
         set((state) =>
@@ -943,12 +1095,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       activateSurface: (ref, surfaceId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => activated(current, surfaceId)),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => activated(current, surfaceId),
+            false,
+            true,
+          ),
         ),
       revealSurface: (ref, surfaceId) =>
-        set((state) =>
-          automaticUpdate(state, scopedThreadKey(ref), (current) => activated(current, surfaceId)),
-        ),
+        set((state) => revealAction(state, scopedThreadKey(ref), surfaceId)),
       closeSurface: (ref, surfaceId) =>
         set((state) =>
           closeAction(state, scopedThreadKey(ref), (current) => {
@@ -1075,8 +1231,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       show: (ref) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            current.isOpen ? current : { ...current, isOpen: true },
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => (current.isOpen ? current : { ...current, isOpen: true }),
+            false,
+            true,
           ),
         ),
       close: (ref) =>
@@ -1102,19 +1262,28 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       toggle: (ref, kind) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const active = current.surfaces.find(
-              (surface) => surface.id === current.activeSurfaceId,
-            );
-            if (current.isOpen && active?.kind === kind) {
-              return { ...current, isOpen: false };
-            }
-            if (kind === "preview") {
-              const existing = current.surfaces.find((surface) => surface.kind === "preview");
-              return upsertSurface(current, existing ?? browserSurface(null));
-            }
-            return upsertSurface(current, singletonSurface(kind));
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const active = current.surfaces.find(
+                (surface) => surface.id === current.activeSurfaceId,
+              );
+              // The saved tab being active is not enough: Voice can be what the panel shows.
+              const showing =
+                active?.kind === kind &&
+                (!state.voiceActive ||
+                  state.visibleThreadKey !== scopedThreadKey(rightPanelHostRef(ref)));
+              if (current.isOpen && showing) return { ...current, isOpen: false };
+              if (kind === "preview") {
+                const existing = current.surfaces.find((surface) => surface.kind === "preview");
+                return upsertSurface(current, existing ?? browserSurface(null));
+              }
+              return upsertSurface(current, singletonSurface(kind));
+            },
+            false,
+            true,
+          ),
         ),
       setThreadPanelOpen: (ref, presentation, open) =>
         set((state) => ({
@@ -1246,6 +1415,49 @@ export function selectActiveRightPanel(
   const state = selectThreadRightPanelState(byThreadKey, ref);
   if (!state.isOpen) return null;
   return state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null;
+}
+
+export interface VoicePanelState {
+  readonly open: boolean;
+  readonly active: boolean;
+}
+
+/** What a thread's panel shows once the app-wide Voice surface is pinned into it. */
+export interface RightPanelView {
+  readonly isOpen: boolean;
+  readonly activeSurfaceId: string | null;
+  readonly surfaces: ReadonlyArray<RightPanelSurface>;
+}
+
+export function threadRightPanelView(
+  state: ThreadRightPanelState,
+  voice: VoicePanelState,
+): RightPanelView {
+  if (!voice.open) {
+    return {
+      isOpen: state.isOpen,
+      activeSurfaceId: state.activeSurfaceId,
+      surfaces: state.surfaces,
+    };
+  }
+  // A thread with nothing selected (or with its tab just closed) shows Voice rather than the picker.
+  const threadActive = state.isOpen
+    ? state.surfaces.find((surface) => surface.id === state.activeSurfaceId)
+    : undefined;
+  return {
+    isOpen: true,
+    activeSurfaceId: voice.active || !threadActive ? VOICE_SURFACE.id : state.activeSurfaceId,
+    // Pinned first so the tab keeps one place across every thread.
+    surfaces: [VOICE_SURFACE, ...state.surfaces],
+  };
+}
+
+export function selectThreadRightPanelView(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+  voice: VoicePanelState,
+): RightPanelView {
+  return threadRightPanelView(selectThreadRightPanelState(byThreadKey, ref), voice);
 }
 
 export function selectActiveRightPanelSurface(

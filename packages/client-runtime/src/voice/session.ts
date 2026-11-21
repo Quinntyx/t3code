@@ -80,6 +80,12 @@ export function createVoiceSession(options: {
   let openRevision = 0;
   let monitorId: string | null = null;
   let unsubscribe: (() => void) | null = null;
+  /** Each role's streaming message; null starts a new one for that role. */
+  let streaming: Record<"user" | "voice", string | null> = { user: null, voice: null };
+  /** Drops the model's spoken and written reply to the internal setup turn, if it is that turn. */
+  let suppressSetupReply = false;
+  /** Typed messages held back while the setup reply is hidden. */
+  let heldInput: string[] = [];
   const update = (patch: Partial<VoiceSessionState>) => {
     state = { ...state, ...patch };
     for (const listener of listeners) listener();
@@ -90,7 +96,37 @@ export function createVoiceSession(options: {
         messages: [...state.messages, { id: String(++nextMessageId), role, text }].slice(-200),
       });
   };
-  const requestMonitor = () =>
+  /**
+   * Live transcription streams a turn as many small fragments. They concatenate verbatim (Gemini
+   * supplies their own leading spaces) into one message, so a reply reads as a paragraph. Input and
+   * output transcription are independent streams: one reply's fragments stay together even while
+   * the user's speech for the next turn lands between them.
+   */
+  const stream = (role: "user" | "voice", text: string) => {
+    if (!text) return;
+    const current = streaming[role];
+    if (current !== null) {
+      update({
+        messages: state.messages.map((message) =>
+          message.id === current ? { ...message, text: message.text + text } : message,
+        ),
+      });
+      return;
+    }
+    // A turn's first fragment can still carry the separating space from the previous fragment.
+    const opening = text.trimStart();
+    if (!opening) return;
+    const message = { id: String(++nextMessageId), role, text: opening };
+    streaming = { ...streaming, [role]: message.id };
+    update({ messages: [...state.messages, message].slice(-200) });
+  };
+  /** Ends a role's streaming message so its next fragment starts a new one. */
+  const endStream = (role?: "user" | "voice") => {
+    streaming = role === undefined ? { user: null, voice: null } : { ...streaming, [role]: null };
+  };
+  const requestMonitor = () => {
+    // The model answers this internal request out loud; hide that turn's reply.
+    suppressSetupReply = true;
     connection?.sendClientContent({
       turns: [
         {
@@ -104,6 +140,18 @@ export function createVoiceSession(options: {
       ],
       turnComplete: true,
     });
+  };
+  /** Sends what the user typed while the setup turn was still arriving. */
+  const sendHeldInput = () => {
+    if (!heldInput.length || !connection) return;
+    const held = heldInput;
+    heldInput = [];
+    for (const text of held)
+      connection.sendClientContent({
+        turns: [{ role: "user", parts: [{ text }] }],
+        turnComplete: true,
+      });
+  };
   const flush = () => {
     if (!state.open || !connection || !monitorId) return;
     const notifications = options.feed.unseen();
@@ -135,14 +183,38 @@ export function createVoiceSession(options: {
   };
   const receive = (message: LiveServerMessage, generation: number) => {
     if (generation !== epoch) return;
-    if (message.serverContent?.interrupted) options.onInterrupt?.();
     const content = message.serverContent;
-    if (content?.inputTranscription?.text) append("user", content.inputTranscription.text);
-    if (content?.outputTranscription?.text) append("voice", content.outputTranscription.text);
+    if (content?.interrupted) {
+      endStream();
+      suppressSetupReply = false;
+      sendHeldInput();
+      options.onInterrupt?.();
+    }
+    if (content?.inputTranscription) {
+      stream("user", content.inputTranscription.text ?? "");
+      if (content.inputTranscription.finished) endStream("user");
+    }
+    if (content?.outputTranscription) {
+      // A new reply starting after user speech closes that utterance: Gemini can omit `finished`.
+      if (streaming.user !== null && streaming.voice === null) endStream("user");
+      if (suppressSetupReply)
+        // Still finish the turn, just never show or speak it.
+        endStream("voice");
+      else stream("voice", content.outputTranscription.text ?? "");
+      if (content.outputTranscription.finished) endStream("voice");
+    }
     for (const part of content?.modelTurn?.parts ?? []) {
-      if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/"))
-        options.onAudio?.(part.inlineData.data);
-      if (part.text && !content?.outputTranscription) append("voice", part.text);
+      const audio = part.inlineData?.data;
+      if (audio && part.inlineData?.mimeType?.startsWith("audio/") && !suppressSetupReply)
+        options.onAudio?.(audio);
+      if (part.text && !content?.outputTranscription && !suppressSetupReply)
+        append("voice", part.text);
+    }
+    if (content?.turnComplete || content?.generationComplete) {
+      // The model's end of turn says nothing about the independent input transcription.
+      endStream("voice");
+      suppressSetupReply = false;
+      sendHeldInput();
     }
     if (monitorId && message.toolCallCancellation?.ids?.includes(monitorId)) {
       monitorId = null;
@@ -213,6 +285,9 @@ export function createVoiceSession(options: {
     connection = null;
     connecting = null;
     monitorId = null;
+    endStream();
+    suppressSetupReply = false;
+    heldInput = [];
     options.onInterrupt?.();
     update({
       status: state.status === "disabled" ? "disabled" : "idle",
@@ -257,7 +332,7 @@ export function createVoiceSession(options: {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction:
-            "You are Voice, an assistant inside this T3 client. Use tools only for environments and threads this client can see. Never invent capabilities or claim a notification was heard by another client. Call monitor_threads once at session start and keep the non-blocking generator open; re-establish it if cancelled. Read pending requests before answering them. Ask the user before destructive work or permission decisions. Text and voice are one conversation.",
+            "You are Voice, an assistant inside this T3 client. Use tools only for environments and threads this client can see. Never invent capabilities or claim a notification was heard by another client. When the user asks how their threads are doing, what needs them, or for a status update, call list_threads (it covers every environment) and answer from its status, needsUser and lastError fields; never guess a thread's state. Call read_thread before answering about a thread's work or a pending request. Call monitor_threads once at session start and keep the non-blocking generator open; re-establish it if cancelled. Read pending requests before answering them. Ask the user before destructive work or permission decisions. Text and voice are one conversation.",
           tools: [
             {
               functionDeclarations: [
@@ -341,11 +416,18 @@ export function createVoiceSession(options: {
       if (!text.trim()) return;
       await connect();
       if (!connection) return;
-      append("user", text.trim());
-      connection.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: text.trim() }] }],
-        turnComplete: true,
-      });
+      // Typed text is its own message; it never joins a streamed transcript.
+      endStream();
+      const typed = text.trim();
+      append("user", typed);
+      // The setup turn's reply must stay hidden to its own end, so typing shows at once but waits
+      // to reach Gemini until then; otherwise the reply would answer this text and leak.
+      if (suppressSetupReply) heldInput.push(typed);
+      else
+        connection.sendClientContent({
+          turns: [{ role: "user", parts: [{ text: typed }] }],
+          turnComplete: true,
+        });
     },
     sendAudio(data: string) {
       connection?.sendRealtimeInput({ audio: { data, mimeType: "audio/pcm;rate=16000" } });

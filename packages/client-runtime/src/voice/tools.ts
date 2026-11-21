@@ -10,12 +10,39 @@ export interface VoiceEnvironmentView {
   readonly label: string;
   readonly projects: ReadonlyArray<{ readonly id: string; readonly title?: string }>;
   readonly providers: ReadonlyArray<unknown>;
+  /** Settled threads the shell left out of `threads`; they cannot be listed. */
+  readonly olderSettledOmitted?: number;
   readonly threads: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
+    /** The thread's latest run status, or "idle". */
     readonly status: string;
+    readonly projectId?: string;
     readonly activeRunId?: string | null;
+    readonly archivedAt?: string | null;
+    readonly latestRunStartedAt?: string | null;
+    readonly latestRunCompletedAt?: string | null;
+    readonly pendingRequest?: {
+      readonly id: string;
+      readonly kind: string;
+      readonly blocking?: boolean | undefined;
+    } | null;
+    readonly lastError?: string | null;
   }>;
+}
+
+/** One row per thread for "how are my threads doing" answers. */
+interface VoiceThreadStatus {
+  readonly environmentId: string;
+  readonly environment: string;
+  readonly projectId: string | null;
+  readonly project: string | null;
+  readonly threadId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly needsUser: boolean;
+  readonly lastError: string | null;
+  readonly lastActiveAt: string | null;
 }
 
 type Dispatch = AtomCommand<
@@ -28,6 +55,14 @@ type Dispatch = AtomCommand<
     input?: unknown,
   ) => Atom.Atom<boolean>;
 };
+
+const LISTED_THREAD_LIMIT = 100;
+const ACTIVE_THREAD_STATUSES = new Set(["queued", "preparing", "starting", "running", "waiting"]);
+
+/** Threads needing the user first, then work in flight, then everything else. */
+function attentionRank(row: VoiceThreadStatus): number {
+  return row.needsUser ? 0 : ACTIVE_THREAD_STATUSES.has(row.status) ? 1 : 2;
+}
 const decodeCommand = Schema.decodeUnknownSync(OrchestrationV2Command);
 const string = { type: "string" };
 const object = { type: "object" };
@@ -48,9 +83,9 @@ const definitions = [
   ],
   [
     "list_threads",
-    "List visible threads, optionally filtering their titles.",
+    "List visible threads across every environment, or one environment, with project, latest run status and whether each needs the user. Returns total, needsUser and byStatus counts across every matching thread plus thread rows (threads needing the user and running ones first); truncated is true when rows omit threads, so use the counts for an all-threads answer. olderSettledOmitted counts settled threads the client does not hold: when it is above zero, say you also have that many older settled threads instead of calling total the exact count.",
     { environmentId: string, query: string },
-    ["environmentId"],
+    [],
   ],
   [
     "search_threads",
@@ -122,11 +157,71 @@ export function createVoiceTools(options: {
       throw new Error(`Invalid ${key}`);
     return value.trim();
   };
+  const statusRow = (
+    environment: VoiceEnvironmentView,
+    thread: VoiceEnvironmentView["threads"][number],
+  ): VoiceThreadStatus => {
+    const latestRunAt = thread.latestRunCompletedAt ?? thread.latestRunStartedAt ?? null;
+    return {
+      environmentId: environment.id,
+      environment: environment.label,
+      projectId: thread.projectId ?? null,
+      project:
+        environment.projects.find((project) => project.id === thread.projectId)?.title ?? null,
+      threadId: thread.id,
+      title: thread.title,
+      status: thread.status,
+      // Same rule as the shell's pending request flags: any open question or approval needs the
+      // user, blocking or not. A credential refresh is the provider's business, not theirs.
+      needsUser:
+        thread.pendingRequest !== null &&
+        thread.pendingRequest !== undefined &&
+        thread.pendingRequest.kind !== "auth_refresh",
+      lastError: thread.lastError ?? null,
+      lastActiveAt: latestRunAt,
+    };
+  };
   return {
     declarations,
     async execute(name, args) {
       const environments = options.environments();
       if (name === "list_environments") return environments.map(({ id, label }) => ({ id, label }));
+      if (name === "list_threads") {
+        // "How are my threads doing" spans environments, and the model may not have listed
+        // them first, so an absent environmentId means all of them.
+        const requested =
+          typeof args.environmentId === "string"
+            ? environments.filter((entry) => entry.id === args.environmentId)
+            : environments;
+        if (!requested.length) throw new Error("Environment is not visible in this client.");
+        const query = typeof args.query === "string" ? args.query.toLowerCase() : null;
+        const rows = requested
+          .flatMap((entry) =>
+            entry.threads
+              .filter((thread) => !thread.archivedAt || (query !== null && query.length > 0))
+              .filter((thread) => query === null || thread.title.toLowerCase().includes(query))
+              .map((thread) => statusRow(entry, thread)),
+          )
+          // What the user came for first: threads that need them, then work in flight.
+          .sort((left, right) => attentionRank(left) - attentionRank(right));
+        const byStatus: Record<string, number> = {};
+        for (const row of rows) byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
+        const threads = rows.slice(0, LISTED_THREAD_LIMIT);
+        // A snapshot can leave older settled threads out entirely; they are not in `rows`, so say
+        // so rather than let `total` read as every thread the user has.
+        const olderSettledOmitted = requested.reduce(
+          (sum, entry) => sum + (entry.olderSettledOmitted ?? 0),
+          0,
+        );
+        return {
+          total: rows.length,
+          truncated: rows.length > threads.length,
+          needsUser: rows.filter((row) => row.needsUser).length,
+          byStatus,
+          olderSettledOmitted,
+          threads,
+        };
+      }
       if (name === "search_threads") {
         const query = text(args, "query").toLowerCase();
         return environments
@@ -142,14 +237,6 @@ export function createVoiceTools(options: {
       const environmentId = EnvironmentId.make(environment.id);
       if (name === "list_projects") return environment.projects;
       if (name === "list_providers") return environment.providers;
-      if (name === "list_threads")
-        return environment.threads
-          .filter(
-            (thread) =>
-              typeof args.query !== "string" ||
-              thread.title.toLowerCase().includes(args.query.toLowerCase()),
-          )
-          .slice(0, 100);
       let command: Record<string, unknown>;
       let threadId: string;
       if (name === "create_thread") {

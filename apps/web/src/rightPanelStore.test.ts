@@ -1,10 +1,12 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { type EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { useClosedViewStore } from "./closedViewStore";
 import { reopenClosedView } from "./reopenClosedView";
 import {
+  bulkCloseAvailability,
+  bulkCloseTargets,
   hostRightPanel,
   migratePersistedRightPanelState,
   pullRequestSurface,
@@ -13,6 +15,7 @@ import {
   selectActiveRightPanelSurface,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
+  selectThreadRightPanelView,
   useRightPanelStore,
 } from "./rightPanelStore";
 
@@ -23,6 +26,8 @@ beforeEach(() => {
   useClosedViewStore.setState({ entries: [] });
   useRightPanelStore.setState({
     byThreadKey: {},
+    voiceOpen: false,
+    voiceActive: false,
     threadPanelVisibilityByThreadKey: {},
     userActionRevisionByThreadKey: {},
     closeRevisionByThreadKey: {},
@@ -38,6 +43,156 @@ async function reloadRightPanelStore() {
   await useRightPanelStore.persist.rehydrate();
   expect(useRightPanelStore.persist.hasHydrated()).toBe(true);
 }
+
+describe("global Voice surface", () => {
+  it("pins Voice into every thread's panel and keeps its conversation across navigation", () => {
+    const store = useRightPanelStore.getState();
+    store.setVoiceOpen(true);
+    // A thread that never opened its panel still shows Voice once it is open.
+    const first = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+      open: true,
+      active: true,
+    });
+    expect(first.isOpen).toBe(true);
+    expect(first.activeSurfaceId).toBe("voice");
+    expect(first.surfaces).toEqual([{ id: "voice", kind: "voice" }]);
+    const second = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refB, {
+      open: true,
+      active: true,
+    });
+    expect(second.activeSurfaceId).toBe("voice");
+  });
+
+  it("shows the thread's own surface when another tab is selected, and Voice again when it is", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.setVoiceOpen(true);
+    store.setVoiceActive(false);
+    const view = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+      open: true,
+      active: false,
+    });
+    expect(view.activeSurfaceId).toBe("diff");
+    expect(view.surfaces.map((surface) => surface.id)).toEqual(["voice", "diff"]);
+    store.setVoiceActive(true);
+    expect(
+      selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+        open: true,
+        active: true,
+      }).activeSurfaceId,
+    ).toBe("voice");
+  });
+
+  it("closes for every thread at once and leaves the thread's own surfaces alone", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.setVoiceOpen(true);
+    store.setVoiceOpen(false);
+    const view = selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+      open: false,
+      active: false,
+    });
+    expect(view).toEqual({
+      isOpen: true,
+      activeSurfaceId: "diff",
+      surfaces: [{ id: "diff", kind: "diff" }],
+    });
+  });
+
+  it("drops the old per-thread Voice surface during migration", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "voice",
+          surfaces: [{ id: "voice", kind: "voice" }],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([]);
+  });
+
+  it("composes the toggle against what the panel shows, not the tab saved behind Voice", () => {
+    const store = useRightPanelStore.getState();
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.open(refA, "diff");
+    store.setVoiceOpen(true);
+    // Diff is saved and active but Voice is what is on screen, so a Diff toggle shows Diff.
+    store.toggle(refA, "diff");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+    expect(
+      selectThreadRightPanelView(useRightPanelStore.getState().byThreadKey, refA, {
+        open: true,
+        active: false,
+      }).activeSurfaceId,
+    ).toBe("diff");
+    // Now Diff really is on screen, so the next toggle closes the panel.
+    store.toggle(refA, "diff");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+    ).toBe(false);
+  });
+
+  it("leaves Voice on for tab closes and background threads' changes", () => {
+    const store = useRightPanelStore.getState();
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.open(refA, "diff");
+    store.open(refA, "files");
+    store.setVoiceOpen(true);
+    store.closeSurface(refA, "files");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+    // A thread that is not on screen never moves the visible panel off Voice.
+    store.open(refB, "diff");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+    // The thread on screen picking its own surface does.
+    store.activateSurface(refA, "diff");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+  });
+
+  it("reveals a thread's surface over Voice only for the thread on screen", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-a");
+    store.openBrowser(refB, "tab-b");
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.setVoiceOpen(true);
+    const revision = store.getUserActionRevision(refB);
+    store.revealSurface(refB, "browser:tab-b");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+    // An agent reveal is not a user choice, so it never suppresses proactive panels.
+    expect(store.getUserActionRevision(refB)).toBe(revision);
+    store.revealSurface(refA, "browser:tab-a");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+  });
+
+  it("resolves bulk closes against the displayed tabs with Voice pinned first", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.openFile(refA, "src/app.ts");
+    const displayed = [
+      { id: "voice", kind: "voice" } as const,
+      ...selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ];
+    // On the pinned Voice tab, "close to the right" closes the thread tabs after it.
+    expect(bulkCloseAvailability(displayed, "voice").right).toBe(true);
+    expect(bulkCloseTargets(displayed, "voice", "right").map((surface) => surface.id)).toEqual([
+      "diff",
+      "file:src/app.ts",
+    ]);
+    // "Close others" from Voice closes the thread tabs too, even when there is only one.
+    const voiceAndDiff = displayed.slice(0, 2);
+    expect(bulkCloseAvailability(voiceAndDiff, "voice").others).toBe(true);
+    expect(bulkCloseTargets(voiceAndDiff, "voice", "others").map((surface) => surface.id)).toEqual([
+      "diff",
+    ]);
+    // From Diff, the only other tab is Voice, which a bulk close may not touch.
+    expect(bulkCloseAvailability(voiceAndDiff, "diff").others).toBe(false);
+    expect(bulkCloseAvailability(voiceAndDiff, "diff").all).toBe(true);
+    // Voice is never a bulk-close target.
+    expect(bulkCloseTargets(displayed, "diff", "all").map((surface) => surface.kind)).not.toContain(
+      "voice",
+    );
+  });
+});
 
 describe("rightPanelStore", () => {
   it("opens a hosted side chat's panel actions in its parent's panel until unhosted", () => {
@@ -128,6 +283,27 @@ describe("rightPanelStore", () => {
     expect(useClosedViewStore.getState().entries).toMatchObject([
       { kind: "panel-tab", surface: { id: "browser:new", resourceId: null } },
     ]);
+  });
+
+  it("keeps an automatic device open out of the user-action revision", () => {
+    const store = useRightPanelStore.getState();
+    const target = {
+      hostId: "nucbox",
+      deviceId: "emulator-5580",
+      name: "Pixel",
+      platform: "android",
+    } as const;
+    store.open(refA, "files");
+    const revision = store.getUserActionRevision(refA);
+    // An agent mirroring its device onto the panel is not the user's choice, so a pending
+    // proactive offer for the thread survives it.
+    store.openDevice(refA, target, true);
+    expect(store.getUserActionRevision(refA)).toBe(revision);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).activeSurfaceId,
+    ).toBe("device:nucbox:emulator-5580");
+    store.openDevice(refA, target);
+    expect(store.getUserActionRevision(refA)).toBe(revision + 1);
   });
 
   it("keeps a dismissed device hidden after another file opens", () => {

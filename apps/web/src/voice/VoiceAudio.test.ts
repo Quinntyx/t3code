@@ -313,22 +313,38 @@ describe("project voice audio owner with controlled WebAudio/device boundary", (
     expect(f.owner.snapshot().error).toContain("Autoplay");
   });
 
+  it("plays a full Gemini reply that streams far ahead of the playhead", async () => {
+    const f = setup();
+    await f.owner.connect(f.attach);
+    // Measured Live output: 1920-byte chunks, occasional 46080-byte ones, and ~37 s of audio
+    // queued ahead of the play cursor across a long reply.
+    for (let index = 0; index < 900; index++)
+      f.handlers().audio(new Uint8Array(index % 60 === 0 ? 46080 : 1920), 0);
+    expect(f.sources).toHaveLength(900);
+    expect(f.owner.snapshot().phase).toBe("speaking");
+    expect(f.owner.snapshot().error).toBeNull();
+    await f.owner.disconnect();
+  });
+
   it("bounds scheduled playback and input failure closes resources; old callbacks cannot play", async () => {
     const f = setup();
     await f.owner.connect(f.attach);
     const old = f.handlers();
-    old.audio(new Uint8Array(24000), 0);
-    old.audio(new Uint8Array(24000), 0);
+    // 120 s of queued audio plus one more chunk is past the safety cap, which drops the session
+    // rather than stalling it silently.
+    const chunk = new Uint8Array(48000);
+    for (let index = 0; index < 120; index++) old.audio(chunk, 0);
     const stopped = deferred<void>();
     f.owner.subscribe(() => {
       if (f.owner.snapshot().phase === "error") stopped.resolve();
     });
-    old.audio(new Uint8Array(24000), 0);
+    old.audio(new Uint8Array(1920), 0);
     await stopped.promise;
+    expect(f.owner.snapshot().error).toContain("queue");
+    expect(f.sources.length).toBeLessThanOrEqual(121);
     await f.owner.disconnect();
-    expect(f.sources.length).toBeLessThanOrEqual(2);
     old.audio(new Uint8Array(480), 0);
-    expect(f.sources.length).toBeLessThanOrEqual(2);
+    expect(f.sources.length).toBeLessThanOrEqual(121);
     expect(f.sources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
   });
 
