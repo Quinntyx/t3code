@@ -507,6 +507,17 @@ describe("billable native turn usage", () => {
       ["haiku-alias", usage("claude-haiku-4-5", 10, 2)],
       ["claude-sonnet-4-6", usage("claude-sonnet-4-6", 0, 10)],
     ]);
+    // Uncached billed input cannot use up cache reads the growth recorded.
+    expect([
+      ...deductClaudeLedgerUsage(
+        new Map([
+          ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 5), cachedInputTokens: 100 }],
+        ]),
+        [usage("claude-haiku-4-5", 100, 5)],
+      ),
+    ]).toEqual([
+      ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 0), cachedInputTokens: 100 }],
+    ]);
   });
 
   it("adds Claude steering segments to the final measured result once", () => {
@@ -761,7 +772,7 @@ describe("billable native turn usage", () => {
       segments: [
         sealClaudeSegment({
           result: success(10, 0),
-          aborted: true,
+          abortedBy: "aborted_streaming",
           mainMessages: byId(["main", row(sonnet, 90, 10)]),
           subagentMessages: new Map(),
           mainModel: sonnet,
@@ -808,6 +819,68 @@ describe("billable native turn usage", () => {
         otherUsageStatus: "partial",
       },
     },
+    {
+      name: "residual cache reads do not cover observed uncached delegate input",
+      hasSubagents: true,
+      status: "completed" as const,
+      rootModels: ["claude-opus-5-5"],
+      segments: [
+        sealClaudeSegment({
+          result: success(100, 20),
+          ledgerGrowth: ledger(row("claude-opus-5-5", 100, 20), {
+            ...row("claude-haiku-4-5", 100, 10),
+            cachedInputTokens: 100,
+          }),
+          mainMessages: byId(["main", row("claude-opus-5-5", 100, 20)]),
+          subagentMessages: byId(["haiku", row("claude-haiku-4-5", 100, 5)]),
+          mainModel: "claude-opus-5-5",
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: true,
+        inputTokens: 100,
+        outputTokens: 20,
+        models: ["claude-opus-5-5"],
+        subagentUsage: [{ ...row("claude-haiku-4-5", 100, 10), cachedInputTokens: 100 }],
+        otherUsage: { inputTokens: 100, outputTokens: 10 },
+        otherUsageStatus: "partial",
+      },
+    },
+    ...(["aborted_streaming", "aborted_tools"] as const).map((abortedBy) => ({
+      name: `a steer window closed by ${abortedBy} whose result won, then a success`,
+      hasSubagents: false,
+      status: "completed" as const,
+      rootModels: [sonnet],
+      segments: [
+        sealClaudeSegment({
+          result: success(100, 20),
+          abortedBy,
+          ledgerGrowth: ledger(row(sonnet, 100, 20)),
+          mainMessages: byId(["first", row(sonnet, 90, 10)]),
+          subagentMessages: new Map(),
+          mainModel: sonnet,
+        }),
+        sealClaudeSegment({
+          result: success(50, 5),
+          ledgerGrowth: ledger(row(sonnet, 50, 5)),
+          mainMessages: byId(["second", row(sonnet, 50, 5)]),
+          subagentMessages: new Map(),
+          mainModel: sonnet,
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        // The cut message's final output never reached either source.
+        usageStatus: abortedBy === "aborted_streaming" ? "partial" : "complete",
+        hasSubagents: false,
+        inputTokens: 150,
+        outputTokens: 25,
+        models: [sonnet],
+        otherUsage: { inputTokens: 0, outputTokens: 0 },
+      },
+    })),
     {
       name: "a zero-count success flagged is_error yields to live main usage",
       hasSubagents: false,

@@ -3417,6 +3417,71 @@ describe("PiAdapterV2", () => {
           : undefined,
         { usageStatus: "complete", inputTokens: 2, outputTokens: 1, otherUsageStatus: "partial" },
       );
+
+      // Pi's subagent tool marks an aborted or spawn-failed child by `status` alone.
+      yield* startTurn(runtime, providerThread, "default", [], "Map it in parallel", undefined, 4);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const statusOnlyChild = (task: string, status: string, input: number, output: number) => ({
+        agent: "scout",
+        task,
+        status,
+        exitCode: null,
+        stderr: "",
+        messages: [],
+        ...(input + output > 0 ? { model: "opencode-go/test-model" } : {}),
+        usage: {
+          input,
+          output,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: input + output > 0 ? 1 : 0,
+        },
+      });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_status",
+        toolName: "subagent",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "stopped" }],
+          details: {
+            mode: "parallel",
+            results: [
+              statusOnlyChild("map the left half", "aborted", 3, 1),
+              statusOnlyChild("map the right half", "failed", 0, 0),
+            ],
+          },
+        },
+      });
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const settledAfterStatus = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "completed" &&
+          event.providerTurn.ordinal === 4,
+      );
+      assert.equal(
+        settledAfterStatus.type === "provider_turn.updated"
+          ? settledAfterStatus.providerTurn.turnTokenUsage?.otherUsageStatus
+          : undefined,
+        "partial",
+      );
+      assert.deepEqual(
+        events.flatMap((event) =>
+          event.type === "subagent.updated" &&
+          event.subagent.nativeTaskRef?.nativeId?.startsWith("call_sub_status:") === true
+            ? [[event.subagent.prompt, event.subagent.status]]
+            : [],
+        ),
+        [
+          ["map the left half", "interrupted"],
+          ["map the right half", "failed"],
+        ],
+      );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

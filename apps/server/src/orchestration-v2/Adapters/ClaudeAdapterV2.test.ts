@@ -6468,7 +6468,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 : undefined,
               {
                 usageScope: "main_agent",
-                usageStatus: failed ? "partial" : "complete",
+                // A message cut mid-stream never reports its final output to either source.
+                usageStatus:
+                  failed || terminalReason === "aborted_streaming" ? "partial" : "complete",
                 hasSubagents: false,
                 // Without a measured last segment, its live frames count: the wake reply's 1 and 1.
                 inputTokens: failed ? 600 + 500 + 2000 + 1 : 603 + 2847 + 11455,
@@ -12608,6 +12610,128 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               ],
             },
           ],
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("bills a background subagent message in the window whose ledger records it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        // The child's frames carry message_start usage; the ledger adds the message once it ends.
+        const childFrame = (uuid: string) =>
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-haiku-4-5",
+              id: "msg_background_child",
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text: "Still looking." }],
+              usage: { input_tokens: 30, output_tokens: 1 },
+            },
+            parent_tool_use_id: "toolu_background_child",
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        const turn = (ordinal: number, text: string) =>
+          harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make(`attempt-claude-background-child-${ordinal}`),
+              text,
+              attachments: [],
+              providerTurnOrdinal: ordinal,
+            }),
+          );
+        const result = (uuid: string, sonnet: readonly [number, number], haiku?: number) =>
+          makeResultFrame({
+            uuid,
+            result: "Done.",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 20,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+            modelUsage: {
+              "claude-sonnet-4-6": billedModelUsage(...sonnet),
+              ...(haiku === undefined ? {} : { "claude-haiku-4-5": billedModelUsage(haiku, 7) }),
+            },
+          });
+
+        yield* turn(1, "Start the audit.");
+        yield* harness.offerAndWait(childFrame("00000000-0000-4000-8000-000000000794"));
+        yield* Queue.offer(
+          harness.sdkMessages,
+          result("00000000-0000-4000-8000-000000000795", [100, 20]),
+        );
+        yield* harness.awaitTerminal(1);
+
+        yield* turn(2, "Keep going.");
+        // A background child replays the snapshot of a message an earlier window settled.
+        yield* harness.offerAndWait(childFrame("00000000-0000-4000-8000-000000000796"));
+        yield* Queue.offer(
+          harness.sdkMessages,
+          result("00000000-0000-4000-8000-000000000797", [200, 40], 30),
+        );
+        yield* harness.awaitTerminal(2);
+
+        const usage = harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.turnTokenUsage !== undefined
+            ? [
+                {
+                  ordinal: event.providerTurn.ordinal,
+                  status: event.providerTurn.status,
+                  ...event.providerTurn.turnTokenUsage,
+                },
+              ]
+            : [],
+        );
+        const settled = usage.filter((entry) => entry.status !== "running");
+        assert.deepEqual(
+          settled.map(({ ordinal, subagentUsage, otherUsageStatus }) => ({
+            ordinal,
+            subagentUsage,
+            otherUsageStatus,
+          })),
+          [
+            { ordinal: 1, subagentUsage: undefined, otherUsageStatus: undefined },
+            {
+              ordinal: 2,
+              subagentUsage: [
+                {
+                  model: "claude-haiku-4-5",
+                  inputTokens: 30,
+                  outputTokens: 7,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                },
+              ],
+              otherUsageStatus: undefined,
+            },
+          ],
+        );
+        assert.isFalse(
+          usage.some(
+            (entry) =>
+              entry.ordinal === 2 &&
+              entry.status === "running" &&
+              entry.subagentUsage !== undefined,
+          ),
         );
       }).pipe(
         Effect.provide(
