@@ -3,7 +3,7 @@ import { useGT } from "gt-react";
 import { memo, useRef } from "react";
 import { EllipsisIcon } from "lucide-react";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
-import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
+import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
 import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
 import { ComposerPermissionsSection, type RuntimeModeOption } from "./ComposerFooterControls";
@@ -12,7 +12,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   showPermissions: boolean;
-  size?: "sm" | "xs";
+  size?: ComposerControlSize;
   /** Close the portaled popup when its trigger hides. */
   hidden?: boolean;
   onRuntimeModeChange: (mode: RuntimeMode) => void;

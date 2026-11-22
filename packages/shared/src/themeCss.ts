@@ -80,6 +80,16 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="composer-host"]', styles: "composer card" },
   { selector: '[data-slot="composer-context-strip"]', styles: "composer context strip" },
   { selector: ".composer-tiptap", styles: "composer text" },
+  { selector: "[data-chat-composer-main-surface]", styles: "composer card around the prompt" },
+  {
+    selector: "[data-chat-composer-row]",
+    styles: 'controls row under the composer card (layout composerControls "below")',
+  },
+  { selector: "[data-chat-composer-stop]", styles: "composer stop button" },
+  {
+    selector: "[data-chat-context-meter]",
+    styles: 'context window ring before the model (layout composerMeter "ring")',
+  },
   { selector: "[data-thread-details-card]", styles: "thread details card" },
   { selector: "[data-thread-terminal-drawer]", styles: "terminal drawer" },
   { selector: '[data-slot="preview-panel-shell"]', styles: "inline preview panel" },

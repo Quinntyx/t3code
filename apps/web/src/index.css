@@ -697,6 +697,71 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     no-repeat;
 }
 
+/* Theme layout `composerControls: "below"`: the card holds the prompt and the send button, and the
+   controls sit in a row on the canvas under it. The prompt's last line and the send button share a
+   centre at any prompt size; whichever is taller sets the row. --chat-composer-line-inset holds
+   1lh, so it resolves on the prompt's own lines where it is used. Themes may retune these. */
+html[data-layout-composer-controls="below"] [data-chat-composer-form] {
+  --chat-composer-box-ps: 1rem;
+  --chat-composer-box-pe: 0.625rem;
+  --chat-composer-box-pt: 0.6875rem;
+  --chat-composer-box-pb: 0.6875rem;
+  --chat-composer-send-size: 2rem;
+  --chat-composer-prompt-lh: calc(var(--font-size-prompt, var(--text-sm)) * 1.625);
+  --chat-composer-line-inset: max(0px, (var(--chat-composer-send-size) - 1lh) / 2);
+  --chat-composer-send-inset: max(
+    0px,
+    (var(--chat-composer-prompt-lh) - var(--chat-composer-send-size)) / 2
+  );
+  /* The row's first label starts with the text and its last icon centres under send: the card
+     adds a 1px border, and a control's content sits 0.5rem inside its edge. */
+  --chat-composer-row-ps: calc(var(--chat-composer-box-ps) + 1px - 0.5rem);
+  --chat-composer-row-pe: calc(var(--chat-composer-box-pe) + 1px);
+
+  @media (width >= 40rem) {
+    --chat-composer-send-size: 1.75rem;
+  }
+  @media (width < 40rem) and (pointer: coarse) {
+    --chat-composer-prompt-lh: calc(var(--font-size-prompt-touch) * 1.625);
+  }
+
+  & [data-chat-composer-body] {
+    padding: var(--chat-composer-box-pt) var(--chat-composer-box-pe) var(--chat-composer-box-pb)
+      var(--chat-composer-box-ps);
+  }
+  &
+    [data-chat-composer-footer][data-chat-composer-actions]
+    :is([data-chat-composer-action-size="large"], [data-chat-composer-stop]) {
+    width: var(--chat-composer-send-size);
+    height: var(--chat-composer-send-size);
+  }
+}
+
+/* Without Liquid Glass the card is the main surface alone, so its fill, outline and shadow stop
+   above the controls row. Liquid Glass keeps its measured shape around both. */
+html[data-layout-composer-controls="below"]:not([data-liquid-glass-effect]) {
+  & [data-slot="composer-shell"]::before,
+  & [data-slot="composer-host"]::before,
+  & [data-slot="composer-host"]::after {
+    display: none;
+  }
+  & [data-slot="composer-host"] {
+    box-shadow: none;
+  }
+  & [data-chat-composer-main-surface] {
+    border-radius: var(--chat-composer-radius);
+    background-color: var(--chat-composer-glass-surface);
+    box-shadow: var(--shadow-composer);
+    &::after {
+      display: block;
+    }
+  }
+}
+html.dark[data-layout-composer-controls="below"]:not([data-liquid-glass-effect])
+  [data-chat-composer-main-surface] {
+  box-shadow: none;
+}
+
 /* One-line text that fades out at its end instead of ending in an ellipsis. */
 @utility truncate-fade {
   overflow: hidden;

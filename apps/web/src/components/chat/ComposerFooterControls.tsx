@@ -6,7 +6,7 @@ import { type ComponentProps, memo, useId, useRef, useState } from "react";
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
+import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
 import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
@@ -21,7 +21,7 @@ export type RuntimeModeOption = {
 export const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
-  size?: "sm" | "xs";
+  size?: ComposerControlSize;
   hidden?: boolean;
   /** How the permissions chip shows: hidden while the thread matches the user's default. */
   accessDisplay?: "label" | "icon" | "hidden";

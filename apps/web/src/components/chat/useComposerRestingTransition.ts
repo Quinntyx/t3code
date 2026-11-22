@@ -91,9 +91,11 @@ export function useComposerRestingTransition(
     const action = visibleTransitionElement('[data-chat-composer-transition-actions="true"]');
     const footer = element.querySelector<HTMLElement>('[data-chat-composer-footer="true"]');
     const continuousControls = element.dataset.inlineRestingControls === "true";
+    // A theme can put the controls row under the card, outside the element this animates.
+    const scope = element.closest<HTMLElement>('[data-chat-composer-form="true"]') ?? element;
     const controls = nextIsCollapsed
       ? restingControlsRef.current
-      : element.querySelector<HTMLElement>('[data-chat-composer-controls="footer"]');
+      : scope.querySelector<HTMLElement>('[data-chat-composer-controls="footer"]');
 
     const interruptedAnimation = animationRef.current;
     const interruptedPromptTop = interruptedAnimation
@@ -286,7 +288,7 @@ export function useComposerRestingTransition(
 
         const arrivingControls = nextIsCollapsed
           ? restingControlsRef.current
-          : element.querySelector<HTMLElement>('[data-chat-composer-controls="footer"]');
+          : scope.querySelector<HTMLElement>('[data-chat-composer-controls="footer"]');
         if (arrivingControls && !continuousControls) {
           const drift = nextIsCollapsed
             ? -COMPOSER_RESTING_CONTROLS_ARRIVAL_DRIFT_PX
@@ -416,10 +418,13 @@ export function useComposerRestingTransition(
       const actionTop = visibleTransitionElement(
         '[data-chat-composer-transition-actions="true"]',
       )?.getBoundingClientRect().top;
+      const scope = element.closest<HTMLElement>('[data-chat-composer-form="true"]') ?? element;
       const controlsRect = (
         isCollapsedRef.current
           ? restingControlsRef.current
-          : visibleTransitionElement('[data-chat-composer-controls="footer"]')
+          : (Array.from(
+              scope.querySelectorAll<HTMLElement>('[data-chat-composer-controls="footer"]'),
+            ).find((candidate) => candidate.getClientRects().length > 0) ?? null)
       )?.getBoundingClientRect();
       previousHeightRef.current = elementRect.height;
       previousContentOffsetsRef.current = {

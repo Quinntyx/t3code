@@ -4,6 +4,7 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
 import { useGT, useMessages } from "gt-react";
 import { CircleAlertIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
 import {
@@ -87,6 +88,10 @@ export function ComposerControlsBar(props: {
   onModelPickerOpenChange: (open: boolean) => void;
   modelPickerIconClassName: string | undefined;
   getModelDisabledReason: ChatComposerProps["getModelDisabledReason"];
+  /** `below` lays the controls out for the row under the card; the picker goes to its end. */
+  placement?: "inside" | "below";
+  /** Shown just before the model picker, such as the context window ring. */
+  contextMeter?: ReactNode;
 }) {
   const {
     environmentId,
@@ -145,7 +150,8 @@ export function ComposerControlsBar(props: {
     collapsed: composerControlsCollapsed,
     measuredHiddenBlockCount,
   });
-  const controlSize = composerControlsCollapsed ? "xs" : "sm";
+  const placementBelow = props.placement === "below" && !composerControlsCollapsed;
+  const controlSize = composerControlsCollapsed ? "xs" : placementBelow ? "row" : "sm";
   const gt = useGT();
   const m = useMessages();
   const applyThreadModelPick = useApplyThreadModelPick();
@@ -219,8 +225,10 @@ export function ComposerControlsBar(props: {
         MODEL_TRIGGER_STATES,
         composerControlsCollapsed
           ? "min-w-13 shrink text-xs!"
-          : // Concentric with the composer corner: both share the footer inset.
-            "min-w-13 rounded-(--chat-composer-action-radius)",
+          : placementBelow
+            ? "min-w-13"
+            : // Concentric with the composer corner: both share the footer inset.
+              "min-w-13 rounded-(--chat-composer-action-radius)",
       )}
       triggerSuffix={effort.suffix}
       triggerDetail={effort.detail}
@@ -249,6 +257,51 @@ export function ComposerControlsBar(props: {
       onOpenProviderSetup={onOpenProviderSetup}
     />
   );
+  const restingBlocks = (
+    <>
+      {restingBlockDefs.map((def, index) => {
+        const hidden = index >= restingBlockDefs.length - restingHiddenBlockCount;
+        return (
+          <div
+            key={def.id}
+            data-resting-block={def.id}
+            data-composer-block-icon-only={
+              index >= restingBlockDefs.length - iconOnlyBlockCount ? "true" : "false"
+            }
+            aria-hidden={hidden || undefined}
+            inert={hidden || undefined}
+            className={cn(
+              "flex w-max min-w-max shrink-0 items-center gap-1",
+              hidden && "pointer-events-none invisible absolute",
+              index >= restingBlockDefs.length - iconOnlyBlockCount &&
+                "[&_[data-composer-control-label]]:pointer-events-none [&_[data-composer-control-label]]:invisible [&_[data-composer-control-label]]:absolute [&_[data-composer-control-label]]:w-max [&_[data-composer-control-label]]:max-w-none [&_[data-composer-control-compact-icon]]:[visibility:inherit] [&_[data-composer-control-compact-icon]]:relative",
+            )}
+          >
+            {def.content}
+          </div>
+        );
+      })}
+      <div
+        data-resting-controls-overflow
+        aria-hidden={hiddenRestingBlockIds.length === 0 || undefined}
+        inert={hiddenRestingBlockIds.length === 0 || undefined}
+        className={cn(
+          "min-w-0 shrink-0",
+          hiddenRestingBlockIds.length === 0 && "pointer-events-none invisible absolute",
+        )}
+      >
+        <CompactComposerControlsMenu
+          runtimeMode={compatibleRuntimeMode}
+          runtimeModeOptions={compatibleRuntimeModeOptions}
+          size={controlSize}
+          hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
+          // Permissions join the overflow only when their normal home is in it.
+          showPermissions={overflowShowsPermissions}
+          onRuntimeModeChange={handleRuntimeModeChange}
+        />
+      </div>
+    </>
+  );
   return showProviderUnavailable ? (
     <ComposerControl
       type="button"
@@ -264,53 +317,20 @@ export function ComposerControlsBar(props: {
       <CircleAlertIcon className="size-4" />
       {providerSetupInstanceId ? gt("Open provider settings") : gt("No provider available")}
     </ComposerControl>
+  ) : placementBelow ? (
+    <>
+      {restingBlocks}
+      <div className="ms-auto flex shrink-0 items-center gap-0.5">
+        {props.contextMeter}
+        {composerModelPicker}
+      </div>
+    </>
   ) : (
     <>
+      {props.contextMeter}
       {composerModelPicker}
 
-      <>
-        {restingBlockDefs.map((def, index) => {
-          const hidden = index >= restingBlockDefs.length - restingHiddenBlockCount;
-          return (
-            <div
-              key={def.id}
-              data-resting-block={def.id}
-              data-composer-block-icon-only={
-                index >= restingBlockDefs.length - iconOnlyBlockCount ? "true" : "false"
-              }
-              aria-hidden={hidden || undefined}
-              inert={hidden || undefined}
-              className={cn(
-                "flex w-max min-w-max shrink-0 items-center gap-1",
-                hidden && "pointer-events-none invisible absolute",
-                index >= restingBlockDefs.length - iconOnlyBlockCount &&
-                  "[&_[data-composer-control-label]]:pointer-events-none [&_[data-composer-control-label]]:invisible [&_[data-composer-control-label]]:absolute [&_[data-composer-control-label]]:w-max [&_[data-composer-control-label]]:max-w-none [&_[data-composer-control-compact-icon]]:[visibility:inherit] [&_[data-composer-control-compact-icon]]:relative",
-              )}
-            >
-              {def.content}
-            </div>
-          );
-        })}
-        <div
-          data-resting-controls-overflow
-          aria-hidden={hiddenRestingBlockIds.length === 0 || undefined}
-          inert={hiddenRestingBlockIds.length === 0 || undefined}
-          className={cn(
-            "min-w-0 shrink-0",
-            hiddenRestingBlockIds.length === 0 && "pointer-events-none invisible absolute",
-          )}
-        >
-          <CompactComposerControlsMenu
-            runtimeMode={compatibleRuntimeMode}
-            runtimeModeOptions={compatibleRuntimeModeOptions}
-            size={controlSize}
-            hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
-            // Permissions join the overflow only when their normal home is in it.
-            showPermissions={overflowShowsPermissions}
-            onRuntimeModeChange={handleRuntimeModeChange}
-          />
-        </div>
-      </>
+      {restingBlocks}
     </>
   );
 }
