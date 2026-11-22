@@ -3449,6 +3449,16 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       uuid: input.uuid,
       session_id: WAKE_NATIVE_SESSION,
     });
+  const billedModelUsage = (inputTokens: number, outputTokens: number) => ({
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+    contextWindow: 200_000,
+    maxOutputTokens: 32_000,
+  });
   const makeResultFrame = (input: {
     readonly uuid: string;
     readonly result: string;
@@ -8412,8 +8422,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
         assert.equal(harness.offeredMessages[1]?.priority, "next");
       }
+      const steeredUsage = {
+        input_tokens: 600,
+        output_tokens: 40,
+        cache_creation_input_tokens: 500,
+        cache_read_input_tokens: 2000,
+      };
       const partialText = "The audit covers the `integ";
-      if (!queryExits)
+      if (steered) {
+        yield* harness.offerAndWait(
+          usageSnapshotFrame(
+            "msg_steered",
+            "00000000-0000-4000-8000-000000000903",
+            steeredUsage,
+            queryExits ? "Working." : partialText,
+          ),
+        );
+      } else if (!queryExits) {
         yield* Queue.offer(
           harness.sdkMessages,
           makeAssistantTextFrame({
@@ -8421,23 +8446,25 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             text: partialText,
           }),
         );
+      }
       yield* harness.offerAndWait(
         makeResultFrame({
           uuid: "00000000-0000-4000-8000-000000000901",
           result: "",
           terminalReason,
-          usage: {
-            input_tokens: 600,
-            output_tokens: 40,
-            cache_creation_input_tokens: 500,
-            cache_read_input_tokens: 2000,
-          },
+          usage: steeredUsage,
         }),
       );
+      if (steered) {
+        // A snapshot repeating the sealed segment's message must not bill it again.
+        yield* harness.offerAndWait(
+          usageSnapshotFrame("msg_steered", "00000000-0000-4000-8000-000000000904", steeredUsage),
+        );
+        yield* harness.offerAndWait(wakeAssistant);
+      }
       if (queryExits) {
         yield* Queue.shutdown(harness.sdkMessages);
       } else if (steered) {
-        yield* Queue.offer(harness.sdkMessages, wakeAssistant);
         yield* Queue.offer(
           harness.sdkMessages,
           makeResultFrame({
@@ -8468,15 +8495,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
       }
       if (steered) {
-        if (!queryExits)
-          assert.isTrue(
-            harness.events.some(
-              (event) =>
-                event.type === "turn_item.updated" &&
-                event.turnItem.type === "assistant_message" &&
-                event.turnItem.text === WAKE_ASSISTANT_TEXT,
-            ),
-          );
+        assert.isTrue(
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text === WAKE_ASSISTANT_TEXT,
+          ),
+        );
         const completed = harness.events.findLast(
           (event) => event.type === "provider_turn.updated",
         );
@@ -8486,14 +8512,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             : undefined,
           {
             usageScope: "main_agent",
-            usageStatus: queryExits ? "partial" : "complete",
+            // A message cut mid-stream never reports its final output to either source.
+            usageStatus:
+              queryExits || terminalReason === "aborted_streaming" ? "partial" : "complete",
             otherUsageStatus: "partial",
             hasSubagents: false,
-            inputTokens: queryExits ? 3100 : 603 + 2847 + 11455,
-            outputTokens: queryExits ? 40 : 46,
+            // Without a measured last segment, its live frames count: the wake reply's 1 and 1.
+            inputTokens: queryExits ? 600 + 500 + 2000 + 1 : 603 + 2847 + 11455,
+            outputTokens: queryExits ? 40 + 1 : 46,
             cachedInputTokens: queryExits ? 2000 : 11455,
             cacheCreationTokens: queryExits ? 500 : 2847,
-            ...(queryExits ? {} : { models: ["claude-sonnet-4-6"] }),
+            models: ["claude-sonnet-4-6"],
           },
         );
       }
@@ -9976,7 +10005,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       session_id: WAKE_NATIVE_SESSION,
       uuid: "usage-stream-frame",
     });
-  const usageSnapshotFrame = (id: string, uuid: string, usage: unknown) =>
+  const usageSnapshotFrame = (id: string, uuid: string, usage: unknown, text = "Working.") =>
     claudeSdkFrame({
       type: "assistant",
       message: {
@@ -9984,7 +10013,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         id,
         type: "message",
         role: "assistant",
-        content: [{ type: "text", text: "Working." }],
+        content: [{ type: "text", text }],
         stop_reason: null,
         stop_sequence: null,
         usage,
@@ -10249,7 +10278,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const frames = [
         usageStreamFrame({
           type: "message_start",
-          message: { id: "msg_native", usage: startUsage },
+          message: { id: "msg_native", model: "claude-sonnet-4-6", usage: startUsage },
         }),
         usageSnapshotFrame("msg_native", "00000000-0000-4000-8000-000000000680", startUsage),
         usageStreamFrame({
@@ -10295,6 +10324,24 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ),
         [117_000, 117_000, 117_000, 117_000],
       );
+      const liveUsage = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" &&
+        event.providerTurn.status === "running" &&
+        event.providerTurn.turnTokenUsage !== undefined
+          ? [event.providerTurn.turnTokenUsage]
+          : [],
+      );
+      assert.deepEqual(liveUsage[0], {
+        usageScope: "main_agent",
+        usageStatus: "partial",
+        hasSubagents: false,
+        inputTokens: 1_210,
+        cachedInputTokens: 1_000,
+        cacheCreationTokens: 200,
+        outputTokens: 1,
+        models: ["claude-sonnet-4-6"],
+      });
+      assert.equal(liveUsage.at(-1)?.outputTokens, 50);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -10915,6 +10962,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             outputTokens: 1,
             cachedInputTokens: 0,
             cacheCreationTokens: 0,
+            models: ["gateway-model"],
             otherUsage: { inputTokens: 0, outputTokens: 0 },
           });
         }
@@ -15834,6 +15882,37 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachments: [],
         }),
       );
+      yield* harness.offerAndWait(
+        usageSnapshotFrame("msg_unmeasured", "00000000-0000-4000-8000-000000000791", {
+          input_tokens: 300,
+          output_tokens: 30,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        }),
+      );
+      // Subagent frames carry message_start output; the ledger records the message once it ends.
+      // One child shares the main agent's model, whose next results also bill the main agent.
+      for (const [model, id, inputTokens, uuid] of [
+        ["claude-haiku-4-5", "msg_unmeasured_child", 30, "00000000-0000-4000-8000-000000000793"],
+        ["claude-sonnet-4-6", "msg_unmeasured_peer", 40, "00000000-0000-4000-8000-000000000799"],
+      ] as const) {
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model,
+              id,
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text: "Looking." }],
+              usage: { input_tokens: inputTokens, output_tokens: 1 },
+            },
+            parent_tool_use_id: `toolu_${id}`,
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+      }
       yield* Queue.offer(
         harness.sdkMessages,
         claudeSdkFrame({
@@ -15850,6 +15929,358 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       if (terminal?.status !== "failed") return;
       assert.equal(terminal.threadDisposition, "reusable");
       assert.include(terminal.failure.message, "never started a turn");
+      const openedOptions = harness.getOpenedOptions();
+
+      // The reused process's next ledger growth spans the unmeasured turn its frames billed.
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-after-unmeasured-turn"),
+          text: "Try again.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000000792",
+          result: "Bumped.",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          // The Haiku child has ended; the Sonnet child has not, so this ledger bills only Haiku.
+          modelUsage: {
+            "claude-sonnet-4-6": billedModelUsage(400, 50),
+            "claude-haiku-4-5": billedModelUsage(30, 7),
+          },
+        }),
+      );
+      yield* harness.awaitTerminal(2);
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-after-child-ends"),
+          text: "Continue.",
+          attachments: [],
+          providerTurnOrdinal: 3,
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000000794",
+          result: "Continued.",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          modelUsage: {
+            "claude-sonnet-4-6": billedModelUsage(540, 75),
+            "claude-haiku-4-5": billedModelUsage(30, 7),
+          },
+        }),
+      );
+      yield* harness.awaitTerminal(3);
+      assert.strictEqual(harness.getOpenedOptions(), openedOptions);
+      assert.deepEqual(
+        harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status !== "running" &&
+          event.providerTurn.turnTokenUsage !== undefined
+            ? [
+                {
+                  input: event.providerTurn.turnTokenUsage.inputTokens,
+                  output: event.providerTurn.turnTokenUsage.outputTokens,
+                  subagentUsage: event.providerTurn.turnTokenUsage.subagentUsage,
+                },
+              ]
+            : [],
+        ),
+        [
+          {
+            input: 300,
+            output: 30,
+            subagentUsage: [
+              {
+                model: "claude-haiku-4-5",
+                inputTokens: 30,
+                outputTokens: 1,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+              },
+              {
+                model: "claude-sonnet-4-6",
+                inputTokens: 40,
+                outputTokens: 1,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+              },
+            ],
+          },
+          {
+            input: 100,
+            output: 20,
+            subagentUsage: [
+              {
+                model: "claude-haiku-4-5",
+                inputTokens: 0,
+                outputTokens: 6,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+              },
+            ],
+          },
+          {
+            input: 100,
+            output: 20,
+            subagentUsage: [
+              {
+                model: "claude-sonnet-4-6",
+                inputTokens: 0,
+                outputTokens: 4,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+              },
+            ],
+          },
+        ],
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
+  it.effect("pays live-billed usage from a result the wake replay skips", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const now = yield* DateTime.now;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-skipped-result-1"),
+          text: "Bump this PR to the latest main.",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(
+        claudeSdkFrame({
+          type: "assistant",
+          message: {
+            model: "claude-haiku-4-5",
+            id: "msg_skipped_result_child",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: "Looking." }],
+            usage: { input_tokens: 30, output_tokens: 1 },
+          },
+          parent_tool_use_id: "toolu_skipped_result_child",
+          uuid: "00000000-0000-4000-8000-000000000801",
+          session_id: WAKE_NATIVE_SESSION,
+        }),
+      );
+      // The turn settles without a result, so its frames bill the child's message start.
+      yield* Queue.offer(
+        harness.sdkMessages,
+        claudeSdkFrame({
+          type: "command_lifecycle",
+          command_uuid: harness.promptUuid(0),
+          state: "completed",
+          uuid: "00000000-0000-4000-8000-000000000802",
+          session_id: WAKE_NATIVE_SESSION,
+        }),
+      );
+      yield* harness.awaitTerminal(1);
+
+      yield* harness.offerAndWait(wakeTaskStarted);
+      yield* harness.offerAndWait(wakeNotification);
+      yield* Queue.offer(harness.sdkMessages, wakeAssistant);
+      yield* harness.awaitContinuation(1);
+      const result = (uuid: string, sonnet: number, haiku: number) =>
+        makeResultFrame({
+          uuid,
+          result: "Done.",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          modelUsage: {
+            "claude-sonnet-4-6": billedModelUsage(sonnet, sonnet / 10),
+            "claude-haiku-4-5": billedModelUsage(haiku, (haiku / 30) * 7),
+          },
+        });
+      // The first result bills that child; the replay settles the continuation on the second.
+      yield* harness.offerAndWait(result("00000000-0000-4000-8000-000000000803", 10, 30));
+      yield* harness.offerAndWait(result("00000000-0000-4000-8000-000000000804", 20, 60));
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-skipped-result-2"),
+          text: "Background task completed.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+          messageCreatedBy: "agent",
+          messageCreationSource: "provider",
+        }),
+      );
+      yield* harness.awaitTerminal(2);
+      const settled = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" &&
+        event.providerTurn.status !== "running" &&
+        event.providerTurn.turnTokenUsage !== undefined
+          ? [event.providerTurn.turnTokenUsage]
+          : [],
+      );
+      // The second child's work stays whole: the skipped result already paid the carry.
+      assert.deepEqual(settled.at(-1)?.subagentUsage, [
+        {
+          model: "claude-haiku-4-5",
+          inputTokens: 30,
+          outputTokens: 7,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
+  it.effect("bills a background subagent message in the window whose ledger records it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const now = yield* DateTime.now;
+      // The child's frames carry message_start usage; the ledger adds the message once it ends.
+      const childFrame = (uuid: string) =>
+        claudeSdkFrame({
+          type: "assistant",
+          message: {
+            model: "claude-haiku-4-5",
+            id: "msg_background_child",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: "Still looking." }],
+            usage: { input_tokens: 30, output_tokens: 1 },
+          },
+          parent_tool_use_id: "toolu_background_child",
+          uuid,
+          session_id: WAKE_NATIVE_SESSION,
+        });
+      const turn = (ordinal: number, text: string) =>
+        harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make(`attempt-claude-background-child-${ordinal}`),
+            text,
+            attachments: [],
+            providerTurnOrdinal: ordinal,
+          }),
+        );
+      const result = (uuid: string, sonnet: readonly [number, number], haiku?: number) =>
+        makeResultFrame({
+          uuid,
+          result: "Done.",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          modelUsage: {
+            "claude-sonnet-4-6": billedModelUsage(...sonnet),
+            ...(haiku === undefined ? {} : { "claude-haiku-4-5": billedModelUsage(haiku, 7) }),
+          },
+        });
+
+      yield* turn(1, "Start the audit.");
+      yield* harness.offerAndWait(childFrame("00000000-0000-4000-8000-000000000794"));
+      yield* Queue.offer(
+        harness.sdkMessages,
+        result("00000000-0000-4000-8000-000000000795", [100, 20]),
+      );
+      yield* harness.awaitTerminal(1);
+
+      yield* turn(2, "Keep going.");
+      // A background child replays the snapshot of a message an earlier window settled.
+      yield* harness.offerAndWait(childFrame("00000000-0000-4000-8000-000000000796"));
+      yield* Queue.offer(
+        harness.sdkMessages,
+        result("00000000-0000-4000-8000-000000000797", [200, 40], 30),
+      );
+      yield* harness.awaitTerminal(2);
+
+      const usage = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" && event.providerTurn.turnTokenUsage !== undefined
+          ? [
+              {
+                ordinal: event.providerTurn.ordinal,
+                status: event.providerTurn.status,
+                ...event.providerTurn.turnTokenUsage,
+              },
+            ]
+          : [],
+      );
+      const settled = usage.filter((entry) => entry.status !== "running");
+      assert.deepEqual(
+        settled.map(({ ordinal, subagentUsage, otherUsageStatus }) => ({
+          ordinal,
+          subagentUsage,
+          otherUsageStatus,
+        })),
+        [
+          { ordinal: 1, subagentUsage: undefined, otherUsageStatus: undefined },
+          {
+            ordinal: 2,
+            subagentUsage: [
+              {
+                model: "claude-haiku-4-5",
+                inputTokens: 30,
+                outputTokens: 7,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+              },
+            ],
+            otherUsageStatus: undefined,
+          },
+        ],
+      );
+      assert.isFalse(
+        usage.some(
+          (entry) =>
+            entry.ordinal === 2 && entry.status === "running" && entry.subagentUsage !== undefined,
+        ),
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -17635,6 +18066,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           (event) => event.type === "message.updated" && event.message.text === WAKE_ASSISTANT_TEXT,
         ),
       );
+      // The absorbing turn's result billed the wake's message; the replay books it again nowhere.
+      assert.isFalse(
+        harness.events.some(
+          (event) =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.ordinal === 3 &&
+            event.providerTurn.turnTokenUsage?.inputTokens !== undefined,
+        ),
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -17983,6 +18423,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly messageId?: string;
     readonly text?: string;
     readonly bashToolUseId?: string;
+    readonly usage?: unknown;
   }): ReadonlyArray<SDKMessage> =>
     [
       ...(input.text === undefined ? [] : [{ type: "text", text: input.text }]),
@@ -18005,6 +18446,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "message",
           role: "assistant",
           content: [block],
+          ...(input.usage === undefined ? {} : { usage: input.usage }),
         },
         parent_tool_use_id: input.parentToolUseId,
         uuid: index === 0 ? input.uuid : `${input.uuid}:${index}`,
@@ -18578,6 +19020,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* Queue.offer(harness.sdkMessages, frame);
       }
       yield* harness.awaitTerminal(1);
+      const settledEventCount = harness.events.length;
 
       for (const frame of [
         makeSubagentToolResultFrame({
@@ -18590,6 +19033,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           uuid: "00000000-0000-4000-8000-000000000955",
           text: "Still auditing.",
           bashToolUseId: IDLE_BASH,
+          usage: { input_tokens: 30, output_tokens: 7 },
         }),
         claudeSdkFrame({
           type: "system",
@@ -18612,6 +19056,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             event.type === "subagent.updated" &&
             event.subagent.progress === "Reading the last commits",
         ),
+      );
+      assert.isFalse(
+        harness.events
+          .slice(settledEventCount)
+          .some(
+            (event) =>
+              event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+          ),
+        "a settled turn's usage is final",
       );
       // The subagent backgrounds that shell; Claude names it by its command alone.
       yield* Queue.offer(
@@ -20073,6 +20526,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           parentToolUseId: TOOL_USE_ID,
           uuid: "00000000-0000-4000-8000-000000000324",
           text: "Still working.",
+          usage: {
+            input_tokens: 30,
+            cache_read_input_tokens: 5,
+            cache_creation_input_tokens: 2,
+            output_tokens: 7,
+          },
         }),
         claudeSdkFrame({
           type: "system",
@@ -20119,6 +20578,22 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         FINAL_REPORT,
       ]);
       assert.deepEqual(routing.assistantTexts(harness.threadId), ["The auditor finished."]);
+      const liveUsage = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" &&
+        event.providerTurn.status === "running" &&
+        event.providerTurn.turnTokenUsage !== undefined
+          ? [event.providerTurn.turnTokenUsage]
+          : [],
+      );
+      assert.deepEqual(liveUsage.at(-1)?.subagentUsage, [
+        {
+          model: "claude-sonnet-4-6",
+          inputTokens: 37,
+          cachedInputTokens: 5,
+          cacheCreationTokens: 2,
+          outputTokens: 7,
+        },
+      ]);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

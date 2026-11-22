@@ -27,14 +27,17 @@ import {
 
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import {
-  addClaudeLedgerUsage,
   claudeLedgerDelta,
   claudeModelLedger,
   claudeReportedContextWindows,
-  normalizeClaudeTurnTokenUsage,
-  recordClaudeMainMessageUsage,
+  claudeTurnTokenUsage,
+  liveClaudeTurnTokenUsage,
+  payClaudeCarry,
+  recordClaudeMessageUsage,
+  sealClaudeSegment,
+  type ClaudeCarry,
   type ClaudeModelLedger,
-  type ClaudeTurnLedger,
+  type ClaudeSegmentUsage,
 } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
 import {
@@ -4702,7 +4705,9 @@ function terminalStatusFromResult(
   return "failed";
 }
 
-function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
+function isClaudeActiveSteeringAbortResult(
+  message: SDKResultMessage,
+): message is SDKResultMessage & { terminal_reason: "aborted_streaming" | "aborted_tools" } {
   return (
     message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
   );
@@ -5184,16 +5189,25 @@ interface ActiveClaudeTurnContext {
   compactionFailure: { readonly message: string | undefined } | null;
   // The title a `session_title_changed` frame reported; a `/rename` result applies it to the thread.
   nativeSessionTitle: string | null;
-  // Steers end segments whose usage is excluded from the final result; bill them too, oldest first.
-  readonly steeredSegmentUsage: Array<SDKResultMessage["usage"]>;
   // Set as finalization starts: a steer admitted later would stay pending
   // forever, so it fails and the orchestrator follows up instead.
   steersClosed: boolean;
-  // Ledger growth of the steered segments; incomplete once any segment's growth is unknown.
-  steeredLedgerUsage: ClaudeTurnLedger;
+  // Segments steers closed, oldest first; each SDK result reports only its own segment.
+  readonly sealedSegments: Array<ClaudeSegmentUsage>;
+  // The attached process's sealed message ids; a repeated snapshot must not book them again.
+  readonly sealedMessageIds: Set<string>;
+  // Each subagent's latest message, keyed by its parent tool use id.
+  readonly latestSubagentMessages: Map<string, string>;
+  // Usage changed since the last running update that carried it.
+  turnUsageDirty: boolean;
+  // Results that had arrived before this window's first usage frame.
+  usageArrival: number | undefined;
+  // The attached process's ledger names, which live in that process's context.
+  readonly ledgerModelNames: ReadonlyMap<string, string>;
   readonly rootModels: Set<string>;
-  // Root messages' usage by id and the main agent's latest model split its usage by model.
+  // The open segment's root and subagent messages' usage by id.
   readonly mainMessages: Map<string, TurnModelTokenUsage>;
+  readonly subagentMessages: Map<string, TurnModelTokenUsage>;
   mainUsageModel: string;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
@@ -5282,6 +5296,15 @@ interface ClaudeLiveQueryContext {
   handedOffSubagents: ReadonlySet<ActiveClaudeSubagent>;
   // The SDK's per-process model ledger at the last result; a new process starts at zero.
   modelLedger: ClaudeModelLedger | undefined;
+  // Usage frames billed to turns that settled without a result since then; the next growth spans it.
+  liveBilledUsage: Array<ClaudeCarry>;
+  resultsArrived: number;
+  // Results with known growth, in ledger order, that no window has sealed yet.
+  unsealedResults: Array<SDKMessage>;
+  // The model this process's ledger names each raw model id.
+  readonly ledgerModelNames: Map<string, string>;
+  // Messages a window of this process already settled; background subagents can replay them.
+  readonly sealedMessageIds: Set<string>;
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
   readonly taskOutputRoot: string | undefined;
@@ -6020,8 +6043,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         // Wake buffers replay result frames, so ledger growth is measured once on arrival.
-        const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeModelLedger>();
+        const resultLedgerUsage = new WeakMap<
+          SDKMessage,
+          { readonly growth: ClaudeModelLedger; readonly query: ClaudeLiveQueryContext }
+        >();
         const resultsReportingNewContextWindow = new WeakSet<SDKMessage>();
+        // Results that arrived before each message; wake buffers replay messages later.
+        const messageArrival = new WeakMap<SDKMessage, number>();
         // A worktree handoff changes the project settings even within one session.
         let bypassCache: { cwd: string | null; availability: ClaudeBypassAvailability } | null =
           null;
@@ -6466,6 +6494,147 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
+        const runningProviderTurn = (
+          context: ActiveClaudeTurnContext,
+        ): OrchestrationV2ProviderTurn => ({
+          id: context.providerTurnId,
+          providerThreadId: context.input.providerThread.id,
+          nodeId: context.input.rootNodeId,
+          runAttemptId: context.input.attemptId,
+          nativeTurnRef: {
+            driver: CLAUDE_PROVIDER,
+            nativeId: context.nativeTurnId,
+            strength: "strong",
+          },
+          ordinal: context.providerTurnOrdinal,
+          status: "running",
+          startedAt: context.startedAt,
+          completedAt: null,
+          ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
+        });
+
+        const turnHasSubagents = (context: ActiveClaudeTurnContext) =>
+          context.subagentsByTaskId.size > 0 || context.subagentsByToolUseId.size > 0;
+
+        const liveTurnTokenUsage = (context: ActiveClaudeTurnContext) =>
+          liveClaudeTurnTokenUsage({
+            sealedSegments: context.sealedSegments,
+            mainMessages: context.mainMessages,
+            subagentMessages: context.subagentMessages,
+            hasSubagents: turnHasSubagents(context),
+            ledgerModelNames: context.ledgerModelNames,
+            rootModels: context.rootModels,
+          });
+
+        const recordTurnMessageUsage = (
+          context: ActiveClaudeTurnContext,
+          message: SDKMessage,
+          messages: Map<string, TurnModelTokenUsage>,
+          messageId: string,
+          model: string,
+          usage: unknown,
+        ) => {
+          if (context.sealedMessageIds.has(messageId)) return false;
+          const changed = recordClaudeMessageUsage(messages, messageId, model, usage);
+          if (changed) {
+            context.turnUsageDirty = true;
+            context.usageArrival ??= messageArrival.get(message);
+          }
+          return changed;
+        };
+
+        const sealTurnSegment = Effect.fn("ClaudeAdapterV2.sealTurnSegment")(function* (
+          context: ActiveClaudeTurnContext,
+          result: SDKResultMessage | undefined,
+        ) {
+          const unfinishedMessageIds = new Set<string>();
+          for (const [toolUseId, messageId] of context.latestSubagentMessages) {
+            const status = (yield* resolveSubagentByToolUseId(context, toolUseId))?.task.status;
+            if (
+              status !== "completed" &&
+              status !== "failed" &&
+              status !== "cancelled" &&
+              status !== "interrupted"
+            ) {
+              unfinishedMessageIds.add(messageId);
+            }
+          }
+          const ledger = result === undefined ? undefined : resultLedgerUsage.get(result);
+          if (result !== undefined && ledger !== undefined) {
+            const pending = ledger.query.unsealedResults;
+            for (const earlier of pending.splice(0, pending.indexOf(result) + 1)) {
+              if (earlier !== result) payCarryFromUnsealedResult(context, earlier);
+            }
+          }
+          const seal = (carry?: ReadonlyArray<TurnModelTokenUsage>) =>
+            sealClaudeSegment({
+              result,
+              ledgerGrowth: ledger?.growth,
+              carry,
+              abortedBy:
+                result !== undefined && isClaudeActiveSteeringAbortResult(result)
+                  ? result.terminal_reason
+                  : undefined,
+              unfinishedMessageIds,
+              mainMessages: context.mainMessages,
+              subagentMessages: context.subagentMessages,
+              mainModel: context.mainUsageModel,
+              canonicalModel: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+              ledgerModelNames: context.ledgerModelNames,
+            });
+          let segment: ClaudeSegmentUsage;
+          if (result === undefined || ledger === undefined) {
+            segment = seal();
+          } else {
+            const paid = payClaudeCarry(
+              ledger.query.liveBilledUsage,
+              messageArrival.get(result) ?? Number.POSITIVE_INFINITY,
+              seal,
+            );
+            segment = paid.segment;
+            ledger.query.liveBilledUsage = paid.carry;
+          }
+          context.usageArrival = undefined;
+          for (const id of context.mainMessages.keys()) context.sealedMessageIds.add(id);
+          for (const id of context.subagentMessages.keys()) context.sealedMessageIds.add(id);
+          context.mainMessages.clear();
+          context.subagentMessages.clear();
+          context.turnUsageDirty = true;
+          return segment;
+        });
+
+        // A result that settles no turn bills nothing, but its growth still pays the carry it covers.
+        const payCarryFromUnsealedResult = (
+          context: ActiveClaudeTurnContext,
+          result: SDKMessage,
+        ) => {
+          const ledger = result.type === "result" ? resultLedgerUsage.get(result) : undefined;
+          if (result.type !== "result" || ledger === undefined) return;
+          if (ledger.query.liveBilledUsage.length === 0 || ledger.growth.size === 0) return;
+          // No frames split this result's main usage. After a model switch the turn's model is
+          // absent from it, and its main loop is the model that output most.
+          const mainModel = ledger.growth.has(context.mainUsageModel)
+            ? context.mainUsageModel
+            : [...ledger.growth].reduce((most, entry) =>
+                entry[1].outputTokens > most[1].outputTokens ? entry : most,
+              )[0];
+          ledger.query.liveBilledUsage = payClaudeCarry(
+            ledger.query.liveBilledUsage,
+            messageArrival.get(result) ?? Number.POSITIVE_INFINITY,
+            (carry) =>
+              sealClaudeSegment({
+                result,
+                ledgerGrowth: ledger.growth,
+                carry,
+                mainMessages: new Map(),
+                subagentMessages: new Map(),
+                mainModel,
+                canonicalModel: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+                ledgerModelNames: context.ledgerModelNames,
+              }),
+          ).carry;
+        };
+
         // Usage without input is a placeholder, not a context measurement.
         const emitContextUsage = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
@@ -6496,26 +6665,35 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (claudeMessageInputTokens(usage) <= 0) return;
             context.compactionTokens = undefined;
           }
+          // Both projections keep the last turn usage, so only a change needs to travel.
+          const liveUsage = context.turnUsageDirty ? liveTurnTokenUsage(context) : undefined;
+          context.turnUsageDirty = false;
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver: CLAUDE_PROVIDER,
             threadId: context.input.threadId,
             providerTurn: {
-              id: context.providerTurnId,
-              providerThreadId: context.input.providerThread.id,
-              nodeId: context.input.rootNodeId,
-              runAttemptId: context.input.attemptId,
-              nativeTurnRef: {
-                driver: CLAUDE_PROVIDER,
-                nativeId: context.nativeTurnId,
-                strength: "strong",
-              },
-              ordinal: context.providerTurnOrdinal,
-              status: "running",
-              startedAt: context.startedAt,
-              completedAt: null,
+              ...runningProviderTurn(context),
               tokenUsage,
-              ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
+              ...(liveUsage === undefined ? {} : { turnTokenUsage: liveUsage }),
+            },
+          });
+        });
+
+        // Runs per subagent frame, so it opts out of span-per-call tracing.
+        const emitLiveTurnUsage = Effect.fnUntraced(function* (context: ActiveClaudeTurnContext) {
+          // Background subagents keep sending frames to a settled turn; its final usage stands.
+          if ((yield* Ref.get(activeTurn))?.providerTurnId !== context.providerTurnId) return;
+          const liveUsage = liveTurnTokenUsage(context);
+          context.turnUsageDirty = false;
+          if (liveUsage === undefined) return;
+          yield* emitProviderEvent({
+            type: "provider_turn.updated",
+            driver: CLAUDE_PROVIDER,
+            threadId: context.input.threadId,
+            providerTurn: {
+              ...runningProviderTurn(context),
+              turnTokenUsage: liveUsage,
             },
           });
         });
@@ -9350,9 +9528,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             status,
           });
 
-        // A held result's usage joins the steered segments once another result settles the turn.
-        const absorbHeldResult = (context: ActiveClaudeTurnContext) => {
-          if (context.heldResult === undefined) return;
+        // A held result's usage joins the sealed segments once another segment starts or settles.
+        const absorbHeldResult = Effect.fnUntraced(function* (context: ActiveClaudeTurnContext) {
+          const held = context.heldResult;
+          if (held === undefined) return;
           const { assistant } = context;
           if (assistant.fallbackText.length > 0) {
             assistant.earlierFallbackText = joinFallbackText(
@@ -9361,13 +9540,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             );
             assistant.fallbackText = "";
           }
-          context.steeredSegmentUsage.push(context.heldResult.usage);
-          context.steeredLedgerUsage = addClaudeLedgerUsage(
-            context.steeredLedgerUsage,
-            resultLedgerUsage.get(context.heldResult),
-          );
           context.heldResult = undefined;
-        };
+          context.sealedSegments.push(yield* sealTurnSegment(context, held));
+        });
 
         const markSteersAccepted = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
@@ -9387,7 +9562,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (steer === undefined) continue;
             context.pendingSteers.delete(uuid);
             // Claude now answers this steer, and that answer's result ends the turn.
-            absorbHeldResult(context);
+            yield* absorbHeldResult(context);
             yield* emitSteerStatus(context, steer.messageId, "completed");
           }
           // Claude removed the steer before reading it. Its item stays pending, so the orchestrator
@@ -9676,6 +9851,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
           }
 
+          const lastSegmentArrival = input.context.usageArrival;
+          const lastSegment = yield* sealTurnSegment(input.context, input.result);
+          if (input.result === undefined) {
+            const liveQuery = yield* Ref.get(queryContext);
+            const rows = [...lastSegment.mainRows, ...lastSegment.delegateRows];
+            if (liveQuery?.lastTurn === input.context && !liveQuery.stopping && rows.length > 0) {
+              liveQuery.liveBilledUsage.push({ from: lastSegmentArrival ?? 0, rows });
+            }
+          }
           const threadDisposition = input.threadDisposition ?? "reusable";
           const terminalEvent: ProviderAdapter.ProviderAdapterV2Event =
             input.status === "failed"
@@ -9721,23 +9905,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     status: input.status,
                     completedAt: input.completedAt,
                   }),
-                  turnTokenUsage: normalizeClaudeTurnTokenUsage(
-                    input.result,
-                    input.context.subagentsByTaskId.size > 0 ||
-                      input.context.subagentsByToolUseId.size > 0,
-                    input.status,
-                    input.context.steeredSegmentUsage,
+                  turnTokenUsage: claudeTurnTokenUsage(
+                    [...input.context.sealedSegments, lastSegment],
                     {
+                      hasSubagents: turnHasSubagents(input.context),
+                      status: input.status,
                       rootModels: input.context.rootModels,
-                      // Without a final result the turn's last segment is unmeasured.
-                      ledger: addClaudeLedgerUsage(
-                        input.context.steeredLedgerUsage,
-                        input.result === undefined
-                          ? undefined
-                          : resultLedgerUsage.get(input.result),
-                      ),
-                      mainMessages: input.context.mainMessages,
-                      mainModel: input.context.mainUsageModel,
+                      ledgerModelNames: input.context.ledgerModelNames,
                     },
                   ),
                 },
@@ -10963,7 +11137,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 usage === undefined ? null : { messageId: event.message.id, usage };
               if (usage !== undefined) {
                 context.mainUsageModel = event.message.model;
-                recordClaudeMainMessageUsage(
+                recordTurnMessageUsage(
+                  context,
+                  message,
                   context.mainMessages,
                   event.message.id,
                   event.message.model,
@@ -10976,7 +11152,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const stream = context.streamUsage;
               if (stream?.usage && usage !== undefined) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
-                recordClaudeMainMessageUsage(
+                recordTurnMessageUsage(
+                  context,
+                  message,
                   context.mainMessages,
                   stream.messageId,
                   context.mainUsageModel,
@@ -11451,7 +11629,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
-              recordClaudeMainMessageUsage(
+              const usageChanged = recordTurnMessageUsage(
+                context,
+                message,
                 context.mainMessages,
                 message.message.id,
                 message.message.model,
@@ -11471,6 +11651,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   output_tokens: Math.max(snapshotUsage.output_tokens, stream.usage.output_tokens),
                 };
                 yield* emitContextUsage(context, stream.usage);
+              } else if (usageChanged) {
+                yield* emitLiveTurnUsage(context);
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
@@ -11484,6 +11666,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               snapshotModel.length === 0 || snapshotModel === "<synthetic>"
                 ? undefined
                 : canonicalClaudeSubagentModel(modelCatalog, snapshotModel);
+            if (parentToolUseId !== null && model !== undefined) {
+              context.latestSubagentMessages.set(parentToolUseId, message.message.id);
+            }
+            if (
+              parentToolUseId !== null &&
+              model !== undefined &&
+              message.message.usage !== undefined &&
+              recordTurnMessageUsage(
+                context,
+                message,
+                context.subagentMessages,
+                message.message.id,
+                model,
+                message.message.usage,
+              )
+            ) {
+              yield* emitLiveTurnUsage(context);
+            }
             if (parentToolUseId !== null && model !== undefined) {
               const subagent = yield* resolveSubagentByToolUseId(context, parentToolUseId);
               if (subagent === undefined) {
@@ -12142,7 +12342,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const completedAt = yield* DateTime.now;
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
-            absorbHeldResult(context);
+            yield* absorbHeldResult(context);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
               const cutOffReply = context.assistant.lastReply;
               context.assistant.lastReply = null;
@@ -12157,11 +12357,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   completedAt,
                 });
               }
-              context.steeredSegmentUsage.push(message.usage);
-              context.steeredLedgerUsage = addClaudeLedgerUsage(
-                context.steeredLedgerUsage,
-                resultLedgerUsage.get(message),
-              );
+              context.sealedSegments.push(yield* sealTurnSegment(context, message));
               return;
             }
             yield* Ref.update(steeredTurns, (current) => {
@@ -13311,6 +13507,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
             ),
             modelLedger: new Map(),
+            liveBilledUsage: [],
+            resultsArrived: 0,
+            unsealedResults: [],
+            ledgerModelNames: new Map(),
+            sealedMessageIds: new Set(),
             taskOutputRoot: claudeTaskOutputRoot(
               adapterOptions.environment,
               path,
@@ -13361,10 +13562,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ) {
                     context.permissionMode = message.permissionMode;
                   }
+                  messageArrival.set(message, context.resultsArrived);
                   if (message.type === "result") {
+                    context.resultsArrived += 1;
                     const ledger = claudeModelLedger(message.modelUsage);
                     const growth = claudeLedgerDelta(context.modelLedger, ledger);
-                    if (growth !== undefined) resultLedgerUsage.set(message, growth);
+                    if (growth === undefined) {
+                      context.liveBilledUsage = [];
+                      context.unsealedResults = [];
+                    } else {
+                      resultLedgerUsage.set(message, { growth, query: context });
+                      context.unsealedResults.push(message);
+                    }
+                    for (const [model, usage] of ledger ?? []) {
+                      context.ledgerModelNames.set(model, usage.model);
+                    }
                     // A ledger that went backwards cannot anchor the next turn's growth.
                     context.modelLedger =
                       growth === undefined && context.modelLedger !== undefined
@@ -13613,11 +13825,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               latestAssistantRateLimit: null,
               compactionFailure: null,
               nativeSessionTitle: null,
-              steeredSegmentUsage: [],
               steersClosed: false,
-              steeredLedgerUsage: { growth: new Map(), complete: true },
+              sealedSegments: [],
+              sealedMessageIds: querySession.sealedMessageIds,
+              latestSubagentMessages: new Map(),
+              turnUsageDirty: false,
+              usageArrival: undefined,
+              ledgerModelNames: querySession.ledgerModelNames,
               rootModels: new Set(),
               mainMessages: new Map(),
+              subagentMessages: new Map(),
               mainUsageModel: turnInput.modelSelection.model,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
@@ -13766,6 +13983,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ? latch?.end?.type !== "result"
                   : (yield* Ref.get(absorbedWakes)).has(nativeThreadId);
                 if (!leavesLaterWake) yield* forgetAbsorbedWake(nativeThreadId);
+                // The user turn that absorbed this wake already billed its messages.
+                if (wakeAbsorbed) {
+                  for (const entry of drained) {
+                    if (entry.type === "assistant") context.sealedMessageIds.add(entry.message.id);
+                    if (entry.type === "stream_event" && entry.event.type === "message_start") {
+                      context.sealedMessageIds.add(entry.event.message.id);
+                    }
+                  }
+                }
                 if (drained.length === 0) {
                   if (turnInput.resume) return;
                   const completedAt = yield* DateTime.now;

@@ -394,6 +394,41 @@ describe("thread usage", () => {
       { group: "delegates", model: "gpt-5.5", threads: 2, totalTokens: 130_000, costUsd: null },
     ]);
     expect(result.incompleteGroups).toEqual(["delegates"]);
+    expect(
+      threadUsageTurns(
+        "main",
+        records("main", claude, "claude-opus-5-5", [
+          { from: 0, to: 1, usage: { ...usage(1_000, 100), usageStatus: "partial" } },
+        ]),
+        T0,
+      ).incompleteGroups,
+    ).toEqual(["main"]);
+    expect(
+      threadUsageTurns(
+        "main",
+        records("main", claude, "claude-opus-5-5", [
+          {
+            from: 0,
+            to: 1,
+            usage: {
+              usageScope: "main_agent",
+              usageStatus: "partial",
+              hasSubagents: true,
+              subagentUsage: [
+                {
+                  model: "claude-haiku-4-5",
+                  inputTokens: 100,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                  outputTokens: 10,
+                },
+              ],
+            },
+          },
+        ]),
+        T0,
+      ).incompleteGroups,
+    ).toEqual([]);
 
     const [opus, gpt] = result.series;
     expect(opus?.buckets).toHaveLength(41);

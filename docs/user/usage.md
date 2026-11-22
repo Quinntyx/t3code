@@ -66,13 +66,16 @@ update model pricing.
 
 ## See one thread's consumption
 
-On web and desktop, **Consumption** in the thread details card charts the tokens a thread used
-over time, with its estimated API-equivalent cost. **Main agent** is the thread's own turns;
+On web and desktop, **Consumption** in the thread details card charts the tokens a thread used over
+time, with its estimated API-equivalent cost. **Main agent** is the thread's own turns;
 **Delegates** are the subagent threads it started and any those started, including Claude's native
-subagents and workflows. A group that ran more than one model reads **Mixed**; select it for the
-per-model breakdown. A dotted line marks each time the thread's context was compacted. Turns
-from providers that do not report per-turn usage show nothing here, and other providers' native
-subagents may count toward the main agent or not appear at all.
+subagents and workflows and Pi's subagent tool. A group that ran more than one model reads
+**Mixed**; select it for the per-model breakdown. A dotted line marks each time the thread's context
+was compacted. Figures update while the thread works; a cost ending in **+** is a floor, usually
+replaced by the exact figure when the turn finishes. An interrupted or failed turn can keep its
+**+**, because part of its work was never measured. Turns from providers that do not report
+per-turn usage show nothing here, and other providers' native subagents may count toward the main
+agent or not appear at all.
 
 Choose whether the card shows it under **Consumption** in Settings → Appearance → Thread details,
 or by right-clicking the card. The sidebar hover on a thread shows how long it worked and its
@@ -82,7 +85,8 @@ estimated cost.
 
 Right-click **Consumption** in the thread details card to add consumption limits for that thread. Add as
 many as you need; the thread stops when any one of them is reached, and delegates count toward the
-same thread.
+same thread. A running turn counts toward a limit as it goes, so a thread can stop partway through
+a turn.
 
 Each limit is either **API spend** or **Usage quota**, and applies to **All** models or to a chosen
 set of them. A spend limit compares the models it covers with your estimated API-list cost, and a

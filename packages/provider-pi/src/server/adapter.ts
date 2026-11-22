@@ -26,6 +26,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  type TurnModelTokenUsage,
   type TurnTokenUsage,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
@@ -416,6 +417,32 @@ function addPiMessageUsage(left: PiMessageUsage, right: PiMessageUsage): PiMessa
   };
 }
 
+type PiSubagentUsage = PiMessageUsage & { readonly model: string };
+
+function piSubagentUsageByModel(turn: ActivePiTurn): TurnModelTokenUsage[] {
+  const byModel = new Map<string, PiSubagentUsage>();
+  for (const { usage } of turn.subagentUsage.values()) {
+    if (usage === null) continue;
+    const seen = byModel.get(usage.model);
+    byModel.set(
+      usage.model,
+      seen === undefined ? usage : { model: usage.model, ...addPiMessageUsage(seen, usage) },
+    );
+  }
+  return Array.from(byModel.values());
+}
+
+function samePiMessageUsage(left: PiMessageUsage | null | undefined, right: PiMessageUsage) {
+  return (
+    left != null &&
+    left.inputTokens === right.inputTokens &&
+    left.outputTokens === right.outputTokens &&
+    left.cachedInputTokens === right.cachedInputTokens &&
+    left.cacheCreationTokens === right.cacheCreationTokens &&
+    left.reasoningTokens === right.reasoningTokens
+  );
+}
+
 function piTurnTokenUsage(turn: ActivePiTurn, completed = false): TurnTokenUsage {
   const usage =
     turn.pendingUsage === null
@@ -423,11 +450,28 @@ function piTurnTokenUsage(turn: ActivePiTurn, completed = false): TurnTokenUsage
       : turn.completedUsage === null
         ? turn.pendingUsage
         : addPiMessageUsage(turn.completedUsage, turn.pendingUsage);
+  const subagentUsage = piSubagentUsageByModel(turn);
+  // A child that is still running, aborted or failed reports a floor of its cumulative usage.
+  const subagentFields = {
+    ...(subagentUsage.length === 0 ? {} : { subagentUsage }),
+    ...([...turn.subagentUsage.values()].some((child) => !child.complete)
+      ? { otherUsageStatus: "partial" as const }
+      : {}),
+  };
   if (usage === null) {
+    if (subagentUsage.length === 0) {
+      return {
+        usageScope: "main_agent",
+        hasSubagents: turn.hasSubagents,
+        usageStatus: "unavailable",
+      };
+    }
+    // The usage aggregator drops unavailable turns; native subagent work still bills this one.
     return {
       usageScope: "main_agent",
       hasSubagents: turn.hasSubagents,
-      usageStatus: "unavailable",
+      usageStatus: "partial",
+      ...subagentFields,
     };
   }
   return {
@@ -436,6 +480,7 @@ function piTurnTokenUsage(turn: ActivePiTurn, completed = false): TurnTokenUsage
     usageStatus:
       completed && turn.usageComplete && turn.pendingUsage === null ? "complete" : "partial",
     ...usage,
+    ...subagentFields,
   };
 }
 
@@ -461,6 +506,10 @@ interface ActivePiTurn {
   pendingUsage: PiMessageUsage | null;
   usageComplete: boolean;
   hasSubagents: boolean;
+  readonly subagentUsage: Map<
+    string,
+    { readonly usage: PiSubagentUsage | null; readonly complete: boolean }
+  >;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
@@ -1138,13 +1187,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         Effect.fnUntraced(function* (turn: ActivePiTurn, usage: unknown) {
           const messageUsage = piMessageUsage(usage);
           const consumptionChanged =
-            messageUsage !== null &&
-            (turn.pendingUsage === null ||
-              messageUsage.inputTokens !== turn.pendingUsage.inputTokens ||
-              messageUsage.outputTokens !== turn.pendingUsage.outputTokens ||
-              messageUsage.cachedInputTokens !== turn.pendingUsage.cachedInputTokens ||
-              messageUsage.cacheCreationTokens !== turn.pendingUsage.cacheCreationTokens ||
-              messageUsage.reasoningTokens !== turn.pendingUsage.reasoningTokens);
+            messageUsage !== null && !samePiMessageUsage(turn.pendingUsage, messageUsage);
           if (messageUsage !== null) turn.pendingUsage = messageUsage;
           const usedTokens = nonNegativeInteger(usage, "totalTokens");
           const contextChanged =
@@ -1608,32 +1651,81 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const results = recordField(details, "results");
         if (!Array.isArray(results)) return;
         let emitted = false;
+        const delegatesPartial = () =>
+          [...turn.subagentUsage.values()].some((child) => !child.complete);
+        const wasPartial = delegatesPartial();
+        let subagentUsageChanged = false;
         for (const [index, result] of results.entries()) {
           const agent = recordString(result, "agent");
           const task = recordString(result, "task");
           if (agent === undefined || task === undefined) continue;
           emitted = true;
-          const finished = completed || recordField(result, "finished") === true;
+          const taskKey = `${recordNumber(result, "step") ?? index}`;
+          const nativeTaskId = `${toolCallId}:subagent:${taskKey}`;
+          // Pi's subagent tool reports `status`; a spawn failure or abort can leave exitCode null.
+          const childStatus = recordString(result, "status");
           const stopReason = recordString(result, "stopReason");
-          const interrupted = finished && stopReason === "aborted";
+          const finished =
+            childStatus === undefined
+              ? completed || recordField(result, "finished") === true
+              : childStatus === "completed" ||
+                childStatus === "failed" ||
+                childStatus === "aborted";
+          const interrupted =
+            childStatus === undefined
+              ? finished && stopReason === "aborted"
+              : childStatus === "aborted";
           const failed =
-            finished &&
-            !interrupted &&
-            ((recordNumber(result, "exitCode") ?? 0) !== 0 || stopReason === "error");
+            childStatus === undefined
+              ? finished &&
+                !interrupted &&
+                ((recordNumber(result, "exitCode") ?? 0) !== 0 || stopReason === "error")
+              : childStatus === "failed";
+          const status = interrupted
+            ? "interrupted"
+            : failed
+              ? "failed"
+              : finished
+                ? "completed"
+                : "running";
           const outputText = piSubagentOutput(result);
-          yield* emitSubagent(turn, toolCallId, `${recordNumber(result, "step") ?? index}`, {
+          yield* emitSubagent(turn, toolCallId, taskKey, {
             agent,
             task,
             model: recordString(result, "model") ?? null,
-            status: interrupted
-              ? "interrupted"
-              : failed
-                ? "failed"
-                : finished
-                  ? "completed"
-                  : "running",
+            status,
             progress: !finished && outputText.length > 0 ? outputText.slice(0, 200) : undefined,
             result: finished && outputText.length > 0 ? outputText.slice(0, 10_000) : null,
+          });
+          const usage = piMessageUsage(recordField(result, "usage"));
+          const complete = finished && !interrupted && !failed;
+          const previous = turn.subagentUsage.get(nativeTaskId);
+          // A child that has not answered yet reports all-zero usage, which measures nothing.
+          const nextUsage: PiSubagentUsage | null =
+            usage !== null && usage.inputTokens + usage.outputTokens > 0
+              ? {
+                  model: recordString(result, "model") ?? turn.turnInput.modelSelection.model,
+                  ...usage,
+                }
+              : (previous?.usage ?? null);
+          const countsChanged =
+            nextUsage !== null &&
+            (previous?.usage?.model !== nextUsage.model ||
+              !samePiMessageUsage(previous.usage, nextUsage));
+          if (countsChanged || previous?.complete !== complete) {
+            turn.subagentUsage.set(nativeTaskId, { usage: nextUsage, complete });
+            subagentUsageChanged ||= countsChanged;
+          }
+        }
+        if (subagentUsageChanged || delegatesPartial() !== wasPartial) {
+          yield* emit({
+            type: "provider_turn.updated",
+            driver: PI_PROVIDER,
+            threadId: turn.turnInput.threadId,
+            providerTurn: {
+              ...turn.providerTurn,
+              turnTokenUsage: piTurnTokenUsage(turn),
+            },
           });
         }
         // Async launches return no results; their members arrive in the subagent-async widget.
@@ -3649,6 +3741,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               pendingUsage: null,
               usageComplete: true,
               hasSubagents: false,
+              subagentUsage: new Map(),
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               compactionCancelled: false,

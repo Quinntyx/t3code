@@ -579,8 +579,12 @@ const openRuntime = Effect.fnUntraced(function* (
     ...(initialNativeThreadId === undefined ? {} : { initialNativeThreadId }),
   });
   const emitted = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+  const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
   yield* runtime.events.pipe(
-    Stream.runForEach((event) => Queue.offer(emitted, event)),
+    Stream.runForEach((event) => {
+      events.push(event);
+      return Queue.offer(emitted, event);
+    }),
     Effect.forkScoped,
   );
   const takeEvent = (predicate: (event: ProviderAdapter.ProviderAdapterV2Event) => boolean) =>
@@ -590,7 +594,7 @@ const openRuntime = Effect.fnUntraced(function* (
         if (predicate(event)) return event;
       }
     });
-  return { runtime, takeEvent };
+  return { runtime, takeEvent, events };
 });
 
 const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THREAD_ID) {
@@ -3671,7 +3675,7 @@ describe("PiAdapterV2", () => {
   it.effect("observes official subagent results without inventing child threads", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const { runtime, takeEvent, events } = yield* openRuntime(fake);
       const providerThread = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
@@ -3692,12 +3696,62 @@ describe("PiAdapterV2", () => {
               {
                 agent: "scout",
                 task: "map the repo",
+                exitCode: null,
+                stderr: "",
+                messages: [],
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+              },
+            ],
+          },
+        },
+      });
+      yield* takeEvent(
+        (event) => event.type === "subagent.updated" && event.subagent.status === "running",
+      );
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.turnTokenUsage?.subagentUsage !== undefined,
+        ),
+        "a child that has not answered measures nothing",
+      );
+      yield* fake.emit({
+        type: "tool_execution_update",
+        toolCallId: "call_sub",
+        toolName: "subagent",
+        partialResult: {
+          content: [{ type: "text", text: "(running...)" }],
+          details: {
+            mode: "single",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo",
                 exitCode: 0,
                 stderr: "",
                 sessionFile: "/ignored/custom-extension-session.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "scanning files" }] },
                 ],
+                model: "opencode-go/test-model",
+                usage: {
+                  input: 10,
+                  output: 5,
+                  cacheRead: 100,
+                  cacheWrite: 20,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 1,
+                },
               },
             ],
           },
@@ -3713,6 +3767,25 @@ describe("PiAdapterV2", () => {
           running.subagent.progress === "scanning files" &&
           running.subagent.childThreadId === null,
       );
+      const runningUsage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.turnTokenUsage?.subagentUsage?.[0]?.outputTokens === 5,
+      );
+      assert.isTrue(runningUsage.type === "provider_turn.updated");
+      if (runningUsage.type !== "provider_turn.updated") return;
+      assert.isUndefined(runningUsage.providerTurn.tokenUsage);
+      assert.equal(runningUsage.providerTurn.turnTokenUsage?.usageStatus, "partial");
+      assert.equal(runningUsage.providerTurn.turnTokenUsage?.otherUsageStatus, "partial");
+      assert.deepEqual(runningUsage.providerTurn.turnTokenUsage?.subagentUsage, [
+        {
+          model: "opencode-go/test-model",
+          inputTokens: 130,
+          cachedInputTokens: 100,
+          cacheCreationTokens: 20,
+          outputTokens: 5,
+        },
+      ]);
 
       yield* fake.emit({
         type: "tool_execution_end",
@@ -3733,6 +3806,16 @@ describe("PiAdapterV2", () => {
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "repo has one file" }] },
                 ],
+                model: "opencode-go/test-model",
+                usage: {
+                  input: 20,
+                  output: 9,
+                  cacheRead: 150,
+                  cacheWrite: 30,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 2,
+                },
               },
             ],
           },
@@ -3756,6 +3839,260 @@ describe("PiAdapterV2", () => {
         subagentItem.type === "turn_item.updated" &&
           subagentItem.turnItem.type === "subagent" &&
           subagentItem.turnItem.childThreadId === null,
+      );
+      const completedUsage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.turnTokenUsage?.subagentUsage?.[0]?.outputTokens === 9,
+      );
+      assert.isTrue(completedUsage.type === "provider_turn.updated");
+      if (completedUsage.type !== "provider_turn.updated") return;
+      const childTotal = {
+        model: "opencode-go/test-model",
+        inputTokens: 200,
+        cachedInputTokens: 150,
+        cacheCreationTokens: 30,
+        outputTokens: 9,
+      };
+      // Cumulative per child, not a sum of both snapshots.
+      assert.deepEqual(completedUsage.providerTurn.turnTokenUsage?.subagentUsage, [childTotal]);
+
+      // A new child that has not answered yet turns the exact delegate total into a floor.
+      const secondChild = (exitCode: number | null, stopReason?: string) => ({
+        agent: "scout",
+        task: "check the tests",
+        exitCode,
+        ...(stopReason === undefined ? {} : { stopReason }),
+        stderr: "",
+        messages: [],
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: 0,
+        },
+      });
+      yield* fake.emit({
+        type: "tool_execution_update",
+        toolCallId: "call_sub_second",
+        toolName: "subagent",
+        partialResult: {
+          content: [{ type: "text", text: "(running...)" }],
+          details: { mode: "single", results: [secondChild(null)] },
+        },
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.turnTokenUsage?.otherUsageStatus === "partial",
+      );
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_second",
+        toolName: "subagent",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "done" }],
+          details: { mode: "single", results: [secondChild(0, "stop")] },
+        },
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "running" &&
+          event.providerTurn.turnTokenUsage?.subagentUsage !== undefined &&
+          event.providerTurn.turnTokenUsage.otherUsageStatus === undefined,
+      );
+
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const settled = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      );
+      assert.deepEqual(
+        settled.type === "provider_turn.updated"
+          ? settled.providerTurn.turnTokenUsage?.subagentUsage
+          : undefined,
+        [childTotal],
+      );
+      assert.isUndefined(
+        settled.type === "provider_turn.updated"
+          ? settled.providerTurn.turnTokenUsage?.otherUsageStatus
+          : "missing",
+      );
+
+      // An aborted child's last cumulative usage stays a floor after the main agent finishes.
+      yield* startTurn(runtime, providerThread, "default", [], "Map it again", undefined, 2);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_aborted",
+        toolName: "subagent",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "aborted" }],
+          details: {
+            mode: "single",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo again",
+                exitCode: 0,
+                stopReason: "aborted",
+                stderr: "",
+                messages: [],
+                model: "opencode-go/test-model",
+                usage: {
+                  input: 4,
+                  output: 2,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 1,
+                },
+              },
+            ],
+          },
+        },
+      });
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const settledAfterAbort = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "completed" &&
+          event.providerTurn.ordinal === 2,
+      );
+      assert.equal(
+        settledAfterAbort.type === "provider_turn.updated"
+          ? settledAfterAbort.providerTurn.turnTokenUsage?.otherUsageStatus
+          : undefined,
+        "partial",
+      );
+
+      // A child that fails before its first answer reports no usage, yet leaves delegates unmeasured.
+      yield* startTurn(runtime, providerThread, "default", [], "Map it once more", undefined, 3);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_failed",
+        toolName: "subagent",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "failed" }],
+          details: {
+            mode: "single",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo once more",
+                exitCode: 1,
+                stopReason: "error",
+                stderr: "boom",
+                messages: [],
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+              },
+            ],
+          },
+        },
+      });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_end",
+        message: { role: "assistant", usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0 } },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+      const settledAfterFailure = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "completed" &&
+          event.providerTurn.ordinal === 3,
+      );
+      assert.deepInclude(
+        settledAfterFailure.type === "provider_turn.updated"
+          ? settledAfterFailure.providerTurn.turnTokenUsage
+          : undefined,
+        { usageStatus: "complete", inputTokens: 2, outputTokens: 1, otherUsageStatus: "partial" },
+      );
+
+      // Pi's subagent tool marks an aborted or spawn-failed child by `status` alone.
+      yield* startTurn(runtime, providerThread, "default", [], "Map it in parallel", undefined, 4);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const statusOnlyChild = (task: string, status: string, input: number, output: number) => ({
+        agent: "scout",
+        task,
+        status,
+        exitCode: null,
+        stderr: "",
+        messages: [],
+        ...(input + output > 0 ? { model: "opencode-go/test-model" } : {}),
+        usage: {
+          input,
+          output,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: input + output > 0 ? 1 : 0,
+        },
+      });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub_status",
+        toolName: "subagent",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "stopped" }],
+          details: {
+            mode: "parallel",
+            results: [
+              statusOnlyChild("map the left half", "aborted", 3, 1),
+              statusOnlyChild("map the right half", "failed", 0, 0),
+            ],
+          },
+        },
+      });
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const settledAfterStatus = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status === "completed" &&
+          event.providerTurn.ordinal === 4,
+      );
+      assert.equal(
+        settledAfterStatus.type === "provider_turn.updated"
+          ? settledAfterStatus.providerTurn.turnTokenUsage?.otherUsageStatus
+          : undefined,
+        "partial",
+      );
+      assert.deepEqual(
+        events.flatMap((event) =>
+          event.type === "subagent.updated" &&
+          event.subagent.nativeTaskRef?.nativeId?.startsWith("call_sub_status:") === true
+            ? [[event.subagent.prompt, event.subagent.status]]
+            : [],
+        ),
+        [
+          ["map the left half", "interrupted"],
+          ["map the right half", "failed"],
+        ],
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
