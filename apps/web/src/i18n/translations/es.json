@@ -4450,6 +4450,7 @@
   "17668fac7463e5b8": "Detalles del hilo: {tokens} tokens, {running} agentes en marcha, {sideChats} chats laterales",
   "ac1782b1ce5415e2": "Uso: {tokens} tokens, {cost}",
   "87da4d79e1db193d": "Agentes: {count} en otras máquinas",
+  "340130bf53d431c4": "{count, plural, one {{count} agente más} other {{count} agentes más}}",
   "6c06be3461c8cdce": "{title} · Chat lateral · {status}",
   "a97983f9199569ed": "{title} · en {machine} · {status}",
   "c09634d1975adec9": "{title} · {status}",

@@ -4454,6 +4454,7 @@
   "17668fac7463e5b8": "Thread-Details: {tokens} Tokens, {running} Agenten aktiv, {sideChats} Nebenchats",
   "ac1782b1ce5415e2": "Verbrauch: {tokens} Tokens, {cost}",
   "87da4d79e1db193d": "Agenten: {count} auf anderen Rechnern",
+  "340130bf53d431c4": "{count, plural, one {{count} weiterer Agent} other {{count} weitere Agenten}}",
   "6c06be3461c8cdce": "{title} · Nebenchat · {status}",
   "a97983f9199569ed": "{title} · auf {machine} · {status}",
   "c09634d1975adec9": "{title} · {status}",

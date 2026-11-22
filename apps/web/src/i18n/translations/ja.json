@@ -4441,6 +4441,7 @@
   "17668fac7463e5b8": "スレッドの詳細: {tokens} トークン、実行中のエージェント {running}、サイドチャット {sideChats}",
   "ac1782b1ce5415e2": "使用量: {tokens} トークン、{cost}",
   "87da4d79e1db193d": "エージェント: 他のマシンで {count}",
+  "340130bf53d431c4": "{count, plural, other {ほか {count} 件のエージェント}}",
   "6c06be3461c8cdce": "{title} · サイドチャット · {status}",
   "a97983f9199569ed": "{title} · {machine} 上 · {status}",
   "c09634d1975adec9": "{title} · {status}",

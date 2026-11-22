@@ -402,6 +402,10 @@ interface SidebarThreadPartitionInput {
 
 function scrollSidebarToTop(content: HTMLElement | null) {
   content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
+  // Sidebar tabs scroll each column on its own.
+  for (const column of content?.querySelectorAll("[data-sidebar-column]") ?? []) {
+    column.scrollTo({ top: 0 });
+  }
 }
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
@@ -4136,6 +4140,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         projectByKey={projectByKey}
         projectDisplayNameByKey={projectDisplayNameByKey}
         onOpenChange={setSettledPopoverOpen}
+        onContextMenu={handleSearchResultContextMenu}
         showMore={{
           count: Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT),
           loading: olderSettledShelf.loading,

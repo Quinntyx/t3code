@@ -4438,6 +4438,7 @@
   "17668fac7463e5b8": "스레드 세부 정보: 토큰 {tokens}개, 실행 중인 에이전트 {running}개, 사이드 채팅 {sideChats}개",
   "ac1782b1ce5415e2": "사용량: 토큰 {tokens}개, {cost}",
   "87da4d79e1db193d": "에이전트: 다른 머신에 {count}개",
+  "340130bf53d431c4": "{count, plural, other {에이전트 {count}개 더}}",
   "6c06be3461c8cdce": "{title} · 사이드 채팅 · {status}",
   "a97983f9199569ed": "{title} · {machine}에서 · {status}",
   "c09634d1975adec9": "{title} · {status}",

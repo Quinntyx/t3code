@@ -460,7 +460,7 @@ export const ChatHeader = memo(function ChatHeader({
         <HeaderWorkspaceActions
           environmentId={activeThreadEnvironmentId}
           threadRef={activeThreadRef}
-          hasProject={activeProjectName !== undefined}
+          project={activeProject}
           gitCwd={gitCwd}
           activeProjectScripts={activeProjectScripts}
           preferredScriptId={preferredScriptId}

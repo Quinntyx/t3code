@@ -1881,11 +1881,12 @@ export default function ChatView(props: ChatViewProps) {
       isGitRepo,
       showEnvironmentIndicator: showComposerEnvironmentIndicator,
     });
-  // The chip replaces the strip for started git threads except where the row is not rendered.
+  // The chip replaces the strip once a git thread's workspace is locked, except where no row renders.
   const showRunContextChip =
     runContextLayout === "chip" &&
     composerMounted &&
     isServerThread &&
+    envLocked &&
     isGitRepo &&
     !isMobileViewport;
   const showEffectiveComposerContextStrip = showComposerContextStrip && !showRunContextChip;
@@ -3618,36 +3619,40 @@ export default function ChatView(props: ChatViewProps) {
             {!floatingPanelControls && inlineRightPanelOwnsTitleBar
               ? threadPanelHeaderControl
               : null}
-            <ChatHeader
-              activeThreadEnvironmentId={activeThread.environmentId}
-              activeThreadId={activeThread.id}
-              isServerThread={isServerThread}
-              activeThreadTitle={activeThread.title}
-              activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}
-              activeProject={activeProject ?? null}
-              parentThreadLink={headerParentThreadLink}
-              onOpenThread={onOpenRelatedThreadStable}
-              rightPanelOpen={inlineRightPanelOwnsTitleBar}
-              reserveTrailingControls={!(panelControlsLayout === "corner" && floatingPanelControls)}
-              onNewThreadInProject={handleNewThreadInActiveProjectStable}
-              {...(activeDraftLogicalProjectKey
-                ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
-                : {})}
-              {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
-              gitCwd={gitCwd}
-              activeProjectScripts={activeProject ? activeProjectScripts : undefined}
-              preferredScriptId={
-                activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
-              }
-              {...(draftId ? { draftId } : {})}
-              onOpenChanges={
-                isServerThread && isGitRepo ? openChangesFromThreadPanelStable : undefined
-              }
-              onRunProjectScript={runProjectScriptStable}
-              onAddProjectScript={saveProjectScriptStable}
-              onUpdateProjectScript={updateProjectScriptStable}
-              onDeleteProjectScript={deleteProjectScriptStable}
-            />
+            <WorkspaceMutationIdContext value={workspaceMutationId}>
+              <ChatHeader
+                activeThreadEnvironmentId={activeThread.environmentId}
+                activeThreadId={activeThread.id}
+                isServerThread={isServerThread}
+                activeThreadTitle={activeThread.title}
+                activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}
+                activeProject={activeProject ?? null}
+                parentThreadLink={headerParentThreadLink}
+                onOpenThread={onOpenRelatedThreadStable}
+                rightPanelOpen={inlineRightPanelOwnsTitleBar}
+                reserveTrailingControls={
+                  !(panelControlsLayout === "corner" && floatingPanelControls)
+                }
+                onNewThreadInProject={handleNewThreadInActiveProjectStable}
+                {...(activeDraftLogicalProjectKey
+                  ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
+                  : {})}
+                {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
+                gitCwd={gitCwd}
+                activeProjectScripts={activeProject ? activeProjectScripts : undefined}
+                preferredScriptId={
+                  activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+                }
+                {...(draftId ? { draftId } : {})}
+                onOpenChanges={
+                  isServerThread && isGitRepo ? openChangesFromThreadPanelStable : undefined
+                }
+                onRunProjectScript={runProjectScriptStable}
+                onAddProjectScript={saveProjectScriptStable}
+                onUpdateProjectScript={updateProjectScriptStable}
+                onDeleteProjectScript={deleteProjectScriptStable}
+              />
+            </WorkspaceMutationIdContext>
           </header>
         )}
 

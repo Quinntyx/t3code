@@ -3,11 +3,13 @@ import { useDroppable } from "@dnd-kit/core";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { ContextMenuSource, ScopedThreadRef } from "@t3tools/contracts";
 import { CheckCheckIcon, ChevronDownIcon, EyeIcon, SearchIcon } from "lucide-react";
 import { useGT } from "gt-react";
 import { useState, type MouseEvent } from "react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
+import { contextMenuSourceOf } from "../../contextMenuSource";
 import { sidebarSectionDropId } from "../Sidebar.logic";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { shortcutLabelForCommand } from "../../keybindings";
@@ -26,6 +28,12 @@ export function SidebarSettledPopover(props: {
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   onUnsettle: (thread: EnvironmentThreadShell) => void;
   onOpen: (thread: EnvironmentThreadShell) => void;
+  /** The stock thread menu, as on a sidebar row. */
+  onContextMenu: (
+    threadRef: ScopedThreadRef,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
   onOpenChange: (open: boolean) => void;
   /** `count` is how many the next page adds; zero when none are left. */
   showMore: {
@@ -104,6 +112,15 @@ export function SidebarSettledPopover(props: {
                 return (
                   <div
                     key={threadKey}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setOpen(false);
+                      props.onContextMenu(
+                        scopeThreadRef(thread.environmentId, thread.id),
+                        { x: event.clientX, y: event.clientY },
+                        contextMenuSourceOf(event),
+                      );
+                    }}
                     className="group/settled-row relative flex h-[34px] items-center gap-2 rounded-md pr-1 pl-2 hover:bg-accent"
                   >
                     <button

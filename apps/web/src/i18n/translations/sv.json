@@ -4451,6 +4451,7 @@
   "17668fac7463e5b8": "Tråddetaljer: {tokens} tokens, {running} agenter igång, {sideChats} sidochattar",
   "ac1782b1ce5415e2": "Förbrukning: {tokens} tokens, {cost}",
   "87da4d79e1db193d": "Agenter: {count} på andra datorer",
+  "340130bf53d431c4": "{count, plural, one {{count} agent till} other {{count} agenter till}}",
   "6c06be3461c8cdce": "{title} · Sidochatt · {status}",
   "a97983f9199569ed": "{title} · på {machine} · {status}",
   "c09634d1975adec9": "{title} · {status}",

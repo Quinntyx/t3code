@@ -266,13 +266,21 @@ export function ThreadDetailsRail({
               </div>
             ))}
           </div>
-          <span
+          {/* A button, so the agents the rail has no room for stay reachable by keyboard. */}
+          <button
+            type="button"
             hidden={capped.more === 0}
             data-thread-rail-more
-            className="mt-0.5 flex h-5 shrink-0 items-center justify-center rounded-md bg-black/[0.055] px-1 text-3xs leading-3 tabular-nums text-muted-foreground dark:bg-white/[0.075]"
+            aria-label={gt(
+              "{count, plural, one {{count} more agent} other {{count} more agents}}",
+              { count: capped.more },
+            )}
+            aria-expanded={hoveredSection === "agents"}
+            onClick={() => hover("agents")}
+            className="mt-0.5 flex h-5 shrink-0 cursor-pointer items-center justify-center rounded-md bg-black/[0.055] px-1 text-3xs leading-3 tabular-nums text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring dark:bg-white/[0.075]"
           >
             +{capped.more}
-          </span>
+          </button>
         </div>
         {sideChats.length === 0 ? null : (
           <>

@@ -217,14 +217,22 @@ it("offers no Initialize Git before the server config says where No project live
     .not.toBeInTheDocument();
 });
 
-it("offers Initialize Git in the header when the workspace actions move there", async () => {
-  using _fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
+it.each([
+  { name: "a plain folder", workspaceRoot: "/work/plain", folder: "/work/plain", offered: true },
+  {
+    name: "a No project thread",
+    workspaceRoot: SCRATCH_ROOT,
+    folder: `${SCRATCH_ROOT}/thread`,
+    offered: false,
+  },
+])("offers Initialize Git in the header for $name: $offered", async (scenario) => {
+  using _fixture = setup(scenario);
   const scriptResult = async () => ({ ok: true }) as never;
   await using _screen = await render(
     <HeaderWorkspaceActions
       environmentId={threadRef.environmentId}
       threadRef={threadRef}
-      hasProject
+      project={{ workspaceRoot: scenario.workspaceRoot } as never}
       gitCwd={state.folder}
       activeProjectScripts={undefined}
       preferredScriptId={null}
@@ -235,5 +243,7 @@ it("offers Initialize Git in the header when the workspace actions move there", 
       onDeleteProjectScript={scriptResult}
     />,
   );
-  await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
+  const button = page.getByRole("button", { name: "Initialize Git" });
+  if (scenario.offered) await expect.element(button).toBeVisible();
+  else await expect.element(button).not.toBeInTheDocument();
 });

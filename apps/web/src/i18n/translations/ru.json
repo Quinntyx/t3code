@@ -4450,6 +4450,7 @@
   "17668fac7463e5b8": "Детали треда: {tokens} токенов, агентов в работе: {running}, боковых чатов: {sideChats}",
   "ac1782b1ce5415e2": "Расход: {tokens} токенов, {cost}",
   "87da4d79e1db193d": "Агенты: {count} на других машинах",
+  "340130bf53d431c4": "{count, plural, one {Ещё {count} агент} few {Ещё {count} агента} many {Ещё {count} агентов} other {Ещё {count} агента}}",
   "6c06be3461c8cdce": "{title} · Боковой чат · {status}",
   "a97983f9199569ed": "{title} · на {machine} · {status}",
   "c09634d1975adec9": "{title} · {status}",

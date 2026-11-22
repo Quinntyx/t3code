@@ -1,8 +1,11 @@
 import type { EnvironmentId, ProjectScript, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
 import { useGT } from "gt-react";
 import { PlayIcon } from "lucide-react";
+import { use } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -10,7 +13,7 @@ import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePull
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { useQuietThreadShell } from "~/state/entities";
+import { useQuietThreadShell, useServerConfigs } from "~/state/entities";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -25,12 +28,13 @@ import {
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Separator } from "../ui/separator";
+import { WorkspaceMutationIdContext } from "./ChatMarkdownMedia";
 import { resolveThreadDetailsVisibility } from "./threadDetailsItems";
 
 export interface HeaderWorkspaceActionsProps {
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef;
-  hasProject: boolean;
+  project: EnvironmentProject | null;
   gitCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
@@ -52,7 +56,7 @@ export interface HeaderWorkspaceActionsProps {
 export function HeaderWorkspaceActions({
   environmentId,
   threadRef,
-  hasProject,
+  project,
   gitCwd,
   activeProjectScripts,
   preferredScriptId,
@@ -66,8 +70,15 @@ export function HeaderWorkspaceActions({
   const gt = useGT();
   const detailsVisible = useClientSettings(resolveThreadDetailsVisibility);
   const showScripts = activeProjectScripts !== undefined && detailsVisible.scripts;
-  const showGit =
-    gitCwd !== null && hasProject && (detailsVisible.changes || detailsVisible.gitActions);
+  const serverConfig = useServerConfigs().get(environmentId);
+  // As in the details card: never git in a No project thread, nor before the config says which that is.
+  const offersGit =
+    gitCwd !== null &&
+    serverConfig !== undefined &&
+    project !== null &&
+    !isScratchProject(project, serverConfig.scratchWorkspaceRoot);
+  const showGit = offersGit && (detailsVisible.changes || detailsVisible.gitActions);
+  const workspaceMutationId = use(WorkspaceMutationIdContext) ?? null;
   const fileScripts = useT3ProjectFileScripts(environmentId, showScripts ? gitCwd : null);
   const scriptsControlProps = {
     environmentId,
@@ -116,6 +127,7 @@ export function HeaderWorkspaceActions({
             showChanges={detailsVisible.changes}
             gitCwd={gitCwd}
             activeThreadRef={threadRef}
+            workspaceMutationId={workspaceMutationId}
             {...(draftId !== undefined ? { draftId } : {})}
             {...(onOpenChanges !== undefined ? { onOpenChanges } : {})}
           />
