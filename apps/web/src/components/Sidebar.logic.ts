@@ -212,6 +212,22 @@ export function resolveSidebarThreadSection(input: {
 }
 
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
+const SIDEBAR_SECTION_DROP_PREFIX = "sidebar-section-drop-";
+
+/** The Idle tab and the Recently settled button take rows the list no longer lists. */
+export type SidebarSectionDropTarget = "active" | "settled";
+
+const SIDEBAR_SECTION_DROP_TARGETS: ReadonlyArray<SidebarSectionDropTarget> = ["active", "settled"];
+
+export function sidebarSectionDropId(section: SidebarSectionDropTarget): string {
+  return `${SIDEBAR_SECTION_DROP_PREFIX}${section}`;
+}
+
+function sidebarSectionDropTargetOf(id: string): SidebarSectionDropTarget | null {
+  return (
+    SIDEBAR_SECTION_DROP_TARGETS.find((section) => sidebarSectionDropId(section) === id) ?? null
+  );
+}
 
 export type SidebarListMarker =
   | "pinned-header"
@@ -258,6 +274,14 @@ export function resolveSidebarDropTarget(
   activeKey: string,
   overId: string,
 ): SidebarDropTarget | null {
+  const sectionDrop = sidebarSectionDropTargetOf(overId);
+  if (sectionDrop !== null) {
+    const order = (name: "pinned" | "active") =>
+      items.flatMap((item) =>
+        item.kind === "thread" && item.key !== activeKey && item.section === name ? [item.key] : [],
+      );
+    return { section: sectionDrop, pinnedOrder: order("pinned"), activeOrder: order("active") };
+  }
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;

@@ -67,6 +67,7 @@ vi.mock("./sidebar/SidebarChrome", () => ({
 
 const layoutOverrides = vi.hoisted(() => ({
   sidebarSearch: "row" as "row" | "hidden",
+  sidebarSections: "shelves" as "shelves" | "tabs",
 }));
 vi.mock(import("../hooks/useTheme"), async (original) => {
   const { DEFAULT_RESOLVED_THEME_LAYOUT } = await import("../themeEffects");
@@ -415,6 +416,7 @@ describe("sidebar search layout", () => {
     using stack = new DisposableStack();
     stack.defer(() => {
       layoutOverrides.sidebarSearch = "row";
+      layoutOverrides.sidebarSections = "shelves";
     });
     const currentProject = project("active");
     const threadRef = {
@@ -462,5 +464,83 @@ describe("sidebar search layout", () => {
     await expect
       .element(hiddenScreen.getByRole("button", { name: "Add project", exact: true }))
       .toBeInTheDocument();
+  });
+});
+
+describe("sidebar sections layout", () => {
+  it("shows shelves by default and switchable tabs when the layout is tabs", async () => {
+    using stack = new DisposableStack();
+    stack.defer(() => {
+      layoutOverrides.sidebarSections = "shelves";
+    });
+    const currentProject = project("active");
+    const settled = makeThreadFixture({
+      environmentId: currentProject.environmentId,
+      projectId: currentProject.id,
+      id: ThreadId.make("settled-0"),
+      title: "Settled 0",
+      settledOverride: "settled",
+      settledAt: "2026-01-01T00:00:00.000Z",
+    });
+    const threadRef = {
+      environmentId: currentProject.environmentId,
+      threadId: ThreadId.make("thread-0"),
+    };
+    vi.mocked(useProjects).mockReturnValue([currentProject]);
+    vi.mocked(useQuietThreadShells).mockReturnValue([settled]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
+    vi.mocked(useServerConfigs).mockReturnValue(
+      new Map([
+        [
+          currentProject.environmentId,
+          {
+            scratchWorkspaceRoot: null,
+            shellThreadFamilies: false,
+          } as unknown as EnvironmentServerConfig,
+        ],
+      ]),
+    );
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: {
+        environmentId: currentProject.environmentId,
+        projectId: currentProject.id,
+      },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: threadRef,
+    });
+    const tree = () => (
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>
+    );
+
+    layoutOverrides.sidebarSections = "shelves";
+    await using shelvesScreen = await render(tree());
+    expect(
+      shelvesScreen.container.querySelector('[data-testid="sidebar-settled-shelf-toggle"]'),
+    ).not.toBeNull();
+    expect(shelvesScreen.container.querySelector('[role="tablist"]')).toBeNull();
+
+    layoutOverrides.sidebarSections = "tabs";
+    await using tabsScreen = await render(tree());
+    expect(
+      tabsScreen.container.querySelector('[data-testid="sidebar-settled-shelf-toggle"]'),
+    ).toBeNull();
+    await expect
+      .element(tabsScreen.getByRole("tablist", { name: "Thread lists" }))
+      .toBeInTheDocument();
+    const workingTab = tabsScreen.getByRole("tab", { name: /Working/ });
+    await expect.element(workingTab).toHaveAttribute("aria-selected", "false");
+    await userEvent.click(workingTab);
+    await expect.element(workingTab).toHaveAttribute("aria-selected", "true");
+    expect(tabsScreen.container.querySelector('[data-sidebar-column="working"]')).not.toBeNull();
+    await userEvent.keyboard("{ArrowRight}");
+    await expect
+      .element(tabsScreen.getByRole("tab", { name: /Snoozed/ }))
+      .toHaveAttribute("aria-selected", "true");
   });
 });

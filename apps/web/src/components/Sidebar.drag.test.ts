@@ -10,6 +10,7 @@ import {
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
+  sidebarSectionDropId,
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
@@ -118,6 +119,27 @@ describe("sidebar collision detection", () => {
       expect(detector(args).map((collision) => collision.id)).toEqual(["source"]);
     },
   );
+
+  it("selects the Idle tab when the pointer ends on it", () => {
+    const args = collisionArgs();
+    const tabId = sidebarSectionDropId("active");
+    const tab = {
+      ...args.droppableContainers[0]!,
+      id: tabId,
+      key: tabId,
+      rect: {
+        current: { top: 890, bottom: 920, left: 0, right: 260, width: 260, height: 30 },
+      },
+    };
+    const detector = createSidebarCollisionDetection(() => true);
+    expect(
+      detector({
+        ...args,
+        pointerCoordinates: { x: 150, y: 900 },
+        droppableContainers: [...args.droppableContainers, tab],
+      })[0]?.id,
+    ).toBe(tabId);
+  });
 
   it.each([
     { sourceSection: "active", pins: 0 },

@@ -25,6 +25,7 @@ import {
   shouldRecedeSidebarThread,
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
+  sidebarSectionDropId,
   planSidebarThreadDrop,
   resolveSidebarReorderableThreadKeys,
   sortPinnedThreadsForSidebar,
@@ -1451,6 +1452,19 @@ describe("Working shelf (beta)", () => {
       marker("settled-header"),
       row("s1", "settled"),
     ];
+
+    it("resolves the Idle tab and Recently settled button as section drop targets", () => {
+      expect(resolveSidebarDropTarget(items, "a1", sidebarSectionDropId("active"))).toEqual({
+        section: "active",
+        pinnedOrder: ["p1"],
+        activeOrder: ["a2"],
+      });
+      expect(resolveSidebarDropTarget(items, "a1", sidebarSectionDropId("settled"))).toEqual({
+        section: "settled",
+        pinnedOrder: ["p1"],
+        activeOrder: ["a2"],
+      });
+    });
 
     it("never drops into the Working shelf, and keeps it out of the inbox order", () => {
       expect(resolveSidebarDropTarget(items, "a1", "w1")).toBeNull();

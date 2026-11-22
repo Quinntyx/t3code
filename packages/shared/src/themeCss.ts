@@ -65,6 +65,11 @@ export const THEME_CSS_HOOKS = [
     selector: "[data-sidebar-header-actions]",
     styles: "search row's icon buttons when the search row is hidden",
   },
+  { selector: "[data-sidebar-tabs]", styles: "bottom Idle/Working/Snoozed tab switcher" },
+  {
+    selector: "[data-sidebar-column]",
+    styles: 'sliding tab column, ="idle" | "working" | "snoozed"',
+  },
   { selector: "[data-thread-item]", styles: "sidebar thread row" },
   {
     selector: '[data-slot="project-monogram"]',

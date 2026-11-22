@@ -4,6 +4,7 @@ import {
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
+  sidebarSectionDropId,
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
@@ -40,8 +41,25 @@ export function createSidebarCollisionDetection(
   let previousPointerY = options.activationY;
   let boundarySection: "pinned" | "active" | undefined;
   return (args) => {
-    let collisions = closestCenter(args);
     const pointer = args.pointerCoordinates;
+    // The tab and settled button are smaller than a dragged card, so the pointer decides.
+    const sectionDrop = pointer
+      ? args.droppableContainers.find((container) => {
+          const id = String(container.id);
+          if (id !== sidebarSectionDropId("active") && id !== sidebarSectionDropId("settled"))
+            return false;
+          const bounds = container.rect.current ?? container.node.current?.getBoundingClientRect();
+          return (
+            bounds !== undefined &&
+            pointer.x >= bounds.left &&
+            pointer.x <= bounds.left + bounds.width &&
+            pointer.y >= bounds.top &&
+            pointer.y <= bounds.top + bounds.height
+          );
+        })
+      : undefined;
+    if (sectionDrop) return [{ id: sectionDrop.id }];
+    let collisions = closestCenter(args);
     const items = options.items;
     const source = items?.find((item) => item.kind === "thread" && item.key === args.active.id);
     const boundary = args.droppableContainers
@@ -92,6 +110,8 @@ export function createSidebarCollisionDetection(
 export function createSidebarSortingStrategy(input: {
   items: readonly SidebarListItem[];
   enabled?: boolean;
+  /** A tab or settled button under the pointer, which names a section outside the list. */
+  overId?: string | null;
   settledOrder: readonly string[];
   activeOrder?: readonly string[];
   settledExpanded: boolean;
@@ -112,8 +132,14 @@ export function createSidebarSortingStrategy(input: {
     const active = items[activeIndex];
     const over = items[overIndex] ?? active;
     if (active?.kind !== "thread" || !over || !rects[0]) return [];
-    const target = resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
+    const target = resolveSidebarDropTarget(
+      items,
+      active.key,
+      input.overId ?? sidebarListItemId(over),
+    );
     if (!target) return [];
+    // A drop on the settled button leaves this column, so only the source row moves.
+    if (input.overId === sidebarSectionDropId("settled")) return items.map(() => hidden);
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],
       active: [],
