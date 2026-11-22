@@ -308,6 +308,31 @@ function hasValidSuccessUsage(result: ClaudeSegmentResult | undefined): boolean 
   );
 }
 
+/** Usage frames billed to a window that settled without a result, from the results seen before its first frame. */
+export interface ClaudeCarry {
+  readonly from: number;
+  readonly rows: ReadonlyArray<TurnModelTokenUsage>;
+}
+
+/**
+ * Seals a result against the carry it can pay: only a result that arrived after a window's first
+ * frame can hold that window's work. `arrival` counts the results that arrived before this one.
+ */
+export function payClaudeCarry(
+  carry: ReadonlyArray<ClaudeCarry>,
+  arrival: number,
+  seal: (rows: ReadonlyArray<TurnModelTokenUsage>) => ClaudeSegmentUsage,
+): { readonly segment: ClaudeSegmentUsage; readonly carry: ClaudeCarry[] } {
+  const segment = seal(carry.flatMap((entry) => (entry.from <= arrival ? entry.rows : [])));
+  return {
+    segment,
+    carry: [
+      ...carry.filter((entry) => entry.from > arrival),
+      ...(segment.carry.length === 0 ? [] : [{ from: arrival, rows: segment.carry }]),
+    ],
+  };
+}
+
 /** One SDK result window of a turn. A steer closes one with its abort result; settlement the last. */
 export interface ClaudeSegmentUsage {
   // The main agent's usage in the SDK result's shape, from the one source this segment chose.

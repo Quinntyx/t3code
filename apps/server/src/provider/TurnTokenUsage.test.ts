@@ -5,6 +5,7 @@ import {
   claudeModelLedger,
   claudeTurnTokenUsage,
   deductClaudeLedgerUsage,
+  payClaudeCarry,
   liveClaudeTurnTokenUsage,
   recordClaudeMessageUsage,
   sealClaudeSegment,
@@ -522,6 +523,21 @@ describe("billable native turn usage", () => {
       ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 0), cachedInputTokens: 100 }],
     ]);
     expect(cached.unbilled).toEqual([usage("claude-haiku-4-5", 100, 0)]);
+    // A result that arrived before a window's first frame cannot hold that window's work.
+    const childGrowth = (arrival: number) =>
+      payClaudeCarry([{ from: 2, rows: [usage("claude-haiku-4-5", 30, 1)] }], arrival, (carry) =>
+        sealClaudeSegment({
+          result: { subtype: "success", usage: { input_tokens: 0, output_tokens: 0 } },
+          ledgerGrowth: new Map([["claude-haiku-4-5", usage("claude-haiku-4-5", 30, 7)]]),
+          mainMessages: new Map(),
+          subagentMessages: new Map(),
+          carry,
+        }),
+      );
+    expect(childGrowth(1).segment.delegateRows).toEqual([usage("claude-haiku-4-5", 30, 7)]);
+    expect(childGrowth(1).carry).toEqual([{ from: 2, rows: [usage("claude-haiku-4-5", 30, 1)] }]);
+    expect(childGrowth(2).segment.delegateRows).toEqual([usage("claude-haiku-4-5", 0, 6)]);
+    expect(childGrowth(2).carry).toEqual([]);
     // Residual input never drops below the cache reads it includes.
     expect(
       sealClaudeSegment({
