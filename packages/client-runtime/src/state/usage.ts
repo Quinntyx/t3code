@@ -29,7 +29,7 @@ type UsageThread = Pick<
   "id" | "lineage" | "latestRunId" | "latestRunCompletedAt" | "activeRunId"
 >;
 
-export function threadUsageRevision(threadId: ThreadId, threads: readonly UsageThread[]): string {
+function threadUsageFamily(threadId: ThreadId, threads: readonly UsageThread[]): UsageThread[] {
   const children = new Map<ThreadId, UsageThread[]>();
   for (const thread of threads) {
     const { parentThreadId, relationshipToParent, sideChat } = thread.lineage;
@@ -43,9 +43,12 @@ export function threadUsageRevision(threadId: ThreadId, threads: readonly UsageT
   for (const id of ids) {
     for (const child of children.get(id) ?? []) ids.add(child.id);
   }
+  return threads.filter((thread) => ids.has(thread.id));
+}
+
+export function threadUsageRevision(threadId: ThreadId, threads: readonly UsageThread[]): string {
   return JSON.stringify(
-    threads
-      .filter((thread) => ids.has(thread.id))
+    threadUsageFamily(threadId, threads)
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((thread) => [
         thread.id,
@@ -56,6 +59,10 @@ export function threadUsageRevision(threadId: ThreadId, threads: readonly UsageT
         thread.activeRunId,
       ]),
   );
+}
+
+export function threadUsageActive(threadId: ThreadId, threads: readonly UsageThread[]): boolean {
+  return threadUsageFamily(threadId, threads).some((thread) => thread.activeRunId !== null);
 }
 
 const limitsRefreshAfter = new Map<EnvironmentId, number>();
