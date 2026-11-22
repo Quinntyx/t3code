@@ -28,6 +28,7 @@ import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { readLocalApi } from "../localApi";
 import type { Project } from "../types";
+import type { ReactNode } from "react";
 import Sidebar from "./Sidebar";
 import { THREAD_JUMP_HINT_SHOW_DELAY_MS } from "./Sidebar.logic";
 import { SortableThreadRow } from "./sidebar/SidebarThreadRow";
@@ -60,9 +61,20 @@ vi.mock("../commandPaletteBus", () => ({
   isCommandPaletteOpen: () => false,
 }));
 vi.mock("./sidebar/SidebarChrome", () => ({
-  SidebarChromeHeader: () => null,
+  SidebarChromeHeader: ({ actions }: { actions?: ReactNode }) => actions ?? null,
   SidebarChromeFooter: () => null,
 }));
+
+const layoutOverrides = vi.hoisted(() => ({
+  sidebarSearch: "row" as "row" | "hidden",
+}));
+vi.mock(import("../hooks/useTheme"), async (original) => {
+  const { DEFAULT_RESOLVED_THEME_LAYOUT } = await import("../themeEffects");
+  return {
+    ...(await original()),
+    useThemeLayout: () => ({ ...DEFAULT_RESOLVED_THEME_LAYOUT, ...layoutOverrides }),
+  };
+});
 
 function project(id: string): Project {
   return {
@@ -395,5 +407,60 @@ describe("sidebar settled pagination", () => {
     const loadedRows = screen.container.querySelectorAll("[data-thread-item]").length;
     await act(() => moreButton.click());
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
+  });
+});
+
+describe("sidebar search layout", () => {
+  it("hides the search row and moves its buttons into the brand row only for the hidden variant", async () => {
+    using stack = new DisposableStack();
+    stack.defer(() => {
+      layoutOverrides.sidebarSearch = "row";
+    });
+    const currentProject = project("active");
+    const threadRef = {
+      environmentId: currentProject.environmentId,
+      threadId: ThreadId.make("thread-0"),
+    };
+    vi.mocked(useProjects).mockReturnValue([currentProject]);
+    vi.mocked(useQuietThreadShells).mockReturnValue([threadShell(currentProject.id, 0)]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: {
+        environmentId: currentProject.environmentId,
+        projectId: currentProject.id,
+      },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: threadRef,
+    });
+    const tree = () => (
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>
+    );
+
+    layoutOverrides.sidebarSearch = "row";
+    await using rowScreen = await render(tree());
+    await expect
+      .element(rowScreen.getByRole("combobox", { name: "Search threads" }))
+      .toBeInTheDocument();
+    await expect
+      .element(rowScreen.getByRole("button", { name: "New thread", exact: true }))
+      .toBeInTheDocument();
+
+    layoutOverrides.sidebarSearch = "hidden";
+    await using hiddenScreen = await render(tree());
+    expect(
+      hiddenScreen.container.querySelector('[role="combobox"][aria-label="Search threads"]'),
+    ).toBeNull();
+    await expect
+      .element(hiddenScreen.getByRole("button", { name: "New thread", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(hiddenScreen.getByRole("button", { name: "Add project", exact: true }))
+      .toBeInTheDocument();
   });
 });

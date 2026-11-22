@@ -61,6 +61,10 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="sidebar"]', styles: "app sidebar" },
   { selector: '[data-slot="sidebar-inner"]', styles: "sidebar surface" },
   { selector: "[data-sidebar-control]", styles: "sidebar toggle container" },
+  {
+    selector: "[data-sidebar-header-actions]",
+    styles: "search row's icon buttons when the search row is hidden",
+  },
   { selector: "[data-thread-item]", styles: "sidebar thread row" },
   {
     selector: '[data-slot="project-monogram"]',
