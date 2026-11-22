@@ -258,7 +258,7 @@ export const THEME_GUIDE = [
   "It cannot load files: no @import, no image-set(), and url() only with data: or #id.",
   'For a palette background image, copy a JPEG, PNG, or WebP file of up to 16 MB to `<themesDir>/<themeId>.jpg` (or .png, .webp), beside the theme file. CSS shows it with `var(--theme-background-image)`, such as `[data-workspace-area="conversation"] { background: var(--theme-background-image) center / cover no-repeat; }`. Delete the file to remove it. Do not embed images in `css`: it holds 100,000 characters.',
   'Motion: popups (`[data-slot$="-popup"]`) and the surfaces marked below carry `data-side` (the side they open from) and `data-starting-style` while entering, `data-ending-style` while leaving. A leaving surface that starts an opacity transition under `[data-ending-style]` stays on screen until it ends, so `[data-ending-style] { opacity: 0; translate: 0 4px; }` with a `transition` fades it out. Keep motion short and never loop it.',
-  "The app's own rules can be more specific. If a rule has no effect, add !important.",
+  "The app's own rules can be more specific. Its palette-only rules start with `html[data-theme-id]`, which `:root` carries whenever a palette is active; start yours the same way to outrank them. If a rule still has no effect, add !important.",
   "It cannot reach the terminal text, the file tree, or diff internals. Use color roles for those.",
   "Native scrollbars take `::-webkit-scrollbar` and `::-webkit-scrollbar-thumb`.",
   "Icons are `svg.lucide`. stroke-width, stroke-linecap, and stroke-linejoin restyle them.",
