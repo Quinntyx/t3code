@@ -78,7 +78,7 @@ jobs:
           path: update-feed/
           if-no-files-found: error
       - name: Advance the tailnet update feed
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
           PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
           FORGEJO_SERVER_URL: ${{ github.server_url }}
@@ -144,7 +144,7 @@ jobs:
           path: release/*.dmg
           if-no-files-found: error
       - name: Advance the tailnet update feed
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
           PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
           FORGEJO_SERVER_URL: ${{ github.server_url }}
