@@ -37,6 +37,10 @@ import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
 import {
+  selectThreadDetailsRailPinned,
+  useThreadDetailsRailPinStore,
+} from "./threadDetailsRailStore";
+import {
   activateVoice,
   connectVoiceMicrophone,
   disconnectVoice,
@@ -52,6 +56,8 @@ interface RightPanelActionsInput {
   readonly deviceStateLoaded: boolean;
   readonly pullRequestPanelTarget: ReturnType<typeof threadPullRequestPanelTarget> | null;
   readonly threadPanelPresentation: ThreadPanelPresentation;
+  /** The theme's watch rail stands in for the inline card, which then opens only when pinned. */
+  readonly threadDetailsRail?: boolean;
   readonly isServerThread: boolean;
   /** A side chat pane; the main view already answers preview bus actions. */
   readonly embedded: boolean;
@@ -86,6 +92,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     deviceStateLoaded,
     pullRequestPanelTarget,
     threadPanelPresentation,
+    threadDetailsRail = false,
     isServerThread,
     embedded,
     isGitRepo,
@@ -248,6 +255,13 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const toggleThreadPanel = () => {
     if (!activeThreadRef) return;
     const store = useRightPanelStore.getState();
+    if (threadPanelPresentation === "inline" && threadDetailsRail) {
+      const pins = useThreadDetailsRailPinStore.getState();
+      if (!selectThreadDetailsRailPinned(pins.pinnedByThreadKey, activeThreadRef))
+        requestWorkspaceFocus({ area: "details" });
+      pins.togglePinned(activeThreadRef);
+      return;
+    }
     if (threadPanelPresentation === "inline") {
       const open = selectThreadPanelOpen(
         store.threadPanelVisibilityByThreadKey,

@@ -20,6 +20,8 @@ export interface ChatCanvasPreview {
 
 const GAP = 12;
 export const DETAILS_CARD_CLEARANCE = 32;
+/** Space the chat lane keeps from the watch rail while no card is open beside it. */
+const DETAILS_RAIL_CLEARANCE = 56;
 
 export function resolveChatCanvasLayout({
   container,
@@ -30,6 +32,7 @@ export function resolveChatCanvasLayout({
   composerHeight = 0,
   detailsCard = null,
   findBar = null,
+  railWidth = 0,
 }: {
   container: PreviewMiniPlayerSize;
   preview: ChatCanvasPreview | null;
@@ -39,11 +42,13 @@ export function resolveChatCanvasLayout({
   composerHeight?: number;
   detailsCard?: PreviewMiniPlayerObstacles["detailsCard"];
   findBar?: PreviewMiniPlayerObstacles["detailsCard"];
+  /** The watch rail's inset at the right edge. */
+  railWidth?: number;
 }) {
   const centeredWidth = Math.max(0, Math.min(maxChatWidth, container.width - padding * 2));
   const laneRight = detailsCard
     ? detailsCard.left - DETAILS_CARD_CLEARANCE
-    : container.width - padding;
+    : container.width - padding - (railWidth > 0 ? DETAILS_RAIL_CLEARANCE : 0);
   const normalWidth = Math.max(0, Math.min(centeredWidth, laneRight - padding));
   const canvasCenterLeft = (container.width - normalWidth) / 2;
   const normalLeft = Math.max(padding, Math.min(canvasCenterLeft, laneRight - normalWidth));

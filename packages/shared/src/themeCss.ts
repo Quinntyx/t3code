@@ -138,6 +138,18 @@ export const THEME_CSS_HOOKS = [
   },
   { selector: "[data-thread-details-card]", styles: "thread details card" },
   { selector: "[data-thread-terminal-drawer]", styles: "terminal drawer" },
+  {
+    selector: "[data-thread-relationship-status]",
+    styles: 'agent status mark on its icon, valued by status (such as ="running")',
+  },
+  {
+    selector: "[data-thread-details-rail]",
+    styles: 'thread details rail (layout threadDetails "rail")',
+  },
+  {
+    selector: "[data-thread-details-peek]",
+    styles: "card a rail section opens, valued by section",
+  },
   { selector: '[data-slot="preview-panel-shell"]', styles: "inline preview panel" },
   { selector: '[data-slot="floating-control-bubble"]', styles: "floating corner control bubble" },
   { selector: "[data-floating-panel-controls]", styles: "floating layout controls bubble" },

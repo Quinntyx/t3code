@@ -331,6 +331,12 @@ import {
 } from "./chat/PanelLayoutControls";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
+import { ThreadDetailsRail } from "./chat/ThreadDetailsRail";
+import { THREAD_DETAILS_RAIL_INSET } from "./chat/threadDetailsCardLayout";
+import {
+  selectThreadDetailsRailPinned,
+  useThreadDetailsRailPinStore,
+} from "./chat/threadDetailsRailStore";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -1182,7 +1188,11 @@ export default function ChatView(props: ChatViewProps) {
     !embedded && canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const floatingPanels = useThemeEffects().floatingPanels.enabled;
-  const { panelControls: panelControlsLayout, runContext: runContextLayout } = useThemeLayout();
+  const {
+    panelControls: panelControlsLayout,
+    runContext: runContextLayout,
+    threadDetails: threadDetailsLayout,
+  } = useThemeLayout();
   const cornerPanelControls = floatingPanels || panelControlsLayout === "corner";
   const floatingPanelControls =
     cornerPanelControls && !embedded && !prefersPlanSidebarSheet && !isMobileViewport;
@@ -2049,9 +2059,19 @@ export default function ChatView(props: ChatViewProps) {
       ? activePreviewMiniPlayer
       : null;
   const canvasPreview = useThreadPreviewCanvasSource(activeThreadRef, shownPreviewMiniPlayer);
-  const threadPanelInlineOpen = useRightPanelStore((state) =>
+  const threadDetailsRailVisible =
+    threadDetailsLayout === "rail" && !embedded && isServerThread && activeThreadRef !== null;
+  const stockThreadPanelInlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, activeThreadRef, "inline"),
   );
+  // Beside the rail the card opens only while pinned, and the pin is the rail's own.
+  const threadDetailsRailPinned = useThreadDetailsRailPinStore((state) =>
+    selectThreadDetailsRailPinned(state.pinnedByThreadKey, activeThreadRef),
+  );
+  const threadPanelInlineOpen = threadDetailsRailVisible
+    ? threadDetailsRailPinned
+    : stockThreadPanelInlineOpen;
+  const threadDetailsRailInset = threadDetailsRailVisible ? THREAD_DETAILS_RAIL_INSET : 0;
   // Selects only the mode, so canvas resizes rerender the chat view only when the
   // card switches presentation.
   const threadPanelPresentation = useStore(
@@ -2063,15 +2083,20 @@ export default function ChatView(props: ChatViewProps) {
         threadRef: activeThreadRef,
         preview: canvasPreview,
         detailsCardInlineOpen: threadPanelInlineOpen,
+        railWidth: threadDetailsRailInset,
       }).detailsCardMode,
   );
-  const threadPanelOpen = useRightPanelStore((state) =>
+  const stockThreadPanelOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(
       state.threadPanelVisibilityByThreadKey,
       activeThreadRef,
       threadPanelPresentation,
     ),
   );
+  const threadPanelOpen =
+    threadDetailsRailVisible && threadPanelPresentation === "inline"
+      ? threadDetailsRailPinned
+      : stockThreadPanelOpen;
   const supportsThreadPullRequests = serverConfig !== null;
   const visiblePullRequests = visibleThreadPullRequests(
     (activeThreadShell ?? activeThread)?.pullRequests ?? [],
@@ -2500,6 +2525,7 @@ export default function ChatView(props: ChatViewProps) {
     deviceStateLoaded,
     pullRequestPanelTarget,
     threadPanelPresentation,
+    threadDetailsRail: threadDetailsRailVisible,
     isServerThread,
     embedded,
     isGitRepo,
@@ -3595,6 +3621,7 @@ export default function ChatView(props: ChatViewProps) {
               parentThreadLink={headerParentThreadLink}
               onOpenThread={onOpenRelatedThreadStable}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
+              reserveTrailingControls={!(panelControlsLayout === "corner" && floatingPanelControls)}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
               {...(activeDraftLogicalProjectKey
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
@@ -3629,6 +3656,7 @@ export default function ChatView(props: ChatViewProps) {
             threadRef={activeThreadRef}
             preview={canvasPreview}
             detailsCardTopInset={isThreadFindActive ? THREAD_FIND_BAR_RESERVED_HEIGHT : 0}
+            railWidth={threadDetailsRailInset}
             composerOverlayElement={isDraftHeroState ? null : composerOverlayElement}
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
@@ -4157,6 +4185,14 @@ export default function ChatView(props: ChatViewProps) {
                   canWriteSourceControl={canWriteSourceControl}
                   onConfirm={handleSwitchCheckoutToThreadStable}
                 />
+
+                {threadDetailsRailVisible ? (
+                  <ThreadDetailsRail
+                    threadRef={activeThreadRef}
+                    onOpenThread={onOpenRelatedThreadStable}
+                    peekEnabled={!threadPanelOpen}
+                  />
+                ) : null}
 
                 <ThreadDetailsPanel
                   anchor={threadPanelPopoverAnchorRef}

@@ -77,6 +77,7 @@ export interface HeaderChatHeaderProps {
   parentThreadLink: { threadId: ThreadId; title: string } | null;
   onOpenThread: (threadId: ThreadId) => void;
   rightPanelOpen: boolean;
+  reserveTrailingControls: boolean;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
@@ -114,6 +115,7 @@ export function HeaderChatHeader({
   parentThreadLink,
   onOpenThread,
   rightPanelOpen,
+  reserveTrailingControls,
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
@@ -373,7 +375,7 @@ export function HeaderChatHeader({
       ref={breadcrumbContainerRef}
       className={cn(
         "@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
-        rightPanelOpen ? "pr-10" : "pr-24",
+        reserveTrailingControls && (rightPanelOpen ? "pr-10" : "pr-24"),
       )}
       onContextMenu={handleHeaderContextMenu}
     >

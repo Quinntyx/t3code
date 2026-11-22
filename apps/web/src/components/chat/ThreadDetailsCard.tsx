@@ -46,9 +46,10 @@ export function ThreadDetailsCard({
   const topInset = canvas?.detailsCardTopInset ?? 0;
   // Floating panels clear the titlebar's toggles, so the card rises to the window's top edge.
   const riseToTopEdge = useThemeEffects().floatingPanels.enabled && topInset === 0;
-  const inlineOpen = useRightPanelStore((state) =>
+  const stockInlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
+  const inlineOpen = canvas?.detailsCardInlineOpen ?? stockInlineOpen;
   const popoverOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "popover"),
   );

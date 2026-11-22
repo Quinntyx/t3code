@@ -4,6 +4,10 @@ import { ChatCanvasContext } from "./ChatCanvasContext";
 import type { ChatCanvasPreview } from "./chatCanvasLayout";
 import { resolveChatCanvasModel, type ChatCanvasStore } from "./canvasStore";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
+import {
+  selectThreadDetailsRailPinned,
+  useThreadDetailsRailPinStore,
+} from "./threadDetailsRailStore";
 import { observeResize } from "../../lib/observeResize";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
@@ -48,6 +52,7 @@ export function ChatCanvas({
   preview,
   composerOverlayElement,
   detailsCardTopInset = 0,
+  railWidth = 0,
   children,
   ...props
 }: Omit<ComponentProps<"div">, "className" | "style" | "ref"> & {
@@ -58,6 +63,8 @@ export function ChatCanvas({
   preview: ChatCanvasPreview | null;
   composerOverlayElement: HTMLElement | null;
   detailsCardTopInset?: number;
+  /** The watch rail's inset at the right edge, which the card and chat lane clear. */
+  railWidth?: number;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
@@ -134,17 +141,23 @@ export function ChatCanvas({
       stopObserving();
     };
   }, [store, composerOverlayElement, timelineElement, detailsCardTopInset]);
-  const detailsCardInlineOpen = useRightPanelStore((state) =>
+  const stockDetailsCardInlineOpen = useRightPanelStore((state) =>
     threadRef === null
       ? false
       : selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
+  const railPinned = useThreadDetailsRailPinStore((state) =>
+    selectThreadDetailsRailPinned(state.pinnedByThreadKey, threadRef),
+  );
+  // Beside the theme's watch rail the card opens only while pinned.
+  const detailsCardInlineOpen = railWidth > 0 ? railPinned : stockDetailsCardInlineOpen;
   const model = resolveChatCanvasModel({
     measurements,
     detailsCardMeasurement,
     threadRef,
     preview,
     detailsCardInlineOpen,
+    railWidth,
   });
   const context = {
     container: model.container,
@@ -156,6 +169,7 @@ export function ChatCanvas({
     detailsCardTopInset: model.detailsCardTopInset,
     preferredDetailsCard: model.preferredDetailsCard,
     detailsCardPlacement: model.detailsCardPlacement,
+    detailsCardInlineOpen,
   };
   const { layout } = context;
   return (

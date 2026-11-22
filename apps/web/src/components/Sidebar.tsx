@@ -4110,11 +4110,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         onOpen={(thread) => navigateToThread(scopeThreadRef(thread.environmentId, thread.id))}
       />
     ) : null;
-  const sidebarFixedHeader = (
-    <SidebarGroup className="z-[1]" data-sidebar-search-group="">
-      {sidebarSearchRegion.searchRow}
-    </SidebarGroup>
-  );
+  const sidebarFixedHeader =
+    sidebarSearchRegion.searchRow === null ? undefined : (
+      <SidebarGroup className="z-[1]" data-sidebar-search-group="">
+        {sidebarSearchRegion.searchRow}
+      </SidebarGroup>
+    );
   const tabItemsIdle = sidebarListItems.filter((item) =>
     item.kind === "marker"
       ? item.marker === "pinned-header" ||

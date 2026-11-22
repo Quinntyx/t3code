@@ -4,6 +4,9 @@ import { DETAILS_CARD_CLEARANCE } from "./chatCanvasLayout";
 export const THREAD_DETAILS_CARD_GAP = 12;
 // Keep in sync with --thread-details-panel-width.
 const THREAD_DETAILS_CARD_WIDTH = 280;
+/** The watch rail (layout threadDetails "rail") at the canvas's right edge, and its gap to the card. */
+const THREAD_DETAILS_RAIL_WIDTH = 36;
+export const THREAD_DETAILS_RAIL_INSET = THREAD_DETAILS_RAIL_WIDTH + 8;
 
 export function resolveThreadDetailsCardDensity(
   height: number,
@@ -21,6 +24,7 @@ export function resolveThreadDetailsCardLayout({
   frame,
   overlapsDetailsCard = false,
   topInset = 0,
+  railWidth = 0,
 }: {
   container: { width: number; height: number };
   // While a panel animates the container, the card fits only if it fits at both ends.
@@ -29,14 +33,19 @@ export function resolveThreadDetailsCardLayout({
   frame: PreviewMiniPlayerFrame | null;
   overlapsDetailsCard?: boolean;
   topInset?: number;
+  /** The watch rail's inset, which the card clears so the two sit side by side. */
+  railWidth?: number;
 }) {
   const gap = THREAD_DETAILS_CARD_GAP;
   const width = THREAD_DETAILS_CARD_WIDTH;
-  const x = container.width - width - gap;
+  const x = container.width - width - gap - railWidth;
   // The transition ends are sampled once, so a resize mid-animation can leave them
   // wider than the container is now.
   const fitWidth = Math.min(narrowestWidth, container.width);
-  if (fitWidth - width - gap - DETAILS_CARD_CLEARANCE - lane.padding < lane.minChatWidth)
+  if (
+    fitWidth - width - gap - railWidth - DETAILS_CARD_CLEARANCE - lane.padding <
+    lane.minChatWidth
+  )
     return null;
   const y = gap + topInset;
   const height =
@@ -46,7 +55,7 @@ export function resolveThreadDetailsCardLayout({
   if (height < 160) return null;
   return {
     x,
-    right: gap,
+    right: gap + railWidth,
     width,
     y,
     height,

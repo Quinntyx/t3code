@@ -87,6 +87,7 @@ export function resolveChatCanvasModel({
   threadRef,
   preview,
   detailsCardInlineOpen,
+  railWidth = 0,
 }: {
   measurements: ChatCanvasMeasurements;
   detailsCardMeasurement: DetailsCardMeasurement | null;
@@ -94,6 +95,8 @@ export function resolveChatCanvasModel({
   threadRef: ScopedThreadRef | null;
   preview: ChatCanvasPreview | null;
   detailsCardInlineOpen: boolean;
+  /** The watch rail's inset at the right edge, which the card and the chat lane clear. */
+  railWidth?: number;
 }) {
   const container = { width: measurements.width, height: measurements.height };
   const { findBar } = measurements;
@@ -107,6 +110,7 @@ export function resolveChatCanvasModel({
     lane,
     frame: null,
     topInset: detailsCardTopInset,
+    railWidth,
   });
   // The canvas outlives thread switches, so a measurement only counts for the
   // thread whose card is shown now.
@@ -139,6 +143,7 @@ export function resolveChatCanvasModel({
     composerHeight: measurements.composerHeight,
     detailsCard,
     findBar,
+    railWidth,
   });
   const detailsCardPlacement = resolveThreadDetailsCardLayout({
     container,
@@ -147,6 +152,7 @@ export function resolveChatCanvasModel({
     frame: layout.frame,
     overlapsDetailsCard: layout.overlapsDetailsCard,
     topInset: detailsCardTopInset,
+    railWidth,
   });
   const detailsCardMode: ThreadPanelPresentation = detailsCardPlacement ? "inline" : "popover";
   return {

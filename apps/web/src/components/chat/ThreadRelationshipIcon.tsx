@@ -93,6 +93,7 @@ export function ThreadRelationshipIcon({
         <FallbackIcon className={iconClassName} />
       )}
       <span
+        data-thread-relationship-status={status ?? ""}
         className={cn(
           "absolute -right-1 size-2 rounded-full border-2 border-card",
           anyInstanceBadge ? "-top-1" : "-bottom-1",
