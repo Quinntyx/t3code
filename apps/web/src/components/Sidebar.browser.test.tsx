@@ -660,6 +660,42 @@ describe("sidebar tabs", () => {
     ).toEqual(["Idle", "Snoozed0"]);
   });
 
+  it("keeps the selected tab's column in view when the Working tab comes and goes", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    using stack = new DisposableStack();
+    const style = document.head.appendChild(document.createElement("style"));
+    style.textContent = appCss;
+    stack.defer(() => style.remove());
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    await using screen = await renderTabsSidebar((currentProject) => [
+      settledThread(currentProject, 0),
+    ]);
+    await userEvent.click(screen.getByRole("tab", { name: /Snoozed/ }));
+    const inView = () => {
+      const column = screen.container.querySelector('[data-sidebar-column="snoozed"]')!;
+      const region = column.parentElement!.parentElement!;
+      return Math.round(column.getBoundingClientRect().left - region.getBoundingClientRect().left);
+    };
+    await vi.waitFor(() => expect(inView()).toBe(0));
+    for (const enabled of [false, true]) {
+      __setClientSettingsForTests({ ...previousSettings, sidebarWorkingShelfEnabled: enabled });
+      // The test setter does not notify subscribers, so render again to read it.
+      await screen.rerender(
+        <SidebarProvider>
+          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+        </SidebarProvider>,
+      );
+      await vi.waitFor(() =>
+        expect(screen.getByRole("tab").elements()).toHaveLength(enabled ? 3 : 2),
+      );
+      await expect
+        .element(screen.getByRole("tab", { name: /Snoozed/ }))
+        .toHaveAttribute("aria-selected", "true");
+      await vi.waitFor(() => expect(inView()).toBe(0));
+    }
+  });
+
   it("scrolls each tab column on its own", async () => {
     using _layout = setupLayout({ sidebarSections: "tabs" });
     using stack = new DisposableStack();

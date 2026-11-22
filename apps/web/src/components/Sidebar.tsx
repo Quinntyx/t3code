@@ -4230,6 +4230,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             fixedHeader={sidebarFixedHeader}
           >
             <SidebarTrack
+              // A different tab set moves every column, so the track starts over at the active one.
+              key={sidebarTabs.length}
               tabs={sidebarTabs}
               active={activeTab}
               columns={{

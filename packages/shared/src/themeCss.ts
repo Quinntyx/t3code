@@ -238,6 +238,7 @@ export const THEME_CSS_PROPERTIES = [
   { name: "--radius", styles: "base corner radius controls and cards derive from" },
   { name: "--radius-glass", styles: "corner radius of glass popups and floating panels" },
   { name: "--radius-glass-item", styles: "corner radius of rows inside glass popups" },
+  { name: "--sidebar-row-radius", styles: "corner radius of sidebar thread rows" },
 ] as const;
 
 /** What each layout region's variants move, for the guide. The first variant is stock. */
