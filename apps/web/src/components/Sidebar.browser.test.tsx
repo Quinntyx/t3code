@@ -23,6 +23,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { useProjects, useServerConfigs, useQuietThreadShells } from "../state/entities";
+import { useConnectedEnvironmentIds } from "../state/environments";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -44,6 +45,7 @@ vi.mock("../hooks/useNowMinute", { spy: true });
 vi.mock("../hooks/useThreadRouteTarget", { spy: true });
 vi.mock("./sidebar/SidebarThreadRow", { spy: true });
 vi.mock("../state/session", { spy: true });
+vi.mock("../state/environments", { spy: true });
 vi.mock("../state/use-orchestration-command", { spy: true });
 vi.mock("../localApi", { spy: true });
 vi.mock(import("../state/server"), async (original) => {
@@ -69,10 +71,16 @@ const layoutOverrides = vi.hoisted(() => ({
   sidebarSearch: "row" as "row" | "hidden",
   sidebarSections: "shelves" as "shelves" | "tabs",
 }));
-/** Resets the layout the mocked hook reports; each layout test calls it first. */
+/** Sets the layout the mocked hook reports, back to stock on dispose; each layout test calls it first. */
 function setupLayout(layout: Partial<typeof layoutOverrides> = {}) {
   layoutOverrides.sidebarSearch = layout.sidebarSearch ?? "row";
   layoutOverrides.sidebarSections = layout.sidebarSections ?? "shelves";
+  return {
+    [Symbol.dispose]: () => {
+      layoutOverrides.sidebarSearch = "row";
+      layoutOverrides.sidebarSections = "shelves";
+    },
+  };
 }
 vi.mock(import("../hooks/useTheme"), async (original) => {
   const { DEFAULT_RESOLVED_THEME_LAYOUT } = await import("../themeEffects");
@@ -418,12 +426,7 @@ describe("sidebar settled pagination", () => {
 
 describe("sidebar search layout", () => {
   it("hides the search row and moves its buttons into the brand row only for the hidden variant", async () => {
-    setupLayout();
-    using stack = new DisposableStack();
-    stack.defer(() => {
-      layoutOverrides.sidebarSearch = "row";
-      layoutOverrides.sidebarSections = "shelves";
-    });
+    using _layout = setupLayout();
     const currentProject = project("active");
     const threadRef = {
       environmentId: currentProject.environmentId,
@@ -475,11 +478,7 @@ describe("sidebar search layout", () => {
 
 describe("sidebar sections layout", () => {
   it("shows shelves by default and switchable tabs when the layout is tabs", async () => {
-    setupLayout();
-    using stack = new DisposableStack();
-    stack.defer(() => {
-      layoutOverrides.sidebarSections = "shelves";
-    });
+    using _layout = setupLayout();
     const currentProject = project("active");
     const settled = makeThreadFixture({
       environmentId: currentProject.environmentId,
@@ -553,30 +552,14 @@ describe("sidebar sections layout", () => {
 });
 
 describe("sidebar recently settled popover", () => {
-  it("lists settled threads with un-settle and view actions when sections are tabs", async () => {
-    setupLayout();
-    using stack = new DisposableStack();
-    stack.defer(() => {
-      layoutOverrides.sidebarSections = "shelves";
-    });
-    layoutOverrides.sidebarSections = "tabs";
+  async function renderTabsSidebar(threads: (project: Project) => EnvironmentThreadShell[]) {
     const currentProject = project("active");
-    const settled = [0, 1].map((index) =>
-      makeThreadFixture({
-        environmentId: currentProject.environmentId,
-        projectId: currentProject.id,
-        id: ThreadId.make(`settled-${index}`),
-        title: `Settled thread ${index}`,
-        settledOverride: "settled",
-        settledAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
     const threadRef = {
       environmentId: currentProject.environmentId,
       threadId: ThreadId.make("thread-0"),
     };
     vi.mocked(useProjects).mockReturnValue([currentProject]);
-    vi.mocked(useQuietThreadShells).mockReturnValue(settled);
+    vi.mocked(useQuietThreadShells).mockReturnValue(threads(currentProject));
     vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
     vi.mocked(useServerConfigs).mockReturnValue(
       new Map([
@@ -606,11 +589,27 @@ describe("sidebar recently settled popover", () => {
     );
     vi.mocked(readEnvironmentScope).mockReturnValue(true);
     vi.mocked(useEnvironmentScope).mockReturnValue(true);
-
-    await using screen = await render(
+    vi.mocked(useConnectedEnvironmentIds).mockReturnValue([currentProject.environmentId]);
+    return render(
       <SidebarProvider>
         <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
       </SidebarProvider>,
+    );
+  }
+  const settledThread = (currentProject: Project, index: number) =>
+    makeThreadFixture({
+      environmentId: currentProject.environmentId,
+      projectId: currentProject.id,
+      id: ThreadId.make(`settled-${index}`),
+      title: `Settled thread ${index}`,
+      settledOverride: "settled",
+      settledAt: "2026-01-01T00:00:00.000Z",
+    });
+
+  it("lists settled threads with un-settle and view actions when sections are tabs", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    await using screen = await renderTabsSidebar((currentProject) =>
+      [0, 1].map((index) => settledThread(currentProject, index)),
     );
     const button = screen.getByRole("button", { name: "Recently settled" });
     await expect.element(button).toBeInTheDocument();
@@ -622,5 +621,47 @@ describe("sidebar recently settled popover", () => {
     await expect
       .element(page.getByRole("button", { name: /Open Settled thread 0 without un-settling/ }))
       .toBeInTheDocument();
+  });
+
+  it("takes an Idle row dragged onto the Recently settled button", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    await using screen = await renderTabsSidebar((currentProject) => [
+      settledThread(currentProject, 0),
+      makeThreadFixture({
+        environmentId: currentProject.environmentId,
+        projectId: currentProject.id,
+        id: ThreadId.make("idle-0"),
+        title: "Idle thread 0",
+      }),
+    ]);
+    const row = screen.getByText("Idle thread 0");
+    const button = screen.getByRole("button", { name: "Recently settled" });
+    await expect.element(row).toBeVisible();
+    await expect.element(button).toBeVisible();
+    const from = row.element().getBoundingClientRect();
+    const to = button.element().getBoundingClientRect();
+    const pointer = (type: string, x: number, y: number) =>
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+        clientX: x,
+        clientY: y,
+      });
+    using _release = {
+      [Symbol.dispose]: () =>
+        document.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape", bubbles: true })),
+    };
+    await act(() => {
+      row.element().dispatchEvent(pointer("pointerdown", from.x + 10, from.y + 5));
+      document.dispatchEvent(pointer("pointermove", from.x + 10, from.y + 30));
+    });
+    await act(() =>
+      document.dispatchEvent(pointer("pointermove", to.x + to.width / 2, to.y + to.height / 2)),
+    );
+    await expect.element(button).toHaveAttribute("data-drop-target", "");
   });
 });
