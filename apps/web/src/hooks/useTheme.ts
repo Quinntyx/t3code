@@ -3,7 +3,7 @@ import type { DesktopBridge } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import * as Schema from "effect/Schema";
 import { useSyncExternalStore } from "react";
-import type { ThemeSettingsSchema } from "@t3tools/contracts";
+import { THEME_LAYOUT_KEYS, type ThemeSettingsSchema } from "@t3tools/contracts";
 import {
   applyThemePalette,
   CUSTOM_THEMES_STORAGE_KEY,
@@ -522,11 +522,17 @@ function getSnapshot(): ThemeSnapshot {
 
   const settingOverrides = readThemeSettingOverrides();
   const activePaletteId = resolveThemeHalf(theme, themeHalves, resolvedTheme);
-  const { effects: resolvedEffects, layout: resolvedLayout } = resolveActiveThemeStyleState(
+  const { effects: resolvedEffects, layout } = resolveActiveThemeStyleState(
     activePaletteId,
     themeStyle,
     settingOverrides,
   );
+  // Kept by identity while no region changes, so layout readers skip unrelated theme changes.
+  const previousLayout = lastSnapshot?.resolvedLayout;
+  const resolvedLayout =
+    previousLayout && THEME_LAYOUT_KEYS.every((key) => previousLayout[key] === layout[key])
+      ? previousLayout
+      : layout;
   lastSnapshotOverridesRaw = settingOverridesRaw;
   lastSnapshotReducedMotion = reducedMotion;
   lastSnapshot = {
@@ -638,8 +644,10 @@ export function useThemeEffects(): ResolvedThemeEffects {
 
 /** Which variant the active theme picked for each layout region; stock by default. */
 export function useThemeLayout(): ResolvedThemeLayout {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot).resolvedLayout;
+  return useSyncExternalStore(subscribe, getLayoutSnapshot, getServerLayoutSnapshot);
 }
+const getLayoutSnapshot = () => getSnapshot().resolvedLayout;
+const getServerLayoutSnapshot = () => DEFAULT_RESOLVED_THEME_LAYOUT;
 
 /** For code outside React (worker pools) that follows the rendered appearance. */
 export function subscribeRenderedAppearance(listener: () => void): () => void {

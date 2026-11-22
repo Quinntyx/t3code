@@ -326,7 +326,7 @@ export function BranchToolbarRunContextChip({
                       </Tooltip>
                     }
                   >
-                    <MiddleTruncate value={branchName ?? "No branch"} />
+                    <MiddleTruncate value={branchName ?? gt("No branch")} />
                   </FactRow>
                   <BranchStatus detail={branchDetail} prSummary={prSummary} prAction={prAction} />
                 </>
