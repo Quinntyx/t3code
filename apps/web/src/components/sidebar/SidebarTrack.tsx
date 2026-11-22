@@ -4,7 +4,6 @@ import { cn } from "~/lib/utils";
 import { sidebarTabElementId, sidebarTabPanelId, type SidebarTab } from "./SidebarTabs";
 
 const SIDEBAR_TABS: readonly SidebarTab[] = ["idle", "working", "snoozed"];
-const SIDEBAR_SLIDE_MS = 320;
 
 function indexOf(tab: SidebarTab) {
   return SIDEBAR_TABS.indexOf(tab);
@@ -23,7 +22,8 @@ export function SidebarTrack(props: {
   }>({ current: props.active, outgoing: null, position: target });
   const previous = useRef(props.active);
   const frame = useRef<number | null>(null);
-  const timer = useRef<number | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const finishSlide = () => setView((current) => ({ ...current, outgoing: null }));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the slide at the old column, then moves it on the next frame
   useLayoutEffect(() => {
@@ -31,27 +31,27 @@ export function SidebarTrack(props: {
     const from = previous.current;
     previous.current = props.active;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
-    if (timer.current !== null) clearTimeout(timer.current);
     setView({ current: props.active, outgoing: from, position: indexOf(from) });
     frame.current = requestAnimationFrame(() => {
       setView((current) => ({ ...current, position: target }));
-      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-        setView((current) => ({ ...current, outgoing: null }));
-        return;
-      }
-      timer.current = window.setTimeout(() => {
-        setView((current) => ({ ...current, outgoing: null }));
-      }, SIDEBAR_SLIDE_MS);
+      // The theme sets the slide's length; with none (or reduced motion) no transitionend comes.
+      const track = trackRef.current;
+      const duration = track ? Number.parseFloat(getComputedStyle(track).transitionDuration) : 0;
+      if (!(duration > 0)) setView((current) => ({ ...current, outgoing: null }));
     });
     return () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
-      if (timer.current !== null) clearTimeout(timer.current);
     };
   }, [props.active, target]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden">
       <div
+        ref={trackRef}
+        onTransitionEnd={(event) => {
+          if (event.target === event.currentTarget && event.propertyName === "transform")
+            finishSlide();
+        }}
         className="flex h-full w-[300%] transition-transform duration-(--sidebar-slide-duration) ease-(--ease-sidebar-slide) motion-reduce:transition-none"
         style={{ transform: `translateX(calc(-100% / 3 * ${view.position}))` }}
       >

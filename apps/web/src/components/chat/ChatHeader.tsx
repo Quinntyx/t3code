@@ -46,7 +46,7 @@ import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useThemeLayout } from "~/hooks/useTheme";
 import { GuestShareIndicator } from "./GuestShareControls";
-import { HeaderChatHeader } from "./HeaderChatHeader";
+import { HeaderPullRequestChip, HeaderWorkspaceActions } from "./HeaderWorkspaceActions";
 import type { DraftId } from "../../composerDraftStore";
 import type { NewProjectScriptInput, ProjectScriptActionResult } from "../ProjectScriptsControl";
 
@@ -278,50 +278,26 @@ export const ChatHeader = memo(function ChatHeader({
       setRenaming(null);
     }
   };
-  if (workspaceActionsLayout === "header") {
-    return (
-      <HeaderChatHeader
-        activeThreadEnvironmentId={activeThreadEnvironmentId}
-        activeThreadId={activeThreadId}
-        activeThreadTitle={activeThreadTitle}
-        activeThreadLinkOrigin={activeThreadLinkOrigin}
-        isServerThread={isServerThread}
-        activeProject={activeProject}
-        parentThreadLink={parentThreadLink}
-        onOpenThread={onOpenThread}
-        rightPanelOpen={rightPanelOpen}
-        reserveTrailingControls={reserveTrailingControls}
-        onNewThreadInProject={onNewThreadInProject}
-        {...(onOpenProjectSettings !== undefined ? { onOpenProjectSettings } : {})}
-        {...(onFindInThread !== undefined ? { onFindInThread } : {})}
-        gitCwd={gitCwd}
-        activeProjectScripts={activeProjectScripts}
-        preferredScriptId={preferredScriptId}
-        {...(draftId !== undefined ? { draftId } : {})}
-        onOpenChanges={onOpenChanges}
-        onRunProjectScript={onRunProjectScript}
-        onAddProjectScript={onAddProjectScript}
-        onUpdateProjectScript={onUpdateProjectScript}
-        onDeleteProjectScript={onDeleteProjectScript}
-      />
-    );
-  }
+  const headerActions = workspaceActionsLayout === "header";
   return (
     <div
       ref={breadcrumbContainerRef}
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
+        headerActions && "@container/header-actions",
         reserveTrailingControls && (rightPanelOpen ? "pr-10" : "pr-24"),
       )}
       onContextMenu={handleHeaderContextMenu}
     >
       <WorkspaceBreadcrumb
         ariaLabel={gt("Thread breadcrumb")}
-        className="flex-1 overflow-clip [overflow-clip-margin:2px]"
+        className={cn(!headerActions && "flex-1", "overflow-clip [overflow-clip-margin:2px]")}
       >
         {activeProject ? (
           <>
-            <WorkspaceBreadcrumbItem className="shrink">
+            <WorkspaceBreadcrumbItem
+              className={headerActions ? "hidden shrink @2xl/header-actions:flex" : "shrink"}
+            >
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -333,7 +309,9 @@ export const ChatHeader = memo(function ChatHeader({
                     />
                   }
                 >
-                  <ProjectFavicon project={activeProject} className="size-3.5" />
+                  {headerActions ? null : (
+                    <ProjectFavicon project={activeProject} className="size-3.5" />
+                  )}
                   <MiddleTruncate
                     data-slot="workspace-breadcrumb-text"
                     value={activeProjectName ?? ""}
@@ -348,7 +326,9 @@ export const ChatHeader = memo(function ChatHeader({
                 </TooltipPopup>
               </Tooltip>
             </WorkspaceBreadcrumbItem>
-            <WorkspaceBreadcrumbSeparator>
+            <WorkspaceBreadcrumbSeparator
+              {...(headerActions ? { className: "hidden @2xl/header-actions:flex" } : {})}
+            >
               <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
             </WorkspaceBreadcrumbSeparator>
           </>
@@ -469,7 +449,29 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {headerActions && isServerThread && renamingTitle === null ? (
+        <HeaderPullRequestChip
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+        />
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
+      {headerActions ? (
+        <HeaderWorkspaceActions
+          environmentId={activeThreadEnvironmentId}
+          threadRef={activeThreadRef}
+          hasProject={activeProjectName !== undefined}
+          gitCwd={gitCwd}
+          activeProjectScripts={activeProjectScripts}
+          preferredScriptId={preferredScriptId}
+          {...(draftId !== undefined ? { draftId } : {})}
+          onOpenChanges={onOpenChanges}
+          onRunProjectScript={onRunProjectScript}
+          onAddProjectScript={onAddProjectScript}
+          onUpdateProjectScript={onUpdateProjectScript}
+          onDeleteProjectScript={onDeleteProjectScript}
+        />
+      ) : null}
     </div>
   );
 });

@@ -697,11 +697,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     no-repeat;
 }
 
-/* Theme layout `composerControls: "below"`: the card holds the prompt and the send button, and the
-   controls sit in a row on the canvas under it. The prompt's last line and the send button share a
-   centre at any prompt size; whichever is taller sets the row. --chat-composer-line-inset holds
-   1lh, so it resolves on the prompt's own lines where it is used. :where() keeps these rules at
-   the specificity of their target, so theme CSS overrides them. */
+/* Theme layout `composerControls: "below"`: the prompt's last line and the send button share a
+   centre at any prompt size. --chat-composer-line-inset holds 1lh, so it resolves on the prompt's
+   own lines. :where() keeps each rule at its target's specificity, so theme CSS overrides it. */
 :where(html[data-layout-composer-controls="below"]) [data-chat-composer-form] {
   --chat-composer-box-ps: 1rem;
   --chat-composer-box-pe: 0.625rem;

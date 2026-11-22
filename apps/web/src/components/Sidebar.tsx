@@ -1057,6 +1057,8 @@ function SidebarListDnd({
   return enabled ? <DndContext {...props}>{children}</DndContext> : <>{children}</>;
 }
 
+const EMPTY_SIDEBAR_LIST_ITEMS: readonly SidebarListItem[] = [];
+
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
   const gt = useGT();
   const themeLayout = useThemeLayout();
@@ -3713,6 +3715,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       return {
                         thread,
                         variant: rowVariant,
+                        ...(sidebarSectionsLayout === "tabs" &&
+                        (section === "working" || section === "snoozed")
+                          ? { recede: false }
+                          : {}),
                         navigationParent:
                           stack?.parentKey ??
                           folderRow ??
@@ -4123,20 +4129,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         {sidebarSearchRegion.searchRow}
       </SidebarGroup>
     );
-  const tabItemsIdle = sidebarListItems.filter((item) =>
-    item.kind === "marker"
-      ? item.marker === "pinned-header" ||
-        item.marker === "pinned-divider" ||
-        item.marker === "active-placeholder"
-      : item.section === "pinned" || item.section === "active",
-  );
-  const tabItemsWorking = sidebarListItems.filter(
-    (item) => item.kind === "thread" && item.section === "working",
-  );
-  const tabItemsSnoozed = sidebarListItems.filter(
-    (item) => item.kind === "thread" && item.section === "snoozed",
-  );
   const sortableIds = sidebarListItems.map(sidebarListItemId);
+  const tabbed = sidebarSectionsLayout === "tabs";
+  const tabItemsIdle = tabbed
+    ? sidebarListItems.filter((item) =>
+        item.kind === "marker"
+          ? item.marker === "pinned-header" ||
+            item.marker === "pinned-divider" ||
+            item.marker === "active-placeholder"
+          : item.section === "pinned" || item.section === "active",
+      )
+    : EMPTY_SIDEBAR_LIST_ITEMS;
+  const tabItemsWorking = tabbed
+    ? sidebarListItems.filter((item) => item.kind === "thread" && item.section === "working")
+    : EMPTY_SIDEBAR_LIST_ITEMS;
+  const tabItemsSnoozed = tabbed
+    ? sidebarListItems.filter((item) => item.kind === "thread" && item.section === "snoozed")
+    : EMPTY_SIDEBAR_LIST_ITEMS;
   const tabSortableIdsIdle = tabItemsIdle.map(sidebarListItemId);
   const tabSortableIdsWorking = tabItemsWorking.map(sidebarListItemId);
   const tabSortableIdsSnoozed = tabItemsSnoozed.map(sidebarListItemId);
@@ -4162,7 +4171,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             <SidebarTrack
               active={effectiveTab}
               columns={{
-                idle: renderThreadColumn(tabItemsIdle, tabSortableIdsIdle),
+                // The tabs share the outer DndContext, so the tab and Settled drop targets see every row.
+                idle: renderThreadColumn(tabItemsIdle, tabSortableIdsIdle, { dnd: false }),
                 working: renderThreadColumn(tabItemsWorking, tabSortableIdsWorking, {
                   drafts: false,
                   search: false,

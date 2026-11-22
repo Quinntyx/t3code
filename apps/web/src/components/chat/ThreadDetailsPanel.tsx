@@ -177,8 +177,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         // Section flags follow the rows that will render, so no empty section steals the divider rule.
         const show = {
           environment: density === "full" && visible.environment && !props.runContextInChip,
+          // With the header holding the actions, Open in editor moves to the chip when there is one.
           openIn:
-            !workspaceActionsInHeader &&
+            !(workspaceActionsInHeader && props.runContextInChip) &&
             density !== "essential" &&
             visible.openIn &&
             props.showOpenInPicker,

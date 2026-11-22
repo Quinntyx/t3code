@@ -160,6 +160,8 @@ export const THEME_CSS_HOOKS = [
   },
   { selector: "[data-settings-page-scroll]", styles: "settings page" },
   { selector: '[data-slot="button"]', styles: "button" },
+  { selector: '[data-slot="group"]', styles: "joined button group, such as a split button" },
+  { selector: '[data-slot="separator"]', styles: "separator, including the one inside a group" },
   { selector: '[data-slot="input"]', styles: "text input" },
   { selector: '[data-slot="switch"]', styles: "switch" },
   { selector: '[data-slot="select-trigger"]', styles: "select" },
@@ -185,6 +187,32 @@ export const THEME_CSS_HOOKS = [
     selector: "[data-composer-sync-status]",
     styles: "sync status line at the end of the timeline; leaves with data-ending-style",
   },
+] as const;
+
+/**
+ * Custom properties theme CSS may set or read. Others are internal and may change between
+ * releases. themeCssHooks.test.ts in apps/web fails when one of these leaves the source.
+ */
+export const THEME_CSS_PROPERTIES = [
+  { name: "--chat-composer-glass-surface", styles: "composer card fill" },
+  { name: "--chat-composer-outline", styles: "composer card border" },
+  { name: "--chat-composer-radius", styles: "composer card corner radius" },
+  { name: "--shadow-float", styles: "shadow of floating cards and the composer" },
+  {
+    name: "--chat-composer-box-ps",
+    styles: 'composer card padding (also -pe, -pt, -pb) with composerControls "below"',
+  },
+  {
+    name: "--chat-composer-send-size",
+    styles: 'send button size with composerControls "below"; the prompt line centres on it',
+  },
+  {
+    name: "--sidebar-slide-duration",
+    styles: 'tab switch slide length with sidebarSections "tabs"',
+  },
+  { name: "--ease-sidebar-slide", styles: 'tab switch easing with sidebarSections "tabs"' },
+  { name: "--sidebar-switch-radius", styles: "tab switcher corner radius (and -pill-radius)" },
+  { name: "--radius", styles: "base corner radius controls and cards derive from" },
 ] as const;
 
 /** What each layout region's variants move, for the guide. The first variant is stock. */
@@ -234,6 +262,10 @@ export const THEME_GUIDE = [
   "It cannot reach the terminal text, the file tree, or diff internals. Use color roles for those.",
   "Native scrollbars take `::-webkit-scrollbar` and `::-webkit-scrollbar-thumb`.",
   "Icons are `svg.lucide`. stroke-width, stroke-linecap, and stroke-linejoin restyle them.",
+  "",
+  "Color roles are also custom properties: `var(--app-theme-<role>)` with the role in kebab case, such as `--app-theme-surface` or `--app-theme-toolbar-border`. Other tunable properties:",
+  ...THEME_CSS_PROPERTIES.map((property) => `- ${property.name}: ${property.styles}`),
+  "Base UI state attributes (`data-popup-open`, `data-pressed`, `data-side`, `data-starting-style`, `data-ending-style`) are stable on the hooks below.",
   "",
   "Stable selectors (other class names change between releases, so do not use them):",
   ...THEME_CSS_HOOKS.map((hook) => `- ${hook.selector}: ${hook.styles}`),

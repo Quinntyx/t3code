@@ -61,6 +61,8 @@ export function selectThreadDetailsRailSection(
   return ref ? (hoveredSectionByThreadKey[scopedThreadKey(ref)] ?? null) : null;
 }
 
+const MAX_PINNED_THREADS = 200;
+
 interface ThreadDetailsRailPinStore {
   /** Threads whose full details card stays open beside the rail. */
   pinnedByThreadKey: Readonly<Record<string, true>>;
@@ -79,7 +81,13 @@ export const useThreadDetailsRailPinStore = create<ThreadDetailsRailPinStore>()(
             const { [key]: _unpinned, ...rest } = state.pinnedByThreadKey;
             return { pinnedByThreadKey: rest };
           }
-          return { pinnedByThreadKey: { ...state.pinnedByThreadKey, [key]: true } };
+          // Keep the newest pins; a thread deleted while pinned would otherwise stay forever.
+          const kept = Object.keys(state.pinnedByThreadKey).slice(-(MAX_PINNED_THREADS - 1));
+          return {
+            pinnedByThreadKey: Object.fromEntries(
+              [...kept, key].map((pinnedKey) => [pinnedKey, true as const]),
+            ),
+          };
         }),
     }),
     {

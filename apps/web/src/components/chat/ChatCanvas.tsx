@@ -53,6 +53,7 @@ export function ChatCanvas({
   composerOverlayElement,
   detailsCardTopInset = 0,
   railWidth = 0,
+  detailsCardPinOnly = false,
   children,
   ...props
 }: Omit<ComponentProps<"div">, "className" | "style" | "ref"> & {
@@ -65,6 +66,8 @@ export function ChatCanvas({
   detailsCardTopInset?: number;
   /** The watch rail's inset at the right edge, which the card and chat lane clear. */
   railWidth?: number;
+  /** Under the rail layout the card opens only while pinned, not by the stock toggle. */
+  detailsCardPinOnly?: boolean;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
@@ -149,8 +152,7 @@ export function ChatCanvas({
   const railPinned = useThreadDetailsRailPinStore((state) =>
     selectThreadDetailsRailPinned(state.pinnedByThreadKey, threadRef),
   );
-  // Beside the theme's watch rail the card opens only while pinned.
-  const detailsCardInlineOpen = railWidth > 0 ? railPinned : stockDetailsCardInlineOpen;
+  const detailsCardInlineOpen = detailsCardPinOnly ? railPinned : stockDetailsCardInlineOpen;
   const model = resolveChatCanvasModel({
     measurements,
     detailsCardMeasurement,
