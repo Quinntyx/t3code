@@ -660,7 +660,7 @@ const CreatePullRequestTool = Tool.make("pull_request_create", {
     body: Schema.String,
     base: Schema.optional(TrimmedNonEmptyString).annotate({
       description:
-        "Omit to target the branch this one was cut from, as T3 recorded it, else the default branch.",
+        "Omit to use the base T3 recorded for this branch, else its upstream, else the default branch.",
     }),
     draft: Schema.optional(Schema.Boolean),
   }),
