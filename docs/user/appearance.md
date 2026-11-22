@@ -121,6 +121,11 @@ to another site. For a full-size image, use a [background image](#background-ima
 Class names in the app change between releases. For rules that keep working, target `data-slot`
 and other `data-` attributes, such as `[data-chat-header]` or `[data-slot="button"]`.
 
+Menus, popovers, tooltips, the find bar and the notices above the composer carry `data-side` and
+are marked `data-starting-style` while they appear and `data-ending-style` while they leave. A
+leaving element with an opacity transition stays on screen until the transition ends, so CSS can
+fade it out.
+
 If a rule hides something you need, run `t3 theme set t3-chat` on the server to switch to a
 built-in theme, or press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to pick
 another theme.
@@ -202,6 +207,24 @@ without changing colors. Both kinds can declare:
 - `effects`: declarative `liquidGlass`, `floatingPanels`, and `ambientShimmer` parameters bound to
   literals or `{ "setting": "<key>" }` references. An active style overrides palette declarations
   per effect.
+- `layout`: rearranges parts of the app. Each region has two arrangements, and the first is the
+  standard one:
+
+  | Region             | Arrangements                                                               |
+  | ------------------ | -------------------------------------------------------------------------- |
+  | `composerControls` | `inside` the composer box, or `below` it                                   |
+  | `composerMeter`    | `none`, or a context-window `ring` beside the model                        |
+  | `runContext`       | the `strip` of machine and branch controls, or one `chip`                  |
+  | `workspaceActions` | Run, changes and Commit & push in the thread `details`, or in the `header` |
+  | `threadDetails`    | the details `card`, or a narrow `rail` that opens cards on hover           |
+  | `panelControls`    | panel toggles in the `titlebar`, or in the window's bottom `corner`s       |
+  | `sidebarSections`  | Working, Snoozed and Settled as `shelves`, or as bottom `tabs`             |
+  | `sidebarSearch`    | the sidebar's search `row`, or `hidden`                                    |
+
+  A region can name a `select` setting instead, as `{ "setting": "<key>" }`, when every option id
+  is one of that region's arrangements, so the choice appears under **Style & effects**. An
+  active style overrides the palette per region. A non-standard arrangement sets
+  `data-layout-<region>` on the root element, such as `data-layout-thread-details="rail"`.
 
 Write updates to a temporary file and rename it into place so clients never read a partial theme.
 Invalid files are not published.

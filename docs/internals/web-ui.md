@@ -21,6 +21,23 @@ Style with Tailwind classes in the component that renders the element.
   runtime are fine.
 - Theme-only rules use `@variant dark` and `@variant light`, not `.dark` selectors.
 
+## Theme layout variants
+
+A theme's `layout` block picks an arrangement per region (`THEME_LAYOUT_OPTIONS` in
+[`server.ts`](../../packages/contracts/src/server.ts)). Most users never select a variant, so the
+stock arrangement must not change when one is added.
+
+- Read the region with `useThemeLayout()` and branch once, at the root of the region. The stock
+  arm keeps its JSX, classes, defaults and stored state exactly. Do not thread variant checks
+  through stock markup.
+- Variant UI lives in its own files beside the stock component and reuses the stock leaves
+  through props.
+- A new region lists its stock arrangement first and gets a line in `THEME_LAYOUT_GUIDE`
+  ([`themeCss.ts`](../../packages/shared/src/themeCss.ts)), which agents read before restyling.
+- Theme CSS reaches stock elements only through the selectors in `THEME_CSS_HOOKS`, and
+  `themeCssHooks.test.ts` fails when one leaves the source. Restyle a stock element in a theme by
+  adding a hook, not a variant.
+
 ## Composition
 
 The composer banners are the reference.
