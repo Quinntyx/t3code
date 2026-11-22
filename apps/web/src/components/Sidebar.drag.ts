@@ -110,8 +110,6 @@ export function createSidebarCollisionDetection(
 export function createSidebarSortingStrategy(input: {
   items: readonly SidebarListItem[];
   enabled?: boolean;
-  /** A tab or settled button under the pointer, which names a section outside the list. */
-  overId?: string | null;
   settledOrder: readonly string[];
   activeOrder?: readonly string[];
   settledExpanded: boolean;
@@ -132,14 +130,8 @@ export function createSidebarSortingStrategy(input: {
     const active = items[activeIndex];
     const over = items[overIndex] ?? active;
     if (active?.kind !== "thread" || !over || !rects[0]) return [];
-    const target = resolveSidebarDropTarget(
-      items,
-      active.key,
-      input.overId ?? sidebarListItemId(over),
-    );
+    const target = resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
     if (!target) return [];
-    // A drop on the settled button leaves this column, so only the source row moves.
-    if (input.overId === sidebarSectionDropId("settled")) return items.map(() => hidden);
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],
       active: [],

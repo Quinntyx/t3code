@@ -293,7 +293,11 @@ export function FloatingPanelControls({
           <span aria-hidden className="h-0.5 shrink-0" />
         </div>
       </div>
-      <span aria-hidden className="flex size-7 items-center justify-center text-muted-foreground">
+      <span
+        aria-hidden
+        data-floating-panel-controls-icon=""
+        className="flex size-7 items-center justify-center text-muted-foreground"
+      >
         <PanelsRightBottomIcon className="size-4" />
       </span>
     </FloatingControlBubble>

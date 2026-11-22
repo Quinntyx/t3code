@@ -27,9 +27,10 @@ A theme's `layout` block picks an arrangement per region (`THEME_LAYOUT_OPTIONS`
 [`server.ts`](../../packages/contracts/src/server.ts)). Most users never select a variant, so the
 stock arrangement must not change when one is added.
 
-- Read the region with `useThemeLayout()` and branch once, at the root of the region. The stock
-  arm keeps its JSX, classes, defaults and stored state exactly. Do not thread variant checks
-  through stock markup.
+- Read the region with `useThemeLayout()` in the component that owns it and branch there. Where a
+  variant only changes how a shared leaf presents, give the leaf a new prop value or display mode
+  instead of a second copy. Either way the stock arm keeps its JSX, classes, defaults and stored
+  state exactly, so a stock render's DOM does not change.
 - Variant UI lives in its own files beside the stock component and reuses the stock leaves
   through props.
 - A new region lists its stock arrangement first and gets a line in `THEME_LAYOUT_GUIDE`

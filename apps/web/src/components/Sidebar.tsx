@@ -501,6 +501,8 @@ function useSidebarThreads(input: {
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
   /** Opens the recently settled popover, which pages older settled threads into the list. */
   readonly settledPopoverOpen?: boolean;
+  /** Tabs show the Working and Snoozed sections whole, so their shelves never collapse. */
+  readonly sectionsTabbed?: boolean;
 }) {
   const {
     projectScopeKey,
@@ -516,6 +518,7 @@ function useSidebarThreads(input: {
     folderGroups,
     keepEmptyFolders: keepEmpty,
     settledPopoverOpen = false,
+    sectionsTabbed = false,
   } = input;
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
@@ -604,12 +607,14 @@ function useSidebarThreads(input: {
   const renderedSettledThreads = settledShelfExpanded
     ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
-  const visibleSnoozedThreads = snoozedShelfExpanded
-    ? snoozedThreads
-    : routeThreadOnly(snoozedThreads, routeRowThreadKey);
-  const visibleWorkingThreads = workingShelfExpanded
-    ? workingThreads
-    : routeStackOnly(workingThreads, stackByRootKey, routeRowThreadKey);
+  const visibleSnoozedThreads =
+    snoozedShelfExpanded || sectionsTabbed
+      ? snoozedThreads
+      : routeThreadOnly(snoozedThreads, routeRowThreadKey);
+  const visibleWorkingThreads =
+    workingShelfExpanded || sectionsTabbed
+      ? workingThreads
+      : routeStackOnly(workingThreads, stackByRootKey, routeRowThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -1575,6 +1580,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
     settledPopoverOpen,
+    sectionsTabbed: sidebarSectionsLayout === "tabs",
   });
 
   // A draft joins its owner's stack only where that owner is listed in a stacking section.
@@ -3501,13 +3507,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         };
   const renderThreadColumn = (
     listItems: readonly SidebarListItem[],
+    // Built where the list is, so the compiler keeps it stable for dnd-kit's identity check.
+    columnSortableIds: string[],
     options: {
       readonly drafts?: boolean;
       readonly search?: boolean;
       readonly dnd?: boolean;
     } = {},
   ) => {
-    const columnSortableIds = listItems.map(sidebarListItemId);
     return (
       <SidebarGroup className="flex-1" role="presentation">
         {options.search !== false && isSearchingThreads ? (
@@ -4129,6 +4136,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const tabItemsSnoozed = sidebarListItems.filter(
     (item) => item.kind === "thread" && item.section === "snoozed",
   );
+  const sortableIds = sidebarListItems.map(sidebarListItemId);
+  const tabSortableIdsIdle = tabItemsIdle.map(sidebarListItemId);
+  const tabSortableIdsWorking = tabItemsWorking.map(sidebarListItemId);
+  const tabSortableIdsSnoozed = tabItemsSnoozed.map(sidebarListItemId);
   const effectiveTab: SidebarTab = isSearchingThreads ? "idle" : activeTab;
   return (
     <SidebarFolderDrop>
@@ -4151,13 +4162,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             <SidebarTrack
               active={effectiveTab}
               columns={{
-                idle: renderThreadColumn(tabItemsIdle),
-                working: renderThreadColumn(tabItemsWorking, {
+                idle: renderThreadColumn(tabItemsIdle, tabSortableIdsIdle),
+                working: renderThreadColumn(tabItemsWorking, tabSortableIdsWorking, {
                   drafts: false,
                   search: false,
                   dnd: false,
                 }),
-                snoozed: renderThreadColumn(tabItemsSnoozed, {
+                snoozed: renderThreadColumn(tabItemsSnoozed, tabSortableIdsSnoozed, {
                   drafts: false,
                   search: false,
                   dnd: false,
@@ -4179,7 +4190,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             className="min-h-full"
             fixedHeader={sidebarFixedHeader}
           >
-            {renderThreadColumn(sidebarListItems)}
+            {renderThreadColumn(sidebarListItems, sortableIds)}
           </SidebarContent>
           <SidebarChromeFooter settled={settledButton} />
         </>

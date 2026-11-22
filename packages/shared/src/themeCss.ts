@@ -78,7 +78,7 @@ export const THEME_CSS_HOOKS = [
   { selector: "[data-thread-item]", styles: "sidebar thread row" },
   {
     selector: "[data-sidebar-row-title]",
-    styles: "thread row title; the redesign gives slim rows the clipped-edge fade",
+    styles: "thread row title",
   },
   {
     selector: '[data-slot="project-monogram"]',
@@ -93,7 +93,7 @@ export const THEME_CSS_HOOKS = [
   { selector: "[data-chat-header-pr-chip]", styles: "pull request chip beside the thread title" },
   {
     selector: "[data-header-ghost]",
-    styles: "toolbar control drawn ghost-style by the header theme",
+    styles: "header toolbar button that is not the git split (Run, scripts menu)",
   },
   { selector: "[data-changed-files-summary]", styles: "changed-files card count and diffstat" },
   {
@@ -131,6 +131,7 @@ export const THEME_CSS_HOOKS = [
     selector: "[data-run-context-chip]",
     styles: 'run context chip in the composer controls (layout runContext "chip")',
   },
+  { selector: '[data-chat-composer-action-size="large"]', styles: "composer send button" },
   { selector: "[data-chat-composer-stop]", styles: "composer stop button" },
   {
     selector: "[data-chat-context-meter]",
@@ -153,6 +154,10 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="preview-panel-shell"]', styles: "inline preview panel" },
   { selector: '[data-slot="floating-control-bubble"]', styles: "floating corner control bubble" },
   { selector: "[data-floating-panel-controls]", styles: "floating layout controls bubble" },
+  {
+    selector: "[data-floating-panel-controls-icon]",
+    styles: "the layout controls bubble's own icon, shown while it is folded",
+  },
   { selector: "[data-settings-page-scroll]", styles: "settings page" },
   { selector: '[data-slot="button"]', styles: "button" },
   { selector: '[data-slot="input"]', styles: "text input" },

@@ -4239,6 +4239,8 @@ export default function ChatView(props: ChatViewProps) {
                     : {})}
                   onEnvModeChange={onEnvModeChangeStable}
                   envMode={envMode}
+                  runContextInChip={showRunContextChip}
+                  {...(threadDetailsRailVisible ? { onClose: toggleThreadPanelStable } : {})}
                   {...(canOverrideServerThreadEnvMode
                     ? {
                         activeThreadBranchOverride: activeThreadBranch,

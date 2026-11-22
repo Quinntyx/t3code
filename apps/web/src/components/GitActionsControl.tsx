@@ -1733,7 +1733,7 @@ function CheckoutGitActionsControl({
                       SourceControlIcon={SourceControlIcon}
                       className="size-3.5"
                     />
-                    <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                    <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
                       {quickAction.label}
                     </span>
                   </PopoverTrigger>
@@ -1761,7 +1761,7 @@ function CheckoutGitActionsControl({
                       SourceControlIcon={SourceControlIcon}
                       className="size-3.5"
                     />
-                    <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                    <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
                       {quickAction.label}
                     </span>
                   </TooltipTrigger>

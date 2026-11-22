@@ -40,7 +40,8 @@ import { useThemeLayout } from "~/hooks/useTheme";
 import { useProject, useServerConfigs } from "../../state/entities";
 import { ThreadDetailsThreadPrRows } from "./ThreadDetailsPrRows";
 import { cn } from "../../lib/utils";
-import { SlidersHorizontalIcon } from "lucide-react";
+import { SlidersHorizontalIcon, XIcon } from "lucide-react";
+import { Button } from "../ui/button";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -92,12 +93,15 @@ interface ThreadDetailsPanelProps extends Pick<
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
   usage: ThreadDetailsUsageInput;
+  /** The composer's run-context chip shows the environment and branch, so the card leaves them out. */
+  runContextInChip?: boolean;
+  /** Given beside the watch rail, where the pinned card gets its own close button. */
+  onClose?: () => void;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
   const workspaceActionsInHeader = useThemeLayout().workspaceActions === "header";
-  const runContextLayout = useThemeLayout().runContext;
   const gt = useGT();
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
@@ -172,7 +176,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       {(density) => {
         // Section flags follow the rows that will render, so no empty section steals the divider rule.
         const show = {
-          environment: density === "full" && visible.environment && runContextLayout !== "chip",
+          environment: density === "full" && visible.environment && !props.runContextInChip,
           openIn:
             !workspaceActionsInHeader &&
             density !== "essential" &&
@@ -182,7 +186,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             !workspaceActionsInHeader &&
             visible.scripts &&
             props.activeProjectScripts !== undefined,
-          branch: offersGit && props.isGitRepo && visible.branch && runContextLayout !== "chip",
+          branch: offersGit && props.isGitRepo && visible.branch && !props.runContextInChip,
           // Without a branch selector, linked pull requests still need somewhere to show.
           pullRequests: !(offersGit && props.isGitRepo) && visible.branch,
           git:
@@ -193,6 +197,19 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         };
         return (
           <>
+            {props.onClose ? (
+              <div className="flex items-center justify-between ps-3 pe-1.5 pt-1.5">
+                <span className="text-xs font-medium text-muted-foreground">{gt("Details")}</span>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={gt("Close details")}
+                  onClick={props.onClose}
+                >
+                  <XIcon aria-hidden />
+                </Button>
+              </div>
+            ) : null}
             <div className="group/details-items">
               {show.environment || show.openIn || show.scripts ? (
                 <ThreadDetailsSection

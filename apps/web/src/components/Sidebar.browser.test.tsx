@@ -69,6 +69,11 @@ const layoutOverrides = vi.hoisted(() => ({
   sidebarSearch: "row" as "row" | "hidden",
   sidebarSections: "shelves" as "shelves" | "tabs",
 }));
+/** Resets the layout the mocked hook reports; each layout test calls it first. */
+function setupLayout(layout: Partial<typeof layoutOverrides> = {}) {
+  layoutOverrides.sidebarSearch = layout.sidebarSearch ?? "row";
+  layoutOverrides.sidebarSections = layout.sidebarSections ?? "shelves";
+}
 vi.mock(import("../hooks/useTheme"), async (original) => {
   const { DEFAULT_RESOLVED_THEME_LAYOUT } = await import("../themeEffects");
   return {
@@ -413,6 +418,7 @@ describe("sidebar settled pagination", () => {
 
 describe("sidebar search layout", () => {
   it("hides the search row and moves its buttons into the brand row only for the hidden variant", async () => {
+    setupLayout();
     using stack = new DisposableStack();
     stack.defer(() => {
       layoutOverrides.sidebarSearch = "row";
@@ -469,6 +475,7 @@ describe("sidebar search layout", () => {
 
 describe("sidebar sections layout", () => {
   it("shows shelves by default and switchable tabs when the layout is tabs", async () => {
+    setupLayout();
     using stack = new DisposableStack();
     stack.defer(() => {
       layoutOverrides.sidebarSections = "shelves";
@@ -547,6 +554,7 @@ describe("sidebar sections layout", () => {
 
 describe("sidebar recently settled popover", () => {
   it("lists settled threads with un-settle and view actions when sections are tabs", async () => {
+    setupLayout();
     using stack = new DisposableStack();
     stack.defer(() => {
       layoutOverrides.sidebarSections = "shelves";
