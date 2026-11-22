@@ -121,7 +121,7 @@ export function SidebarSettledPopover(props: {
                         contextMenuSourceOf(event),
                       );
                     }}
-                    className="group/settled-row relative flex h-[34px] items-center gap-2 rounded-md pr-1 pl-2 hover:bg-accent"
+                    className="group/settled-row relative flex h-[34px] shrink-0 items-center gap-2 rounded-md pr-1 pl-2 hover:bg-accent"
                   >
                     <button
                       type="button"

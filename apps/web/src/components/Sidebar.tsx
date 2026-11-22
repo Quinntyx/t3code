@@ -4225,7 +4225,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         >
           <SidebarContent
             ref={sidebarContentRef}
-            className="min-h-full"
+            // Each tab column scrolls itself, so the region takes exactly the space it is given.
+            className="h-full"
             fixedHeader={sidebarFixedHeader}
           >
             <SidebarTrack

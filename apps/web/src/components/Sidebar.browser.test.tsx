@@ -172,6 +172,8 @@ async function renderTabsSidebar(
   threads: (project: Project) => EnvironmentThreadShell[],
   /** The open thread, revealed as if just navigated to. */
   revealThreadId?: string,
+  /** A fixed sidebar height, for layout checks. */
+  height?: number,
 ) {
   const currentProject = project("active");
   const threadRef = {
@@ -213,7 +215,7 @@ async function renderTabsSidebar(
   vi.mocked(useEnvironmentScope).mockReturnValue(true);
   vi.mocked(useConnectedEnvironmentIds).mockReturnValue([currentProject.environmentId]);
   return render(
-    <SidebarProvider>
+    <SidebarProvider {...(height === undefined ? {} : { style: { height, minHeight: height } })}>
       <Sidebar routeReveal={{ observedKey: null, pendingKey: revealKey }} />
     </SidebarProvider>,
   );
@@ -656,6 +658,26 @@ describe("sidebar tabs", () => {
         .elements()
         .map((tab) => tab.textContent),
     ).toEqual(["Idle", "Snoozed0"]);
+  });
+
+  it("scrolls each tab column on its own", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    using stack = new DisposableStack();
+    const style = document.head.appendChild(document.createElement("style"));
+    style.textContent = appCss;
+    stack.defer(() => style.remove());
+    await using screen = await renderTabsSidebar(
+      (currentProject) =>
+        Array.from({ length: 40 }, (_, index) => threadShell(currentProject.id, index)),
+      undefined,
+      400,
+    );
+    await expect.element(screen.getByText("Thread 0", { exact: true })).toBeVisible();
+    const column = screen.container.querySelector<HTMLElement>('[data-sidebar-column="idle"]')!;
+    const viewport = column.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    // The column overflows and scrolls; the sidebar's own viewport has nothing to scroll.
+    expect(column.scrollHeight).toBeGreaterThan(column.clientHeight);
+    expect(viewport.scrollHeight).toBe(viewport.clientHeight);
   });
 
   it("leaves the tabs to the user while a settled thread is open", async () => {
