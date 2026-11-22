@@ -4447,6 +4447,13 @@
     }
   ],
   "159ddd0d146a0f22": "Watching: the agent wakes when checks finish, someone comments, or the branch conflicts. Click to stop.",
+  "17668fac7463e5b8": "Thread details: {tokens} tokens, {running} agents running, {sideChats} side chats",
+  "ac1782b1ce5415e2": "Usage: {tokens} tokens, {cost}",
+  "87da4d79e1db193d": "Agents: {count} on other machines",
+  "6c06be3461c8cdce": "{title} · Side chat · {status}",
+  "a97983f9199569ed": "{title} · on {machine} · {status}",
+  "c09634d1975adec9": "{title} · {status}",
+  "e4762f02aea64aec": "{title} · {workflow} · {status}",
   "a3d040c4ef4fc6e9": "Ahead of pace",
   "b16fdf56b16d99c9": "On pace",
   "90f977e97ae8b6c6": "Under pace",
