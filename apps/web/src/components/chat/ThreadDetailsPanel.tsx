@@ -97,6 +97,7 @@ interface ThreadDetailsPanelProps extends Pick<
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
   const workspaceActionsInHeader = useThemeLayout().workspaceActions === "header";
+  const runContextLayout = useThemeLayout().runContext;
   const gt = useGT();
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
@@ -171,7 +172,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       {(density) => {
         // Section flags follow the rows that will render, so no empty section steals the divider rule.
         const show = {
-          environment: density === "full" && visible.environment,
+          environment: density === "full" && visible.environment && runContextLayout !== "chip",
           openIn:
             !workspaceActionsInHeader &&
             density !== "essential" &&
@@ -181,7 +182,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             !workspaceActionsInHeader &&
             visible.scripts &&
             props.activeProjectScripts !== undefined,
-          branch: offersGit && props.isGitRepo && visible.branch,
+          branch: offersGit && props.isGitRepo && visible.branch && runContextLayout !== "chip",
           // Without a branch selector, linked pull requests still need somewhere to show.
           pullRequests: !(offersGit && props.isGitRepo) && visible.branch,
           git:

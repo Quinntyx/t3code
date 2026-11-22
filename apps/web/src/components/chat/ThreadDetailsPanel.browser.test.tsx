@@ -16,6 +16,21 @@ const state = vi.hoisted(() => ({
   folder: "",
   pullRequests: [] as unknown[],
   configLoaded: true,
+  runContext: "strip" as string,
+}));
+
+vi.mock("../../hooks/useTheme", async (importOriginal) => ({
+  ...(await importOriginal()),
+  useThemeLayout: (() => ({
+    composerControls: "inside",
+    composerMeter: "none",
+    runContext: state.runContext,
+    workspaceActions: "details",
+    threadDetails: "card",
+    panelControls: "titlebar",
+    sidebarSections: "shelves",
+    sidebarSearch: "row",
+  })) as never,
 }));
 
 vi.mock(import("~/state/entities"), async (importOriginal) => ({
@@ -110,11 +125,14 @@ function setup(input: {
   folder: string;
   pullRequests?: ThreadPullRequestLink[];
   configLoaded?: boolean;
+  gitRepo?: boolean;
+  runContext?: string;
 }) {
   state.configLoaded = input.configLoaded ?? true;
   state.workspaceRoot = input.workspaceRoot;
   state.folder = input.folder;
   state.pullRequests = input.pullRequests ?? [];
+  state.runContext = input.runContext ?? "strip";
   useRightPanelStore.setState({ threadPanelVisibilityByThreadKey: {} });
   const anchor = document.createElement("div");
   document.body.append(anchor);
@@ -125,7 +143,13 @@ function setup(input: {
   };
 }
 
-function Panel({ fixture }: { fixture: ReturnType<typeof setup> }) {
+function Panel({
+  fixture,
+  gitRepo = false,
+}: {
+  fixture: ReturnType<typeof setup>;
+  gitRepo?: boolean;
+}) {
   const noop = () => {};
   const scriptResult = async () => ({ ok: true }) as never;
   return (
@@ -160,7 +184,7 @@ function Panel({ fixture }: { fixture: ReturnType<typeof setup> }) {
         openInShortcutEnabled={false}
         gitCwd={state.folder}
         workspaceMutationId={null}
-        isGitRepo={false}
+        isGitRepo={gitRepo}
         envLocked
         availableEnvironments={[]}
         onEnvModeChange={noop}
@@ -214,4 +238,21 @@ it("offers no Initialize Git before the server config says where No project live
   await expect
     .element(page.getByRole("button", { name: "Initialize Git" }))
     .not.toBeInTheDocument();
+});
+
+it("keeps the details card's run-context rows with the stock layout", async () => {
+  using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain", gitRepo: true });
+  await using _screen = await render(<Panel fixture={fixture} gitRepo />);
+  expect(document.querySelectorAll("[data-thread-panel-run-context]").length).toBeGreaterThan(0);
+});
+
+it("drops the details card's run-context rows under the chip layout", async () => {
+  using fixture = setup({
+    workspaceRoot: "/work/plain",
+    folder: "/work/plain",
+    gitRepo: true,
+    runContext: "chip",
+  });
+  await using _screen = await render(<Panel fixture={fixture} gitRepo />);
+  expect(document.querySelectorAll("[data-thread-panel-run-context]").length).toBe(0);
 });
