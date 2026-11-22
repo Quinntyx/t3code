@@ -5,6 +5,7 @@ import {
   BUILT_IN_LIQUID_GLASS_STYLE,
   coerceThemeSettingValue,
   DEFAULT_RESOLVED_THEME_EFFECTS,
+  DEFAULT_RESOLVED_THEME_LAYOUT,
   isThemeSettingVisible,
   migrateLegacyDesktopForkVisualSettings,
   migrateLegacyForkVisualSettings,
@@ -121,6 +122,38 @@ describe("resolveThemeEffectsAndSettings", () => {
     // Style omitted ambientShimmer -> palette's ambientShimmer stays active.
     expect(resolved.effects.ambientShimmer.enabled).toBe(true);
     expect(resolved.cssVariables["--theme-setting-accent-tint"]).toBe("#224466");
+  });
+
+  it("resolves layout per region, a style's choice over the palette's, unknown variants to stock", () => {
+    const resolved = resolveThemeEffectsAndSettings({
+      palette: { id: "palette", layout: { threadDetails: "rail", composerMeter: "ring" } },
+      style: {
+        id: "style",
+        settings: {
+          details: {
+            type: "select",
+            label: "Details",
+            default: "card",
+            options: [
+              { id: "card", label: "Card" },
+              { id: "rail", label: "Rail" },
+            ],
+          },
+        },
+        layout: { threadDetails: { setting: "details" }, sidebarSections: "drawer" },
+      },
+      overrides: {},
+      capabilities: { liquidGlassSupported: false, reducedMotion: false },
+    });
+
+    expect(resolved.layout).toEqual({
+      ...DEFAULT_RESOLVED_THEME_LAYOUT,
+      threadDetails: "card",
+      composerMeter: "ring",
+    });
+    expect(resolved.rootAttributes["data-layout-composer-meter"]).toBe("ring");
+    expect(resolved.rootAttributes).not.toHaveProperty("data-layout-thread-details");
+    expect(resolved.rootAttributes).not.toHaveProperty("data-layout-sidebar-sections");
   });
 
   it("enforces Chromium capability for liquid glass and reduced-motion pause for ambient shimmer", () => {

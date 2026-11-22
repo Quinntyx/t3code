@@ -763,6 +763,37 @@ export const ThemeEffects = Schema.Struct({
 });
 export type ThemeEffects = typeof ThemeEffects.Type;
 
+/**
+ * Regions a v2 theme can rearrange. Each lists its variants, and the first is the stock layout.
+ * Values travel as strings so an older client ignores a variant it does not know.
+ */
+export const THEME_LAYOUT_OPTIONS = {
+  composerControls: ["inside", "below"],
+  composerMeter: ["none", "ring"],
+  runContext: ["strip", "chip"],
+  workspaceActions: ["details", "header"],
+  threadDetails: ["card", "rail"],
+  panelControls: ["titlebar", "corner"],
+  sidebarSections: ["shelves", "tabs"],
+  sidebarSearch: ["row", "hidden"],
+} as const;
+export type ThemeLayoutKey = keyof typeof THEME_LAYOUT_OPTIONS;
+export type ThemeLayoutValue<K extends ThemeLayoutKey> = (typeof THEME_LAYOUT_OPTIONS)[K][number];
+export const THEME_LAYOUT_KEYS = Object.keys(THEME_LAYOUT_OPTIONS) as ReadonlyArray<ThemeLayoutKey>;
+
+const ThemeLayoutParam = Schema.Union([ThemeSettingKey, ThemeSettingRef]);
+export const ThemeLayout = Schema.Struct({
+  composerControls: Schema.optional(ThemeLayoutParam),
+  composerMeter: Schema.optional(ThemeLayoutParam),
+  runContext: Schema.optional(ThemeLayoutParam),
+  workspaceActions: Schema.optional(ThemeLayoutParam),
+  threadDetails: Schema.optional(ThemeLayoutParam),
+  panelControls: Schema.optional(ThemeLayoutParam),
+  sidebarSections: Schema.optional(ThemeLayoutParam),
+  sidebarSearch: Schema.optional(ThemeLayoutParam),
+} satisfies Record<ThemeLayoutKey, unknown>);
+export type ThemeLayout = typeof ThemeLayout.Type;
+
 export const EnvironmentThemeKind = Schema.Literals(["palette", "style"]);
 export type EnvironmentThemeKind = typeof EnvironmentThemeKind.Type;
 
@@ -794,6 +825,7 @@ const environmentThemeV2PaletteFields = {
   ...environmentThemePaletteBaseFields,
   settings: Schema.optional(ThemeSettingsSchema),
   effects: Schema.optional(ThemeEffects),
+  layout: Schema.optional(ThemeLayout),
 };
 
 const environmentThemeV2StyleFields = {
@@ -803,6 +835,7 @@ const environmentThemeV2StyleFields = {
   css: Schema.optional(Schema.String.check(Schema.isMaxLength(THEME_CSS_MAX_LENGTH))),
   settings: Schema.optional(ThemeSettingsSchema),
   effects: Schema.optional(ThemeEffects),
+  layout: Schema.optional(ThemeLayout),
 };
 
 export const EnvironmentThemeFileV1 = Schema.Struct(environmentThemeV1Fields);
@@ -940,14 +973,16 @@ export function validateEnvironmentThemeFile(file: EnvironmentThemeFile): string
       (style.effects.liquidGlass !== undefined ||
         style.effects.ambientShimmer !== undefined ||
         style.effects.floatingPanels !== undefined);
-    if (!hasCss && !hasEffects) {
-      return "has no styles or effects. Give non-empty css or at least one effect.";
+    const hasLayout = style.layout !== undefined && Object.keys(style.layout).length > 0;
+    if (!hasCss && !hasEffects && !hasLayout) {
+      return "has no styles, effects or layout. Give non-empty css, an effect or a layout.";
     }
   }
 
-  if (!("settings" in file) && !("effects" in file)) return null;
+  if (!("settings" in file) && !("effects" in file) && !("layout" in file)) return null;
   const settings = "settings" in file ? file.settings : undefined;
   const effects = "effects" in file ? file.effects : undefined;
+  const layout = "layout" in file ? file.layout : undefined;
 
   if (settings !== undefined) {
     const entries = Object.entries(settings);
@@ -1041,7 +1076,36 @@ export function validateEnvironmentThemeFile(file: EnvironmentThemeFile): string
     }
   }
 
+  if (layout !== undefined) {
+    for (const key of THEME_LAYOUT_KEYS) {
+      const problem = validateThemeLayoutParam(key, layout[key], settings);
+      if (problem) return problem;
+    }
+  }
+
   return null;
+}
+
+function validateThemeLayoutParam(
+  key: ThemeLayoutKey,
+  param: string | ThemeSettingRef | undefined,
+  settings: ThemeSettingsSchema | undefined,
+): string | null {
+  if (param === undefined) return null;
+  const values: ReadonlyArray<string> = THEME_LAYOUT_OPTIONS[key];
+  const valid = values.map((value) => `"${value}"`).join(" or ");
+  if (!isThemeSettingRef(param)) {
+    return values.includes(param) ? null : `has layout.${key} "${param}"; use ${valid}.`;
+  }
+  const def = settings?.[param.setting];
+  if (!def) return `references unknown setting "${param.setting}" in layout.${key}.`;
+  if (def.type !== "select") {
+    return `references non-select setting "${param.setting}" in layout.${key}.`;
+  }
+  const unknown = def.options.find((option) => !values.includes(option.id));
+  return unknown
+    ? `setting "${param.setting}" for layout.${key} has option "${unknown.id}"; use ${valid}.`
+    : null;
 }
 
 /** tailnet means this machine's Tailscale interface; other private addresses are lan. */

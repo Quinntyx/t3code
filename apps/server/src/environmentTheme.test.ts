@@ -625,11 +625,71 @@ describe("environment theme", () => {
             })
             .pipe(Effect.flip);
           assert.match(outOfBounds.message, /exceeds 0\.\.24/);
+          // A layout alone makes a style; its regions take known variants or a matching select.
+          yield* themes.apply({
+            styleId: "rail-only",
+            theme: {
+              version: 2,
+              kind: "style",
+              name: "Rail only",
+              settings: {
+                details: {
+                  type: "select",
+                  label: "Details",
+                  default: "rail",
+                  options: [
+                    { id: "card", label: "Card" },
+                    { id: "rail", label: "Rail" },
+                  ],
+                },
+              },
+              layout: { threadDetails: { setting: "details" }, panelControls: "corner" },
+            },
+          });
+          const unknownVariant = yield* themes
+            .apply({
+              styleId: "sideways",
+              theme: {
+                version: 2,
+                kind: "style",
+                name: "Sideways",
+                layout: { threadDetails: "drawer" },
+              },
+            })
+            .pipe(Effect.flip);
+          assert.match(
+            unknownVariant.message,
+            /layout\.threadDetails "drawer"; use "card" or "rail"/,
+          );
+          const foreignOption = yield* themes
+            .apply({
+              styleId: "sideways",
+              theme: {
+                version: 2,
+                kind: "style",
+                name: "Sideways",
+                settings: {
+                  details: {
+                    type: "select",
+                    label: "Details",
+                    default: "card",
+                    options: [
+                      { id: "card", label: "Card" },
+                      { id: "drawer", label: "Drawer" },
+                    ],
+                  },
+                },
+                layout: { threadDetails: { setting: "details" } },
+              },
+            })
+            .pipe(Effect.flip);
+          assert.match(foreignOption.message, /has option "drawer"/);
 
           assert.deepEqual(selected, [
             { style: "liquid-glass" },
             { style: "" },
             { style: "frosted-chrome" },
+            { style: "rail-only" },
           ]);
         }),
         selected,

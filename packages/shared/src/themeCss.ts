@@ -1,3 +1,5 @@
+import { THEME_LAYOUT_KEYS, THEME_LAYOUT_OPTIONS, type ThemeLayoutKey } from "@t3tools/contracts";
+
 import { THEME_COLOR_ROLES } from "./themePalettes.ts";
 
 const FETCHES_BY_STRING = /image-set\(|\bsrc\(/i;
@@ -96,11 +98,29 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="scroll-area-thumb"]', styles: "overlay scrollbar thumb" },
 ] as const;
 
+/** What each layout region's variants move, for the guide. The first variant is stock. */
+const THEME_LAYOUT_GUIDE: Readonly<Record<ThemeLayoutKey, string>> = {
+  composerControls:
+    "the model, context and permission controls sit inside the composer card or in a row below it, leaving the prompt and send button in the card",
+  composerMeter: "a context-window ring left of the model chip",
+  runContext:
+    "the machine, workspace and branch controls under the composer, or one chip whose popover holds them",
+  workspaceActions:
+    "Run, changed files and Commit & push live in the thread details card, or in the chat header with the PR beside the title; Open in editor then also sits on the changed-files card",
+  threadDetails:
+    "thread details as the always-open card, or a narrow rail of agent icons whose sections open cards on hover",
+  panelControls:
+    "the panel toggles in the title bar, or in bottom corner bubbles without floating the panels",
+  sidebarSections:
+    "Working, Snoozed and Settled as collapsible sections, or bottom tabs for Idle, Working and Snoozed with Recently settled behind a footer button",
+  sidebarSearch: "the sidebar's search row, or hidden with its buttons moved beside the app name",
+};
+
 /** What an agent needs to restyle the app. `t3_theme_read` returns it. */
 export const THEME_GUIDE = [
   "Themes restyle T3 Code on web and desktop. Mobile does not use them.",
   "",
-  'Kinds: v1 (or omitted version) and v2 `kind: "palette"` define color palettes (plus optional `css`, `settings`, `effects`, and background images). v2 `kind: "style"` overlays `css`, `settings`, and `effects` on top of any palette without changing colors.',
+  'Kinds: v1 (or omitted version) and v2 `kind: "palette"` define color palettes (plus optional `css`, `settings`, `effects`, `layout`, and background images). v2 `kind: "style"` overlays `css`, `settings`, `effects`, and `layout` on top of any palette without changing colors.',
   "Use `t3_theme_set` with `themeId` for palettes, `styleId` for styles (`null` clears the style; omitting preserves it), and `appearance` for light/dark/system mode.",
   "",
   "Colors: `canvas` and `accent` (hex) derive a full palette. `colors` overrides single roles, and `variants.light` or `variants.dark` does that for the other appearance. Prefer colors over CSS.",
@@ -110,6 +130,12 @@ export const THEME_GUIDE = [
   "Resolved setting values are exposed on `:root` as `--theme-setting-<key>` (palette) and `--theme-style-setting-<key>` (style); booleans and selects also set `data-theme-setting-<key>` / `data-theme-style-setting-<key>`.",
   "",
   'Effects (v2): optional `effects` declares `liquidGlass` (`enabled`, plus optional `blur` 0..24, `centerBlur` 0..24, `saturation` 0..200, `refraction` 0..200, `dispersion` 0..2000, `glare` 0..200), `floatingPanels` (`enabled`, toggles `data-floating-panels` on `:root`), and `ambientShimmer` (`enabled`, toggles `data-ambient-shimmer` on `:root`). Any parameter can be a literal or `{ "setting": "<key>" }`. Active styles replace palette declarations per effect.',
+  "",
+  'Layout (v2): optional `layout` picks a variant per region. The first variant is the stock layout. A value is a literal or `{ "setting": "<key>" }` naming a `select` setting whose option ids are that region\'s variants, so users can switch it under Settings -> Appearance. An active style replaces the palette\'s choice per region. A non-stock variant sets `data-layout-<region>="<variant>"` on `:root` (region in kebab case) for CSS. Layout moves whole controls, so change one region at a time and ask the user.',
+  ...THEME_LAYOUT_KEYS.map(
+    (key) =>
+      `- ${key} (${THEME_LAYOUT_OPTIONS[key].map((value) => `"${value}"`).join(" | ")}): ${THEME_LAYOUT_GUIDE[key]}.`,
+  ),
   "",
   "CSS: `css` applies after the app's styles (palette CSS first, style CSS second). Use `.dark` or `:root:not(.dark)` for one appearance.",
   "It cannot load files: no @import, no image-set(), and url() only with data: or #id.",

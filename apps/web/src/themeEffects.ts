@@ -3,7 +3,12 @@ import {
   MAX_LIQUID_GLASS_BLUR,
   MAX_LIQUID_GLASS_DISPERSION,
   MAX_LIQUID_GLASS_PERCENT,
+  THEME_LAYOUT_KEYS,
+  THEME_LAYOUT_OPTIONS,
   type ThemeEffects,
+  type ThemeLayout,
+  type ThemeLayoutKey,
+  type ThemeLayoutValue,
   type ThemeLiquidGlassEffect,
   type ThemeSettingDefinition,
   type ThemeSettingRef,
@@ -37,7 +42,14 @@ export interface ThemeStyleDefinition {
   readonly css?: string;
   readonly settings?: ThemeSettingsSchema;
   readonly effects?: ThemeEffects;
+  readonly layout?: ThemeLayout;
 }
+
+export type ResolvedThemeLayout = { readonly [K in ThemeLayoutKey]: ThemeLayoutValue<K> };
+
+export const DEFAULT_RESOLVED_THEME_LAYOUT = Object.fromEntries(
+  THEME_LAYOUT_KEYS.map((key) => [key, THEME_LAYOUT_OPTIONS[key][0]]),
+) as ResolvedThemeLayout;
 
 export interface ResolvedLiquidGlassEffect {
   readonly enabled: boolean;
@@ -64,6 +76,7 @@ export interface ResolvedThemeEffects {
 
 export interface ResolvedThemeStyleState {
   readonly effects: ResolvedThemeEffects;
+  readonly layout: ResolvedThemeLayout;
   readonly cssVariables: Readonly<Record<string, string>>;
   readonly rootAttributes: Readonly<Record<string, string>>;
   readonly paletteValues: Readonly<Record<string, ThemeSettingValue>>;
@@ -437,9 +450,27 @@ function getThemeEffectCapabilities(): ThemeEffectCapabilities {
   };
 }
 
+function resolveThemeLayout(
+  palette: { readonly layout: ThemeLayout | undefined; readonly values: SettingValues },
+  style: { readonly layout: ThemeLayout | undefined; readonly values: SettingValues },
+): ResolvedThemeLayout {
+  const resolved: Record<string, string> = {};
+  for (const key of THEME_LAYOUT_KEYS) {
+    // Like effects, a style that names a region replaces the palette's choice for it.
+    const source = style.layout?.[key] !== undefined ? style : palette;
+    const binding = source.layout?.[key];
+    const value = isSettingRef(binding) ? source.values[binding.setting] : binding;
+    const options: ReadonlyArray<string> = THEME_LAYOUT_OPTIONS[key];
+    resolved[key] = typeof value === "string" && options.includes(value) ? value : options[0]!;
+  }
+  return resolved as ResolvedThemeLayout;
+}
+
+type SettingValues = Readonly<Record<string, ThemeSettingValue>>;
+
 export function resolveThemeEffectsAndSettings(input: {
-  readonly palette: Pick<ThemeDefinition, "id" | "settings" | "effects"> | null;
-  readonly style: Pick<ThemeStyleDefinition, "id" | "settings" | "effects"> | null;
+  readonly palette: Pick<ThemeDefinition, "id" | "settings" | "effects" | "layout"> | null;
+  readonly style: Pick<ThemeStyleDefinition, "id" | "settings" | "effects" | "layout"> | null;
   readonly overrides: ThemeSettingOverridesMap;
   readonly capabilities?: ThemeEffectCapabilities;
 }): ResolvedThemeStyleState {
@@ -500,7 +531,18 @@ export function resolveThemeEffectsAndSettings(input: {
     ambientShimmerSource.values,
   );
 
+  const layout = resolveThemeLayout(
+    { layout: input.palette?.layout, values: paletteValues },
+    { layout: input.style?.layout, values: styleValues },
+  );
+  for (const key of THEME_LAYOUT_KEYS) {
+    if (layout[key] !== DEFAULT_RESOLVED_THEME_LAYOUT[key]) {
+      rootAttributes[`data-layout-${toAttributeSlug(key)}`] = layout[key];
+    }
+  }
+
   return {
+    layout,
     effects: {
       liquidGlass,
       floatingPanels: { enabled: floatingPanelsEnabled },

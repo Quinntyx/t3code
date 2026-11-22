@@ -3,6 +3,7 @@ import {
   isEnvironmentStyleTheme,
   THEME_CSS_MAX_LENGTH,
   ThemeEffects,
+  ThemeLayout,
   ThemeSettingsSchema,
   validateEnvironmentThemeFile,
   type EnvironmentTheme,
@@ -91,6 +92,7 @@ export type ThemeFile = Readonly<{
   css?: string;
   settings?: ThemeSettingsSchema;
   effects?: ThemeEffects;
+  layout?: ThemeLayout;
 }>;
 
 const customThemeListeners = new Set<() => void>();
@@ -198,6 +200,7 @@ function parseStoredThemeVariants(
 
 const decodeThemeSettingsSchemaExit = Schema.decodeUnknownExit(ThemeSettingsSchema);
 const decodeThemeEffectsExit = Schema.decodeUnknownExit(ThemeEffects);
+const decodeThemeLayoutExit = Schema.decodeUnknownExit(ThemeLayout);
 
 function parseOptionalThemeSettings(value: unknown): ThemeSettingsSchema | undefined {
   if (value === undefined) return undefined;
@@ -215,6 +218,14 @@ function parseOptionalThemeEffects(value: unknown): ThemeEffects | undefined {
     : undefined;
 }
 
+function parseOptionalThemeLayout(value: unknown): ThemeLayout | undefined {
+  if (value === undefined) return undefined;
+  const decoded = decodeThemeLayoutExit(value);
+  return decoded._tag === "Success" && Object.keys(decoded.value).length > 0
+    ? decoded.value
+    : undefined;
+}
+
 function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!isRecord(value)) return null;
   if (!isThemeId(value.id) || RESERVED_THEME_IDS.has(value.id)) return null;
@@ -226,6 +237,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   const collection = parseThemeCollection(value.collection);
   const settings = parseOptionalThemeSettings(value.settings);
   const effects = parseOptionalThemeEffects(value.effects);
+  const layout = parseOptionalThemeLayout(value.layout);
 
   return {
     id: value.id,
@@ -238,6 +250,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
     ...(isThemeCss(value.css) && value.css.length > 0 ? { css: value.css } : {}),
     ...(settings ? { settings } : {}),
     ...(effects ? { effects } : {}),
+    ...(layout ? { layout } : {}),
   };
 }
 
@@ -248,13 +261,15 @@ function parseStoredStyle(value: unknown): ThemeStyleDefinition | null {
   const css = isThemeCss(value.css) && value.css.trim().length > 0 ? value.css : undefined;
   const settings = parseOptionalThemeSettings(value.settings);
   const effects = parseOptionalThemeEffects(value.effects);
-  if (!css && !effects) return null;
+  const layout = parseOptionalThemeLayout(value.layout);
+  if (!css && !effects && !layout) return null;
   return {
     id: value.id,
     label: value.label.trim(),
     ...(css ? { css } : {}),
     ...(settings ? { settings } : {}),
     ...(effects ? { effects } : {}),
+    ...(layout ? { layout } : {}),
   };
 }
 
@@ -358,6 +373,7 @@ function environmentThemeDefinition(theme: PublishedPaletteTheme): ThemeDefiniti
   }
   const settings = "settings" in theme ? theme.settings : undefined;
   const effects = "effects" in theme ? theme.effects : undefined;
+  const layout = "layout" in theme ? theme.layout : undefined;
 
   return {
     id: theme.id,
@@ -378,6 +394,7 @@ function environmentThemeDefinition(theme: PublishedPaletteTheme): ThemeDefiniti
     ...(theme.css ? { css: theme.css } : {}),
     ...(settings && Object.keys(settings).length > 0 ? { settings } : {}),
     ...(effects && Object.keys(effects).length > 0 ? { effects } : {}),
+    ...(layout && Object.keys(layout).length > 0 ? { layout } : {}),
   };
 }
 
@@ -414,7 +431,8 @@ function publishedStyleDefinitions(
     const css = theme.css && theme.css.trim().length > 0 ? theme.css : undefined;
     const effects =
       theme.effects && Object.keys(theme.effects).length > 0 ? theme.effects : undefined;
-    if (!css && !effects) continue;
+    const layout = theme.layout && Object.keys(theme.layout).length > 0 ? theme.layout : undefined;
+    if (!css && !effects && !layout) continue;
     styles.push({
       id: theme.id,
       label: theme.name,
@@ -423,6 +441,7 @@ function publishedStyleDefinitions(
         ? { settings: theme.settings }
         : {}),
       ...(effects ? { effects } : {}),
+      ...(layout ? { layout } : {}),
     });
   }
   return styles;
@@ -1744,7 +1763,11 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
   if (value.effects !== undefined && effects === undefined) {
     throw new Error("Theme effects must use valid v2 effect definitions.");
   }
-  if (settings !== undefined || effects !== undefined) {
+  const layout = value.layout === undefined ? undefined : parseOptionalThemeLayout(value.layout);
+  if (value.layout !== undefined && layout === undefined) {
+    throw new Error("Theme layout must use valid v2 layout regions.");
+  }
+  if (settings !== undefined || effects !== undefined || layout !== undefined) {
     const problem = validateEnvironmentThemeFile({
       version: 2,
       kind: "palette",
@@ -1754,6 +1777,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
       ...(value.css ? { css: value.css } : {}),
       ...(settings ? { settings } : {}),
       ...(effects ? { effects } : {}),
+      ...(layout ? { layout } : {}),
     });
     if (problem !== null) {
       throw new Error(problem);
@@ -1803,12 +1827,13 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     ...(value.css ? { css: value.css } : {}),
     ...(settings && Object.keys(settings).length > 0 ? { settings } : {}),
     ...(effects && Object.keys(effects).length > 0 ? { effects } : {}),
+    ...(layout && Object.keys(layout).length > 0 ? { layout } : {}),
   };
 }
 
 /** A copy of `theme` under `name` and the id it derives. The collection stays behind. */
 export function renameTheme(theme: ThemeDefinition, name: string): ThemeDefinition {
-  const isV2 = Boolean(theme.settings || theme.effects);
+  const isV2 = Boolean(theme.settings || theme.effects || theme.layout);
   return parseThemeFile({
     version: isV2 ? 2 : THEME_FILE_VERSION,
     ...(isV2 ? { kind: "palette" } : {}),
@@ -1820,12 +1845,13 @@ export function renameTheme(theme: ThemeDefinition, name: string): ThemeDefiniti
     ...(theme.css ? { css: theme.css } : {}),
     ...(theme.settings ? { settings: theme.settings } : {}),
     ...(theme.effects ? { effects: theme.effects } : {}),
+    ...(theme.layout ? { layout: theme.layout } : {}),
   });
 }
 
 export function serializeThemeFile(theme: ThemeDefinition): string {
   const canonicalTheme = canonicalizeThemeDefinition(theme);
-  const isV2 = Boolean(canonicalTheme.settings || canonicalTheme.effects);
+  const isV2 = Boolean(canonicalTheme.settings || canonicalTheme.effects || canonicalTheme.layout);
   const file: ThemeFile = {
     version: isV2 ? 2 : THEME_FILE_VERSION,
     ...(isV2 ? { kind: "palette" as const } : {}),
@@ -1839,6 +1865,7 @@ export function serializeThemeFile(theme: ThemeDefinition): string {
     ...(canonicalTheme.css ? { css: canonicalTheme.css } : {}),
     ...(canonicalTheme.settings ? { settings: canonicalTheme.settings } : {}),
     ...(canonicalTheme.effects ? { effects: canonicalTheme.effects } : {}),
+    ...(canonicalTheme.layout ? { layout: canonicalTheme.layout } : {}),
   };
   return `${JSON.stringify(file, null, 2)}\n`;
 }

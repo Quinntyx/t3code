@@ -179,7 +179,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import { DEFAULT_INTERACTION_MODE, type ChatMessage } from "../types";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useTheme, useThemeEffects } from "../hooks/useTheme";
+import { useTheme, useThemeEffects, useThemeLayout } from "../hooks/useTheme";
 import { useAmbientShimmerProminence } from "~/ambient-shimmer/prominence";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
@@ -1182,9 +1182,11 @@ export default function ChatView(props: ChatViewProps) {
     !embedded && canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const floatingPanels = useThemeEffects().floatingPanels.enabled;
+  const panelControlsLayout = useThemeLayout().panelControls;
+  const cornerPanelControls = floatingPanels || panelControlsLayout === "corner";
   const floatingPanelControls =
-    floatingPanels && !embedded && !prefersPlanSidebarSheet && !isMobileViewport;
-  const floatingSidebarBubble = floatingPanels && !embedded && !isSidebarSheetViewport;
+    cornerPanelControls && !embedded && !prefersPlanSidebarSheet && !isMobileViewport;
+  const floatingSidebarBubble = cornerPanelControls && !embedded && !isSidebarSheetViewport;
   const chatCanvasClassName =
     embedded && floatingPanels ? "bg-transparent" : "bg-background ambient-shimmer:bg-transparent";
   const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
@@ -3559,7 +3561,8 @@ export default function ChatView(props: ChatViewProps) {
                       "wco:pr-(--workspace-native-controls-inset)",
                   )
                 : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)",
-              floatingPanelControls &&
+              floatingPanels &&
+                floatingPanelControls &&
                 threadPanelOpen &&
                 threadPanelPresentation === "inline" &&
                 "pr-(--floating-details-clearance) sm:pr-(--floating-details-clearance)",

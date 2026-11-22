@@ -62,6 +62,8 @@ export const layer = McpToolAccess.toLayer(ThemeToolkit, {
             "settings" in entry &&
             entry.settings !== undefined &&
             Object.keys(entry.settings).length > 0,
+          hasLayout:
+            "layout" in entry && entry.layout !== undefined && Object.keys(entry.layout).length > 0,
           hasBackground: "background" in entry && entry.background !== undefined,
         })),
         ...(theme === undefined ? {} : { theme: stripPublishedThemeFields(theme) }),

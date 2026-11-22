@@ -35,7 +35,7 @@ import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { useThemeEffects } from "../hooks/useTheme";
+import { useThemeEffects, useThemeLayout } from "../hooks/useTheme";
 import {
   PanelAnimationSuppressionProvider,
   usePanelAnimationSettings,
@@ -328,8 +328,10 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const floatingPanels = useThemeEffects().floatingPanels.enabled;
+  const panelControlsLayout = useThemeLayout().panelControls;
+  const cornerControls = floatingPanels || panelControlsLayout === "corner";
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
-  const floatingBubble = floatingPanels && !isMobile && showSidebar;
+  const floatingBubble = cornerControls && !isMobile && showSidebar;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
     context: { usagePageOpen },
   });
@@ -395,7 +397,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
         render={
           <SidebarTrigger
             variant={
-              isSidebarVisible && stageBackdropVariant && !floatingPanels
+              isSidebarVisible && stageBackdropVariant && !cornerControls
                 ? "media-navigation"
                 : "ghost"
             }

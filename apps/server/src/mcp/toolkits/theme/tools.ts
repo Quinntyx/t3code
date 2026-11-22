@@ -29,7 +29,7 @@ const shared = {
 const ThemeReadTool = Tool.make("t3_theme_read", {
   ...shared,
   description:
-    "Read T3 Code's own themes (palettes and overlay styles) and the guide to restyle it: color roles, CSS selectors, settings, and visual effects. Call before `t3_theme_set`.",
+    "Read T3 Code's own themes (palettes and overlay styles) and the guide to restyle it: color roles, CSS selectors, settings, visual effects, and layout. Call before `t3_theme_set`.",
   parameters: Schema.Struct({
     themeId: Schema.optionalKey(
       EnvironmentThemeId.annotate({ description: "Also return this published theme's file." }),
@@ -49,6 +49,7 @@ const ThemeReadTool = Tool.make("t3_theme_read", {
         hasCss: Schema.Boolean,
         hasEffects: Schema.Boolean,
         hasSettings: Schema.Boolean,
+        hasLayout: Schema.Boolean,
         hasBackground: Schema.Boolean,
       }),
     ),

@@ -30,6 +30,7 @@ import {
 } from "../themePalette";
 import {
   DEFAULT_RESOLVED_THEME_EFFECTS,
+  DEFAULT_RESOLVED_THEME_LAYOUT,
   ENVIRONMENT_STYLES_STORAGE_KEY,
   readThemeSettingOverrides,
   resetThemeSettingOverrides,
@@ -37,6 +38,7 @@ import {
   THEME_STYLE_STORAGE_KEY,
   writeThemeSettingOverride,
   type ResolvedThemeEffects,
+  type ResolvedThemeLayout,
   type ThemeSettingOverridesMap,
   type ThemeSettingValue,
 } from "../themeEffects";
@@ -51,6 +53,7 @@ type ThemeSnapshot = {
   themeHalves: ThemeHalves | null;
   themeStyle: string | null;
   resolvedEffects: ResolvedThemeEffects;
+  resolvedLayout: ResolvedThemeLayout;
   settingOverrides: ThemeSettingOverridesMap;
 };
 
@@ -69,6 +72,7 @@ const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   themeHalves: null,
   themeStyle: null,
   resolvedEffects: DEFAULT_RESOLVED_THEME_EFFECTS,
+  resolvedLayout: DEFAULT_RESOLVED_THEME_LAYOUT,
   settingOverrides: EMPTY_SETTING_OVERRIDES,
 };
 
@@ -518,7 +522,7 @@ function getSnapshot(): ThemeSnapshot {
 
   const settingOverrides = readThemeSettingOverrides();
   const activePaletteId = resolveThemeHalf(theme, themeHalves, resolvedTheme);
-  const { effects: resolvedEffects } = resolveActiveThemeStyleState(
+  const { effects: resolvedEffects, layout: resolvedLayout } = resolveActiveThemeStyleState(
     activePaletteId,
     themeStyle,
     settingOverrides,
@@ -534,6 +538,7 @@ function getSnapshot(): ThemeSnapshot {
     themeHalves,
     themeStyle,
     resolvedEffects,
+    resolvedLayout,
     settingOverrides,
   };
   return lastSnapshot;
@@ -629,6 +634,11 @@ export function subscribeThemeEffects(listener: () => void): () => void {
 
 export function useThemeEffects(): ResolvedThemeEffects {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot).resolvedEffects;
+}
+
+/** Which variant the active theme picked for each layout region; stock by default. */
+export function useThemeLayout(): ResolvedThemeLayout {
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot).resolvedLayout;
 }
 
 /** For code outside React (worker pools) that follows the rendered appearance. */

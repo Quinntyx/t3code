@@ -1,4 +1,4 @@
-import type { ThemeEffects, ThemeSettingsSchema } from "@t3tools/contracts";
+import type { ThemeEffects, ThemeLayout, ThemeSettingsSchema } from "@t3tools/contracts";
 
 export const BUILT_IN_THEME_IDS = ["t3-chat", "grove", "ocean", "ember", "iris"] as const;
 export const BUILT_IN_STYLE_IDS = ["liquid-glass"] as const;
@@ -114,6 +114,8 @@ export type ThemeDefinition = Readonly<{
   settings?: ThemeSettingsSchema;
   /** Declarative visual effects attached to this palette. */
   effects?: ThemeEffects;
+  /** Layout variants this palette selects. */
+  layout?: ThemeLayout;
 }>;
 
 export const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
