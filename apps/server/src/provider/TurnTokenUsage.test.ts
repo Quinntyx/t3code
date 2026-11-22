@@ -522,6 +522,27 @@ describe("billable native turn usage", () => {
       ["claude-haiku-4-5", { ...usage("claude-haiku-4-5", 100, 0), cachedInputTokens: 100 }],
     ]);
     expect(cached.unbilled).toEqual([usage("claude-haiku-4-5", 100, 0)]);
+    // Residual input never drops below the cache reads it includes.
+    expect(
+      sealClaudeSegment({
+        ledgerGrowth: new Map([
+          ["claude-sonnet-4-6", { ...usage("claude-sonnet-4-6", 110, 10), cachedInputTokens: 100 }],
+        ]),
+        mainMessages: new Map([["main", usage("claude-sonnet-4-6", 100, 10)]]),
+        subagentMessages: new Map(),
+        mainModel: "claude-sonnet-4-6",
+      }).delegateRows,
+    ).toEqual([{ ...usage("claude-sonnet-4-6", 100, 0), cachedInputTokens: 100 }]);
+    // A tool-boundary abort missing a counter is not an exact main figure.
+    expect(
+      sealClaudeSegment({
+        result: { subtype: "success", usage: { input_tokens: 100 } },
+        abortedBy: "aborted_tools",
+        mainMessages: new Map([["main", usage("claude-sonnet-4-6", 10, 1)]]),
+        subagentMessages: new Map(),
+        mainModel: "claude-sonnet-4-6",
+      }).mainComplete,
+    ).toBe(false);
     // The carry comes out of what the main agent left; another model's growth cannot absorb it.
     const reserved = sealClaudeSegment({
       result: { subtype: "success", usage: { input_tokens: 100, output_tokens: 20 } },
@@ -1032,11 +1053,48 @@ describe("billable native turn usage", () => {
         otherUsage: { inputTokens: 50, outputTokens: 8 },
       },
     },
+    {
+      name: "a model the ledger names only after a steer stays one priced model",
+      hasSubagents: false,
+      status: "completed" as const,
+      rootModels: ["provider-opus"],
+      ledgerModelNames: new Map([["provider-opus", "claude-opus-5-5"]]),
+      segments: [
+        sealClaudeSegment({
+          result: success(100, 20),
+          abortedBy: "aborted_tools",
+          mainMessages: byId(["first", row("provider-opus", 100, 20)]),
+          subagentMessages: new Map(),
+          mainModel: "provider-opus",
+        }),
+        sealClaudeSegment({
+          result: success(50, 5),
+          ledgerGrowth: new Map([["provider-opus", row("claude-opus-5-5", 50, 5)]]),
+          mainMessages: byId(["second", row("provider-opus", 50, 5)]),
+          subagentMessages: new Map(),
+          mainModel: "provider-opus",
+        }),
+      ],
+      expected: {
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: false,
+        inputTokens: 150,
+        outputTokens: 25,
+        models: ["provider-opus"],
+        otherUsageStatus: "partial",
+      },
+    },
   ])(
     "settles Claude usage per segment: $name",
-    ({ segments, hasSubagents, status, rootModels, expected }) => {
+    ({ segments, hasSubagents, status, rootModels, expected, ...row }) => {
       expect(
-        claudeTurnTokenUsage(segments, { hasSubagents, status, rootModels: new Set(rootModels) }),
+        claudeTurnTokenUsage(segments, {
+          hasSubagents,
+          status,
+          rootModels: new Set(rootModels),
+          ...("ledgerModelNames" in row ? { ledgerModelNames: row.ledgerModelNames } : {}),
+        }),
       ).toEqual(expected);
     },
   );

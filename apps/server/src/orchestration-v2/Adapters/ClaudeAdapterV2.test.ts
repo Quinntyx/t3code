@@ -12680,6 +12680,116 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("pays live-billed usage from a result the wake replay skips", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-skipped-result-1"),
+            text: "Bump this PR to the latest main.",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-haiku-4-5",
+              id: "msg_skipped_result_child",
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text: "Looking." }],
+              usage: { input_tokens: 30, output_tokens: 1 },
+            },
+            parent_tool_use_id: "toolu_skipped_result_child",
+            uuid: "00000000-0000-4000-8000-000000000801",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        // The turn settles without a result, so its frames bill the child's message start.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: harness.promptUuid(0),
+            state: "completed",
+            uuid: "00000000-0000-4000-8000-000000000802",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.awaitTerminal(1);
+
+        yield* harness.offerAndWait(wakeTaskStarted);
+        yield* harness.offerAndWait(wakeNotification);
+        yield* Queue.offer(harness.sdkMessages, wakeAssistant);
+        yield* harness.awaitContinuation(1);
+        const result = (uuid: string, sonnet: number, haiku: number) =>
+          makeResultFrame({
+            uuid,
+            result: "Done.",
+            usage: {
+              input_tokens: 10,
+              output_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+            modelUsage: {
+              "claude-sonnet-4-6": billedModelUsage(sonnet, sonnet / 10),
+              "claude-haiku-4-5": billedModelUsage(haiku, (haiku / 30) * 7),
+            },
+          });
+        // The first result bills that child; the replay settles the continuation on the second.
+        yield* harness.offerAndWait(result("00000000-0000-4000-8000-000000000803", 10, 30));
+        yield* harness.offerAndWait(result("00000000-0000-4000-8000-000000000804", 20, 60));
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-skipped-result-2"),
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        yield* harness.awaitTerminal(2);
+        const settled = harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" &&
+          event.providerTurn.status !== "running" &&
+          event.providerTurn.turnTokenUsage !== undefined
+            ? [event.providerTurn.turnTokenUsage]
+            : [],
+        );
+        // The second child's work stays whole: the skipped result already paid the carry.
+        assert.deepEqual(settled.at(-1)?.subagentUsage, [
+          {
+            model: "claude-haiku-4-5",
+            inputTokens: 30,
+            outputTokens: 7,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+          },
+        ]);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
   it.effect("bills a background subagent message in the window whose ledger records it", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -4487,6 +4487,8 @@ interface ClaudeLiveQueryContext {
   modelLedger: ClaudeModelLedger | undefined;
   // Usage frames billed to turns that settled without a result since then; the next growth spans it.
   liveBilledUsage: Array<TurnModelTokenUsage>;
+  // Results with known growth, in ledger order, that no window has sealed yet.
+  unsealedResults: Array<SDKMessage>;
   // The model this process's ledger names each raw model id.
   readonly ledgerModelNames: Map<string, string>;
   // Messages a window of this process already settled; background subagents can replay them.
@@ -5560,6 +5562,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
           }
           const ledger = result === undefined ? undefined : resultLedgerUsage.get(result);
+          if (result !== undefined && ledger !== undefined) {
+            const pending = ledger.query.unsealedResults;
+            for (const earlier of pending.splice(0, pending.indexOf(result) + 1)) {
+              if (earlier !== result) payCarryFromUnsealedResult(context, earlier);
+            }
+          }
           const segment = sealClaudeSegment({
             result,
             ledgerGrowth: ledger?.growth,
@@ -5583,6 +5591,28 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           context.turnUsageDirty = true;
           return segment;
         });
+
+        // A result that settles no turn bills nothing, but its growth still pays the carry it covers.
+        const payCarryFromUnsealedResult = (
+          context: ActiveClaudeTurnContext,
+          result: SDKMessage,
+        ) => {
+          const ledger = result.type === "result" ? resultLedgerUsage.get(result) : undefined;
+          if (result.type !== "result" || ledger === undefined) return;
+          if (ledger.query.liveBilledUsage.length === 0) return;
+          ledger.query.liveBilledUsage = [
+            ...sealClaudeSegment({
+              result,
+              ledgerGrowth: ledger.growth,
+              carry: ledger.query.liveBilledUsage,
+              mainMessages: new Map(),
+              subagentMessages: new Map(),
+              mainModel: context.mainUsageModel,
+              canonicalModel: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+              ledgerModelNames: context.ledgerModelNames,
+            }).carry,
+          ];
+        };
 
         // Usage without input is a placeholder, not a context measurement.
         const emitContextUsage = Effect.fnUntraced(function* (
@@ -8336,6 +8366,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       hasSubagents: turnHasSubagents(input.context),
                       status: input.status,
                       rootModels: input.context.rootModels,
+                      ledgerModelNames: input.context.ledgerModelNames,
                     },
                   ),
                 },
@@ -11363,6 +11394,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ),
             modelLedger: new Map(),
             liveBilledUsage: [],
+            unsealedResults: [],
             ledgerModelNames: new Map(),
             sealedMessageIds: new Set(),
             taskOutputRoot: claudeTaskOutputRoot(
@@ -11407,8 +11439,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   if (message.type === "result") {
                     const ledger = claudeModelLedger(message.modelUsage);
                     const growth = claudeLedgerDelta(context.modelLedger, ledger);
-                    if (growth === undefined) context.liveBilledUsage = [];
-                    else resultLedgerUsage.set(message, { growth, query: context });
+                    if (growth === undefined) {
+                      context.liveBilledUsage = [];
+                      context.unsealedResults = [];
+                    } else {
+                      resultLedgerUsage.set(message, { growth, query: context });
+                      context.unsealedResults.push(message);
+                    }
                     for (const [model, usage] of ledger ?? []) {
                       context.ledgerModelNames.set(model, usage.model);
                     }

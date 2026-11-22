@@ -355,11 +355,10 @@ function claimMainUsage(
 function ledgerResidual(growth: ClaudeModelLedger, main: ModelTotals): TurnModelTokenUsage[] {
   const residual = totalsByModel(growth.values());
   for (const [model, counts] of residual.countsByModel) {
-    const claimed = main.countsByModel.get(model);
-    for (const field of TOKEN_FIELDS) {
-      counts[field] = Math.max(0, counts[field] - (claimed?.[field] ?? 0));
-    }
-    counts.reasoningTokens = Math.min(counts.outputTokens, counts.reasoningTokens);
+    const left = disjointCounts(counts);
+    const claimed = disjointCounts(main.countsByModel.get(model) ?? {});
+    for (const field of TOKEN_FIELDS) left[field] = Math.max(0, left[field] - claimed[field]);
+    residual.countsByModel.set(model, inclusiveCounts(left));
   }
   return modelRows(residual);
 }
@@ -381,7 +380,7 @@ export function sealClaudeSegment(input: {
   // Messages of subagents still running at the result; the ledger records them once they end.
   readonly unfinishedMessageIds?: ReadonlySet<string>;
   // Usage frames billed to windows of this process that settled without a result.
-  readonly carry?: ReadonlyArray<TurnModelTokenUsage>;
+  readonly carry?: ReadonlyArray<TurnModelTokenUsage> | undefined;
 }): ClaudeSegmentUsage {
   const { result, ledgerGrowth: growth, ledgerModelNames: names } = input;
   const ledgerModel = (model: string) => growth?.get(model)?.model ?? names?.get(model) ?? model;
@@ -483,7 +482,8 @@ export function sealClaudeSegment(input: {
     localCommand: typeof result?.local_command === "string" && result.local_command.length > 0,
     // An aborted_streaming close never got the cut message's final output, from either source.
     mainComplete:
-      fromResult !== undefined &&
+      fromResult?.inputTokens !== undefined &&
+      fromResult.outputTokens !== undefined &&
       (input.abortedBy === "aborted_tools" ||
         (input.abortedBy === undefined && hasValidSuccessUsage(result))),
     delegatesMeasured:
@@ -507,6 +507,8 @@ export function claudeTurnTokenUsage(
     readonly status: RuntimeTurnState | "running";
     // Models on the turn's root assistant messages; without any, the main rows' models.
     readonly rootModels?: ReadonlySet<string>;
+    // A window sealed before the ledger named a model keeps its raw id; name every window alike.
+    readonly ledgerModelNames?: ReadonlyMap<string, string>;
   },
 ): TurnTokenUsage {
   const last = segments.at(-1);
@@ -520,7 +522,14 @@ export function claudeTurnTokenUsage(
     measured.usageStatus === "complete" && segments.some((segment) => !segment.mainComplete)
       ? { ...measured, usageStatus: "partial" as const }
       : measured;
-  const mainAgentUsage = modelRows(totalsByModel(segments.flatMap((segment) => segment.mainRows)));
+  const names = turn.ledgerModelNames;
+  const mainAgentUsage = modelRows(
+    totalsByModel(
+      segments.flatMap((segment) =>
+        segment.mainRows.map((row) => ({ ...row, model: names?.get(row.model) ?? row.model })),
+      ),
+    ),
+  );
   const subagentUsage = modelRows(
     totalsByModel(segments.flatMap((segment) => segment.delegateRows)),
   );
@@ -577,6 +586,7 @@ export function liveClaudeTurnTokenUsage(input: {
       hasSubagents: input.hasSubagents,
       status: "running",
       ...(input.rootModels === undefined ? {} : { rootModels: input.rootModels }),
+      ...(input.ledgerModelNames === undefined ? {} : { ledgerModelNames: input.ledgerModelNames }),
     },
   );
   return usage.usageStatus === "unavailable" ? undefined : usage;
