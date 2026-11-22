@@ -93,7 +93,11 @@ export function ThreadDetailsRailPeek({
   const top = Math.max(0, Math.min(tops[section], available - height));
   // A cancelled fade (a theme change mid-way) closes the peek like a finished one.
   const closeOnFade = (event: TransitionEvent) => {
-    if (!open && event.target === event.currentTarget && event.propertyName === "opacity")
+    if (
+      !open &&
+      event.target === event.currentTarget &&
+      event.nativeEvent.propertyName === "opacity"
+    )
       onClosed();
   };
 

@@ -305,13 +305,12 @@ export const ChatHeader = memo(function ChatHeader({
                       type="button"
                       aria-label={gt("New thread in {project}", { project: activeProjectName })}
                       onClick={onNewThreadInProject}
+                      data-chat-header-project-crumb=""
                       className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     />
                   }
                 >
-                  {headerActions ? null : (
-                    <ProjectFavicon project={activeProject} className="size-3.5" />
-                  )}
+                  <ProjectFavicon project={activeProject} className="size-3.5" />
                   <MiddleTruncate
                     data-slot="workspace-breadcrumb-text"
                     value={activeProjectName ?? ""}

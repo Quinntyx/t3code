@@ -620,7 +620,7 @@ describe("sidebar sections layout", () => {
   });
 });
 
-describe("sidebar recently settled popover", () => {
+describe("sidebar tabs", () => {
   it("brings the open thread's tab forward when it is revealed", async () => {
     using _layout = setupLayout({ sidebarSections: "tabs" });
     await using screen = await renderTabsSidebar(
@@ -639,6 +639,23 @@ describe("sidebar recently settled popover", () => {
     await expect
       .element(screen.getByRole("tab", { name: /Snoozed/ }))
       .toHaveAttribute("aria-selected", "true");
+  });
+
+  it("has no Working tab when the Working shelf is off", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    const previousSettings = getClientSettings();
+    using _settings = { [Symbol.dispose]: () => __setClientSettingsForTests(previousSettings) };
+    __setClientSettingsForTests({ ...previousSettings, sidebarWorkingShelfEnabled: false });
+    await using screen = await renderTabsSidebar((currentProject) => [
+      settledThread(currentProject, 0),
+    ]);
+    await expect.element(screen.getByRole("tab", { name: /Snoozed/ })).toBeInTheDocument();
+    expect(
+      screen
+        .getByRole("tab")
+        .elements()
+        .map((tab) => tab.textContent),
+    ).toEqual(["Idle", "Snoozed0"]);
   });
 
   it("leaves the tabs to the user while a settled thread is open", async () => {

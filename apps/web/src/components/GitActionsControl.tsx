@@ -1829,9 +1829,20 @@ function CheckoutGitActionsControl({
                   </ThreadDetailsControl>
                 }
               />
-              <TooltipPopup side="bottom" className="max-w-96 break-words">
-                {changesBaseLabel ? `${gt("Open diff")} · ${changesBaseLabel}` : gt("Open diff")}
-              </TooltipPopup>
+              {changesBreakdown && (changesTotals.insertions > 0 || changesTotals.deletions > 0) ? (
+                // The card's breakdown; Base UI fixes the popup width on open, so remeasure on change.
+                <TooltipPopup key={JSON.stringify(changesBreakdown)} side="bottom">
+                  <ChangeBreakdownGrid
+                    breakdown={changesBreakdown}
+                    total={{
+                      additions: changesTotals.insertions,
+                      deletions: changesTotals.deletions,
+                    }}
+                  />
+                </TooltipPopup>
+              ) : (
+                <TooltipPopup side="bottom">{gt("Open diff")}</TooltipPopup>
+              )}
             </Tooltip>
           ) : null}
           {gitSplit}

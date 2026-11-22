@@ -8,7 +8,9 @@ import { sidebarSectionDropId } from "../Sidebar.logic";
 
 export type SidebarTab = "idle" | "working" | "snoozed";
 
-const SIDEBAR_TABS: readonly SidebarTab[] = ["idle", "working", "snoozed"];
+export const SIDEBAR_TABS: readonly SidebarTab[] = ["idle", "working", "snoozed"];
+/** Without the Working shelf, working threads stay in Idle. */
+export const SIDEBAR_TABS_WITHOUT_WORKING: readonly SidebarTab[] = ["idle", "snoozed"];
 
 export function sidebarTabPanelId(tab: SidebarTab) {
   return `sidebar-tabpanel-${tab}`;
@@ -20,6 +22,7 @@ export function sidebarTabElementId(tab: SidebarTab) {
 
 /** The Idle | Working | Snoozed switcher above the sidebar footer. */
 export function SidebarTabs(props: {
+  tabs: readonly SidebarTab[];
   value: SidebarTab;
   counts: { readonly working: number; readonly snoozed: number };
   onValueChange: (tab: SidebarTab) => void;
@@ -53,13 +56,14 @@ export function SidebarTabs(props: {
   }, [props.value]);
 
   const move = (event: KeyboardEvent<HTMLButtonElement>, direction: 1 | -1 | "first" | "last") => {
-    const index = SIDEBAR_TABS.indexOf(props.value);
+    const { tabs } = props;
+    const index = tabs.indexOf(props.value);
     const next =
       direction === "first"
-        ? SIDEBAR_TABS[0]
+        ? tabs[0]
         : direction === "last"
-          ? SIDEBAR_TABS[SIDEBAR_TABS.length - 1]
-          : SIDEBAR_TABS[(index + direction + SIDEBAR_TABS.length) % SIDEBAR_TABS.length];
+          ? tabs[tabs.length - 1]
+          : tabs[(index + direction + tabs.length) % tabs.length];
     if (next === undefined) return;
     event.preventDefault();
     props.onValueChange(next);
@@ -80,7 +84,7 @@ export function SidebarTabs(props: {
           style={{ left: pill.left, width: pill.width }}
         />
       ) : null}
-      {SIDEBAR_TABS.map((tab) => {
+      {props.tabs.map((tab) => {
         const selected = tab === props.value;
         const count = tab === "idle" ? null : props.counts[tab];
         return (

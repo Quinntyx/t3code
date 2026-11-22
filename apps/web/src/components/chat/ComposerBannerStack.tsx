@@ -64,8 +64,10 @@ function useExitingNotices(items: ReadonlyArray<ComposerBannerStackItem>) {
     if (!row.exiting) return {};
     const release = () =>
       setExiting((current) => current.filter((entry) => entry.item.id !== row.item.id));
+    // React's synthetic transitioncancel has no propertyName, so read the native event's.
     const releaseOnOpacity = (event: TransitionEvent) => {
-      if (event.target === event.currentTarget && event.propertyName === "opacity") release();
+      if (event.target === event.currentTarget && event.nativeEvent.propertyName === "opacity")
+        release();
     };
     return {
       "data-ending-style": "",

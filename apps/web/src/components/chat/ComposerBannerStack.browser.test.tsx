@@ -50,8 +50,12 @@ it("drops a removed notice at once, or after a theme's fade out", async () => {
   await vi.waitFor(() => expect(cancelled?.getAnimations()).toEqual([]));
   sheet.textContent =
     "[data-composer-banner-stack][data-ending-style] { opacity: 0; transition: opacity 1h; }";
+  const running = new Promise((resolve) =>
+    cancelled?.addEventListener("transitionrun", resolve, { once: true }),
+  );
   await screen.rerender(<ComposerBannerStack items={[]} />);
   expect(cancelled?.hasAttribute("data-ending-style")).toBe(true);
+  await running;
   sheet.textContent = "";
   await vi.waitFor(() => expect(screen.container.textContent).toBe(""));
 });

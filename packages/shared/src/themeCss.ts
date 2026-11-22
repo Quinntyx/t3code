@@ -92,6 +92,11 @@ export const THEME_CSS_HOOKS = [
   { selector: "[data-chat-header-git-actions]", styles: "header git and changed-files split" },
   { selector: "[data-chat-header-pr-chip]", styles: "pull request chip beside the thread title" },
   {
+    selector: "[data-chat-header-project-crumb]",
+    styles:
+      'project crumb in the header: the project icon, then [data-slot="workspace-breadcrumb-text"]',
+  },
+  {
     selector: "[data-header-ghost]",
     styles: "header toolbar button that is not the git split (Run, scripts menu)",
   },
@@ -175,6 +180,14 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="autocomplete-popup"]', styles: "autocomplete list" },
   { selector: '[data-slot="preview-card-popup"]', styles: "hover preview card" },
   { selector: '[data-slot="toast-popup"]', styles: "toast" },
+  {
+    selector: '[data-slot="menu-item"]',
+    styles: "menu row (also menu-checkbox-item, menu-radio-item)",
+  },
+  { selector: '[data-slot="menu-checkbox-item"]', styles: "menu row with a checkbox" },
+  { selector: '[data-slot="menu-radio-item"]', styles: "menu row with a radio" },
+  { selector: '[data-slot="select-item"]', styles: "select list row" },
+  { selector: '[data-slot="combobox-item"]', styles: "combobox list row" },
   { selector: '[data-slot="scroll-area-scrollbar"]', styles: "overlay scrollbar" },
   { selector: '[data-slot="scroll-area-thumb"]', styles: "overlay scrollbar thumb" },
   {
@@ -223,6 +236,8 @@ export const THEME_CSS_PROPERTIES = [
   { name: "--ease-sidebar-slide", styles: 'tab switch easing with sidebarSections "tabs"' },
   { name: "--sidebar-switch-radius", styles: "tab switcher corner radius (and -pill-radius)" },
   { name: "--radius", styles: "base corner radius controls and cards derive from" },
+  { name: "--radius-glass", styles: "corner radius of glass popups and floating panels" },
+  { name: "--radius-glass-item", styles: "corner radius of rows inside glass popups" },
 ] as const;
 
 /** What each layout region's variants move, for the guide. The first variant is stock. */

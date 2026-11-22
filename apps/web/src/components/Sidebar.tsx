@@ -274,7 +274,12 @@ import { useThemeLayout } from "../hooks/useTheme";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderActions } from "./sidebar/SidebarHeaderActions";
 import { SidebarSettledPopover } from "./sidebar/SidebarSettledPopover";
-import { SidebarTabs, type SidebarTab } from "./sidebar/SidebarTabs";
+import {
+  SIDEBAR_TABS,
+  SIDEBAR_TABS_WITHOUT_WORKING,
+  SidebarTabs,
+  type SidebarTab,
+} from "./sidebar/SidebarTabs";
 import { SidebarTrack } from "./sidebar/SidebarTrack";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
@@ -1316,8 +1321,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     readonly key: string | null;
     readonly tab: SidebarTab | null;
   }>({ key: null, tab: null });
-  // Search results replace the Idle column, so a query keeps that tab in front until it clears.
-  const activeTab: SidebarTab = isSearchingThreads ? "idle" : (followedRoute.tab ?? storedTab);
   // Picking another tab takes the search away with it, rather than leaving it over an unseen list.
   const setActiveTab = (tab: SidebarTab) => {
     setStoredTab(tab);
@@ -4183,6 +4186,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const tabSortableIdsIdle = tabItemsIdle.map(sidebarListItemId);
   const tabSortableIdsWorking = tabItemsWorking.map(sidebarListItemId);
   const tabSortableIdsSnoozed = tabItemsSnoozed.map(sidebarListItemId);
+  const sidebarTabs = workingShelfEnabled ? SIDEBAR_TABS : SIDEBAR_TABS_WITHOUT_WORKING;
+  const chosenTab = followedRoute.tab ?? storedTab;
+  // Search results replace the Idle column, so a query keeps that tab in front until it clears.
+  const activeTab: SidebarTab =
+    isSearchingThreads || !sidebarTabs.includes(chosenTab) ? "idle" : chosenTab;
   // Opening a thread brings its tab forward once, so its row is on screen; a tab picked afterwards
   // stays. Settled threads are listed in the popover, so they move no tab.
   const routeSection =
@@ -4221,6 +4229,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             fixedHeader={sidebarFixedHeader}
           >
             <SidebarTrack
+              tabs={sidebarTabs}
               active={activeTab}
               columns={{
                 // The tabs share the outer DndContext, so the tab and Settled drop targets see every row.
@@ -4239,6 +4248,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             />
           </SidebarContent>
           <SidebarTabs
+            // A different tab set moves every tab, so the pill measures afresh.
+            key={sidebarTabs.length}
+            tabs={sidebarTabs}
             value={activeTab}
             counts={{ working: workingThreadCount, snoozed: visibleSnoozedThreads.length }}
             onValueChange={setActiveTab}

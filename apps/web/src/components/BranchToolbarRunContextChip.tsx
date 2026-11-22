@@ -296,7 +296,12 @@ export function BranchToolbarRunContextChip({
                 }
               >
                 <span className="shrink-0">{workspace.label}</span>
-                {workspace.path ? (
+                {/* A worktree's label is its folder, which its path would repeat; name the kind. */}
+                {workspace.kind === "worktree" ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    <T>Worktree</T>
+                  </span>
+                ) : workspace.path ? (
                   <span className="flex min-w-0 font-mono text-2xs text-muted-foreground">
                     <MiddleTruncate value={workspace.path} />
                   </span>

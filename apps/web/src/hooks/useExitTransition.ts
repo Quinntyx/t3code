@@ -27,8 +27,13 @@ export function useExitTransition<T>(value: T | null, same: (a: T, b: T) => bool
     setHeld(value === null ? previous : null);
   }
   const exiting = value === null && held !== null;
+  // React's synthetic transitioncancel has no propertyName, so read the native event's.
   const release = (event: TransitionEvent) => {
-    if (exiting && event.target === event.currentTarget && event.propertyName === "opacity")
+    if (
+      exiting &&
+      event.target === event.currentTarget &&
+      event.nativeEvent.propertyName === "opacity"
+    )
       setHeld(null);
   };
   return {
