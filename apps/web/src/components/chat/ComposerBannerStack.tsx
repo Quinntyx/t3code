@@ -1,11 +1,12 @@
 import { useGT } from "gt-react";
 import { InfoIcon } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode, type TransitionEvent } from "react";
 
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
 import { observeResize } from "~/lib/observeResize";
+import { isFadingOut } from "~/hooks/useExitTransition";
 
 /**
  * Where a notice sits in the stack. The machine comes first, then what needs you; the
@@ -31,6 +32,52 @@ const GROUPS = ["environment", "attention"] as const;
 const FADE_IN =
   "transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none";
 
+const inGroupOrder = (items: ReadonlyArray<ComposerBannerStackItem>) =>
+  GROUPS.flatMap((group) => items.filter((item) => (item.group ?? "attention") === group));
+
+/**
+ * The notices to draw: the current ones, plus each removed one at its old place, marked
+ * `data-ending-style` until a theme's fade ends (at once without one), showing what it last said.
+ */
+function useExitingNotices(items: ReadonlyArray<ComposerBannerStackItem>) {
+  const [previous, setPrevious] = useState(items);
+  const [exiting, setExiting] = useState<
+    ReadonlyArray<{ readonly item: ComposerBannerStackItem; readonly after: string | null }>
+  >([]);
+  if (items !== previous) {
+    const ids = new Set(items.map((item) => item.id));
+    const before = inGroupOrder(previous);
+    setPrevious(items);
+    setExiting((current) => [
+      ...current.filter((entry) => !ids.has(entry.item.id)),
+      ...before.flatMap((item, index) =>
+        ids.has(item.id) ? [] : [{ item, after: before[index - 1]?.id ?? null }],
+      ),
+    ]);
+  }
+  const rows = inGroupOrder(items).map((item) => ({ item, exiting: false }));
+  for (const entry of exiting) {
+    const at = entry.after === null ? -1 : rows.findIndex((row) => row.item.id === entry.after);
+    rows.splice(at + 1, 0, { item: entry.item, exiting: true });
+  }
+  const exitProps = (row: (typeof rows)[number]) => {
+    if (!row.exiting) return {};
+    const release = () =>
+      setExiting((current) => current.filter((entry) => entry.item.id !== row.item.id));
+    return {
+      "data-ending-style": "",
+      inert: true,
+      ref: (element: HTMLElement | null) => {
+        if (element && !isFadingOut(element)) release();
+      },
+      onTransitionEnd: (event: TransitionEvent) => {
+        if (event.target === event.currentTarget && event.propertyName === "opacity") release();
+      },
+    };
+  };
+  return { rows, exitProps };
+}
+
 /**
  * Notices about sending from this composer, each its own attached card. Consecutive cards join
  * edge to edge, and the last joins the composer or the drawer below it. Detached cards stand
@@ -43,19 +90,29 @@ export function ComposerBannerStack({
   readonly items: ReadonlyArray<ComposerBannerStackItem>;
   readonly detached?: boolean;
 }) {
-  const ordered = GROUPS.flatMap((group) =>
-    items.filter((item) => (item.group ?? "attention") === group),
-  );
+  const { rows, exitProps } = useExitingNotices(items);
   if (detached) {
-    return ordered.map((item) => (
-      <div key={item.id} data-composer-banner-stack="true" className={FADE_IN}>
-        <NoticeCard item={item} detached />
+    return rows.map((row) => (
+      <div
+        key={row.item.id}
+        data-composer-banner-stack="true"
+        data-side="top"
+        {...exitProps(row)}
+        className={FADE_IN}
+      >
+        <NoticeCard item={row.item} detached />
       </div>
     ));
   }
-  return ordered.map((item) => (
-    <ComposerBanner.Attachment key={item.id} data-composer-banner-stack="true" className={FADE_IN}>
-      <NoticeCard item={item} />
+  return rows.map((row) => (
+    <ComposerBanner.Attachment
+      key={row.item.id}
+      data-composer-banner-stack="true"
+      data-side="top"
+      {...exitProps(row)}
+      className={FADE_IN}
+    >
+      <NoticeCard item={row.item} />
     </ComposerBanner.Attachment>
   ));
 }

@@ -1,6 +1,7 @@
 import { RefreshCwIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { useExitTransition } from "../../hooks/useExitTransition";
 import { threadSyncLabel, type ThreadSyncPhase } from "../../threadSync";
 import { cn } from "~/lib/utils";
 import { useMessages } from "gt-react";
@@ -22,18 +23,24 @@ const lineClassName = cn(
   "transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none",
 );
 
+type ExitProps = ReturnType<typeof useExitTransition>["exitProps"];
+
 /** One line of thread state at the end of the timeline: icon, title, detail, then actions. */
 function ThreadNowLine({
   item,
+  exitProps,
   announce = false,
 }: {
   readonly item: ThreadNowItem;
+  readonly exitProps: ExitProps;
   /** Announces the line when it appears; only for something that needs the user. */
   readonly announce?: boolean;
 }) {
   return (
     <div
       role={announce ? "alert" : undefined}
+      data-side="top"
+      {...exitProps}
       className={cn(lineClassName, "items-baseline")}
       data-thread-now-line="true"
     >
@@ -58,10 +65,22 @@ function ThreadNowLine({
   );
 }
 
-function ThreadSyncLine({ phase }: { readonly phase: ThreadSyncPhase }) {
+function ThreadSyncLine({
+  phase,
+  exitProps,
+}: {
+  readonly phase: ThreadSyncPhase;
+  readonly exitProps: ExitProps;
+}) {
   const m = useMessages();
   return (
-    <div className={lineClassName} role="status" data-composer-sync-status={phase}>
+    <div
+      className={lineClassName}
+      role="status"
+      data-composer-sync-status={phase}
+      data-side="top"
+      {...exitProps}
+    >
       <RefreshCwIcon aria-hidden />
       <span className="truncate">{threadSyncLabel(phase, m)}</span>
     </div>
@@ -84,12 +103,28 @@ export function ThreadNow({
   readonly syncPhase: ThreadSyncPhase | null;
   readonly goal: ThreadNowItem | null;
 }): ReactNode {
+  const shownAttention = useExitTransition(attention);
+  const shownWork = useExitTransition(work);
+  const shownSync = useExitTransition(syncPhase);
+  const shownGoal = useExitTransition(goal);
   return (
     <>
-      {attention ? <ThreadNowLine item={attention} announce /> : null}
-      {work ? <ThreadNowLine item={work} /> : null}
-      {syncPhase ? <ThreadSyncLine phase={syncPhase} /> : null}
-      {goal ? <ThreadNowLine item={goal} /> : null}
+      {shownAttention.shown ? (
+        <ThreadNowLine
+          item={shownAttention.shown}
+          exitProps={shownAttention.exitProps}
+          announce={!shownAttention.exiting}
+        />
+      ) : null}
+      {shownWork.shown ? (
+        <ThreadNowLine item={shownWork.shown} exitProps={shownWork.exitProps} />
+      ) : null}
+      {shownSync.shown ? (
+        <ThreadSyncLine phase={shownSync.shown} exitProps={shownSync.exitProps} />
+      ) : null}
+      {shownGoal.shown ? (
+        <ThreadNowLine item={shownGoal.shown} exitProps={shownGoal.exitProps} />
+      ) : null}
     </>
   );
 }

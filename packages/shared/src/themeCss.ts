@@ -96,6 +96,22 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="tooltip-popup"]', styles: "tooltip" },
   { selector: '[data-slot="scroll-area-scrollbar"]', styles: "overlay scrollbar" },
   { selector: '[data-slot="scroll-area-thumb"]', styles: "overlay scrollbar thumb" },
+  {
+    selector: "[data-thread-find-bar]",
+    styles: "find-in-thread bar; leaves with data-ending-style",
+  },
+  {
+    selector: "[data-composer-banner-stack]",
+    styles: "notice above the composer; leaves with data-ending-style",
+  },
+  {
+    selector: "[data-thread-now-line]",
+    styles: "status line at the end of the timeline; leaves with data-ending-style",
+  },
+  {
+    selector: "[data-composer-sync-status]",
+    styles: "sync status line at the end of the timeline; leaves with data-ending-style",
+  },
 ] as const;
 
 /** What each layout region's variants move, for the guide. The first variant is stock. */
@@ -140,6 +156,7 @@ export const THEME_GUIDE = [
   "CSS: `css` applies after the app's styles (palette CSS first, style CSS second). Use `.dark` or `:root:not(.dark)` for one appearance.",
   "It cannot load files: no @import, no image-set(), and url() only with data: or #id.",
   'For a palette background image, copy a JPEG, PNG, or WebP file of up to 16 MB to `<themesDir>/<themeId>.jpg` (or .png, .webp), beside the theme file. CSS shows it with `var(--theme-background-image)`, such as `[data-workspace-area="conversation"] { background: var(--theme-background-image) center / cover no-repeat; }`. Delete the file to remove it. Do not embed images in `css`: it holds 100,000 characters.',
+  'Motion: popups (`[data-slot$="-popup"]`) and the surfaces marked below carry `data-side` (the side they open from) and `data-starting-style` while entering, `data-ending-style` while leaving. A leaving surface that starts an opacity transition under `[data-ending-style]` stays on screen until it ends, so `[data-ending-style] { opacity: 0; translate: 0 4px; }` with a `transition` fades it out. Keep motion short and never loop it.',
   "The app's own rules can be more specific. If a rule has no effect, add !important.",
   "It cannot reach the terminal text, the file tree, or diff internals. Use color roles for those.",
   "Native scrollbars take `::-webkit-scrollbar` and `::-webkit-scrollbar-thumb`.",

@@ -4,6 +4,7 @@ import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { cn } from "~/lib/utils";
+import { useExitTransition } from "~/hooks/useExitTransition";
 import {
   formatThreadFindCount,
   nextThreadFindAnnouncement,
@@ -64,7 +65,12 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
   });
   if (announcement !== storedAnnouncement) setAnnouncement(announcement);
 
-  if (!props.open) return null;
+  // Closing clears the query, so a closing bar keeps showing what it last showed.
+  const { shown, exitProps } = useExitTransition(
+    props.open ? { query: props.query, label, noResults } : null,
+    (a, b) => a.query === b.query && a.label === b.label && a.noResults === b.noResults,
+  );
+  if (!shown) return null;
 
   const navigationDisabled =
     props.matchCount === 0 || props.status === "loading" || props.counting === true;
@@ -81,6 +87,8 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
   return (
     <div
       data-thread-find-bar
+      data-side="bottom"
+      {...exitProps}
       className="absolute top-3 right-3 z-40 w-[min(var(--thread-details-panel-width),calc(100%-1.5rem))] transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none"
     >
       <InputGroup
@@ -96,7 +104,7 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
           ref={inputRef}
           type="search"
           size="sm"
-          value={props.query}
+          value={shown.query}
           aria-label={gt("Find in thread")}
           placeholder={gt("Find in thread")}
           maxLength={200}
@@ -113,10 +121,10 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
             aria-hidden
             className={cn(
               "min-w-10 text-center text-xs tabular-nums",
-              noResults ? "text-destructive" : "text-muted-foreground",
+              shown.noResults ? "text-destructive" : "text-muted-foreground",
             )}
           >
-            {label}
+            {shown.label}
           </span>
           {props.status === "error" ? (
             <Button size="xs" variant="ghost" onClick={props.onRetry}>
