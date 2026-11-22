@@ -700,8 +700,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 /* Theme layout `composerControls: "below"`: the card holds the prompt and the send button, and the
    controls sit in a row on the canvas under it. The prompt's last line and the send button share a
    centre at any prompt size; whichever is taller sets the row. --chat-composer-line-inset holds
-   1lh, so it resolves on the prompt's own lines where it is used. Themes may retune these. */
-html[data-layout-composer-controls="below"] [data-chat-composer-form] {
+   1lh, so it resolves on the prompt's own lines where it is used. :where() keeps these rules at
+   the specificity of their target, so theme CSS overrides them. */
+:where(html[data-layout-composer-controls="below"]) [data-chat-composer-form] {
   --chat-composer-box-ps: 1rem;
   --chat-composer-box-pe: 0.625rem;
   --chat-composer-box-pt: 0.6875rem;
@@ -739,7 +740,7 @@ html[data-layout-composer-controls="below"] [data-chat-composer-form] {
 
 /* Without Liquid Glass the card is the main surface alone, so its fill, outline and shadow stop
    above the controls row. Liquid Glass keeps its measured shape around both. */
-html[data-layout-composer-controls="below"]:not([data-liquid-glass-effect]) {
+:where(html[data-layout-composer-controls="below"]:not([data-liquid-glass-effect])) {
   & [data-slot="composer-shell"]::before,
   & [data-slot="composer-host"]::before,
   & [data-slot="composer-host"]::after {
@@ -757,9 +758,17 @@ html[data-layout-composer-controls="below"]:not([data-liquid-glass-effect]) {
     }
   }
 }
-html.dark[data-layout-composer-controls="below"]:not([data-liquid-glass-effect])
+:where(html.dark[data-layout-composer-controls="below"]:not([data-liquid-glass-effect]))
   [data-chat-composer-main-surface] {
   box-shadow: none;
+}
+
+/* Theme layout `sidebarSections: "tabs"`: one decelerating move between columns and the pill. */
+:where(html[data-layout-sidebar-sections="tabs"]) {
+  --ease-sidebar-slide: cubic-bezier(0.22, 0.8, 0.24, 1);
+  --sidebar-slide-duration: 320ms;
+  --sidebar-switch-radius: 9px;
+  --sidebar-switch-pill-radius: 7px;
 }
 
 /* One-line text that fades out at its end instead of ending in an ellipsis. */
@@ -1813,7 +1822,8 @@ html[data-theme-id][data-ambient-shimmer] [data-chat-header] {
 
 html[data-theme-id] [data-chat-header] [data-slot="button"],
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"],
-html[data-theme-id] [data-chat-header] [data-toolbar-control] {
+html[data-theme-id] [data-chat-header] [data-toolbar-control],
+html[data-theme-id] [data-chat-header-git-actions] [data-slot="group"] > button {
   --control-icon-color: var(--contrast-toolbar-control-foreground);
   background-color: var(--toolbar-control);
   border-color: var(--contrast-toolbar-border);
@@ -1850,7 +1860,8 @@ html[data-theme-id] [data-chat-header] [data-slot="button"][data-pressed],
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"]:hover,
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"][data-pressed],
 html[data-theme-id] [data-chat-header] [data-toolbar-control]:hover,
-html[data-theme-id] [data-chat-header] [data-toolbar-control][data-pressed] {
+html[data-theme-id] [data-chat-header] [data-toolbar-control][data-pressed],
+html[data-theme-id] [data-chat-header-git-actions] [data-slot="group"] > button:hover {
   background-color: var(--toolbar-control-hover);
 }
 
