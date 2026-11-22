@@ -87,8 +87,10 @@ export interface BranchToolbarHandle {
   usePreviousWorktree: () => void;
 }
 
+export type { RunContextChipInput } from "./BranchToolbarBranchSelector";
+
 interface BranchToolbarProps {
-  layout?: "composer" | "panel";
+  layout?: "composer" | "panel" | "chip";
   panelSection?: "all" | "workspace" | "branch";
   forceNewWorktree?: boolean;
   ref?: Ref<BranchToolbarHandle>;
@@ -739,6 +741,37 @@ export const BranchToolbar = memo(function BranchToolbar({
   const [attachStrip, labelsOverflow] = useLabelsOverflow();
 
   if (!activeProject) return null;
+
+  if (layout === "chip") {
+    return (
+      <BranchToolbarBranchSelector
+        ref={branchSelectorRef}
+        presentation="chip"
+        environmentId={environmentId}
+        threadId={threadId}
+        {...(draftId ? { draftId } : {})}
+        envLocked={envLocked}
+        effectiveEnvModeOverride={effectiveEnvMode}
+        {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
+        {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+        startFromOrigin={startFromOrigin}
+        onStartFromOriginChange={onStartFromOriginChange}
+        {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+        {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+        runContext={{
+          environmentId,
+          workspaceRoot: activeProject.workspaceRoot,
+          worktreePath: activeWorktreePath,
+          showGitControls,
+          machineHandoffBusy,
+          availableEnvironments,
+          onEnvironmentChange: showEnvironmentPicker ? onEnvironmentChange : undefined,
+          addTargets,
+          onAddToMachine,
+        }}
+      />
+    );
+  }
 
   if (layout === "panel") {
     return (
