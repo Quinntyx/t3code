@@ -6,6 +6,7 @@ export function ThreadHoverCardPopup({ className, ...props }: ComponentProps<typ
   return (
     <TooltipPopup
       {...props}
+      data-thread-hover-card=""
       variant="glass"
       className={cn("max-w-80 text-left whitespace-normal", className)}
     />

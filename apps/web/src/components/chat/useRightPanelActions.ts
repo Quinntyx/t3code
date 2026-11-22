@@ -36,7 +36,10 @@ import { openDeviceSetupDialog } from "./ChatOverlayHosts";
 import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
-import { useThreadDetailsRailPinStore } from "./threadDetailsRailStore";
+import {
+  selectThreadDetailsRailPinned,
+  useThreadDetailsRailPinStore,
+} from "./threadDetailsRailStore";
 import {
   activateVoice,
   connectVoiceMicrophone,
@@ -253,8 +256,13 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     if (!activeThreadRef) return;
     const store = useRightPanelStore.getState();
     if (threadPanelPresentation === "inline" && threadDetailsRail) {
-      // Focus stays put: the pinned card's first control is its close button.
-      useThreadDetailsRailPinStore.getState().togglePinned(activeThreadRef);
+      const pins = useThreadDetailsRailPinStore.getState();
+      // The same focus handoff as the stock card: into it on open, back to the content on close.
+      if (!selectThreadDetailsRailPinned(pins.pinnedByThreadKey, activeThreadRef))
+        requestWorkspaceFocus({ area: "details" });
+      else if (document.activeElement?.closest('[data-workspace-area="details"]'))
+        requestWorkspaceContentFocus();
+      pins.togglePinned(activeThreadRef);
       return;
     }
     if (threadPanelPresentation === "inline") {

@@ -12,6 +12,7 @@ import {
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
+import { resolveThreadDetailsVisibility } from "./chat/threadDetailsItems";
 import { useFocusComposerOnThreadOpen } from "./chat/useFocusComposerOnThreadOpen";
 import { configuredHostedAppUrl } from "../hostedPairing";
 import {
@@ -1776,6 +1777,10 @@ export default function ChatView(props: ChatViewProps) {
     hostEnvironmentId,
     remoteOpenMode: remoteOpenState.mode,
   });
+  // The details card's "Open in editor" item also governs the chip's copy of it.
+  const openInItemVisible = useClientSettings(
+    (settings) => resolveThreadDetailsVisibility(settings).openIn,
+  );
   useOpenFavoriteEditorShortcut({
     enabled: showOpenInPicker && !backgroundThread,
     environmentId: openInEnvironmentId,
@@ -4017,6 +4022,7 @@ export default function ChatView(props: ChatViewProps) {
                                   showRunContextChip ? (
                                     <BranchToolbar
                                       layout="chip"
+                                      showWorkspaceOpenIn={showOpenInPicker && openInItemVisible}
                                       forceNewWorktree={multipleModelSelections !== null}
                                       ref={branchToolbarRef}
                                       environmentId={activeThread.environmentId}

@@ -91,6 +91,8 @@ export type { RunContextChipInput } from "./BranchToolbarBranchSelector";
 
 interface BranchToolbarProps {
   layout?: "composer" | "panel" | "chip";
+  /** The chip layout's Open in editor, under the same rules as the details card's. */
+  showWorkspaceOpenIn?: boolean;
   panelSection?: "all" | "workspace" | "branch";
   forceNewWorktree?: boolean;
   ref?: Ref<BranchToolbarHandle>;
@@ -626,6 +628,7 @@ function useLabelsOverflow(): readonly [
 
 export const BranchToolbar = memo(function BranchToolbar({
   layout = "composer",
+  showWorkspaceOpenIn = false,
   panelSection = "all",
   forceNewWorktree = false,
   ref,
@@ -768,6 +771,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           onEnvironmentChange: showEnvironmentPicker ? onEnvironmentChange : undefined,
           addTargets,
           onAddToMachine,
+          showOpenIn: showWorkspaceOpenIn,
         }}
       />
     );

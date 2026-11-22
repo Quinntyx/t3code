@@ -130,6 +130,7 @@ export interface RunContextChipInput {
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
   addTargets: readonly AddProjectTarget[];
   onAddToMachine: (environmentId: EnvironmentId | null) => void;
+  showOpenIn: boolean;
 }
 
 const WORKTREE_CHANGE_BLOCKED_MESSAGE = msg("Stop the current turn to switch worktrees.");
@@ -1070,7 +1071,7 @@ export function BranchToolbarBranchSelector({
         }
         onCopyWorkspacePath={copyWorkspacePath}
         workspaceOpenIn={
-          workspacePath === null ? null : (
+          workspacePath === null || !runContext.showOpenIn ? null : (
             <OpenInPicker
               environmentId={environmentId}
               keybindings={serverConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS}

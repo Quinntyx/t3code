@@ -179,6 +179,7 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="combobox-popup"]', styles: "combobox list, such as the project filter" },
   { selector: '[data-slot="autocomplete-popup"]', styles: "autocomplete list" },
   { selector: '[data-slot="preview-card-popup"]', styles: "hover preview card" },
+  { selector: "[data-thread-hover-card]", styles: "a sidebar thread's hover card" },
   { selector: '[data-slot="toast-popup"]', styles: "toast" },
   {
     selector: '[data-slot="menu-item"]',

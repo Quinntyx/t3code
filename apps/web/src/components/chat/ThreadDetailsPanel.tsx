@@ -196,19 +196,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             props.activeProjectName !== undefined &&
             (visible.gitActions || (visible.changes && props.isGitRepo)),
         };
-        return (
+        const body = (
           <>
             {props.onClose ? (
-              <div className="flex items-center justify-between ps-3 pe-1.5 pt-1.5">
-                <span className="text-xs font-medium text-muted-foreground">{gt("Details")}</span>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label={gt("Close details")}
-                  onClick={props.onClose}
-                >
-                  <XIcon aria-hidden />
-                </Button>
+              <div className="flex items-center ps-3 pt-1.5">
+                <span className="flex h-6 items-center text-xs font-medium text-muted-foreground">
+                  {gt("Details")}
+                </span>
               </div>
             ) : null}
             <div className="group/details-items">
@@ -366,6 +360,24 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               </MenuPopup>
             </Menu>
           </>
+        );
+        // Close comes last in tab order, so opening the card focuses its first item instead.
+        return props.onClose ? (
+          <div className="relative">
+            {body}
+            <div className="absolute top-1.5 end-1.5">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={gt("Close details")}
+                onClick={props.onClose}
+              >
+                <XIcon aria-hidden />
+              </Button>
+            </div>
+          </div>
+        ) : (
+          body
         );
       }}
     </ThreadDetailsCard>
