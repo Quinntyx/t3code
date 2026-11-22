@@ -128,6 +128,7 @@ it("treats Diff saved behind Voice as closed, so opening a turn keeps its select
   reset();
   const store = useRightPanelStore.getState();
   // Diff is the thread's saved, active tab, but the app-wide Voice surface is what is on screen.
+  store.setVisibleThread("env-1:thread-A");
   store.open(ref, "diff");
   store.setVoiceOpen(true);
 
