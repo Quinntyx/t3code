@@ -782,16 +782,8 @@ export type ThemeLayoutValue<K extends ThemeLayoutKey> = (typeof THEME_LAYOUT_OP
 export const THEME_LAYOUT_KEYS = Object.keys(THEME_LAYOUT_OPTIONS) as ReadonlyArray<ThemeLayoutKey>;
 
 const ThemeLayoutParam = Schema.Union([ThemeSettingKey, ThemeSettingRef]);
-export const ThemeLayout = Schema.Struct({
-  composerControls: Schema.optional(ThemeLayoutParam),
-  composerMeter: Schema.optional(ThemeLayoutParam),
-  runContext: Schema.optional(ThemeLayoutParam),
-  workspaceActions: Schema.optional(ThemeLayoutParam),
-  threadDetails: Schema.optional(ThemeLayoutParam),
-  panelControls: Schema.optional(ThemeLayoutParam),
-  sidebarSections: Schema.optional(ThemeLayoutParam),
-  sidebarSearch: Schema.optional(ThemeLayoutParam),
-} satisfies Record<ThemeLayoutKey, unknown>);
+/** Region name to variant; regions and variants are checked on publish, not in the wire schema. */
+export const ThemeLayout = Schema.Record(ThemeSettingKey, ThemeLayoutParam);
 export type ThemeLayout = typeof ThemeLayout.Type;
 
 export const EnvironmentThemeKind = Schema.Literals(["palette", "style"]);
@@ -1077,6 +1069,11 @@ export function validateEnvironmentThemeFile(file: EnvironmentThemeFile): string
   }
 
   if (layout !== undefined) {
+    for (const region of Object.keys(layout)) {
+      if (!(THEME_LAYOUT_KEYS as ReadonlyArray<string>).includes(region)) {
+        return `has unknown layout region "${region}"; use ${THEME_LAYOUT_KEYS.join(", ")}.`;
+      }
+    }
     for (const key of THEME_LAYOUT_KEYS) {
       const problem = validateThemeLayoutParam(key, layout[key], settings);
       if (problem) return problem;

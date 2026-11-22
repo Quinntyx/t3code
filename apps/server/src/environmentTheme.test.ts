@@ -684,6 +684,13 @@ describe("environment theme", () => {
             })
             .pipe(Effect.flip);
           assert.match(foreignOption.message, /has option "drawer"/);
+          const unknownRegion = yield* themes
+            .apply({
+              styleId: "sideways",
+              theme: { version: 2, kind: "style", name: "Sideways", layout: { toolbar: "left" } },
+            })
+            .pipe(Effect.flip);
+          assert.match(unknownRegion.message, /unknown layout region "toolbar"/);
 
           assert.deepEqual(selected, [
             { style: "liquid-glass" },
