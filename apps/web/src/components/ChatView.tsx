@@ -1182,7 +1182,7 @@ export default function ChatView(props: ChatViewProps) {
     !embedded && canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const floatingPanels = useThemeEffects().floatingPanels.enabled;
-  const panelControlsLayout = useThemeLayout().panelControls;
+  const { panelControls: panelControlsLayout, runContext: runContextLayout } = useThemeLayout();
   const cornerPanelControls = floatingPanels || panelControlsLayout === "corner";
   const floatingPanelControls =
     cornerPanelControls && !embedded && !prefersPlanSidebarSheet && !isMobileViewport;
@@ -1871,6 +1871,10 @@ export default function ChatView(props: ChatViewProps) {
       isGitRepo,
       showEnvironmentIndicator: showComposerEnvironmentIndicator,
     });
+  // The chip replaces the strip for started git threads except where the row is not rendered.
+  const showRunContextChip =
+    runContextLayout === "chip" && isServerThread && isGitRepo && !isMobileViewport;
+  const showEffectiveComposerContextStrip = showComposerContextStrip && !showRunContextChip;
   const terminalShortcutLabelOptions = {
     context: {
       terminalFocus: true,
@@ -3820,7 +3824,7 @@ export default function ChatView(props: ChatViewProps) {
                   >
                     <ChildThreadApprovals threadRef={activeThreadRef} />
                     <div className="relative">
-                      <ComposerSurface.Shell contextRow={showComposerContextStrip}>
+                      <ComposerSurface.Shell contextRow={showEffectiveComposerContextStrip}>
                         <ComposerSurface.Host
                           inert={queuedRunEdit.isSaving}
                           aria-busy={queuedRunEdit.isSaving}
@@ -3968,8 +3972,46 @@ export default function ChatView(props: ChatViewProps) {
                                   (activeThreadShell ?? activeThread)?.pullRequests
                                 }
                                 onComposerOverlayHeightChange={publishComposerOverlayHeightStable}
+                                runContextChip={
+                                  showRunContextChip ? (
+                                    <BranchToolbar
+                                      layout="chip"
+                                      forceNewWorktree={multipleModelSelections !== null}
+                                      ref={branchToolbarRef}
+                                      environmentId={activeThread.environmentId}
+                                      threadId={activeThread.id}
+                                      projectId={activeThread.projectId}
+                                      worktreePath={activeThread.worktreePath}
+                                      isServerThread={isServerThread}
+                                      showGitControls={isGitRepo}
+                                      onEnvModeChange={onEnvModeChangeStable}
+                                      startFromOrigin={startFromOrigin}
+                                      onStartFromOriginChange={onStartFromOriginChange}
+                                      envMode={envMode}
+                                      {...(canOverrideServerThreadEnvMode
+                                        ? {
+                                            activeThreadBranchOverride: activeThreadBranch,
+                                            onActiveThreadBranchOverrideChange:
+                                              setPendingServerThreadBranch,
+                                          }
+                                        : {})}
+                                      envLocked={envLocked}
+                                      onComposerFocusRequest={scheduleComposerFocusStable}
+                                      {...(canCheckoutPullRequestIntoThread
+                                        ? {
+                                            onCheckoutPullRequestRequest:
+                                              openPullRequestDialogStable,
+                                          }
+                                        : {})}
+                                      {...(canChangeEnvironment
+                                        ? { onEnvironmentChange: onEnvironmentChangeStable }
+                                        : {})}
+                                      availableEnvironments={logicalProjectEnvironments}
+                                    />
+                                  ) : undefined
+                                }
                                 permissionsShownInStrip={
-                                  showComposerContextStrip && !isServerThread
+                                  showEffectiveComposerContextStrip && !isServerThread
                                 }
                                 promptRef={promptRef}
                                 composerImagesRef={composerImagesRef}
@@ -4017,7 +4059,7 @@ export default function ChatView(props: ChatViewProps) {
                             data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
                             className="relative z-0"
                           >
-                            {showComposerContextStrip && (
+                            {showEffectiveComposerContextStrip && (
                               <div className="pointer-events-auto">
                                 <BranchToolbar
                                   forceNewWorktree={multipleModelSelections !== null}

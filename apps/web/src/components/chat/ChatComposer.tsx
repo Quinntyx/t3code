@@ -395,6 +395,8 @@ export interface ChatComposerProps {
   isPreparingWorktree: boolean;
   canSteer: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
+  /** The started thread's run context, at the controls' left end beside the attach button. */
+  runContextChip?: ReactNode;
   resumeCompactionTokens: number | null;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
@@ -3959,6 +3961,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 {composerAttachButton && !dictationTakesFooter ? (
                   <div className="me-2">{composerAttachButton}</div>
                 ) : null}
+                {props.runContextChip}
                 <div
                   data-chat-composer-actions="right"
                   data-chat-composer-transition-actions="true"
@@ -4016,6 +4019,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             className="relative flex min-w-0 items-center gap-0.5 ps-(--chat-composer-row-ps) pe-(--chat-composer-row-pe) pt-1.5"
           >
             {composerAttachButton && !dictationTakesFooter ? composerAttachButton : null}
+            {props.runContextChip}
             <div
               ref={attachExpandedComposerControls}
               data-chat-composer-controls="footer"
