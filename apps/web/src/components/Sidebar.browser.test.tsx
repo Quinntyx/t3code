@@ -13,7 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -62,7 +62,7 @@ vi.mock("../commandPaletteBus", () => ({
 }));
 vi.mock("./sidebar/SidebarChrome", () => ({
   SidebarChromeHeader: ({ actions }: { actions?: ReactNode }) => actions ?? null,
-  SidebarChromeFooter: () => null,
+  SidebarChromeFooter: ({ settled }: { settled?: ReactNode }) => settled ?? null,
 }));
 
 const layoutOverrides = vi.hoisted(() => ({
@@ -542,5 +542,77 @@ describe("sidebar sections layout", () => {
     await expect
       .element(tabsScreen.getByRole("tab", { name: /Snoozed/ }))
       .toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("sidebar recently settled popover", () => {
+  it("lists settled threads with un-settle and view actions when sections are tabs", async () => {
+    using stack = new DisposableStack();
+    stack.defer(() => {
+      layoutOverrides.sidebarSections = "shelves";
+    });
+    layoutOverrides.sidebarSections = "tabs";
+    const currentProject = project("active");
+    const settled = [0, 1].map((index) =>
+      makeThreadFixture({
+        environmentId: currentProject.environmentId,
+        projectId: currentProject.id,
+        id: ThreadId.make(`settled-${index}`),
+        title: `Settled thread ${index}`,
+        settledOverride: "settled",
+        settledAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const threadRef = {
+      environmentId: currentProject.environmentId,
+      threadId: ThreadId.make("thread-0"),
+    };
+    vi.mocked(useProjects).mockReturnValue([currentProject]);
+    vi.mocked(useQuietThreadShells).mockReturnValue(settled);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
+    vi.mocked(useServerConfigs).mockReturnValue(
+      new Map([
+        [
+          currentProject.environmentId,
+          {
+            scratchWorkspaceRoot: null,
+            shellThreadFamilies: false,
+          } as unknown as EnvironmentServerConfig,
+        ],
+      ]),
+    );
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: {
+        environmentId: currentProject.environmentId,
+        projectId: currentProject.id,
+      },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: threadRef,
+    });
+    vi.mocked(useOrchestrationCommand).mockReturnValue(
+      vi.fn().mockResolvedValue({ _tag: "Success" }),
+    );
+    vi.mocked(readEnvironmentScope).mockReturnValue(true);
+    vi.mocked(useEnvironmentScope).mockReturnValue(true);
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+    const button = screen.getByRole("button", { name: "Recently settled" });
+    await expect.element(button).toBeInTheDocument();
+    await userEvent.click(button);
+    await expect.element(page.getByText("Settled thread 0")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: /Un-settle Settled thread 0/ }))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: /Open Settled thread 0 without un-settling/ }))
+      .toBeInTheDocument();
   });
 });

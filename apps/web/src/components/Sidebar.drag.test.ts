@@ -120,26 +120,29 @@ describe("sidebar collision detection", () => {
     },
   );
 
-  it("selects the Idle tab when the pointer ends on it", () => {
-    const args = collisionArgs();
-    const tabId = sidebarSectionDropId("active");
-    const tab = {
-      ...args.droppableContainers[0]!,
-      id: tabId,
-      key: tabId,
-      rect: {
-        current: { top: 890, bottom: 920, left: 0, right: 260, width: 260, height: 30 },
-      },
-    };
-    const detector = createSidebarCollisionDetection(() => true);
-    expect(
-      detector({
-        ...args,
-        pointerCoordinates: { x: 150, y: 900 },
-        droppableContainers: [...args.droppableContainers, tab],
-      })[0]?.id,
-    ).toBe(tabId);
-  });
+  it.each(["active", "settled"] as const)(
+    "selects the %s tab/button drop target when the pointer ends on it",
+    (section) => {
+      const args = collisionArgs();
+      const targetId = sidebarSectionDropId(section);
+      const target = {
+        ...args.droppableContainers[0]!,
+        id: targetId,
+        key: targetId,
+        rect: {
+          current: { top: 890, bottom: 920, left: 0, right: 260, width: 260, height: 30 },
+        },
+      };
+      const detector = createSidebarCollisionDetection(() => true);
+      expect(
+        detector({
+          ...args,
+          pointerCoordinates: { x: 150, y: 900 },
+          droppableContainers: [...args.droppableContainers, target],
+        })[0]?.id,
+      ).toBe(targetId);
+    },
+  );
 
   it.each([
     { sourceSection: "active", pins: 0 },

@@ -61,16 +61,25 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="sidebar"]', styles: "app sidebar" },
   { selector: '[data-slot="sidebar-inner"]', styles: "sidebar surface" },
   { selector: "[data-sidebar-control]", styles: "sidebar toggle container" },
+  { selector: "[data-sidebar-search-group]", styles: "fixed header around the sidebar search row" },
   {
     selector: "[data-sidebar-header-actions]",
     styles: "search row's icon buttons when the search row is hidden",
   },
   { selector: "[data-sidebar-tabs]", styles: "bottom Idle/Working/Snoozed tab switcher" },
   {
+    selector: "[data-sidebar-settled-button]",
+    styles: "recently settled button in the sidebar footer",
+  },
+  {
     selector: "[data-sidebar-column]",
     styles: 'sliding tab column, ="idle" | "working" | "snoozed"',
   },
   { selector: "[data-thread-item]", styles: "sidebar thread row" },
+  {
+    selector: "[data-sidebar-row-title]",
+    styles: "thread row title; the redesign gives slim rows the clipped-edge fade",
+  },
   {
     selector: '[data-slot="project-monogram"]',
     styles: "project icon with letters; its svg holds the tile",

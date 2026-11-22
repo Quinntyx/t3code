@@ -273,6 +273,7 @@ import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { useThemeLayout } from "../hooks/useTheme";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderActions } from "./sidebar/SidebarHeaderActions";
+import { SidebarSettledPopover } from "./sidebar/SidebarSettledPopover";
 import { SidebarTabs, type SidebarTab } from "./sidebar/SidebarTabs";
 import { SidebarTrack } from "./sidebar/SidebarTrack";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
@@ -498,6 +499,8 @@ function useSidebarThreads(input: {
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
+  /** Opens the recently settled popover, which pages older settled threads into the list. */
+  readonly settledPopoverOpen?: boolean;
 }) {
   const {
     projectScopeKey,
@@ -512,6 +515,7 @@ function useSidebarThreads(input: {
     routeRowThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
+    settledPopoverOpen = false,
   } = input;
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
@@ -578,7 +582,7 @@ function useSidebarThreads(input: {
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
-    expanded: settledShelfExpanded,
+    expanded: settledShelfExpanded || settledPopoverOpen,
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
@@ -1172,6 +1176,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<SidebarTab>("idle");
+  const [settledPopoverOpen, setSettledPopoverOpen] = useState(false);
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
@@ -1569,6 +1574,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+    settledPopoverOpen,
   });
 
   // A draft joins its owner's stack only where that owner is listed in a stacking section.
@@ -4081,8 +4087,33 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       </SidebarGroup>
     );
   };
+  const settledButton =
+    sidebarSectionsLayout === "tabs" ? (
+      <SidebarSettledPopover
+        settledThreads={settledThreads}
+        projectByKey={projectByKey}
+        projectDisplayNameByKey={projectDisplayNameByKey}
+        onOpenChange={setSettledPopoverOpen}
+        hiddenCount={hiddenSettledCount}
+        showMore={{
+          loading: olderSettledShelf.loading,
+          failed: olderSettledShelf.failed,
+          run: () => {
+            olderSettledShelf.retry();
+            showMoreSettled();
+          },
+        }}
+        onUnsettle={(thread) => {
+          attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
+          navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
+        }}
+        onOpen={(thread) => navigateToThread(scopeThreadRef(thread.environmentId, thread.id))}
+      />
+    ) : null;
   const sidebarFixedHeader = (
-    <SidebarGroup className="z-[1]">{sidebarSearchRegion.searchRow}</SidebarGroup>
+    <SidebarGroup className="z-[1]" data-sidebar-search-group="">
+      {sidebarSearchRegion.searchRow}
+    </SidebarGroup>
   );
   const tabItemsIdle = sidebarListItems.filter((item) =>
     item.kind === "marker"
@@ -4138,7 +4169,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             counts={{ working: workingThreadCount, snoozed: visibleSnoozedThreads.length }}
             onValueChange={setActiveTab}
           />
-          <SidebarChromeFooter />
+          <SidebarChromeFooter settled={settledButton} />
         </DndContext>
       ) : (
         <>
@@ -4149,7 +4180,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           >
             {renderThreadColumn(sidebarListItems)}
           </SidebarContent>
-          <SidebarChromeFooter />
+          <SidebarChromeFooter settled={settledButton} />
         </>
       )}
     </SidebarFolderDrop>
