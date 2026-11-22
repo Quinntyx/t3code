@@ -1,7 +1,7 @@
 import {
   EnvironmentId,
-  ThreadId,
   RunId,
+  ThreadId,
   UsageDay,
   USAGE_CONTRACT_VERSION,
   type UsageModelFilter,
@@ -42,7 +42,7 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
   const environments = ids.map((id) => {
     const environmentId = EnvironmentId.make(id);
     const rates = Promise.withResolvers<
-      AsyncResult.Success<typeof pricing> | AsyncResult.Failure<never, unknown>
+      AsyncResult.Success<typeof pricing> | AsyncResult.Failure<never, Error>
     >();
     const scan = Promise.withResolvers<UsageSummary>();
     const scanStarted = Promise.withResolvers<void>();
@@ -81,7 +81,14 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
         run: (
           _registry: AtomRegistry.AtomRegistry,
           { environmentId }: { environmentId: EnvironmentId },
-        ) => get(environmentId).rates.promise,
+        ) =>
+          Effect.promise(() => get(environmentId).rates.promise).pipe(
+            Effect.flatMap((result) =>
+              AsyncResult.isSuccess(result)
+                ? Effect.succeed(result.value)
+                : Effect.failCause(result.cause),
+            ),
+          ),
       },
     },
     presentations: {
@@ -91,8 +98,8 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
   return { registry, environments, requested, refresh: () => refreshUsage(options) };
 }
 
-describe("thread usage revision", () => {
-  it("tracks nested delegate completion without refreshing for forks, side chats or streaming", () => {
+describe("threadUsageRevision", () => {
+  it("changes when a thread or nested subagent finishes a run and ignores unrelated threads", () => {
     const root = {
       id: ThreadId.make("root"),
       lineage: {

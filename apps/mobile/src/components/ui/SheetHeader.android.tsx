@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { View } from "react-native";
 
 import { AndroidHeaderIconButton } from "./AndroidScreenHeader.android";
@@ -7,10 +8,11 @@ import { Button } from "./Button";
 import type { SheetCloseButtonProps, SheetHeaderProps } from "./SheetHeader.types";
 
 export function SheetCloseButton(props: SheetCloseButtonProps) {
+  const gt = useGT();
   return (
     <AndroidHeaderIconButton
       icon="xmark"
-      accessibilityLabel={props.accessibilityLabel ?? (props.onCancel ? "Cancel" : "Close")}
+      accessibilityLabel={props.accessibilityLabel ?? (props.onCancel ? gt("Cancel") : gt("Close"))}
       disabled={props.disabled}
       onPress={props.onCancel ?? props.onClose}
     />

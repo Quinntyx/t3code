@@ -1,4 +1,5 @@
 import { Pressable, View } from "react-native";
+import { useGT } from "gt-react-native";
 import {
   compactTrajectoryLabel,
   type AgentTrajectorySummary,
@@ -16,6 +17,7 @@ export function ThreadTrajectorySegments({
   readonly compact?: boolean;
   readonly measurement?: boolean;
 }) {
+  const gt = useGT();
   const Segment = measurement ? View : Pressable;
   return summary.map((segment) => {
     const label = compact ? compactTrajectoryLabel(segment.label) : segment.label;
@@ -27,7 +29,7 @@ export function ThreadTrajectorySegments({
         <Segment
           accessibilityRole="button"
           accessibilityLabel={segment.label}
-          accessibilityHint="Show breakdown"
+          accessibilityHint={gt("Show breakdown")}
           onPress={measurement ? undefined : () => alert(segment.title, segment.details.join("\n"))}
           className="min-h-11 justify-center px-1"
         >

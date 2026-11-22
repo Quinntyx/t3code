@@ -1,10 +1,10 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   UsageLimitSourceError,
-  type UsageLimitSourceAccount,
-  type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditOutcome,
+  type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
+  type ProviderDriverKind,
   type ServerProvider,
   type ServerSettings,
   UsageLimitSourceConfig,
@@ -12,7 +12,6 @@ import {
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
-import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -31,6 +30,7 @@ import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretReso
 import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
+import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
 export class UsageLimitSources extends Context.Service<
@@ -59,109 +59,45 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   }
 }
 
+/**
+ * A refused read of one account keeps its last good reading, as provider probes keep their bars
+ * (see ServerProviderUsageLimits); a reading with none to keep stays listed as unreadable.
+ */
+function keepLastGoodReadings(
+  previous: ReadonlyArray<UsageLimitSourceSnapshot>,
+  next: ReadonlyArray<UsageLimitSourceSnapshot>,
+): ReadonlyArray<UsageLimitSourceSnapshot> {
+  return next.map((source) => {
+    // Auth file names can be reused, so only the same hub and login may lend a reading.
+    const before = previous.find(
+      (candidate) => candidate.id === source.id && candidate.endpoint === source.endpoint,
+    );
+    if (!before) return source;
+    return {
+      ...source,
+      accounts: source.accounts.map((account) => {
+        if (account.usageLimits.unavailable?.reason !== "probeFailed") return account;
+        // Without a listed login, a reused auth file name cannot be told apart from the old one.
+        if (account.email === undefined && account.workspaceId === undefined) return account;
+        const last = before.accounts.find(
+          (candidate) =>
+            candidate.id === account.id &&
+            candidate.driver === account.driver &&
+            // Fingerprinted Antigravity readings omit the listed identity, so they are never lent.
+            candidate.usageLimits.credentialFingerprint === undefined &&
+            candidate.email === account.email &&
+            candidate.workspaceId === account.workspaceId,
+        );
+        return last && !last.usageLimits.unavailable ? last : account;
+      }),
+    };
+  });
+}
+
 function missingManagementKey(config: UsageLimitSourceConfig): string {
   return typeof config.managementKey === "string"
     ? "No management key configured."
     : "Could not read the management key from its secret provider.";
-}
-
-function differs(a: string | undefined, b: string | undefined): boolean {
-  return a !== undefined && b !== undefined && a !== b;
-}
-
-function sameAccountIdentity(
-  previous: UsageLimitSourceAccount,
-  next: UsageLimitSourceAccount,
-): boolean {
-  return (
-    !differs(next.email?.toLowerCase(), previous.email?.toLowerCase()) &&
-    (next.workspaceId === undefined || next.workspaceId === previous.workspaceId)
-  );
-}
-
-function mergeAccount(
-  previous: UsageLimitSourceAccount | undefined,
-  next: UsageLimitSourceAccount,
-): UsageLimitSourceAccount {
-  if (!previous || !sameAccountIdentity(previous, next)) {
-    return next;
-  }
-  const usageLimits =
-    resolveUsageLimitsAfterProbe({
-      published: previous.usageLimits,
-      probed: next.usageLimits,
-    }) ?? next.usageLimits;
-  if (usageLimits !== previous.usageLimits) {
-    return usageLimits === next.usageLimits ? next : { ...next, usageLimits };
-  }
-  return {
-    ...next,
-    ...(next.email === undefined && previous.email !== undefined ? { email: previous.email } : {}),
-    ...(next.email === undefined && next.label === undefined && previous.label !== undefined
-      ? { label: previous.label }
-      : {}),
-    ...(next.plan === undefined && previous.plan !== undefined ? { plan: previous.plan } : {}),
-    ...(next.workspaceId === undefined && previous.workspaceId !== undefined
-      ? { workspaceId: previous.workspaceId }
-      : {}),
-    usageLimits,
-  };
-}
-
-function mergeSourceSnapshots(
-  previous: ReadonlyArray<UsageLimitSourceSnapshot>,
-  next: ReadonlyArray<UsageLimitSourceSnapshot>,
-): ReadonlyArray<UsageLimitSourceSnapshot> {
-  if (previous.length === 0) return next;
-  const previousById = new Map(previous.map((source) => [source.id, source] as const));
-  return next.map((source) => {
-    const prior = previousById.get(source.id);
-    if (
-      !prior ||
-      prior === source ||
-      prior.url !== source.url ||
-      source.error !== undefined ||
-      prior.accounts.length === 0 ||
-      source.accounts.length === 0
-    ) {
-      return source;
-    }
-    const priorAccounts = new Map(
-      prior.accounts.map((account) => [`${account.driver}:${account.id}`, account] as const),
-    );
-    let changed = false;
-    const accounts = source.accounts.map((account) => {
-      const merged = mergeAccount(priorAccounts.get(`${account.driver}:${account.id}`), account);
-      if (merged !== account) changed = true;
-      return merged;
-    });
-    return changed ? { ...source, accounts } : source;
-  });
-}
-
-function clearCachedResetCredits(
-  snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
-  sourceId: UsageLimitSourceId,
-  accountId: string,
-): ReadonlyArray<UsageLimitSourceSnapshot> {
-  return snapshots.map((source) =>
-    source.id !== sourceId
-      ? source
-      : {
-          ...source,
-          accounts: source.accounts.map((account) => {
-            if (
-              account.driver !== "codex" ||
-              account.id !== accountId ||
-              account.usageLimits.resetCredits === undefined
-            ) {
-              return account;
-            }
-            const { resetCredits: _, ...usageLimits } = account.usageLimits;
-            return { ...account, usageLimits };
-          }),
-        },
-  );
 }
 
 export const readSourceManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
@@ -192,11 +128,18 @@ export const make = Effect.gen(function* () {
     config: UsageLimitSourceConfig,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const url = URL.parse(config.url);
     const base = {
       id,
       kind: config.kind,
       label: sourceLabel(id, config),
       url: config.url,
+      ...(url && /^https?:$/.test(url.protocol)
+        ? {
+            origin: url.origin,
+            endpoint: `${url.origin}${url.pathname.replace(/(\/management\.html)?\/*$/i, "")}`,
+          }
+        : {}),
       checkedAt,
     } as const;
     const managementKey = yield* readManagementKey(config);
@@ -216,11 +159,10 @@ export const make = Effect.gen(function* () {
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
     next: ReadonlyArray<UsageLimitSourceSnapshot>,
   ) {
-    const published = yield* Ref.modify(stateRef, (previous) => {
-      const merged = mergeSourceSnapshots(previous, next);
-      return Equal.equals(previous, merged) ? [null, previous] : [merged, merged];
-    });
-    if (published !== null) yield* PubSub.publish(changes, published);
+    const changed = yield* Ref.modify(stateRef, (previous) =>
+      Equal.equals(previous, next) ? [false, previous] : [true, next],
+    );
+    if (changed) yield* PubSub.publish(changes, next);
   });
 
   // Serialize refreshes so slow old-settings reads cannot resurrect removed sources after newer refreshes.
@@ -238,7 +180,7 @@ export const make = Effect.gen(function* () {
       ([id, config]) => readSource(id as UsageLimitSourceId, config),
       { concurrency: 4 },
     );
-    yield* publish(snapshots);
+    yield* publish(keepLastGoodReadings(yield* Ref.get(stateRef), snapshots));
   }).pipe(Effect.ignoreCause({ log: true }));
 
   // Coalesce concurrent callers into at most one queued follow-up on the service scope.
@@ -286,11 +228,7 @@ export const make = Effect.gen(function* () {
       input.accountId,
       input.creditId,
     );
-    if (result.outcome !== "nothingToReset") {
-      yield* Ref.update(stateRef, (previous) =>
-        clearCachedResetCredits(previous, input.sourceId, input.accountId),
-      );
-    }
+    // A redemption changes the reading, so a refused re-read must not bring back the one before it.
     const snapshot = yield* readSource(input.sourceId, config);
     const previous = yield* Ref.get(stateRef);
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
@@ -390,4 +328,65 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(UsageLimitSources, make).pipe(
   Layer.provide(SecretResolverLayer.layer),
+);
+
+/** A hub answers with a usage limit only when every account it routes the driver to is spent. */
+export function hubPoolResetAt(
+  sources: ReadonlyArray<UsageLimitSourceSnapshot>,
+  driver: ProviderDriverKind,
+  model: string | null,
+  now: number,
+): string | null {
+  let earliest: number | null = null;
+  for (const source of sources) {
+    for (const account of source.accounts) {
+      if (account.driver !== driver) continue;
+      // An unread account may be the one still blocked, so its refill is unknown.
+      if (account.usageLimits.unavailable) return null;
+      const spent = account.usageLimits.windows.filter(
+        (window) => window.usedPercent >= 100 && windowLimitsModel(window, model),
+      );
+      if (spent.length === 0) return null;
+      const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
+      if (resets.some((reset) => !Number.isFinite(reset))) return null;
+      const recoversAt = Math.max(...resets);
+      if (recoversAt <= now) return null;
+      earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+    }
+  }
+  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
+}
+
+export class UsageLimitResetFallback extends Context.Reference<{
+  readonly resetAt: (
+    driver: ProviderDriverKind,
+    endpoint: string,
+    model: string | null,
+  ) => Effect.Effect<string | null>;
+}>("t3/usage/UsageLimitResetFallback", {
+  defaultValue: () => ({ resetAt: () => Effect.succeed(null) }),
+}) {}
+
+export const layerResetFallback = Layer.effect(
+  UsageLimitResetFallback,
+  Effect.gen(function* () {
+    const sources = yield* UsageLimitSources;
+    return {
+      resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (driver, endpoint, model) {
+        // Only the hub at the instance's endpoint serves its turns.
+        const atEndpoint = Effect.map(sources.current, (current) =>
+          current.filter((source) => source.origin === endpoint),
+        );
+        if ((yield* atEndpoint).length === 0) return null;
+        // The pool usually ran out after the last poll, so the cached accounts still show room.
+        yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
+        return hubPoolResetAt(
+          yield* atEndpoint,
+          driver,
+          model,
+          DateTime.toEpochMillis(yield* DateTime.now),
+        );
+      }),
+    };
+  }),
 );

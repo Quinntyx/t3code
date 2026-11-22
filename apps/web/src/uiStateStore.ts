@@ -1,12 +1,13 @@
 import { Debouncer } from "@tanstack/react-pacer";
-import type {
-  ProjectCloneLayout,
+import {
+  type ProjectCloneLayout,
   PullRequestMergeMethod,
-  SourceControlProviderKind,
+  type SourceControlProviderKind,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { Atom } from "effect/reactivity";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
-import { Atom } from "effect/reactivity";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 2;
@@ -116,6 +117,19 @@ function sanitizeOptionalKey(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
+
+function isProjectCloneLayout(value: unknown): value is ProjectCloneLayout {
+  return value === "standard" || value === "worktree-container";
+}
+
+// An unknown kind is harmless: the publish target falls back to the first one.
+function sanitizeProviderKind(value: unknown): SourceControlProviderKind | null {
+  return typeof value === "string" && value.length > 0
+    ? (value as SourceControlProviderKind)
+    : null;
+}
+
 function sanitizeTimestampRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
@@ -129,21 +143,6 @@ function sanitizeTimestampRecord(value: unknown): Record<string, string> {
         Number.isFinite(Date.parse(entry[1])),
     ),
   );
-}
-
-function isPullRequestMergeMethod(value: unknown): value is PullRequestMergeMethod {
-  return value === "merge" || value === "squash" || value === "rebase";
-}
-
-function isProjectCloneLayout(value: unknown): value is ProjectCloneLayout {
-  return value === "standard" || value === "worktree-container";
-}
-
-// An unknown kind is harmless: the publish target falls back to the first one.
-function sanitizeProviderKind(value: unknown): SourceControlProviderKind | null {
-  return typeof value === "string" && value.length > 0
-    ? (value as SourceControlProviderKind)
-    : null;
 }
 
 export function parsePersistedState(parsed: PersistedUiState): UiState {
@@ -248,15 +247,10 @@ export function persistState(state: UiState): void {
     return;
   }
   try {
-    const projectExpandedById = Object.fromEntries(
-      Object.entries(state.projectExpandedById).filter(
-        ([key]) => key !== LEGACY_PROJECT_EXPANSION_DEFAULT_KEY,
-      ),
-    );
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
-        projectExpandedById,
+        projectExpandedById: state.projectExpandedById,
         projectOrder: state.projectOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         hiddenThreadKeys: state.hiddenThreadKeys,

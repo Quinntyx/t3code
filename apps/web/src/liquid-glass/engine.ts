@@ -76,7 +76,7 @@ export interface LiquidGlassController {
   stop(): void;
 }
 
-function supportsLiquidGlass(): boolean {
+export function supportsLiquidGlass(): boolean {
   if (typeof window === "undefined") return false;
   if (!/Chrome\/|Chromium\/|Edg\//.test(navigator.userAgent)) return false;
   return window.CSS?.supports("backdrop-filter", "url(#liquid-glass)") === true;

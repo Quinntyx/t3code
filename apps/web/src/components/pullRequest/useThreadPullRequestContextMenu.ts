@@ -2,14 +2,17 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { ProjectId, ScopedThreadRef } from "@t3tools/contracts";
+import { msg } from "gt-react";
 
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { m } from "~/i18n/messages";
 import { openChangeRequestInRightPanel } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { changeRequestTermKind } from "./changeRequestTerm";
 import {
   buildThreadPullRequestContextMenuItems,
   type ThreadPullRequestContextMenuAction,
@@ -82,7 +85,17 @@ export function useThreadPullRequestContextMenu({
       case "merge": {
         const confirmed =
           api.contextMenu.supportsInPlaceConfirm ||
-          (await api.dialogs.confirm(`Merge ${terminology.singular} #${target.reference.number}?`));
+          (await api.dialogs.confirm(
+            m(
+              msg(
+                "Merge {term, select, mr {merge request} cr {change request} other {pull request}} #{number}?",
+                {
+                  term: changeRequestTermKind(terminology),
+                  number: target.reference.number,
+                },
+              ),
+            ),
+          ));
         if (confirmed) await perform("merge");
         return;
       }
@@ -101,8 +114,9 @@ export function useThreadPullRequestContextMenu({
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not create thread",
-              description: failure instanceof Error ? failure.message : "An error occurred.",
+              title: m(msg("Could not create thread")),
+              description:
+                failure instanceof Error ? failure.message : m(msg("An error occurred.")),
             }),
           );
         }

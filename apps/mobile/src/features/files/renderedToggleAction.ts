@@ -1,4 +1,7 @@
+import { msg } from "gt-react-native";
+
 import type { AppBarAction } from "../../components/ui/AppBar.types";
+import { m } from "../../i18n/messages";
 
 /** The icon names the view a tap switches to, like the desktop file header. */
 export function renderedToggleAction(input: {
@@ -8,10 +11,10 @@ export function renderedToggleAction(input: {
 }): AppBarAction {
   return {
     accessibilityLabel: input.rendered
-      ? "Show source"
+      ? m(msg("Show source"))
       : input.table
-        ? "Show table"
-        : "Show preview",
+        ? m(msg("Show table"))
+        : m(msg("Show preview")),
     icon: input.rendered
       ? "chevron.left.forwardslash.chevron.right"
       : input.table

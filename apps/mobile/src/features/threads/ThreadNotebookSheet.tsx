@@ -1,5 +1,5 @@
 /* oxlint-disable react/no-array-index-key -- Snapshot outputs have no IDs; ordinals identify them within a cell. */
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type {
@@ -10,6 +10,7 @@ import type {
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { Image } from "expo-image";
+import { T, useGT, Var } from "gt-react-native";
 import { useState, useSyncExternalStore } from "react";
 import { AppState, Platform, Pressable, ScrollView as NativeScrollView, View } from "react-native";
 import { ScrollView as GestureScrollView } from "react-native-gesture-handler";
@@ -22,9 +23,10 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
 import type { NotebookView } from "../../persistence/mobile-preferences";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
@@ -36,12 +38,13 @@ const subscribeAppState = (notify: () => void) => {
 const appActive = () => AppState.currentState === "active";
 
 export function ThreadNotebookSheet({ route }: StaticScreenProps<NotebookTarget>) {
+  const gt = useGT();
   const navigation = useNavigation();
   const focused = useIsFocused();
   const active = useSyncExternalStore(subscribeAppState, appActive, () => false);
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <SheetHeader title="Notebook" onClose={() => navigation.goBack()} />
+      <SheetHeader title={gt("Notebook")} onClose={() => navigation.goBack()} />
       <ScreenContent>
         <NotebookContent
           key={scopedThreadKey(route.params)}
@@ -54,6 +57,7 @@ export function ThreadNotebookSheet({ route }: StaticScreenProps<NotebookTarget>
 }
 
 function NotebookContent({ target, visible }: { target: NotebookTarget; visible: boolean }) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const query = useEnvironmentQuery(
     visible
@@ -68,7 +72,7 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
   const view = AsyncResult.isSuccess(preferences)
     ? preferences.value.notebookViews?.[threadKey]
     : undefined;
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const updateView = (update: (current: NotebookView) => NotebookView) =>
     savePreferences({
       transform: (current) => ({
@@ -97,15 +101,19 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
       {query.error ? (
         <View className="gap-2">
           <Text accessibilityRole="alert" className="text-sm text-danger">
-            Could not load notebook. {query.error}
+            <T>
+              Could not load notebook. <Var>{query.error}</Var>
+            </T>
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Retry notebook"
+            accessibilityLabel={gt("Retry notebook")}
             onPress={query.refresh}
             className="min-h-11 justify-center"
           >
-            <Text className="text-sm text-link">Retry</Text>
+            <Text className="text-sm text-link">
+              <T>Retry</T>
+            </Text>
           </Pressable>
         </View>
       ) : null}
@@ -115,7 +123,7 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
             <Pressable
               key={entry.id}
               accessibilityRole="button"
-              accessibilityLabel={`Kernel ${entry.name}`}
+              accessibilityLabel={gt("Kernel {name}", { name: entry.name })}
               accessibilityState={{ selected: entry.id === kernel?.id }}
               onPress={() => updateView((current) => ({ ...current, selectedKernelId: entry.id }))}
               className={
@@ -133,7 +141,10 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
         <>
           <View className="gap-1">
             <Text className="text-sm font-t3-bold text-foreground">
-              {kernel.name} · {kernel.running ? "Running" : "Idle"}
+              {kernel.name} ·{" "}
+              {kernel.running
+                ? gt("Running", { $context: "notebook kernel status" })
+                : gt("Idle", { $context: "notebook kernel status" })}
             </Text>
             <Text numberOfLines={2} className="text-xs text-foreground-muted">
               {kernel.notebookPath}
@@ -141,7 +152,7 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
           </View>
           {kernel.cells.length === 0 ? (
             <Text className="py-6 text-center text-sm text-foreground-muted">
-              No cells in this kernel yet.
+              <T>No cells in this kernel yet.</T>
             </Text>
           ) : (
             kernel.cells.map((cell) => (
@@ -158,10 +169,10 @@ function NotebookContent({ target, visible }: { target: NotebookTarget; visible:
       ) : (
         <Text className="py-6 text-center text-sm text-foreground-muted">
           {query.isPending
-            ? "Loading notebook…"
+            ? gt("Loading notebook…")
             : query.error
-              ? "Notebook unavailable."
-              : "No notebook cells yet."}
+              ? gt("Notebook unavailable.")
+              : gt("No notebook cells yet.")}
         </Text>
       )}
     </ScrollView>
@@ -179,6 +190,7 @@ function NotebookCell({
   collapsed: NotebookView["collapsed"];
   toggle: (key: string) => void;
 }) {
+  const gt = useGT();
   const { nativeTextStyle } = useMarkdownPreviewStyles();
   const { appearance } = useAppearancePreferences();
   const codeStyle = {
@@ -191,7 +203,7 @@ function NotebookCell({
     <View className="overflow-hidden rounded-xl border border-border">
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Cell ${cell.index}`}
+        accessibilityLabel={gt("Cell {index}", { index: cell.index })}
         accessibilityState={{ expanded: !isCollapsed("cell") }}
         onPress={() => toggle(key("cell"))}
         className="min-h-11 flex-row items-center gap-2 px-3"
@@ -201,14 +213,18 @@ function NotebookCell({
           size={12}
           tintColorClassName="accent-foreground-muted"
         />
-        <Text className="flex-1 text-xs text-foreground-muted">Cell {cell.index}</Text>
+        <Text className="flex-1 text-xs text-foreground-muted">
+          <T>
+            Cell <Var>{cell.index}</Var>
+          </T>
+        </Text>
         <Text className="text-xs text-foreground-muted">{cell.cellType}</Text>
       </Pressable>
       {!isCollapsed("cell") ? (
         <>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Toggle source for cell ${cell.index}`}
+            accessibilityLabel={gt("Toggle source for cell {index}", { index: cell.index })}
             accessibilityState={{ expanded: !isCollapsed("source") }}
             onPress={() => toggle(key("source"))}
             className="min-h-11 flex-row items-center gap-2 px-3"
@@ -219,12 +235,17 @@ function NotebookCell({
               tintColorClassName="accent-link"
             />
             <Text style={codeStyle} className="text-xs text-link">
-              {cell.cellType === "code" ? `In [${count}]:` : "Source"}
+              {cell.cellType === "code"
+                ? // oxlint-disable-next-line t3code/no-untranslated-copy -- Jupyter cell input prompt token
+                  `In [${count}]:`
+                : gt("Source", { $context: "notebook cell source" })}
             </Text>
           </Pressable>
           <View className="px-3 pb-3">
             {isCollapsed("source") ? (
-              <Text className="text-xs text-foreground-muted">Source collapsed</Text>
+              <Text className="text-xs text-foreground-muted">
+                <T>Source collapsed</T>
+              </Text>
             ) : cell.cellType === "markdown" ? (
               <SelectableMarkdownText
                 markdown={cell.source}
@@ -243,7 +264,7 @@ function NotebookCell({
             <View className="border-t border-border">
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Toggle outputs for cell ${cell.index}`}
+                accessibilityLabel={gt("Toggle outputs for cell {index}", { index: cell.index })}
                 accessibilityState={{ expanded: !isCollapsed("outputs") }}
                 onPress={() => toggle(key("outputs"))}
                 className="min-h-11 flex-row items-center gap-2 px-3"
@@ -253,14 +274,17 @@ function NotebookCell({
                   size={12}
                   tintColorClassName="accent-foreground-muted"
                 />
-                <Text
-                  style={codeStyle}
-                  className="text-xs text-foreground-muted"
-                >{`Out[${count}]:`}</Text>
+                <Text style={codeStyle} className="text-xs text-foreground-muted">
+                  {/* oxlint-disable-next-line t3code/no-untranslated-copy -- Jupyter cell output prompt token */}
+                  {`Out[${count}]:`}
+                </Text>
               </Pressable>
               {isCollapsed("outputs") ? (
                 <Text className="px-3 pb-3 text-xs text-foreground-muted">
-                  {cell.outputs.length} outputs collapsed
+                  {gt(
+                    "{count, plural, one {{count} output collapsed} other {{count} outputs collapsed}}",
+                    { count: cell.outputs.length },
+                  )}
                 </Text>
               ) : (
                 <View className="gap-3 px-3 pb-3">
@@ -269,7 +293,10 @@ function NotebookCell({
                       <NotebookImage
                         key={index}
                         uri={`data:${output.mimeType};base64,${output.data}`}
-                        label={`Cell ${cell.index} output ${index + 1}`}
+                        label={gt("Cell {cellIndex} output {outputIndex}", {
+                          cellIndex: cell.index,
+                          outputIndex: index + 1,
+                        })}
                       />
                     ) : (
                       <Text

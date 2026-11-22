@@ -1,9 +1,11 @@
-import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { useGT } from "gt-react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { hiddenThreadKeysAtom, showHiddenThreadsAtom } from "../../state/hidden-threads";
-import { updateMobilePreferencesAtom } from "../../state/preferences";
+import { saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { updateHiddenThreadKeys } from "./hidden-threads";
 import { showLocalThreadUndoNotice } from "./thread-undo-notice";
 
@@ -14,20 +16,18 @@ export function useHiddenThreads() {
 }
 
 export function useSetThreadHidden() {
-  const updatePreferences = useAtomSet(updateMobilePreferencesAtom, { mode: "promise" });
+  const gt = useGT();
+  const savePreferences = useAtomCommand(saveMobilePreferences, { reportFailure: false });
   const setHidden = async (thread: EnvironmentThreadShell, hidden: boolean): Promise<void> => {
-    const saved = await updatePreferences({
+    const result = await savePreferences({
       transform: (current) => ({
         hiddenThreadKeys: updateHiddenThreadKeys(current.hiddenThreadKeys ?? [], thread, hidden),
       }),
-    }).then(
-      () => true,
-      () => false,
-    );
-    if (!saved) {
+    });
+    if (result._tag !== "Success") {
       Dialog.alert(
-        hidden ? "Could not hide thread" : "Could not restore thread",
-        "Your device could not save this change. Please try again.",
+        hidden ? gt("Could not hide thread") : gt("Could not restore thread"),
+        gt("Your device could not save this change. Please try again."),
       );
       return;
     }

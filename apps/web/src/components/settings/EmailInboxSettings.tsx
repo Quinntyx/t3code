@@ -2,11 +2,12 @@ import { useState } from "react";
 import { EmailInboxAccountConfig, ServerSettings } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { useGT } from "gt-react";
 
 import { DraftInput } from "../ui/draft-input";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 const decodeAccounts = Schema.decodeOption(
@@ -17,24 +18,28 @@ const decodeCommand = Schema.decodeOption(
 );
 
 export function EmailInboxSettings() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
   const update = useUpdateScopedSettings();
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
 
   return (
-    <SettingsSection id="email-inbox" title="Inbox">
+    <SettingsSection id="email-inbox" title={gt("Inbox")}>
       <SettingsRow
         serverScoped
         settingKeys={["emailInboxEnabled"]}
         {...searchableSetting("email-inbox-enabled")}
-        description="Let agents in this environment search and read configured inboxes through native tools. Reading preserves unread flags. External MCP clients do not gain inbox access."
+        description={gt(
+          "Let agents in this environment search and read configured inboxes through native tools. Reading preserves unread flags. External MCP clients do not gain inbox access.",
+        )}
         control={
           <ScopedSwitch
             settingKeys={["emailInboxEnabled"]}
             checked={settings.emailInboxEnabled}
             onCheckedChange={(value) => update({ emailInboxEnabled: Boolean(value) })}
-            aria-label="Agents can read inboxes"
+            aria-label={gt("Agents can read inboxes")}
           />
         }
       />
@@ -44,13 +49,15 @@ export function EmailInboxSettings() {
             serverScoped
             settingKeys={["emailTaggingEnabled"]}
             {...searchableSetting("email-tagging-enabled")}
-            description="Allow explicitly authorized tag changes, including marking reviewed mail read. Sending still requires your review and Send in a draft card."
+            description={gt(
+              "Allow explicitly authorized tag changes, including marking reviewed mail read. Sending still requires your review and Send in a draft card.",
+            )}
             control={
               <ScopedSwitch
                 settingKeys={["emailTaggingEnabled"]}
                 checked={settings.emailTaggingEnabled}
                 onCheckedChange={(value) => update({ emailTaggingEnabled: Boolean(value) })}
-                aria-label="Agents can tag messages"
+                aria-label={gt("Agents can tag messages")}
               />
             }
           />
@@ -58,7 +65,9 @@ export function EmailInboxSettings() {
             serverScoped
             settingKeys={["emailNotmuchConfigFile"]}
             {...searchableSetting("email-notmuch-config")}
-            description="The notmuch config on the server machine. Leave empty for that host's existing default. T3 does not create a mailbox or run sync when reading."
+            description={gt(
+              "The notmuch config on the server machine. Leave empty for that host's existing default. T3 does not create a mailbox or run sync when reading.",
+            )}
             control={
               <div className="w-full sm:w-96">
                 <DraftInput
@@ -66,7 +75,7 @@ export function EmailInboxSettings() {
                   value={settings.emailNotmuchConfigFile}
                   onCommit={(value) => update({ emailNotmuchConfigFile: value })}
                   placeholder="~/.notmuch-config"
-                  aria-label="Inbox notmuch config"
+                  aria-label={gt("Inbox notmuch config")}
                   spellCheck={false}
                 />
               </div>
@@ -76,15 +85,16 @@ export function EmailInboxSettings() {
             serverScoped
             settingKeys={["emailInboxAccounts"]}
             {...searchableSetting("email-inbox-accounts")}
-            description={
-              'JSON account scopes, for example [{"name":"work","query":"path:work/**"}]. Use the sender account name for native replies. Only these scopes are accessible.'
-            }
+            description={gt(
+              "JSON account scopes, for example {example}. Use the sender account name for native replies. Only these scopes are accessible.",
+              { example: '[{"name":"work","query":"path:work/**"}]' },
+            )}
             control={
               <div className="w-full sm:w-96">
                 <DraftInput
                   size="sm"
                   value={JSON.stringify(settings.emailInboxAccounts)}
-                  aria-label="Inbox account scopes"
+                  aria-label={gt("Inbox account scopes")}
                   spellCheck={false}
                   onCommit={(value) => {
                     const decoded = decodeAccounts(value);
@@ -94,7 +104,7 @@ export function EmailInboxSettings() {
                         decoded.value.length
                     ) {
                       setAccountsError(
-                        "Enter a JSON array of unique account names and nonempty query scopes.",
+                        gt("Enter a JSON array of unique account names and nonempty query scopes."),
                       );
                       return;
                     }
@@ -114,21 +124,23 @@ export function EmailInboxSettings() {
             serverScoped
             settingKeys={["emailRefreshCommand"]}
             {...searchableSetting("email-refresh-command")}
-            description={
-              'Trusted sync argv as JSON, e.g. ["/path/to/mail-sync.sh"]. [] disables refresh. Sync may reconcile flags, expunge mail and run routing hooks; reads never run it automatically.'
-            }
+            description={gt(
+              'Trusted sync argv as JSON, e.g. ["/path/to/mail-sync.sh"]. [] disables refresh. Sync may reconcile flags, expunge mail and run routing hooks; reads never run it automatically.',
+            )}
             control={
               <div className="w-full sm:w-96">
                 <DraftInput
                   size="sm"
                   value={JSON.stringify(settings.emailRefreshCommand)}
-                  aria-label="Mail refresh command"
+                  aria-label={gt("Mail refresh command")}
                   spellCheck={false}
                   onCommit={(value) => {
                     const decoded = decodeCommand(value);
                     if (Option.isNone(decoded)) {
                       setCommandError(
-                        "Enter a JSON array containing the executable and its arguments, or [].",
+                        gt(
+                          "Enter a JSON array containing the executable and its arguments, or [].",
+                        ),
                       );
                       return;
                     }

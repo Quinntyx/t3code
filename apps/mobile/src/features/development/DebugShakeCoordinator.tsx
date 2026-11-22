@@ -32,8 +32,13 @@ async function openDebugShakeDraft(
 ) {
   try {
     const uri = await native!.captureScreenshot();
-    const attachments = await convertPastedImagesToAttachments({ uris: [uri], existingCount: 0 });
-    if (attachments.length === 0) throw new Error("Could not attach the screenshot.");
+    const { attachments, error } = await convertPastedImagesToAttachments({
+      uris: [uri],
+      existingCount: 0,
+    });
+    if (attachments.length === 0) {
+      throw new Error(error ?? "Could not attach the screenshot.");
+    }
     await waitForComposerDraftsLoaded();
     if (cancelled()) return;
     const draftKey = createNewTaskDraft({

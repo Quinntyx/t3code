@@ -12,6 +12,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -90,6 +91,7 @@ const makeHarness = Effect.fn("DiscoveryHostTest.makeHarness")(function* (
     Effect.provide(
       Layer.mergeAll(
         ManagedPolicy.layerTest(policy),
+        NetService.layer,
         Layer.succeed(HttpClient.HttpClient, http),
         Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({}),
         Layer.mock(ServerSecretStore.ServerSecretStore)({

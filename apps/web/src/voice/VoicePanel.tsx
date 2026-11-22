@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { Link } from "@tanstack/react-router";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { ArrowUp, AudioLines, MicOff, Square } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -20,20 +21,21 @@ import {
 type Target = { readonly environmentId: string; readonly threadId: string };
 
 const STATUS: Record<string, { readonly label: string; readonly tone: string }> = {
-  preparing: { label: "Starting", tone: "bg-muted-foreground/60" },
-  queued: { label: "Queued", tone: "bg-muted-foreground/60" },
-  starting: { label: "Starting", tone: "bg-muted-foreground/60" },
-  running: { label: "Running", tone: "bg-emerald-500" },
-  waiting: { label: "Needs you", tone: "bg-amber-500" },
-  completed: { label: "Done", tone: "bg-muted-foreground/40" },
-  failed: { label: "Failed", tone: "bg-destructive" },
-  interrupted: { label: "Stopped", tone: "bg-muted-foreground/40" },
-  cancelled: { label: "Stopped", tone: "bg-muted-foreground/40" },
-  rolled_back: { label: "Rolled back", tone: "bg-muted-foreground/40" },
-  idle: { label: "Idle", tone: "bg-muted-foreground/40" },
+  preparing: { label: msg("Starting"), tone: "bg-muted-foreground/60" },
+  queued: { label: msg("Queued"), tone: "bg-muted-foreground/60" },
+  starting: { label: msg("Starting"), tone: "bg-muted-foreground/60" },
+  running: { label: msg("Running"), tone: "bg-emerald-500" },
+  waiting: { label: msg("Needs you"), tone: "bg-amber-500" },
+  completed: { label: msg("Done"), tone: "bg-muted-foreground/40" },
+  failed: { label: msg("Failed"), tone: "bg-destructive" },
+  interrupted: { label: msg("Stopped"), tone: "bg-muted-foreground/40" },
+  cancelled: { label: msg("Stopped"), tone: "bg-muted-foreground/40" },
+  rolled_back: { label: msg("Rolled back"), tone: "bg-muted-foreground/40" },
+  idle: { label: msg("Idle"), tone: "bg-muted-foreground/40" },
 };
 
 function ThreadPill({ target }: { readonly target: Target }) {
+  const m = useMessages();
   const shell = useThreadShell(
     scopeThreadRef(EnvironmentId.make(target.environmentId), ThreadId.make(target.threadId)),
   );
@@ -47,12 +49,13 @@ function ThreadPill({ target }: { readonly target: Target }) {
     >
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", status.tone)} />
       <span className="min-w-0 flex-1 truncate font-medium text-foreground">{shell.title}</span>
-      <span className="shrink-0 text-3xs text-muted-foreground">{status.label}</span>
+      <span className="shrink-0 text-3xs text-muted-foreground">{m(status.label)}</span>
     </Link>
   );
 }
 
 export function VoicePanel({ visible }: { readonly visible: boolean }) {
+  const gt = useGT();
   const session = useSyncExternalStore(voiceSession.subscribe, voiceSession.getSnapshot);
   const audio = useSyncExternalStore(voiceAudio.subscribe, voiceAudio.snapshot);
   const [text, setText] = useState("");
@@ -87,27 +90,34 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
     );
     setSending(false);
     if (sent) setText((current) => (current === value ? "" : current));
-    else setError("Couldn't send. Check your device key and connection.");
+    else setError(gt("Couldn't send. Check your device key and connection."));
   };
   const toggleMicrophone = () => {
     setError(null);
     if (live) void voiceAudio.disconnect();
-    else void connectVoiceMicrophone().catch(() => setError("The microphone couldn't connect."));
+    else
+      void connectVoiceMicrophone().catch(() => setError(gt("The microphone couldn't connect.")));
   };
   const phase = audio.muted
-    ? "Muted"
+    ? gt("Muted")
     : audio.phase === "speaking"
-      ? "Speaking"
+      ? gt("Speaking")
       : audio.phase === "listening"
-        ? "Listening"
+        ? gt("Listening")
         : connecting
-          ? "Connecting…"
+          ? gt("Connecting…")
           : null;
 
   return (
-    <section aria-label="Voice" className="relative flex h-full min-h-0 flex-col overflow-hidden">
+    <section
+      aria-label={gt("Voice", { $context: "voice assistant panel" })}
+      className="relative flex h-full min-h-0 flex-col overflow-hidden"
+    >
       {threads.length ? (
-        <nav aria-label="Threads Voice is following" className="shrink-0 space-y-1.5 px-4 pt-4">
+        <nav
+          aria-label={gt("Threads Voice is following")}
+          className="shrink-0 space-y-1.5 px-4 pt-4"
+        >
           {threads.map((target) => (
             <ThreadPill key={`${target.environmentId}:${target.threadId}`} target={target} />
           ))}
@@ -116,16 +126,20 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
 
       <div
         role="log"
-        aria-label="Voice conversation"
-        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-5 py-6 scrollbar-gutter-both"
+        aria-label={gt("Voice conversation")}
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-5 py-6 wrap-anywhere scrollbar-gutter-both"
       >
         {session.messages.length === 0 ? (
           <div className="m-auto flex max-w-xs flex-col items-center gap-3 text-center">
             <AudioLines aria-hidden className="size-5 text-muted-foreground/70" />
             <p className="text-sm leading-relaxed text-muted-foreground">
               {needsKey
-                ? "Voice drives the threads this window can see. Add a Gemini key on this device to start."
-                : "Ask about your threads, start new work, or steer what's running. Type or talk."}
+                ? gt(
+                    "Voice drives the threads this window can see. Add a Gemini key on this device to start.",
+                  )
+                : gt(
+                    "Ask about your threads, start new work, or steer what's running. Type or talk.",
+                  )}
             </p>
             {needsKey ? (
               <Button
@@ -133,7 +147,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                 variant="outline"
                 size="sm"
               >
-                Set up Voice
+                <T>Set up Voice</T>
               </Button>
             ) : null}
           </div>
@@ -144,7 +158,9 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                 key={message.id}
                 className="max-w-[85%] self-end rounded-2xl bg-muted px-4 py-2.75 text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap text-foreground"
               >
-                <span className="sr-only">You: </span>
+                <span className="sr-only">
+                  <T>You:</T>{" "}
+                </span>
                 {message.text}
               </p>
             ) : (
@@ -152,7 +168,9 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                 key={message.id}
                 className="max-w-[68ch] self-start text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap text-foreground/90"
               >
-                <span className="sr-only">Voice: </span>
+                <span className="sr-only">
+                  <T>Voice:</T>{" "}
+                </span>
                 {message.text}
               </p>
             ),
@@ -167,7 +185,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
             <p role="alert" className="max-w-[440px] text-center text-xs text-destructive">
               {problem}{" "}
               <Link to="/settings/voice" hash="voice-key" className="underline underline-offset-4">
-                Voice settings
+                <T>Voice settings</T>
               </Link>
             </p>
           ) : phase ? (
@@ -190,21 +208,26 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                   <Button
                     variant={live ? "ghost" : "ghost-muted"}
                     size="icon-sm"
-                    aria-label={live ? "Turn voice off" : "Talk"}
+                    aria-label={live ? gt("Turn voice off") : gt("Talk")}
                     aria-pressed={live}
                     disabled={busy || audio.cleanupRequired}
                     onClick={toggleMicrophone}
                   />
                 }
               >
-                {live ? <AudioLines /> : <span className="text-xs font-medium">Aa</span>}
+                {live ? (
+                  <AudioLines />
+                ) : (
+                  // oxlint-disable-next-line t3code/no-untranslated-copy -- visual typography glyph for text mode
+                  <span className="text-xs font-medium">Aa</span>
+                )}
               </TooltipTrigger>
-              <TooltipPopup>{live ? "Turn voice off" : "Talk"}</TooltipPopup>
+              <TooltipPopup>{live ? gt("Turn voice off") : gt("Talk")}</TooltipPopup>
             </Tooltip>
             <div className="min-w-0 flex-1">
               <Input
                 unstyled
-                aria-label="Message Voice"
+                aria-label={gt("Message Voice")}
                 autoComplete="off"
                 value={text}
                 disabled={busy || sending}
@@ -219,7 +242,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                       <Button
                         variant="ghost-muted"
                         size="icon-sm"
-                        aria-label={audio.muted ? "Unmute" : "Mute"}
+                        aria-label={audio.muted ? gt("Unmute") : gt("Mute")}
                         aria-pressed={audio.muted}
                         onClick={muteVoice}
                       />
@@ -227,7 +250,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                   >
                     <MicOff />
                   </TooltipTrigger>
-                  <TooltipPopup>{audio.muted ? "Unmute" : "Mute"}</TooltipPopup>
+                  <TooltipPopup>{audio.muted ? gt("Unmute") : gt("Mute")}</TooltipPopup>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger
@@ -235,14 +258,16 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
                       <Button
                         variant="ghost-muted"
                         size="icon-sm"
-                        aria-label="Stop speaking"
+                        aria-label={gt("Stop speaking")}
                         onClick={() => voiceSession.interrupt()}
                       />
                     }
                   >
                     <Square />
                   </TooltipTrigger>
-                  <TooltipPopup>Stop speaking</TooltipPopup>
+                  <TooltipPopup>
+                    <T>Stop speaking</T>
+                  </TooltipPopup>
                 </Tooltip>
               </>
             ) : null}
@@ -250,7 +275,7 @@ export function VoicePanel({ visible }: { readonly visible: boolean }) {
               variant="glass"
               size="icon-sm"
               type="submit"
-              aria-label="Send"
+              aria-label={gt("Send")}
               disabled={busy || sending || !text.trim()}
             >
               <ArrowUp />

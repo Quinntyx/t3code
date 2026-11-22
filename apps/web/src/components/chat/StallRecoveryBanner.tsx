@@ -1,7 +1,9 @@
+import { msg, useGT } from "gt-react";
 import type { ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { CloudOffIcon } from "lucide-react";
 import { useState } from "react";
+import { m, type MessageResolver } from "../../i18n/messages";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { InlineButton } from "../ui/button";
 import { toastManager } from "../ui/toast";
@@ -21,25 +23,39 @@ type StallProps = {
  * The notice a stalled thread shows in place of its error. The provider's API was overloaded, so
  * T3 Code retries on its own and nothing needs fixing.
  */
-export function stallRecoveryBannerItem(props: StallProps): ComposerBannerStackItem {
+export function stallRecoveryBannerItem(
+  props: StallProps,
+  resolve: MessageResolver = m,
+): ComposerBannerStackItem {
   const nextAttempt =
     props.nextAttemptAt === null
       ? null
-      : formatUpcomingTimestamp(props.nextAttemptAt, props.timestampFormat);
+      : formatUpcomingTimestamp(
+          props.nextAttemptAt,
+          props.timestampFormat,
+          undefined,
+          undefined,
+          resolve,
+        );
   return {
     id: `stall-recovery:${props.threadId}`,
     variant: "warning",
     group: "environment",
     icon: <CloudOffIcon />,
-    title: "Provider overloaded",
+    title: resolve(msg("Provider overloaded")),
     description: nextAttempt
-      ? `T3 Code retries this thread on its own, next at ${nextAttempt}.`
-      : "T3 Code retries this thread on its own.",
+      ? resolve(
+          msg("T3 Code retries this thread on its own, next at {time}.", {
+            time: nextAttempt,
+          }),
+        )
+      : resolve(msg("T3 Code retries this thread on its own.")),
     actions: <StallActions {...props} />,
   };
 }
 
 function StallActions({ requestPending, onAction }: StallProps) {
+  const gt = useGT();
   const [pending, setPending] = useState<"stop" | "retry" | null>(null);
 
   async function run(action: "stop" | "retry") {
@@ -49,8 +65,8 @@ function StallActions({ requestPending, onAction }: StallProps) {
     } catch (cause) {
       toastManager.add({
         type: "error",
-        title: action === "stop" ? "Could not stop retrying" : "Could not retry now",
-        description: cause instanceof Error ? cause.message : "An error occurred.",
+        title: action === "stop" ? gt("Could not stop retrying") : gt("Could not retry now"),
+        description: cause instanceof Error ? cause.message : gt("An error occurred."),
       });
     }
     setPending(null);
@@ -64,14 +80,14 @@ function StallActions({ requestPending, onAction }: StallProps) {
         disabled={pending !== null || requestPending}
         onClick={() => void run("retry")}
       >
-        {pending === "retry" ? "Retrying..." : "Retry now"}
+        {pending === "retry" ? gt("Retrying...") : gt("Retry now")}
       </InlineButton>
       <InlineButton
         touchTarget="padded"
         disabled={pending !== null}
         onClick={() => void run("stop")}
       >
-        {pending === "stop" ? "Stopping..." : "Stop retrying"}
+        {pending === "stop" ? gt("Stopping...") : gt("Stop retrying")}
       </InlineButton>
     </span>
   );

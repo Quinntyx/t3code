@@ -3,6 +3,8 @@ import type {
   AcpRegistryPrepareResult,
   AcpRegistrySearchAgent,
 } from "@t3tools/contracts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { providerClients } from "../providerClients.ts";
 
@@ -13,10 +15,13 @@ export const FIRST_CLASS_REGISTRY_AGENT_IDS: ReadonlySet<string> = new Set(
   providerClients.definitions.flatMap((definition) => definition.acpRegistryAgentIds ?? []),
 );
 
-export function acpRegistryPrepareErrorMessage(error: unknown): string {
+export function acpRegistryPrepareErrorMessage(
+  error: unknown,
+  resolve: MFunctionType = mFallback,
+): string {
   return error instanceof Error && error.message.trim()
     ? error.message
-    : "The ACP could not be prepared.";
+    : resolve(msg("The ACP could not be prepared."));
 }
 
 export function applyAcpRegistryPrepareResult(
@@ -33,6 +38,7 @@ export function applyAcpRegistryPrepareResult(
 
 export function parseProviderHeaders(
   text: string,
+  resolve: MFunctionType = mFallback,
 ):
   | { readonly ok: true; readonly headers: Record<string, string> | undefined }
   | { readonly ok: false; readonly error: string } {
@@ -43,7 +49,7 @@ export function parseProviderHeaders(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "Headers must be valid JSON.",
+      error: error instanceof Error ? error.message : resolve(msg("Headers must be valid JSON.")),
     };
   }
   if (
@@ -52,7 +58,10 @@ export function parseProviderHeaders(
     Array.isArray(parsed) ||
     !Object.values(parsed).every((value) => typeof value === "string")
   ) {
-    return { ok: false, error: "Headers must be a JSON object with string values." };
+    return {
+      ok: false,
+      error: resolve(msg("Headers must be a JSON object with string values.")),
+    };
   }
   return { ok: true, headers: parsed as Record<string, string> };
 }

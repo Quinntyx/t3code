@@ -5,6 +5,9 @@ import {
 } from "@t3tools/contracts";
 import { isValidMcpToolName } from "@t3tools/shared/mcpRegistration";
 
+import { msg } from "gt-react";
+import { m } from "~/i18n/messages";
+
 /**
  * The tool prefix a new server gets: its name slugged, without a registry name's reverse-DNS
  * namespace, which would spend most of a tool name's length (`io.github.acme/notes` is `notes`).
@@ -23,13 +26,15 @@ export const validateEntry = (
   others: ReadonlyArray<RegisteredMcpServerEntry>,
 ): string | null => {
   if (!isValidMcpToolName(candidate.toolName)) {
-    return "The tool name must start with a lowercase letter and use only a-z, 0-9, _ and -.";
+    return m(
+      msg("The tool name must start with a lowercase letter and use only a-z, 0-9, _ and -."),
+    );
   }
   if (others.some((entry) => entry.toolName === candidate.toolName)) {
-    return "Another registered server already uses that tool name.";
+    return m(msg("Another registered server already uses that tool name."));
   }
   if (others.some((entry) => entry.id === candidate.id)) {
-    return "That server is already registered.";
+    return m(msg("That server is already registered."));
   }
   return null;
 };

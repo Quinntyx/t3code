@@ -31,7 +31,9 @@ function createTooltipHoverTracker() {
     },
     dismissUnfocused() {
       const tooltip = hovered;
-      if (!tooltip || tooltip.trigger.contains(tooltip.trigger.ownerDocument.activeElement)) {
+      if (!tooltip) return;
+      const focused = tooltip.trigger.ownerDocument.activeElement;
+      if (focused && tooltip.trigger.contains(focused) && focused.matches(":focus-visible")) {
         return;
       }
       hovered = null;
@@ -138,8 +140,10 @@ function TooltipPopup({
       <TooltipPositioner align={align} anchor={anchor} side={side} sideOffset={sideOffset}>
         <TooltipPrimitive.Popup
           className={cn(
-            "dropdown-glass relative flex origin-(--transform-origin) text-balance rounded-glass text-popover-foreground text-xs transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[inherit] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
-            variant === "glass" ? "shadow-xl shadow-black/25 before:hidden" : "shadow-md/5",
+            "relative flex origin-(--transform-origin) rounded-md text-popover-foreground text-xs transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            variant === "glass"
+              ? "dropdown-glass shadow-xl shadow-black/25 before:hidden"
+              : "border bg-popover not-dark:bg-clip-padding shadow-md/5",
             variant === "code"
               ? "max-w-120 wrap-anywhere text-left font-mono text-[11px] leading-relaxed"
               : "max-w-80 wrap-anywhere whitespace-normal leading-snug",
@@ -148,7 +152,7 @@ function TooltipPopup({
           data-slot="tooltip-popup"
           {...props}
         >
-          <div className="min-w-0 px-3 py-2" data-slot="tooltip-viewport">
+          <div className="min-w-0 px-2 py-1" data-slot="tooltip-viewport">
             {children}
           </div>
         </TooltipPrimitive.Popup>

@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { readConfigString } from "@t3tools/client-runtime/provider-settings/instance";
 import type { EnvironmentId, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import { useGT } from "gt-react-native";
 import { useRef, useState } from "react";
 import { View } from "react-native";
 
@@ -31,27 +32,30 @@ export function AntigravitySetupSection(props: {
   readonly readOnly: boolean;
   readonly onEnable: () => Promise<boolean>;
 }) {
+  const gt = useGT();
   return (
-    <SettingsSection title="Setup">
+    <SettingsSection title={gt("Setup")}>
       <FieldBlock
-        label="Runs on"
+        label={gt("Runs on")}
         description={props.environmentLabel}
         trailing={
           !props.enabled && !props.readOnly ? (
-            <Button label="Turn on" tone="secondary" onPress={() => void props.onEnable()} />
+            <Button label={gt("Turn on")} tone="secondary" onPress={() => void props.onEnable()} />
           ) : null
         }
       />
       {props.readOnly ? (
         <FieldBlock
-          label="Setup unavailable"
-          description="Provider setup is read-only."
+          label={gt("Setup unavailable")}
+          description={gt("Provider setup is read-only.")}
           separated
         />
       ) : props.provider?.setup === undefined ? (
         <FieldBlock
-          label="Update required"
-          description="Update this environment to manage Antigravity."
+          label={gt("Update required")}
+          description={gt("Update this environment to manage {provider}.", {
+            provider: "Antigravity",
+          })}
           separated
         />
       ) : (
@@ -69,6 +73,8 @@ export function AntigravitySetupSection(props: {
   );
 }
 
+type PendingSetupAction = "cancel" | "start" | "remove";
+
 function AntigravitySetupActions({
   environmentId,
   environmentLabel,
@@ -84,6 +90,7 @@ function AntigravitySetupActions({
   readonly binaryPath: string;
   readonly enabled: boolean;
 }) {
+  const gt = useGT();
   const target = { environmentId, input: { instanceId } };
   const authQuery = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
   const installQuery = useEnvironmentQuery(serverEnvironment.providerInstallState(target));
@@ -93,7 +100,7 @@ function AntigravitySetupActions({
   const startInstall = useAtomCommand(serverEnvironment.startProviderInstall, options);
   const cancelInstall = useAtomCommand(serverEnvironment.cancelProviderInstall, options);
   const removeInstall = useAtomCommand(serverEnvironment.removeProviderInstallation, options);
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingSetupAction | null>(null);
   const pendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const authActive =
@@ -106,63 +113,89 @@ function AntigravitySetupActions({
   const installed = provider.installed || (!customBinary && installation?.installedVersion != null);
   const queryError = authQuery.error ?? installQuery.error;
   const disabled = pending !== null || queryError !== null;
+  const pendingLabel =
+    pending === "cancel"
+      ? gt("Cancelling installation")
+      : pending === "start"
+        ? gt("Starting installation")
+        : pending === "remove"
+          ? gt("Removing runtime")
+          : null;
   const status =
     installation === null
-      ? "Checking the Antigravity runtime"
+      ? gt("Checking the {provider} runtime", { provider: "Antigravity" })
       : installation.phase === "downloading"
-        ? `Downloading ${(installation.downloadedBytes / 1_000_000).toFixed(1)} MB${installation.totalBytes === null ? "" : ` of ${(installation.totalBytes / 1_000_000).toFixed(1)} MB`}`
+        ? installation.totalBytes === null
+          ? gt("Downloading {downloaded} MB", {
+              downloaded: (installation.downloadedBytes / 1_000_000).toFixed(1),
+            })
+          : gt("Downloading {downloaded} MB of {total} MB", {
+              downloaded: (installation.downloadedBytes / 1_000_000).toFixed(1),
+              total: (installation.totalBytes / 1_000_000).toFixed(1),
+            })
         : installation?.phase === "extracting"
-          ? "Extracting Antigravity"
+          ? gt("Extracting {provider}", { provider: "Antigravity" })
           : installation?.phase === "verifying"
-            ? "Checking the downloaded runtime"
+            ? gt("Checking the downloaded runtime")
             : installed
-              ? "Installed"
+              ? gt("Installed")
               : customBinary
                 ? enabled
-                  ? "The configured Antigravity runtime is unavailable"
-                  : "The configured Antigravity runtime has not been checked"
+                  ? gt("The configured {provider} runtime is unavailable", {
+                      provider: "Antigravity",
+                    })
+                  : gt("The configured {provider} runtime has not been checked", {
+                      provider: "Antigravity",
+                    })
                 : installation?.totalBytes
-                  ? `Not installed · ${Math.ceil(installation.totalBytes / 1_000_000)} MB download`
-                  : "Not installed";
+                  ? gt("Not installed · {megabytes} MB download", {
+                      megabytes: Math.ceil(installation.totalBytes / 1_000_000),
+                    })
+                  : gt("Not installed");
   const installLabel = installation?.installedVersion
     ? installation.version && installation.version !== installation.installedVersion
-      ? "Update Antigravity"
-      : "Reinstall Antigravity"
+      ? gt("Update {provider}", { provider: "Antigravity" })
+      : gt("Reinstall {provider}", { provider: "Antigravity" })
     : installation?.phase === "failed" || installation?.phase === "cancelled"
-      ? "Retry installation"
+      ? gt("Retry installation")
       : installed
-        ? "Install managed runtime"
-        : "Install Antigravity";
+        ? gt("Install managed runtime")
+        : gt("Install {provider}", { provider: "Antigravity" });
 
-  async function run<A, E>(label: string, request: () => Promise<AtomCommandResult<A, E>>) {
+  async function run<A, E>(
+    action: PendingSetupAction,
+    request: () => Promise<AtomCommandResult<A, E>>,
+  ) {
     if (pendingRef.current) return;
     pendingRef.current = true;
-    setPending(label);
+    setPending(action);
     setError(null);
     const settled = await settlePromise(request);
     pendingRef.current = false;
     setPending(null);
     if (settled._tag === "Failure") {
-      setError("Provider setup failed. Try again.");
+      setError(gt("Provider setup failed. Try again."));
       return;
     }
     const result = settled.value;
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Provider setup failed.");
+      setError(failure instanceof Error ? failure.message : gt("Provider setup failed."));
     }
   }
 
   return (
     <>
       <FieldBlock
-        label="Runtime"
+        label={gt("Runtime")}
         separated
         description={
           customBinary
-            ? "Uses the custom binary path in Runtime settings. Installation keeps that path."
+            ? gt("Uses the custom binary path in Runtime settings. Installation keeps that path.")
             : !installed && !provider.setup?.canInstall
-              ? "Automatic installation is unavailable. Set a binary path or use another environment."
+              ? gt(
+                  "Automatic installation is unavailable. Set a binary path or use another environment.",
+                )
               : undefined
         }
       >
@@ -171,13 +204,13 @@ function AntigravitySetupActions({
           textRole="footnote"
           className="text-foreground-muted"
         >
-          {pending ?? status}
+          {pendingLabel ?? status}
         </Text>
         {installation?.phase === "downloading" &&
         installation.totalBytes !== null &&
         installation.totalBytes > 0 ? (
           <Progress
-            label="Antigravity download"
+            label={gt("{provider} download", { provider: "Antigravity" })}
             value={installation.downloadedBytes / installation.totalBytes}
           />
         ) : null}
@@ -188,13 +221,13 @@ function AntigravitySetupActions({
         ) : null}
         {installActive && installation.operationId ? (
           <Button
-            label="Cancel installation"
+            label={gt("Cancel installation")}
             tone="secondary"
             disabled={disabled}
             onPress={() => {
               const operationId = installation.operationId;
               if (!operationId) return;
-              void run("Cancelling installation", () =>
+              void run("cancel", () =>
                 cancelInstall({ environmentId, input: { instanceId, operationId } }),
               );
             }}
@@ -204,9 +237,9 @@ function AntigravitySetupActions({
             label={installLabel}
             icon="arrow.down.circle"
             tone="secondary"
-            loading={pending === "Starting installation"}
+            loading={pending === "start"}
             disabled={disabled || authActive}
-            onPress={() => void run("Starting installation", () => startInstall(target))}
+            onPress={() => void run("start", () => startInstall(target))}
           />
         ) : null}
       </FieldBlock>
@@ -214,16 +247,23 @@ function AntigravitySetupActions({
         <View className="border-t border-border-subtle">
           <ListActionRow
             icon="trash"
-            label="Remove downloaded runtime"
+            label={gt("Remove downloaded runtime")}
             tone="danger"
             disabled={disabled || authActive}
             onPress={() =>
               Dialog.confirm({
-                title: "Remove runtime?",
-                message: `Removes the downloaded Antigravity runtime from ${environmentLabel}. Google sign-in and thread history are kept.`,
-                confirmText: "Remove",
+                title: gt("Remove runtime?"),
+                message: gt(
+                  "Removes the downloaded {provider} runtime from {environment}. {account} sign-in and thread history are kept.",
+                  {
+                    provider: "Antigravity",
+                    environment: environmentLabel,
+                    account: "Google",
+                  },
+                ),
+                confirmText: gt("Remove"),
                 destructive: true,
-                onConfirm: () => void run("Removing runtime", () => removeInstall(target)),
+                onConfirm: () => void run("remove", () => removeInstall(target)),
               })
             }
           />
@@ -242,7 +282,7 @@ function AntigravitySetupActions({
           </Text>
           {queryError ? (
             <Button
-              label="Retry setup status"
+              label={gt("Retry setup status")}
               tone="secondary"
               onPress={() => {
                 authQuery.refresh();

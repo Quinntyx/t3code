@@ -1,5 +1,7 @@
 import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { claudeSkillInvocation, collectToolFilePaths } from "@t3tools/shared/toolActivity";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 export interface AgentTrajectorySegment {
   readonly kind: "skills" | "tools";
@@ -61,6 +63,7 @@ function addCommandSkills(command: string, skills: Set<string>) {
 
 export function summarizeAgentTrajectory(
   items: Iterable<OrchestrationV2TurnItem>,
+  resolve: MFunctionType = mFallback,
 ): AgentTrajectorySummary {
   const seen = new Set<string>();
   const tools = new Map<string, number>();
@@ -96,19 +99,32 @@ export function summarizeAgentTrajectory(
   if (skills.size > 0)
     summary.push({
       kind: "skills",
-      label: `Used ${skills.size} skill${skills.size === 1 ? "" : "s"}`,
-      title: "Skills used",
+      label: resolve(
+        msg("Used {count, plural, one {{count} skill} other {{count} skills}}", {
+          count: skills.size,
+        }),
+      ),
+      title: resolve(msg("Skills used")),
       details: [...skills].sort(),
     });
   if (tools.size > 0) {
     const count = [...tools.values()].reduce((sum, n) => sum + n, 0);
     summary.push({
       kind: "tools",
-      label: `Called ${count} tool${count === 1 ? "" : "s"}`,
-      title: "Tool calls",
+      label: resolve(
+        msg("Called {count, plural, one {{count} tool} other {{count} tools}}", { count }),
+      ),
+      title: resolve(msg("Tool calls")),
       details: [...tools]
         .sort(([a, ac], [b, bc]) => bc - ac || a.localeCompare(b))
-        .map(([name, n]) => `${name} · ${n} call${n === 1 ? "" : "s"}`),
+        .map(([name, n]) =>
+          resolve(
+            msg("{name} · {count, plural, one {{count} call} other {{count} calls}}", {
+              name,
+              count: n,
+            }),
+          ),
+        ),
     });
   }
   return summary;

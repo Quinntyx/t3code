@@ -62,10 +62,26 @@ export class DesktopClientSettingsWriteError extends Schema.TaggedError<DesktopC
   }
 }
 
+const LEGACY_VISUAL_SETTING_KEYS = [
+  "liquidGlassEnabled",
+  "floatingPanelsEnabled",
+  "ambientShimmerEnabled",
+  "liquidGlassBlur",
+  "liquidGlassCenterBlur",
+  "liquidGlassSaturation",
+  "liquidGlassRefraction",
+  "liquidGlassDispersion",
+  "liquidGlassGlare",
+] as const;
+
 export class DesktopClientSettings extends Context.Service<
   DesktopClientSettings,
   {
     readonly get: Effect.Effect<Option.Option<ClientSettings>, DesktopClientSettingsReadError>;
+    readonly getLegacyVisualSettings: Effect.Effect<
+      Option.Option<Readonly<Record<string, unknown>>>,
+      DesktopClientSettingsReadError
+    >;
     readonly set: (
       settings: ClientSettings,
     ) => Effect.Effect<void, DesktopClientSettingsWriteError>;
@@ -186,6 +202,73 @@ const writeClientSettings = Effect.fnUntraced(function* (input: {
   }).pipe(Effect.ensuring(input.fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore)));
 });
 
+const readLegacyVisualSettings = (
+  fileSystem: FileSystem.FileSystem,
+  settingsPath: string,
+): Effect.Effect<
+  Option.Option<Readonly<Record<string, unknown>>>,
+  DesktopClientSettingsReadError
+> =>
+  fileSystem.readFileString(settingsPath).pipe(
+    Effect.asSome,
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        cause.reason._tag === "NotFound"
+          ? Effect.succeed(Option.none<string>())
+          : Effect.logWarning("Could not read legacy desktop visual settings.", cause).pipe(
+              Effect.annotateLogs({ settingsPath }),
+              Effect.andThen(
+                Effect.fail(
+                  new DesktopClientSettingsReadError({
+                    operation: "read-file",
+                    path: settingsPath,
+                    cause,
+                  }),
+                ),
+              ),
+            ),
+    }),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(Option.none<Readonly<Record<string, unknown>>>()),
+        onSome: (raw) =>
+          decodeClientSettingsDocument(raw).pipe(
+            Effect.map((document) => {
+              const source =
+                Object.hasOwn(document, "settings") &&
+                typeof document.settings === "object" &&
+                document.settings !== null &&
+                !Array.isArray(document.settings)
+                  ? (document.settings as Record<string, unknown>)
+                  : document;
+              const legacy: Record<string, unknown> = {};
+              for (const key of LEGACY_VISUAL_SETTING_KEYS) {
+                if (Object.hasOwn(source, key)) {
+                  legacy[key] = source[key];
+                }
+              }
+              return Object.keys(legacy).length > 0 ? Option.some(legacy) : Option.none();
+            }),
+            Effect.catchTags({
+              SchemaError: (cause) =>
+                Effect.logWarning("Could not decode legacy desktop visual settings.", cause).pipe(
+                  Effect.annotateLogs({ settingsPath }),
+                  Effect.andThen(
+                    Effect.fail(
+                      new DesktopClientSettingsReadError({
+                        operation: "decode-document",
+                        path: settingsPath,
+                        cause,
+                      }),
+                    ),
+                  ),
+                ),
+            }),
+          ),
+      }),
+    ),
+  );
+
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -196,6 +279,10 @@ export const make = Effect.gen(function* () {
     get: readClientSettings(fileSystem, environment.clientSettingsPath).pipe(
       Effect.withSpan("desktop.clientSettings.get"),
     ),
+    getLegacyVisualSettings: readLegacyVisualSettings(
+      fileSystem,
+      environment.clientSettingsPath,
+    ).pipe(Effect.withSpan("desktop.clientSettings.getLegacyVisualSettings")),
     set: Effect.fn("desktop.clientSettings.set")(function (settings) {
       return random.uuidV4().pipe(
         Effect.map((uuid) => uuid.replace(/-/g, "")),
@@ -222,6 +309,7 @@ export const layerTest = (initialSettings: Option.Option<ClientSettings> = Optio
       const settingsRef = yield* Ref.make(initialSettings);
       return DesktopClientSettings.of({
         get: Ref.get(settingsRef),
+        getLegacyVisualSettings: Effect.succeedNone,
         set: Effect.fn("DesktopClientSettings.set")(function (settings) {
           return Ref.set(settingsRef, Option.some(settings));
         }),

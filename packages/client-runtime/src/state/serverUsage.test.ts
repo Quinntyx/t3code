@@ -321,7 +321,13 @@ const makeRefreshingHarness = Effect.fn("ServerUsageTest.makeRefreshingHarness")
       input.awaitRefresh === true
         ? Deferred.succeed(followUpStarted, undefined).pipe(Effect.andThen(followUp))
         : Effect.void,
-    (input) => [cursorSource(input.awaitRefresh !== true)],
+    // The saved answer differs from the plain one, so a test can tell which was kept.
+    (input) => [
+      {
+        ...cursorSource(input.awaitRefresh !== true),
+        ...(input.provisional === true ? { scannedFiles: 0 } : {}),
+      },
+    ],
   );
   return { ...harness, followUpStarted };
 });
@@ -343,53 +349,99 @@ function waitForCost<E>(
 }
 
 it.effect("restarts a pending usage read after a price change", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const interrupted = yield* Deferred.make<void>();
-      const harness = yield* makeHarness((request) =>
-        request === 1
-          ? Deferred.succeed(started, undefined).pipe(
-              Effect.andThen(Effect.never),
-              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
-            )
-          : Effect.void,
-      );
-      const summary = harness.summary();
-      const unmount = harness.registry.mount(summary);
-      yield* Deferred.await(started);
-      yield* harness.updateSettings({
-        ...DEFAULT_SERVER_SETTINGS,
-        usagePriceOverrides: {
-          "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
-        },
-      });
-      yield* waitForCost(harness.registry, summary, 5);
-      yield* Deferred.await(interrupted);
-      expect(harness.requests()).toBe(2);
-      unmount();
-    }),
-  ),
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const interrupted = yield* Deferred.make<void>();
+    const harness = yield* makeHarness((request) =>
+      request === 1
+        ? Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          )
+        : Effect.void,
+    );
+    const summary = harness.summary();
+    const unmount = harness.registry.mount(summary);
+    yield* Deferred.await(started);
+    yield* harness.updateSettings({
+      ...DEFAULT_SERVER_SETTINGS,
+      usagePriceOverrides: {
+        "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+      },
+    });
+    yield* waitForCost(harness.registry, summary, 5);
+    yield* Deferred.await(interrupted);
+    expect(harness.requests()).toBe(2);
+    unmount();
+  }),
 );
 
 it.effect("refetches thread usage after a price change", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const harness = yield* makeHarness();
-      const threadUsage = harness.threadUsage(ThreadId.make("usage-thread"));
-      const unmount = harness.registry.mount(threadUsage);
-      yield* waitForThreadCost(harness.registry, threadUsage, null);
-      yield* harness.updateSettings({
-        ...DEFAULT_SERVER_SETTINGS,
-        usagePriceOverrides: {
-          "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
-        },
-      });
-      yield* waitForThreadCost(harness.registry, threadUsage, 5);
-      expect(harness.threadUsageRequests()).toBe(2);
-      unmount();
-    }),
-  ),
+  Effect.gen(function* () {
+    const harness = yield* makeHarness();
+    const threadUsage = harness.threadUsage(ThreadId.make("usage-thread"));
+    const unmount = harness.registry.mount(threadUsage);
+    yield* waitForThreadCost(harness.registry, threadUsage, null);
+    yield* harness.updateSettings({
+      ...DEFAULT_SERVER_SETTINGS,
+      usagePriceOverrides: {
+        "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+      },
+    });
+    yield* waitForThreadCost(harness.registry, threadUsage, 5);
+    expect(harness.threadUsageRequests()).toBe(2);
+    unmount();
+  }),
+);
+
+it.effect("drops unmounted thread usage so reconnects only refetch the open thread", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness(undefined, undefined, 60_000);
+    const closedId = ThreadId.make("closed-thread");
+    const openId = ThreadId.make("open-thread");
+    const closedUsage = harness.threadUsage(closedId);
+    const openUsage = harness.threadUsage(openId);
+
+    const unmountOpen = harness.registry.mount(openUsage);
+    yield* waitForThreadCost(harness.registry, openUsage, null);
+    const baselineNodes = harness.registry.getNodes().size;
+
+    const unmountClosed = harness.registry.mount(closedUsage);
+    yield* waitForThreadCost(harness.registry, closedUsage, null);
+    expect(harness.registry.getNodes().size).toBeGreaterThan(baselineNodes);
+
+    const closedEvicted = yield* Deferred.make<void>();
+    harness.registry.onNodeRemoved = () => {
+      if (harness.registry.getNodes().size <= baselineNodes) {
+        Deferred.doneUnsafe(closedEvicted, Exit.void);
+      }
+    };
+    unmountClosed();
+    yield* Deferred.await(closedEvicted);
+    expect(harness.registry.getNodes().has(closedUsage)).toBe(false);
+    expect(harness.registry.getNodes().size).toBe(baselineNodes);
+
+    yield* harness.updateSettings({
+      ...DEFAULT_SERVER_SETTINGS,
+      usagePriceOverrides: {
+        "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+      },
+    });
+    yield* waitForThreadCost(harness.registry, openUsage, 5);
+    yield* Queue.clear(harness.threadUsageRequested);
+
+    yield* harness.reconnect();
+    expect(yield* Queue.take(harness.threadUsageRequested)).toBe(openId);
+    expect(harness.threadUsageRequestIds().filter((id) => id === closedId)).toHaveLength(1);
+
+    // Re-mounting the evicted thread after price changes fetches once, not twice.
+    const remountClosed = harness.registry.mount(closedUsage);
+    yield* waitForThreadCost(harness.registry, closedUsage, 5);
+    expect(harness.threadUsageRequestIds().filter((id) => id === closedId)).toHaveLength(2);
+    expect(harness.threadUsageRequestIds().filter((id) => id === openId)).toHaveLength(3);
+    remountClosed();
+    unmountOpen();
+  }),
 );
 
 it.effect("drops unmounted thread usage so reconnects only refetch the open thread", () =>
@@ -445,19 +497,48 @@ it.effect("drops unmounted thread usage so reconnects only refetch the open thre
 );
 
 it.effect("keeps the cached usage summary when the awaited refresh fails", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const harness = yield* makeRefreshingHarness(
-        Effect.fail(new UsageReadError({ reason: "scanFailed", detail: "Cursor is down" })),
-      );
-      const summary = harness.summary();
-      const unmount = harness.registry.mount(summary);
-      expect((yield* settledSummary(harness.registry, summary)).sources).toEqual([
-        cursorSource(true),
-      ]);
-      expect(AsyncResult.isSuccess(harness.registry.get(summary))).toBe(true);
-      expect(harness.requests()).toBe(2);
-      unmount();
-    }),
-  ),
+  Effect.gen(function* () {
+    const harness = yield* makeRefreshingHarness(
+      Effect.fail(new UsageReadError({ reason: "scanFailed", detail: "Cursor is down" })),
+    );
+    const summary = harness.summary();
+    const unmount = harness.registry.mount(summary);
+    expect((yield* settledSummary(harness.registry, summary)).sources).toEqual([
+      cursorSource(true),
+    ]);
+    expect(AsyncResult.isSuccess(harness.registry.get(summary))).toBe(true);
+    // The saved answer is followed by a plain read before the one that waits for Cursor.
+    expect(
+      harness.inputs().map(({ provisional, awaitRefresh }) => ({ provisional, awaitRefresh })),
+    ).toEqual([
+      { provisional: true, awaitRefresh: undefined },
+      { provisional: undefined, awaitRefresh: undefined },
+      { provisional: undefined, awaitRefresh: true },
+    ]);
+    // With figures on screen, a refresh reads them exactly instead of asking for saved ones.
+    yield* harness.updateSettings({
+      ...DEFAULT_SERVER_SETTINGS,
+      usagePriceOverrides: {
+        "custom-model": { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 10 },
+      },
+    });
+    yield* waitForCost(harness.registry, summary, 5);
+    expect(harness.inputs()[3]?.provisional).toBeUndefined();
+    unmount();
+  }),
+);
+
+it.effect("reads usage in full when the saved answer cannot be read", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness((_request, input) =>
+      input.provisional === true
+        ? Effect.fail(new UsageReadError({ reason: "scanFailed", detail: "saved scan unreadable" }))
+        : Effect.void,
+    );
+    const summary = harness.summary();
+    const unmount = harness.registry.mount(summary);
+    yield* settledSummary(harness.registry, summary);
+    expect(harness.inputs().map(({ provisional }) => provisional)).toEqual([true, undefined]);
+    unmount();
+  }),
 );

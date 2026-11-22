@@ -2,6 +2,7 @@ import { useAndroidFloatingTabs } from "../settings/appearance/AppearancePrefere
 import { useState } from "react";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { Platform, View } from "react-native";
+import { useGT } from "gt-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Toast } from "../../components/ui/Toast";
 import {
@@ -22,6 +23,7 @@ export function ThreadUndoNotice(props: {
   readonly visible: boolean;
   readonly bottomClearance?: number;
 }) {
+  const gt = useGT();
   const floatingTabsEnabled = useAndroidFloatingTabs();
   const notice = useThreadUndoNotice();
   const insets = useSafeAreaInsets();
@@ -55,7 +57,11 @@ export function ThreadUndoNotice(props: {
     props.bottomClearance ??
     (Platform.OS === "ios"
       ? foldedResting
-        ? Math.max(rootMetrics.safeArea.bottom, keyboardHeight) + 8
+        ? // Sit level with the rail's tab pill, which floats inside the bottom safe area.
+          Math.max(
+            rootMetrics.bottomBarInset ?? rootMetrics.safeArea.bottom + 8,
+            keyboardHeight + 8,
+          )
         : rootMetrics?.hasHinge && rootMetrics.verticalBarEdge !== "none"
           ? // The column's safe area already includes UIKit's search toolbar in this posture.
             workspaceSearchBottomClearance({
@@ -83,10 +89,16 @@ export function ThreadUndoNotice(props: {
     >
       <Toast
         message={
-          notice.action === "Hidden" ? "Hidden thread on this device" : `${notice.action} thread`
+          notice.action === "Hidden"
+            ? gt("Hidden thread on this device")
+            : notice.action === "Settled"
+              ? gt("Settled thread")
+              : notice.action === "Snoozed"
+                ? gt("Snoozed thread")
+                : gt("Unpinned thread")
         }
         action={{
-          label: "Undo",
+          label: gt("Undo"),
           onPress: () => {
             void notice.undo();
           },

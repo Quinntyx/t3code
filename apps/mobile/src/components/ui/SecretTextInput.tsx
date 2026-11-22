@@ -11,8 +11,8 @@ export function SecretTextInput(props: SecretTextInputProps) {
   return (
     <View className="justify-center">
       <AppTextInput
-        accessibilityLabel={props.accessibilityLabel}
         className="pr-12"
+        accessibilityLabel={props.accessibilityLabel}
         placeholder={props.placeholder}
         value={props.value}
         onChangeText={props.onChangeText}
@@ -27,12 +27,8 @@ export function SecretTextInput(props: SecretTextInputProps) {
         returnKeyType="done"
         onSubmitEditing={(event) => props.onSubmitEditing(event.nativeEvent.text)}
       />
-      <View className="absolute inset-y-0 right-1.5 justify-center">
-        <SecretRevealButton
-          revealed={revealed}
-          disabled={!props.editable}
-          onPress={() => setRevealed((current) => !current)}
-        />
+      <View className="absolute right-1.5">
+        <SecretRevealButton revealed={revealed} onPress={() => setRevealed(!revealed)} />
       </View>
     </View>
   );

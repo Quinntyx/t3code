@@ -10,6 +10,7 @@ import {
   type DiscoverTransport,
   DiscoverWork,
 } from "@t3tools/contracts/discover";
+import * as NetService from "@t3tools/shared/Net";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -103,6 +104,7 @@ export const make = Effect.gen(function* () {
   const policy = yield* ManagedPolicy.ManagedPolicy;
   const http = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const net = yield* NetService.NetService;
   const lock = yield* Semaphore.make(1);
   let current: StoredHost | null = null;
   let lastError: string | null = null;
@@ -160,6 +162,7 @@ export const make = Effect.gen(function* () {
         }).pipe(
           Effect.provideService(HttpClient.HttpClient, http),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(NetService.NetService, net),
         );
         httpBaseUrl = resolved.baseUrl;
       } else {

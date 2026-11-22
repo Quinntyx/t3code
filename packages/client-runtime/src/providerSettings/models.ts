@@ -1,5 +1,7 @@
 import { ProviderDriverKind, type ServerProviderModel } from "@t3tools/contracts";
 import { type CustomModelDefinition, normalizeCustomModelSlug } from "@t3tools/shared/model";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { sortModelsForProviderInstance } from "../modelOrdering.ts";
 import { isReasoningControl } from "../modelTraits.ts";
@@ -91,17 +93,22 @@ export function validateCustomModelSlug(
   input: string,
   models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
   customModels: ReadonlyArray<CustomModelDefinition>,
+  resolve: MFunctionType = mFallback,
 ): { readonly slug: string } | { readonly error: string } {
   const normalized = normalizeCustomModelSlug(input);
-  if (!normalized) return { error: "Enter a model slug." };
+  if (!normalized) return { error: resolve(msg("Enter a model slug.")) };
   if (models.some((model) => !model.isCustom && model.slug === normalized)) {
-    return { error: "That model is already built in." };
+    return { error: resolve(msg("That model is already built in.")) };
   }
   if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-    return { error: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.` };
+    return {
+      error: resolve(
+        msg("Model slugs must be {max} characters or less.", { max: MAX_CUSTOM_MODEL_LENGTH }),
+      ),
+    };
   }
   if (customModels.some((entry) => entry.slug === normalized)) {
-    return { error: "That custom model is already saved." };
+    return { error: resolve(msg("That custom model is already saved.")) };
   }
   return { slug: normalized };
 }

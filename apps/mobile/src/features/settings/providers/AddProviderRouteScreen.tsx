@@ -34,6 +34,7 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
 } from "@t3tools/contracts";
+import { T, useGT, useMessages, Var } from "gt-react-native";
 import { useState } from "react";
 import { Linking, Platform, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
@@ -85,6 +86,8 @@ export function AddProviderRouteScreen({
 }
 
 function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
+  const messages = useMessages();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const environmentLabel = useEnvironmentLabel(environmentId);
@@ -104,7 +107,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
   // A policy that owns Codex's launch settings also rules out ChatGPT's own runtime.
   const chatGptAllowed =
     isManagedDriverAllowed(policy, CODEX_DRIVER) &&
-    managedInstanceLocks(policy, CODEX_DRIVER)?.configKeys.has("setupMode") !== true;
+    managedInstanceLocks(policy, CODEX_DRIVER, messages)?.configKeys.has("setupMode") !== true;
 
   const [step, setStep] = useState(0);
   const [driver, setDriver] = useState<ProviderDriverKind>(
@@ -128,7 +131,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
 
   const existingIds = reservedInstanceIds(actions.settings.providerInstances);
   const definition = providerClients.get(driver) ?? FEATURED_DRIVER_OPTIONS[0]!;
-  const driverLocks = managedInstanceLocks(policy, driver);
+  const driverLocks = managedInstanceLocks(policy, driver, messages);
   const managedConfig = driverLocks && { keys: driverLocks.configKeys, reason: driverLocks.reason };
   const isAcp = driver === ACP_REGISTRY_DRIVER;
   const identity = identityByDriver[driver] ?? {
@@ -144,7 +147,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
       label: identity.label,
       existingIds,
     });
-  const instanceIdError = validateInstanceId(instanceId, existingIds);
+  const instanceIdError = validateInstanceId(instanceId, existingIds, messages);
   const config = configByDriver[driver] ?? EMPTY_CONFIG;
   const isLocalAcp = isAcp && manualAcp && config.source === "local";
   const localCommand = typeof config.commandPath === "string" ? config.commandPath.trim() : "";
@@ -152,10 +155,10 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
   const acpSelectionError = isLocalAcp
     ? localCommand.length > 0
       ? null
-      : "Executable is required."
+      : gt("Executable is required.")
     : selectedAcp !== null || (manualAcp && manualAgentId.length > 0)
       ? null
-      : "Select an agent or configure one manually.";
+      : gt("Select an agent or configure one manually.");
   const steps = isAcp
     ? isLocalAcp
       ? LOCAL_ACP_WIZARD_STEPS
@@ -270,7 +273,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
     });
     setIdentityByDriver((existing) =>
       updateProviderIdentityDraft(existing, ACP_REGISTRY_DRIVER, {
-        label: local ? "Local ACP" : "",
+        label: local ? gt("Local ACP") : "",
         instanceIdOverride: null,
       }),
     );
@@ -287,12 +290,12 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
 
   const footer =
     createdId !== null ? (
-      <Button label="Done" onPress={() => finish(createdId)} fullWidth />
+      <Button label={gt("Done")} onPress={() => finish(createdId)} fullWidth />
     ) : step === 0 && !(isAcp && manualAcp) ? null : (
       <View className="flex-row gap-3">
         <View className="flex-1">
           <Button
-            label="Back"
+            label={gt("Back")}
             tone="secondary"
             disabled={saving}
             fullWidth
@@ -306,10 +309,10 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
         </View>
         <View className="flex-1">
           {step < lastEditableStep ? (
-            <Button label="Next" fullWidth onPress={() => navigate(step + 1)} />
+            <Button label={gt("Next")} fullWidth onPress={() => navigate(step + 1)} />
           ) : (
             <Button
-              label={isAcp && !isLocalAcp ? "Continue to sign-in" : "Add provider"}
+              label={isAcp && !isLocalAcp ? gt("Continue to sign-in") : gt("Add provider")}
               loading={saving}
               disabled={saving || !canManage}
               fullWidth
@@ -321,7 +324,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
     );
 
   return (
-    <SettingsScreen title="Add provider">
+    <SettingsScreen title={gt("Add provider")}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -333,18 +336,20 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
           <StepIndicator steps={steps} current={step} />
         ) : (
           <Text textRole="footnote" className="px-1 text-foreground-muted">
-            {`Add an account or configure a provider on ${environmentLabel}.`}
+            <T>
+              Add an account or configure a provider on <Var>{environmentLabel}</Var>.
+            </T>
           </Text>
         )}
 
         {step === 0 && createdId === null ? (
           isAcp && manualAcp ? (
             <SettingsSection
-              title={isLocalAcp ? "Local ACP command" : "Registry agent"}
+              title={isLocalAcp ? gt("Local ACP command") : gt("Registry agent")}
               trailing={
                 <ControlPill
                   variant="pill"
-                  label="Search registry"
+                  label={gt("Search registry")}
                   onPress={() => {
                     setManualAcp(false);
                     setAttempted(false);
@@ -353,8 +358,10 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
               }
               footer={
                 isLocalAcp
-                  ? `Runs an installed ACP executable on ${environmentLabel}.`
-                  : "Enter an official registry ID and any local executable or auth override."
+                  ? gt("Runs an installed ACP executable on {environment}.", {
+                      environment: environmentLabel,
+                    })
+                  : gt("Enter an official registry ID and any local executable or auth override.")
               }
             >
               <ProviderSettingsFields
@@ -380,17 +387,17 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
           ) : (
             <>
               {chatGptAllowed ? (
-                <SettingsSection title="Connect an account">
+                <SettingsSection title={gt("Connect an account")}>
                   <ListRow
-                    label="Continue with ChatGPT"
-                    description="Sign in a managed Codex account."
+                    label={gt("Continue with ChatGPT")}
+                    description={gt("Sign in a managed Codex account.")}
                     onPress={() =>
                       navigation.navigate("SettingsProviderAddChatGpt", { environmentId })
                     }
                   />
                 </SettingsSection>
               ) : null}
-              <SettingsSection title="Providers">
+              <SettingsSection title={gt("Providers")}>
                 {featuredOptions.map((option, index) => (
                   <DriverRow
                     key={option.driverKind}
@@ -422,7 +429,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                     >
                       <View className="min-h-12 flex-row items-center justify-center gap-2 px-4 py-3">
                         <Text textRole="footnote" className="font-t3-medium text-primary-text">
-                          {showMore ? "Show fewer providers" : "Show more providers"}
+                          {showMore ? gt("Show fewer providers") : gt("Show more providers")}
                         </Text>
                         <SymbolView
                           name={showMore ? "chevron.up" : "chevron.down"}
@@ -438,7 +445,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
               {acpRegistryAllowed ? (
                 <View className="gap-2">
                   <Text textRole="footnote" className="px-2 font-t3-medium text-foreground-muted">
-                    ACP Registry
+                    <T>ACP Registry</T>
                   </Text>
                   <AcpRegistryPicker
                     environmentId={environmentId}
@@ -465,14 +472,14 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                       {selectedAcp.website ? (
                         <ControlPill
                           variant="pill"
-                          label="Docs"
+                          label={gt("Docs")}
                           onPress={() => void Linking.openURL(selectedAcp.website!)}
                         />
                       ) : null}
                       {selectedAcp.repository ? (
                         <ControlPill
                           variant="pill"
-                          label="Source"
+                          label={gt("Source", { $context: "source code repository" })}
                           onPress={() => void Linking.openURL(selectedAcp.repository!)}
                         />
                       ) : null}
@@ -482,26 +489,35 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
               </SettingsSection>
             ) : null}
             <SettingsSection
-              title={isAcp ? "Identity" : `${definition.label} identity`}
+              title={
+                isAcp ? gt("Identity") : gt("{provider} identity", { provider: definition.label })
+              }
               footer={
                 signedInAccount
-                  ? `${environmentLabel} already has a ${definition.label} account signed in. Managing several ${definition.label} accounts in T3 Code is not recommended.`
+                  ? gt(
+                      "{environment} already has a {provider} account signed in. Managing several {provider} accounts in T3 Code is not recommended.",
+                      { environment: environmentLabel, provider: definition.label },
+                    )
                   : undefined
               }
             >
-              <FieldBlock label="Label" description="Shown in the provider list.">
+              <FieldBlock label={gt("Label")} description={gt("Shown in the provider list.")}>
                 <AppTextInput
-                  accessibilityLabel="Label"
+                  accessibilityLabel={gt("Label")}
                   value={identity.label}
-                  placeholder="e.g. Work"
+                  placeholder={gt("e.g. Work")}
                   autoCorrect={false}
                   className="min-h-11 rounded-xl px-3 py-2 text-base"
                   onChangeText={(label) => setIdentity({ label })}
                 />
               </FieldBlock>
-              <FieldBlock label="Instance ID" description="Letters, digits, '-', or '_'." separated>
+              <FieldBlock
+                label={gt("Instance ID")}
+                description={gt("Letters, digits, '-', or '_'.")}
+                separated
+              >
                 <AppTextInput
-                  accessibilityLabel="Instance ID"
+                  accessibilityLabel={gt("Instance ID")}
                   value={instanceId}
                   placeholder={`${driver}_work`}
                   autoCapitalize="none"
@@ -514,8 +530,8 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                 ) : null}
               </FieldBlock>
               <FieldBlock
-                label="Accent color"
-                description="Optional marker shown in the picker."
+                label={gt("Accent color")}
+                description={gt("Optional marker shown in the picker.")}
                 separated
               >
                 <AccentColorPicker
@@ -528,7 +544,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
             {signedInAccount ? (
               <ControlPill
                 variant="pill"
-                label="Why not several accounts?"
+                label={gt("Why not several accounts?")}
                 onPress={() => void Linking.openURL(MULTIPLE_ACCOUNTS_FAQ_URL)}
               />
             ) : null}
@@ -536,7 +552,7 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
         ) : null}
 
         {step === 2 && createdId === null && !isAcp ? (
-          <SettingsSection title="Configuration">
+          <SettingsSection title={gt("Configuration")}>
             {deriveProviderSettingsFields(definition).length > 0 ? (
               <ProviderSettingsFields
                 definition={definition}
@@ -548,8 +564,8 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
               />
             ) : (
               <FieldBlock
-                label="Nothing to configure"
-                description="This provider has no required configuration. You can add it now."
+                label={gt("Nothing to configure")}
+                description={gt("This provider has no required configuration. You can add it now.")}
               />
             )}
           </SettingsSection>
@@ -570,10 +586,17 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
 }
 
 function StepIndicator(props: { readonly steps: readonly string[]; readonly current: number }) {
+  const gt = useGT();
+  const messages = useMessages();
+  const currentStepLabel = messages(props.steps[props.current] ?? "");
   return (
     <View
       accessible
-      accessibilityLabel={`Step ${props.current + 1} of ${props.steps.length}: ${props.steps[props.current]}`}
+      accessibilityLabel={gt("Step {current} of {total}: {label}", {
+        current: props.current + 1,
+        total: props.steps.length,
+        label: currentStepLabel,
+      })}
       className="flex-row gap-2 px-1"
     >
       {props.steps.map((label, index) => (
@@ -590,7 +613,7 @@ function StepIndicator(props: { readonly steps: readonly string[]; readonly curr
             className={index === props.current ? "text-foreground" : "text-foreground-muted"}
             numberOfLines={1}
           >
-            {label}
+            {messages(label)}
           </Text>
         </View>
       ))}
@@ -658,11 +681,15 @@ function CreatedProviderSignIn(props: {
   readonly environmentLabel: string;
   readonly instanceId: ProviderInstanceId;
 }) {
+  const gt = useGT();
   const provider = useEnvironmentProviders(props.environmentId).find(
     (candidate) => candidate.instanceId === props.instanceId,
   );
   return (
-    <SettingsSection title="Sign-in" footer="You can sign in later from this provider's settings.">
+    <SettingsSection
+      title={gt("Sign-in")}
+      footer={gt("You can sign in later from this provider's settings.")}
+    >
       {provider ? (
         <ProviderSignInSection
           environment={{ environmentId: props.environmentId, label: props.environmentLabel }}
@@ -670,8 +697,10 @@ function CreatedProviderSignIn(props: {
         />
       ) : (
         <FieldBlock
-          label="Account"
-          description={`Waiting for ${props.environmentLabel} to start the provider…`}
+          label={gt("Account")}
+          description={gt("Waiting for {environment} to start the provider…", {
+            environment: props.environmentLabel,
+          })}
         />
       )}
     </SettingsSection>

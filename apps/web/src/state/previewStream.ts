@@ -10,6 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
+import { msg } from "gt-react";
+import { m } from "../i18n/messages";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSession } from "./session";
@@ -26,7 +28,7 @@ function formatAccessError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
-    : "Could not connect to the remote browser.";
+    : m(msg("Could not connect to the remote browser."));
 }
 
 const previewStreamAccessAtom = Atom.family((environmentId: EnvironmentId) =>

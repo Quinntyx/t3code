@@ -5,6 +5,7 @@ import type {
   PycellsNotebookKernel,
   ScopedThreadRef,
 } from "@t3tools/contracts";
+import { T, useGT, Var } from "gt-react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
@@ -27,6 +28,7 @@ export default function NotebookPanel({ threadRef }: { threadRef: ScopedThreadRe
 }
 
 function NotebookContent({ threadRef }: { threadRef: ScopedThreadRef }) {
+  const gt = useGT();
   const query = useEnvironmentQuery(
     serverEnvironment.threadNotebook({
       environmentId: threadRef.environmentId,
@@ -37,7 +39,7 @@ function NotebookContent({ threadRef }: { threadRef: ScopedThreadRef }) {
   const kernels = query.data?.kernels ?? [];
   const kernel = kernels.find((entry) => entry.id === view?.kernelId) ?? kernels[0];
   return (
-    <section className="flex h-full min-h-0 flex-col" aria-label="Notebook">
+    <section className="flex h-full min-h-0 flex-col" aria-label={gt("Notebook")}>
       {kernel ? (
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
@@ -45,14 +47,16 @@ function NotebookContent({ threadRef }: { threadRef: ScopedThreadRef }) {
             <div className="truncate text-xs text-muted-foreground">{kernel.notebookPath}</div>
           </div>
           <span className="shrink-0 text-xs text-muted-foreground">
-            {kernel.running ? "Running" : "Idle"}
+            {kernel.running
+              ? gt("Running", { $context: "notebook kernel status" })
+              : gt("Idle", { $context: "notebook kernel status" })}
           </span>
           {kernels.length > 1 ? (
             <Menu>
               <MenuTrigger
-                render={<Button variant="ghost-muted" size="xs" aria-label="Select kernel" />}
+                render={<Button variant="ghost-muted" size="xs" aria-label={gt("Select kernel")} />}
               >
-                Kernel <ChevronDown className="size-3" />
+                <T>Kernel</T> <ChevronDown className="size-3" />
               </MenuTrigger>
               <MenuPopup align="end">
                 {kernels.map((entry) => (
@@ -71,25 +75,29 @@ function NotebookContent({ threadRef }: { threadRef: ScopedThreadRef }) {
       ) : null}
       {query.error ? (
         <div role="status" className="flex items-center gap-2 px-3 py-2 text-xs text-destructive">
-          <span className="min-w-0 flex-1">Could not load notebook. {query.error}</span>
+          <span className="min-w-0 flex-1">
+            <T>
+              Could not load notebook. <Var>{query.error}</Var>
+            </T>
+          </span>
           <Button variant="ghost" size="xs" onClick={query.refresh}>
-            Retry
+            <T>Retry</T>
           </Button>
         </div>
       ) : null}
       {!kernel ? (
         <p role="status" className="p-4 text-center text-sm text-muted-foreground">
           {query.isPending
-            ? "Loading notebook…"
+            ? gt("Loading notebook…")
             : query.error
-              ? "Notebook unavailable."
-              : "No notebook cells yet."}
+              ? gt("Notebook unavailable.")
+              : gt("No notebook cells yet.")}
         </p>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto p-3">
           {kernel.cells.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No cells in this kernel yet.
+              <T>No cells in this kernel yet.</T>
             </p>
           ) : (
             kernel.cells.map((cell) => (
@@ -116,6 +124,7 @@ function NotebookCell({
   kernel: PycellsNotebookKernel;
   threadRef: ScopedThreadRef;
 }) {
+  const gt = useGT();
   const collapsed = useNotebookStore(
     (state) => state.byThread[scopedThreadKey(threadRef)]?.collapsed,
   );
@@ -136,7 +145,11 @@ function NotebookCell({
         ) : (
           <ChevronDown className="size-3" />
         )}
-        <span>Cell {cell.index}</span>
+        <span>
+          <T>
+            Cell <Var>{cell.index}</Var>
+          </T>
+        </span>
         <span className="ml-auto">{cell.cellType}</span>
       </button>
       {!isCollapsed("cell") ? (
@@ -144,7 +157,7 @@ function NotebookCell({
           <div className="flex items-start gap-2 px-2 pb-2">
             <button
               type="button"
-              aria-label={`Toggle source for cell ${cell.index}`}
+              aria-label={gt("Toggle source for cell {index}", { index: cell.index })}
               aria-expanded={!isCollapsed("source")}
               onClick={() => toggle("source")}
               className="flex w-20 shrink-0 items-center gap-1 pt-2 font-mono text-xs text-info focus-visible:outline-2 focus-visible:outline-ring"
@@ -154,11 +167,16 @@ function NotebookCell({
               ) : (
                 <ChevronDown className="size-3" />
               )}
-              {cell.cellType === "code" ? `In [${count}]:` : "Source"}
+              {cell.cellType === "code"
+                ? // oxlint-disable-next-line t3code/no-untranslated-copy -- Jupyter cell input prompt token
+                  `In [${count}]:`
+                : gt("Source", { $context: "notebook cell source" })}
             </button>
             <div className="min-w-0 flex-1">
               {isCollapsed("source") ? (
-                <span className="text-xs text-muted-foreground">Source collapsed</span>
+                <span className="text-xs text-muted-foreground">
+                  <T>Source collapsed</T>
+                </span>
               ) : cell.cellType === "markdown" ? (
                 <ChatMarkdown
                   text={cell.source}
@@ -177,7 +195,7 @@ function NotebookCell({
             <div className="flex items-start gap-2 border-t border-border px-2 py-2">
               <button
                 type="button"
-                aria-label={`Toggle outputs for cell ${cell.index}`}
+                aria-label={gt("Toggle outputs for cell {index}", { index: cell.index })}
                 aria-expanded={!isCollapsed("outputs")}
                 onClick={() => toggle("outputs")}
                 className="flex w-20 shrink-0 items-center gap-1 font-mono text-xs text-warning focus-visible:outline-2 focus-visible:outline-ring"
@@ -187,12 +205,16 @@ function NotebookCell({
                 ) : (
                   <ChevronDown className="size-3" />
                 )}
+                {/* oxlint-disable-next-line t3code/no-untranslated-copy -- Jupyter cell output prompt token */}
                 {`Out[${count}]:`}
               </button>
               <div className="min-w-0 flex-1 space-y-2">
                 {isCollapsed("outputs") ? (
                   <span className="text-xs text-muted-foreground">
-                    {cell.outputs.length} outputs collapsed
+                    {gt(
+                      "{count, plural, one {{count} output collapsed} other {{count} outputs collapsed}}",
+                      { count: cell.outputs.length },
+                    )}
                   </span>
                 ) : (
                   cell.outputs.map((output, index) =>
@@ -200,7 +222,10 @@ function NotebookCell({
                       <img
                         key={index}
                         src={`data:${output.mimeType};base64,${output.data}`}
-                        alt={`Cell ${cell.index} output ${index + 1}`}
+                        alt={gt("Cell {cellIndex} output {outputIndex}", {
+                          cellIndex: cell.index,
+                          outputIndex: index + 1,
+                        })}
                         className="h-auto max-w-full"
                         loading="lazy"
                       />

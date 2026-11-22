@@ -28,6 +28,20 @@ export type OpenCodeGoUsageResult =
   | { readonly _tag: "noSubscription" }
   | { readonly _tag: "failed" };
 
+/**
+ * Zen names no account, and machines often hold different keys for one subscription; its
+ * monthly reset is the billing anchor, so it identifies the subscription across environments
+ * and providers (OpenCode legacy, OpenCode v2, Pi).
+ */
+const openCodeGoCredentialFingerprint = Effect.fn("openCodeGoCredentialFingerprint")(function* (
+  monthlyResetsAtIso: string,
+) {
+  const digest = yield* Digest.Digest;
+  return yield* digest
+    .digest(Digest.sha256, new TextEncoder().encode(`opencode-go\0${monthlyResetsAtIso}`))
+    .pipe(Effect.map(Hex.encode), Effect.orDie);
+});
+
 function openCodeGoUsageWindows(body: UsageResponse): ReadonlyArray<ServerProviderUsageWindow> {
   return [
     {
@@ -65,7 +79,6 @@ interface OpenCodeGoUsageInput {
 
 const readUsage = Effect.fn("readOpenCodeGoUsage")(function* (input: OpenCodeGoUsageInput) {
   const client = yield* HttpClient.HttpClient;
-  const digest = yield* Digest.Digest;
   const readUsage = (key: string) =>
     client.execute(
       HttpClientRequest.get(OPENCODE_GO_USAGE_URL).pipe(HttpClientRequest.bearerToken(key)),
@@ -85,14 +98,9 @@ const readUsage = Effect.fn("readOpenCodeGoUsage")(function* (input: OpenCodeGoU
   const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(UsageResponse)),
   );
-  // Zen names no account, and machines often hold different keys for one subscription; its
-  // monthly reset is the billing anchor, so it identifies the subscription across environments.
-  const credentialFingerprint = yield* digest
-    .digest(
-      Digest.sha256,
-      new TextEncoder().encode(`opencode-go\0${DateTime.formatIso(body.usage.monthly.resetsAt)}`),
-    )
-    .pipe(Effect.map(Hex.encode), Effect.orDie);
+  const credentialFingerprint = yield* openCodeGoCredentialFingerprint(
+    DateTime.formatIso(body.usage.monthly.resetsAt),
+  );
   return {
     _tag: "limits",
     limits: {

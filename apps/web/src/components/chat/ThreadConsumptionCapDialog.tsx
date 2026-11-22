@@ -9,10 +9,12 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
+import { m, type MessageResolver } from "../../i18n/messages";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { threadEnvironment } from "../../state/threads";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
@@ -58,17 +60,31 @@ const WINDOW_KINDS: ReadonlyArray<ThreadConsumptionCapWindowKind> = [
   "other",
 ];
 
-const WINDOW_KIND_LABEL = {
+const WINDOW_KIND_WIRE_LABEL = {
   session: "5h",
   weekly: "Weekly",
   monthly: "Monthly",
   other: "Window",
 } as const;
 
-const KIND_LABEL = { spend: "API spend", quota: "Usage quota" } as const;
+const WINDOW_KIND_LABEL = {
+  session: msg("5h"),
+  weekly: msg("Weekly"),
+  monthly: msg("Monthly"),
+  other: msg("Window"),
+} as const;
 
-function windowLabel(window: ServerProviderUsageWindow): string {
-  return window.label || WINDOW_KIND_LABEL[window.kind];
+const KIND_LABEL = {
+  spend: msg("API spend"),
+  quota: msg("Usage quota"),
+} as const;
+
+function windowWireLabel(window: ServerProviderUsageWindow): string {
+  return window.label || WINDOW_KIND_WIRE_LABEL[window.kind];
+}
+
+function windowDisplayLabel(window: ServerProviderUsageWindow, resolve: MessageResolver): string {
+  return window.label || resolve(WINDOW_KIND_LABEL[window.kind]);
 }
 
 function parsePositive(value: string): number | null {
@@ -97,6 +113,7 @@ function scopedRows(
 function windowChoices(
   rows: ReadonlyArray<ThreadConsumptionCapRow>,
   scope: ConditionDraft["scope"],
+  resolve: MessageResolver = m,
 ) {
   const scoped = scopedRows(rows, scope);
   return WINDOW_KINDS.map((kind) => {
@@ -104,14 +121,20 @@ function windowChoices(
     if (windows.length === 0) {
       return {
         kind,
-        label: WINDOW_KIND_LABEL[kind],
+        label: resolve(WINDOW_KIND_LABEL[kind]),
+        wireLabel: WINDOW_KIND_WIRE_LABEL[kind],
         window: null as ServerProviderUsageWindow | null,
       };
     }
     const worst = windows.reduce((left, right) =>
       right.usedPercent > left.usedPercent ? right : left,
     );
-    return { kind, label: windowLabel(worst), window: worst };
+    return {
+      kind,
+      label: windowDisplayLabel(worst, resolve),
+      wireLabel: windowWireLabel(worst),
+      window: worst,
+    };
   });
 }
 
@@ -141,6 +164,7 @@ function initialDrafts(cap: ThreadConsumptionCap | null): ReadonlyArray<Conditio
 function buildCap(
   drafts: ReadonlyArray<ConditionDraft>,
   rows: ReadonlyArray<ThreadConsumptionCapRow>,
+  resolve: MessageResolver = m,
 ): { readonly cap: ThreadConsumptionCap | null; readonly error: string | null } {
   const conditions: Array<ThreadConsumptionCapCondition> = [];
   for (const draft of drafts) {
@@ -153,12 +177,18 @@ function buildCap(
             model: row.model,
           }));
     if (models !== undefined && models.length === 0) {
-      return { cap: null, error: "Pick at least one model, or All, for every limit." };
+      return {
+        cap: null,
+        error: resolve(msg("Pick at least one model, or All, for every limit.")),
+      };
     }
     if (draft.kind === "spend") {
       const limitUsd = parsePositive(draft.limitUsd);
       if (limitUsd === null) {
-        return { cap: null, error: "Enter a positive dollar amount for every API spend limit." };
+        return {
+          cap: null,
+          error: resolve(msg("Enter a positive dollar amount for every API spend limit.")),
+        };
       }
       conditions.push({
         kind: "spend",
@@ -169,16 +199,19 @@ function buildCap(
     }
     const atPercent = parsePercent(draft.atPercent);
     if (atPercent === null) {
-      return { cap: null, error: "Enter a percentage from 1 to 100 for every usage quota limit." };
+      return {
+        cap: null,
+        error: resolve(msg("Enter a percentage from 1 to 100 for every usage quota limit.")),
+      };
     }
-    const choice = windowChoices(rows, draft.scope).find(
+    const choice = windowChoices(rows, draft.scope, resolve).find(
       (candidate) => candidate.kind === draft.windowKind,
     );
     conditions.push({
       kind: "quota",
       atPercent,
       windowKind: draft.windowKind,
-      ...(choice === undefined ? {} : { windowLabel: choice.label }),
+      ...(choice === undefined ? {} : { windowLabel: choice.wireLabel }),
       ...(models === undefined ? {} : { models }),
     });
   }
@@ -225,6 +258,8 @@ function ThreadConsumptionCapDialogContent({
   readonly cap: ThreadConsumptionCap | null;
   readonly rows: ReadonlyArray<ThreadConsumptionCapRow>;
 }) {
+  const gt = useGT();
+  const resolve = useMessages();
   const updateMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -233,6 +268,11 @@ function ThreadConsumptionCapDialogContent({
   const [drafts, setDrafts] = useState(() => initialDrafts(cap));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const kindLabels = {
+    spend: resolve(KIND_LABEL.spend),
+    quota: resolve(KIND_LABEL.quota),
+  };
 
   const updateDraft = (key: string, patch: Partial<ConditionDraft>) => {
     setDrafts((current) =>
@@ -268,7 +308,7 @@ function ThreadConsumptionCapDialogContent({
     setSaving(false);
     if (result._tag === "Failure") {
       const cause = squashAtomCommandFailure(result);
-      setError(cause instanceof Error ? cause.message : "Could not save the consumption cap.");
+      setError(cause instanceof Error ? cause.message : gt("Could not save the consumption cap."));
       return;
     }
     onOpenChange(false);
@@ -281,7 +321,7 @@ function ThreadConsumptionCapDialogContent({
           className="flex min-h-0 flex-col"
           onSubmit={(event) => {
             event.preventDefault();
-            const built = buildCap(drafts, rows);
+            const built = buildCap(drafts, rows, resolve);
             if (built.error !== null) {
               setError(built.error);
               return;
@@ -290,17 +330,21 @@ function ThreadConsumptionCapDialogContent({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Consumption cap</DialogTitle>
+            <DialogTitle>
+              <T>Consumption cap</T>
+            </DialogTitle>
             <DialogDescription>
-              Stop this thread when any one of these limits is reached. Delegated work counts toward
-              the same thread.
+              <T>
+                Stop this thread when any one of these limits is reached. Delegated work counts
+                toward the same thread.
+              </T>
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
                 {drafts.map((draft, index) => {
-                  const choices = windowChoices(rows, draft.scope);
+                  const choices = windowChoices(rows, draft.scope, resolve);
                   const selected = choices.find((choice) => choice.kind === draft.windowKind);
                   const scoped = scopedRows(rows, draft.scope);
                   const unpriced =
@@ -315,7 +359,7 @@ function ThreadConsumptionCapDialogContent({
                       <div className="flex min-w-0 items-center gap-2">
                         <Select
                           value={draft.kind}
-                          items={KIND_LABEL}
+                          items={kindLabels}
                           onValueChange={(value) => {
                             if (value === "spend" || value === "quota") {
                               updateDraft(draft.key, { kind: value });
@@ -323,21 +367,21 @@ function ThreadConsumptionCapDialogContent({
                           }}
                         >
                           <SelectTrigger
-                            aria-label={`Limit ${index + 1} kind`}
+                            aria-label={gt("Limit {index} kind", { index: index + 1 })}
                             className="h-8 min-w-0 flex-1"
                           >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectPopup>
-                            <SelectItem value="spend">{KIND_LABEL.spend}</SelectItem>
-                            <SelectItem value="quota">{KIND_LABEL.quota}</SelectItem>
+                            <SelectItem value="spend">{kindLabels.spend}</SelectItem>
+                            <SelectItem value="quota">{kindLabels.quota}</SelectItem>
                           </SelectPopup>
                         </Select>
                         <Button
                           type="button"
                           size="icon-xs"
                           variant="ghost"
-                          aria-label={`Remove limit ${index + 1}`}
+                          aria-label={gt("Remove limit {index}", { index: index + 1 })}
                           onClick={() => {
                             setDrafts((current) =>
                               current.filter((candidate) => candidate.key !== draft.key),
@@ -350,15 +394,19 @@ function ThreadConsumptionCapDialogContent({
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs text-muted-foreground">Models</span>
+                        <span className="text-xs text-muted-foreground">
+                          <T>Models</T>
+                        </span>
                         <ToggleGroup
-                          aria-label="Models this limit watches"
+                          aria-label={gt("Models this limit watches")}
                           multiple
                           variant="segmented"
                           value={draft.scope === "all" ? ["all"] : draft.scope}
                           onValueChange={(values) => updateScope(draft.key, values)}
                         >
-                          <Toggle value="all">All</Toggle>
+                          <Toggle value="all">
+                            <T>All</T>
+                          </Toggle>
                           {rows.map((row) => (
                             <Toggle key={row.key} value={row.key}>
                               {row.label}
@@ -369,9 +417,11 @@ function ThreadConsumptionCapDialogContent({
 
                       {draft.kind === "spend" ? (
                         <div className="flex items-center gap-2">
-                          <span className="shrink-0 text-xs text-muted-foreground">Stop at</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            <T>Stop at</T>
+                          </span>
                           <Input
-                            aria-label={`Limit ${index + 1} dollar cap`}
+                            aria-label={gt("Limit {index} dollar cap", { index: index + 1 })}
                             inputMode="decimal"
                             className="h-8"
                             placeholder="10.00"
@@ -384,7 +434,7 @@ function ThreadConsumptionCapDialogContent({
                       ) : (
                         <div className="flex min-w-0 items-center gap-2">
                           <Input
-                            aria-label={`Limit ${index + 1} usage percentage`}
+                            aria-label={gt("Limit {index} usage percentage", { index: index + 1 })}
                             inputMode="decimal"
                             className="h-8 w-16"
                             placeholder="80"
@@ -393,7 +443,9 @@ function ThreadConsumptionCapDialogContent({
                               updateDraft(draft.key, { atPercent: event.target.value })
                             }
                           />
-                          <span className="shrink-0 text-xs text-muted-foreground">% of</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            <T>% of</T>
+                          </span>
                           <Select
                             value={draft.windowKind}
                             items={Object.fromEntries(
@@ -414,8 +466,13 @@ function ThreadConsumptionCapDialogContent({
                               {choices.map((choice) => (
                                 <SelectItem key={choice.kind} value={choice.kind}>
                                   {choice.window === null
-                                    ? `${choice.label} · usage data unavailable`
-                                    : `${choice.label} · ${Math.round(choice.window.usedPercent)}% used`}
+                                    ? gt("{label} · usage data unavailable", {
+                                        label: choice.label,
+                                      })
+                                    : gt("{label} · {percent}% used", {
+                                        label: choice.label,
+                                        percent: Math.round(choice.window.usedPercent),
+                                      })}
                                 </SelectItem>
                               ))}
                             </SelectPopup>
@@ -426,16 +483,27 @@ function ThreadConsumptionCapDialogContent({
                       {draft.kind === "quota" ? (
                         <p className="text-xs text-muted-foreground">
                           {selected?.window === null || selected === undefined
-                            ? "This account does not report that window yet."
-                            : `${Math.round(selected.window.usedPercent)}% used${
-                                selected.window.resetsAt
-                                  ? ` · resets ${formatUpcomingTimestamp(selected.window.resetsAt, timestampFormat)}`
-                                  : ""
-                              }`}
+                            ? gt("This account does not report that window yet.")
+                            : selected.window.resetsAt
+                              ? gt("{percent}% used · resets {resetsAt}", {
+                                  percent: Math.round(selected.window.usedPercent),
+                                  resetsAt: formatUpcomingTimestamp(
+                                    selected.window.resetsAt,
+                                    timestampFormat,
+                                    undefined,
+                                    undefined,
+                                    resolve,
+                                  ),
+                                })
+                              : gt("{percent}% used", {
+                                  percent: Math.round(selected.window.usedPercent),
+                                })}
                         </p>
                       ) : unpriced ? (
                         <p className="text-xs text-muted-foreground">
-                          Models without a known API price do not count, so the total is a floor.
+                          <T>
+                            Models without a known API price do not count, so the total is a floor.
+                          </T>
                         </p>
                       ) : null}
                     </div>
@@ -456,7 +524,7 @@ function ThreadConsumptionCapDialogContent({
                 }}
               >
                 <PlusIcon aria-hidden />
-                Add limit
+                <T>Add limit</T>
               </Button>
 
               {error !== null ? (
@@ -474,7 +542,7 @@ function ThreadConsumptionCapDialogContent({
               disabled={saving}
               onClick={() => void save(null)}
             >
-              Remove cap
+              <T>Remove cap</T>
             </Button>
             <Button
               type="button"
@@ -482,10 +550,10 @@ function ThreadConsumptionCapDialogContent({
               disabled={saving}
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              <T>Cancel</T>
             </Button>
             <Button type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
+              {saving ? gt("Saving…") : gt("Save")}
             </Button>
           </DialogFooter>
         </form>

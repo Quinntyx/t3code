@@ -8,6 +8,11 @@ import type {
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
+import { msg } from "gt-react";
+
+import { m } from "~/i18n/messages";
+
+import { changeRequestTermKind } from "./changeRequestTerm";
 
 export type ThreadPullRequestContextMenuAction = "open-in-panel" | "merge" | "stack";
 
@@ -70,20 +75,28 @@ export function buildThreadPullRequestContextMenuItems(input: {
   /** The app draws this menu, so the merge item can ask again in place. */
   readonly confirmMergeInPlace: boolean;
 }): ReadonlyArray<ContextMenuItem<ThreadPullRequestContextMenuAction>> {
+  const term = changeRequestTermKind(input.terminology);
   return [
     {
       id: "open-in-panel",
-      label: `Open in ${input.terminology.shortLabel} viewer`,
+      label: m(
+        msg("Open in {term, select, mr {MR} cr {change request} other {PR}} viewer", { term }),
+      ),
       icon: "folder-tree",
     },
     ...(input.canMerge
       ? [
           {
             id: "merge" as const,
-            label: `Merge ${input.terminology.singular}`,
+            label: m(
+              msg(
+                "Merge {term, select, mr {merge request} cr {change request} other {pull request}}",
+                { term },
+              ),
+            ),
             icon: "circle-check",
             separatorBefore: true,
-            ...(input.confirmMergeInPlace ? { confirmLabel: "Confirm merge?" } : {}),
+            ...(input.confirmMergeInPlace ? { confirmLabel: m(msg("Confirm merge?")) } : {}),
           },
         ]
       : []),
@@ -92,7 +105,7 @@ export function buildThreadPullRequestContextMenuItems(input: {
       : [
           {
             id: "stack" as const,
-            label: `Stack a new thread on ${input.headBranch}`,
+            label: m(msg("Stack a new thread on {branch}", { branch: input.headBranch })),
             icon: "git-branch",
             separatorBefore: !input.canMerge,
           },

@@ -87,9 +87,18 @@ export const decodeJsonReplyDetailed = <S extends Schema.Top>(
   // Effect.suspend keeps the generic on this function; Effect.fn would erase S.
   Effect.suspend(() =>
     Effect.gen(function* () {
+      const decodeJsonString = Schema.decodeEffect(Schema.fromJsonString(request.outputSchema));
+      const schemaCause = (input: string) =>
+        Effect.result(decodeJsonString(input)).pipe(
+          Effect.map((result) => (result._tag === "Failure" ? result.failure : undefined)),
+        );
+
       const reply = text.trim();
       if (reply.length === 0) {
-        return yield* Effect.fail({ reason: "the reply was empty" });
+        return yield* Effect.fail({
+          reason: "the reply was empty",
+          cause: yield* schemaCause(reply),
+        });
       }
 
       // Try the last object first, since a model that corrects itself repeats the answer at the end.
@@ -112,9 +121,13 @@ export const decodeJsonReplyDetailed = <S extends Schema.Top>(
       if (truncated !== undefined) {
         return yield* Effect.fail({
           reason: `the JSON object was unterminated after ${reply.length} characters, so the reply was likely truncated`,
+          cause: yield* schemaCause(truncated),
         });
       }
-      return yield* Effect.fail({ reason: "the reply contained no JSON object" });
+      return yield* Effect.fail({
+        reason: "the reply contained no JSON object",
+        cause: yield* schemaCause(reply),
+      });
     }),
   );
 
@@ -133,6 +146,19 @@ export const decodeJsonReply = <S extends Schema.Top>(
         }),
     ),
   );
+
+export const generatedThreadTitle = (raw: string) => {
+  const title = sanitizeThreadTitle(raw);
+  // Some models echo the output schema's key instead of a title.
+  return title.toLowerCase() === "title"
+    ? Effect.fail(
+        new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: 'The model returned the placeholder title "title".',
+        }),
+      )
+    : Effect.succeed(title);
+};
 
 export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
   const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] = Effect.fn(
@@ -207,6 +233,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
       attachments: input.attachments,
       ...buildThreadTitlePrompt({
         message: input.message,
+        projectTitle: input.projectTitle,
         previousTitle: input.previousTitle,
         forkSource: input.forkSource,
         linkedContext: input.linkedContext,
@@ -215,7 +242,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
       }),
     });
     return {
-      title: sanitizeThreadTitle(generated.title),
+      title: yield* generatedThreadTitle(generated.title),
       ...(generated.needsRefinement ? { needsRefinement: true } : {}),
     };
   });

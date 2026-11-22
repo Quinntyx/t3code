@@ -15,6 +15,8 @@ import type { ProviderEnvironmentField } from "@t3tools/provider-core/client";
 import type { CustomModelDefinition } from "@t3tools/shared/model";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { providerClients } from "../providerClients.ts";
 import { reconcileRowsDraft, seedRowsDraft, type RowsDraft } from "./form.ts";
@@ -364,6 +366,7 @@ export function providerInstanceName(instance: ProviderInstanceConfig): string {
 export function providerInstanceRemovalPrompt(
   operation: "remove" | "reset",
   instance: ProviderInstanceConfig,
+  resolve: MFunctionType = mFallback,
 ): { readonly question: string; readonly detail: string } {
   const name = providerInstanceName(instance);
   const turnsOff =
@@ -373,9 +376,15 @@ export function providerInstanceRemovalPrompt(
   return {
     question:
       operation === "remove"
-        ? `Remove the ${name} provider instance?`
-        : `Reset the ${name} provider to its defaults?`,
-    detail: `Its saved settings, including any custom binary path, will be removed.${turnsOff ? " It will also be turned off." : ""}`,
+        ? resolve(msg("Remove the {name} provider instance?", { name }))
+        : resolve(msg("Reset the {name} provider to its defaults?", { name })),
+    detail: turnsOff
+      ? resolve(
+          msg(
+            "Its saved settings, including any custom binary path, will be removed. It will also be turned off.",
+          ),
+        )
+      : resolve(msg("Its saved settings, including any custom binary path, will be removed.")),
   };
 }
 
@@ -400,6 +409,7 @@ export interface ManagedInstanceLocks {
 export function managedInstanceLocks(
   policy: ManagedPolicySummary | undefined,
   driver: ProviderDriverKind,
+  resolve: MFunctionType = mFallback,
 ): ManagedInstanceLocks | undefined {
   const paths = policy?.limits?.providers?.lockedInstanceFields?.[driver];
   if (policy === undefined || paths === undefined || paths.length === 0) return undefined;
@@ -409,6 +419,6 @@ export function managedInstanceLocks(
     configKeys: fieldsUnder("config."),
     environmentNames: fieldsUnder("environment."),
     wholeEnvironment: paths.includes("environment"),
-    reason: `Managed by ${policy.organization}.`,
+    reason: resolve(msg("Managed by {organization}.", { organization: policy.organization })),
   };
 }

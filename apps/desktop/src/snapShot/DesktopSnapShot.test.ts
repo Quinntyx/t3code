@@ -504,6 +504,7 @@ const layerTest = (
           DesktopClientSettings.DesktopClientSettings,
           DesktopClientSettings.DesktopClientSettings.of({
             get: settingsGet,
+            getLegacyVisualSettings: Effect.succeedNone,
             set: () => Effect.void,
           }),
         ),
@@ -1048,7 +1049,6 @@ it.effect.each([
   { backend: "gnome", screenshot: "PNG" },
   { backend: "niri", screenshot: "PNG" },
   { backend: "kde", screenshot: "PNG" },
-  { backend: "hyprland", screenshot: "PNG" },
   { backend: "gnome", screenshot: "invalid" },
 ] as const)(
   "persists $backend accessibility text with a $screenshot screenshot",

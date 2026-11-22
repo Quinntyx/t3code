@@ -1,4 +1,5 @@
 import type { JSX } from "react";
+import { useGT } from "gt-react-native";
 import { Platform, Pressable, View } from "react-native";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -58,6 +59,7 @@ export function usesFloatingThreadControls(layout: { readonly usesSplitView: boo
 
 /** Two floating pills over the feed: threads on the left, details on the right. */
 export function ThreadFloatingHeader() {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const { openDrawer } = useThreadListDrawer();
   const details = useThreadDetailsDrawer();
@@ -75,7 +77,7 @@ export function ThreadFloatingHeader() {
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open threads"
+          accessibilityLabel={gt("Open threads")}
           className={PILL_CLASS_NAME}
           style={PILL_STYLE}
           onPress={openDrawer}
@@ -90,7 +92,7 @@ export function ThreadFloatingHeader() {
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open thread details"
+          accessibilityLabel={gt("Open thread details")}
           accessibilityState={{ expanded: details.open }}
           className={PILL_CLASS_NAME}
           style={PILL_STYLE}

@@ -12,6 +12,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { BoxesIcon, KeyRoundIcon, LinkIcon, UnlinkIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -19,6 +20,7 @@ import {
   useEnvironmentSettings,
   usePersistEnvironmentProviderInstanceMutation,
 } from "../../hooks/useSettings";
+import { m, type MessageResolver } from "../../i18n/messages";
 import { directoryDiscovery } from "../../state/discover";
 import { environmentPresentations } from "../../state/presentation";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -35,12 +37,16 @@ import {
 import { DiscoveryList, DiscoveryListRow } from "../ui/discovery-list";
 import { toastManager } from "../ui/toast";
 
-const healthLabel = (service: DiscoverServiceEntry) =>
-  service.health === "online" ? "Online" : service.health === "offline" ? "Offline" : "Unknown";
+const healthLabel = (service: DiscoverServiceEntry, resolve: MessageResolver = m) =>
+  service.health === "online"
+    ? resolve(msg("Online"))
+    : service.health === "offline"
+      ? resolve(msg("Offline"))
+      : resolve(msg("Unknown"));
 
-const endpointLabel = (service: DiscoverServiceEntry) => {
+const endpointLabel = (service: DiscoverServiceEntry, resolve: MessageResolver = m) => {
   const endpoint = service.endpoints[0];
-  if (endpoint === undefined) return "No endpoint";
+  if (endpoint === undefined) return resolve(msg("No endpoint"));
   try {
     return `${endpoint.transport} · ${new URL(endpoint.httpBaseUrl).host}`;
   } catch {
@@ -48,8 +54,10 @@ const endpointLabel = (service: DiscoverServiceEntry) => {
   }
 };
 
-const capabilityLabel = (service: DiscoverServiceEntry) =>
-  service.capabilities.includes("key-exchange") ? "Issues keys" : "Bring your own key";
+const capabilityLabel = (service: DiscoverServiceEntry, resolve: MessageResolver = m) =>
+  service.capabilities.includes("key-exchange")
+    ? resolve(msg("Issues keys"))
+    : resolve(msg("Bring your own key"));
 
 const maskedKey = (apiKey: string) =>
   apiKey.length <= 10 ? apiKey : `${apiKey.slice(0, 6)}…${apiKey.slice(-4)}`;
@@ -66,6 +74,7 @@ function EnvironmentTargets({
   readonly service: DiscoverServiceEntry;
   readonly credential: DiscoverServiceCredential;
 }) {
+  const gt = useGT();
   const settings = useEnvironmentSettings(environmentId);
   const persist = usePersistEnvironmentProviderInstanceMutation(environmentId);
   const [selected, setSelected] = useState<ReadonlySet<ProviderInstanceId>>(() => new Set());
@@ -76,7 +85,9 @@ function EnvironmentTargets({
   if (compatible.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        {environmentLabel} has no provider that accepts this service.
+        <T>
+          <Var>{environmentLabel}</Var> has no provider that accepts this service.
+        </T>
       </p>
     );
   }
@@ -113,7 +124,7 @@ function EnvironmentTargets({
         const failure = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: "Could not configure a provider",
+          title: m(msg("Could not configure a provider")),
           description: failure instanceof Error ? failure.message : undefined,
         });
       }
@@ -122,8 +133,17 @@ function EnvironmentTargets({
     if (applied > 0) {
       toastManager.add({
         type: "success",
-        title: `Configured ${applied} provider${applied === 1 ? "" : "s"}`,
-        description: `${environmentLabel} now reaches ${service.label}.`,
+        title: m(
+          msg("Configured {count, plural, one {{count} provider} other {{count} providers}}", {
+            count: applied,
+          }),
+        ),
+        description: m(
+          msg("{environment} now reaches {service}.", {
+            environment: environmentLabel,
+            service: service.label,
+          }),
+        ),
       });
       setSelected(new Set());
     }
@@ -140,7 +160,11 @@ function EnvironmentTargets({
           disabled={pending || selected.size === 0}
           onClick={() => void apply()}
         >
-          {pending ? "Applying…" : `Apply to ${selected.size || "selected"}`}
+          {pending
+            ? gt("Applying…")
+            : selected.size > 0
+              ? gt("Apply to {count}", { count: selected.size })
+              : gt("Apply to selected")}
         </Button>
       </div>
       <div className="flex flex-col gap-1">
@@ -175,6 +199,8 @@ function LinkServiceDialog({
   readonly initialCredential: DiscoverServiceCredential | null;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
+  const resolve = useMessages();
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const link = useAtomCommand(directoryDiscovery.linkService, { reportFailure: false });
   const unlink = useAtomCommand(directoryDiscovery.unlinkService, { reportFailure: false });
@@ -193,7 +219,7 @@ function LinkServiceDialog({
     }
     if (!isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not link this service.");
+      setError(failure instanceof Error ? failure.message : gt("Could not link this service."));
     }
     return null;
   };
@@ -227,10 +253,13 @@ function LinkServiceDialog({
     if (result._tag === "Success") {
       setCredential(null);
       setLinkedWithoutCredential(false);
-      toastManager.add({ type: "success", title: `${service.label} unlinked` });
+      toastManager.add({
+        type: "success",
+        title: m(msg("{service} unlinked", { service: service.label })),
+      });
     } else if (!isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not unlink this service.");
+      setError(failure instanceof Error ? failure.message : gt("Could not unlink this service."));
     }
   };
 
@@ -240,8 +269,8 @@ function LinkServiceDialog({
         <DialogHeader>
           <DialogTitle>{service.label}</DialogTitle>
           <DialogDescription>
-            {service.kind} · {endpointLabel(service)} · {healthLabel(service)} ·{" "}
-            {capabilityLabel(service)}
+            {service.kind} · {endpointLabel(service, resolve)} · {healthLabel(service, resolve)} ·{" "}
+            {capabilityLabel(service, resolve)}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -252,22 +281,28 @@ function LinkServiceDialog({
                 <p className="text-sm text-muted-foreground">
                   {linked
                     ? issuesCredential
-                      ? "The credential issued for this machine could not be loaded."
-                      : "This service is linked. It does not issue a credential through discovery."
+                      ? gt("The credential issued for this machine could not be loaded.")
+                      : gt(
+                          "This service is linked. It does not issue a credential through discovery.",
+                        )
                     : issuesCredential
-                      ? "Linking asks the discovery server to mint a credential for this machine. Nothing is shared until you link."
-                      : "Linking records this service on this machine. It does not issue a credential."}
+                      ? gt(
+                          "Linking asks the discovery server to mint a credential for this machine. Nothing is shared until you link.",
+                        )
+                      : gt(
+                          "Linking records this service on this machine. It does not issue a credential.",
+                        )}
                 </p>
                 {linked && !issuesCredential ? null : (
                   <Button disabled={pending} onClick={() => void runLink()}>
                     <LinkIcon aria-hidden />
-                    {pending ? "Linking…" : linked ? "Retry" : "Link service"}
+                    {pending ? gt("Linking…") : linked ? gt("Retry") : gt("Link service")}
                   </Button>
                 )}
                 {linked ? (
                   <Button variant="outline" disabled={pending} onClick={() => void runUnlink()}>
                     <UnlinkIcon aria-hidden />
-                    Unlink and revoke
+                    <T>Unlink and revoke</T>
                   </Button>
                 ) : null}
               </div>
@@ -276,7 +311,7 @@ function LinkServiceDialog({
                 <div className="flex flex-col gap-1 rounded-lg border border-border/70 p-3">
                   <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                     <KeyRoundIcon className="size-3.5" aria-hidden />
-                    Credential for this machine
+                    <T>Credential for this machine</T>
                   </span>
                   <code className="truncate font-mono text-xs text-foreground">
                     {maskedKey(credential.apiKey)}
@@ -286,14 +321,18 @@ function LinkServiceDialog({
                   </span>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-foreground">Apply to providers</span>
+                  <span className="text-sm font-medium text-foreground">
+                    <T>Apply to providers</T>
+                  </span>
                   <p className="text-xs text-muted-foreground">
-                    Sets the base URL and credential on the providers you pick. Existing values for
-                    those names are replaced.
+                    <T>
+                      Sets the base URL and credential on the providers you pick. Existing values
+                      for those names are replaced.
+                    </T>
                   </p>
                   {environments.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
-                      Connect an environment to configure its providers.
+                      <T>Connect an environment to configure its providers.</T>
                     </p>
                   ) : (
                     environments.map((environment) => (
@@ -309,7 +348,7 @@ function LinkServiceDialog({
                 </div>
                 <Button variant="outline" disabled={pending} onClick={() => void runUnlink()}>
                   <UnlinkIcon aria-hidden />
-                  Unlink and revoke
+                  <T>Unlink and revoke</T>
                 </Button>
               </div>
             )}
@@ -321,6 +360,8 @@ function LinkServiceDialog({
 }
 
 export function DiscoveredServicesSection() {
+  const gt = useGT();
+  const resolve = useMessages();
   const state = useAtomValue(directoryDiscovery.stateValueAtom);
   const readLink = useAtomCommand(directoryDiscovery.serviceLink, { reportFailure: false });
   const openSequence = useRef(0);
@@ -347,17 +388,19 @@ export function DiscoveredServicesSection() {
   };
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium text-foreground">Discovered services</h2>
+      <h2 className="text-sm font-medium text-foreground">
+        <T>Discovered services</T>
+      </h2>
       <DiscoveryList>
         {state.services.map((service) => (
           <DiscoveryListRow
             key={service.serviceId}
             icon={<BoxesIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
             title={service.label}
-            description={`${service.kind} · ${endpointLabel(service)} · ${healthLabel(service)}`}
+            description={`${service.kind} · ${endpointLabel(service, resolve)} · ${healthLabel(service, resolve)}`}
             action={
               <span className="shrink-0 text-xs text-muted-foreground">
-                {service.linkedAt === null ? "Not linked" : "Linked"}
+                {service.linkedAt === null ? gt("Not linked") : gt("Linked")}
               </span>
             }
             onClick={() => void openService(service)}

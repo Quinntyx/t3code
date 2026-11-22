@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { cn } from "../../lib/cn";
 import { MOBILE_MOTION, MOBILE_SHAPE } from "../../lib/designTokens";
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
@@ -57,6 +58,7 @@ export function Toast(props: ToastProps) {
 }
 
 function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
+  const gt = useGT();
   const { fontScale, height } = useWindowDimensions();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -101,7 +103,7 @@ function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
           numberOfLines={props.singleLine || expanded ? 1 : undefined}
           accessibilityLabel={props.singleLine && !expanded ? message : undefined}
         >
-          {expanded ? "Error details" : message}
+          {expanded ? gt("Error details") : message}
         </AppText>
         {props.description && !props.singleLine && !expanded ? (
           <AppText textRole="label" className="text-foreground-muted">
@@ -130,8 +132,8 @@ function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
           <Pressable
             className="min-w-0 flex-1 flex-row items-center gap-3"
             accessibilityRole="button"
-            accessibilityLabel={expanded ? "Collapse error" : message}
-            accessibilityHint={expanded ? "Hide error details" : "Show full error details"}
+            accessibilityLabel={expanded ? gt("Collapse error") : message}
+            accessibilityHint={expanded ? gt("Hide error details") : gt("Show full error details")}
             accessibilityState={{ expanded }}
             onPress={() => {
               if (!expanded) props.onExpand?.();
@@ -150,17 +152,21 @@ function ToastContent(props: ToastProps & { readonly glassReady?: boolean }) {
         )}
         {expanded ? (
           <IconButton
-            accessibilityLabel={copied ? "Copied" : "Copy error"}
+            accessibilityLabel={copied ? gt("Copied") : gt("Copy error")}
             icon={copied ? "checkmark" : "doc.on.doc"}
             onPress={async () => {
               if (await tryCopyTextWithHaptic(fullMessage)) setCopied(true);
-              else Dialog.alert("Could not copy", "Try again.");
+              else Dialog.alert(gt("Could not copy"), gt("Try again."));
             }}
           />
         ) : null}
         {inlineAction && action ? <View className="self-center">{action}</View> : null}
         {props.onDismiss && (props.dismissMode !== "swipe" || expanded) ? (
-          <IconButton accessibilityLabel="Dismiss message" icon="xmark" onPress={props.onDismiss} />
+          <IconButton
+            accessibilityLabel={gt("Dismiss message")}
+            icon="xmark"
+            onPress={props.onDismiss}
+          />
         ) : null}
       </View>
       {expanded ? (
@@ -202,6 +208,7 @@ const ENTER_TIMING = {
 };
 const TOAST_EXITING = FadeOut.duration(MOBILE_MOTION.exit).reduceMotion(ReduceMotion.System);
 function SwipeableToast(props: ToastProps & { readonly onDismiss: () => void }) {
+  const gt = useGT();
   const [glassReady, setGlassReady] = useState(Platform.OS !== "ios");
   const finishEntering = useCallback(() => setGlassReady(true), []);
   // UIKit can skip glass on a moving host; remount the surface after entry so its blur installs.
@@ -270,7 +277,7 @@ function SwipeableToast(props: ToastProps & { readonly onDismiss: () => void }) 
               accessibilityRole="alert"
               accessibilityLiveRegion="assertive"
               accessibilityLabel={props.message}
-              accessibilityActions={[{ name: "dismiss", label: "Dismiss message" }]}
+              accessibilityActions={[{ name: "dismiss", label: gt("Dismiss message") }]}
               onAccessibilityAction={({ nativeEvent }) => {
                 if (nativeEvent.actionName === "dismiss") onDismiss();
               }}

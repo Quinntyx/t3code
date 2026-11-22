@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { Platform } from "react-native";
 
 import {
@@ -17,6 +18,7 @@ import { FontFamilyMenuRow } from "../components/FontFamilyMenuRow";
 import { FontSizeSliderRow } from "../components/FontSizeSliderRow";
 
 export function TerminalAppearanceSection() {
+  const gt = useGT();
   const { isReady, appearance, setTerminalFontId, setTerminalFontSize } =
     useAppearancePreferences();
   const custom = appearance.isTerminalFontSizeCustom;
@@ -26,7 +28,7 @@ export function TerminalAppearanceSection() {
   };
 
   return (
-    <SettingsSection title="Terminal">
+    <SettingsSection title={gt("Terminal", { $context: "settings section for the terminal" })}>
       <TerminalAppearancePreview
         fontFamily={appearance.terminalFontFamily}
         fontSize={appearance.terminalFontSize}
@@ -34,7 +36,7 @@ export function TerminalAppearanceSection() {
       <AppearancePreviewSeparator />
       <FontFamilyMenuRow
         disabled={!isReady}
-        label="Font"
+        label={gt("Font", { $context: "settings row for font family" })}
         defaultLabel={defaultFontLabel("terminal", Platform.OS)}
         choices={terminalFontChoices(Platform.OS)}
         selectedId={appearance.terminalFontId}
@@ -43,7 +45,7 @@ export function TerminalAppearanceSection() {
       <SettingsSwitchRow
         disabled={!isReady}
         icon="terminal"
-        label="Custom font size"
+        label={gt("Custom font size")}
         onValueChange={handleToggleCustom}
         value={custom}
       />
@@ -51,13 +53,13 @@ export function TerminalAppearanceSection() {
         <FontSizeSliderRow
           disabled={!isReady}
           icon="textformat.size"
-          label="Font size"
+          label={gt("Font size")}
           max={MAX_TERMINAL_FONT_SIZE}
           min={MIN_TERMINAL_FONT_SIZE}
           onChange={setTerminalFontSize}
           step={TERMINAL_FONT_SIZE_STEP}
           value={appearance.terminalFontSize}
-          valueLabel={`${appearance.terminalFontSize.toFixed(1)} pt`}
+          valueLabel={gt("{size} pt", { size: appearance.terminalFontSize.toFixed(1) })}
         />
       ) : null}
     </SettingsSection>

@@ -10,8 +10,10 @@ import {
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
+import { useGT, useMessages } from "gt-react-native";
 import { use, useState } from "react";
 
+import { changeRequestTermKind } from "../../../lib/changeRequestTerm";
 import { useEnvironmentQuery } from "../../../state/query";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
@@ -32,6 +34,8 @@ export function useGitOverview(props: {
   readonly presentation: "sheet" | "inspector" | "drawer";
   readonly onNavigate?: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const navigation = useNavigation();
   const { presentation, onNavigate } = props;
   const environmentId = EnvironmentId.make(props.environmentId);
@@ -68,7 +72,7 @@ export function useGitOverview(props: {
       : null,
   ).data;
 
-  const currentBranchLabel = gitStatus?.refName ?? selectedThread?.branch ?? "Detached HEAD";
+  const currentBranchLabel = gitStatus?.refName ?? selectedThread?.branch ?? gt("Detached HEAD");
   const busy = gitState.gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -77,24 +81,29 @@ export function useGitOverview(props: {
   const terminology = sourceControlClients.get(
     gitStatus?.sourceControlProvider?.kind,
   ).changeRequest;
-  const { shortLabel, singular } = terminology;
+  const term = changeRequestTermKind(terminology);
 
   const resolvedQuickAction = resolveQuickAction(
     gitStatus ?? null,
     busy,
     isDefaultRef,
     hasPrimaryRemote,
+    m,
   );
   const writeBlocked =
     !canWriteSourceControl &&
     (resolvedQuickAction.kind === "run_action" || resolvedQuickAction.kind === "run_pull");
   const quickAction = !isRepo
-    ? { ...resolvedQuickAction, disabled: true, hint: "This workspace is not a git repository." }
+    ? {
+        ...resolvedQuickAction,
+        disabled: true,
+        hint: gt("This workspace is not a git repository."),
+      }
     : writeBlocked
       ? {
           ...resolvedQuickAction,
           disabled: true,
-          hint: "This connection cannot change source control.",
+          hint: gt("This connection cannot change source control."),
         }
       : resolvedQuickAction;
 
@@ -102,35 +111,49 @@ export function useGitOverview(props: {
     if (gitStatus == null) return undefined;
     if (item.dialogAction === "commit" && gitStatus.hasWorkingTreeChanges) {
       const fileCount = gitStatus.workingTree?.files.length ?? 0;
-      return `${fileCount} file${fileCount === 1 ? "" : "s"} changed`;
+      return gt("{count, plural, one {{count} file changed} other {{count} files changed}}", {
+        count: fileCount,
+      });
     }
     if (item.dialogAction === "push" && (gitStatus.aheadCount ?? 0) > 0) {
       const ahead = gitStatus.aheadCount ?? 0;
-      return `${ahead} commit${ahead === 1 ? "" : "s"} ahead`;
+      return gt("{count, plural, one {{count} commit ahead} other {{count} commits ahead}}", {
+        count: ahead,
+      });
     }
     if (item.kind === "open_pr" && gitStatus.pr?.number != null) {
-      return `${shortLabel} #${gitStatus.pr.number} ${gitStatus.pr.state ?? "open"}`;
+      return gt(
+        "{term, select, mr {MR #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}} cr {change request #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}} other {PR #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}}}",
+        {
+          term,
+          number: gitStatus.pr.number,
+          state: gitStatus.pr.state ?? "open",
+        },
+      );
     }
     return undefined;
   };
 
-  const menuItems = (isRepo ? buildMenuItems(gitStatus ?? null, busy, hasPrimaryRemote) : []).map(
-    (item) => {
-      const writeBlocked = !canWriteSourceControl && item.kind !== "open_pr";
-      return {
-        item: { ...item, disabled: item.disabled || writeBlocked },
-        disabledReason: writeBlocked
-          ? "This connection cannot change source control."
-          : getGitActionDisabledReason({
+  const menuItems = (
+    isRepo ? buildMenuItems(gitStatus ?? null, busy, hasPrimaryRemote, m) : []
+  ).map((item) => {
+    const itemWriteBlocked = !canWriteSourceControl && item.kind !== "open_pr";
+    return {
+      item: { ...item, disabled: item.disabled || itemWriteBlocked },
+      disabledReason: itemWriteBlocked
+        ? gt("This connection cannot change source control.")
+        : getGitActionDisabledReason(
+            {
               item,
               gitStatus: gitStatus ?? null,
               isBusy: busy,
               hasOriginRemote: hasPrimaryRemote,
-            }),
-        statusDetail: rowStatusDetail(item),
-      };
-    },
-  );
+            },
+            m,
+          ),
+      statusDetail: rowStatusDetail(item),
+    };
+  });
 
   const openLinkedPullRequest = async (url: string) => {
     onNavigate?.();
@@ -139,14 +162,31 @@ export function useGitOverview(props: {
 
   const openUrl = async (url: string) => {
     if (!(await openLinkedPullRequest(url))) {
-      Dialog.alert(`Unable to open ${shortLabel}`, `The ${singular} could not be opened.`);
+      Dialog.alert(
+        gt(
+          "{term, select, mr {Unable to open MR} cr {Unable to open change request} other {Unable to open PR}}",
+          { term },
+        ),
+        gt(
+          "{term, select, mr {The merge request could not be opened.} cr {The change request could not be opened.} other {The pull request could not be opened.}}",
+          { term },
+        ),
+      );
     }
   };
 
   const openExistingPr = async () => {
     const prUrl = gitStatus?.pr?.state === "open" ? gitStatus.pr.url : null;
     if (!prUrl) {
-      Dialog.alert(`No open ${shortLabel}`, `This branch does not have an open ${singular}.`);
+      Dialog.alert(
+        gt("{term, select, mr {No open MR} cr {No open change request} other {No open PR}}", {
+          term,
+        }),
+        gt(
+          "{term, select, mr {This branch does not have an open merge request.} cr {This branch does not have an open change request.} other {This branch does not have an open pull request.}}",
+          { term },
+        ),
+      );
       return;
     }
     await openUrl(prUrl);
@@ -254,7 +294,7 @@ export function useGitOverview(props: {
   return {
     gitStatus: gitStatus ?? null,
     currentBranchLabel,
-    currentStatusSummary: statusSummary(gitStatus ?? null),
+    currentStatusSummary: statusSummary(gitStatus ?? null, m),
     worktreePath: selectedThreadWorktreePath,
     terminology,
     busy,

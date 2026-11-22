@@ -29,6 +29,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { createModelHiddenPredicate, readCustomModelEntries } from "@t3tools/shared/model";
+import { msg, T, useGT, useMessages, Var } from "gt-react-native";
 import { useState } from "react";
 import { Linking, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -42,6 +43,7 @@ import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { ListRow } from "../../../components/ui/ListRow";
 import { ListToggleRow } from "../../../components/ui/ListToggleRow";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
+import { m, type MessageResolver } from "../../../i18n/messages";
 import { copyTextWithHaptic } from "../../../lib/copyTextWithHaptic";
 import { serverEnvironment } from "../../../state/server";
 import { useEnvironmentScope } from "../../../state/session";
@@ -93,6 +95,7 @@ export function ProviderDetailRouteScreen({ route }: StaticScreenProps<Params>) 
 }
 
 function ProviderDetail({ environmentId, instanceId }: Params) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const environmentLabel = useEnvironmentLabel(environmentId);
   const providers = useEnvironmentProviders(environmentId);
@@ -105,7 +108,7 @@ function ProviderDetail({ environmentId, instanceId }: Params) {
   const provider = providers.find((candidate) => candidate.instanceId === instanceId);
   const instance = row ? (row.explicitInstance ?? { driver: row.driver }) : null;
   return (
-    <SettingsScreen title={instance ? providerInstanceName(instance) : "Provider"}>
+    <SettingsScreen title={instance ? providerInstanceName(instance) : gt("Provider")}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -126,7 +129,9 @@ function ProviderDetail({ environmentId, instanceId }: Params) {
           />
         ) : (
           <Text className="text-foreground-muted">
-            This provider is no longer configured on {environmentLabel}.
+            <T>
+              This provider is no longer configured on <Var>{environmentLabel}</Var>.
+            </T>
           </Text>
         )}
       </ScreenScrollView>
@@ -144,6 +149,8 @@ function ProviderEditor(props: {
   readonly provider: ServerProvider | undefined;
   readonly actions: ReturnType<typeof useProviderInstanceActions>;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const { environmentId, instanceId, instance, provider, actions } = props;
   const navigation = useNavigation();
   const sources = useSecretSources(environmentId);
@@ -151,7 +158,7 @@ function ProviderEditor(props: {
   // An instance the policy pins as a whole is the administrator's to change, not the user's.
   const instanceManaged = isManagedSettingPath(policy, `providerInstances.${instanceId}`);
   const readOnly = !actions.canManage || instanceManaged;
-  const locks = managedInstanceLocks(policy, instance.driver);
+  const locks = managedInstanceLocks(policy, instance.driver, messages);
   const definition = providerClients.get(instance.driver);
   const driverDenial = isManagedDriverAllowed(policy, instance.driver)
     ? undefined
@@ -232,17 +239,19 @@ function ProviderEditor(props: {
         }
       />
     ) : !readOnly && provider && canManageProviderSignIn(provider) ? (
-      <SettingsSection title="Sign-in">
+      <SettingsSection title={gt("Sign-in")}>
         <ProviderSignInSection
           environment={{ environmentId, label: props.environmentLabel }}
           provider={provider}
         />
       </SettingsSection>
     ) : !readOnly && instance.driver === "cursor" && provider?.setup?.canAuthenticate === false ? (
-      <SettingsSection title="Sign-in">
+      <SettingsSection title={gt("Sign-in")}>
         <FieldBlock
-          label="Cursor account"
-          description="Using CURSOR_API_KEY. Remove it from this provider's environment to use browser sign-in."
+          label={gt("Cursor account")}
+          description={gt(
+            "Using CURSOR_API_KEY. Remove it from this provider's environment to use browser sign-in.",
+          )}
         />
       </SettingsSection>
     ) : null;
@@ -290,15 +299,19 @@ function ProviderEditor(props: {
       </View>
 
       <SettingsSection
-        footer={instanceManaged && policy ? `Managed by ${policy.organization}.` : undefined}
+        footer={
+          instanceManaged && policy
+            ? gt("Managed by {organization}.", { organization: policy.organization })
+            : undefined
+        }
       >
         <ListToggleRow
-          label="Turned on"
+          label={gt("Turned on")}
           description={
             // The policy refuses switching it on; switching it off stays the user's call.
             !status.enabled && driverDenial
               ? driverDenial
-              : "Show this provider in pickers and let threads start on it."
+              : gt("Show this provider in pickers and let threads start on it.")
           }
           disabled={readOnly || (!status.enabled && driverDenial !== undefined)}
           value={enabledSwitch.value}
@@ -310,8 +323,10 @@ function ProviderEditor(props: {
           }
         />
         <ListToggleRow
-          label="Block delegation for disabled models"
-          description="Reject delegated tasks using models turned off for this provider. Direct use is unchanged."
+          label={gt("Block delegation for disabled models")}
+          description={gt(
+            "Reject delegated tasks using models turned off for this provider. Direct use is unchanged.",
+          )}
           disabled={readOnly}
           value={delegationBlockSwitch.value}
           onValueChange={(value) =>
@@ -343,7 +358,7 @@ function ProviderEditor(props: {
       {setup}
 
       {environmentFields.length > 0 ? (
-        <SettingsSection title="Credentials">
+        <SettingsSection title={gt("Credentials")}>
           <ProviderEnvironmentFieldRows
             fields={environmentFields}
             environment={instance.environment}
@@ -374,12 +389,12 @@ function ProviderEditor(props: {
         </SettingsSection>
       ) : null}
 
-      <SettingsSection title="Identity">
-        <FieldBlock label="Display name">
+      <SettingsSection title={gt("Identity")}>
+        <FieldBlock label={gt("Display name")}>
           <CommitTextInput
-            accessibilityLabel="Display name"
+            accessibilityLabel={gt("Display name")}
             value={instance.displayName ?? ""}
-            placeholder={definition?.label ?? "Instance label"}
+            placeholder={definition?.label ?? gt("Instance label")}
             editable={!readOnly}
             onCommit={(value) => {
               const trimmed = value.trim();
@@ -390,8 +405,8 @@ function ProviderEditor(props: {
           />
         </FieldBlock>
         <FieldBlock
-          label="Accent color"
-          description="Marks this instance in the model picker."
+          label={gt("Accent color")}
+          description={gt("Marks this instance in the model picker.")}
           separated
         >
           <AccentColorPicker
@@ -404,7 +419,7 @@ function ProviderEditor(props: {
             }}
           />
         </FieldBlock>
-        <FieldBlock label="Instance ID" separated>
+        <FieldBlock label={gt("Instance ID")} separated>
           <Text selectable className="font-mono text-sm text-foreground-muted">
             {instanceId}
           </Text>
@@ -412,14 +427,17 @@ function ProviderEditor(props: {
       </SettingsSection>
 
       {!definition ? (
-        <SettingsSection title="Runtime">
+        <SettingsSection title={gt("Runtime")}>
           <FieldBlock
-            label="Driver"
-            description={`This instance uses ${String(instance.driver)}, which this app version does not know. Its configuration is kept as is.`}
+            label={gt("Driver")}
+            description={gt(
+              "This instance uses {driver}, which this app version does not know. Its configuration is kept as is.",
+              { driver: String(instance.driver) },
+            )}
           />
         </SettingsSection>
       ) : codexMode === "managed" ? (
-        <SettingsSection title="Runtime">
+        <SettingsSection title={gt("Runtime")}>
           <CodexManagedRuntimeFields
             environmentId={environmentId}
             instanceId={instanceId}
@@ -427,7 +445,7 @@ function ProviderEditor(props: {
           />
         </SettingsSection>
       ) : runtimeFieldCount > 0 ? (
-        <SettingsSection title="Runtime">
+        <SettingsSection title={gt("Runtime")}>
           <ProviderSettingsFields
             definition={definition}
             value={instance.config}
@@ -440,11 +458,13 @@ function ProviderEditor(props: {
       ) : null}
 
       <SettingsSection
-        title="Environment variables"
+        title={gt("Environment variables")}
         footer={
           locks?.wholeEnvironment
             ? locks.reason
-            : "API keys, base URLs, and other per-instance CLI settings. Sensitive values are stored separately and never returned to the app."
+            : gt(
+                "API keys, base URLs, and other per-instance CLI settings. Sensitive values are stored separately and never returned to the app.",
+              )
         }
       >
         <ProviderEnvironmentVariables
@@ -471,11 +491,11 @@ function ProviderEditor(props: {
       ) : null}
 
       {definition ? (
-        <SettingsSection title="Models">
+        <SettingsSection title={gt("Models")}>
           <ListRow
             icon="cube"
-            label="Models"
-            description={modelSummary(instance, provider, modelPreferences, instanceId)}
+            label={gt("Models")}
+            description={modelSummary(instance, provider, modelPreferences, instanceId, messages)}
             onPress={() =>
               navigation.navigate("SettingsProviderModels", { environmentId, instanceId })
             }
@@ -487,21 +507,21 @@ function ProviderEditor(props: {
         <SettingsSection
           footer={
             props.isDefault
-              ? "Clears this provider's saved settings on this device. Sign-in is kept."
+              ? gt("Clears this provider's saved settings on this device. Sign-in is kept.")
               : undefined
           }
         >
           {props.isDefault ? (
             <ListActionRow
               icon="arrow.uturn.backward"
-              label="Reset to defaults"
+              label={gt("Reset to defaults")}
               tone="danger"
               onPress={() => {
-                const prompt = providerInstanceRemovalPrompt("reset", instance);
+                const prompt = providerInstanceRemovalPrompt("reset", instance, messages);
                 Dialog.confirm({
                   title: prompt.question,
                   message: prompt.detail,
-                  confirmText: "Reset",
+                  confirmText: gt("Reset", { $context: "verb, resets settings to defaults" }),
                   destructive: true,
                   onConfirm: () => void actions.resetDefaultInstance(instance.driver),
                 });
@@ -510,14 +530,14 @@ function ProviderEditor(props: {
           ) : (
             <ListActionRow
               icon="trash"
-              label="Delete provider"
+              label={gt("Delete provider")}
               tone="danger"
               onPress={() => {
-                const prompt = providerInstanceRemovalPrompt("remove", instance);
+                const prompt = providerInstanceRemovalPrompt("remove", instance, messages);
                 Dialog.confirm({
                   title: prompt.question,
                   message: prompt.detail,
-                  confirmText: "Remove",
+                  confirmText: gt("Remove", { $context: "verb, removes a provider instance" }),
                   destructive: true,
                   onConfirm: () => {
                     void actions.deleteInstance(instanceId, instance).then((deleted) => {
@@ -539,6 +559,7 @@ function modelSummary(
   provider: ServerProvider | undefined,
   preferences: ReturnType<typeof useModelPreferences>["preferences"],
   instanceId: ProviderInstanceId,
+  resolve: MessageResolver = m,
 ) {
   const customModels =
     instance.driver === "antigravity"
@@ -549,7 +570,7 @@ function modelSummary(
             : undefined,
         );
   const models = deriveProviderModelsForDisplay({ liveModels: provider?.models, customModels });
-  if (models.length === 0) return "No models reported yet";
+  if (models.length === 0) return resolve(msg("No models reported yet"));
   const instancePreferences = preferences.providerModelPreferences[instanceId];
   const isHidden = createModelHiddenPredicate({
     hiddenModels: instancePreferences?.hiddenModels ?? [],
@@ -563,27 +584,40 @@ function modelSummary(
   ).length;
   const hidden = models.filter((model) => !model.isCustom && isHidden(model)).length;
   return [
-    `${models.length} model${models.length === 1 ? "" : "s"}`,
-    favorites > 0 ? `${favorites} favorite${favorites === 1 ? "" : "s"}` : null,
-    hidden > 0 ? `${hidden} hidden` : null,
+    resolve(
+      msg("{count, plural, one {{count} model} other {{count} models}}", { count: models.length }),
+    ),
+    favorites > 0
+      ? resolve(
+          msg("{count, plural, one {{count} favorite} other {{count} favorites}}", {
+            count: favorites,
+          }),
+        )
+      : null,
+    hidden > 0 ? resolve(msg("{count} hidden", { count: hidden })) : null,
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
 function RevealableEmail(props: { readonly email: string }) {
+  const gt = useGT();
   const [revealed, setRevealed] = useState(false);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
-        revealed ? `Signed in as ${props.email}` : "Signed in. Show account email"
+        revealed
+          ? gt("Signed in as {email}", { email: props.email })
+          : gt("Signed in. Show account email")
       }
       onPress={() => setRevealed((value) => !value)}
       hitSlop={6}
     >
       <Text textRole="footnote" className="text-center text-foreground-muted">
-        {`Signed in as ${revealed ? props.email.trim() : "••••••@••••••"}`}
+        <T>
+          Signed in as <Var>{revealed ? props.email.trim() : "••••••@••••••"}</Var>
+        </T>
       </Text>
     </Pressable>
   );
@@ -597,6 +631,8 @@ function VersionAdvisoryCard(props: {
   readonly enabled: boolean;
   readonly readOnly: boolean;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const { provider } = props;
   const runUpdate = useAtomCommand(serverEnvironment.updateProvider, { reportFailure: false });
   const canManage = useEnvironmentScope(props.environmentId, AuthProvidersManageScope);
@@ -605,13 +641,14 @@ function VersionAdvisoryCard(props: {
     provider?.versionAdvisory,
     provider?.compatibilityAdvisory,
     props.enabled,
+    messages,
   );
   if (!provider || !advisory) return null;
   const updating = dispatching || isProviderUpdating(provider);
   const progress = updating
     ? ((provider.updateState?.status === "queued" || provider.updateState?.status === "running"
         ? provider.updateState.message
-        : null) ?? "Starting update")
+        : null) ?? gt("Starting update"))
     : null;
   const problem =
     !updating &&
@@ -640,8 +677,8 @@ function VersionAdvisoryCard(props: {
       setDispatching(false);
       reportCommandFailure(
         result,
-        `Could not update ${props.name}`,
-        "The provider update command could not be started.",
+        gt("Could not update {name}", { name: props.name }),
+        gt("The provider update command could not be started."),
       );
     });
   };
@@ -672,10 +709,12 @@ function VersionAdvisoryCard(props: {
         <Button
           label={
             updating
-              ? "Updating"
+              ? gt("Updating")
               : targetVersion
-                ? `Install ${getProviderVersionLabel(targetVersion)}`
-                : "Update now"
+                ? gt("Install {version}", {
+                    version: getProviderVersionLabel(targetVersion) ?? targetVersion,
+                  })
+                : gt("Update now")
           }
           icon="arrow.down.circle"
           loading={updating}
@@ -699,7 +738,7 @@ function VersionAdvisoryCard(props: {
       {updateCommand ? (
         <View className="gap-1.5">
           <Text textRole="footnote" className="text-foreground-muted">
-            {canRun ? "Or update manually:" : "Update manually:"}
+            {canRun ? gt("Or update manually:") : gt("Update manually:")}
           </Text>
           <View className="flex-row items-center gap-2 rounded-xl bg-subtle py-1 pr-1 pl-3">
             <Text
@@ -711,7 +750,7 @@ function VersionAdvisoryCard(props: {
             </Text>
             <ControlPill
               icon="doc.on.doc"
-              accessibilityLabel="Copy update command"
+              accessibilityLabel={gt("Copy update command")}
               onPress={() => copyTextWithHaptic(updateCommand, { target: "update command" })}
             />
           </View>
@@ -726,6 +765,7 @@ function UrlAuthCard(props: {
   readonly instanceId: ProviderInstanceId;
   readonly action: AcpRegistryUrlAuthAction;
 }) {
+  const gt = useGT();
   const accept = useAtomCommand(serverEnvironment.acceptAcpRegistryUrlAuth, {
     reportFailure: false,
   });
@@ -738,7 +778,7 @@ function UrlAuthCard(props: {
         {props.action.url}
       </Text>
       <Button
-        label="Continue authentication"
+        label={gt("Continue authentication")}
         icon="globe"
         tone="secondary"
         onPress={() => {
@@ -748,14 +788,14 @@ function UrlAuthCard(props: {
           }).then((result) => {
             if (result._tag === "Success" && !result.value.accepted) {
               Dialog.alert(
-                "Authentication request expired",
-                "Refresh the provider and start the authentication flow again.",
+                gt("Authentication request expired"),
+                gt("Refresh the provider and start the authentication flow again."),
               );
               return;
             }
-            if (reportCommandFailure(result, "Could not continue authentication")) {
+            if (reportCommandFailure(result, gt("Could not continue authentication"))) {
               void Linking.openURL(props.action.url).catch(() =>
-                Dialog.alert("Could not open the page", props.action.url),
+                Dialog.alert(gt("Could not open the page"), props.action.url),
               );
             }
           });

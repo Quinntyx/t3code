@@ -6,6 +6,7 @@ import {
   formatHourShort,
   formatMoney,
   formatThreadUsageCost,
+  formatTokens,
   makeWindow,
   usageSourceMessages,
 } from "./usageFormat.ts";
@@ -204,5 +205,13 @@ describe("hourly usage formatting", () => {
     } finally {
       resolvedOptions.mockRestore();
     }
+  });
+});
+
+describe("token formatting", () => {
+  it("moves to the next unit when rounding reaches it", () => {
+    expect(formatTokens(999_999)).toBe("1M");
+    expect(formatTokens(999_999_999)).toBe("1B");
+    expect(formatTokens(-999_999)).toBe("-1M");
   });
 });

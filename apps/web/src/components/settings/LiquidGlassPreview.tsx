@@ -1,45 +1,37 @@
-import type { CSSProperties } from "react";
-
-import { cn } from "~/lib/utils";
-
-// liquid-glass-studio's test card: stripes make bending and color split obvious, flat quadrants
-// show the rim light on white and black. Fixed colors, so every theme previews the same backdrop.
-const STRIPES = "#000 0 8px, #fff 8px 16px";
-const quadrants = [
-  { inset: "0 50% 50% 0", background: `repeating-linear-gradient(0deg, ${STRIPES})` },
-  { inset: "0 0 50% 50%", background: "#fff" },
-  { inset: "50% 50% 0 0", background: "#000" },
-  { inset: "50% 0 0 50%", background: `repeating-linear-gradient(90deg, ${STRIPES})` },
-] as const satisfies ReadonlyArray<CSSProperties>;
-
-const glassClassName = "absolute -translate-x-1/2 shadow-lg surface-glass";
-
-/** A miniature backdrop with glass on it, so liquid glass sliders show their effect while dragging. */
+/** Live preview of the liquid-glass shader over three contrasting backdrop zones. */
 export function LiquidGlassPreview() {
   return (
     <div
-      role="img"
-      aria-label="Liquid glass preview over striped, white, and black backdrops"
-      className="relative isolate mb-3 h-64 w-full max-w-md overflow-hidden rounded-xl border border-border"
+      aria-hidden
+      className="relative h-24 w-full overflow-hidden rounded-lg border border-border/70 select-none sm:h-20 sm:w-52"
     >
-      {quadrants.map((style) => (
-        <span key={style.inset} aria-hidden className="absolute" style={style} />
-      ))}
-      <span
-        aria-hidden
-        data-liquid-glass=""
-        className={cn(glassClassName, "top-2.5 left-1/2 size-25 rounded-3xl")}
-      />
-      <span
-        aria-hidden
-        data-liquid-glass=""
-        className={cn(glassClassName, "top-28.5 left-1/2 h-7 w-3/5 rounded-full")}
-      />
-      <span
-        aria-hidden
-        data-liquid-glass=""
-        className={cn(glassClassName, "top-37.5 left-1/2 size-25 rounded-full")}
-      />
+      <div className="grid h-full w-full grid-cols-[2fr_1fr]">
+        <div
+          className="h-full"
+          style={{
+            backgroundImage: "repeating-linear-gradient(135deg, #000 0 8px, #fff 8px 16px)",
+          }}
+        />
+        <div className="grid h-full grid-rows-2">
+          <div className="bg-white" />
+          <div className="bg-black" />
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-around px-3">
+        <div
+          className="h-11 w-11 rounded-full bg-card/(--glass-opacity) shadow-sm ring-1 ring-border/70 liquid-frost glass-glare"
+          data-liquid-glass=""
+        />
+        <div
+          className="h-11 w-11 rounded-xl bg-card/(--glass-opacity) shadow-sm ring-1 ring-border/70 liquid-frost glass-glare"
+          data-liquid-glass=""
+        />
+        <div
+          className="h-9 w-16 rounded-full bg-card/(--glass-opacity) shadow-sm ring-1 ring-border/70 liquid-frost glass-glare"
+          data-liquid-glass=""
+        />
+      </div>
     </div>
   );
 }

@@ -12,6 +12,8 @@ import {
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 export const PREVIEW_STREAM_BASE_PATH = "/api/preview-stream";
 
@@ -50,50 +52,69 @@ export const previewStreamPhase = (
         ? "awaiting-frame"
         : "connecting";
 
-const previewStreamControlLabel = (control: PreviewStreamControl): string =>
+const previewStreamControlLabel = (
+  control: PreviewStreamControl,
+  resolve: MFunctionType = mFallback,
+): string =>
   !control.canOperate
-    ? "Read-only"
+    ? resolve(msg("Read-only"))
     : control.controller === "you"
-      ? "You have control"
+      ? resolve(msg("You have control"))
       : control.controller === "agent"
-        ? "Agent has control"
+        ? resolve(msg("Agent has control"))
         : control.controller === "another-viewer"
-          ? "Another viewer has control"
-          : "Watching";
+          ? resolve(msg("Another viewer has control"))
+          : resolve(
+              msg("Watching", { $context: "preview stream status, viewing without control" }),
+            );
 
 export const previewStreamStatusLabel = (
   phase: PreviewStreamPhase,
   control: PreviewStreamControl | null,
+  resolve: MFunctionType = mFallback,
 ): string => {
   switch (phase) {
     case "connecting":
-      return "Connecting to remote stream…";
+      return resolve(msg("Connecting to remote stream…"));
     case "awaiting-frame":
       return control
-        ? `Waiting for video frame · ${previewStreamControlLabel(control)}`
-        : "Waiting for video frame…";
+        ? resolve(
+            msg("Waiting for video frame · {control}", {
+              control: previewStreamControlLabel(control, resolve),
+            }),
+          )
+        : resolve(msg("Waiting for video frame…"));
     case "reconnecting":
       return control
-        ? `Reconnecting stream · ${previewStreamControlLabel(control)}`
-        : "Reconnecting stream…";
+        ? resolve(
+            msg("Reconnecting stream · {control}", {
+              control: previewStreamControlLabel(control, resolve),
+            }),
+          )
+        : resolve(msg("Reconnecting stream…"));
     case "live":
-      return control ? previewStreamControlLabel(control) : "Connecting to remote stream…";
+      return control
+        ? previewStreamControlLabel(control, resolve)
+        : resolve(msg("Connecting to remote stream…"));
   }
 };
 
 export const previewStreamOverlayDetail = (
   phase: PreviewStreamPhase,
   environmentLabel?: string,
+  resolve: MFunctionType = mFallback,
 ): string => {
   switch (phase) {
     case "awaiting-frame":
-      return "Waiting for first frame…";
+      return resolve(msg("Waiting for first frame…"));
     case "reconnecting":
-      return "Reconnecting to remote browser…";
+      return resolve(msg("Reconnecting to remote browser…"));
     case "connecting":
     case "live": {
       const label = environmentLabel?.trim();
-      return label ? `Starting video stream from ${label}…` : "Starting video stream…";
+      return label
+        ? resolve(msg("Starting video stream from {environment}…", { environment: label }))
+        : resolve(msg("Starting video stream…"));
     }
   }
 };
@@ -149,6 +170,7 @@ export type PreviewStreamInput =
   | { readonly type: "navigate"; readonly url: string }
   | { readonly type: "history"; readonly delta: -1 | 1 }
   | { readonly type: "reload"; readonly ignoreCache?: boolean }
+  | { readonly type: "stopLoading" }
   | { readonly type: "probe"; readonly x: number; readonly y: number };
 
 export interface PreviewStreamDownload {
@@ -879,7 +901,18 @@ const decodeHostSetup = (reason: string): PreviewStreamHostSetup => {
   return { need: "sandbox", command: "sudo npx t3 browser setup" };
 };
 
-export const previewStreamHostSetupMessage = (setup: PreviewStreamHostSetup) =>
+export const previewStreamHostSetupMessage = (
+  setup: PreviewStreamHostSetup,
+  resolve: MFunctionType = mFallback,
+) =>
   setup.need === "sandbox"
-    ? "This server's host blocks the sandbox its browser runs in. Run this once on the host, then try again:"
-    : "This server's host is missing libraries its browser needs. Run this once on the host, then try again:";
+    ? resolve(
+        msg(
+          "This server's host blocks the sandbox its browser runs in. Run this once on the host, then try again:",
+        ),
+      )
+    : resolve(
+        msg(
+          "This server's host is missing libraries its browser needs. Run this once on the host, then try again:",
+        ),
+      );

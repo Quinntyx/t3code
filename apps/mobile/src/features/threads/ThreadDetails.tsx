@@ -1,16 +1,11 @@
 import { useNavigation } from "@react-navigation/native";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { AuthFilesystemReadScope, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Clipboard from "expo-clipboard";
+import { msg, T, useGT, useMessages } from "gt-react-native";
 import { use, useState, type ReactNode } from "react";
-import {
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppBar } from "../../components/ui/AppBar";
@@ -20,7 +15,9 @@ import { Button } from "../../components/ui/Button";
 import { FloatingHeaderButtonBackdrop } from "../../components/ui/FloatingHeaderButtonBackdrop";
 import { ListRow } from "../../components/ui/ListRow";
 import { ListSection } from "../../components/ui/ListSection";
+import { RefreshControl } from "../../components/ui/RefreshControl";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { changeRequestTermKind } from "../../lib/changeRequestTerm";
 import { cn } from "../../lib/cn";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -39,6 +36,16 @@ import { LinkedPullRequestRow, linkedPullRequestKey } from "./LinkedPullRequestL
 import { ThreadProjectActions } from "./ThreadProjectActions";
 import type { ThreadGitControlsProps } from "./ThreadGitControls";
 import { ThreadListDrawerHost, threadListDrawerWidth } from "./thread-list-drawer";
+
+const CONNECTION_STATE_LABELS: Record<EnvironmentConnectionPhase, string> = {
+  available: msg("Available", { $context: "environment connection status" }),
+  offline: msg("Offline", { $context: "environment connection status" }),
+  connecting: msg("Connecting", { $context: "environment connection status" }),
+  reconnecting: msg("Reconnecting", { $context: "environment connection status" }),
+  connected: msg("Connected", { $context: "environment connection status" }),
+  error: msg("Error", { $context: "environment connection status" }),
+  unsupported: msg("Unsupported", { $context: "environment connection status" }),
+};
 
 interface DetailsProps {
   readonly title: string;
@@ -62,6 +69,7 @@ export function ThreadDetailsDrawer(props: DetailsProps) {
 }
 
 function ThreadDetailsDrawerPanel(props: DetailsProps & { readonly onClose: () => void }) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   return (
     <View
@@ -71,7 +79,7 @@ function ThreadDetailsDrawerPanel(props: DetailsProps & { readonly onClose: () =
       <View className="flex-row items-center justify-between gap-3 px-5 py-4">
         <View className="min-w-0 flex-1 gap-1">
           <Text textRole="title" className="font-t3-bold">
-            Thread details
+            <T>Thread details</T>
           </Text>
           <Text textRole="footnote" className="text-foreground-muted" numberOfLines={2}>
             {props.title}
@@ -79,7 +87,7 @@ function ThreadDetailsDrawerPanel(props: DetailsProps & { readonly onClose: () =
         </View>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Close thread details"
+          accessibilityLabel={gt("Close thread details")}
           onPress={props.onClose}
           className="h-11 w-11 items-center justify-center rounded-full active:bg-subtle"
         >
@@ -94,9 +102,10 @@ function ThreadDetailsDrawerPanel(props: DetailsProps & { readonly onClose: () =
 
 /** Split windows: the same details as an inspector pane, in its column or sheet. */
 export function ThreadDetailsInspectorPane(props: DetailsProps) {
+  const gt = useGT();
   return (
     <View collapsable={false} className="flex-1 android:bg-header ios:bg-screen">
-      <AppBar title="Thread details" subtitle={props.title} />
+      <AppBar title={gt("Thread details")} subtitle={props.title} />
       <ScreenContent insetHorizontal>
         <ThreadDetailsBody {...props} presentation="inspector" />
       </ScreenContent>
@@ -112,6 +121,8 @@ type BodyProps = DetailsProps & {
 
 // Read-only facts sit at the top; the actions people reach for most sit in a dock under the thumb.
 function ThreadDetailsBody(props: BodyProps) {
+  const gt = useGT();
+  const m = useMessages();
   const navigation = useNavigation();
   const closeInspectorSheet = use(InspectorSheetContext);
   const controls = props.gitControls;
@@ -158,8 +169,8 @@ function ThreadDetailsBody(props: BodyProps) {
           <ListSection>
             <ListRow
               icon="doc.text"
-              label="Notebook"
-              description="Read-only cells and outputs"
+              label={gt("Notebook")}
+              description={gt("Read-only cells and outputs")}
               onPress={() =>
                 navigate(() =>
                   navigation.navigate("ThreadNotebook", {
@@ -175,7 +186,12 @@ function ThreadDetailsBody(props: BodyProps) {
         <WorkspaceSummary {...props} git={git} hasThread={hasThread} />
 
         {hasThread && git.linkedPrLines.length > 0 ? (
-          <ListSection title={`Linked ${git.linkedPrActions.terminology.plural}`}>
+          <ListSection
+            title={gt(
+              "{term, select, mr {Linked merge requests} cr {Linked change requests} other {Linked pull requests}}",
+              { term: changeRequestTermKind(git.linkedPrActions.terminology) },
+            )}
+          >
             {git.linkedPrLines.map((line, index) => (
               <LinkedPullRequestRow
                 key={linkedPullRequestKey(line)}
@@ -203,10 +219,10 @@ function ThreadDetailsBody(props: BodyProps) {
         ) : null}
 
         <ListSection
-          title="Terminals"
+          title={gt("Terminals")}
           footer={
             !controls.canOperateTerminal
-              ? "Terminal commands require a saved thread and terminal access."
+              ? gt("Terminal commands require a saved thread and terminal access.")
               : undefined
           }
         >
@@ -215,14 +231,14 @@ function ThreadDetailsBody(props: BodyProps) {
               key={session.terminalId}
               icon="terminal"
               label={session.displayLabel}
-              description={getTerminalStatusLabel(session)}
+              description={getTerminalStatusLabel(session, m)}
               disabled={!controls.canOpenTerminal}
               onPress={() => navigate(() => controls.onOpenTerminal(session.terminalId))}
             />
           ))}
           <ListRow
             icon="plus"
-            label="New terminal"
+            label={gt("New terminal")}
             disabled={!controls.canOperateTerminal}
             onPress={() => navigate(controls.onOpenNewTerminal)}
           />
@@ -240,6 +256,8 @@ function ThreadDetailsBody(props: BodyProps) {
 }
 
 function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: boolean }) {
+  const gt = useGT();
+  const m = useMessages();
   const { git, cwd } = props;
   const controls = props.gitControls;
   const environmentId = EnvironmentId.make(String(controls.environmentId));
@@ -249,7 +267,7 @@ function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: bool
   const [copied, setCopied] = useState(false);
   const branch = props.hasThread
     ? git.currentBranchLabel
-    : (controls.gitStatus?.refName ?? controls.currentBranch ?? "Detached HEAD");
+    : (controls.gitStatus?.refName ?? controls.currentBranch ?? gt("Detached HEAD"));
   const changes = git.gitStatus ? (git.gitStatus.branchChanges ?? git.gitStatus.workingTree) : null;
   return (
     <View className="gap-4 rounded-3xl bg-grouped-card px-4 py-4">
@@ -268,7 +286,7 @@ function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: bool
           <Text textRole="footnote" className="text-foreground-muted">
             {props.hasThread
               ? git.currentStatusSummary
-              : "Send the first message to use source control."}
+              : gt("Send the first message to use source control.")}
           </Text>
           {props.hasThread && changes && changes.insertions + changes.deletions > 0 ? (
             <PullRequestDiffStats additions={changes.insertions} deletions={changes.deletions} />
@@ -277,7 +295,7 @@ function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: bool
       </View>
 
       <View className="gap-3 border-t border-border-subtle pt-4">
-        <SummaryFact label="Environment">
+        <SummaryFact label={gt("Environment")}>
           <View className="flex-row items-center gap-2">
             <View
               className={cn(
@@ -292,22 +310,22 @@ function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: bool
               )}
             />
             <Text textRole="footnote" className="min-w-0 shrink font-t3-medium" numberOfLines={1}>
-              {environment?.environmentLabel ?? "Environment"}
+              {environment?.environmentLabel ?? gt("Environment")}
             </Text>
             <Text textRole="footnote" className="text-foreground-muted">
-              {connectionState.charAt(0).toUpperCase() + connectionState.slice(1)}
+              {m(CONNECTION_STATE_LABELS[connectionState])}
             </Text>
           </View>
         </SummaryFact>
-        <SummaryFact label="Project">
+        <SummaryFact label={gt("Project")}>
           <Text textRole="footnote" className="font-t3-medium" numberOfLines={1}>
-            {props.project?.title ?? "Project"}
+            {props.project?.title ?? gt("Project")}
           </Text>
         </SummaryFact>
-        <SummaryFact label={props.worktreePath ? "Worktree" : "Directory"}>
+        <SummaryFact label={props.worktreePath ? gt("Worktree") : gt("Directory")}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={copied ? "Workspace path copied" : "Copy workspace path"}
+            accessibilityLabel={copied ? gt("Workspace path copied") : gt("Copy workspace path")}
             disabled={!cwd}
             onPress={() => {
               if (!cwd) return;
@@ -317,7 +335,7 @@ function WorkspaceSummary(props: BodyProps & { git: GitOverview; hasThread: bool
             className="flex-row items-start gap-2 rounded-lg active:opacity-60"
           >
             <Text textRole="footnote" className="min-w-0 flex-1 text-foreground-secondary">
-              {cwd ?? "Workspace unavailable"}
+              {cwd ?? gt("Workspace unavailable")}
             </Text>
             {cwd ? (
               <SymbolView
@@ -351,21 +369,22 @@ function ManageSection(
     navigate: (action: () => void) => void;
   },
 ) {
+  const gt = useGT();
   const { git, navigate } = props;
   const controls = props.gitControls;
   const [branchesOpen, setBranchesOpen] = useState(false);
   const canManageBranches = props.hasThread && git.isRepo;
   return (
     <View className="gap-3">
-      <ListSection title="Manage">
+      <ListSection title={gt("Manage")}>
         {canManageBranches ? (
           <ListRow
             icon="point.topleft.down.curvedto.point.bottomright.up"
-            label="Branches & worktrees"
+            label={gt("Branches & worktrees")}
             description={
               git.canChangeThreadBranch
-                ? "Switch branch, create branch, or move to a worktree"
-                : "View branches and worktrees"
+                ? gt("Switch branch, create branch, or move to a worktree")
+                : gt("View branches and worktrees")
             }
             disabled={git.busy}
             onPress={() => setBranchesOpen((open) => !open)}
@@ -374,21 +393,27 @@ function ManageSection(
         {props.hasThread && git.linkedPrActions.canLink ? (
           <ListRow
             icon="link"
-            label={`Link ${git.linkedPrActions.terminology.singular}`}
-            description={`Attach a ${git.linkedPrActions.terminology.singular} by URL or number`}
+            label={gt(
+              "{term, select, mr {Link merge request} cr {Link change request} other {Link pull request}}",
+              { term: changeRequestTermKind(git.linkedPrActions.terminology) },
+            )}
+            description={gt(
+              "{term, select, mr {Attach a merge request by URL or number} cr {Attach a change request by URL or number} other {Attach a pull request by URL or number}}",
+              { term: changeRequestTermKind(git.linkedPrActions.terminology) },
+            )}
             onPress={() => navigate(git.linkedPrActions.promptLink)}
           />
         ) : null}
         {controls.onMergeBack ? (
           <ListRow
             icon={PullRequestGlyph.merged}
-            label="Merge back to source"
+            label={gt("Merge back to source")}
             onPress={() => navigate(() => controls.onMergeBack?.())}
           />
         ) : null}
         <ListRow
           icon="chevron.left"
-          label="Close thread"
+          label={gt("Close thread")}
           onPress={() => navigate(props.onCloseThread)}
         />
       </ListSection>
@@ -405,6 +430,8 @@ function ActionDock(
     openFiles: () => void;
   },
 ) {
+  const gt = useGT();
+  const m = useMessages();
   const insets = useSafeAreaInsets();
   const { git, navigate, hasThread } = props;
   const controls = props.gitControls;
@@ -452,20 +479,20 @@ function ActionDock(
         {props.onReturnToThread ? (
           <DockTile
             icon="bubble.left"
-            label="Chat"
+            label={gt("Chat", { $context: "thread conversation view" })}
             onPress={() => navigate(() => props.onReturnToThread?.())}
           />
         ) : null}
         <DockTile
           icon="folder"
-          label="Files"
+          label={gt("Files")}
           disabled={!controls.canOpenFiles || !canReadFiles}
           onPress={props.openFiles}
         />
         <DockTile
           icon="terminal"
-          label="Terminal"
-          detail={latestTerminal ? getTerminalStatusLabel(latestTerminal) : undefined}
+          label={gt("Terminal")}
+          detail={latestTerminal ? getTerminalStatusLabel(latestTerminal, m) : undefined}
           disabled={latestTerminal ? !controls.canOpenTerminal : !controls.canOperateTerminal}
           onPress={() =>
             navigate(() =>
@@ -478,7 +505,7 @@ function ActionDock(
         {hasThread ? (
           <DockTile
             icon="text.bubble"
-            label="Review"
+            label={gt("Review", { $context: "code review action" })}
             disabled={git.busy || !git.isRepo}
             onPress={git.openReview}
           />

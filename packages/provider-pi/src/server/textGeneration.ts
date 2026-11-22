@@ -1,18 +1,29 @@
 import * as Effect from "effect/Effect";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { fastVariantDispatchModel } from "@t3tools/shared/model";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { TextGenerationError } from "@t3tools/contracts";
+import { ProviderDriverKind, TextGenerationError } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  fastVariantDispatchModel,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
+import {
+  brokenVersionDetail,
+  noCompatibilityPolicy,
+  type ProviderCompatibilityLookup,
+} from "@t3tools/provider-core/server/compatibility";
+import { parseGenericCliVersion } from "@t3tools/provider-core/server/snapshotProbe";
+import { buildStructuredOutputRepairPrompt } from "@t3tools/provider-core/server/textGenerationPrompts";
 import type { PiSettings } from "../settings.ts";
 
-import { makePiRpcConnection, parsePiModelSlug, piRecordString } from "./rpc.ts";
+import { makePiRpcConnection, piRecordField, piRecordString, resolvePiModelSlug } from "./rpc.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
-import { buildStructuredOutputRepairPrompt } from "@t3tools/provider-core/server/textGenerationPrompts";
+import { isPiThinkingLevel } from "./modelCapabilities.ts";
+import { runPiVersionCommand } from "./status.ts";
 
 const PI_TIMEOUT_MS = 180_000;
 
@@ -30,6 +41,7 @@ const piTurnErrorDetail = (errorMessage: string | undefined) => {
 export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* (
   piSettings: PiSettings,
   environment?: NodeJS.ProcessEnv,
+  compatibility: ProviderCompatibilityLookup = noCompatibilityPolicy,
 ) {
   const resolvedEnvironment = environment ?? (yield* HostProcess.Environment);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -37,6 +49,28 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   const runPiJson: TextGenerationOperations.Runner = Effect.fn("PiTextGeneration.runPiJson")(
     function* (request) {
       const { operation, cwd, prompt, modelSelection } = request;
+      const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+      if (thinking !== undefined && isPiThinkingLevel(thinking)) {
+        const output = yield* runPiVersionCommand(piSettings, resolvedEnvironment, cwd).pipe(
+          Effect.timeoutOption(4_000),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const version =
+          Option.isSome(output) && output.value.code === 0
+            ? parseGenericCliVersion(`${output.value.stdout}\n${output.value.stderr}`)
+            : null;
+        const broken =
+          version === null
+            ? "T3 Code could not determine the Pi version. Update Pi and try again."
+            : brokenVersionDetail({
+                name: "Pi",
+                version,
+                advisory: yield* compatibility(ProviderDriverKind.make("pi"), version),
+              });
+        if (broken !== undefined) {
+          return yield* new TextGenerationError({ operation, detail: broken });
+        }
+      }
 
       const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
@@ -66,7 +100,10 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       const model = fastVariantDispatchModel(modelSelection);
       if (model !== "default") {
         // Reject unusable custom slugs; silently using Pi's default would misreport the requested model.
-        const parsed = parsePiModelSlug(model);
+        const inventory = yield* connection
+          .request({ type: "get_available_models" })
+          .pipe(Effect.orElseSucceed(() => undefined));
+        const parsed = resolvePiModelSlug(model, piRecordField(inventory, "models"));
         if (parsed === null) {
           return yield* new TextGenerationError({
             operation,
@@ -91,6 +128,14 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
                 : error,
             ),
           );
+      }
+
+      if (thinking !== undefined && isPiThinkingLevel(thinking)) {
+        // Pi rejects xhigh/max for models without a thinkingLevelMap entry; a stale saved
+        // level falls back to Pi's default instead of failing the whole generation.
+        yield* connection
+          .request({ type: "set_thinking_level", level: thinking })
+          .pipe(Effect.catchTags({ PiRpcError: () => Effect.void }));
       }
 
       // Provider failures (bad key, rate limit, 5xx) arrive on the assistant

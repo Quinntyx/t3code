@@ -5,6 +5,9 @@ import type { ThreadId } from "@t3tools/contracts";
 import { resolveMarkdownLinkPresentation } from "../../lib/markdownLinks";
 import type { MarkdownFileContextMenu } from "../../native/SelectableMarkdownText.types";
 import { hostPreviewMimeTypeFromExtension } from "@t3tools/shared/filePreview";
+import { msg } from "gt-react-native";
+
+import { m, type MessageResolver } from "../../i18n/messages";
 
 import {
   isAbsolutePath,
@@ -71,23 +74,29 @@ export function fileChipShareSource(target: FileChipTarget, threadId: ThreadId) 
 export function fileChipMenu(
   target: FileChipTarget,
   canDownload: boolean,
+  resolve: MessageResolver = m,
 ): MarkdownFileContextMenu {
   return {
     title: target.fullPath ?? target.relativePath ?? "",
     actions: [
       ...(target.fullPath && isHandoffFile(target.fullPath)
-        ? [{ id: "hand-off", title: "Hand off to new thread" }]
+        ? [{ id: "hand-off", title: resolve(msg("Hand off to new thread")) }]
         : []),
-      ...(target.fullPath ? [{ id: "copy-full-path", title: "Copy full path" }] : []),
-      ...(target.relativePath ? [{ id: "copy-relative-path", title: "Copy relative path" }] : []),
-      { id: "open-file", title: "Open in file viewer" },
+      ...(target.fullPath ? [{ id: "copy-full-path", title: resolve(msg("Copy full path")) }] : []),
+      ...(target.relativePath
+        ? [{ id: "copy-relative-path", title: resolve(msg("Copy relative path")) }]
+        : []),
+      { id: "open-file", title: resolve(msg("Open in file viewer")) },
       ...(fileChipMetadata(target)
         ? canDownload
           ? [
-              { id: "download", title: "Download" },
-              { id: "save", title: "Share" },
+              { id: "download", title: resolve(msg("Download")) },
+              {
+                id: "save",
+                title: resolve(msg("Share", { $context: "verb, opens the system share sheet" })),
+              },
             ]
-          : [{ id: "save", title: "Save or share" }]
+          : [{ id: "save", title: resolve(msg("Save or share")) }]
         : []),
     ],
   };

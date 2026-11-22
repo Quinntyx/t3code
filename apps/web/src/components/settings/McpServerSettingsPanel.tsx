@@ -10,6 +10,7 @@ import {
   type McpConfigValue,
 } from "@t3tools/shared/mcpRegistration";
 import { useParams } from "@tanstack/react-router";
+import { T, useGT } from "gt-react";
 import { useState, type ComponentProps } from "react";
 
 import { Button } from "../ui/button";
@@ -32,6 +33,7 @@ const valueOf = (config: Readonly<Record<string, McpConfigValue>>, field: McpCon
  * entry's `config`, so a save is one settings write.
  */
 export function McpServerSettingsPanel() {
+  const gt = useGT();
   const { serverId } = useParams({ from: "/_chat/settings/mcp/$serverId" });
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
@@ -42,9 +44,9 @@ export function McpServerSettingsPanel() {
   if (scope.kind !== "environment" || environment === null) {
     return (
       <SettingsPageContainer>
-        <SettingsSection id="mcp-server-scope" title="MCP server">
+        <SettingsSection id="mcp-server-scope" title={gt("MCP server")}>
           <SettingsScopeNotice target="environment" inline>
-            Choose the environment this server runs on to change its settings.
+            {gt("Choose the environment this server runs on to change its settings.")}
           </SettingsScopeNotice>
         </SettingsSection>
       </SettingsPageContainer>
@@ -54,10 +56,12 @@ export function McpServerSettingsPanel() {
   if (entry === undefined) {
     return (
       <SettingsPageContainer>
-        <SettingsSection id="mcp-server-missing" title="MCP server">
+        <SettingsSection id="mcp-server-missing" title={gt("MCP server")}>
           <SettingsRow
-            title="Not registered"
-            description="This server is no longer registered. Add it again from Settings → Capabilities."
+            title={gt("Not registered")}
+            description={gt(
+              "This server is no longer registered. Add it again from Settings → Capabilities.",
+            )}
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -78,21 +82,26 @@ export function McpServerSettingsPanel() {
         <SettingsRow
           serverScoped
           settingKeys={["registeredMcpServers"]}
-          title="Enabled"
-          description="While on, T3 Code runs this server and its tools are available to agents."
+          title={gt("Enabled")}
+          description={gt(
+            "While on, T3 Code runs this server and its tools are available to agents.",
+          )}
           control={
             <Switch
               checked={entry.enabled}
               onCheckedChange={(next) => save({ enabled: Boolean(next) })}
-              aria-label="Run this MCP server"
+              aria-label={gt("Run this MCP server")}
             />
           }
         />
         <SettingsRow
           serverScoped
           settingKeys={["registeredMcpServers"]}
-          title="Tool name"
-          description={`Agents call this server's tools as ${entry.toolName}_<tool>. Lowercase letters, digits, _ and - only.`}
+          title={gt("Tool name")}
+          description={gt(
+            "Agents call this server's tools as {pattern}. Lowercase letters, digits, _ and - only.",
+            { pattern: `${entry.toolName}_<tool>` },
+          )}
           control={
             <ToolNameInput
               // Another server, or a name saved elsewhere, must not keep this draft.
@@ -108,12 +117,18 @@ export function McpServerSettingsPanel() {
       </SettingsSection>
 
       {fields.length === 0 ? null : (
-        <SettingsSection id="mcp-server-config" title="Configuration">
+        <SettingsSection id="mcp-server-config" title={gt("Configuration")}>
           {fields.map((field) => (
             <SettingsRow
               key={field.key}
               title={field.label}
-              description={`${field.required ? "Required. " : ""}${field.description ?? field.key}`}
+              description={
+                field.required
+                  ? gt("Required. {description}", {
+                      description: field.description ?? field.key,
+                    })
+                  : (field.description ?? field.key)
+              }
               control={
                 <FieldControl
                   field={field}
@@ -144,11 +159,14 @@ function ToolNameInput({
   others: ReadonlyArray<RegisteredMcpServerEntry>;
   onCommit: (toolName: string) => void;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState(value);
   const problem = !isValidMcpToolName(draft)
-    ? `Start with a lowercase letter and use only a-z, 0-9, _ and - (up to ${maxMcpToolPrefixLength}).`
+    ? gt("Start with a lowercase letter and use only a-z, 0-9, _ and - (up to {maxLength}).", {
+        maxLength: maxMcpToolPrefixLength,
+      })
     : others.some((entry) => entry.toolName === draft)
-      ? "Another registered server already uses that tool name."
+      ? gt("Another registered server already uses that tool name.")
       : null;
   return (
     <div className="flex flex-col items-end gap-1">
@@ -156,7 +174,7 @@ function ToolNameInput({
         size="sm"
         className="w-52"
         spellCheck={false}
-        aria-label="Tool name prefix"
+        aria-label={gt("Tool name prefix")}
         aria-invalid={problem !== null}
         value={draft}
         onChange={(event) => setDraft(event.currentTarget.value)}
@@ -165,7 +183,7 @@ function ToolNameInput({
             setDraft(value);
             toastManager.add({
               type: "warning",
-              title: "Tool name not saved",
+              title: gt("Tool name not saved"),
               description: problem,
             });
             return;
@@ -213,6 +231,7 @@ function FieldControl({
   entry: RegisteredMcpServerEntry;
   onChange: (value: McpConfigValue | undefined) => void;
 }) {
+  const gt = useGT();
   const value = valueOf(entry.config, field);
 
   if (field.secret) {
@@ -227,7 +246,9 @@ function FieldControl({
           className="min-w-0 flex-1"
           aria-label={field.label}
           value=""
-          placeholder={configuredSecret(entry, field.key) ? "Saved, type to replace" : "Not set"}
+          placeholder={
+            configuredSecret(entry, field.key) ? gt("Saved, type to replace") : gt("Not set")
+          }
           onCommit={(next) => {
             if (next === "") return;
             onChange(next);
@@ -237,11 +258,11 @@ function FieldControl({
           <Button
             size="sm"
             variant="ghost"
-            aria-label={`Clear ${field.label}`}
+            aria-label={gt("Clear {label}", { label: field.label })}
             // Cleared, the field falls back to the document's default and the stored secret goes.
             onClick={() => onChange(undefined)}
           >
-            Clear
+            <T>Clear</T>
           </Button>
         ) : null}
       </div>
@@ -265,7 +286,7 @@ function FieldControl({
         spellCheck={false}
         className="w-full max-w-72"
         aria-label={field.label}
-        placeholder={field.required ? "Required" : "One value per line"}
+        placeholder={field.required ? gt("Required") : gt("One value per line")}
         value={Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : ""}
         onCommit={(next) => {
           const values = next
@@ -287,7 +308,7 @@ function FieldControl({
         aria-label={field.label}
       >
         <SelectTrigger size="sm" className="w-56">
-          <SelectValue placeholder="Choose…" />
+          <SelectValue placeholder={gt("Choose…")} />
         </SelectTrigger>
         <SelectContent>
           {field.choices.map((choice) => (
@@ -323,7 +344,7 @@ function FieldControl({
       className="w-full max-w-72"
       spellCheck={field.type !== "path"}
       aria-label={field.label}
-      placeholder={field.required ? "Required" : "Optional"}
+      placeholder={field.required ? gt("Required") : gt("Optional")}
       value={typeof value === "string" ? value : ""}
       onCommit={(next) => onChange(next === "" ? undefined : next)}
     />

@@ -5,6 +5,9 @@ import {
   type StackableThread,
 } from "@t3tools/client-runtime/threadStacks";
 import type { GitRestackThreadResult, PullRequestState } from "@t3tools/contracts";
+import { msg } from "gt-react";
+
+import { m } from "~/i18n/messages";
 
 export interface StackPullRequest {
   readonly number: number;
@@ -154,7 +157,7 @@ export function derivePullRequestStack<T extends StackableThread & { readonly ti
 function formatPullRequestNumbers(numbers: ReadonlyArray<number>): string {
   const labels = numbers.map((number) => `#${number}`);
   if (labels.length <= 1) return labels.join("");
-  return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
+  return m(msg("{head} and {last}", { head: labels.slice(0, -1).join(", "), last: labels.at(-1) }));
 }
 
 export interface PullRequestStackMergeChoice {
@@ -187,6 +190,7 @@ export function resolvePullRequestStackMerge(input: {
   const parent = ancestors.at(-1);
   const rootBase = stack?.rootBase ?? null;
   const merged = formatPullRequestNumbers([...ancestors, number]);
+  const dependentNumbers = formatPullRequestNumbers(dependents);
   return {
     stackMerge:
       parent === undefined
@@ -194,51 +198,103 @@ export function resolvePullRequestStackMerge(input: {
         : {
             label:
               ancestors.length === 1
-                ? `Merge #${parent}, then #${number}`
-                : `Merge stack to #${number}`,
+                ? m(msg("Merge #{parent}, then #{number}", { parent, number }))
+                : m(msg("Merge stack to #{number}", { number })),
             tooltip:
               rootBase === null
-                ? `Merges ${merged}, bottom first`
-                : `Merges ${merged} into ${rootBase}, bottom first`,
+                ? m(msg("Merges {merged}, bottom first", { merged }))
+                : m(msg("Merges {merged} into {rootBase}, bottom first", { merged, rootBase })),
           },
     mergeOnly:
       parent === undefined
         ? null
         : {
-            label: `Merge only #${number}`,
-            detail: `into #${parent}'s branch`,
+            label: m(msg("Merge only #{number}", { number })),
+            detail: m(msg("into #{parent}'s branch", { parent })),
             info:
               rootBase === null
-                ? `Lands in ${baseBranch}, #${parent}'s branch, not the stack's base. It gets there when #${parent} merges.`
-                : `Lands in ${baseBranch}, #${parent}'s branch, not ${rootBase}. It reaches ${rootBase} when #${parent} merges.`,
+                ? m(
+                    msg(
+                      "Lands in {baseBranch}, #{parent}'s branch, not the stack's base. It gets there when #{parent} merges.",
+                      { baseBranch, parent },
+                    ),
+                  )
+                : m(
+                    msg(
+                      "Lands in {baseBranch}, #{parent}'s branch, not {rootBase}. It reaches {rootBase} when #{parent} merges.",
+                      { baseBranch, parent, rootBase },
+                    ),
+                  ),
           },
     dependents:
       dependents.length === 0
         ? null
         : {
-            title: `Merge #${number} into ${baseBranch}`,
-            moves: `${formatPullRequestNumbers(dependents)} ${dependents.length === 1 ? "moves" : "move"} to ${baseBranch}`,
-            movesInfo: `${dependents.length === 1 ? "It is" : "They are"} retargeted to ${baseBranch}, and ${dependents.length === 1 ? "its thread moves" : "their threads move"} out of this stack.`,
-            restack: `Restack ${formatPullRequestNumbers(dependents)}`,
-            restackInfo: `Rebases each branch onto ${baseBranch} in its own worktree, leaving out #${number}'s commits. Conflicts go to that thread's agent.`,
+            title: m(msg("Merge #{number} into {baseBranch}", { number, baseBranch })),
+            moves:
+              dependents.length === 1
+                ? m(
+                    msg("{dependents} moves to {baseBranch}", {
+                      dependents: dependentNumbers,
+                      baseBranch,
+                    }),
+                  )
+                : m(
+                    msg("{dependents} move to {baseBranch}", {
+                      dependents: dependentNumbers,
+                      baseBranch,
+                    }),
+                  ),
+            movesInfo:
+              dependents.length === 1
+                ? m(
+                    msg(
+                      "It is retargeted to {baseBranch}, and its thread moves out of this stack.",
+                      { baseBranch },
+                    ),
+                  )
+                : m(
+                    msg(
+                      "They are retargeted to {baseBranch}, and their threads move out of this stack.",
+                      { baseBranch },
+                    ),
+                  ),
+            restack: m(msg("Restack {dependents}", { dependents: dependentNumbers })),
+            restackInfo: m(
+              msg(
+                "Rebases each branch onto {baseBranch} in its own worktree, leaving out #{number}'s commits. Conflicts go to that thread's agent.",
+                { baseBranch, number },
+              ),
+            ),
           },
   };
 }
 
 /** The toast line for a restack, as in "Restacked 2 · asked 1 agent to finish". */
 export function summarizeRestackOutcomes(results: ReadonlyArray<GitRestackThreadResult>): string {
-  if (results.length === 0) return "Nothing is stacked here";
+  if (results.length === 0) return m(msg("Nothing is stacked here"));
   const count = (predicate: (result: GitRestackThreadResult) => boolean) =>
     results.filter(predicate).length;
   const restacked = count((result) => result.outcome === "restacked");
   const asked = count((result) => result.outcome === "agent-asked");
   const unpushed = count((result) => result.outcome === "restacked" && result.pushed === false);
-  if (restacked === 0 && asked === 0) return "Already up to date";
+  if (restacked === 0 && asked === 0) return m(msg("Already up to date"));
   const parts = [
-    restacked > 0 ? `Restacked ${restacked}` : null,
-    unpushed > 0 ? `${unpushed} not pushed` : null,
-    asked > 0 ? `asked ${asked} ${asked === 1 ? "agent" : "agents"} to finish` : null,
+    restacked > 0 ? m(msg("Restacked {count}", { count: restacked })) : null,
+    unpushed > 0 ? m(msg("{count} not pushed", { count: unpushed })) : null,
+    asked > 0
+      ? restacked === 0 && unpushed === 0
+        ? m(
+            msg("Asked {count, plural, one {# agent} other {# agents}} to finish", {
+              count: asked,
+            }),
+          )
+        : m(
+            msg("asked {count, plural, one {# agent} other {# agents}} to finish", {
+              count: asked,
+            }),
+          )
+      : null,
   ].filter((part) => part !== null);
-  const line = parts.join(" · ");
-  return line.charAt(0).toUpperCase() + line.slice(1);
+  return parts.join(" · ");
 }

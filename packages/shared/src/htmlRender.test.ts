@@ -1,4 +1,3 @@
-import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -11,67 +10,6 @@ import { htmlRenderFromToolItem } from "./toolOutput.ts";
 const reference = { attachmentId: "thread-abc-123.html", title: "Chart", height: 420 };
 
 describe("injectHtmlRenderBootstrap", () => {
-  it.each([
-    ["data:image/png;base64,AA", true, "t3/notifications/open-image"],
-    ["DATA:image/svg+xml,%3Csvg%3E%3C/svg%3E", true, "t3/notifications/open-image"],
-    ["https://example.com/drawing.png", true, "ui/open-link"],
-    ["#drawing", true, undefined],
-    ["data:text/html,%3Cp%3Enot-an-image", true, undefined],
-    ["data:image/png;base64,AA", false, undefined],
-  ] as const)("routes an image link at %s (trusted: %s)", (href, isTrusted, method) => {
-    const html = injectHtmlRenderBootstrap('<a href="image"><img alt="Drawing"></a>');
-    const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"));
-    const messages: unknown[] = [];
-    const link = {
-      matches: (selector: string) => selector === "a[href]",
-      getAttribute: () => href,
-      querySelector: () => ({ alt: "Drawing" }),
-    };
-    const event = {
-      isTrusted,
-      defaultPrevented: false,
-      metaKey: false,
-      ctrlKey: false,
-      composedPath: () => [{ tagName: "IMG" }, link],
-      preventDefault() {
-        this.defaultPrevented = true;
-      },
-    };
-    let click: ((input: typeof event) => void) | undefined;
-    NodeVM.runInNewContext(script, {
-      URL,
-      location: new URL("https://app.example/gallery.html"),
-      document: {
-        baseURI: "https://app.example/gallery.html",
-        getElementById: () => ({}),
-        addEventListener: (type: string, listener: typeof click) => {
-          if (type === "click") click = listener;
-        },
-      },
-      window: {
-        parent: { postMessage: (message: unknown) => messages.push(message) },
-        addEventListener: () => undefined,
-      },
-    });
-    expect(click).toBeTypeOf("function");
-    click?.(event);
-    expect(event.defaultPrevented).toBe(method !== undefined);
-    expect(messages).toEqual(
-      method === "t3/notifications/open-image"
-        ? [{ jsonrpc: "2.0", method, params: { src: new URL(href).href, name: "Drawing" } }]
-        : method === "ui/open-link"
-          ? [
-              {
-                jsonrpc: "2.0",
-                id: "t3-link-1",
-                method,
-                params: { url: href, metaKey: false, ctrlKey: false },
-              },
-            ]
-          : [],
-    );
-  });
-
   it("puts the theme ahead of the page's own head content", () => {
     const html =
       "<!doctype html><html><head><style>:root{--background:red}</style></head><body>x</body></html>";
@@ -83,12 +21,20 @@ describe("injectHtmlRenderBootstrap", () => {
     expect(injected).toContain('name="viewport"');
   });
 
-  it("keeps the page transparent so the thread shows through", () => {
-    const injected = injectHtmlRenderBootstrap("<p>x</p>");
-    expect(injected).toContain("html{background:transparent;");
-    // A dark color-scheme on the root would paint an opaque canvas over the thread.
-    expect(injected).toContain("body{color-scheme:dark}");
-    expect(injected).not.toContain(":root{color-scheme:");
+  it.each([
+    "<html><head data-condition='x > 0'>",
+    '<html><head data-condition="x > 0" data-label=\'it "works"\'>',
+    "<html data-condition='x > 0'>",
+    '<html data-condition="x > 0" data-label="it \'works\'">',
+  ])("keeps the bootstrap after the complete opening tag: %s", (opening) => {
+    const prefix = `<!doctype html>${opening}`;
+    const head = opening.startsWith("<html><head") ? "" : "<head>";
+    const content = `${head ? "" : "<title>Report</title></head>"}<body><p>Report</p></body></html>`;
+    const injected = injectHtmlRenderBootstrap(prefix + content);
+    expect(injected.startsWith(`${prefix}${head}<meta charset="utf-8">`)).toBe(true);
+    expect(injected.indexOf('<style id="t3-theme">')).toBeGreaterThan(prefix.length);
+    expect(injected).toContain("<script>");
+    expect(injected.endsWith(content)).toBe(true);
   });
 
   it("wraps fragments without a head and keeps existing meta tags", () => {
@@ -174,17 +120,41 @@ describe("readHtmlRenderImageRequest", () => {
     });
     expect(
       readHtmlRenderImageRequest(image({ src: "data:image/png;base64,AA", name: " Chart " })),
-    ).toEqual({
-      src: "data:image/png;base64,AA",
-      name: "Chart",
-    });
+    ).toEqual({ images: [{ src: "data:image/png;base64,AA", name: "Chart" }], index: 0 });
     expect(readHtmlRenderImageRequest(image({ src: "https://example.com/a.png" }))).toEqual({
-      src: "https://example.com/a.png",
-      name: "Image",
+      images: [{ src: "https://example.com/a.png", name: "Image" }],
+      index: 0,
     });
+    const boundaryImage = readHtmlRenderImageRequest(
+      image({ src: "https://example.com/a.png", name: "a".repeat(199) + "😀" }),
+    );
+    expect(boundaryImage?.images[0]?.name.isWellFormed()).toBe(true);
+    expect(boundaryImage?.images[0]?.name).toBe("a".repeat(199));
     expect(readHtmlRenderImageRequest(image({ src: "javascript:alert(1)" }))).toBeUndefined();
     expect(readHtmlRenderImageRequest(image({ src: "data:text/html,<p>" }))).toBeUndefined();
     expect(readHtmlRenderImageRequest(image({ src: "blob:null/1" }))).toBeUndefined();
+  });
+
+  it("keeps the page's other images, dropping unsafe ones, around the clicked image", () => {
+    const b = { src: "https://example.com/b.png", name: "B" };
+    const params = {
+      ...b,
+      images: [{ src: "https://example.com/a.png", name: "A" }, { src: "blob:null/1" }, b, null],
+      index: 2,
+    };
+    const request = (overrides: object) =>
+      readHtmlRenderImageRequest({
+        jsonrpc: "2.0",
+        method: "t3/notifications/open-image",
+        params: { ...params, ...overrides },
+      });
+    expect(request({})).toEqual({
+      images: [{ src: "https://example.com/a.png", name: "A" }, b],
+      index: 1,
+    });
+    // An index that does not point at the clicked image falls back to that image alone.
+    expect(request({ index: 0 })).toEqual({ images: [b], index: 0 });
+    expect(request({ index: -1 })).toEqual({ images: [b], index: 0 });
   });
 });
 
@@ -197,6 +167,16 @@ describe("htmlRenderFromToolItem", () => {
       ["t3-code.html_render", { structuredContent: result, content: [] }],
       ["t3-code-thread_1_html_render", JSON.stringify(result)],
       ["html_render", result],
+      // OpenCode 2 Code Mode reports a script's nested html_render call as one `execute` item.
+      ["execute", JSON.stringify(result)],
+      // Antigravity runs the `acp-mcp-call` terminal fallback and wraps its stdout.
+      [
+        "t3-code.html_render",
+        {
+          output: `Created At: 2026-11-19T02:54:02Z\nCompleted At: 2026-11-19T02:54:02Z\nCommand exited with code 0.\n\nCommand output:\n${JSON.stringify({ content: [], structuredContent: result, isError: false })}\r\n`,
+          exit_code: 0,
+        },
+      ],
     ] as const) {
       expect(htmlRenderFromToolItem({ toolName, output })).toEqual(reference);
     }

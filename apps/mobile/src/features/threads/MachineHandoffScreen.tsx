@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
 import { AsyncResult } from "effect/reactivity";
+import { T, useGT, useMessages } from "gt-react-native";
 import { use, useRef, useState, type ReactNode } from "react";
 import { Alert, View } from "react-native";
 
@@ -70,6 +71,8 @@ export function MachineHandoffScreen(props: {
   readonly sourceRef: ScopedThreadRef;
   readonly modelSelection: ModelSelection;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const theme = useUniwindTheme();
   const registry = use(RegistryContext);
   const selectDetail = useSelectWorkspaceDetail();
@@ -185,12 +188,15 @@ export function MachineHandoffScreen(props: {
     projectSelected: destinationProject !== null,
     modelReady: selection !== null,
   };
-  const blocker = machineHandoffBlocker(availability);
-  const preparationBlocker = machineHandoffBlocker({
-    ...availability,
-    projectSelected: true,
-    modelReady: true,
-  });
+  const blocker = machineHandoffBlocker(availability, m);
+  const preparationBlocker = machineHandoffBlocker(
+    {
+      ...availability,
+      projectSelected: true,
+      modelReady: true,
+    },
+    m,
+  );
   const eligibility = () => {
     const currentThread = registry.get(environmentThreadShells.threadShellAtom(props.sourceRef));
     const presentations = registry.get(environmentPresentations.presentationsAtom);
@@ -208,39 +214,42 @@ export function MachineHandoffScreen(props: {
             }),
           )
         : null;
-    return machineHandoffBlocker({
-      sourceAvailable:
-        currentThread !== null &&
-        sourceProject !== null &&
-        currentThread.projectId === sourceProject.id &&
-        registry.get(
-          environmentProjects.projectAtom({
-            environmentId: props.sourceRef.environmentId,
-            projectId: sourceProject.id,
-          }),
-        ) !== null,
-      sourceStatus: currentThread?.source.status,
-      sourceConnected: currentSource?.connection.phase === "connected",
-      targetConnected: currentTarget?.connection.phase === "connected",
-      sourceSupported:
-        currentSource?.serverConfig?.environment.capabilities.machineHandoff === true,
-      targetSupported:
-        currentTarget?.serverConfig?.environment.capabilities.machineHandoff === true,
-      canExport: registry.get(
-        threadEnvironment.exportMachineHandoff.permissionAtom(props.sourceRef.environmentId),
-      ),
-      canImport:
-        targetId !== null &&
-        registry.get(threadEnvironment.importMachineHandoff.permissionAtom(targetId)),
-      projectSelected: currentProject !== null,
-      modelReady:
-        selection !== null &&
-        destinationModels(currentConfig, selection, currentProject?.id ?? null).some(
-          (option) =>
-            option.selection.instanceId === selection.instanceId &&
-            option.selection.model === selection.model,
+    return machineHandoffBlocker(
+      {
+        sourceAvailable:
+          currentThread !== null &&
+          sourceProject !== null &&
+          currentThread.projectId === sourceProject.id &&
+          registry.get(
+            environmentProjects.projectAtom({
+              environmentId: props.sourceRef.environmentId,
+              projectId: sourceProject.id,
+            }),
+          ) !== null,
+        sourceStatus: currentThread?.source.status,
+        sourceConnected: currentSource?.connection.phase === "connected",
+        targetConnected: currentTarget?.connection.phase === "connected",
+        sourceSupported:
+          currentSource?.serverConfig?.environment.capabilities.machineHandoff === true,
+        targetSupported:
+          currentTarget?.serverConfig?.environment.capabilities.machineHandoff === true,
+        canExport: registry.get(
+          threadEnvironment.exportMachineHandoff.permissionAtom(props.sourceRef.environmentId),
         ),
-    });
+        canImport:
+          targetId !== null &&
+          registry.get(threadEnvironment.importMachineHandoff.permissionAtom(targetId)),
+        projectSelected: currentProject !== null,
+        modelReady:
+          selection !== null &&
+          destinationModels(currentConfig, selection, currentProject?.id ?? null).some(
+            (option) =>
+              option.selection.instanceId === selection.instanceId &&
+              option.selection.model === selection.model,
+          ),
+      },
+      m,
+    );
   };
 
   const submit = async () => {
@@ -284,9 +293,11 @@ export function MachineHandoffScreen(props: {
             params: { environmentId: targetId, threadId: result.threadId },
           });
         if (result.warnings?.length) {
-          Alert.alert("Thread transferred; workspace setup needed", result.warnings.join("\n"), [
-            { text: "Open thread", onPress: openThread },
-          ]);
+          Alert.alert(
+            gt("Thread transferred; workspace setup needed"),
+            result.warnings.join("\n"),
+            [{ text: gt("Open thread"), onPress: openThread }],
+          );
         } else {
           openThread();
         }
@@ -295,7 +306,7 @@ export function MachineHandoffScreen(props: {
         setError(
           cause instanceof Error
             ? cause.message
-            : "Could not hand off the thread. Your source is unchanged.",
+            : gt("Could not hand off the thread. Your source is unchanged."),
         ),
       );
     executing.current = false;
@@ -319,7 +330,7 @@ export function MachineHandoffScreen(props: {
       const destination = { environmentId: clonedProject.environmentId, projectId };
       if (!(await waitForProject(destination)))
         throw new Error(
-          "The cloned project has not reached this device yet. Reopen handoff when it appears.",
+          gt("The cloned project has not reached this device yet. Reopen handoff when it appears."),
         );
       return destination;
     };
@@ -331,7 +342,7 @@ export function MachineHandoffScreen(props: {
       })
       .catch((cause: unknown) =>
         setError(
-          cause instanceof Error ? cause.message : "Could not prepare the destination project.",
+          cause instanceof Error ? cause.message : gt("Could not prepare the destination project."),
         ),
       );
     setBusy(false);
@@ -341,29 +352,29 @@ export function MachineHandoffScreen(props: {
     return (
       <View className="flex-1 bg-sheet">
         <View className="px-4 py-3 gap-2">
-          <Button label="Back to handoff" disabled={busy} onPress={() => setCloning(false)} />
+          <Button label={gt("Back to handoff")} disabled={busy} onPress={() => setCloning(false)} />
           {error ? <ErrorBanner message={error} /> : null}
         </View>
         {clonedProject ? (
           <View className="px-4 gap-4">
             <Text>
               {cloneReady
-                ? "Clone complete. Continue to review the handoff; no agent will start."
+                ? gt("Clone complete. Continue to review the handoff; no agent will start.")
                 : clone === null || clone === "pending"
-                  ? "Waiting for clone status…"
+                  ? gt("Waiting for clone status…")
                   : clone.phase === "running"
-                    ? "Cloning repository…"
-                    : (clone.error ?? "Clone did not complete.")}
+                    ? gt("Cloning repository…")
+                    : (clone.error ?? gt("Clone did not complete."))}
             </Text>
             <Button
-              label="Continue handoff"
+              label={gt("Continue handoff")}
               disabled={!cloneProject || !cloneReady}
               loading={busy}
               onPress={() => void finishClone()}
             />
             {clone !== null && clone !== "pending" && clone.phase !== "done" ? (
               <Button
-                label={clone.phase === "running" ? "Cancel clone" : "Retry clone"}
+                label={clone.phase === "running" ? gt("Cancel clone") : gt("Retry clone")}
                 onPress={() => {
                   const command = clone.phase === "running" ? cancelClone : retryClone;
                   void command({
@@ -401,13 +412,15 @@ export function MachineHandoffScreen(props: {
       contentInsetAdjustmentBehavior="automatic"
     >
       <Text className="text-sm text-foreground-muted">
-        Continue this conversation and its working files in a fresh isolated worktree on another
-        machine. The original thread and files stay intact, with no commits added to your branch and
-        no agent turn started.
+        <T>
+          Continue this conversation and its working files in a fresh isolated worktree on another
+          machine. The original thread and files stay intact, with no commits added to your branch
+          and no agent turn started.
+        </T>
       </Text>
       {error ? <ErrorBanner message={error} /> : null}
       <View pointerEvents={busy || prepared ? "none" : "auto"} className="gap-5">
-        <Section title="Destination machine">
+        <Section title={gt("Destination machine")}>
           {targets.map((environment, index) => (
             <ChoiceRow
               key={environment.environmentId}
@@ -425,19 +438,27 @@ export function MachineHandoffScreen(props: {
           ))}
           {targets.length === 0 ? (
             <Text className="p-4 text-sm text-foreground-muted">
-              No other connected machine supports handoff. Connect or update the destination server
-              first.
+              <T>
+                No other connected machine supports handoff. Connect or update the destination
+                server first.
+              </T>
             </Text>
           ) : null}
         </Section>
         {target ? (
           <>
-            <Section title="Destination project">
+            <Section title={gt("Destination project")}>
               {targetProjects.map((project, index) => (
                 <ChoiceRow
                   key={project.id}
                   label={project.title}
-                  description={`${matching.some((candidate) => candidate.id === project.id) ? "Matching repository · " : ""}${project.workspaceRoot}`}
+                  description={
+                    matching.some((candidate) => candidate.id === project.id)
+                      ? gt("Matching repository · {workspaceRoot}", {
+                          workspaceRoot: project.workspaceRoot,
+                        })
+                      : project.workspaceRoot
+                  }
                   selected={project.id === destinationProject?.id}
                   isLast={index === targetProjects.length - 1}
                   onPress={() => {
@@ -451,19 +472,21 @@ export function MachineHandoffScreen(props: {
               ))}
               {targetProjects.length === 0 ? (
                 <Text className="p-4 text-sm text-foreground-muted">
-                  This machine has no project yet.
+                  <T>This machine has no project yet.</T>
                 </Text>
               ) : null}
             </Section>
             {matching.length === 0 ? (
               <Text className="text-sm text-foreground-muted">
-                No repository and project-path match was found. Explicitly choose the same
-                repository and relative project folder, or clone it first. The server checks
-                compatibility before importing.
+                <T>
+                  No repository and project-path match was found. Explicitly choose the same
+                  repository and relative project folder, or clone it first. The server checks
+                  compatibility before importing.
+                </T>
               </Text>
             ) : null}
             <Button
-              label="Clone repository on this machine"
+              label={gt("Clone repository on this machine")}
               disabled={!remoteUrl || subdirectory === null || preparationBlocker !== null}
               onPress={() => {
                 setCloning(true);
@@ -472,12 +495,15 @@ export function MachineHandoffScreen(props: {
             />
             {subdirectory === null ? (
               <Text className="text-xs text-foreground-muted">
-                Repository identity is unavailable, so automatic cloning cannot preserve the project
-                folder. Add the matching project on this machine first, then select it here.
+                <T>
+                  Repository identity is unavailable, so automatic cloning cannot preserve the
+                  project folder. Add the matching project on this machine first, then select it
+                  here.
+                </T>
               </Text>
             ) : null}
             {destinationProject ? (
-              <Section title="Destination provider and model">
+              <Section title={gt("Destination provider and model")}>
                 {models.map((option, index) => (
                   <ChoiceRow
                     key={option.key}
@@ -490,7 +516,9 @@ export function MachineHandoffScreen(props: {
                 ))}
                 {models.length === 0 ? (
                   <Text className="p-4 text-sm text-foreground-muted">
-                    No ready provider/model for this project. Set one up on the destination first.
+                    <T>
+                      No ready provider/model for this project. Set one up on the destination first.
+                    </T>
                   </Text>
                 ) : null}
               </Section>
@@ -558,25 +586,27 @@ export function MachineHandoffScreen(props: {
             endpoints={{ from: [], to: props.modelSelection }}
             iconColor={theme["--color-foreground-muted"]}
             surfaceColor={theme["--color-grouped-card"]}
-            label={`From ${source?.label ?? "source machine"}`}
+            label={gt("From {machine}", { machine: source?.label ?? gt("source machine") })}
           />
           <ThreadHandoffDivider
             environmentId={target.environmentId}
             endpoints={{ from: [], to: selection }}
             iconColor={theme["--color-foreground-muted"]}
             surfaceColor={theme["--color-grouped-card"]}
-            label={`To ${target.label}`}
+            label={gt("To {machine}", { machine: target.label })}
           />
         </View>
       ) : null}
       <Text className="text-xs text-foreground-muted">
-        Ignored files (including ignored .env files), provider sessions, approvals and
-        authentication are not transferred. Tracked changes, untracked non-ignored files and
-        unpushed git history travel with the handoff.
+        <T>
+          Ignored files (including ignored .env files), provider sessions, approvals and
+          authentication are not transferred. Tracked changes, untracked non-ignored files and
+          unpushed git history travel with the handoff.
+        </T>
       </Text>
       {blocker ? <Text className="text-sm text-foreground-muted">{blocker}</Text> : null}
       <Button
-        label="Hand off thread"
+        label={gt("Hand off thread")}
         tone="primary"
         fullWidth
         disabled={blocker !== null}

@@ -28,6 +28,7 @@ function systemFaces(regular: string, medium = regular): UiFontFaces {
 // Registered under these names on both platforms by app.config.ts.
 const ATKINSON_HYPERLEGIBLE: FontChoice<UiFontFaces> = {
   id: "atkinson-hyperlegible",
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
   label: "Atkinson Hyperlegible",
   value: {
     regular: "AtkinsonHyperlegible-Regular",
@@ -38,6 +39,7 @@ const ATKINSON_HYPERLEGIBLE: FontChoice<UiFontFaces> = {
 };
 const FIRA_CODE_NERD_FONT: FontChoice<string> = {
   id: "fira-code",
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
   label: "Fira Code Nerd Font",
   value: "FiraCode Nerd Font",
 };
@@ -46,9 +48,11 @@ const FIRA_CODE_NERD_FONT: FontChoice<string> = {
 const UI_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<UiFontFaces>>> = {
   ios: [
     ATKINSON_HYPERLEGIBLE,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "system", label: "System", value: systemFaces("System") },
     {
       id: "avenir-next",
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
       label: "Avenir Next",
       value: {
         regular: "AvenirNext-Regular",
@@ -59,6 +63,7 @@ const UI_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<UiFontFaces
     },
     {
       id: "helvetica-neue",
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
       label: "Helvetica Neue",
       value: {
         regular: "HelveticaNeue",
@@ -69,6 +74,7 @@ const UI_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<UiFontFaces
     },
     {
       id: "georgia",
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
       label: "Georgia",
       value: { regular: "Georgia", medium: "Georgia", bold: "Georgia-Bold", boldByWeight: false },
     },
@@ -76,12 +82,15 @@ const UI_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<UiFontFaces
   // React Native maps Android system families to NORMAL or BOLD only, so medium needs its own family.
   android: [
     ATKINSON_HYPERLEGIBLE,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "system", label: "System", value: systemFaces("sans-serif", "sans-serif-medium") },
     {
       id: "condensed",
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
       label: "System Condensed",
       value: systemFaces("sans-serif-condensed", "sans-serif-condensed-medium"),
     },
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "serif", label: "System Serif", value: systemFaces("serif") },
   ],
 };
@@ -90,12 +99,15 @@ const CODE_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<string>>>
   ios: [
     FIRA_CODE_NERD_FONT,
     { id: "sf-mono", label: "SF Mono", value: "ui-monospace" },
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "menlo", label: "Menlo", value: "Menlo" },
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "courier-new", label: "Courier New", value: "Courier New" },
   ],
   // Android code surfaces already default to the system monospace family.
   android: [
     FIRA_CODE_NERD_FONT,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "serif-mono", label: "Serif Mono", value: "serif-monospace" },
   ],
 };
@@ -104,12 +116,16 @@ const CODE_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<string>>>
 const TERMINAL_FONT_CHOICES: Record<FontPlatform, ReadonlyArray<FontChoice<string>>> = {
   ios: [
     FIRA_CODE_NERD_FONT,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "menlo", label: "Menlo", value: "Menlo" },
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "courier-new", label: "Courier New", value: "Courier New" },
   ],
   android: [
     FIRA_CODE_NERD_FONT,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "system", label: "System Mono", value: "monospace" },
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- font family name
     { id: "serif-mono", label: "Serif Mono", value: "serif-monospace" },
   ],
 };

@@ -34,6 +34,7 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as MachineHandoffService from "./MachineHandoffService.ts";
@@ -263,6 +264,7 @@ it.effect.each([
             Effect.succeedSome({
               projectId,
               title: "Project",
+              hasCustomTitle: false,
               workspaceRoot: destination,
               defaultModelSelection: null,
               defaultThreadEnvMode: null,
@@ -339,6 +341,7 @@ it.effect.each([
             Layer.mock(TextGeneration.TextGeneration)({}),
             Layer.mock(ProviderRegistry.ProviderRegistry)({}),
             Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+            Layer.mock(PullRequestService.PullRequestService)({}),
             Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
           ),
         ),

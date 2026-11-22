@@ -1,3 +1,5 @@
+import { useGT } from "gt-react-native";
+
 import { SymbolView } from "../../../../components/ui/AppSymbol";
 import { ListRowLayout } from "../../../../components/ui/ListRowLayout";
 import { Menu } from "../../../../components/ui/Menu";
@@ -14,8 +16,13 @@ export function FontFamilyMenuRow(props: {
   readonly selectedId: string | null;
   readonly onSelect: (id: string | null) => void;
 }) {
+  const gt = useGT();
+  const defaultTitle =
+    props.defaultLabel === "Default"
+      ? gt("Default", { $context: "default font option" })
+      : props.defaultLabel;
   const value =
-    props.choices.find((choice) => choice.id === props.selectedId)?.label ?? props.defaultLabel;
+    props.choices.find((choice) => choice.id === props.selectedId)?.label ?? defaultTitle;
 
   return (
     <Menu
@@ -23,8 +30,11 @@ export function FontFamilyMenuRow(props: {
       actions={[
         {
           id: DEFAULT_ACTION_ID,
-          title: props.defaultLabel,
-          subtitle: props.defaultLabel === "Default" ? undefined : "Default",
+          title: defaultTitle,
+          subtitle:
+            props.defaultLabel === "Default"
+              ? undefined
+              : gt("Default", { $context: "default font option" }),
           state: props.selectedId === null ? "on" : "off",
         },
         ...props.choices.map((choice) => ({

@@ -1,3 +1,5 @@
+import { useGT, useMessages } from "gt-react";
+
 import { cn } from "~/lib/utils";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import { resolvePullRequestState } from "./pullRequestPresentation";
@@ -11,11 +13,13 @@ export function PullRequestStackTree({
   rows: ReadonlyArray<PullRequestStackRow>;
   onSelect?: ((number: number) => void) | undefined;
 }) {
+  const gt = useGT();
+  const resolve = useMessages();
   return (
     <ul className="flex flex-col text-xs">
       {rows.map((row) => {
         const pullRequest = row.pullRequest;
-        const state = pullRequest ? resolvePullRequestState(pullRequest) : null;
+        const state = pullRequest ? resolvePullRequestState(pullRequest, resolve) : null;
         const content = (
           <>
             {Array.from({ length: row.depth }, (_, level) => (
@@ -49,7 +53,7 @@ export function PullRequestStackTree({
               {row.title}
             </span>
             <span className="shrink-0 text-muted-foreground">
-              {row.current ? "this" : (state?.label.toLowerCase() ?? "thread")}
+              {row.current ? gt("this") : (state?.label.toLowerCase() ?? gt("thread"))}
             </span>
           </>
         );

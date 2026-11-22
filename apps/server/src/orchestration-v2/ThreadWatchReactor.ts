@@ -65,7 +65,7 @@ export class ThreadWatchReactor extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadWatchReactor") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const eventSink = yield* EventSink.EventSinkV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;

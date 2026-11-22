@@ -3,8 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   matchComposerEnvironmentItems,
+  matchComposerThreadItems,
   matchComposerThreadTriggerItems,
-  type ComposerThreadCandidate,
+  type ComposerThreadTriggerCandidate,
 } from "./composerThreadItems.ts";
 
 const environmentId = EnvironmentId.make("env-composer");
@@ -12,9 +13,9 @@ const environmentId = EnvironmentId.make("env-composer");
 function shell(
   id: string,
   title: string,
-  overrides: Partial<ComposerThreadCandidate> = {},
-): ComposerThreadCandidate {
-  return {
+  overrides: Partial<ComposerThreadTriggerCandidate> = {},
+): ComposerThreadTriggerCandidate {
+  const base: ComposerThreadTriggerCandidate = {
     environmentId,
     id: ThreadId.make(id),
     title,
@@ -25,15 +26,16 @@ function shell(
     opens: null,
     archivedAt: null,
     settledOverride: null,
+    snoozedUntil: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     lineage: { rootThreadId: ThreadId.make(id), parentThreadId: null, relationshipToParent: null },
-    ...overrides,
   };
+  return Object.assign(base, overrides);
 }
 
-it("leaves subagent threads and unlinked machines' threads out of thread mentions", () => {
-  const items = matchComposerThreadTriggerItems({
+it("ranks thread mentions like the palette and leaves out subagent threads", () => {
+  const items = matchComposerThreadItems({
     shells: [
       shell("newer-mid-word", "Remodel the settings page", {
         updatedAt: "2026-10-20T00:00:00.000Z",
@@ -54,12 +56,40 @@ it("leaves subagent threads and unlinked machines' threads out of thread mention
     query: "model",
     now: Date.parse("2026-10-23T00:00:00.000Z"),
   });
-  expect(items.map((item) => item.thread.threadId)).toEqual(["newer-mid-word", "word"]);
+  expect(items.map((item) => item.thread.threadId)).toEqual(["word", "newer-mid-word"]);
+});
+
+it("offers the composer thread's own used side chats, but not other threads' side chats", () => {
+  const sideChatOf = (parent: string) => ({
+    rootThreadId: ThreadId.make(parent),
+    parentThreadId: ThreadId.make(parent),
+    relationshipToParent: "fork" as const,
+    sideChat: true,
+  });
+  const latestUserMessageAt = "2026-10-22T00:00:00.000Z";
+  const items = matchComposerThreadItems({
+    shells: [
+      shell("mine", "Why is the build slow?", { lineage: sideChatOf("main"), latestUserMessageAt }),
+      shell("unused", "Slow side chat", { lineage: sideChatOf("main") }),
+      shell("theirs", "Why is the test slow?", {
+        lineage: sideChatOf("other"),
+        latestUserMessageAt,
+      }),
+    ],
+    environmentId,
+    linkedEnvironments: new Map(),
+    excludeThreadId: ThreadId.make("main"),
+    query: "slow",
+    now: Date.parse("2026-10-23T00:00:00.000Z"),
+  });
+  expect(items.map(({ thread, description }) => ({ id: thread.threadId, description }))).toEqual([
+    { id: "mine", description: "Side chat" },
+  ]);
 });
 
 it("also offers threads on linked machines, naming the machine, but no other machine's", () => {
   const vps = EnvironmentId.make("env-vps");
-  const items = matchComposerThreadTriggerItems({
+  const items = matchComposerThreadItems({
     shells: [
       shell("here", "Deploy script"),
       shell("there", "Deploy script", { environmentId: vps }),
@@ -72,11 +102,11 @@ it("also offers threads on linked machines, naming the machine, but no other mac
     now: Date.parse("2026-10-23T00:00:00.000Z"),
   });
   expect(items.map(({ thread, label, description }) => ({ thread, label, description }))).toEqual([
-    { thread: { environmentId, threadId: "here" }, label: "Deploy script", description: "Active" },
+    { thread: { environmentId, threadId: "here" }, label: "Deploy script", description: "Thread" },
     {
       thread: { environmentId: vps, threadId: "there" },
       label: "Deploy script",
-      description: "Active on Hetzner VPS",
+      description: "Thread on Hetzner VPS",
     },
   ]);
 });

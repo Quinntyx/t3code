@@ -1,5 +1,6 @@
 import { AppActivityIndicator } from "./AppActivityIndicator";
 import { Column, Text as NativeText, RNHostView } from "@expo/ui/jetpack-compose";
+import { useGT } from "gt-react-native";
 import { use, useState, type ReactNode } from "react";
 import { View } from "react-native";
 
@@ -58,6 +59,7 @@ export function AndroidScreenHeader(props: {
   /** Defaults to borderless chrome with the thread screen's circular controls. */
   readonly floating?: boolean;
 }) {
+  const gt = useGT();
   const { colors } = useControlTheme();
   const titleRole = useScaledTextRole("title");
   const floating = props.floating ?? true;
@@ -95,7 +97,7 @@ export function AndroidScreenHeader(props: {
             <View collapsable={false} className="flex-row items-center gap-2">
               {props.onBack ? (
                 <AndroidHeaderIconButton
-                  accessibilityLabel="Navigate up"
+                  accessibilityLabel={gt("Navigate up")}
                   icon="arrow.left"
                   floating={floating}
                   onPress={props.onBack}
@@ -187,7 +189,7 @@ export function AndroidScreenHeader(props: {
                 >
                   {(open) => (
                     <AndroidHeaderIconButton
-                      accessibilityLabel="More actions"
+                      accessibilityLabel={gt("More actions")}
                       icon="ellipsis"
                       floating={floating}
                       onPress={open}

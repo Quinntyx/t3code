@@ -20,31 +20,27 @@ export function useWorkspaceListNavigation(tab: WorkspaceTab) {
   };
 }
 
-export function useWorkspaceBackNavigation(tab: WorkspaceTab) {
+export function useWorkspaceBackNavigation() {
   const navigation = useNavigation();
-  const dispatch = useWorkspaceTabs()?.dispatch;
-  const returnToList = useWorkspaceListNavigation(tab);
   return () => {
-    if (Platform.OS === "android") {
-      returnToAndroidWorkspaceList(navigation, () => dispatch?.({ type: "select", tab }));
-    } else returnToList();
+    if (Platform.OS === "android") returnToAndroidWorkspaceList(navigation);
+    else if (navigation.canGoBack()) navigation.goBack();
+    else navigation.dispatch(StackActions.replace("Home"));
   };
 }
 
-export function useAndroidWorkspaceBack(tab: WorkspaceTab) {
-  const dispatch = useWorkspaceTabs()?.dispatch;
-  const goBack = useWorkspaceBackNavigation(tab);
+export function useAndroidWorkspaceBack() {
+  const goBack = useWorkspaceBackNavigation();
   useFocusEffect(
     useCallback(() => {
       if (Platform.OS !== "android") return;
-      dispatch?.({ type: "select", tab });
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
         if (Keyboard.isVisible()) Keyboard.dismiss();
         else goBack();
         return true;
       });
       return () => subscription.remove();
-    }, [goBack, dispatch, tab]),
+    }, [goBack]),
   );
   return goBack;
 }

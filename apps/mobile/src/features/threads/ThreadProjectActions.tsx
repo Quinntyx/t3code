@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+import { T, useGT } from "gt-react-native";
 import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -34,6 +35,7 @@ export function ThreadProjectActions(props: {
   readonly canRun: boolean;
   readonly onRun: (script: ProjectScript) => void;
 }) {
+  const gt = useGT();
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   const canEdit = useAtomValue(
     serverEnvironment.updateSettings.permissionAtom(props.environmentId),
@@ -144,9 +146,11 @@ export function ThreadProjectActions(props: {
   return (
     <View className="gap-3">
       <ListSection
-        title="Project actions"
+        title={gt("Project actions")}
         footer={
-          !props.canRun ? "Running actions requires a saved thread and terminal access." : undefined
+          !props.canRun
+            ? gt("Running actions requires a saved thread and terminal access.")
+            : undefined
         }
       >
         {props.scripts.map((script) => (
@@ -164,7 +168,7 @@ export function ThreadProjectActions(props: {
               <View className="pr-2">
                 <IconButton
                   icon="pencil"
-                  accessibilityLabel={`Edit ${script.name}`}
+                  accessibilityLabel={gt("Edit {name}", { name: script.name })}
                   disabled={pending}
                   onPress={() => setEditor(script)}
                 />
@@ -174,15 +178,18 @@ export function ThreadProjectActions(props: {
         ))}
         {props.scripts.length === 0 ? (
           <Text textRole="footnote" className="px-4 py-4 text-foreground-muted">
-            No project actions configured.
+            <T>No project actions configured.</T>
           </Text>
         ) : null}
         {importable.map((script) => (
           <ListRow
             key={`${script.name}:${script.command}`}
             icon="arrow.down.circle"
-            label={`Import ${script.name}`}
-            description={`From t3.json · ${script.command}`}
+            label={gt("Import {name}", { name: script.name })}
+            description={gt("From {file} · {command}", {
+              file: T3_PROJECT_FILE_NAME,
+              command: script.command,
+            })}
             disabled={!canEdit || pending}
             onPress={() =>
               void persist(
@@ -198,7 +205,7 @@ export function ThreadProjectActions(props: {
         ))}
         <ListRow
           icon="plus"
-          label="Add project action"
+          label={gt("Add project action")}
           disabled={!canEdit || pending}
           onPress={() =>
             setEditor({
@@ -213,15 +220,15 @@ export function ThreadProjectActions(props: {
       </ListSection>
       {editor ? (
         <View className="gap-3 rounded-2xl bg-grouped-card p-4">
-          <Text textRole="headline">{editingExisting ? "Edit action" : "New action"}</Text>
-          {input("name", "Action name")}
-          {input("command", "Command", "Action command")}
+          <Text textRole="headline">{editingExisting ? gt("Edit action") : gt("New action")}</Text>
+          {input("name", gt("Action name"))}
+          {input("command", gt("Command"), gt("Action command"))}
           <View className="flex-row flex-wrap gap-2">
             {ProjectScriptIcon.literals.map((icon) => (
               <Pressable
                 key={icon}
                 accessibilityRole="radio"
-                accessibilityLabel={`${icon} action icon`}
+                accessibilityLabel={gt("{icon} action icon", { icon })}
                 accessibilityState={{ checked: editor.icon === icon }}
                 disabled={pending || !canEdit}
                 onPress={() => setEditor({ ...editor, icon })}
@@ -235,25 +242,25 @@ export function ThreadProjectActions(props: {
               </Pressable>
             ))}
           </View>
-          {toggle("runOnWorktreeCreate", "Run on worktree creation")}
+          {toggle("runOnWorktreeCreate", gt("Run on worktree creation"))}
           {editor.runOnWorktreeCreate
-            ? toggle("async", "Wait for setup before starting the agent")
+            ? toggle("async", gt("Wait for setup before starting the agent"))
             : null}
-          {toggle("runOnSettle", "Run when the thread settles")}
-          {input("previewUrl", "Preview URL (optional)", "Action preview URL")}
+          {toggle("runOnSettle", gt("Run when the thread settles"))}
+          {input("previewUrl", gt("Preview URL (optional)"), gt("Action preview URL"))}
           {editor.previewUrl?.trim()
-            ? toggle("autoOpenPreview", "Open preview after running")
+            ? toggle("autoOpenPreview", gt("Open preview after running"))
             : null}
           <View className="flex-row gap-2">
             <View className="flex-1">
               <Button
-                label={pending ? "Saving…" : "Save action"}
+                label={pending ? gt("Saving…") : gt("Save action")}
                 disabled={pending || !canEdit || !editor.name.trim() || !editor.command.trim()}
                 onPress={() => void save()}
               />
             </View>
             <Button
-              label="Cancel"
+              label={gt("Cancel")}
               tone="secondary"
               disabled={pending}
               onPress={() => setEditor(null)}
@@ -261,14 +268,14 @@ export function ThreadProjectActions(props: {
           </View>
           {editingExisting ? (
             <Button
-              label="Delete action"
+              label={gt("Delete action")}
               tone="danger"
               disabled={pending || !canEdit}
               onPress={() =>
                 Dialog.confirm({
-                  title: `Delete ${editor.name}?`,
-                  message: "This removes the action from this project, not its files.",
-                  confirmText: "Delete action",
+                  title: gt("Delete {name}?", { name: editor.name }),
+                  message: gt("This removes the action from this project, not its files."),
+                  confirmText: gt("Delete action"),
                   destructive: true,
                   onConfirm: () => {
                     void persist(props.scripts.filter((script) => script.id !== editor.id)).then(

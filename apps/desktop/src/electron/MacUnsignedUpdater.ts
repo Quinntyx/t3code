@@ -11,7 +11,7 @@ import { swapBundleOnExit } from "./MacBundleSwap.ts";
 
 /** Whether scripts/build-desktop-artifact.ts packaged this app for macOS without a signature. */
 export function isUnsignedMacBuild(): boolean {
-  if (!Electron.app.isPackaged) return false;
+  if (!Electron.app?.isPackaged) return false;
   try {
     const manifest: unknown = JSON.parse(
       NodeFS.readFileSync(NodePath.join(Electron.app.getAppPath(), "package.json"), "utf8"),

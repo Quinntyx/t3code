@@ -3,10 +3,13 @@ import { converter } from "culori/fn";
 import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
 
 import { CONTEXT_CHIP_ACCENTS, contextChipColorVariable } from "./lib/contextChipAccents";
+import { appAtomRegistry } from "./rpc/atomRegistry";
 
 import {
   applyThemePalette,
+  canonicalThemePreference,
   contextChipVariables,
+  getThemeDefinition,
   getThemeColorsForMode,
   getThemeModes,
   getCustomThemes,
@@ -15,7 +18,10 @@ import {
   invalidateCustomThemes,
   installCustomTheme,
   parseThemeFile,
+  parseThemeHalves,
+  publishedThemeDefinitions,
   removeCustomTheme,
+  renameTheme,
   replaceCustomThemeCollection,
   resolveDesktopTheme,
   resolveThemeAppearance,
@@ -99,6 +105,21 @@ describe("theme files", () => {
         expect(distance(colors.searchMatchActiveBackground, background)).toBeGreaterThan(0.08);
       }
     }
+  });
+
+  it("derives an imported palette from top-level canvas and accent like a published theme", () => {
+    const theme = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: "Teal",
+      appearance: "dark",
+      canvas: "#0b1a1e",
+      accent: "#f08a2c",
+      colors: { sidebar: "#0f2126" },
+    });
+
+    expect(theme.colors.canvas).toBe(canonical("#0b1a1e"));
+    expect(theme.colors.accent).toBe(canonical("#f08a2c"));
+    expect(theme.colors.sidebar).toBe(canonical("#0f2126"));
   });
 
   it("round-trips custom search colours and fills them in for older theme files", () => {
@@ -271,8 +292,10 @@ describe("theme files", () => {
       variants: {
         dark: { canvas: "#101827", text: "#eef5ff" },
       },
+      css: "[data-chat-header] { border-bottom: 1px solid red; }",
     });
 
+    expect(JSON.parse(serializeThemeFile(theme)).css).toBe(theme.css);
     expect(getThemeModes(theme)).toEqual(["light", "dark"]);
     expect(getThemeColorsForMode(theme, "dark")).toMatchObject({
       canvas: canonical("#101827"),
@@ -287,6 +310,43 @@ describe("theme files", () => {
       canvas: canonical("#101827"),
       text: canonical("#eef5ff"),
     });
+  });
+
+  it("round-trips v2 palette settings and effects through export, import, and rename", () => {
+    const v2 = parseThemeFile({
+      version: 2,
+      kind: "palette",
+      id: "frosted-aurora",
+      name: "Frosted Aurora",
+      appearance: "dark",
+      colors: { canvas: "#101827", accent: "#60a5fa" },
+      settings: {
+        blur: { type: "number", label: "Blur", min: 0, max: 24, step: 1, default: 10 },
+      },
+      effects: {
+        liquidGlass: { enabled: true, blur: { setting: "blur" } },
+      },
+    });
+    const serialized = JSON.parse(serializeThemeFile(v2));
+    expect(serialized.version).toBe(2);
+    expect(serialized.kind).toBe("palette");
+    expect(serialized.settings).toEqual(v2.settings);
+    expect(serialized.effects).toEqual(v2.effects);
+    const reimported = parseThemeFile(serialized);
+    expect(reimported.settings).toEqual(v2.settings);
+    expect(reimported.effects).toEqual(v2.effects);
+    const renamed = renameTheme(v2, "Frosted Copy");
+    expect(renamed.id).toBe("frosted-copy");
+    expect(renamed.settings).toEqual(v2.settings);
+    expect(renamed.effects).toEqual(v2.effects);
+    expect(() =>
+      parseThemeFile({
+        version: 2,
+        kind: "style",
+        name: "Style Only",
+        css: "body {}",
+      }),
+    ).toThrow(/Style themes cannot be imported/);
   });
 
   it("preserves valid imported-theme collections and drops malformed metadata", () => {
@@ -702,7 +762,7 @@ describe("context chip colors", () => {
 });
 
 describe("stored theme preferences", () => {
-  it("lets a configured half unlock an appearance the base theme lacks", () => {
+  it("lets built-in and published halves unlock an appearance the base theme lacks", () => {
     const lightOnly = parseThemeFile({
       version: THEME_FILE_VERSION,
       id: "paper",
@@ -710,6 +770,17 @@ describe("stored theme preferences", () => {
       appearance: "light",
       colors: { canvas: "#f8fbff" },
     });
+    const [publishedTheme] = publishedThemeDefinitions([
+      {
+        id: "constructor",
+        name: "Constructor",
+        appearance: "dark",
+        canvas: "#1a1b26",
+        accent: "#7aa2f7",
+      },
+    ]);
+    expect(publishedTheme).toBeDefined();
+    using _environmentThemes = vi.spyOn(appAtomRegistry, "get").mockReturnValue([publishedTheme]);
     vi.stubGlobal("window", {
       localStorage: {
         getItem: (key: string) =>
@@ -723,6 +794,12 @@ describe("stored theme preferences", () => {
       expect(resolveThemeAppearance("paper", true, true, undefined, halves)).toBe("dark");
       expect(resolveThemeAppearance("paper", false, false, "dark", halves)).toBe("dark");
       expect(resolveDesktopTheme("paper", true, undefined, halves)).toBe("system");
+
+      expect(getThemeDefinition("constructor")).toEqual(publishedTheme);
+      expect(canonicalThemePreference("constructor")).toBe("constructor");
+      const publishedHalves = parseThemeHalves(JSON.stringify({ dark: "constructor" }));
+      expect(publishedHalves).toEqual({ dark: "constructor" });
+      expect(resolveThemeAppearance("paper", true, true, undefined, publishedHalves)).toBe("dark");
     } finally {
       vi.unstubAllGlobals();
       invalidateCustomThemes();

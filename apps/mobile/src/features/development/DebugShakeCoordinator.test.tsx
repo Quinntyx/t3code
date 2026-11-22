@@ -63,7 +63,10 @@ function setup(enabled = true) {
     debugShakeProject: project,
   });
   harness.capture.mockResolvedValue("file:///screenshot.png");
-  harness.convert.mockResolvedValue([{ id: "image", type: "image" }]);
+  harness.convert.mockResolvedValue({
+    attachments: [{ id: "image", type: "image" }],
+    error: null,
+  });
   harness.load.mockResolvedValue(undefined);
   harness.create.mockReturnValue("new-debug-draft");
   harness.addListener.mockReturnValue({ remove: harness.remove });

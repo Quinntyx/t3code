@@ -1,3 +1,4 @@
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
@@ -23,12 +24,14 @@ import {
   useState,
   type Ref,
 } from "react";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { AccessibilityInfo, Platform, Pressable, TextInput, View } from "react-native";
 import { WebView } from "react-native-webview";
 import * as Clipboard from "expo-clipboard";
 
 import { AppText } from "../../components/ui/AppText";
 import { PdfPreview } from "../../components/PdfPreview";
+import { m } from "../../i18n/messages";
 import {
   downloadAndShareAttachment,
   downloadAttachmentToDevice,
@@ -63,6 +66,8 @@ type NativeStreamBridge = {
   readonly onRefused: (delayMs: number) => void;
   readonly onGone?: () => void;
   readonly onViewport?: (viewport: { readonly width: number; readonly height: number }) => void;
+  /** The direction a drag scrolls the page, every few dozen pixels of it. */
+  readonly onScrollDirection?: (direction: "up" | "down") => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
   readonly onPictureInPicture?: (state: PreviewPictureInPictureState, detail?: string) => void;
   /** True while frames show, so commands reach the page. */
@@ -77,6 +82,7 @@ type NativeStreamBridge = {
 };
 
 function CompactErrorBadge() {
+  const gt = useGT();
   return (
     <View
       accessibilityElementsHidden
@@ -84,7 +90,7 @@ function CompactErrorBadge() {
       className="flex-row items-center gap-1.5 rounded-full bg-black/65 px-2.5 py-1"
     >
       <ConnectionStatusDot state="error" pulse={false} size={6} />
-      <AppText className="text-2xs text-white">Unavailable</AppText>
+      <AppText className="text-2xs text-white">{gt("Unavailable")}</AppText>
     </View>
   );
 }
@@ -118,6 +124,7 @@ function PreviewStreamFallback({
   readonly onPhaseChange?: ((phase: PreviewStreamPhase) => void) | undefined;
   readonly onErrorChange?: ((failed: boolean) => void) | undefined;
 }) {
+  const gt = useGT();
   const hasError = !paused && error !== null;
   const lastAnnouncedError = useRef<string | null>(null);
   const reportPhase = useEffectEvent((phase: PreviewStreamPhase) => onPhaseChange?.(phase));
@@ -166,11 +173,11 @@ function PreviewStreamFallback({
                 : "text-sm text-foreground-muted"
             }
           >
-            {hasError ? error : "Connecting to remote browser…"}
+            {hasError ? error : gt("Connecting to remote browser…")}
           </AppText>
           {hasError && (
             <View className="items-center">
-              <Button label="Retry" tone="secondary" loading={retrying} onPress={onRetry} />
+              <Button label={gt("Retry")} tone="secondary" loading={retrying} onPress={onRetry} />
             </View>
           )}
         </>
@@ -203,7 +210,7 @@ async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean)
     body,
     credentials: chooser.credentials ? "include" : "omit",
   });
-  if (!response.ok) throw new Error((await response.text()) || "The upload was refused.");
+  if (!response.ok) throw new Error((await response.text()) || m(msg("The upload was refused.")));
 }
 
 function offerDownload(download: PreviewStreamDownload) {
@@ -214,24 +221,26 @@ function offerDownload(download: PreviewStreamDownload) {
   const save = (task: Promise<unknown>) =>
     void task.catch((cause: unknown) =>
       Dialog.alert(
-        "Could not save the download",
-        cause instanceof Error ? cause.message : undefined,
+        m(msg("Could not save the download")),
+        cause instanceof Error ? (errorDisplayMessage(cause, m) ?? cause.message) : undefined,
       ),
     );
   // The save also copies local file: and content: URIs as they are; a stream download is always remote.
   const canDownload = canSaveFileToDownloads() && /^https?:\/\//i.test(download.url);
-  Dialog.alert(`Downloaded ${download.fileName}`, undefined, [
-    { text: "Not now", style: "cancel" },
+  Dialog.alert(m(msg("Downloaded {fileName}", { fileName: download.fileName })), undefined, [
+    { text: m(msg("Not now")), style: "cancel" },
     ...(canDownload
       ? [
           {
-            text: "Save to Downloads",
+            text: m(msg("Save to Downloads")),
             onPress: () => save(downloadAttachmentToDevice({ ...input, uri: download.url })),
           },
         ]
       : []),
     {
-      text: canDownload ? "Share" : "Save or share",
+      text: canDownload
+        ? m(msg("Share", { $context: "verb, opens the system share sheet" }))
+        : m(msg("Save or share")),
       onPress: () => save(downloadAndShareAttachment({ ...input, url: download.url })),
     },
   ]);
@@ -245,7 +254,7 @@ type NativeStreamConfiguration = Omit<PreviewStreamConfiguration, "reuseNearbyTo
 };
 
 export function PreviewStreamWebView(
-  props: Omit<NativeStreamConfiguration, "access"> &
+  props: Omit<NativeStreamConfiguration, "access" | "labels"> &
     Omit<NativeStreamBridge, "onUnauthorized" | "onRefused"> & {
       readonly environmentId: EnvironmentId;
       readonly paused?: boolean;
@@ -309,12 +318,13 @@ function AuthorizedPreviewStream({
   accessError,
   accessPending,
   ...props
-}: Omit<NativeStreamConfiguration, "access"> &
+}: Omit<NativeStreamConfiguration, "access" | "labels"> &
   NativeStreamBridge & {
     readonly access: PreviewStreamConfiguration["access"];
     readonly accessError: string | null;
     readonly accessPending: boolean;
   }) {
+  const gt = useGT();
   const [attempt, setAttempt] = useState(0);
   const [refusedAccess, setRefusedAccess] = useState<PreviewStreamConfiguration["access"]>(null);
   if (refusedAccess !== null && access !== refusedAccess) {
@@ -335,6 +345,12 @@ function AuthorizedPreviewStream({
     interactive: props.interactive,
     background: props.background,
     reuseNearbyTouchProbe: Platform.OS === "ios",
+    labels: {
+      page: gt("Browser page"),
+      pageInput: gt("Browser page input"),
+      pictureInPictureNotReady: gt("The page has not shown yet. Try again in a moment."),
+      pictureInPictureUnavailable: gt("Picture in picture is unavailable."),
+    },
     ...(props.audio === false ? { audio: false } : {}),
   } satisfies PreviewStreamConfiguration);
   return (
@@ -398,6 +414,7 @@ function PreviewStreamDocumentView({
   onRefreshAccess,
   onGone,
   onViewport,
+  onScrollDirection,
   onControl,
   onPictureInPicture,
   onStreamingChange,
@@ -424,6 +441,8 @@ function PreviewStreamDocumentView({
   readonly onRecoverProcess: () => boolean;
 }) {
   const webView = useRef<WebView<object>>(null);
+  const gt = useGT();
+  const messages = useMessages();
   const active = useRef(false);
   const failed = useRef(false);
   const bootstrapped = useRef(false);
@@ -453,7 +472,7 @@ function PreviewStreamDocumentView({
     status === "error"
       ? error
       : authRefused
-        ? "This session can't open the browser stream. Reconnect to try again."
+        ? m(msg("This session can't open the browser stream. Reconnect to try again."))
         : access === null
           ? accessError
           : null;
@@ -462,14 +481,14 @@ function PreviewStreamDocumentView({
     hasError && hasStreamed && !frameLost && !gone && hostSetup === null;
   const fullErrorOverlayVisible = hasError && !showRetainedErrorBanner;
   const phase = previewStreamPhase(control, status === "streaming", hasStreamed);
-  const statusLabel = previewStreamStatusLabel(phase, control);
+  const statusLabel = previewStreamStatusLabel(phase, control, messages);
   const announcement = compact ? null : hasError ? displayError : statusLabel;
   const lastAnnouncement = useRef<string | null>(announcement);
   const dialogAnnouncement =
     !compact && control?.dialog
       ? control.dialog.message.trim()
-        ? `Browser dialog: ${control.dialog.message.trim()}`
-        : "Browser dialog opened."
+        ? gt("Browser dialog: {message}", { message: control.dialog.message.trim() })
+        : gt("Browser dialog opened.")
       : null;
   const lastDialogAnnouncement = useRef<string | null>(dialogAnnouncement);
   const dialogRef = useRef<PreviewStreamControl["dialog"]>(null);
@@ -480,8 +499,8 @@ function PreviewStreamDocumentView({
     setFileChooser(null);
     void sendFilesToPage(chooser, pick).catch((cause: unknown) =>
       Dialog.alert(
-        "Could not send the files to the page",
-        cause instanceof Error ? cause.message : undefined,
+        m(msg("Could not send the files to the page")),
+        cause instanceof Error ? (errorDisplayMessage(cause, m) ?? cause.message) : undefined,
       ),
     );
   };
@@ -517,7 +536,7 @@ function PreviewStreamDocumentView({
       },
       () => {
         if (!active.current || failed.current || pasteGeneration.current !== generation) return;
-        Dialog.alert("Could not read the clipboard");
+        Dialog.alert(m(msg("Could not read the clipboard")));
       },
     );
   };
@@ -547,7 +566,7 @@ function PreviewStreamDocumentView({
     setStatus("error");
   };
   const bootstrapTimedOut = useEffectEvent(() =>
-    fail("Browser viewer could not start. Reconnect to try again.", { frameLost: true }),
+    fail(m(msg("Browser viewer could not start. Reconnect to try again.")), { frameLost: true }),
   );
   const reportPhase = useEffectEvent((nextPhase: PreviewStreamPhase) => {
     onPhaseChange?.(nextPhase);
@@ -626,7 +645,12 @@ function PreviewStreamDocumentView({
   }, [audioMuted]);
   // The document is built once; a tab reopened while muted seeds the page before it starts.
   const [source] = useState(() => ({
-    html: previewStreamDocument(initialConfiguration, previewStreamScript, audioMuted),
+    html: previewStreamDocument(
+      initialConfiguration,
+      previewStreamScript,
+      gt("Browser viewer stopped unexpectedly."),
+      audioMuted,
+    ),
     baseUrl: Platform.OS === "android" ? "https://localhost/" : "file:///",
   }));
   useImperativeHandle(ref, () => ({
@@ -642,7 +666,7 @@ function PreviewStreamDocumentView({
       return;
     }
     if (!onRecoverProcess()) {
-      fail("Browser viewer stopped. Reconnect to try again.", { frameLost: true });
+      fail(m(msg("Browser viewer stopped. Reconnect to try again.")), { frameLost: true });
     }
   };
   return (
@@ -664,17 +688,15 @@ function PreviewStreamDocumentView({
               numberOfLines={1}
               className="flex-1 text-xs text-foreground-muted"
             >
-              {hasError ? "Stream disconnected" : statusLabel}
+              {hasError ? gt("Stream disconnected") : statusLabel}
             </AppText>
           </View>
           {control?.canOperate ? (
             <Button
-              label={control.controller === "you" ? "Release control" : "Take control"}
+              label={gt("Take control")}
               tone="secondary"
               disabled={control.controller === "another-viewer"}
-              onPress={() =>
-                command({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-              }
+              onPress={() => command({ type: "takeControl" })}
             />
           ) : phase !== "live" && environmentLabel?.trim() ? (
             <AppText
@@ -702,10 +724,14 @@ function PreviewStreamDocumentView({
           mediaPlaybackRequiresUserAction={false}
           style={{ flex: 1, backgroundColor: background }}
           onError={() =>
-            fail("Browser viewer could not load. Reconnect to try again.", { frameLost: true })
+            fail(m(msg("Browser viewer could not load. Reconnect to try again.")), {
+              frameLost: true,
+            })
           }
           onHttpError={() =>
-            fail("Browser viewer could not load. Reconnect to try again.", { frameLost: true })
+            fail(m(msg("Browser viewer could not load. Reconnect to try again.")), {
+              frameLost: true,
+            })
           }
           onContentProcessDidTerminate={processTerminated}
           onRenderProcessGone={processTerminated}
@@ -782,15 +808,18 @@ function PreviewStreamDocumentView({
                 return;
               case "gone":
                 setGone(true);
-                fail("This tab was closed.");
+                fail(m(msg("This tab was closed.")));
                 onGone?.();
                 return;
               case "hostSetup":
                 setHostSetup({ need: message.need, command: message.command });
-                fail(previewStreamHostSetupMessage(message));
+                fail(previewStreamHostSetupMessage(message, m));
                 return;
               case "viewport":
                 onViewport?.(message);
+                return;
+              case "scroll":
+                onScrollDirection?.(message.direction);
                 return;
               case "audio":
                 onAudioUnavailable?.(message.available);
@@ -809,7 +838,7 @@ function PreviewStreamDocumentView({
                 return;
               case "status": {
                 if (message.status === "error") {
-                  fail(message.detail ?? "Browser stream failed.");
+                  fail(message.detail ?? m(msg("Browser stream failed.")));
                   return;
                 }
                 streamingRef.current = message.status === "streaming";
@@ -845,10 +874,10 @@ function PreviewStreamDocumentView({
             {compact ? null : (
               <>
                 <AppText className="text-center text-sm text-foreground-muted">
-                  Connecting to remote browser
+                  {gt("Connecting to remote browser")}
                 </AppText>
                 <AppText className="text-center text-xs text-foreground-muted">
-                  {previewStreamOverlayDetail(phase, environmentLabel)}
+                  {previewStreamOverlayDetail(phase, environmentLabel, messages)}
                 </AppText>
               </>
             )}
@@ -876,7 +905,9 @@ function PreviewStreamDocumentView({
               <AppText
                 className={compact ? "text-2xs text-white" : "text-xs text-secondary-foreground"}
               >
-                {compact ? "Reconnecting…" : previewStreamOverlayDetail(phase, environmentLabel)}
+                {compact
+                  ? gt("Reconnecting…")
+                  : previewStreamOverlayDetail(phase, environmentLabel, messages)}
               </AppText>
             </View>
           </View>
@@ -899,7 +930,7 @@ function PreviewStreamDocumentView({
                 {displayError}
               </AppText>
               <Button
-                label={status === "error" || authRefused ? "Reconnect" : "Retry"}
+                label={status === "error" || authRefused ? gt("Reconnect") : gt("Retry")}
                 tone="secondary"
                 loading={status !== "error" && accessPending}
                 onPress={status === "error" ? onRetry : onRefreshAccess}
@@ -911,12 +942,14 @@ function PreviewStreamDocumentView({
       {!compact && fileChooser && control?.controller === "you" ? (
         <View className="absolute inset-x-3 top-16 gap-3 rounded-xl border border-secondary-border bg-secondary p-4">
           <AppText className="text-sm text-secondary-foreground">
-            The page asks for {fileChooser.multiple ? "files" : "a file"}.
+            {fileChooser.multiple
+              ? gt("The page asks for files.")
+              : gt("The page asks for a file.")}
           </AppText>
           <View className="flex-row justify-end gap-3">
-            <Button label="Cancel" tone="text" onPress={() => answerFileChooser(false)} />
+            <Button label={gt("Cancel")} tone="text" onPress={() => answerFileChooser(false)} />
             <Button
-              label={`Choose ${fileChooser.multiple ? "files" : "file"}`}
+              label={fileChooser.multiple ? gt("Choose files") : gt("Choose file")}
               tone="secondary"
               onPress={() => answerFileChooser(true)}
             />
@@ -926,13 +959,13 @@ function PreviewStreamDocumentView({
       {!compact && control?.dialog ? (
         <View className="absolute inset-x-3 top-16 gap-3 rounded-xl border border-secondary-border bg-secondary p-4">
           <AppText accessibilityLiveRegion="polite" className="text-sm text-secondary-foreground">
-            {control.dialog.message.trim() || "Browser dialog opened."}
+            {control.dialog.message.trim() || gt("Browser dialog opened.")}
           </AppText>
           {control.controller === "you" ? (
             <>
               {control.dialog.type === "prompt" ? (
                 <TextInput
-                  accessibilityLabel="Dialog response"
+                  accessibilityLabel={gt("Dialog response")}
                   className="rounded-lg border border-input-border bg-input px-3 py-2 text-foreground"
                   placeholderTextColorClassName="accent-placeholder"
                   selectionColorClassName="accent-focus/32"
@@ -942,12 +975,12 @@ function PreviewStreamDocumentView({
               ) : null}
               <View className="flex-row justify-end gap-3">
                 <Button
-                  label="Dismiss"
+                  label={gt("Dismiss", { $context: "rejects a page dialog" })}
                   tone="text"
                   onPress={() => command({ type: "dialog", accept: false })}
                 />
                 <Button
-                  label="Accept"
+                  label={gt("Accept", { $context: "accepts a page dialog" })}
                   tone="secondary"
                   onPress={() =>
                     command({
@@ -960,7 +993,9 @@ function PreviewStreamDocumentView({
               </View>
             </>
           ) : (
-            <AppText className="text-xs text-foreground-muted">Take control to respond.</AppText>
+            <AppText className="text-xs text-foreground-muted">
+              {gt("Take control to respond.")}
+            </AppText>
           )}
         </View>
       ) : null}
@@ -984,7 +1019,7 @@ function PreviewStreamDocumentView({
           {status === "error" && hostSetup && !compact ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Copy ${hostSetup.command}`}
+              accessibilityLabel={gt("Copy {command}", { command: hostSetup.command })}
               className="w-full flex-row items-center gap-2 rounded-xl border border-secondary-border bg-secondary px-4 py-3"
               onPress={() => {
                 void Clipboard.setStringAsync(hostSetup.command).catch(() => undefined);
@@ -993,7 +1028,9 @@ function PreviewStreamDocumentView({
               <AppText selectable className="flex-1 font-mono text-sm text-secondary-foreground">
                 {hostSetup.command}
               </AppText>
-              <AppText className="text-xs text-foreground-muted">Copy</AppText>
+              <AppText className="text-xs text-foreground-muted">
+                {gt("Copy", { $context: "verb" })}
+              </AppText>
             </Pressable>
           ) : null}
           {!gone && !compact ? (
@@ -1002,11 +1039,11 @@ function PreviewStreamDocumentView({
                 label={
                   status === "error"
                     ? hostSetup
-                      ? "Try again"
-                      : "Reconnect"
+                      ? gt("Try again")
+                      : gt("Reconnect")
                     : authRefused
-                      ? "Reconnect"
-                      : "Retry"
+                      ? gt("Reconnect")
+                      : gt("Retry")
                 }
                 tone="secondary"
                 loading={status !== "error" && accessPending}

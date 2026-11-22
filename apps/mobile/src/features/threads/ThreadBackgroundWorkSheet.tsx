@@ -26,6 +26,7 @@ import {
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { nextTerminalId } from "@t3tools/shared/terminalLabels";
 import * as Haptics from "expo-haptics";
+import { msg, T, useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -51,10 +52,10 @@ import { ThreadCommandOutput, useCommandOutputStreaming } from "./thread-command
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 const KIND_LABELS = {
-  subagent: "Subagent",
-  command: "Command",
-  monitor: "Monitor",
-  background_task: "Background task",
+  subagent: msg("Subagent"),
+  command: msg("Command", { $context: "noun, a running shell command" }),
+  monitor: msg("Monitor", { $context: "noun, a background watcher task" }),
+  background_task: msg("Background task"),
 } as const;
 
 type BackgroundWorkTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
@@ -62,6 +63,8 @@ type BackgroundWorkTarget = { readonly environmentId: EnvironmentId; readonly th
 export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<BackgroundWorkTarget>) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const gt = useGT();
+  const m = useMessages();
   const target = route.params;
   const threadRef = scopeThreadRef(target.environmentId, target.threadId);
   const thread = useQuietThreadShell(threadRef);
@@ -74,6 +77,7 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
     tasks: thread?.pendingBackgroundTasks ?? [],
     turnItems: structure?.projection.turnItems ?? [],
     pullRequests: thread?.pullRequests,
+    resolve: m,
   });
   const followOutput = (path: string) => {
     if (
@@ -113,7 +117,7 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
     >
       {work === null ? (
         <Text className="pt-6 text-center text-sm text-foreground-muted">
-          Nothing running in the background.
+          <T>Nothing running in the background.</T>
         </Text>
       ) : (
         work.details.map((detail) =>
@@ -138,16 +142,16 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
   );
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <SheetHeader title="Background work" onClose={() => navigation.goBack()} />
+      <SheetHeader title={gt("Background work")} onClose={() => navigation.goBack()} />
       <ScreenContent>{content}</ScreenContent>
     </View>
   );
 }
 
 const CHECKS_LABELS = {
-  passing: "checks passing",
-  pending: "checks pending",
-  failing: "checks failing",
+  passing: msg("checks passing"),
+  pending: msg("checks pending"),
+  failing: msg("checks failing"),
 } as const;
 
 function BackgroundWorkElapsed({ startedAtMs }: { readonly startedAtMs: number | null }) {
@@ -164,22 +168,30 @@ function PullRequestMonitorRow(props: {
   readonly startedAtMs: number | null;
 }) {
   const { link } = props;
+  const gt = useGT();
+  const m = useMessages();
   // The snapshot arrives from the host after the link, so the row must stay tappable without it.
   const snapshot = link.snapshot;
-  const status = snapshot ? pullRequestStatus(snapshot) : null;
+  const status = snapshot ? pullRequestStatus(snapshot, m) : null;
   const checksState = snapshot?.state === "open" ? snapshot.checksState : undefined;
   const checks = checksState ? pullRequestChecksStatus(checksState) : null;
-  const checksLabel = checksState ? CHECKS_LABELS[checksState] : undefined;
-  const title = snapshot?.title ?? `Pull request #${link.number}`;
+  const checksLabel = checksState ? m(CHECKS_LABELS[checksState]) : undefined;
+  const title = snapshot?.title ?? gt("Pull request #{number}", { number: link.number });
+  const baseLabel = gt("Watching pull request {number}, {title}", {
+    number: link.number,
+    title,
+  });
   return (
     <Pressable
       accessibilityRole="link"
-      accessibilityLabel={`Watching pull request ${link.number}, ${title}${status ? `, ${status.label}` : ""}${checksLabel ? `, ${checksLabel}` : ""}`}
-      accessibilityHint="Opens this pull request externally"
+      accessibilityLabel={`${baseLabel}${status ? `, ${status.label}` : ""}${checksLabel ? `, ${checksLabel}` : ""}`}
+      accessibilityHint={gt("Opens this pull request externally")}
       onPress={() => {
         void Haptics.selectionAsync();
         void tryOpenExternalUrl(link.url, "pull-request").then((opened) => {
-          if (!opened) Dialog.alert("Unable to open PR", "The pull request could not be opened.");
+          if (!opened) {
+            Dialog.alert(gt("Unable to open PR"), gt("The pull request could not be opened."));
+          }
         });
       }}
       className="active:opacity-70"
@@ -200,7 +212,9 @@ function PullRequestMonitorRow(props: {
               #{link.number}
             </Text>
             <Text className="text-xs text-foreground-muted">
-              Monitor · Watching{status ? ` · ${status.label}` : ""}
+              {status
+                ? gt("Monitor · Watching · {status}", { status: status.label })
+                : gt("Monitor · Watching")}
               <BackgroundWorkElapsed startedAtMs={props.startedAtMs} />
             </Text>
             {checks ? (
@@ -224,6 +238,8 @@ function BackgroundWorkRow(props: {
   readonly onFollow: ((path: string) => void) | undefined;
 }) {
   const { item, childThreadId } = props.detail;
+  const gt = useGT();
+  const m = useMessages();
   const [expanded, setExpanded] = useState(false);
   const focused = useIsFocused();
   return (
@@ -231,7 +247,9 @@ function BackgroundWorkRow(props: {
       <Pressable
         accessibilityRole={childThreadId === undefined ? "button" : "link"}
         accessibilityLabel={
-          childThreadId === undefined ? item.label : `Open subagent ${item.label}`
+          childThreadId === undefined
+            ? item.label
+            : gt("Open subagent {label}", { label: item.label })
         }
         accessibilityState={childThreadId === undefined ? { expanded } : undefined}
         onPress={() => {
@@ -256,7 +274,7 @@ function BackgroundWorkRow(props: {
           <View className="min-w-0 flex-1">
             <Text className="font-t3-medium text-sm text-foreground">{item.label}</Text>
             <Text className="text-xs text-foreground-muted">
-              {KIND_LABELS[item.kind]}
+              {m(KIND_LABELS[item.kind])}
               <BackgroundWorkElapsed startedAtMs={props.detail.startedAtMs} />
             </Text>
           </View>
@@ -284,6 +302,7 @@ function BackgroundWorkInspection(props: {
   readonly onFollow: ((path: string) => void) | undefined;
 }) {
   const { detail, target, onFollow } = props;
+  const gt = useGT();
   const { themeAppearance } = useAppearancePreferences();
   const streaming = useCommandOutputStreaming(target.environmentId);
   const item = detail.turnItem;
@@ -335,7 +354,7 @@ function BackgroundWorkInspection(props: {
       ) : null}
       {toolItem ? (
         <Text selectable className="font-t3-medium text-xs text-foreground">
-          {toolItem.toolName ?? "Tool"}
+          {toolItem.toolName ?? gt("Tool")}
         </Text>
       ) : null}
       {inputText ? (
@@ -345,13 +364,15 @@ function BackgroundWorkInspection(props: {
       ) : null}
       {outputFile !== null ? (
         <>
-          <Text className="text-xs text-foreground-muted">Output file on this environment</Text>
+          <Text className="text-xs text-foreground-muted">
+            <T>Output file on this environment</T>
+          </Text>
           <Text selectable className="font-mono text-xs text-foreground-muted">
             {outputFile}
           </Text>
           {onFollow ? (
             <Button
-              label="Follow in terminal"
+              label={gt("Follow in terminal")}
               icon="terminal"
               onPress={() => onFollow(outputFile)}
             />
@@ -368,15 +389,15 @@ function BackgroundWorkInspection(props: {
         <ScrollView nestedScrollEnabled className="max-h-60">
           <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
             {loading
-              ? "Loading output…"
+              ? gt("Loading output…")
               : fetched.error
-                ? `Couldn't load output: ${fetched.error}`
-                : (output ?? subagent?.progress ?? subagent?.result ?? "No output yet.")}
+                ? gt("Couldn't load output: {error}", { error: String(fetched.error) })
+                : (output ?? subagent?.progress ?? subagent?.result ?? gt("No output yet."))}
           </Text>
         </ScrollView>
       )}
       <Text selectable className="font-mono text-3xs text-foreground-subtle">
-        Task {detail.item.taskId}
+        {gt("Task {taskId}", { taskId: detail.item.taskId })}
       </Text>
     </View>
   );

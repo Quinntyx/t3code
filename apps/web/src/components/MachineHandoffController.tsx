@@ -6,9 +6,11 @@ import {
   type MachineHandoffImportResult,
   type ModelSelection,
 } from "@t3tools/contracts";
+import { msg } from "gt-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useStableCallback } from "../hooks/useStableCallback";
+import { m } from "../i18n/messages";
 import { newThreadId, randomUUID } from "../lib/utils";
 import {
   getDefaultProviderInstanceModel,
@@ -196,14 +198,14 @@ function MachineHandoff({ attempt: job }: { attempt: MachineHandoffAttempt }) {
       if (imported.warnings?.length) {
         toastManager.add({
           type: "warning",
-          title: "Worktree setup may be needed",
-          description: "The new worktree excludes ignored files and dependencies.",
+          title: m(msg("Worktree setup may be needed")),
+          description: m(msg("The new worktree excludes ignored files and dependencies.")),
           actionProps: {
-            children: "Details",
+            children: m(msg("Details")),
             onClick: () => {
               toastManager.add({
                 type: "warning",
-                title: "Workspace setup details",
+                title: m(msg("Workspace setup details")),
                 description: imported.warnings?.join("\n"),
               });
             },
@@ -220,9 +222,12 @@ function MachineHandoff({ attempt: job }: { attempt: MachineHandoffAttempt }) {
       const target = environments.find((environment) => environment.environmentId === targetId);
       toastManager.add({
         type: "error",
-        title: `Could not move thread to ${target?.label ?? "another machine"}`,
-        description: cause instanceof Error ? cause.message : "Your source thread is unchanged.",
-        actionProps: { children: "Retry", onClick: () => openMachineHandoff(request) },
+        title: target?.label
+          ? m(msg("Could not move thread to {target}", { target: target.label }))
+          : m(msg("Could not move thread to another machine")),
+        description:
+          cause instanceof Error ? cause.message : m(msg("Your source thread is unchanged.")),
+        actionProps: { children: m(msg("Retry")), onClick: () => openMachineHandoff(request) },
       });
       return false;
     });

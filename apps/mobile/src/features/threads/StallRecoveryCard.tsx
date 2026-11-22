@@ -2,6 +2,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react-native";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -19,6 +20,7 @@ export function StallRecoveryCard({
   thread: EnvironmentThreadShell;
   environmentId: EnvironmentId;
 }) {
+  const gt = useGT();
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata);
   const [pending, setPending] = useState<"stop" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,30 +52,30 @@ export function StallRecoveryCard({
         cause instanceof Error
           ? cause.message
           : action === "stop"
-            ? "Could not stop retrying."
-            : "Could not retry now.",
+            ? gt("Could not stop retrying.")
+            : gt("Could not retry now."),
       );
     }
   }
   return (
     <View className="mx-3 mb-2 gap-1 rounded-xl border border-info-foreground/25 bg-screen p-3">
       <View className="min-w-0 gap-1">
-        <Text className="text-sm font-t3-medium text-foreground">Provider overloaded</Text>
+        <Text className="text-sm font-t3-medium text-foreground">{gt("Provider overloaded")}</Text>
         <Text className="text-sm text-foreground-muted">
           {nextAttempt === null
-            ? "T3 Code retries this thread on its own."
-            : `T3 Code retries this thread on its own, next at ${nextAttempt}.`}
+            ? gt("T3 Code retries this thread on its own.")
+            : gt("T3 Code retries this thread on its own, next at {time}.", { time: nextAttempt })}
         </Text>
       </View>
       {/* The margins cancel the 44pt touch height so the links sit 8pt under the text. */}
       <View className="-mb-3 -mt-2 flex-row flex-wrap gap-x-4">
         <RecoveryAction
-          label="Retry now"
+          label={gt("Retry now")}
           disabled={pending !== null || requestPending}
           onPress={() => void run("retry")}
         />
         <RecoveryAction
-          label="Stop retrying"
+          label={gt("Stop retrying")}
           disabled={pending !== null}
           onPress={() => void run("stop")}
         />

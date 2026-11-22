@@ -10,6 +10,8 @@ import {
   type SecretReference,
 } from "@t3tools/contracts";
 import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 export type {
   ProviderClientDefinition,
@@ -82,6 +84,7 @@ function readFieldBooleanDefault(
 export function deriveProviderSettingsFields(
   definition: SettingsFormDefinition,
   value?: unknown,
+  resolve: MFunctionType = mFallback,
 ): ReadonlyArray<ProviderSettingsFieldModel> {
   const isLocalAcp =
     definition.driverKind === "acpRegistry" &&
@@ -114,15 +117,15 @@ export function deriveProviderSettingsFields(
           control: formAnnotation.control ?? "text",
           label:
             isLocalAcp && key === "commandPath"
-              ? "Executable"
+              ? resolve(msg("Executable"))
               : (annotatedTitle ?? titleizeFieldKey(key)),
           ...(isLocalAcp && key === "commandPath"
-            ? { description: "Executable name or path on this environment." }
+            ? { description: resolve(msg("Executable name or path on this environment.")) }
             : annotatedDescription !== undefined
               ? { description: annotatedDescription }
               : {}),
           ...(isLocalAcp && key === "commandPath"
-            ? { placeholder: "e.g. dsh" }
+            ? { placeholder: resolve(msg("e.g. dsh")) }
             : formAnnotation.placeholder !== undefined
               ? { placeholder: formAnnotation.placeholder }
               : {}),

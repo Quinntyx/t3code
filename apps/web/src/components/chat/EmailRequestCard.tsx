@@ -15,6 +15,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { CheckIcon, MailIcon, MinusIcon, SendIcon } from "lucide-react";
 import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 
@@ -82,6 +83,7 @@ function PendingEmailComposer(props: {
   readonly environmentId: EnvironmentId;
   readonly item: EmailRequestItem;
 }) {
+  const gt = useGT();
   const { item } = props;
   const ids = {
     to: useId(),
@@ -161,7 +163,7 @@ function PendingEmailComposer(props: {
   return (
     <form
       data-v2-item-type={item.type}
-      aria-label="Email draft"
+      aria-label={gt("Email draft")}
       className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-card"
       onSubmit={onSubmit}
       onKeyDown={(event) => {
@@ -173,10 +175,14 @@ function PendingEmailComposer(props: {
     >
       <div className="flex min-w-0 items-center gap-2 px-3 py-2.5">
         <MailIcon className="size-4 shrink-0 text-icon-muted" aria-hidden />
-        <span className="text-sm font-medium text-foreground">Email draft</span>
-        <span className="truncate text-xs text-muted-foreground">Review before it sends</span>
+        <span className="text-sm font-medium text-foreground">
+          <T>Email draft</T>
+        </span>
+        <span className="truncate text-xs text-muted-foreground">
+          <T>Review before it sends</T>
+        </span>
       </div>
-      <ComposerRow label="From">
+      <ComposerRow label={gt("From", { $context: "email sender field" })}>
         {item.accounts.length > 1 ? (
           <Select
             value={fields.account}
@@ -185,7 +191,11 @@ function PendingEmailComposer(props: {
               if (next !== null) update("account")(next as string);
             }}
           >
-            <SelectTrigger variant="ghost" size="sm" aria-label="From">
+            <SelectTrigger
+              variant="ghost"
+              size="sm"
+              aria-label={gt("From", { $context: "email sender field" })}
+            >
               <SelectValue>{() => account?.from ?? fields.account}</SelectValue>
             </SelectTrigger>
             <SelectPopup alignItemWithTrigger={false}>
@@ -206,7 +216,7 @@ function PendingEmailComposer(props: {
         )}
       </ComposerRow>
       <ComposerRow
-        label="To"
+        label={gt("To", { $context: "email recipient field" })}
         htmlFor={ids.to}
         trailing={
           showCc && showBcc ? null : (
@@ -218,7 +228,7 @@ function PendingEmailComposer(props: {
                   variant="ghost-muted"
                   onClick={() => setShowCc(true)}
                 >
-                  Cc
+                  <T context="email carbon copy field">Cc</T>
                 </Button>
               )}
               {showBcc ? null : (
@@ -228,7 +238,7 @@ function PendingEmailComposer(props: {
                   variant="ghost-muted"
                   onClick={() => setShowBcc(true)}
                 >
-                  Bcc
+                  <T context="email blind carbon copy field">Bcc</T>
                 </Button>
               )}
             </span>
@@ -238,16 +248,19 @@ function PendingEmailComposer(props: {
         {addressInput(ids.to, "to", "name@example.com")}
       </ComposerRow>
       {showCc ? (
-        <ComposerRow label="Cc" htmlFor={ids.cc}>
+        <ComposerRow label={gt("Cc", { $context: "email carbon copy field" })} htmlFor={ids.cc}>
           {addressInput(ids.cc, "cc")}
         </ComposerRow>
       ) : null}
       {showBcc ? (
-        <ComposerRow label="Bcc" htmlFor={ids.bcc}>
+        <ComposerRow
+          label={gt("Bcc", { $context: "email blind carbon copy field" })}
+          htmlFor={ids.bcc}
+        >
           {addressInput(ids.bcc, "bcc")}
         </ComposerRow>
       ) : null}
-      <ComposerRow label="Subject" htmlFor={ids.subject}>
+      <ComposerRow label={gt("Subject", { $context: "email subject field" })} htmlFor={ids.subject}>
         <Input
           id={ids.subject}
           unstyled
@@ -262,7 +275,7 @@ function PendingEmailComposer(props: {
         <Textarea
           id={ids.body}
           unstyled
-          aria-label="Message"
+          aria-label={gt("Message", { $context: "email body field" })}
           value={fields.body}
           disabled={locked}
           onChange={(event) => update("body")(event.currentTarget.value)}
@@ -289,18 +302,18 @@ function PendingEmailComposer(props: {
             disabled={locked}
             onClick={() => void send({ type: "discard" })}
           >
-            Discard
+            <T>Discard</T>
           </Button>
           <Button
             type="submit"
             size="sm"
-            title={`Send (${sendShortcut})`}
+            title={gt("Send ({shortcut})", { shortcut: sendShortcut })}
             aria-keyshortcuts="Meta+Enter Control+Enter"
             disabled={locked || !canSend}
             aria-describedby={error !== null ? ids.error : undefined}
           >
             <SendIcon aria-hidden />
-            {submitting ? "Sending…" : "Send"}
+            {submitting ? gt("Sending…") : gt("Send")}
           </Button>
         </div>
       </div>

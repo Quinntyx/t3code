@@ -1,3 +1,5 @@
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
+import { T, useGT, Var } from "gt-react-native";
 import * as Dialog from "../../../components/ui/Dialog";
 import {
   isAtomCommandInterrupted,
@@ -12,6 +14,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
 import { Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
+import { m } from "../../../i18n/messages";
 
 import type { MenuAction } from "@react-native-menu/menu";
 
@@ -38,6 +41,7 @@ export function ProviderSignInSection({
   readonly environment: { readonly environmentId: EnvironmentId; readonly label: string };
   readonly provider: ServerProvider;
 }) {
+  const gt = useGT();
   const environmentId = environment.environmentId;
   const instanceId = provider.instanceId;
   const target = { environmentId, input: { instanceId } };
@@ -94,7 +98,11 @@ export function ProviderSignInSection({
     if (result._tag === "Success") return true;
     if (!isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not update provider sign-in.");
+      setError(
+        failure instanceof Error
+          ? (errorDisplayMessage(failure, m) ?? failure.message)
+          : gt("Could not update provider sign-in."),
+      );
     }
     return false;
   }
@@ -146,18 +154,18 @@ export function ProviderSignInSection({
     active || state?.phase === "failed" || state?.phase === "cancelled"
       ? state.message
       : !provider.enabled
-        ? "Turned off"
+        ? gt("Turned off")
         : signedIn
-          ? "Signed in"
+          ? gt("Signed in")
           : isDiscovering
-            ? "Discovering sign-in methods…"
+            ? gt("Discovering sign-in methods…")
             : needsExternalSetup
-              ? "No in-app sign-in advertised. Follow the provider's docs to finish setup."
+              ? gt("No in-app sign-in advertised. Follow the provider's docs to finish setup.")
               : !provider.installed
-                ? "Not installed"
+                ? gt("Not installed")
                 : usesCredentials
-                  ? "Connect to load models"
-                  : "Not signed in";
+                  ? gt("Connect to load models")
+                  : gt("Not signed in");
   // A provider with several sign-in methods picks one from a menu on the same control.
   const methodActions: MenuAction[] = methods.map((method) => ({
     id: `method:${method.id}`,
@@ -168,7 +176,7 @@ export function ProviderSignInSection({
     ? [
         {
           id: "remove",
-          title: "Remove incomplete connection",
+          title: gt("Remove incomplete connection"),
           attributes: { disabled: disabled || active || !canRemoveMethod },
           subactions: removableMethods.map((method) => ({
             id: `remove:${method.id}`,
@@ -183,12 +191,15 @@ export function ProviderSignInSection({
   }
   function signOut() {
     Dialog.alert(
-      "Sign out?",
-      `Running threads sharing this sign-in on ${environment.label} will stop. Thread history is kept.`,
+      gt("Sign out?"),
+      gt(
+        "Running threads sharing this sign-in on {environment} will stop. Thread history is kept.",
+        { environment: environment.label },
+      ),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: gt("Cancel"), style: "cancel" },
         {
-          text: "Sign out",
+          text: gt("Sign out"),
           style: "destructive",
           onPress: () => {
             void run(() => logout(target));
@@ -215,7 +226,7 @@ export function ProviderSignInSection({
       ? [
           {
             id: "change",
-            title: "Change account",
+            title: gt("Change account"),
             image: "person.crop.circle",
             attributes: { disabled: signInDisabled },
             ...(methodActions.length > 1
@@ -233,7 +244,7 @@ export function ProviderSignInSection({
       ? [
           {
             id: "signOut",
-            title: "Sign out",
+            title: gt("Sign out"),
             image: "rectangle.portrait.and.arrow.right",
             attributes: { destructive: true, disabled: disabled || state === null },
           },
@@ -247,18 +258,18 @@ export function ProviderSignInSection({
   ) : needsExternalSetup && provider.setup?.documentationUrl ? (
     <ControlPill
       variant="pill"
-      label="Docs"
+      label={gt("Docs")}
       onPress={() => {
         void Linking.openURL(provider.setup!.documentationUrl!).catch(() =>
-          setError("Could not open the provider docs."),
+          setError(gt("Could not open the provider docs.")),
         );
       }}
     />
   ) : active && state?.flowId ? (
     <ControlPill
       variant="pill"
-      label="Cancel"
-      accessibilityLabel={`Cancel ${name} sign-in`}
+      label={gt("Cancel")}
+      accessibilityLabel={gt("Cancel {provider} sign-in", { provider: name })}
       disabled={disabled}
       onPress={() => {
         void run(() => cancel({ environmentId, input: { instanceId, flowId: state.flowId! } }));
@@ -268,29 +279,40 @@ export function ProviderSignInSection({
     <Menu
       accessible
       accessibilityRole="button"
-      accessibilityLabel={`${name} account options`}
+      accessibilityLabel={gt("{provider} account options", { provider: name })}
       title={name}
       actions={accountActions}
       onPressAction={({ nativeEvent }) => onMenuAction(nativeEvent.event)}
     >
-      <ControlPill icon="ellipsis" accessibilityLabel={`${name} account options`} />
+      <ControlPill
+        icon="ellipsis"
+        accessibilityLabel={gt("{provider} account options", { provider: name })}
+      />
     </Menu>
   ) : canSignIn && !signedIn && methodActions.length > 1 && !signInDisabled ? (
     <Menu
       accessible
       accessibilityRole="button"
-      accessibilityLabel={`Sign in to ${name}`}
-      title="Sign in with"
+      accessibilityLabel={gt("Sign in to {provider}", { provider: name })}
+      title={gt("Sign in with")}
       actions={[...methodActions, ...removeActions]}
       onPressAction={({ nativeEvent }) => onMenuAction(nativeEvent.event)}
     >
-      <ControlPill variant="primary" label="Sign in" accessibilityLabel={`Sign in to ${name}`} />
+      <ControlPill
+        variant="primary"
+        label={gt("Sign in")}
+        accessibilityLabel={gt("Sign in to {provider}", { provider: name })}
+      />
     </Menu>
   ) : canSignIn && !signedIn ? (
     <ControlPill
       variant="primary"
-      label={usesCredentials ? "Connect" : "Sign in"}
-      accessibilityLabel={usesCredentials ? `Connect to ${name}` : `Sign in to ${name}`}
+      label={usesCredentials ? gt("Connect") : gt("Sign in")}
+      accessibilityLabel={
+        usesCredentials
+          ? gt("Connect to {provider}", { provider: name })
+          : gt("Sign in to {provider}", { provider: name })
+      }
       disabled={signInDisabled}
       onPress={() => startSignIn()}
     />
@@ -304,7 +326,12 @@ export function ProviderSignInSection({
             : "min-h-16 flex-row items-center gap-3 px-4 py-3"
         }
       >
-        <ProviderAccountSummary key={email} name="Account" status={status} email={email} />
+        <ProviderAccountSummary
+          key={email}
+          name={gt("Account", { $context: "provider account row title" })}
+          status={status}
+          email={email}
+        />
         {trailing}
       </View>
       {interaction?.type === "deviceCode" ||
@@ -316,7 +343,9 @@ export function ProviderSignInSection({
         <View className="gap-2 px-4 pb-3">
           {interaction?.type === "deviceCode" ? (
             <Text selectable className="text-foreground">
-              Enter code {interaction.userCode} on the sign-in page.
+              <T>
+                Enter code <Var>{interaction.userCode}</Var> on the sign-in page.
+              </T>
             </Text>
           ) : null}
           {interaction?.type === "terminal" ? (
@@ -326,10 +355,10 @@ export function ProviderSignInSection({
                   {interaction.output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")}
                 </Text>
               </ScrollView>
-              {field("input", "Terminal response", true)}
+              {field("input", gt("Terminal response"), true)}
               <SettingsActionRow
                 icon="arrow.up"
-                label="Send response"
+                label={gt("Send response")}
                 disabled={disabled}
                 onPress={() => {
                   void send({ type: "terminal", data: `${values.input ?? ""}\r` }).then((sent) => {
@@ -346,7 +375,7 @@ export function ProviderSignInSection({
               ))}
               <SettingsActionRow
                 icon="person.crop.circle"
-                label="Connect"
+                label={gt("Connect")}
                 disabled={disabled}
                 onPress={() => {
                   void send({ type: "credentials", values }).then((sent) => {
@@ -358,10 +387,10 @@ export function ProviderSignInSection({
           ) : null}
           {showCallback ? (
             <>
-              {field("callback", "Final localhost URL", false)}
+              {field("callback", gt("Final localhost URL"), false)}
               <SettingsActionRow
                 icon="arrow.right"
-                label="Continue"
+                label={gt("Continue")}
                 disabled={disabled || !values.callback?.trim()}
                 onPress={() => {
                   if (!state?.flowId) return;
@@ -387,7 +416,7 @@ export function ProviderSignInSection({
       {url ? (
         <SettingsActionRow
           icon="globe"
-          label="Open sign-in page"
+          label={gt("Open sign-in page")}
           disabled={disabled}
           onPress={() => {
             void (async () => {
@@ -398,7 +427,7 @@ export function ProviderSignInSection({
               )
                 return;
               await Linking.openURL(url);
-            })().catch(() => setError("Could not open the sign-in page."));
+            })().catch(() => setError(gt("Could not open the sign-in page.")));
           }}
         />
       ) : null}
@@ -415,6 +444,7 @@ function ProviderAccountSummary({
   readonly status: string | null | undefined;
   readonly email: string | undefined;
 }) {
+  const gt = useGT();
   const [revealed, setRevealed] = useState(false);
   const content = (
     <>
@@ -441,7 +471,7 @@ function ProviderAccountSummary({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={[name, status, revealed ? email : null].filter(Boolean).join(", ")}
-      accessibilityHint={revealed ? "Hides the account email" : "Reveals the account email"}
+      accessibilityHint={revealed ? gt("Hides the account email") : gt("Reveals the account email")}
       onPress={() => setRevealed((value) => !value)}
       className="min-w-0 shrink grow gap-0.5"
     >

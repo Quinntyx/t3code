@@ -15,6 +15,7 @@ import {
 } from "@t3tools/client-runtime/provider-settings/custom-model-editor";
 import type { ProviderDriverKind, ServerProviderModel } from "@t3tools/contracts";
 import type { CustomModelDefinition } from "@t3tools/shared/model";
+import { T, useGT, Var } from "gt-react-native";
 import { useState } from "react";
 import { View } from "react-native";
 
@@ -58,6 +59,7 @@ export function CustomModelEditor(props: {
   readonly onSave: (next: CustomModelDefinition) => void;
   readonly onCancel: () => void;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState<CustomModelDraft>(() => draftFromDefinition(props.entry));
   const [error, setError] = useState<string | null>(null);
   const presets = DESCRIPTOR_PRESETS_BY_KIND[props.driverKind] ?? [];
@@ -115,10 +117,10 @@ export function CustomModelEditor(props: {
 
   return (
     <>
-      <SettingsSection title="Custom model">
-        <FieldBlock label="Display name" description={draft.slug}>
+      <SettingsSection title={gt("Custom model")}>
+        <FieldBlock label={gt("Display name")} description={draft.slug}>
           <EditorInput
-            accessibilityLabel="Display name"
+            accessibilityLabel={gt("Display name")}
             value={draft.name}
             placeholder={draft.slug}
             onChangeText={(name) => edit((current) => ({ ...current, name }))}
@@ -127,14 +129,14 @@ export function CustomModelEditor(props: {
       </SettingsSection>
 
       <SettingsSection
-        title="Options shown in the composer"
+        title={gt("Options shown in the composer")}
         trailing={
           startFrom.length > 0 ? (
             <Menu
               accessible
               accessibilityRole="button"
-              accessibilityLabel="Copy options from a built-in model"
-              title="Copy options from"
+              accessibilityLabel={gt("Copy options from a built-in model")}
+              title={gt("Copy options from")}
               actions={startFromActions}
               onPressAction={({ nativeEvent }) => {
                 const model = startFrom.find((candidate) => candidate.slug === nativeEvent.event);
@@ -145,13 +147,13 @@ export function CustomModelEditor(props: {
                 }));
               }}
             >
-              <ControlPill variant="pill" label="Copy from…" />
+              <ControlPill variant="pill" label={gt("Copy from…")} />
             </Menu>
           ) : null
         }
         footer={
           draft.descriptors.length === 0
-            ? "No custom options. The composer uses the provider's default options."
+            ? gt("No custom options. The composer uses the provider's default options.")
             : undefined
         }
       >
@@ -164,7 +166,11 @@ export function CustomModelEditor(props: {
               subtitle: preset.label,
               state: (preset.id === presetId ? "on" : "off") as "on" | "off",
             })),
-            { id: CUSTOM_ID, title: "Custom…", state: presetId === CUSTOM_ID ? "on" : "off" },
+            {
+              id: CUSTOM_ID,
+              title: gt("Custom…"),
+              state: presetId === CUSTOM_ID ? "on" : "off",
+            },
           ];
           return (
             <View
@@ -173,15 +179,17 @@ export function CustomModelEditor(props: {
             >
               <View className="flex-row items-center justify-between gap-2">
                 <Text textRole="body" className="text-foreground">
-                  {`Option ${index + 1}`}
+                  <T>
+                    Option <Var>{index + 1}</Var>
+                  </T>
                 </Text>
                 <View className="flex-row items-center gap-2">
                   {presets.length > 0 ? (
                     <Menu
                       accessible
                       accessibilityRole="button"
-                      accessibilityLabel={`Option ${index + 1} id`}
-                      title="Option id"
+                      accessibilityLabel={gt("Option {number} id", { number: index + 1 })}
+                      title={gt("Option id")}
                       actions={idActions}
                       onPressAction={({ nativeEvent }) => {
                         if (nativeEvent.event === CUSTOM_ID) {
@@ -204,24 +212,24 @@ export function CustomModelEditor(props: {
                     >
                       <ControlPill
                         variant="pill"
-                        label={presetId === CUSTOM_ID ? "Custom…" : descriptor.id}
+                        label={presetId === CUSTOM_ID ? gt("Custom…") : descriptor.id}
                       />
                     </Menu>
                   ) : null}
                   <Menu
                     accessible
                     accessibilityRole="button"
-                    accessibilityLabel={`Option ${index + 1} type`}
-                    title="Option type"
+                    accessibilityLabel={gt("Option {number} type", { number: index + 1 })}
+                    title={gt("Option type")}
                     actions={[
                       {
                         id: "select",
-                        title: "Choices",
+                        title: gt("Choices"),
                         state: descriptor.type === "select" ? "on" : "off",
                       },
                       {
                         id: "boolean",
-                        title: "Toggle",
+                        title: gt("Toggle", { $context: "noun, on/off option type" }),
                         state: descriptor.type === "boolean" ? "on" : "off",
                       },
                     ]}
@@ -233,12 +241,16 @@ export function CustomModelEditor(props: {
                   >
                     <ControlPill
                       variant="pill"
-                      label={descriptor.type === "boolean" ? "Toggle" : "Choices"}
+                      label={
+                        descriptor.type === "boolean"
+                          ? gt("Toggle", { $context: "noun, on/off option type" })
+                          : gt("Choices")
+                      }
                     />
                   </Menu>
                   <ControlPill
                     icon="xmark"
-                    accessibilityLabel={`Remove option ${index + 1}`}
+                    accessibilityLabel={gt("Remove option {number}", { number: index + 1 })}
                     onPress={() =>
                       edit((current) => ({
                         ...current,
@@ -252,7 +264,7 @@ export function CustomModelEditor(props: {
               </View>
               {presetId === CUSTOM_ID ? (
                 <EditorInput
-                  accessibilityLabel={`Option ${index + 1} id`}
+                  accessibilityLabel={gt("Option {number} id", { number: index + 1 })}
                   value={descriptor.id}
                   placeholder="optionId"
                   mono
@@ -260,9 +272,9 @@ export function CustomModelEditor(props: {
                 />
               ) : null}
               <EditorInput
-                accessibilityLabel={`Option ${index + 1} label`}
+                accessibilityLabel={gt("Option {number} label", { number: index + 1 })}
                 value={descriptor.label}
-                placeholder="Label"
+                placeholder={gt("Label", { $context: "noun, display name" })}
                 onChangeText={(label) => updateDescriptor(descriptor.key, { label })}
               />
               {descriptor.type === "select" ? (
@@ -278,16 +290,22 @@ export function CustomModelEditor(props: {
                       <View className="flex-row items-center gap-2">
                         <View className="min-w-0 flex-1">
                           <EditorInput
-                            accessibilityLabel={`Choice ${choiceIndex + 1} value`}
+                            accessibilityLabel={gt("Choice {number} value", {
+                              number: choiceIndex + 1,
+                            })}
                             value={choice.id}
-                            placeholder="value"
+                            placeholder={gt("value", {
+                              $context: "placeholder for an option choice value",
+                            })}
                             mono
                             onChangeText={(id) => updateChoice(descriptor.key, choice.key, { id })}
                           />
                         </View>
                         <ControlPill
                           icon="xmark"
-                          accessibilityLabel={`Remove choice ${choiceIndex + 1}`}
+                          accessibilityLabel={gt("Remove choice {number}", {
+                            number: choiceIndex + 1,
+                          })}
                           onPress={() =>
                             updateDescriptor(descriptor.key, {
                               choices: descriptor.choices.filter(
@@ -298,19 +316,23 @@ export function CustomModelEditor(props: {
                         />
                       </View>
                       <EditorInput
-                        accessibilityLabel={`Choice ${choiceIndex + 1} label`}
+                        accessibilityLabel={gt("Choice {number} label", {
+                          number: choiceIndex + 1,
+                        })}
                         value={choice.label}
-                        placeholder="Label"
+                        placeholder={gt("Label", { $context: "noun, display name" })}
                         onChangeText={(label) =>
                           updateChoice(descriptor.key, choice.key, { label })
                         }
                       />
                       <View className="flex-row items-center justify-between gap-3">
                         <Text textRole="footnote" className="text-foreground-muted">
-                          Default
+                          <T>Default</T>
                         </Text>
                         <ThemedSwitch
-                          accessibilityLabel={`Choice ${choiceIndex + 1} is the default`}
+                          accessibilityLabel={gt("Choice {number} is the default", {
+                            number: choiceIndex + 1,
+                          })}
                           value={choice.isDefault}
                           onValueChange={(isDefault) =>
                             updateChoice(descriptor.key, choice.key, { isDefault })
@@ -323,7 +345,7 @@ export function CustomModelEditor(props: {
                     <ControlPill
                       variant="pill"
                       icon="plus"
-                      label="Add choice"
+                      label={gt("Add choice")}
                       onPress={() =>
                         updateDescriptor(descriptor.key, {
                           choices: [...descriptor.choices, emptyEditorChoice()],
@@ -359,7 +381,7 @@ export function CustomModelEditor(props: {
           <ControlPill
             variant="pill"
             icon="plus"
-            label="Custom option"
+            label={gt("Custom option")}
             onPress={() =>
               edit((current) => ({
                 ...current,
@@ -378,10 +400,10 @@ export function CustomModelEditor(props: {
 
       <View className="flex-row gap-3">
         <View className="flex-1">
-          <Button label="Cancel" tone="secondary" fullWidth onPress={props.onCancel} />
+          <Button label={gt("Cancel")} tone="secondary" fullWidth onPress={props.onCancel} />
         </View>
         <View className="flex-1">
-          <Button label="Save" tone="primary" fullWidth onPress={save} />
+          <Button label={gt("Save")} tone="primary" fullWidth onPress={save} />
         </View>
       </View>
     </>

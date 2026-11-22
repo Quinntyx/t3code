@@ -12,6 +12,7 @@ import {
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { T, useGT, useMessages, Var } from "gt-react-native";
 import { useRef, useState } from "react";
 import { Platform, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
@@ -48,12 +49,13 @@ import {
 } from "./useProviderSettings";
 
 export function ProvidersRouteScreen() {
+  const gt = useGT();
   const environmentMenu = useSettingsEnvironmentMenu();
   const { selectedTargets } = useSettingsEnvironmentFilter();
   const permitted = useEnvironmentsWithScope(selectedTargets, AuthProvidersManageScope);
   const insets = useSafeAreaInsets();
   return (
-    <SettingsScreen title="Providers" menus={[environmentMenu]}>
+    <SettingsScreen title={gt("Providers")} menus={[environmentMenu]}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -61,7 +63,9 @@ export function ProvidersRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         {selectedTargets.length === 0 ? (
-          <Text className="text-foreground-muted">Select a connected environment.</Text>
+          <Text className="text-foreground-muted">
+            <T>Select a connected environment.</T>
+          </Text>
         ) : (
           selectedTargets.map((environment) => (
             <EnvironmentProviders
@@ -82,6 +86,7 @@ function EnvironmentProviders(props: {
   readonly readOnly: boolean;
   readonly showOptionsTitle: boolean;
 }) {
+  const gt = useGT();
   const { environmentId, label } = props.environment;
   const navigation = useNavigation();
   const providers = useEnvironmentProviders(environmentId);
@@ -100,7 +105,12 @@ function EnvironmentProviders(props: {
         trailing={<RefreshProvidersControl environmentId={environmentId} providers={providers} />}
         footer={
           props.readOnly
-            ? `This session can view ${label}'s providers but can't change their settings.`
+            ? gt(
+                "This session can view {environment}'s providers but can't change their settings.",
+                {
+                  environment: label,
+                },
+              )
             : undefined
         }
       >
@@ -123,17 +133,21 @@ function EnvironmentProviders(props: {
           <View className={rows.length > 0 ? "border-t border-border-subtle" : undefined}>
             <ListActionRow
               icon="plus"
-              label="Add provider"
+              label={gt("Add provider")}
               onPress={() => navigation.navigate("SettingsProviderAdd", { environmentId })}
             />
           </View>
         ) : null}
       </SettingsSection>
-      <SettingsSection title={props.showOptionsTitle ? `${label} options` : undefined}>
+      <SettingsSection
+        title={
+          props.showOptionsTitle ? gt("{environment} options", { environment: label }) : undefined
+        }
+      >
         <ListRow
           icon="chart.bar.xaxis"
-          label="Usage and background checks"
-          description="Usage hubs, health check interval, and idle compaction"
+          label={gt("Usage and background checks")}
+          description={gt("Usage hubs, health check interval, and idle compaction")}
           onPress={() =>
             navigation.navigate("SettingsProviderEnvironmentOptions", { environmentId })
           }
@@ -147,6 +161,7 @@ function RefreshProvidersControl(props: {
   readonly environmentId: EnvironmentId;
   readonly providers: ReadonlyArray<ServerProvider>;
 }) {
+  const gt = useGT();
   const canRefresh = useEnvironmentScope(props.environmentId, AuthOrchestrationReadScope);
   const refresh = useAtomCommand(serverEnvironment.refreshProviders, { reportFailure: false });
   const [refreshing, setRefreshing] = useState(false);
@@ -166,7 +181,9 @@ function RefreshProvidersControl(props: {
     >
       {lastChecked && !refreshing ? (
         <Text textRole="footnote" className="text-foreground-muted">
-          {`Checked ${relativeTime(lastChecked)}`}
+          <T>
+            Checked <Var>{relativeTime(lastChecked)}</Var>
+          </T>
         </Text>
       ) : null}
       {refreshing ? (
@@ -176,7 +193,7 @@ function RefreshProvidersControl(props: {
       ) : (
         <ControlPill
           icon="arrow.clockwise"
-          accessibilityLabel="Refresh provider status"
+          accessibilityLabel={gt("Refresh provider status")}
           disabled={!canRefresh}
           onPress={() => {
             if (refreshingRef.current) return;
@@ -188,7 +205,11 @@ function RefreshProvidersControl(props: {
             }).then((result) => {
               refreshingRef.current = false;
               setRefreshing(false);
-              reportCommandFailure(result, "Could not refresh providers", "The refresh failed.");
+              reportCommandFailure(
+                result,
+                gt("Could not refresh providers"),
+                gt("The refresh failed."),
+              );
             });
           }}
         />
@@ -206,10 +227,12 @@ function ProviderListRow(props: {
   readonly driverAllowed: boolean;
   readonly onToggle: (enabled: boolean) => Promise<boolean>;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const navigation = useNavigation();
   const rippleStyle = useResolveClassNames("bg-subtle-strong");
   const instance = props.row.explicitInstance ?? { driver: props.row.driver };
-  const status = describeProviderInstance(instance, props.provider);
+  const status = describeProviderInstance(instance, props.provider, m);
   const enabledSwitch = usePendingSwitch(status.enabled);
   const enabled = enabledSwitch.value;
   const name = providerInstanceName(instance);
@@ -228,7 +251,7 @@ function ProviderListRow(props: {
     <RowPressable
       accessibilityRole="button"
       accessibilityLabel={[name, version, statusLine].filter(Boolean).join(", ")}
-      accessibilityHint="Opens provider settings"
+      accessibilityHint={gt("Opens provider settings")}
       onPress={() =>
         navigation.navigate("SettingsProviderInstance", {
           environmentId: props.environmentId,
@@ -283,7 +306,7 @@ function ProviderListRow(props: {
           </View>
         </View>
         <ThemedSwitch
-          accessibilityLabel={`Turn on ${name}`}
+          accessibilityLabel={gt("Turn on {provider}", { provider: name })}
           // The policy refuses switching it on; switching it off stays the user's call.
           disabled={props.readOnly || (!enabled && !props.driverAllowed)}
           value={enabled}

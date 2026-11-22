@@ -1,17 +1,20 @@
-import { cn } from "../../../lib/cn";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useGT } from "gt-react-native";
 import { useEffect } from "react";
-import { Platform, RefreshControl, View } from "react-native";
-import { NativeScrollView } from "../../../native/NativeScrollViewMarker";
-
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import { AppBar } from "../../../components/ui/AppBar";
+import { AppText as Text } from "../../../components/ui/AppText";
 import { ListRow } from "../../../components/ui/ListRow";
 import { ListSection } from "../../../components/ui/ListSection";
+import { groupedListInsets } from "../../../components/ui/listMetrics";
+import { RefreshControl } from "../../../components/ui/RefreshControl";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
-import { AppText as Text } from "../../../components/ui/AppText";
-import { menuItemIconName } from "./gitSheetComponents";
+import { SheetPane } from "../../../components/ui/SheetPane";
+import { changeRequestTermKind } from "../../../lib/changeRequestTerm";
+import { NativeScrollView } from "../../../native/NativeScrollViewMarker";
 import { LinkedPullRequestRow, linkedPullRequestKey } from "../LinkedPullRequestList";
+import { menuItemIconName } from "./gitSheetComponents";
 import { useGitOverview } from "./useGitOverview";
 
 type GitOverviewSheetProps = StaticScreenProps<{
@@ -34,6 +37,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
 }
 
 function GitOverviewSheetContent(props: GitOverviewSheetProps) {
+  const gt = useGT();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const presentation = props.presentation ?? "sheet";
@@ -46,14 +50,13 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
     <NativeScrollView
       nestedScrollEnabled
       alwaysBounceVertical
-      className="flex-1 android:bg-sheet-solid ios:bg-screen"
+      className="flex-1 bg-screen"
       contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
-      contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
       contentContainerStyle={{
-        paddingHorizontal: Platform.OS === "android" ? 8 : isInspector ? 12 : 20,
+        ...groupedListInsets(isInspector),
         paddingTop: 8,
-        gap: Platform.OS === "android" ? 8 : 14,
+        paddingBottom: Math.max(insets.bottom, 18) + 18,
       }}
       refreshControl={
         <RefreshControl refreshing={git.isRefreshing} onRefresh={() => void git.refresh()} />
@@ -73,11 +76,14 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         {behindCount > 0 ? (
           <ListRow
             icon="arrow.down.circle"
-            label="Pull latest"
+            label={gt("Pull latest")}
             description={
               git.canWriteSourceControl
-                ? `${behindCount} commit${behindCount === 1 ? "" : "s"} behind upstream`
-                : "This connection cannot change source control."
+                ? gt(
+                    "{count, plural, one {{count} commit behind upstream} other {{count} commits behind upstream}}",
+                    { count: behindCount },
+                  )
+                : gt("This connection cannot change source control.")
             }
             disabled={!git.canWriteSourceControl || busy || !isRepo}
             onPress={git.pull}
@@ -85,18 +91,18 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         ) : null}
         <ListRow
           icon="text.bubble"
-          label="Review changes"
-          description="Inspect changes, uncommitted edits, and turn diffs"
+          label={gt("Review changes")}
+          description={gt("Inspect changes, uncommitted edits, and turn diffs")}
           disabled={busy || !isRepo}
           onPress={git.openReview}
         />
         <ListRow
           icon="point.topleft.down.curvedto.point.bottomright.up"
-          label="Branches & worktrees"
+          label={gt("Branches & worktrees")}
           description={
             git.canChangeThreadBranch
-              ? "Switch branch, create branch, or move to a worktree"
-              : "View branches and worktrees"
+              ? gt("Switch branch, create branch, or move to a worktree")
+              : gt("View branches and worktrees")
           }
           disabled={busy || !isRepo}
           onPress={git.openBranches}
@@ -104,15 +110,27 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         {git.linkedPrActions.canLink ? (
           <ListRow
             icon="link"
-            label={`Link ${git.linkedPrActions.terminology.singular}`}
-            description={`Attach a ${git.linkedPrActions.terminology.singular} by URL or number`}
+            label={gt(
+              "{term, select, mr {Link merge request} cr {Link change request} other {Link pull request}}",
+              {
+                term: changeRequestTermKind(git.linkedPrActions.terminology),
+              },
+            )}
+            description={gt(
+              "{term, select, mr {Attach a merge request by URL or number} cr {Attach a change request by URL or number} other {Attach a pull request by URL or number}}",
+              {
+                term: changeRequestTermKind(git.linkedPrActions.terminology),
+              },
+            )}
             onPress={git.linkedPrActions.promptLink}
           />
         ) : null}
       </ListSection>
 
       {git.linkedPrLines.length > 0 ? (
-        <ListSection title={`Linked ${git.linkedPrActions.terminology.plural}`}>
+        <ListSection
+          title={gt("Linked {terms}", { terms: git.linkedPrActions.terminology.plural })}
+        >
           {git.linkedPrLines.map((line, index) => (
             <LinkedPullRequestRow
               key={linkedPullRequestKey(line)}
@@ -127,7 +145,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       ) : null}
 
       {git.worktreePath ? (
-        <ListSection title="Worktree">
+        <ListSection title={gt("Worktree")}>
           <Text selectable textRole="footnote" className="p-4 text-foreground-muted">
             {git.worktreePath}
           </Text>
@@ -137,22 +155,19 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
   );
 
   return (
-    <View
-      collapsable={false}
-      className={cn("flex-1 android:bg-header", isInspector ? "ios:bg-screen" : "ios:bg-sheet")}
-    >
+    <SheetPane surface={isInspector ? "screen" : "sheet"}>
       <AppBar
         title={git.currentBranchLabel}
         subtitle={git.currentStatusSummary}
         hideBottomBorder={!isInspector}
         onClose={isInspector ? undefined : () => navigation.goBack()}
         refresh={{
-          accessibilityLabel: "Refresh repository status",
+          accessibilityLabel: gt("Refresh repository status"),
           disabled: busy || git.isRefreshing,
           onPress: () => void git.refresh(),
         }}
       />
       <ScreenContent insetHorizontal={isInspector ? true : undefined}>{content}</ScreenContent>
-    </View>
+    </SheetPane>
   );
 }

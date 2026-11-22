@@ -2,8 +2,8 @@ import {
   type CustomModelSetting,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
   ModelCapabilities,
-  type ModelSelection,
   type ModelPreferences,
+  type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -221,6 +221,24 @@ export function draftModelPickMatchesThread(pick: ModelSelection, thread: ModelS
       selection.options?.filter((option) => option.id !== "fastMode" || option.value !== false),
     );
   return modelSelectionsEqual(withoutFastModeOff(pick), withoutFastModeOff(thread));
+}
+
+/** Cursor ACP can default Fast to true; T3 requires a user selection. */
+export function withImplicitFastModeDefault(
+  caps: ModelCapabilities,
+  modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  const hasExplicitFastMode = modelOptions?.some((selection) => selection.id === "fastMode");
+  if (hasExplicitFastMode) {
+    return modelOptions ?? undefined;
+  }
+  const hasFastModeDescriptor = caps.optionDescriptors?.some(
+    (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+  );
+  if (!hasFastModeDescriptor) {
+    return modelOptions ?? undefined;
+  }
+  return [...(modelOptions ?? []), { id: "fastMode", value: false }];
 }
 
 function resolveDescriptorChoiceValue(
@@ -611,6 +629,17 @@ export function createModelSelection(
     model,
   };
   return selections.length > 0 ? { ...base, options: selections } : base;
+}
+
+/** A model picker's pick: re-picking the current model keeps its options, another model starts without any. */
+export function pickModelSelection(
+  current: ModelSelection | null | undefined,
+  instanceId: ProviderInstanceId,
+  model: string,
+): ModelSelection {
+  return current?.instanceId === instanceId && current.model === model
+    ? current
+    : createModelSelection(instanceId, model);
 }
 
 export function resolvePromptInjectedEffort(

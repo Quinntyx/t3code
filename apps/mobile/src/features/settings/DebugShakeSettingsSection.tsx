@@ -1,5 +1,6 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
+import { T, useGT, Var } from "gt-react-native";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -7,13 +8,15 @@ import { ListRowLayout } from "../../components/ui/ListRowLayout";
 import { Menu } from "../../components/ui/Menu";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 
 export function DebugShakeSettingsSection() {
+  const gt = useGT();
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const save = useAtomSet(updateMobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences);
   const projects = useProjects();
   const { environments } = useEnvironments();
   const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
@@ -29,16 +32,16 @@ export function DebugShakeSettingsSection() {
 
   return (
     <View className="gap-3">
-      <SettingsSection title="Developer">
+      <SettingsSection title={gt("Developer")}>
         <SettingsSwitchRow
           icon="iphone"
-          label="Debug shake"
+          label={gt("Debug shake")}
           value={value.debugShakeEnabled === true}
           disabled={!ready || (!selected && value.debugShakeEnabled !== true)}
           onValueChange={(enabled) => save({ debugShakeEnabled: enabled })}
         />
         <Menu
-          accessibilityLabel="Debug shake destination"
+          accessibilityLabel={gt("Debug shake destination")}
           actions={environments.map((environment) => ({
             id: environment.environmentId,
             title: environment.label,
@@ -68,21 +71,23 @@ export function DebugShakeSettingsSection() {
         >
           <ListRowLayout
             icon="desktopcomputer"
-            label="Machine and project"
+            label={gt("Machine and project")}
             detail={
               selected && machine
                 ? `${machine.label} · ${selected.title}`
                 : value.debugShakeProject
-                  ? "Unavailable project, choose…"
-                  : "Choose…"
+                  ? gt("Unavailable project, choose…")
+                  : gt("Choose…")
             }
           />
         </Menu>
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">
-        Choose your T3 Code project, then shake to open a new draft with a screenshot and the last
-        200 mobile log lines. No agent runs until you press Send. Logs are kept only in memory while
-        enabled; review them for sensitive information before sending.
+        <T>
+          Choose your <Var>T3 Code</Var> project, then shake to open a new draft with a screenshot
+          and the last 200 mobile log lines. No agent runs until you press Send. Logs are kept only
+          in memory while enabled; review them for sensitive information before sending.
+        </T>
       </Text>
     </View>
   );

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { Platform } from "react-native";
 
 import {
@@ -21,6 +22,7 @@ import { FontFamilyMenuRow } from "../components/FontFamilyMenuRow";
 import { FontSizeSliderRow } from "../components/FontSizeSliderRow";
 
 export function CodeAppearanceSection() {
+  const gt = useGT();
   const { isReady, appearance, setCodeFontId, setCodeFontSize, setCodeWordBreak } =
     useAppearancePreferences();
   const custom = appearance.isCodeFontSizeCustom;
@@ -30,7 +32,7 @@ export function CodeAppearanceSection() {
   };
 
   return (
-    <SettingsSection title="Code & Diffs">
+    <SettingsSection title={gt("Code & Diffs")}>
       <CodeAppearancePreview
         fontFamily={appearance.codeFontFamily ?? defaultCodeFontFamily(Platform.OS)}
         fontSize={appearance.codeFontSize}
@@ -39,7 +41,7 @@ export function CodeAppearanceSection() {
       <AppearancePreviewSeparator />
       <FontFamilyMenuRow
         disabled={!isReady}
-        label="Font"
+        label={gt("Font", { $context: "settings row for font family" })}
         defaultLabel={defaultFontLabel("code", Platform.OS)}
         choices={codeFontChoices(Platform.OS)}
         selectedId={appearance.codeFontId}
@@ -48,7 +50,7 @@ export function CodeAppearanceSection() {
       <SettingsSwitchRow
         disabled={!isReady}
         icon="chevron.left.forwardslash.chevron.right"
-        label="Custom font size"
+        label={gt("Custom font size")}
         onValueChange={handleToggleCustom}
         value={custom}
       />
@@ -56,19 +58,19 @@ export function CodeAppearanceSection() {
         <FontSizeSliderRow
           disabled={!isReady}
           icon="textformat.size"
-          label="Font size"
+          label={gt("Font size")}
           max={MAX_CODE_FONT_SIZE}
           min={MIN_CODE_FONT_SIZE}
           onChange={setCodeFontSize}
           step={CODE_FONT_SIZE_STEP}
           value={appearance.codeFontSize}
-          valueLabel={`${appearance.codeFontSize} pt`}
+          valueLabel={gt("{size} pt", { size: appearance.codeFontSize })}
         />
       ) : null}
       <SettingsSwitchRow
         disabled={!isReady}
         icon="text.word.spacing"
-        label="Word break"
+        label={gt("Word break")}
         onValueChange={setCodeWordBreak}
         value={appearance.codeWordBreak}
       />

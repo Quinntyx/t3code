@@ -6,8 +6,9 @@
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));
-/* The Ambient shimmer setting, written onto the root by appInit. */
+/* Active theme effects, written onto the root by the theme effect controller. */
 @custom-variant ambient-shimmer (&:is([data-ambient-shimmer] *));
+@custom-variant floating-panels (&:is([data-floating-panels] *));
 
 /* Secondary hovering pointers reveal sidebar actions on touch-primary devices. */
 @custom-variant any-hover {
@@ -112,7 +113,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    * Compact UI geometry. Keep these values semantic so sidebar, palette,
    * tooltip, and toolbar controls cannot quietly drift apart.
    */
-  --control-radius: var(--radius);
+  --control-radius: 0.5rem;
   --sidebar-content-inset: 0.5rem;
   --sidebar-control-gap: 0.5rem;
   --sidebar-icon-color: color-mix(
@@ -132,26 +133,20 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --glass-opacity: 80%;
   --glass-alpha: 0.8;
   --glass-saturation: 1.14;
-  /* One drop shadow for every floating surface: composer, details card, floating browser, and
-     floating panels. Dark mode needs a deeper shadow to read against a dark canvas. */
+  /* Shared drop shadow for floating glass surfaces; dark mode deepens it against a dark canvas. */
   --app-float-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 32px -8px rgb(0 0 0 / 12%);
   /* A shaped composer casts one shadow from its whole body, so its colour lives here. */
   --composer-glass-shadow-color: rgb(0 0 0 / 12%);
   --floating-panel-gap: 0.5rem;
-  /* Cards share the menus' and details card's glass corner. The composer stays rounder: its
-     corner follows its send button, and a matching card corner would crowd the sidebar's rows. */
   --floating-panel-radius: var(--radius-glass);
-  /* Titlebar room for a details card risen to the top edge. */
   --floating-details-clearance: calc(
     var(--thread-details-panel-width) + var(--floating-panel-gap) * 2
   );
-  /* Round control bubbles sit in the bottom corners and rise onto the terminal drawer. A
-     maximized right panel, which spans the full height, stops short of them instead. */
   --floating-bubble-size: 2.25rem;
   --floating-bubble-clearance: calc(var(--floating-bubble-size) + var(--floating-panel-gap) * 2);
-  --floating-bubble-inset-start: var(--floating-panel-gap);
-  --floating-bubble-inset-end: var(--floating-panel-gap);
-  --sidebar-row-radius: calc(var(--radius) + 4px);
+  --floating-bubble-inset-start: 0px;
+  --floating-bubble-inset-end: 0px;
+  --sidebar-row-radius: var(--radius-lg);
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
@@ -177,13 +172,19 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @variant dark {
     --appearance-contrast-target: white;
-    --app-scrollbar-thumb: rgb(255 255 255 / 8%);
-    --app-scrollbar-thumb-hover: rgb(255 255 255 / 12%);
+    /* Keeps the idle thumb above 3:1 (WCAG 1.4.11) on #000; 35% renders as gray 89, just under. */
+    --app-scrollbar-thumb: rgb(255 255 255 / 36%);
+    --app-scrollbar-thumb-hover: rgb(255 255 255 / 45%);
     --glass-blur: 16px;
     --glass-saturation: 1.08;
     --app-float-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 10px 36px -10px rgb(0 0 0 / 50%);
     --composer-glass-shadow-color: rgb(0 0 0 / 50%);
   }
+}
+
+:root[data-floating-panels] {
+  --floating-bubble-inset-start: var(--floating-panel-gap);
+  --floating-bubble-inset-end: var(--floating-panel-gap);
 }
 
 .wco {
@@ -230,6 +231,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* The composer's elevation: a soft drop pulled in under the surface, shared
      by the composer, its context strip and attached banners. */
+  --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
+  --shadow-composer-dark: 0 14px 32px -18px rgb(0 0 0 / 75%);
   --shadow-float: var(--app-float-shadow);
   /* Overlap the lower toolbar backdrop by one pixel to cover the composer seam. */
   --spacing-composer-seam: calc(var(--spacing) * 4 - 1px);
@@ -250,7 +253,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     linear-gradient(
       to top,
       transparent 0 var(--chat-composer-attachment-overlap),
-      rgb(0 0 0 / 18%) var(--chat-composer-attachment-overlap),
+      var(--chat-composer-attached-seam, rgb(0 0 0 / 18%)) var(--chat-composer-attachment-overlap),
       transparent calc(var(--chat-composer-attachment-overlap) + 10px)
     );
   --color-zinc-25: oklch(99.2% 0 0);
@@ -291,8 +294,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--contrast-accent-foreground);
   --color-accent: var(--accent);
-  /* Row highlights inside glass never cover the backdrop more than the glass does; themes
-     whose accent is already a faint overlay keep it. */
+  /* Row highlights inside glass never cover the backdrop more than the glass does. */
   --color-accent-glass: rgb(from var(--accent) r g b / min(alpha, var(--glass-alpha)));
   --color-muted-foreground: var(--contrast-muted-foreground);
   --color-muted: var(--muted);
@@ -335,8 +337,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
-  /* Half a standard 1.75rem row, so a row never clamps it; glass lists pad rows 0.375rem
-     inside a 1px border, which puts the outer corner on the same center. */
   --radius-glass-item: 0.875rem;
   --radius-glass: calc(var(--radius-glass-item) + 0.375rem + 1px);
   --radius-glass-list-item: calc(var(--radius-glass) - 0.5rem);
@@ -527,7 +527,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility dropdown-glass {
-  background: color-mix(in srgb, var(--popover) var(--glass-opacity), transparent);
+  background: color-mix(
+    in srgb,
+    var(--popover) 18%,
+    color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
+  );
   background-image: var(--glass-liquid-glare, none);
   background-origin: border-box;
   background-size: 100% 100%;
@@ -547,8 +551,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
-/* The glass layer behind a floating panel's content. A separate element rather than the card
-   itself: liquid glass adopts it when it mounts, so toggling the setting never remounts panels. */
+/* The glass layer behind a floating panel's content so toggling liquid glass never remounts panels. */
 @utility panel-glass {
   position: absolute;
   inset: 0;
@@ -583,7 +586,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
-/* One frost definition for every composer surface: the host, its pseudo-element, or the strip. */
+/* Shared frost definition for composer surfaces (host, pseudo-element, or context strip). */
 @utility composer-frost {
   -webkit-backdrop-filter: var(
     --glass-liquid-filter,
@@ -595,7 +598,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   );
 }
 
-/* The liquid glass rim light, for glass drawn outside the glass utilities above. */
+/* Rim light for glass surfaces drawn outside the standard glass utilities. */
 @utility glass-glare {
   background-image: var(--glass-liquid-glare, none);
   background-origin: border-box;
@@ -609,12 +612,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   backdrop-filter: var(--glass-liquid-filter);
 }
 
-/* One frost for the composer card and its context strip. Each backdrop blur stops at its own
-   edge, so two of them leave a hard seam where text crosses the joint. The clip's strip subpath
-   starts inside the card, so no clip edge lands on the joint either. The strip keeps its own frost
-   wherever the card's leaves the shell (shaped glass, attached banners, model transition). */
+/* Single frost pass for the composer card and its context strip to eliminate a seam at the joint. */
 @supports (clip-path: shape(from 0 0, line to 0 0)) {
-  [data-slot="composer-shell"][data-context-row]:not(
+  html[data-liquid-glass-effect]
+    [data-slot="composer-shell"][data-context-row]:not(
       [data-liquid-glass-shaped],
       [data-model-strip-transition],
       :has([data-composer-banner-surface="attached"])
@@ -655,8 +656,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
-/* Glass shaped from several parts (liquid-glass/engine.ts) owns its box and outline, replacing
-   the host's radius and clip; ::after draws the host's border along that outline. */
+/* Multi-part shaped glass owns its box and outline; ::after draws the border along that outline. */
 [data-liquid-glass-shaped]::before,
 [data-liquid-glass-shaped]::after {
   inset: var(--glass-liquid-top) var(--glass-liquid-right) var(--glass-liquid-bottom)
@@ -678,8 +678,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   mask: var(--glass-liquid-outline) 0 0 / 100% 100% no-repeat;
 }
 
-/* A shaped body casts one shadow from its whole silhouette (card, drawers, context strip),
-   instead of each part casting a clipped copy of its own box. */
+/* A shaped composer casts one shadow from its combined silhouette. */
 [data-slot="composer-glass-shadow"] {
   display: none;
 }
@@ -694,7 +693,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     calc(var(--glass-liquid-bottom) - var(--glass-liquid-shadow-margin, 0px))
     calc(var(--glass-liquid-left) - var(--glass-liquid-shadow-margin, 0px));
   background: var(--composer-glass-shadow-color);
-  /* Transparent until the engine hands over the blurred silhouette. */
   mask: var(--glass-liquid-shadow, linear-gradient(transparent, transparent)) 0 0 / 100% 100%
     no-repeat;
 }
@@ -911,7 +909,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility live-activity-focus-aligned {
   width: calc(100% - var(--live-activity-focus-width) - var(--live-activity-focus-width));
-  margin-left: var(--live-activity-focus-width);
+  margin-inline-start: var(--live-activity-focus-width);
 }
 
 @property --assistant-citation-highlight-opacity {
@@ -1367,7 +1365,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 :root {
   color-scheme: light;
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   --background: var(--color-zinc-25);
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
@@ -1729,8 +1727,7 @@ html[data-theme-id][data-ambient-shimmer] [data-chat-header] {
   background-color: transparent;
 }
 
-/* The sidebar's bubble sits just past the open card's corner, or in the window corner once the
-   card slides away, lined up with the terminal drawer's edge either way. */
+/* Position the sidebar bubble past the expanded floating card or in the window corner when collapsed. */
 [data-slot="sidebar-wrapper"] {
   --floating-sidebar-bubble-left: var(--floating-panel-gap);
 }
@@ -1738,8 +1735,7 @@ html[data-theme-id][data-ambient-shimmer] [data-chat-header] {
   --floating-sidebar-bubble-left: calc(var(--sidebar-width) + var(--floating-panel-gap));
 }
 
-/* Both corner bubbles rest on the open terminal drawer, following its open animation and resize.
-   With no drawer, anchor() falls back to the window's bottom edge. */
+/* Corner bubbles rest on the open terminal drawer and fall back to the bottom edge when closed. */
 [data-floating-terminal-dock] {
   anchor-name: --floating-terminal;
 }
@@ -2220,13 +2216,11 @@ code {
   list-style-type: disc;
 }
 
-/* --list-gutter defaults to the same 1.25rem as .chat-markdown ul, but
-   ChatMarkdown's `ol` renderer widens it (via inline style) for lists whose
-   widest marker has multiple characters so it isn't clipped by list-style-position:
-   outside painting the marker past the padding box. Reset it here too so a
-   nested ol without its own widened marker doesn't inherit the outer one. */
+/* Outside markers paint past the padding box, so the gutter must fit `0. `,
+   measured per font in appearanceFonts. ChatMarkdown widens it inline for
+   multi-digit markers; setting it here stops a nested ol inheriting that. */
 :is(.chat-markdown, .composer-tiptap) ol {
-  --list-gutter: 1.25rem;
+  --list-gutter: max(1.25rem, var(--list-marker-sans, 0px));
   padding-inline-start: var(--list-gutter, 1.25rem);
   list-style-type: decimal;
 }
@@ -2299,6 +2293,18 @@ code {
   list-style-type: lower-roman;
 }
 
+.chat-markdown.user-message-markdown ol {
+  list-style-type: decimal;
+}
+
+/* Spaces a user typed at the start of a line, which Markdown would otherwise drop. pre-wrap, not
+   pre, so an indent wider than the bubble wraps instead of pushing the line's text out of view.
+   Not selectable, so a selection, a drag or a copy carries the text as it did before. */
+.chat-markdown.user-message-markdown [data-leading-whitespace] {
+  white-space: pre-wrap;
+  user-select: none;
+}
+
 .chat-markdown li + li {
   margin-top: 0.25rem;
 }
@@ -2322,6 +2328,25 @@ code {
 
 .chat-markdown a {
   text-decoration: none;
+}
+
+/* Triple-click selection stops at block-level boxes, flex items included, so file chips in
+   prose stay inline-level down to the icon and label. */
+.chat-markdown-file-link {
+  display: inline-block;
+  overflow-x: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-markdown-file-link > :is(svg, img) {
+  display: inline;
+  margin-inline-end: 0.2em;
+  vertical-align: -0.125em;
+}
+
+.chat-markdown-file-link > [data-slot="context-chip-label"] {
+  display: inline;
 }
 
 /* File links and context chips own their color and focus ring. */
@@ -2423,6 +2448,11 @@ code {
   font-size: 0.85em;
 }
 
+.chat-markdown.user-message-markdown :not(pre) > code {
+  background: color-mix(in srgb, var(--contrast-message-foreground) 10%, transparent);
+  color: var(--contrast-message-foreground);
+}
+
 .chat-markdown strong {
   font-weight: 700;
 }
@@ -2485,6 +2515,18 @@ code {
   & :is(pre, pre *) {
     color: inherit !important;
   }
+}
+
+/* Sent messages color prose with the message foreground, which is not chosen
+   for the code surface, so their plain-text fences keep the global foreground. */
+.chat-markdown.user-message-markdown
+  .chat-markdown-codeblock:is(
+    [data-language="text" i],
+    [data-language="txt" i],
+    [data-language="plain" i],
+    [data-language="plaintext" i]
+  ) {
+  color: var(--contrast-foreground) !important;
 }
 
 /* Paragraphs and code blocks arrive in chunks while a response streams. Fade
@@ -2727,6 +2769,12 @@ code {
   position: relative;
 }
 
+/* Tiptap's injected base CSS disables ligatures; match sent messages. */
+.composer-tiptap.ProseMirror {
+  font-variant-ligatures: normal;
+  font-feature-settings: normal;
+}
+
 .composer-tiptap p {
   margin: 0;
 }
@@ -2827,8 +2875,6 @@ code {
 }
 
 @layer components {
-  /* The lane also clears the floating corner bubbles by one panel gap, the same gap a bubble
-     keeps from the card beside it. */
   .chat-composer-lane {
     padding-inline-start: calc(
       env(safe-area-inset-left) + max(0.75rem, var(--floating-bubble-inset-start)) +
@@ -2875,11 +2921,19 @@ code {
 }
 
 /* A workspace area with no control of its own takes F6 focus itself; keep that visible.
-   workspaceFocus.ts marks those, since :focus-visible also matches a clicked area after a key press. */
+   workspaceFocus.ts marks those, since :focus-visible also matches a clicked area after a key press.
+   The conversation's timeline takes it instead, and its top fade mask would hide its own ring. */
 [data-workspace-area]:focus-visible {
   outline: none;
 }
-[data-workspace-keyboard-focus]:focus {
+[data-workspace-keyboard-focus]:focus,
+[data-workspace-area="conversation"]:has(
+  .messages-timeline-scroll[data-workspace-keyboard-focus]:focus
+) {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
+}
+
+.messages-timeline-scroll:focus-visible {
+  outline: none;
 }

@@ -14,7 +14,16 @@ const configuration = JSON.stringify({
   tabId: "tab",
   interactive: true,
   background: "#000",
+  reuseNearbyTouchProbe: false,
+  labels: {
+    page: "Browser page",
+    pageInput: "Browser page input",
+    pictureInPictureNotReady: "The page has not shown yet. Try again in a moment.",
+    pictureInPictureUnavailable: "Picture in picture is unavailable.",
+  },
 });
+
+const STOPPED_DETAIL = "Browser viewer stopped unexpectedly.";
 
 const statuses = (messages: ReadonlyArray<PreviewStreamMessage>) =>
   messages.flatMap((message) => (message.type === "status" ? [message.status] : []));
@@ -62,7 +71,7 @@ describe("preview stream document", () => {
   it("runs the production bundle before it seeds mute and starts the viewer", async () => {
     for (const muted of [true, false]) {
       const { messages, failure } = runDocument(
-        previewStreamDocument(configuration, await script, muted),
+        previewStreamDocument(configuration, await script, STOPPED_DETAIL, muted),
       );
       expect(failure).toBeNull();
       expect(statuses(messages)).toEqual(["connecting"]);
@@ -84,6 +93,7 @@ describe("preview stream document", () => {
       previewStreamDocument(
         configuration,
         `window.T3PreviewStream.muted = false;\n${await script}`,
+        STOPPED_DETAIL,
       ),
     );
     expect(failure).toContain("setting 'muted'");

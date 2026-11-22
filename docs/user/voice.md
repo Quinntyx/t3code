@@ -7,11 +7,15 @@ the app. To dictate text into a draft instead, see [Voice input](./voice-input.m
 
 ## Set up
 
-Add a Gemini API key under **Voice panel** in **Settings → Voice**. The key stays on this
-device, not on your T3 server: desktop keeps it in the operating system keyring and refuses
-to store it unencrypted, and web keeps it in browser storage, where other scripts on the
-same origin can read it. Conversation and tool results go directly to Gemini, and Gemini
-API charges may apply. Remove the key to turn Voice off.
+Add a **Device Gemini API key** under **Voice panel** in **Settings → Voice**. The key stays on
+this device, not on your T3 server: desktop keeps it in the operating system keyring and refuses
+to store it unencrypted, and web keeps it in browser storage, where other scripts on the same
+origin can read it. Conversation and tool results go directly to Gemini, and Gemini API charges
+may apply. Remove the key to turn Voice off.
+
+To change the Gemini Live model used on the next connection, set **Live model** in the same
+section; clear it to restore the default native-audio model. Customize Voice shortcuts under
+**Settings → Keybindings** (`voice.toggle`, `voice.connect`, `voice.mute`, `voice.disconnect`).
 
 ## Use
 
@@ -20,8 +24,8 @@ Voice belongs to the window rather than to one thread: its tab appears in every 
 right panel while it is open, and switching threads keeps the same conversation and
 connection. Selecting another tab shows that thread's own surface without closing Voice;
 selecting Voice again returns to it. Typing works without a microphone; opening Voice never
-requests microphone access, only **Talk** does, using the microphone chosen under **Input**
-on the same settings page. Mute stops capture, stop speaking discards the current spoken
+requests microphone access, only **Talk** does, using the preferred microphone under
+**Settings → Voice → Input**. Mute stops capture, stop speaking discards the current spoken
 reply, and closing the Voice tab ends the connection. Reconnecting is always explicit.
 
 ## Notifications from threads

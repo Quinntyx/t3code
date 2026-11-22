@@ -7,6 +7,8 @@ import type {
   LiveServerMessage,
   Session,
 } from "@google/genai";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 import { notificationScheduling, type VoiceNotificationFeed } from "./notifications.ts";
 
 export interface VoiceKeyStore {
@@ -64,7 +66,9 @@ export function createVoiceSession(options: {
   readonly onAudio?: (base64: string) => void;
   readonly onInterrupt?: () => void;
   readonly onDisconnect?: () => void;
+  readonly resolve?: MFunctionType;
 }) {
+  const resolve = options.resolve ?? mFallback;
   let state: VoiceSessionState = {
     open: false,
     status: "disabled",
@@ -133,6 +137,7 @@ export function createVoiceSession(options: {
           role: "user",
           parts: [
             {
+              // oxlint-disable-next-line t3code/no-untranslated-copy -- prompt sent to the voice model
               text: "Call monitor_threads now to receive client-visible thread notifications. Keep that non-blocking call open.",
             },
           ],
@@ -177,7 +182,7 @@ export function createVoiceSession(options: {
     } catch {
       update({
         status: "error",
-        error: "Could not forward thread notifications. Reconnect to retry.",
+        error: resolve(msg("Could not forward thread notifications. Reconnect to retry.")),
       });
     }
   };
@@ -270,6 +275,7 @@ export function createVoiceSession(options: {
                   name,
                   response: {
                     error:
+                      // oxlint-disable-next-line t3code/no-untranslated-copy -- tool error sent to the voice model
                       "The client could not execute this tool. Check visibility, permissions and input.",
                   },
                 },
@@ -318,7 +324,7 @@ export function createVoiceSession(options: {
             options.onDisconnect?.();
             update({
               status: "error",
-              error: "Gemini connection failed. Check your device key and reconnect.",
+              error: resolve(msg("Gemini connection failed. Check your device key and reconnect.")),
             });
           },
           onclose: () => {
@@ -338,6 +344,7 @@ export function createVoiceSession(options: {
               functionDeclarations: [
                 {
                   name: "monitor_threads",
+                  // oxlint-disable-next-line t3code/no-untranslated-copy -- tool description sent to the voice model
                   description: "Receive visible thread notifications until disconnected.",
                   behavior: "NON_BLOCKING" as Behavior,
                 },
@@ -364,7 +371,7 @@ export function createVoiceSession(options: {
           if (state.status !== "disabled")
             update({
               status: "error",
-              error: "Could not connect to Gemini. Check the device key and retry.",
+              error: resolve(msg("Could not connect to Gemini. Check the device key and retry.")),
             });
         }
         throw error;
@@ -392,8 +399,11 @@ export function createVoiceSession(options: {
         if (revision === openRevision)
           update({
             status: "disabled",
-            error:
-              "Could not read the device key. Check browser storage or unlock the desktop keyring.",
+            error: resolve(
+              msg(
+                "Could not read the device key. Check browser storage or unlock the desktop keyring.",
+              ),
+            ),
           });
         return;
       }
@@ -439,7 +449,15 @@ export function createVoiceSession(options: {
       options.onInterrupt?.();
       connection?.sendClientContent({
         turns: [
-          { role: "user", parts: [{ text: "Stop speaking and wait for my next instruction." }] },
+          {
+            role: "user",
+            parts: [
+              {
+                // oxlint-disable-next-line t3code/no-untranslated-copy -- prompt sent to the voice model
+                text: "Stop speaking and wait for my next instruction.",
+              },
+            ],
+          },
         ],
         turnComplete: true,
       });

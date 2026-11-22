@@ -13,14 +13,15 @@ it("reissues imported context until a V2 run completes", () => {
   assert.isFalse(
     shouldPrepareLegacyImportHandoff({
       historyOrigin: "v1_import",
-      hasCompletedRun: true,
+      hasCompletedRun: false,
       legacyImportItemCount: 2,
+      hasNativeHistory: true,
     }),
   );
-  assert.isTrue(
+  assert.isFalse(
     shouldPrepareLegacyImportHandoff({
-      historyOrigin: "machine_handoff",
-      hasCompletedRun: false,
+      historyOrigin: "v1_import",
+      hasCompletedRun: true,
       legacyImportItemCount: 2,
     }),
   );

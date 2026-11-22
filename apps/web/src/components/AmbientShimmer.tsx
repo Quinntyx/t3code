@@ -2,13 +2,13 @@ import { useEffect, useRef } from "react";
 
 import { useAmbientShimmerProminent } from "~/ambient-shimmer/prominence";
 import { startAmbientShimmer } from "~/ambient-shimmer/renderer";
-import { useClientSettings } from "~/hooks/useSettings";
+import { useThemeEffects } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 
 /** The experimental shimmer behind the whole app: soft on new threads, fainter elsewhere. */
 export function AmbientShimmer() {
-  const enabled = useClientSettings((settings) => settings.ambientShimmerEnabled);
-  return enabled ? <AmbientShimmerCanvas /> : null;
+  const { ambientShimmer } = useThemeEffects();
+  return ambientShimmer.enabled ? <AmbientShimmerCanvas /> : null;
 }
 
 function AmbientShimmerCanvas() {

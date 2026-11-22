@@ -1,4 +1,5 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { useGT, useMessages } from "gt-react-native";
 
 import { AppBar } from "../../components/ui/AppBar";
 import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
@@ -34,25 +35,27 @@ export function ThreadHeader(props: {
   readonly onOpenFilesInspector: () => void;
   readonly onOpenDetailsInspector: () => void;
 }) {
-  const goBack = useWorkspaceBackNavigation("threads");
+  const gt = useGT();
+  const m = useMessages();
+  const goBack = useWorkspaceBackNavigation();
   const { layout, toggleAuxiliaryPane, startNewTask } = useAdaptiveWorkspaceLayout();
   const { panes } = useWorkspacePaneState();
   const details = useThreadDetailsDrawer();
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
-  const terminalMenu = threadTerminalMenu(props.gitControls);
+  const terminalMenu = threadTerminalMenu(props.gitControls, m);
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
   const detailsVisible = props.inspectorMode === "details" && panes.auxiliaryPaneVisible;
   // Without columns, the details drawer holds files, git and terminals behind one button.
   // With them, the same details are an inspector pane beside the thread's own actions.
   const detailsAction: AppBarAction = layout.usesSplitView
     ? {
-        accessibilityLabel: detailsVisible ? "Close thread details" : "Open thread details",
+        accessibilityLabel: detailsVisible ? gt("Close thread details") : gt("Open thread details"),
         icon: "sidebar.right",
         selected: detailsVisible,
         onPress: detailsVisible ? toggleAuxiliaryPane : props.onOpenDetailsInspector,
       }
     : {
-        accessibilityLabel: "Open thread details",
+        accessibilityLabel: gt("Open thread details"),
         icon: "sidebar.right",
         selected: details.open,
         onPress: details.openDrawer,
@@ -61,7 +64,7 @@ export function ThreadHeader(props: {
     layout.usesSplitView && props.cwd !== null
       ? [
           {
-            accessibilityLabel: filesVisible ? "Close files" : "Open files",
+            accessibilityLabel: filesVisible ? gt("Close files") : gt("Open files"),
             icon: "folder",
             selected: filesVisible,
             disabled: !props.gitControls.canOpenFiles,
@@ -91,7 +94,7 @@ export function ThreadHeader(props: {
           backInSplitView={
             props.onReturnToThread
               ? {
-                  accessibilityLabel: "Return to chat",
+                  accessibilityLabel: gt("Return to chat"),
                   icon: "chevron.left",
                   onPress: props.onReturnToThread,
                 }

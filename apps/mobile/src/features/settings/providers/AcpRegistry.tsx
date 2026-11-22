@@ -28,6 +28,7 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
+import { T, useGT } from "gt-react-native";
 import { useLayoutEffect, useRef, useState } from "react";
 import { Linking, View, type TextInputInstance } from "react-native";
 
@@ -39,6 +40,7 @@ import { ControlPill } from "../../../components/ui/ControlPill";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { Menu } from "../../../components/ui/Menu";
 import { SearchField } from "../../../components/ui/SearchField";
+import { m } from "../../../i18n/messages";
 import { useProjects } from "../../../state/entities";
 import { useDebouncedValue } from "../../../state/queries";
 import { useEnvironmentQuery } from "../../../state/query";
@@ -56,6 +58,7 @@ export function AcpRegistryPicker(props: {
   readonly onManualConfiguration: () => void;
   readonly onLocalConfiguration: () => void;
 }) {
+  const gt = useGT();
   const inputRef = useRef<TextInputInstance | null>(null);
   const canManage = useEnvironmentScope(props.environmentId, AuthProvidersManageScope);
   const [query, setQuery] = useState("");
@@ -88,7 +91,7 @@ export function AcpRegistryPicker(props: {
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
-      setPrepareError(acpRegistryPrepareErrorMessage(squashAtomCommandFailure(result)));
+      setPrepareError(acpRegistryPrepareErrorMessage(squashAtomCommandFailure(result), m));
     }
   };
 
@@ -104,9 +107,9 @@ export function AcpRegistryPicker(props: {
           <SearchField
             inputRef={inputRef}
             autoFocus={false}
-            accessibilityLabel="Search ACP Registry"
-            clearAccessibilityLabel="Clear search"
-            placeholder="Search agents"
+            accessibilityLabel={gt("Search ACP Registry")}
+            clearAccessibilityLabel={gt("Clear search")}
+            placeholder={gt("Search agents")}
             value={query}
             onChangeText={(text) => {
               setPrepareError(null);
@@ -131,17 +134,17 @@ export function AcpRegistryPicker(props: {
             <View className="min-h-20 flex-row items-center justify-center gap-2 border-t border-border-subtle px-4">
               <AppActivityIndicator colorClassName="accent-icon" />
               <Text textRole="footnote" className="text-foreground-muted">
-                Searching the registry…
+                <T>Searching the registry…</T>
               </Text>
             </View>
           ) : null
         ) : results.length === 0 ? (
           <View className="min-h-24 items-center justify-center gap-1 border-t border-border-subtle px-4 py-4">
             <Text textRole="body" className="text-foreground">
-              No compatible agents found
+              <T>No compatible agents found</T>
             </Text>
             <Text textRole="footnote" className="text-foreground-muted">
-              Try a broader search.
+              <T>Try a broader search.</T>
             </Text>
           </View>
         ) : (
@@ -157,17 +160,21 @@ export function AcpRegistryPicker(props: {
           ))
         )}
       </SettingsSection>
-      <SettingsSection footer="Not listed? Enter an official registry ID, or run an ACP executable already installed on this device.">
+      <SettingsSection
+        footer={gt(
+          "Not listed? Enter an official registry ID, or run an ACP executable already installed on this device.",
+        )}
+      >
         <ListActionRow
           icon="pencil"
-          label="Enter registry ID manually"
+          label={gt("Enter registry ID manually")}
           disabled={busy}
           onPress={props.onManualConfiguration}
         />
         <View className="border-t border-border-subtle">
           <ListActionRow
             icon="terminal"
-            label="Local ACP command"
+            label={gt("Local ACP command")}
             disabled={busy}
             onPress={props.onLocalConfiguration}
           />
@@ -184,9 +191,14 @@ function AcpRegistryAgentRow(props: {
   readonly preparing: boolean;
   readonly onAdd: () => void;
 }) {
+  const gt = useGT();
   const { agent } = props;
   const aboutUrl = agent.website || agent.repository;
-  const progressLabel = agent.distribution === "binary" ? "Downloading" : "Preparing";
+  const progressLabel = agent.distribution === "binary" ? gt("Downloading") : gt("Preparing");
+  const progressAccessibilityLabel =
+    agent.distribution === "binary"
+      ? gt("Downloading {name}", { name: agent.name })
+      : gt("Preparing {name}", { name: agent.name });
   return (
     <View className="min-h-16 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
       <View className="size-9 items-center justify-center rounded-xl bg-subtle">
@@ -205,14 +217,14 @@ function AcpRegistryAgentRow(props: {
       {aboutUrl ? (
         <ControlPill
           icon="arrow.up.right"
-          accessibilityLabel={`About ${agent.name}`}
+          accessibilityLabel={gt("About {name}", { name: agent.name })}
           onPress={() => void Linking.openURL(aboutUrl).catch(() => undefined)}
         />
       ) : null}
       {props.preparing ? (
         <View
           accessible
-          accessibilityLabel={`${progressLabel} ${agent.name}`}
+          accessibilityLabel={progressAccessibilityLabel}
           className="flex-row items-center gap-1.5"
         >
           <AppActivityIndicator colorClassName="accent-icon" />
@@ -222,17 +234,17 @@ function AcpRegistryAgentRow(props: {
         </View>
       ) : props.alreadyAdded ? (
         <Text
-          accessibilityLabel={`${agent.name} already added`}
+          accessibilityLabel={gt("{name} already added", { name: agent.name })}
           textRole="footnote"
           className="text-foreground-muted"
         >
-          Added
+          <T>Added</T>
         </Text>
       ) : (
         <ControlPill
           variant="primary"
-          label="Add"
-          accessibilityLabel={`Add ${agent.name}`}
+          label={gt("Add", { $context: "verb, adds an agent" })}
+          accessibilityLabel={gt("Add {name}", { name: agent.name })}
           disabled={!props.canAdd}
           onPress={props.onAdd}
         />
@@ -247,6 +259,7 @@ export function AcpSessionsSection(props: {
   readonly provider: ServerProvider;
   readonly readOnly: boolean;
 }) {
+  const gt = useGT();
   const { environmentId, instanceId, provider } = props;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
@@ -328,7 +341,11 @@ export function AcpSessionsSection(props: {
       setNextCursor(result.value.nextCursor);
       return;
     }
-    reportCommandFailure(result, "Could not list ACP sessions", "The ACP operation failed.");
+    reportCommandFailure(
+      result,
+      gt("Could not list ACP sessions"),
+      gt("The ACP operation failed."),
+    );
   };
 
   const importNativeSession = async (session: AcpRegistrySession) => {
@@ -362,7 +379,11 @@ export function AcpSessionsSection(props: {
       );
       return;
     }
-    reportCommandFailure(result, "Could not import ACP session", "The ACP operation failed.");
+    reportCommandFailure(
+      result,
+      gt("Could not import ACP session"),
+      gt("The ACP operation failed."),
+    );
   };
 
   const deleteNativeSession = (session: AcpRegistrySession) => {
@@ -370,9 +391,11 @@ export function AcpSessionsSection(props: {
     if (projectId === null || deletingSessionId !== null || session.importedThreadId !== null)
       return;
     Dialog.confirm({
-      title: "Delete session?",
-      message: `Permanently deletes the native ACP session "${session.title ?? session.sessionId}".`,
-      confirmText: "Delete",
+      title: gt("Delete session?"),
+      message: gt('Permanently deletes the native ACP session "{session}".', {
+        session: session.title ?? session.sessionId,
+      }),
+      confirmText: gt("Delete", { $context: "verb, deletes a session" }),
       destructive: true,
       onConfirm: () => {
         if (
@@ -393,7 +416,11 @@ export function AcpSessionsSection(props: {
             );
             return;
           }
-          reportCommandFailure(result, "Could not delete ACP session", "The ACP operation failed.");
+          reportCommandFailure(
+            result,
+            gt("Could not delete ACP session"),
+            gt("The ACP operation failed."),
+          );
         });
       },
     });
@@ -413,7 +440,11 @@ export function AcpSessionsSection(props: {
       );
       return;
     }
-    reportCommandFailure(result, "Could not list ACP providers", "The ACP operation failed.");
+    reportCommandFailure(
+      result,
+      gt("Could not list ACP providers"),
+      gt("The ACP operation failed."),
+    );
   };
 
   const saveProvider = async (entry: AcpRegistryConfigurableProvider) => {
@@ -427,9 +458,9 @@ export function AcpSessionsSection(props: {
       return;
     const draft = drafts[entry.providerId] ?? initialAcpProviderDraft(entry);
     if (draft.apiType.length === 0 || draft.baseUrl.length === 0) return;
-    const parsed = parseProviderHeaders(draft.headers);
+    const parsed = parseProviderHeaders(draft.headers, m);
     if (!parsed.ok) {
-      Dialog.alert("Invalid provider headers", parsed.error);
+      Dialog.alert(gt("Invalid provider headers"), parsed.error);
       return;
     }
     setSavingProviderId(entry.providerId);
@@ -450,7 +481,11 @@ export function AcpSessionsSection(props: {
       await loadProviders(entry.providerId);
       return;
     }
-    reportCommandFailure(result, "Could not configure ACP provider", "The ACP operation failed.");
+    reportCommandFailure(
+      result,
+      gt("Could not configure ACP provider"),
+      gt("The ACP operation failed."),
+    );
   };
 
   const disableAgentProvider = (entry: AcpRegistryConfigurableProvider) => {
@@ -458,9 +493,9 @@ export function AcpSessionsSection(props: {
     if (projectId === null || savingProviderId !== null || loadingProviders || entry.required)
       return;
     Dialog.confirm({
-      title: `Disable ${entry.providerId}?`,
-      message: "The agent stops routing requests through this provider.",
-      confirmText: "Disable",
+      title: gt("Disable {provider}?", { provider: entry.providerId }),
+      message: gt("The agent stops routing requests through this provider."),
+      confirmText: gt("Disable"),
       destructive: true,
       onConfirm: () => {
         if (
@@ -481,8 +516,8 @@ export function AcpSessionsSection(props: {
           }
           reportCommandFailure(
             result,
-            "Could not disable ACP provider",
-            "The ACP operation failed.",
+            gt("Could not disable ACP provider"),
+            gt("The ACP operation failed."),
           );
         });
       },
@@ -491,9 +526,9 @@ export function AcpSessionsSection(props: {
 
   const logoutAgent = () => {
     Dialog.confirm({
-      title: "Log out of this agent?",
-      message: "Signs the ACP agent out on this device. Imported threads are kept.",
-      confirmText: "Log out",
+      title: gt("Log out of this agent?"),
+      message: gt("Signs the ACP agent out on this device. Imported threads are kept."),
+      confirmText: gt("Log out"),
       destructive: true,
       onConfirm: () => {
         if (loggingOut || !readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
@@ -507,8 +542,8 @@ export function AcpSessionsSection(props: {
           }
           reportCommandFailure(
             result,
-            "Could not log out of ACP agent",
-            "The ACP operation failed.",
+            gt("Could not log out of ACP agent"),
+            gt("The ACP operation failed."),
           );
         });
       },
@@ -529,12 +564,12 @@ export function AcpSessionsSection(props: {
     <>
       {canList || canLogout ? (
         <SettingsSection
-          title="Native sessions"
+          title={gt("Native sessions")}
           footer={
             canList && projects.length === 0
-              ? "Add a project before importing sessions."
+              ? gt("Add a project before importing sessions.")
               : canList
-                ? "Resume agent-owned conversations as T3 threads."
+                ? gt("Resume agent-owned conversations as T3 threads.")
                 : undefined
           }
         >
@@ -544,7 +579,7 @@ export function AcpSessionsSection(props: {
               <View className="border-t border-border-subtle">
                 <ListActionRow
                   icon="arrow.clockwise"
-                  label={sessions.length === 0 ? "List sessions" : "Refresh sessions"}
+                  label={sessions.length === 0 ? gt("List sessions") : gt("Refresh sessions")}
                   loading={loading && nextCursor === null}
                   disabled={!canRead || projectId === null}
                   onPress={() => void loadSessions()}
@@ -567,7 +602,7 @@ export function AcpSessionsSection(props: {
                 <View className="border-t border-border-subtle">
                   <ListActionRow
                     icon="chevron.down"
-                    label="Load more"
+                    label={gt("Load more")}
                     loading={loading}
                     disabled={!canRead}
                     onPress={() => void loadSessions(nextCursor)}
@@ -584,7 +619,7 @@ export function AcpSessionsSection(props: {
             >
               <ListActionRow
                 icon="xmark.circle.fill"
-                label="Log out of agent"
+                label={gt("Log out of agent")}
                 tone="danger"
                 loading={loggingOut}
                 disabled={props.readOnly}
@@ -597,8 +632,8 @@ export function AcpSessionsSection(props: {
 
       {canConfigureProviders ? (
         <SettingsSection
-          title="Agent providers"
-          footer="Configure non-secret routing. Headers are write-only."
+          title={gt("Agent providers")}
+          footer={gt("Configure non-secret routing. Headers are write-only.")}
         >
           {!canList && projects.length > 1 ? projectPicker(false) : null}
           <View
@@ -608,7 +643,7 @@ export function AcpSessionsSection(props: {
           >
             <ListActionRow
               icon="arrow.clockwise"
-              label={agentProviders.length === 0 ? "List providers" : "Refresh providers"}
+              label={agentProviders.length === 0 ? gt("List providers") : gt("Refresh providers")}
               loading={loadingProviders}
               disabled={!canRead || savingProviderId !== null || projectId === null}
               onPress={() => void loadProviders()}
@@ -641,6 +676,7 @@ function ProjectPickerRow(props: {
   readonly separated: boolean;
   readonly onSelect: (projectId: ProjectId) => void;
 }) {
+  const gt = useGT();
   const current = props.projects.find((project) => project.id === props.projectId);
   const actions: MenuAction[] = props.projects.map((project) => ({
     id: project.id,
@@ -649,14 +685,16 @@ function ProjectPickerRow(props: {
   }));
   return (
     <FieldBlock
-      label="Project"
+      label={gt("Project")}
       separated={props.separated}
       trailing={
         <Menu
           accessible
           accessibilityRole="button"
-          accessibilityLabel={`Project: ${current?.title ?? "None"}`}
-          title="Project"
+          accessibilityLabel={
+            current ? gt("Project: {project}", { project: current.title }) : gt("Project: None")
+          }
+          title={gt("Project")}
           actions={actions}
           onPressAction={({ nativeEvent }) => {
             if (props.disabled) return;
@@ -664,7 +702,11 @@ function ProjectPickerRow(props: {
             if (next) props.onSelect(next.id);
           }}
         >
-          <ControlPill variant="pill" label={current?.title ?? "None"} disabled={props.disabled} />
+          <ControlPill
+            variant="pill"
+            label={current?.title ?? gt("None", { $context: "no project selected" })}
+            disabled={props.disabled}
+          />
         </Menu>
       }
     />
@@ -681,6 +723,7 @@ function SessionRow(props: {
   readonly onImport: () => void;
   readonly onDelete: () => void;
 }) {
+  const gt = useGT();
   const { session } = props;
   const imported = session.importedThreadId !== null;
   const title = session.title ?? session.sessionId;
@@ -704,13 +747,13 @@ function SessionRow(props: {
         <AppActivityIndicator colorClassName="accent-icon" />
       ) : imported ? (
         <Text textRole="footnote" className="text-foreground-muted">
-          Imported
+          <T>Imported</T>
         </Text>
       ) : (
         <ControlPill
           variant="pill"
-          label="Import"
-          accessibilityLabel={`Import ${title}`}
+          label={gt("Import", { $context: "verb" })}
+          accessibilityLabel={gt("Import {title}", { title })}
           disabled={!props.canImport}
           onPress={props.onImport}
         />
@@ -721,7 +764,7 @@ function SessionRow(props: {
         ) : (
           <ControlPill
             icon="trash"
-            accessibilityLabel={`Delete ${title}`}
+            accessibilityLabel={gt("Delete {title}", { title })}
             disabled={props.deleteDisabled}
             onPress={props.onDelete}
           />
@@ -740,6 +783,7 @@ function AgentProviderEditor(props: {
   readonly onSave: () => void;
   readonly onDisable: () => void;
 }) {
+  const gt = useGT();
   const { entry, draft } = props;
   const protocolActions: MenuAction[] = entry.supported.map((protocol) => ({
     id: protocol,
@@ -754,14 +798,27 @@ function AgentProviderEditor(props: {
             {entry.providerId}
           </Text>
           <Text textRole="footnote" className="text-foreground-muted">
-            {`${entry.current === null ? "Disabled" : "Configured"}${entry.required ? " · Required" : ""}`}
+            {entry.current === null
+              ? entry.required
+                ? gt("Disabled · Required")
+                : gt("Disabled", { $context: "ACP provider status" })
+              : entry.required
+                ? gt("Configured · Required")
+                : gt("Configured")}
           </Text>
         </View>
         <Menu
           accessible
           accessibilityRole="button"
-          accessibilityLabel={`${entry.providerId} protocol: ${draft.apiType || "None"}`}
-          title="Protocol"
+          accessibilityLabel={
+            draft.apiType
+              ? gt("{provider} protocol: {protocol}", {
+                  provider: entry.providerId,
+                  protocol: draft.apiType,
+                })
+              : gt("{provider} protocol: None", { provider: entry.providerId })
+          }
+          title={gt("Protocol")}
           actions={protocolActions}
           onPressAction={({ nativeEvent }) => {
             if (!props.disabled) props.onChange({ ...draft, apiType: nativeEvent.event });
@@ -769,13 +826,13 @@ function AgentProviderEditor(props: {
         >
           <ControlPill
             variant="pill"
-            label={draft.apiType || "Protocol"}
+            label={draft.apiType || gt("Protocol")}
             disabled={props.disabled}
           />
         </Menu>
       </View>
       <AppTextInput
-        accessibilityLabel={`${entry.providerId} base URL`}
+        accessibilityLabel={gt("{provider} base URL", { provider: entry.providerId })}
         value={draft.baseUrl}
         placeholder="https://api.example.com"
         keyboardType="url"
@@ -786,9 +843,13 @@ function AgentProviderEditor(props: {
         onChangeText={(baseUrl) => props.onChange({ ...draft, baseUrl })}
       />
       <AppTextInput
-        accessibilityLabel={`${entry.providerId} write-only headers JSON`}
+        accessibilityLabel={gt("{provider} write-only headers JSON", {
+          provider: entry.providerId,
+        })}
         value={draft.headers}
-        placeholder='Headers JSON, e.g. {"Authorization":"Bearer …"}'
+        placeholder={gt("Headers JSON, e.g. {example}", {
+          example: '{"Authorization":"Bearer …"}',
+        })}
         secureTextEntry
         autoCapitalize="none"
         autoCorrect={false}
@@ -800,16 +861,16 @@ function AgentProviderEditor(props: {
         {!entry.required && entry.current !== null ? (
           <ControlPill
             variant="pill"
-            label="Disable"
-            accessibilityLabel={`Disable ${entry.providerId}`}
+            label={gt("Disable")}
+            accessibilityLabel={gt("Disable {provider}", { provider: entry.providerId })}
             disabled={props.disabled}
             onPress={props.onDisable}
           />
         ) : null}
         <ControlPill
           variant="primary"
-          label={props.saving ? "Saving" : "Save"}
-          accessibilityLabel={`Save ${entry.providerId}`}
+          label={props.saving ? gt("Saving") : gt("Save", { $context: "verb" })}
+          accessibilityLabel={gt("Save {provider}", { provider: entry.providerId })}
           disabled={props.disabled || draft.apiType.length === 0 || draft.baseUrl.length === 0}
           onPress={props.onSave}
         />

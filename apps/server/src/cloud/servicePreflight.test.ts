@@ -33,6 +33,21 @@ it.each([1])("blocks legacy launcher protocol %i with exact recovery steps", (la
   expect(reason).toContain("which -a t3");
 });
 
+// regression: #34502 every installed launcher was protocol 3, so protocol 4 blocked every remote update
+it.each([3, SERVICE_LAUNCHER_PROTOCOL])(
+  "is ready under launcher protocol %i and reports it back",
+  (launcherProtocol) => {
+    // A released server accepts a ready result only when it names that server's own protocol.
+    expect(
+      runServicePreflight({
+        databasePath: "/missing/state.sqlite",
+        launcherProtocol,
+        version: "9.8.7",
+      }),
+    ).toEqual({ status: "ready", version: "9.8.7", launcherProtocol });
+  },
+);
+
 it.layer(NodeServices.layer)("service preflight database", (it) => {
   it.effect("blocks a database that a newer build migrated", () =>
     Effect.gen(function* () {
@@ -51,6 +66,80 @@ it.layer(NodeServices.layer)("service preflight database", (it) => {
 
       expect(preflight().status).toBe("ready");
       expect(databaseMigrationHead(databasePath)).toBe(BUILD_MIGRATION_HEAD);
+
+      db.prepare("UPDATE effect_sql_migrations SET name = ? WHERE migration_id = ?").run(
+        "ForkMigration",
+        BUILD_MIGRATION_HEAD,
+      );
+      const conflict = preflight();
+      expect(conflict.status).toBe("blocked");
+      expect(conflict.status === "blocked" ? conflict.reason : "").toContain("ForkMigration");
+      db.prepare("UPDATE effect_sql_migrations SET name = ? WHERE migration_id = ?").run(
+        migrationManifest.at(-1)![1],
+        BUILD_MIGRATION_HEAD,
+      );
+
+      // Startup reconciles this V2 preview history, so it must not block an update.
+      const preview = path.join(path.dirname(databasePath), "preview.sqlite");
+      const previewDb = new NodeSqlite.DatabaseSync(preview);
+      previewDb.exec(
+        "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT)",
+      );
+      const insertPreview = previewDb.prepare("INSERT INTO effect_sql_migrations VALUES (?, ?)");
+      for (const [id, name] of migrationManifest.filter(([id]) => id < 53)) {
+        insertPreview.run(id, name);
+      }
+      insertPreview.run(53, "PullRequestFilesViewed");
+      insertPreview.run(54, "OrchestrationV2");
+      insertPreview.run(55, "RemoveRedundantProjectionIndexes");
+      previewDb.close();
+      expect(
+        runServicePreflight({ databasePath: preview, launcherProtocol: SERVICE_LAUNCHER_PROTOCOL })
+          .status,
+      ).toBe("ready");
+
+      // Startup reconciles legacy fork 81/82 index migrations, so preflight accepts valid tails and blocks invalid ones.
+      const legacyFork = path.join(path.dirname(databasePath), "legacy-fork.sqlite");
+      const legacyForkDb = new NodeSqlite.DatabaseSync(legacyFork);
+      legacyForkDb.exec(
+        "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT)",
+      );
+      const insertLegacy = legacyForkDb.prepare("INSERT INTO effect_sql_migrations VALUES (?, ?)");
+      for (const [id, name] of migrationManifest.filter(([id]) => id <= 80)) {
+        insertLegacy.run(id, name);
+      }
+      insertLegacy.run(81, "VoiceNotificationIndex");
+      insertLegacy.run(82, "SubagentLineageIndex");
+      legacyForkDb.close();
+      expect(
+        runServicePreflight({
+          databasePath: legacyFork,
+          launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+        }).status,
+      ).toBe("ready");
+
+      const invalidFork = path.join(path.dirname(databasePath), "invalid-fork.sqlite");
+      const invalidForkDb = new NodeSqlite.DatabaseSync(invalidFork);
+      invalidForkDb.exec(
+        "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT)",
+      );
+      const insertInvalid = invalidForkDb.prepare(
+        "INSERT INTO effect_sql_migrations VALUES (?, ?)",
+      );
+      for (const [id, name] of migrationManifest.filter(([id]) => id <= 80)) {
+        insertInvalid.run(id, name);
+      }
+      insertInvalid.run(81, "VoiceNotificationIndex");
+      insertInvalid.run(83, "CommandReadIndexes");
+      invalidForkDb.close();
+      const invalidForkPreflight = runServicePreflight({
+        databasePath: invalidFork,
+        launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+      });
+      expect(invalidForkPreflight.status).toBe("blocked");
+      expect(
+        invalidForkPreflight.status === "blocked" ? invalidForkPreflight.reason : "",
+      ).toContain("83_CommandReadIndexes");
 
       const newerId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
       insert.run(newerId, "FromNightly");

@@ -21,6 +21,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { CHATGPT_USAGE_URL } from "@t3tools/shared/usageLimits";
+import { T, useGT, Var } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Linking, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -57,10 +58,11 @@ export function CodexSetupSection(props: {
   readonly readOnly: boolean;
   readonly onModeChange: (mode: "managed" | "existing") => Promise<boolean>;
 }) {
+  const gt = useGT();
   if (!props.provider?.setup?.canAuthenticate) {
     return (
-      <SettingsSection title="ChatGPT account">
-        <FieldBlock label="ChatGPT account" description="Preparing sign-in." />
+      <SettingsSection title={gt("ChatGPT account")}>
+        <FieldBlock label={gt("ChatGPT account")} description={gt("Preparing sign-in.")} />
       </SettingsSection>
     );
   }
@@ -101,6 +103,7 @@ function ManagedCodexSetup({
   readonly onUseExistingCli?: () => void;
   readonly onSignInCancelled?: () => void;
 }) {
+  const gt = useGT();
   const target = { environmentId, input: { instanceId } };
   const authQuery = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
   const installQuery = useEnvironmentQuery(serverEnvironment.providerInstallState(target));
@@ -205,13 +208,13 @@ function ManagedCodexSetup({
     }
     if (!isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Codex setup failed. Try again.");
+      setError(failure instanceof Error ? failure.message : gt("Codex setup failed. Try again."));
     }
     return false;
   };
 
   const openPage = (page: string) =>
-    Linking.openURL(page).catch(() => setError("Could not open the ChatGPT sign-in page."));
+    Linking.openURL(page).catch(() => setError(gt("Could not open the ChatGPT sign-in page.")));
 
   const signIn = async (methodId: string, signal: AbortSignal) => {
     if (pendingRef.current) return;
@@ -292,26 +295,41 @@ function ManagedCodexSetup({
 
   const installDescription =
     installation?.phase === "downloading"
-      ? `Downloading ${(installation.downloadedBytes / 1_000_000).toFixed(1)}${installation.totalBytes === null ? "" : ` of ${(installation.totalBytes / 1_000_000).toFixed(1)}`} MB.`
+      ? installation.totalBytes === null
+        ? gt("Downloading {downloaded} MB.", {
+            downloaded: (installation.downloadedBytes / 1_000_000).toFixed(1),
+          })
+        : gt("Downloading {downloaded} of {total} MB.", {
+            downloaded: (installation.downloadedBytes / 1_000_000).toFixed(1),
+            total: (installation.totalBytes / 1_000_000).toFixed(1),
+          })
       : installation?.phase === "extracting"
-        ? "Installing Codex."
+        ? gt("Installing Codex.")
         : installation?.phase === "verifying"
-          ? "Checking Codex."
+          ? gt("Checking Codex.")
           : null;
   const accountDescription = finishingSignIn
-    ? "Finishing sign-in…"
+    ? gt("Finishing sign-in…")
     : installDescription
       ? installDescription
       : authActive || auth?.phase === "failed" || auth?.phase === "cancelled"
         ? auth?.phase === "waiting" && requestedAccountEmail
-          ? `Continue as ${requestedAccountEmail} on OpenAI.`
-          : (auth?.message ?? "Finish signing in in your browser.")
+          ? gt("Continue as {email} on OpenAI.", { email: requestedAccountEmail })
+          : (auth?.message ?? gt("Finish signing in in your browser."))
         : authenticated
-          ? "Signed in with ChatGPT."
-          : (reconnectEmail ?? "Use your ChatGPT subscription.");
+          ? gt("Signed in with ChatGPT.")
+          : (reconnectEmail ?? gt("Use your ChatGPT subscription."));
   const runtimeDescription = installed
-    ? `${installation?.source === "local" ? "Using your installed Codex" : "Managed by T3 Code"}${installation?.installedVersion ? ` · v${installation.installedVersion}` : ""}.`
-    : (installation?.message ?? "T3 Code downloads and manages Codex for you.");
+    ? installation?.source === "local"
+      ? installation.installedVersion
+        ? gt("Using your installed Codex · v{version}.", {
+            version: installation.installedVersion,
+          })
+        : gt("Using your installed Codex.")
+      : installation?.installedVersion
+        ? gt("Managed by T3 Code · v{version}.", { version: installation.installedVersion })
+        : gt("Managed by T3 Code.")
+    : (installation?.message ?? gt("T3 Code downloads and manages Codex for you."));
   const logoutWarning =
     auth?.phase === "idle" && auth.message?.startsWith("Signed out locally.") ? auth.message : null;
   const queryError = authQuery.error ?? installQuery.error;
@@ -320,7 +338,7 @@ function ManagedCodexSetup({
     (installation?.phase === "failed"
       ? installation.message
       : queryError
-        ? "Could not read Codex setup status. Reconnect and try again."
+        ? gt("Could not read Codex setup status. Reconnect and try again.")
         : null);
   const cannotStart =
     unavailable ||
@@ -330,12 +348,12 @@ function ManagedCodexSetup({
   const removeDisabled = unavailable || busy || !canRemoveAuthMethod;
   const accountActions: MenuAction[] = [
     ...profiles.map((profile) => ({ id: profile.id, title: profile.name })),
-    { id: CHANGE_ACCOUNT_METHOD, title: "Use a different account" },
+    { id: CHANGE_ACCOUNT_METHOD, title: gt("Use a different account") },
     ...(removableProfiles.length > 0
       ? [
           {
             id: "remove",
-            title: "Remove connection",
+            title: gt("Remove connection"),
             attributes: { disabled: removeDisabled },
             subactions: removableProfiles.map((profile) => ({
               id: `remove:${profile.id}`,
@@ -363,17 +381,19 @@ function ManagedCodexSetup({
 
   return (
     <SettingsSection
-      title="ChatGPT account"
+      title={gt("ChatGPT account")}
       footer={
         authActive && auth?.phase === "waiting"
-          ? "After you sign in, the browser lands on a localhost page that won't load. Copy that page's address and paste it here."
+          ? gt(
+              "After you sign in, the browser lands on a localhost page that won't load. Copy that page's address and paste it here.",
+            )
           : runtimeDescription
       }
     >
       <View className="gap-1 px-4 py-3">
         <View className="min-h-6 flex-row items-center justify-between gap-3">
           <Text textRole="body" className="shrink text-foreground">
-            ChatGPT account
+            <T>ChatGPT account</T>
           </Text>
           {pending || installActive || finishingSignIn ? (
             <AppActivityIndicator colorClassName="accent-icon" />
@@ -394,13 +414,15 @@ function ManagedCodexSetup({
         installation.totalBytes > 0 ? (
           <Progress
             className="mt-2"
-            label="Codex download"
+            label={gt("Codex download")}
             value={installation.downloadedBytes / installation.totalBytes}
           />
         ) : null}
         {auth?.interaction?.type === "deviceCode" ? (
           <Text selectable className="mt-1 font-mono text-base text-foreground">
-            {`Code: ${auth.interaction.userCode}`}
+            <T>
+              Code: <Var>{auth.interaction.userCode}</Var>
+            </T>
           </Text>
         ) : null}
       </View>
@@ -412,15 +434,15 @@ function ManagedCodexSetup({
               <Divided>
                 <ListActionRow
                   icon="globe"
-                  label="Open ChatGPT sign-in"
+                  label={gt("Open ChatGPT sign-in")}
                   onPress={() => void openPage(url)}
                 />
               </Divided>
               {auth.interaction?.type !== "deviceCode" ? (
                 <View className="gap-2 border-t border-border-subtle px-4 py-3">
                   <AppTextInput
-                    accessibilityLabel="ChatGPT sign-in redirect URL"
-                    placeholder="Paste the localhost address"
+                    accessibilityLabel={gt("ChatGPT sign-in redirect URL")}
+                    placeholder={gt("Paste the localhost address")}
                     secureTextEntry
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -431,7 +453,7 @@ function ManagedCodexSetup({
                     onChangeText={(value) => setCallbackDraft({ flowId: auth.flowId ?? "", value })}
                   />
                   <Button
-                    label="Connect"
+                    label={gt("Connect")}
                     disabled={pending || readOnly || !callbackUrl.trim()}
                     onPress={() => {
                       const flowId = auth.flowId;
@@ -455,7 +477,7 @@ function ManagedCodexSetup({
             <Divided>
               <ListActionRow
                 icon="xmark"
-                label="Cancel sign-in"
+                label={gt("Cancel sign-in")}
                 disabled={pending || readOnly}
                 onPress={cancelSignIn}
               />
@@ -466,7 +488,7 @@ function ManagedCodexSetup({
         <Divided>
           <ListActionRow
             icon="xmark"
-            label="Cancel installation"
+            label={gt("Cancel installation")}
             disabled={pending || readOnly || !installation?.operationId}
             onPress={() => {
               const operationId = installation?.operationId;
@@ -482,17 +504,17 @@ function ManagedCodexSetup({
             <AccountMenu
               actions={accountActions}
               disabled={unavailable || busy}
-              label="Change account"
+              label={gt("Change account")}
               onSelect={chooseAccount}
             />
           </Divided>
           <Divided>
             <ListActionRow
               icon="chart.bar.xaxis"
-              label="Manage usage"
+              label={gt("Manage usage")}
               onPress={() =>
                 void Linking.openURL(CHATGPT_USAGE_URL).catch(() =>
-                  setError("Could not open ChatGPT usage settings."),
+                  setError(gt("Could not open ChatGPT usage settings.")),
                 )
               }
             />
@@ -501,8 +523,8 @@ function ManagedCodexSetup({
             <Divided>
               <ListActionRow
                 icon="terminal"
-                label="Use existing Codex CLI instead"
-                description="Sign in with the Codex CLI already on this environment."
+                label={gt("Use existing Codex CLI instead")}
+                description={gt("Sign in with the Codex CLI already on this environment.")}
                 disabled={busy}
                 onPress={onUseExistingCli}
               />
@@ -511,14 +533,14 @@ function ManagedCodexSetup({
           <Divided>
             <ListActionRow
               icon="xmark.circle.fill"
-              label="Disconnect"
+              label={gt("Disconnect")}
               tone="danger"
               disabled={unavailable || busy}
               onPress={() =>
                 Dialog.confirm({
-                  title: "Disconnect ChatGPT?",
-                  message: "Running threads on this account stop. Thread history is kept.",
-                  confirmText: "Disconnect",
+                  title: gt("Disconnect ChatGPT?"),
+                  message: gt("Running threads on this account stop. Thread history is kept."),
+                  confirmText: gt("Disconnect"),
                   destructive: true,
                   onConfirm: () => void run(() => logoutAuth(target)),
                 })
@@ -533,8 +555,8 @@ function ManagedCodexSetup({
               <Menu
                 accessible
                 accessibilityRole="button"
-                accessibilityLabel="Reconnect ChatGPT account"
-                title="On OpenAI, sign in with the account you choose here."
+                accessibilityLabel={gt("Reconnect ChatGPT account")}
+                title={gt("On OpenAI, sign in with the account you choose here.")}
                 actions={accountActions}
                 onPressAction={({ nativeEvent }) => {
                   if (!cannotStart) chooseAccount(nativeEvent.event);
@@ -542,7 +564,7 @@ function ManagedCodexSetup({
               >
                 <View pointerEvents="none">
                   <Button
-                    label={pending ? "Setting up…" : "Reconnect account"}
+                    label={pending ? gt("Setting up…") : gt("Reconnect account")}
                     tone="primary"
                     disabled={cannotStart}
                     fullWidth
@@ -552,7 +574,7 @@ function ManagedCodexSetup({
               </Menu>
             ) : (
               <Button
-                label={pending ? "Setting up…" : "Continue with ChatGPT"}
+                label={pending ? gt("Setting up…") : gt("Continue with ChatGPT")}
                 tone="primary"
                 loading={pending}
                 disabled={cannotStart}
@@ -565,8 +587,8 @@ function ManagedCodexSetup({
             <Divided>
               <ListActionRow
                 icon="terminal"
-                label="Use existing Codex CLI instead"
-                description="Sign in with the Codex CLI already on this environment."
+                label={gt("Use existing Codex CLI instead")}
+                description={gt("Sign in with the Codex CLI already on this environment.")}
                 disabled={busy}
                 onPress={onUseExistingCli}
               />
@@ -590,7 +612,7 @@ function ManagedCodexSetup({
           </Text>
           {queryError ? (
             <Button
-              label="Retry setup status"
+              label={gt("Retry setup status")}
               onPress={() => {
                 authQuery.refresh();
                 installQuery.refresh();
@@ -613,12 +635,13 @@ function AccountMenu(props: {
   readonly label: string;
   readonly onSelect: (methodId: string) => void;
 }) {
+  const gt = useGT();
   return (
     <Menu
       accessible
       accessibilityRole="button"
       accessibilityLabel={props.label}
-      title="On OpenAI, sign in with the account you choose here."
+      title={gt("On OpenAI, sign in with the account you choose here.")}
       actions={props.actions}
       onPressAction={({ nativeEvent }) => {
         if (!props.disabled) props.onSelect(nativeEvent.event);
@@ -630,11 +653,14 @@ function AccountMenu(props: {
 }
 
 function RevealableAccountEmail(props: { readonly email: string }) {
+  const gt = useGT();
   const [revealed, setRevealed] = useState(false);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={revealed ? `Signed in as ${props.email}` : "Show account email"}
+      accessibilityLabel={
+        revealed ? gt("Signed in as {email}", { email: props.email }) : gt("Show account email")
+      }
       onPress={() => setRevealed((value) => !value)}
       hitSlop={6}
     >
@@ -654,39 +680,38 @@ export function CodexManagedRuntimeFields({
   readonly instanceId: ProviderInstanceId;
   readonly provider: ServerProvider | undefined;
 }) {
+  const gt = useGT();
   const installation = useEnvironmentQuery(
     serverEnvironment.providerInstallState({ environmentId, input: { instanceId } }),
   );
   const paths = provider?.runtimePaths;
   const rows = [
     {
-      label: "Binary path",
-      description: "Selected by T3 Code.",
+      id: "binary",
+      label: gt("Binary path"),
+      description: gt("Selected by T3 Code."),
       value: installation.data?.executablePath ?? null,
-      empty: installation.error ? "Could not read runtime path" : "Not installed",
+      empty: installation.error ? gt("Could not read runtime path") : gt("Not installed"),
     },
     {
-      label: "CODEX_HOME path",
-      description: "Shared Codex config, sessions, and state.",
+      id: "home",
+      label: gt("CODEX_HOME path"),
+      description: gt("Shared Codex config, sessions, and state."),
       value: paths?.homePath ?? null,
-      empty: "Unavailable",
+      empty: gt("Unavailable", { $context: "runtime path status" }),
     },
     {
-      label: "Shadow home path",
+      id: "shadow",
+      label: gt("Shadow home path"),
       description: paths?.shadowHomePath
-        ? "Account-specific home sharing the Codex state above."
-        : "This instance uses the shared Codex home directly.",
+        ? gt("Account-specific home sharing the Codex state above.")
+        : gt("This instance uses the shared Codex home directly."),
       value: paths?.shadowHomePath ?? null,
-      empty: paths ? "Not used" : "Unavailable",
+      empty: paths ? gt("Not used") : gt("Unavailable", { $context: "runtime path status" }),
     },
   ];
   return rows.map((row, index) => (
-    <FieldBlock
-      key={row.label}
-      label={row.label}
-      description={row.description}
-      separated={index > 0}
-    >
+    <FieldBlock key={row.id} label={row.label} description={row.description} separated={index > 0}>
       <Text
         selectable
         className={
@@ -711,12 +736,15 @@ export function AddChatGptAccountRouteScreen({
 }
 
 function AddChatGptAccount({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const actions = useProviderInstanceActions(environmentId);
   const providers = useEnvironmentProviders(environmentId);
   const canManage = useEnvironmentScope(environmentId, AuthProvidersManageScope);
-  const [name, setName] = useState("Personal");
+  const [name, setName] = useState(() =>
+    gt("Personal", { $context: "default name for a ChatGPT account" }),
+  );
   const [instanceId, setInstanceId] = useState<ProviderInstanceId | null>(null);
   const [pending, setPending] = useState(false);
   const displayName = `ChatGPT - ${name.trim()}`;
@@ -751,7 +779,7 @@ function AddChatGptAccount({ environmentId }: { readonly environmentId: Environm
   };
 
   return (
-    <SettingsScreen title={instanceId ? displayName : "Add ChatGPT account"}>
+    <SettingsScreen title={instanceId ? displayName : gt("Add ChatGPT account")}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -760,27 +788,29 @@ function AddChatGptAccount({ environmentId }: { readonly environmentId: Environm
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <Text textRole="footnote" className="px-1 text-foreground-muted">
-          Each account has its own Codex instance and sign-in. Choose the other account on the
-          sign-in page.
+          <T>
+            Each account has its own Codex instance and sign-in. Choose the other account on the
+            sign-in page.
+          </T>
         </Text>
         {instanceId === null ? (
           <>
             <SettingsSection
               footer={
                 hasSignedInCodex
-                  ? "Managing several Codex accounts in T3 Code is not recommended."
+                  ? gt("Managing several Codex accounts in T3 Code is not recommended.")
                   : undefined
               }
             >
               <FieldBlock
-                label="Account name"
-                description="Shown in the provider list and model picker."
+                label={gt("Account name")}
+                description={gt("Shown in the provider list and model picker.")}
               >
                 <AppTextInput
-                  accessibilityLabel="Account name"
+                  accessibilityLabel={gt("Account name")}
                   value={name}
                   editable={!pending}
-                  placeholder="e.g. Personal or Work"
+                  placeholder={gt("e.g. Personal or Work")}
                   autoCorrect={false}
                   returnKeyType="done"
                   className="min-h-11 rounded-xl px-3 py-2 text-base"
@@ -790,7 +820,7 @@ function AddChatGptAccount({ environmentId }: { readonly environmentId: Environm
               </FieldBlock>
             </SettingsSection>
             <Button
-              label={pending ? "Adding account…" : "Continue"}
+              label={pending ? gt("Adding account…") : gt("Continue")}
               tone="primary"
               loading={pending}
               disabled={pending || !name.trim() || !canManage}
@@ -811,12 +841,15 @@ function AddChatGptAccount({ environmentId }: { readonly environmentId: Environm
                 autoStart
               />
             ) : (
-              <SettingsSection title="ChatGPT account">
-                <FieldBlock label="Codex runtime" description="Preparing managed setup." />
+              <SettingsSection title={gt("ChatGPT account")}>
+                <FieldBlock
+                  label={gt("Codex runtime")}
+                  description={gt("Preparing managed setup.")}
+                />
               </SettingsSection>
             )}
             <Button
-              label={connected ? "Done" : "Finish later"}
+              label={connected ? gt("Done") : gt("Finish later")}
               tone={connected ? "primary" : "secondary"}
               fullWidth
               onPress={openInstance}

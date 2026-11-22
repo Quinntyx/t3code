@@ -23,7 +23,8 @@ import {
 } from "effect/http";
 import * as Socket from "effect/socket/Socket";
 
-import { authenticateMediaRequest } from "../auth/http.ts";
+import { authenticateMediaRequest, failEnvironmentInternal } from "../auth/http.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import { assetResponseHeaders } from "../http.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -102,7 +103,8 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
   if (threadId.length === 0 || tabId.length === 0) {
     return HttpServerResponse.text("Not Found", { status: 404 });
   }
-  return yield* Effect.scoped(
+  const sessions = yield* SessionStore.SessionStore;
+  const stream = Effect.scoped(
     Effect.gen(function* () {
       const attached = yield* browser
         .attachViewer({
@@ -194,7 +196,8 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
               return yield* write(data);
             }
             // The encoder dropped it, so no ack will come.
-            inFlight.splice(inFlight.indexOf(slot), 1);
+            const index = inFlight.indexOf(slot);
+            if (index !== -1) inFlight.splice(index, 1);
             yield* Effect.forkScoped(slot.ack);
             yield* sendPending;
           }),
@@ -275,7 +278,7 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
           Effect.forever(receiveInput),
           Effect.raceFirst(Effect.forever(sendFrames), sendAudio),
         ),
-      );
+      ).pipe(Effect.onInterrupt(() => Effect.sync(() => transport.destroy())));
     }),
   ).pipe(
     Effect.catchTags({
@@ -285,6 +288,16 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
         ),
     }),
     Effect.orElseSucceed(() => HttpServerResponse.empty()),
+  );
+  return yield* Effect.raceFirst(
+    stream,
+    sessions.awaitInvalidation(session.sessionId).pipe(
+      Effect.as(HttpServerResponse.empty()),
+      Effect.catchTags({
+        SessionCredentialVerificationError: (error) =>
+          failEnvironmentInternal("internal_error", error),
+      }),
+    ),
   );
 });
 

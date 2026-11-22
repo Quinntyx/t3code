@@ -31,7 +31,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import type { AtomCommandResult } from "./runtime.ts";
+import { runAtomCommand, type AtomCommandResult } from "./runtime.ts";
 import {
   applyVcsActionProgressEvent,
   beginVcsActionState,
@@ -435,201 +435,216 @@ describe("vcsActionState", () => {
   });
 
   it.effect("invalidates persisted refs after successful and failed stacked actions", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const connectionState: SupervisorConnectionState = {
-          ...AVAILABLE_CONNECTION_STATE,
-          desired: true,
-          network: "online",
-          phase: "connected",
-          attempt: 1,
-          generation: 1,
-        };
-        const targetKey = { environmentId, cwd };
-        const successfulActionId = "invalidate-success";
-        const failedActionId = "invalidate-failure";
-        const interruptedActionId = "invalidate-interrupted";
-        const successfulTransportActionId = createVcsActionTransportId(
-          targetKey,
-          successfulActionId,
-        );
-        const failedTransportActionId = createVcsActionTransportId(targetKey, failedActionId);
-        const interruptedTransportActionId = createVcsActionTransportId(
-          targetKey,
-          interruptedActionId,
-        );
-        const rpcInputs = new Array<GitRunStackedActionInput>();
-        const prActionId = "pr-generation";
-        const prTransportActionId = createVcsActionTransportId(targetKey, prActionId);
-        const prStarted = yield* Deferred.make<void>();
-        const prFinished = yield* Deferred.make<void>();
-        const runStackedAction = (input: GitRunStackedActionInput) => {
-          rpcInputs.push(input);
-          if (input.actionId === prTransportActionId) {
-            return Stream.concat(
-              Stream.fromEffect(
-                Deferred.succeed(prStarted, undefined).pipe(
-                  Effect.as(
-                    progress({
-                      kind: "phase_started",
-                      actionId: prTransportActionId,
-                      cwd,
-                      action: "create_pr",
-                      phase: "pr",
-                      label: "Generating pull request...",
-                    }),
-                  ),
+    Effect.gen(function* () {
+      const connectionState: SupervisorConnectionState = {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        network: "online",
+        phase: "connected",
+        attempt: 1,
+        generation: 1,
+      };
+      const targetKey = { environmentId, cwd };
+      const successfulActionId = "invalidate-success";
+      const failedActionId = "invalidate-failure";
+      const interruptedActionId = "invalidate-interrupted";
+      const successfulTransportActionId = createVcsActionTransportId(targetKey, successfulActionId);
+      const failedTransportActionId = createVcsActionTransportId(targetKey, failedActionId);
+      const interruptedTransportActionId = createVcsActionTransportId(
+        targetKey,
+        interruptedActionId,
+      );
+      const rpcInputs = new Array<GitRunStackedActionInput>();
+      const prActionId = "pr-generation";
+      const prTransportActionId = createVcsActionTransportId(targetKey, prActionId);
+      const prStarted = yield* Deferred.make<void>();
+      const prFinished = yield* Deferred.make<void>();
+      const runStackedAction = (input: GitRunStackedActionInput) => {
+        rpcInputs.push(input);
+        if (input.actionId === prTransportActionId) {
+          return Stream.concat(
+            Stream.fromEffect(
+              Deferred.succeed(prStarted, undefined).pipe(
+                Effect.as(
+                  progress({
+                    kind: "phase_started",
+                    actionId: prTransportActionId,
+                    cwd,
+                    action: "create_pr",
+                    phase: "pr",
+                    label: "Generating pull request...",
+                  }),
                 ),
               ),
-              Stream.fromEffect(
-                Deferred.await(prFinished).pipe(
-                  Effect.as(
-                    progress({
-                      kind: "action_finished",
-                      actionId: prTransportActionId,
-                      cwd,
-                      action: "create_pr",
-                      result: { ...result, action: "create_pr" },
-                    }),
-                  ),
+            ),
+            Stream.fromEffect(
+              Deferred.await(prFinished).pipe(
+                Effect.as(
+                  progress({
+                    kind: "action_finished",
+                    actionId: prTransportActionId,
+                    cwd,
+                    action: "create_pr",
+                    result: { ...result, action: "create_pr" },
+                  }),
                 ),
               ),
-            );
-          }
-          if (input.actionId === successfulTransportActionId) {
-            return Stream.make(
-              progress({
-                kind: "action_finished",
-                actionId: successfulTransportActionId,
-                cwd,
-                action,
-                result,
-              }),
-            );
-          }
-          if (input.actionId === interruptedTransportActionId) {
-            return Stream.fromEffect(Effect.interrupt);
-          }
+            ),
+          );
+        }
+        if (input.actionId === successfulTransportActionId) {
           return Stream.make(
             progress({
-              kind: "action_failed",
-              actionId: failedTransportActionId,
+              kind: "action_finished",
+              actionId: successfulTransportActionId,
               cwd,
               action,
-              phase: "push",
-              message: "push failed after creating the branch",
+              result,
             }),
           );
-        };
-        const client = {
-          [WS_METHODS.gitRunStackedAction]: runStackedAction,
-        } as unknown as WsRpcProtocolClient;
-        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-          target,
-          state: yield* SubscriptionRef.make(connectionState),
-          session: yield* SubscriptionRef.make(Option.some(session(client))),
-          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
-          connect: Effect.void,
-          disconnect: Effect.void,
-          retryNow: Effect.void,
-        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
-        const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
-          _environmentId,
-          effect,
-        ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
-        const runStream: EnvironmentRegistry.EnvironmentRegistry["Service"]["runStream"] = (
-          _environmentId,
-          stream,
-        ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
-        const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
-          run,
-          runStream,
-        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-        const removed = new Array<string>();
-        const runtime = Atom.runtime(
-          Layer.merge(
-            Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
-            Layer.succeed(
-              Persistence.EnvironmentCacheStore,
-              cacheStore((removedEnvironmentId) => {
-                removed.push(`${removedEnvironmentId}:*`);
-              }),
-            ),
+        }
+        if (input.actionId === interruptedTransportActionId) {
+          return Stream.fromEffect(Effect.interrupt);
+        }
+        return Stream.make(
+          progress({
+            kind: "action_failed",
+            actionId: failedTransportActionId,
+            cwd,
+            action,
+            phase: "push",
+            message: "push failed after creating the branch",
+          }),
+        );
+      };
+      const client = {
+        [WS_METHODS.gitRunStackedAction]: runStackedAction,
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(connectionState),
+        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
+        _environmentId,
+        effect,
+      ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+      const runStream: EnvironmentRegistry.EnvironmentRegistry["Service"]["runStream"] = (
+        _environmentId,
+        stream,
+      ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+      const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+        run,
+        runStream,
+      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      const removed = new Array<string>();
+      const runtime = Atom.runtime(
+        Layer.merge(
+          Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+          Layer.succeed(
+            Persistence.EnvironmentCacheStore,
+            cacheStore((removedEnvironmentId) => {
+              removed.push(`${removedEnvironmentId}:*`);
+            }),
           ),
-        );
-        const manager = createVcsActionManager(runtime);
-        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
-          Effect.sync(() => registry.dispose()),
-        );
-        const state = vcsRefsCacheStateAtom({ environmentId });
+        ),
+      );
+      const manager = createVcsActionManager(runtime);
+      const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
+        Effect.sync(() => registry.dispose()),
+      );
+      const state = vcsRefsCacheStateAtom({ environmentId });
 
-        expect(registry.get(state).revision).toBe(0);
-        const threadId = ThreadId.make("thread-stacked-action");
-        const projectId = ProjectId.make("project-stacked-action");
-        const successfulResult = yield* Effect.promise(() =>
-          manager.runStackedAction(targetKey).run(registry, {
+      expect(registry.get(state).revision).toBe(0);
+      const threadId = ThreadId.make("thread-stacked-action");
+      const projectId = ProjectId.make("project-stacked-action");
+      const successfulResult = yield* Effect.promise(() =>
+        runAtomCommand(
+          registry,
+          manager.runStackedAction(targetKey),
+          {
             actionId: successfulActionId,
             action,
             threadId,
             projectId,
-          }),
-        );
+          },
+          { reportFailure: false, reportDefect: false },
+        ),
+      );
 
-        expect(AsyncResult.isSuccess(successfulResult)).toBe(true);
-        expect(registry.get(manager.stateAtom(targetKey))).toEqual(EMPTY_VCS_ACTION_STATE);
-        expect(registry.get(state).revision).toBe(1);
-        expect(removed).toEqual([`${environmentId}:*`]);
-        expect(rpcInputs).toEqual([
-          { actionId: successfulTransportActionId, cwd, action, threadId, projectId },
-        ]);
+      expect(AsyncResult.isSuccess(successfulResult)).toBe(true);
+      expect(registry.get(manager.stateAtom(targetKey))).toEqual(EMPTY_VCS_ACTION_STATE);
+      expect(registry.get(state).revision).toBe(1);
+      expect(removed).toEqual([`${environmentId}:*`]);
+      expect(rpcInputs).toEqual([
+        { actionId: successfulTransportActionId, cwd, action, threadId, projectId },
+      ]);
 
-        const failedResult = yield* Effect.promise(() =>
-          manager.runStackedAction(targetKey).run(registry, {
+      const failedResult = yield* Effect.promise(() =>
+        runAtomCommand(
+          registry,
+          manager.runStackedAction(targetKey),
+          {
             actionId: failedActionId,
             action,
-          }),
-        );
+          },
+          { reportFailure: false, reportDefect: false },
+        ),
+      );
 
-        expect(AsyncResult.isFailure(failedResult)).toBe(true);
-        expect(registry.get(manager.stateAtom(targetKey))).toMatchObject({
-          isRunning: false,
-          operation: "run_change_request",
-          actionId: failedActionId,
-          error: "Source control action 'commit_push' failed during push.",
-        });
-        expect(registry.get(state).revision).toBe(2);
-        expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`]);
+      expect(AsyncResult.isFailure(failedResult)).toBe(true);
+      expect(registry.get(manager.stateAtom(targetKey))).toMatchObject({
+        isRunning: false,
+        operation: "run_change_request",
+        actionId: failedActionId,
+        error: "Source control action 'commit_push' failed during push.",
+      });
+      expect(registry.get(state).revision).toBe(2);
+      expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`]);
 
-        const interruptedResult = yield* Effect.promise(() =>
-          manager.runStackedAction(targetKey).run(registry, {
+      const interruptedResult = yield* Effect.promise(() =>
+        runAtomCommand(
+          registry,
+          manager.runStackedAction(targetKey),
+          {
             actionId: interruptedActionId,
             action,
-          }),
-        );
+          },
+          { reportFailure: false, reportDefect: false },
+        ),
+      );
 
-        expect(AsyncResult.isFailure(interruptedResult)).toBe(true);
-        if (AsyncResult.isFailure(interruptedResult)) {
-          expect(Cause.hasInterruptsOnly(interruptedResult.cause)).toBe(true);
-        }
-        expect(registry.get(manager.stateAtom(targetKey))).toEqual(EMPTY_VCS_ACTION_STATE);
-        expect(registry.get(state).revision).toBe(3);
-        expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`, `${environmentId}:*`]);
+      expect(AsyncResult.isFailure(interruptedResult)).toBe(true);
+      if (AsyncResult.isFailure(interruptedResult)) {
+        expect(Cause.hasInterruptsOnly(interruptedResult.cause)).toBe(true);
+      }
+      expect(registry.get(manager.stateAtom(targetKey))).toEqual(EMPTY_VCS_ACTION_STATE);
+      expect(registry.get(state).revision).toBe(3);
+      expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`, `${environmentId}:*`]);
 
-        const prThreadId = ThreadId.make("thread-pr-generation");
-        const prRun = manager.runStackedAction(targetKey).run(registry, {
+      const prThreadId = ThreadId.make("thread-pr-generation");
+      const prRun = runAtomCommand(
+        registry,
+        manager.runStackedAction(targetKey),
+        {
           actionId: prActionId,
           action: "create_pr",
           threadId: prThreadId,
           projectId,
-        });
-        yield* Deferred.await(prStarted);
-        expect(isPullRequestGenerating({ environmentId, threadId: prThreadId })).toBe(true);
+        },
+        { reportFailure: false, reportDefect: false },
+      );
+      yield* Deferred.await(prStarted);
+      expect(isPullRequestGenerating({ environmentId, threadId: prThreadId })).toBe(true);
 
-        yield* Deferred.succeed(prFinished, undefined);
-        expect(AsyncResult.isSuccess(yield* Effect.promise(() => prRun))).toBe(true);
-        expect(isPullRequestGenerating({ environmentId, threadId: prThreadId })).toBe(false);
-      }),
-    ),
+      yield* Deferred.succeed(prFinished, undefined);
+      expect(AsyncResult.isSuccess(yield* Effect.promise(() => prRun))).toBe(true);
+      expect(isPullRequestGenerating({ environmentId, threadId: prThreadId })).toBe(false);
+    }),
   );
 });
 

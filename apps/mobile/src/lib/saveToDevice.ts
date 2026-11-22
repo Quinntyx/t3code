@@ -1,4 +1,7 @@
+import { msg } from "gt-react-native";
 import { Platform, ToastAndroid } from "react-native";
+
+import { m } from "../i18n/messages";
 
 const SAVABLE_IMAGE_MIME_TYPE = /^image\/(png|jpe?g|gif|webp|heic|heif)$/i;
 
@@ -36,7 +39,7 @@ export function canSaveFileToDownloads(): boolean {
 }
 
 export function showDownloadStarted(name: string) {
-  ToastAndroid.show(`Downloading ${name}…`, ToastAndroid.SHORT);
+  ToastAndroid.show(m(msg("Downloading {name}…", { name })), ToastAndroid.SHORT);
 }
 
 /** Copies a local `file:` or `content:` URI into Android's public Downloads folder. */
@@ -44,5 +47,5 @@ export async function saveFileToDownloads(uri: string, name: string, signal: Abo
   const native = await nativeModule();
   if (signal.aborted) return;
   const saved = await native.saveFileToDownloads(uri, name);
-  ToastAndroid.show(`Saved ${saved} to Downloads`, ToastAndroid.SHORT);
+  ToastAndroid.show(m(msg("Saved {saved} to Downloads", { saved })), ToastAndroid.SHORT);
 }

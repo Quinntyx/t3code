@@ -57,11 +57,7 @@ const ref: ScopedThreadRef = {
   threadId: ThreadId.make("thread-A"),
 };
 
-function Harness({
-  explicitDiffOpenRef,
-}: {
-  explicitDiffOpenRef: { current: ScopedThreadRef | null };
-}) {
+function Harness() {
   const diffOpen = useRightPanelStore(
     (state) =>
       threadRightPanelView(selectThreadRightPanelState(state.byThreadKey, ref), {
@@ -92,7 +88,6 @@ function Harness({
     pullRequestsSurfaceAvailable: false,
     gitCwd: null,
     activeProjectCwd: null,
-    explicitDiffOpenRef,
     onDiffPanelOpen: undefined,
     closeRightPanelSurface: () => {},
   });
@@ -126,7 +121,6 @@ function reset() {
   useDiffPanelStore.setState({
     byThreadKey: {},
     branchBaseRefByThreadKey: {},
-    keepSelectionOnOpenThreadKey: null,
   });
 }
 
@@ -136,16 +130,14 @@ it("treats Diff saved behind Voice as closed, so opening a turn keeps its select
   // Diff is the thread's saved, active tab, but the app-wide Voice surface is what is on screen.
   store.open(ref, "diff");
   store.setVoiceOpen(true);
-  const explicitDiffOpenRef = { current: null as ScopedThreadRef | null };
 
-  await using screen = await render(<Harness explicitDiffOpenRef={explicitDiffOpenRef} />, {
+  await using screen = await render(<Harness />, {
     // Nothing here navigates; the harness only calls panel actions.
     router: false,
   });
   await screen.getByRole("button", { name: "Open turn diff" }).click();
 
-  // The branch-reset layout effect sees an explicit request and keeps the turned diff selected.
-  expect(explicitDiffOpenRef.current).toEqual(ref);
+  expect(useRightPanelStore.getState().voiceActive).toBe(false);
   expect(useDiffPanelStore.getState().byThreadKey["env-1:thread-A"]).toMatchObject({
     kind: "turn",
     turnId: "turn-1",
@@ -154,15 +146,14 @@ it("treats Diff saved behind Voice as closed, so opening a turn keeps its select
 
 it("keeps the requested tool diff when Diff was not on screen", async () => {
   reset();
-  const explicitDiffOpenRef = { current: null as ScopedThreadRef | null };
 
-  await using screen = await render(<Harness explicitDiffOpenRef={explicitDiffOpenRef} />, {
+  await using screen = await render(<Harness />, {
     // Nothing here navigates; the harness only calls panel actions.
     router: false,
   });
   await screen.getByRole("button", { name: "Open tool diff" }).click();
 
-  expect(explicitDiffOpenRef.current).toEqual(ref);
+  expect(useRightPanelStore.getState().voiceActive).toBe(false);
   expect(useDiffPanelStore.getState().byThreadKey["env-1:thread-A"]).toMatchObject({
     kind: "tool-call",
     itemId: "item-1",

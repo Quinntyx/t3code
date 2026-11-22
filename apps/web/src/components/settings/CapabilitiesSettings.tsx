@@ -1,5 +1,6 @@
 import { mcpServerIdFromName, type RegisteredMcpServerEntry } from "@t3tools/contracts";
 import { parseMcpRegistration, type ParsedMcpRegistration } from "@t3tools/shared/mcpRegistration";
+import { T, useGT } from "gt-react";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 
@@ -11,10 +12,12 @@ import { defaultToolName, validateEntry } from "./CapabilitiesSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 export function CapabilitiesSettingsPanel() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { environment, scope } = useSettingsScope();
@@ -25,9 +28,9 @@ export function CapabilitiesSettingsPanel() {
   if (scope.kind !== "environment" || environment === null) {
     return (
       <SettingsPageContainer>
-        <SettingsSection id="capabilities" title="MCP servers">
+        <SettingsSection id="capabilities" title={gt("MCP servers")}>
           <SettingsScopeNotice target="environment" inline>
-            Choose one environment to manage the MCP servers it runs.
+            {gt("Choose one environment to manage the MCP servers it runs.")}
           </SettingsScopeNotice>
         </SettingsSection>
       </SettingsPageContainer>
@@ -36,13 +39,15 @@ export function CapabilitiesSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="capabilities" title="MCP servers">
+      <SettingsSection id="capabilities" title={gt("MCP servers")}>
         <SettingsRow
           serverScoped
           settingKeys={["registeredMcpServers"]}
           {...searchableSetting("mcp-servers")}
-          title="Local MCP servers"
-          description="T3 Code starts each enabled server on this machine and gives its tools to agents as native tools. Only servers it can launch itself (stdio) are supported."
+          title={gt("Local MCP servers")}
+          description={gt(
+            "T3 Code starts each enabled server on this machine and gives its tools to agents as native tools. Only servers it can launch itself (stdio) are supported.",
+          )}
         />
       </SettingsSection>
 
@@ -51,11 +56,11 @@ export function CapabilitiesSettingsPanel() {
         onAdd={(entry) => updateSettings({ registeredMcpServers: { [entry.id]: entry } })}
       />
 
-      <SettingsSection id="registered-servers" title="Registered servers">
+      <SettingsSection id="registered-servers" title={gt("Registered servers")}>
         {entries.length === 0 ? (
           <SettingsRow
             {...searchableSetting("registered-servers")}
-            description="No MCP servers are registered yet."
+            description={gt("No MCP servers are registered yet.")}
           />
         ) : (
           entries.map((entry) => (
@@ -63,7 +68,9 @@ export function CapabilitiesSettingsPanel() {
               key={entry.id}
               id={`mcp-server-${entry.id}`}
               title={entry.name}
-              description={`Agents call its tools as ${entry.toolName}_<tool>.`}
+              description={gt("Agents call its tools as {pattern}.", {
+                pattern: `${entry.toolName}_<tool>`,
+              })}
               control={
                 <EnableSwitch
                   checked={entry.enabled}
@@ -78,7 +85,7 @@ export function CapabilitiesSettingsPanel() {
                 <Button
                   size="icon-xs"
                   variant="ghost-destructive"
-                  aria-label={`Remove ${entry.name}`}
+                  aria-label={gt("Remove {name}", { name: entry.name })}
                   onClick={() => updateSettings({ registeredMcpServers: { [entry.id]: null } })}
                 >
                   <Trash2Icon className="size-3.5" />
@@ -99,11 +106,12 @@ function EnableSwitch({
   checked: boolean;
   onChange: (enabled: boolean) => void;
 }) {
+  const gt = useGT();
   return (
     <Switch
       checked={checked}
       onCheckedChange={(next) => onChange(Boolean(next))}
-      aria-label={checked ? "Disable this server" : "Enable this server"}
+      aria-label={checked ? gt("Disable this server") : gt("Enable this server")}
     />
   );
 }
@@ -115,6 +123,8 @@ function RegisterServerForm({
   existing: ReadonlyArray<RegisteredMcpServerEntry>;
   onAdd: (entry: RegisteredMcpServerEntry) => void;
 }) {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const [document, setDocument] = useState("");
   const [bundleDir, setBundleDir] = useState("");
   const [parsed, setParsed] = useState<ParsedMcpRegistration | null>(null);
@@ -133,7 +143,7 @@ function RegisterServerForm({
       json = JSON.parse(next);
     } catch {
       setParsed(null);
-      setError("That is not valid JSON. Paste the whole server.json or MCPB manifest.json.");
+      setError(gt("That is not valid JSON. Paste the whole server.json or MCPB manifest.json."));
       return;
     }
     const result = parseMcpRegistration(json);
@@ -152,7 +162,7 @@ function RegisterServerForm({
     try {
       json = JSON.parse(document);
     } catch {
-      setError("That is not valid JSON.");
+      setError(gt("That is not valid JSON."));
       return;
     }
     const candidate: RegisteredMcpServerEntry = {
@@ -176,7 +186,7 @@ function RegisterServerForm({
       candidate.source.kind === "mcpb" &&
       candidate.source.bundleDir === ""
     ) {
-      setError("Set the bundle directory the manifest's files live in.");
+      setError(gt("Set the bundle directory the manifest's files live in."));
       return;
     }
     onAdd(candidate);
@@ -188,26 +198,29 @@ function RegisterServerForm({
   };
 
   return (
-    <SettingsSection id="register-mcp-server" title="Add an MCP server">
+    <SettingsSection id="register-mcp-server" title={gt("Add an MCP server")}>
       <SettingsRow
         {...searchableSetting("register-mcp-server")}
-        title="Register a server"
-        description="Paste the server.json from the MCP Registry, or an MCPB manifest.json. T3 runs it from this machine; remote servers are not supported."
+        title={gt("Register a server")}
+        description={gt(
+          "Paste the server.json from the MCP Registry, or an MCPB manifest.json. T3 runs it from this machine; remote servers are not supported.",
+        )}
       >
         <div className="flex flex-col gap-2">
           <Textarea
-            aria-label="Server document"
+            aria-label={gt("Server document")}
             className="min-h-32 w-full"
             spellCheck={false}
+            // oxlint-disable-next-line t3code/no-untranslated-copy -- literal JSON snippet example
             placeholder='{"name": "io.acme/team-notes", "packages": [ … ]}'
             value={document}
             onChange={(event) => readDocument(event.currentTarget.value)}
           />
           {parsed?.sourceKind === "mcpb" ? (
             <Input
-              aria-label="Bundle directory"
+              aria-label={gt("Bundle directory")}
               spellCheck={false}
-              placeholder="Directory holding the MCPB manifest and its files"
+              placeholder={gt("Directory holding the MCPB manifest and its files")}
               value={bundleDir}
               onChange={(event) => {
                 setBundleDir(event.currentTarget.value);
@@ -217,7 +230,7 @@ function RegisterServerForm({
           ) : null}
           {parsed === null ? null : (
             <Input
-              aria-label="Tool name prefix"
+              aria-label={gt("Tool name prefix")}
               spellCheck={false}
               placeholder={defaultToolName(parsed.name)}
               value={toolName}
@@ -231,7 +244,7 @@ function RegisterServerForm({
           <div className="flex items-center justify-end">
             <Button size="sm" variant="secondary" disabled={parsed === null} onClick={add}>
               <PlusIcon className="size-3.5" />
-              Register
+              <T>Register</T>
             </Button>
           </div>
         </div>

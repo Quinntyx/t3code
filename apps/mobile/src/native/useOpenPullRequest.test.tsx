@@ -5,13 +5,11 @@ import { expect, it, vi } from "vite-plus/test";
 import {
   selectWorkspaceDetail,
   workspaceDetailRouter,
-  type WorkspaceDetail,
 } from "../features/layout/workspace/workspace-detail-selection";
 
 const harness = vi.hoisted(() => ({
   os: "android",
   navigation: undefined as unknown,
-  select: (_detail: WorkspaceDetail) => {},
 }));
 
 vi.mock("react-native", () => ({
@@ -29,14 +27,17 @@ vi.mock("@react-navigation/native", async () => {
   return {
     StackActions: require("@react-navigation/routers").StackActions,
     useNavigation: () => harness.navigation,
+    useRoute: () => ({ params: undefined }),
   };
 });
-vi.mock("../features/layout/workspace/useSelectWorkspaceDetail", () => ({
-  useSelectWorkspaceDetail: () => harness.select,
-}));
 vi.mock("../state/entities", () => ({ useProjects: () => [], useThreadShell: () => null }));
 vi.mock("../state/atom-registry", () => ({ appAtomRegistry: { get: () => new Map() } }));
 vi.mock("../state/server", () => ({ environmentServerConfigsAtom: {} }));
+vi.mock("../state/issueTrackers", () => ({ issueTrackerEnvironment: { connections: {} } }));
+vi.mock("../state/pull-requests", () => ({ composerPullRequests: { preview: {} } }));
+vi.mock("../state/use-atom-query-runner", () => ({
+  useAtomQueryRunner: () => () => Promise.resolve({ _tag: "Failure" }),
+}));
 vi.mock("../state/use-thread-pr", () => ({
   withKnownPullRequestSummary: <Params,>(params: Params) => params,
 }));
@@ -48,6 +49,7 @@ vi.mock("../lib/pullRequestNavigation", () => ({
     repository: "o/r",
     number: 2,
   }),
+  pullRequestCandidateForIssueLink: () => null,
 }));
 
 import { useNavigateToPullRequest } from "./useOpenPullRequest";
@@ -60,7 +62,7 @@ const { StackRouter, StackActions } = require("@react-navigation/routers") as {
   StackActions: typeof import("@react-navigation/native").StackActions;
 };
 
-function setup({ sheet = false, drillIn = false, os = "android" } = {}) {
+function setup({ replace = false, drillIn = false, os = "android" } = {}) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   harness.os = os;
   const base = StackRouter({});
@@ -82,12 +84,10 @@ function setup({ sheet = false, drillIn = false, os = "android" } = {}) {
     params: { environmentId: "env", projectId: "p", repository: "o/r", number: 1 },
   } as const;
   dispatch(selectWorkspaceDetail(first) as unknown as Action);
-  if (sheet) dispatch(StackActions.push("GitOverview"));
   harness.navigation = { dispatch, getState: () => state };
-  harness.select = (detail) => dispatch(selectWorkspaceDetail(detail) as unknown as Action);
   let open!: ReturnType<typeof useNavigateToPullRequest>;
   function Probe() {
-    const navigate = useNavigateToPullRequest({ drillIn });
+    const navigate = useNavigateToPullRequest({ replace, drillIn });
     useLayoutEffect(() => {
       open = navigate;
     });
@@ -109,17 +109,23 @@ function setup({ sheet = false, drillIn = false, os = "android" } = {}) {
   };
 }
 
-it.each([false, true])(
-  "selects a PR without retaining the previous PR or sheet (sheet=%s)",
-  async (sheet) => {
-    using screen = setup({ sheet });
+it.each(["android", "ios"])(
+  "pushes the destination PR on top of the current route (%s)",
+  async (os) => {
+    using screen = setup({ os });
     await screen.open();
-    expect(screen.state.routes.map((route) => route.name)).toEqual(["Home", "PullRequest"]);
+    expect(screen.state.routes.map((route) => route.name)).toEqual([
+      "Home",
+      "PullRequest",
+      "PullRequest",
+    ]);
     expect(screen.state.routes.at(-1)?.params).toMatchObject({ number: 2 });
+    screen.back();
+    expect(screen.state.routes.at(-1)?.params).toMatchObject({ number: 1 });
   },
 );
 
-it("retains the source PR for Back when a PR-content link explicitly drills in", async () => {
+it("retains the source PR for Back when drillIn is passed", async () => {
   using screen = setup({ drillIn: true });
   await screen.open();
   expect(screen.state.routes.map((route) => route.name)).toEqual([
@@ -131,12 +137,9 @@ it("retains the source PR for Back when a PR-content link explicitly drills in",
   expect(screen.state.routes.at(-1)?.params).toMatchObject({ number: 1 });
 });
 
-it("preserves iOS's existing push behavior", async () => {
-  using screen = setup({ os: "ios" });
+it("replaces the current route when replace is true", async () => {
+  using screen = setup({ replace: true });
   await screen.open();
-  expect(screen.state.routes.map((route) => route.name)).toEqual([
-    "Home",
-    "PullRequest",
-    "PullRequest",
-  ]);
+  expect(screen.state.routes.map((route) => route.name)).toEqual(["Home", "PullRequest"]);
+  expect(screen.state.routes.at(-1)?.params).toMatchObject({ number: 2 });
 });

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveAppearance, resolveAppearancePreferences } from "./appearancePreferences";
+import {
+  resolveAppearance,
+  resolveAppearancePreferences,
+  resolveComposerTextRole,
+} from "./appearancePreferences";
 import { FONT_FAMILIES } from "./fontFamilies";
 
 describe("appearancePreferences", () => {
@@ -9,6 +13,16 @@ describe("appearancePreferences", () => {
     expect(
       resolveAppearancePreferences({ baseFontSize: 16, markdownFontSize: 18 }).baseFontSize,
     ).toBe(16);
+  });
+
+  it("scales the iOS composer text with the system text size", () => {
+    const body = { fontSize: 16, lineHeight: 23 };
+    expect(resolveComposerTextRole(body, 1, "ios")).toEqual(body);
+    expect(resolveComposerTextRole(body, 2.643, "ios")).toEqual({
+      fontSize: 16 * 2.643,
+      lineHeight: 23 * 2.643,
+    });
+    expect(resolveComposerTextRole(body, 2.643, "android")).toEqual(body);
   });
 
   it("resolves font choices per platform and falls back for ids it does not offer", () => {

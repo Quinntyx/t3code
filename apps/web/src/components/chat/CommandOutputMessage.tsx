@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { SquareTerminalIcon } from "lucide-react";
 import { use } from "react";
 import ChatMarkdown from "../ChatMarkdown";
@@ -15,6 +16,7 @@ export function CommandOutputMessage({
   streaming: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const gt = useGT();
 
   return (
     <div className="w-fit min-w-0 max-w-full rounded-lg border border-border/70 bg-muted/30">
@@ -23,11 +25,13 @@ export function CommandOutputMessage({
         {localCommand ? (
           <span className="min-w-0 break-all font-mono text-foreground">/{localCommand}</span>
         ) : (
-          <span>Command output</span>
+          <span>
+            <T>Command output</T>
+          </span>
         )}
         {!streaming && (
           <div className="ml-auto pl-3 opacity-0 pointer-coarse:opacity-100 group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100">
-            <MessageCopyButton text={text} label="Copy command output" variant="ghost" />
+            <MessageCopyButton text={text} label={gt("Copy command output")} variant="ghost" />
           </div>
         )}
       </div>

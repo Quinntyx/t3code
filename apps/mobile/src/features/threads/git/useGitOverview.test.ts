@@ -12,6 +12,10 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("react", () => ({ use: () => null, useState: (value: unknown) => [value, () => {}] }));
+vi.mock("gt-react-native", async (importOriginal) => {
+  const gt = await importOriginal<typeof import("gt-react-native")>();
+  return { ...gt, useGT: () => gt.mFallback, useMessages: () => gt.mFallback };
+});
 vi.mock("../../layout/workspace-inspector-sheet", () => ({ InspectorSheetContext: null }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ navigate: state.navigate }),

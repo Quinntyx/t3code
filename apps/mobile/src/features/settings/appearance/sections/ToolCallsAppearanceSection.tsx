@@ -1,4 +1,5 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { msg, T, useGT, useMessages } from "gt-react-native";
+import { useAtomValue } from "@effect/atom-react";
 import type { ToolCallVisibility } from "@t3tools/contracts/settings";
 import { AsyncResult } from "effect/reactivity";
 import { View } from "react-native";
@@ -6,21 +7,24 @@ import { View } from "react-native";
 import { AppText as Text } from "../../../../components/ui/AppText";
 import { ListChoiceRow } from "../../../../components/ui/ListChoiceRow";
 import { ListToggleRow } from "../../../../components/ui/ListToggleRow";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../../../state/preferences";
+import { useAtomCommand } from "../../../../state/use-atom-command";
 import { SettingsSection } from "../../components/SettingsSection";
 
 const TOOL_CALL_VISIBILITY_OPTIONS: ReadonlyArray<{
   readonly value: ToolCallVisibility;
   readonly label: string;
 }> = [
-  { value: "showAll", label: "Show all" },
-  { value: "hideSuccessful", label: "Hide successful" },
-  { value: "hideAll", label: "Hide all" },
-  { value: "zen", label: "Zen" },
+  { value: "showAll", label: msg("Show all") },
+  { value: "hideSuccessful", label: msg("Hide successful") },
+  { value: "hideAll", label: msg("Hide all") },
+  { value: "zen", label: msg("Zen", { $context: "tool call visibility: only final answers" }) },
 ];
 
 export function ToolCallsAppearanceSection() {
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const gt = useGT();
+  const m = useMessages();
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const selected = AsyncResult.isSuccess(preferences)
     ? (preferences.value.toolCallVisibility ?? "showAll")
@@ -28,31 +32,39 @@ export function ToolCallsAppearanceSection() {
 
   return (
     <View className="gap-3">
-      <SettingsSection title="Tool calls in chat">
+      <SettingsSection title={gt("Tool calls in chat")}>
         {TOOL_CALL_VISIBILITY_OPTIONS.map((option, index) => (
           <ListChoiceRow
             key={option.value}
-            label={option.label}
+            label={m(option.label)}
             selected={selected === option.value}
             separated={index > 0}
             disabled={selected === null}
-            onPress={() => savePreferences({ toolCallVisibility: option.value })}
+            onPress={() => {
+              void savePreferences({ toolCallVisibility: option.value });
+            }}
           />
         ))}
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">
-        Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows
-        only final answers. Approvals, questions, and errors always show.
+        <T>
+          Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen
+          shows only final answers. Approvals, questions, and errors always show.
+        </T>
       </Text>
       <SettingsSection>
         <ListToggleRow
-          label="Fold context compactions"
-          description="Hide “Context compacted” dividers inside a finished turn’s collapsed work instead of showing them below it."
+          label={gt("Fold context compactions")}
+          description={gt(
+            "Hide “Context compacted” dividers inside a finished turn’s collapsed work instead of showing them below it.",
+          )}
           value={
             AsyncResult.isSuccess(preferences) && preferences.value.foldContextCompactions === true
           }
           disabled={selected === null}
-          onValueChange={(value) => savePreferences({ foldContextCompactions: value })}
+          onValueChange={(value) => {
+            void savePreferences({ foldContextCompactions: value });
+          }}
         />
       </SettingsSection>
     </View>

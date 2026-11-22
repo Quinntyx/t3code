@@ -18,12 +18,14 @@ import type {
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { deriveThreadWorkedDuration, formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { formatThreadUsageCost, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { ChevronDownIcon, GaugeIcon, TimerIcon, UsersIcon } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useThreadUsage } from "../../hooks/useThreadUsage";
+import { m, type MessageResolver } from "../../i18n/messages";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import {
@@ -55,15 +57,15 @@ import {
 
 const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const GROUP_LABEL: Record<ThreadUsageGroup, string> = {
-  main: "Main agent",
-  delegates: "Delegates",
+  main: msg("Main agent"),
+  delegates: msg("Delegates"),
 };
 
 const WINDOW_KIND_LABEL = {
-  session: "5h",
-  weekly: "Weekly",
-  monthly: "Monthly",
-  other: "Window",
+  session: msg("5h"),
+  weekly: msg("Weekly"),
+  monthly: msg("Monthly"),
+  other: msg("Window"),
 } as const;
 
 function isFiveHourOrWeekly(window: ServerProviderUsageWindow): boolean {
@@ -75,28 +77,44 @@ function isFiveHourOrWeekly(window: ServerProviderUsageWindow): boolean {
   );
 }
 
-function consumptionCapConditionLabel(condition: ThreadConsumptionCapCondition): string {
+function consumptionCapConditionLabel(
+  condition: ThreadConsumptionCapCondition,
+  resolve: MessageResolver = m,
+): string {
   const models = condition.models?.length;
   if (condition.kind === "spend") {
     const amount = formatUsd(condition.limitUsd);
     return models === undefined
-      ? `${amount} total`
-      : `${amount} · ${models} model${models === 1 ? "" : "s"}`;
+      ? resolve(msg("{amount} total", { amount }))
+      : resolve(
+          msg("{amount} · {count, plural, one {{count} model} other {{count} models}}", {
+            amount,
+            count: models,
+          }),
+        );
   }
-  const window = `${WINDOW_KIND_LABEL[condition.windowKind]} ${condition.atPercent}%`;
-  return models === undefined ? window : `${window} · ${models} model${models === 1 ? "" : "s"}`;
+  const window = `${resolve(WINDOW_KIND_LABEL[condition.windowKind])} ${condition.atPercent}%`;
+  return models === undefined
+    ? window
+    : resolve(
+        msg("{window} · {count, plural, one {{count} model} other {{count} models}}", {
+          window,
+          count: models,
+        }),
+      );
 }
 
 function consumptionCapSummary(
   cap: ThreadConsumptionCap | null,
   hit: ThreadConsumptionCapHit | null,
+  resolve: MessageResolver = m,
 ): string {
   if (hit !== null) return hit.reason;
-  if (cap === null) return "Right-click to set a cap";
+  if (cap === null) return resolve(msg("Right-click to set a cap"));
   const [first] = cap.conditions;
-  if (first === undefined) return "No limits";
+  if (first === undefined) return resolve(msg("No limits"));
   const more = cap.conditions.length > 1 ? ` +${cap.conditions.length - 1}` : "";
-  return `${consumptionCapConditionLabel(first)}${more}`;
+  return `${consumptionCapConditionLabel(first, resolve)}${more}`;
 }
 
 function providerColor(driver: ProviderDriverKind): string {
@@ -169,6 +187,8 @@ function UsageGroupRow({
   readonly open: boolean;
   readonly onToggle: () => void;
 }) {
+  const resolve = useMessages();
+  const gt = useGT();
   const [first] = models;
   if (first === undefined) return null;
   const mixed = models.length > 1;
@@ -176,11 +196,11 @@ function UsageGroupRow({
     <span
       className={cn("flex min-w-0 flex-1 items-center gap-0.5", THREAD_DETAILS_PANEL_LABEL_CLASS)}
     >
-      <span className="shrink-0">{GROUP_LABEL[group]}</span>
+      <span className="shrink-0">{resolve(GROUP_LABEL[group])}</span>
       <span
         className={cn("text-xs font-normal text-muted-foreground", mixed ? "shrink-0" : "truncate")}
       >
-        ({mixed ? "Mixed" : present(first).label})
+        ({mixed ? gt("Mixed") : present(first).label})
       </span>
       {mixed ? (
         <ChevronDownIcon
@@ -265,6 +285,8 @@ export function ThreadUsagePanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
+  const gt = useGT();
+  const resolve = useMessages();
   const threadRef = scopeThreadRef(props.environmentId, props.threadId);
   const { data, dataUpdatedAt, isPending, shell } = useThreadUsage(threadRef);
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
@@ -370,11 +392,11 @@ export function ThreadUsagePanel(props: {
     const items = [
       {
         id: "edit" as const,
-        label: cap === null ? "Set consumption cap…" : "Edit consumption cap…",
+        label: cap === null ? gt("Set consumption cap…") : gt("Edit consumption cap…"),
       },
       ...(cap === null
         ? []
-        : [{ id: "remove" as const, label: "Remove consumption cap", destructive: true }]),
+        : [{ id: "remove" as const, label: gt("Remove consumption cap"), destructive: true }]),
     ];
     void api.contextMenu.show(items, { x: event.clientX, y: event.clientY }).then((action) => {
       if (action === "edit") setCapOpen(true);
@@ -387,8 +409,8 @@ export function ThreadUsagePanel(props: {
         const cause = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: "Could not remove consumption cap",
-          description: cause instanceof Error ? cause.message : "An error occurred.",
+          title: m(msg("Could not remove consumption cap")),
+          description: cause instanceof Error ? cause.message : m(msg("An error occurred.")),
         });
       });
     });
@@ -417,18 +439,22 @@ export function ThreadUsagePanel(props: {
   return (
     <ThreadDetailsSection
       headingId="thread-details-consumption-heading"
-      title="Consumption"
+      title={gt("Consumption")}
       showHeading={false}
       onContextMenu={handleContextMenu}
     >
       <div className="flex flex-col">
         <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
           <GaugeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Consumption</span>
+          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+            <T>Consumption</T>
+          </span>
           {hasUsage ? (
             <UsageFigures models={data.models} incomplete={data.incompleteGroups !== undefined} />
           ) : (
-            <span className="text-xs text-muted-foreground">No usage yet</span>
+            <span className="text-xs text-muted-foreground">
+              <T>No usage yet</T>
+            </span>
           )}
         </div>
         {hasUsage && data.startedAt !== null ? (
@@ -438,7 +464,7 @@ export function ThreadUsagePanel(props: {
               startedAt={data.startedAt}
               bucketMs={data.bucketMs}
               compactedAt={data.compactedAt}
-              endLabel={shell?.runtime?.activeRunId ? "Now" : null}
+              endLabel={shell?.runtime?.activeRunId ? gt("Now") : null}
               formatTime={(iso, spanMs) => formatUsageChartTimestamp(iso, timestampFormat, spanMs)}
               formatTooltipTime={(iso) => formatDayAwareTimestamp(iso, timestampFormat)}
             />
@@ -447,7 +473,9 @@ export function ThreadUsagePanel(props: {
         {workedFor !== null ? (
           <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
             <TimerIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-            <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Worked for</span>
+            <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+              <T>Worked for</T>
+            </span>
             <span className="shrink-0 text-xs font-normal text-foreground/85 tabular-nums">
               {workedFor.liveFromMs !== null ? (
                 <RunningDuration durationMs={workedFor.baseMs} updatedAt={workedFor.liveFromMs} />
@@ -465,14 +493,16 @@ export function ThreadUsagePanel(props: {
             aria-hidden
             className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, capHit !== null && "text-warning")}
           />
-          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Cap</span>
+          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+            <T>Cap</T>
+          </span>
           <span
             className={cn(
               "min-w-0 max-w-[62%] truncate text-xs tabular-nums",
               capHit !== null ? "text-warning" : "text-muted-foreground",
             )}
           >
-            {consumptionCapSummary(cap, capHit)}
+            {consumptionCapSummary(cap, capHit, resolve)}
           </span>
         </div>
         {hasUsage

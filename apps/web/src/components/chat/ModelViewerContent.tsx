@@ -22,6 +22,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { T, useGT, Var } from "gt-react";
 import { OrbitIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -104,6 +105,7 @@ async function loadModel(source: ArrayBuffer, extension: string, name: string): 
 }
 
 export function ModelViewerContent(props: ModelViewerContentProps) {
+  const gt = useGT();
   const containerRef = useRef<HTMLSpanElement | null>(null);
   const viewRef = useRef<{
     readonly reset: () => void;
@@ -280,19 +282,23 @@ export function ModelViewerContent(props: ModelViewerContentProps) {
     <span
       className="relative block size-full"
       role="group"
-      aria-label={`Interactive 3D model: ${props.name}`}
+      aria-label={gt("Interactive 3D model: {name}", { name: props.name })}
     >
       <span ref={containerRef} className={cn("block size-full", props.className)} />
       {status === "loading" ? (
         <span className="absolute inset-0 flex items-center justify-center bg-muted/30 text-xs text-muted-foreground motion-safe:animate-skeleton">
-          Loading 3D model…
+          <T>Loading 3D model…</T>
         </span>
       ) : null}
       {status === "error" ? (
         <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/40 p-4 text-center text-xs text-muted-foreground">
-          <span>3D model unavailable · {props.name}</span>
+          <span>
+            <T>
+              3D model unavailable · <Var>{props.name}</Var>
+            </T>
+          </span>
           <Button variant="outline" size="xs" onClick={retry}>
-            Retry
+            <T>Retry</T>
           </Button>
         </span>
       ) : null}
@@ -302,8 +308,8 @@ export function ModelViewerContent(props: ModelViewerContentProps) {
             <Button
               variant="glass"
               size="icon-xs"
-              aria-label="Reset camera"
-              title="Reset camera"
+              aria-label={gt("Reset camera")}
+              title={gt("Reset camera")}
               onClick={resetView}
             >
               <RotateCcwIcon />
@@ -312,8 +318,8 @@ export function ModelViewerContent(props: ModelViewerContentProps) {
               variant="glass"
               size="icon-xs"
               aria-pressed={autoRotate}
-              aria-label="Toggle auto-rotate"
-              title="Toggle auto-rotate"
+              aria-label={gt("Toggle auto-rotate")}
+              title={gt("Toggle auto-rotate")}
               onClick={toggleRotation}
             >
               <OrbitIcon />

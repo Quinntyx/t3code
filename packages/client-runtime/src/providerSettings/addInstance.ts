@@ -1,14 +1,23 @@
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
+
 import { deriveAvailableInstanceId, deriveInstanceId } from "../providerInstanceIds.ts";
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 
-export function validateInstanceId(id: string, existing: ReadonlySet<string>): string | null {
-  if (id.length === 0) return "Instance ID is required.";
-  if (id.length > 64) return "Instance ID must be 64 characters or fewer.";
+export function validateInstanceId(
+  id: string,
+  existing: ReadonlySet<string>,
+  resolve: MFunctionType = mFallback,
+): string | null {
+  if (id.length === 0) return resolve(msg("Instance ID is required."));
+  if (id.length > 64) return resolve(msg("Instance ID must be 64 characters or fewer."));
   if (!INSTANCE_ID_PATTERN.test(id)) {
-    return "Instance ID must start with a letter and use only letters, digits, '-', or '_'.";
+    return resolve(
+      msg("Instance ID must start with a letter and use only letters, digits, '-', or '_'."),
+    );
   }
-  if (existing.has(id)) return `An instance named '${id}' already exists.`;
+  if (existing.has(id)) return resolve(msg("An instance named ''{id}'' already exists.", { id }));
   return null;
 }
 

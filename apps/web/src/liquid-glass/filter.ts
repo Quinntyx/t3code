@@ -1,5 +1,3 @@
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-
 import { type GlassEdge, RIM_WIDTH } from "./shape";
 
 export interface LiquidGlassOptions {
@@ -12,12 +10,12 @@ export interface LiquidGlassOptions {
 }
 
 export const DEFAULT_LIQUID_GLASS_OPTIONS: LiquidGlassOptions = {
-  blur: DEFAULT_UNIFIED_SETTINGS.liquidGlassBlur,
-  centerBlur: DEFAULT_UNIFIED_SETTINGS.liquidGlassCenterBlur,
-  saturation: DEFAULT_UNIFIED_SETTINGS.liquidGlassSaturation,
-  refraction: DEFAULT_UNIFIED_SETTINGS.liquidGlassRefraction,
-  dispersion: DEFAULT_UNIFIED_SETTINGS.liquidGlassDispersion,
-  glare: DEFAULT_UNIFIED_SETTINGS.liquidGlassGlare,
+  blur: 1,
+  centerBlur: 6,
+  saturation: 100,
+  refraction: 100,
+  dispersion: 400,
+  glare: 100,
 };
 
 // Filter parameters from https://blade04208.github.io/css/liquid-glass.css (lyra rebane).

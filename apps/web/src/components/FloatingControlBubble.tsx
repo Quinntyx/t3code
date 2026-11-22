@@ -6,6 +6,7 @@ import { cn } from "~/lib/utils";
 export function FloatingControlBubble({ className, children, ...props }: ComponentProps<"div">) {
   return (
     <div
+      data-slot="floating-control-bubble"
       className={cn(
         "isolate flex flex-col items-center gap-0.5 rounded-full p-1 shadow-float [--radius:1rem]",
         className,

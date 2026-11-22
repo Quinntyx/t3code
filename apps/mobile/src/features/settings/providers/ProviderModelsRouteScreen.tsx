@@ -29,6 +29,7 @@ import {
   toCustomModelSetting,
   type CustomModelDefinition,
 } from "@t3tools/shared/model";
+import { T, useGT } from "gt-react-native";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -73,6 +74,7 @@ export function ProviderModelsRouteScreen({ route }: StaticScreenProps<Params>) 
 }
 
 function ProviderModels({ environmentId, instanceId }: Params) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const actions = useProviderInstanceActions(environmentId);
   const providers = useEnvironmentProviders(environmentId);
@@ -84,7 +86,13 @@ function ProviderModels({ environmentId, instanceId }: Params) {
   const instance = row ? (row.explicitInstance ?? { driver: row.driver }) : null;
   const provider = providers.find((candidate) => candidate.instanceId === instanceId);
   return (
-    <SettingsScreen title={instance ? `${providerInstanceName(instance)} models` : "Models"}>
+    <SettingsScreen
+      title={
+        instance
+          ? gt("{provider} models", { provider: providerInstanceName(instance) })
+          : gt("Models")
+      }
+    >
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -101,7 +109,9 @@ function ProviderModels({ environmentId, instanceId }: Params) {
             actions={actions}
           />
         ) : (
-          <Text className="text-foreground-muted">This provider is no longer configured.</Text>
+          <Text className="text-foreground-muted">
+            <T>This provider is no longer configured.</T>
+          </Text>
         )}
       </ScreenScrollView>
     </SettingsScreen>
@@ -115,6 +125,7 @@ function ModelsEditor(props: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
   readonly actions: ReturnType<typeof useProviderInstanceActions>;
 }) {
+  const gt = useGT();
   const { instanceId, instance, actions } = props;
   const driverKind = isProviderDriverKind(instance.driver) ? instance.driver : null;
   const supportsCustomModels = instance.driver !== "antigravity";
@@ -302,21 +313,33 @@ function ModelsEditor(props: {
   const groups = (["favorite", "visible", "hidden"] as const)
     .map((group) => ({ group, models: visibleModels.filter((model) => groupOf(model) === group) }))
     .filter((entry) => entry.models.length > 0);
+  const summary = [
+    gt("{count, plural, one {{count} model} other {{count} models}}", { count: models.length }),
+    favoriteCount > 0
+      ? gt("{count, plural, one {{count} favorite} other {{count} favorites}}", {
+          count: favoriteCount,
+        })
+      : null,
+    hiddenCount > 0 ? gt("{count} hidden", { count: hiddenCount }) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <>
       <SettingsSection
-        footer={`Preferences are saved on this environment and shared across devices. ${[
-          `${models.length} model${models.length === 1 ? "" : "s"}`,
-          favoriteCount > 0 ? `${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}` : null,
-          hiddenCount > 0 ? `${hiddenCount} hidden` : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")}.`}
+        footer={gt(
+          "Preferences are saved on this environment and shared across devices. {summary}.",
+          {
+            summary,
+          },
+        )}
       >
         <ListToggleRow
-          label="Turn on new models"
-          description="New models from this provider show in the picker. Existing choices stay as they are."
+          label={gt("Turn on new models")}
+          description={gt(
+            "New models from this provider show in the picker. Existing choices stay as they are.",
+          )}
           disabled={!canWritePreferences}
           value={newModelsEnabled}
           onValueChange={(enabled) =>
@@ -333,7 +356,7 @@ function ModelsEditor(props: {
           <View className="border-t border-border-subtle">
             <ListActionRow
               icon={allBuiltInHidden ? "eye" : "eye.slash"}
-              label={allBuiltInHidden ? "Show all models" : "Hide all models"}
+              label={allBuiltInHidden ? gt("Show all models") : gt("Hide all models")}
               disabled={!canWritePreferences}
               onPress={() => {
                 const nextHidden = new Set(nextHiddenModelsForBulkToggle(models, hiddenModels));
@@ -352,9 +375,9 @@ function ModelsEditor(props: {
 
       {models.length > FILTER_THRESHOLD ? (
         <AppTextInput
-          accessibilityLabel="Filter models"
+          accessibilityLabel={gt("Filter models")}
           value={filter}
-          placeholder="Filter models"
+          placeholder={gt("Filter models")}
           autoCapitalize="none"
           autoCorrect={false}
           clearButtonMode="while-editing"
@@ -365,22 +388,24 @@ function ModelsEditor(props: {
 
       {models.length === 0 ? (
         <Text className="px-2 text-foreground-muted">
-          No models reported for this provider yet.
+          <T>No models reported for this provider yet.</T>
         </Text>
       ) : visibleModels.length === 0 ? (
-        <Text className="px-2 text-foreground-muted">No models match.</Text>
+        <Text className="px-2 text-foreground-muted">
+          <T>No models match.</T>
+        </Text>
       ) : (
         groups.map(({ group, models: groupModels }) => (
           <SettingsSection
             key={group}
             title={
               group === "favorite"
-                ? "Favorites"
+                ? gt("Favorites")
                 : group === "hidden"
-                  ? "Hidden from picker"
+                  ? gt("Hidden from picker")
                   : favoriteCount > 0
-                    ? "All"
-                    : "Models"
+                    ? gt("All", { $context: "model list section heading" })
+                    : gt("Models")
             }
           >
             {groupModels.map((model, index) => {
@@ -405,9 +430,9 @@ function ModelsEditor(props: {
                   onEdit={() => setEditingSlug(model.slug)}
                   onRemove={() =>
                     Dialog.confirm({
-                      title: `Remove ${model.slug}?`,
-                      message: "The custom model leaves this provider's picker.",
-                      confirmText: "Remove",
+                      title: gt("Remove {model}?", { model: model.slug }),
+                      message: gt("The custom model leaves this provider's picker."),
+                      confirmText: gt("Remove"),
                       destructive: true,
                       onConfirm: () => removeCustomModel(model.slug),
                     })
@@ -420,21 +445,23 @@ function ModelsEditor(props: {
       )}
 
       {canManageCustom ? (
-        <SettingsSection title="Custom model">
+        <SettingsSection title={gt("Custom model")}>
           <FieldBlock
-            label="Model slug"
-            description="Any model the provider accepts that it does not list. Custom models always show in the picker."
+            label={gt("Model slug")}
+            description={gt(
+              "Any model the provider accepts that it does not list. Custom models always show in the picker.",
+            )}
             trailing={
               <ControlPill
                 variant="primary"
-                label="Add"
+                label={gt("Add")}
                 disabled={adding.trim().length === 0}
                 onPress={addCustomModel}
               />
             }
           >
             <AppTextInput
-              accessibilityLabel="Custom model slug"
+              accessibilityLabel={gt("Custom model slug")}
               value={adding}
               placeholder={
                 (driverKind ? CUSTOM_MODEL_PLACEHOLDER_BY_KIND[driverKind] : undefined) ??
@@ -483,11 +510,12 @@ function ModelRow(props: {
   readonly onEdit: () => void;
   readonly onRemove: () => void;
 }) {
+  const gt = useGT();
   const { model } = props;
   const capabilities = describeModelCapabilities(model, props.flagMissingReasoning);
   const detail = [
     model.name !== model.slug ? model.slug : null,
-    model.isCustom ? "custom" : null,
+    model.isCustom ? gt("custom", { $context: "model badge, custom user-added model" }) : null,
     capabilities.length > 0 ? capabilities.join(" · ") : null,
   ]
     .filter(Boolean)
@@ -497,13 +525,13 @@ function ModelRow(props: {
       ? [
           {
             id: "up",
-            title: "Move up",
+            title: gt("Move up"),
             image: "arrow.up",
             attributes: { disabled: !props.canMoveUp },
           },
           {
             id: "down",
-            title: "Move down",
+            title: gt("Move down"),
             image: "arrow.down",
             attributes: { disabled: !props.canMoveDown },
           },
@@ -511,10 +539,10 @@ function ModelRow(props: {
       : []),
     ...(model.isCustom && props.canManageCustom
       ? [
-          { id: "edit", title: "Edit name and options", image: "pencil" },
+          { id: "edit", title: gt("Edit name and options"), image: "pencil" },
           {
             id: "remove",
-            title: "Remove custom model",
+            title: gt("Remove custom model"),
             image: "trash",
             attributes: { destructive: true },
           },
@@ -531,7 +559,9 @@ function ModelRow(props: {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={
-          props.favorite ? `Remove ${model.name} from favorites` : `Add ${model.name} to favorites`
+          props.favorite
+            ? gt("Remove {model} from favorites", { model: model.name })
+            : gt("Add {model} to favorites", { model: model.name })
         }
         accessibilityState={{ selected: props.favorite, disabled: !props.canWritePreferences }}
         disabled={!props.canWritePreferences}
@@ -560,7 +590,7 @@ function ModelRow(props: {
         <Menu
           accessible
           accessibilityRole="button"
-          accessibilityLabel={`${model.name} options`}
+          accessibilityLabel={gt("{model} options", { model: model.name })}
           title={model.name}
           actions={menuActions}
           onPressAction={({ nativeEvent }) => {
@@ -570,11 +600,14 @@ function ModelRow(props: {
             else if (nativeEvent.event === "remove") props.onRemove();
           }}
         >
-          <ControlPill icon="ellipsis" accessibilityLabel={`${model.name} options`} />
+          <ControlPill
+            icon="ellipsis"
+            accessibilityLabel={gt("{model} options", { model: model.name })}
+          />
         </Menu>
       ) : null}
       <ThemedSwitch
-        accessibilityLabel={`Show ${model.name} in the model picker`}
+        accessibilityLabel={gt("Show {model} in the model picker", { model: model.name })}
         disabled={!props.canWritePreferences || model.isCustom}
         value={!props.hidden}
         onValueChange={(shown) => props.onSetHidden(!shown)}

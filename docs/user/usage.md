@@ -20,6 +20,13 @@ record are missing from the totals.
 Text generation (thread titles, commit messages, PR text, branch names and review guides) is not in
 the totals for Codex or Claude Code 2.0.63 and newer, because those runs save no session history.
 
+The server keeps scanned usage history for 92 days by default. Claude Code deletes its own
+transcripts after 30 days, so for older Claude usage this history is the only record left. To keep
+it longer, set `usageHistoryRetentionDays` in `<T3 home>/userdata/settings.json` to a number of days
+such as `365`, or to `"unlimited"`. Usage views still show at most 90 days. Lowering the value
+prunes older history on the next refresh, and raising it again does not bring pruned history back.
+While `settings.json` cannot be read, nothing is pruned.
+
 OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
 databases, including T3-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
 server to read a different data directory; comma-separated paths read multiple directories.
@@ -209,6 +216,9 @@ Grok reports the remaining subscription allowance and reset time for its current
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
 
+Muse Code reports its session and weekly windows and its tier once the Muse CLI has run in a thread.
+Until then it shows no limits. Readings are not kept across a server restart.
+
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
@@ -218,18 +228,20 @@ To see pooled accounts, open **Settings → Providers → Usage providers → Ad
 **Settings → Providers → Usage and background checks → Add hub** on mobile. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
-The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
-account and choose **Use reset** to redeem one. No hub plugin is required. A hub with provider
-discovery also reports its other upstream providers, such as Mistral, OpenCode Go, or OpenRouter,
-with each vendor's own windows. A provider or window the hub cannot measure shows no bar rather
-than 0% or unlimited. Older hubs report only Claude and Codex accounts.
+The hub's Codex, Claude, xAI (shown as Grok), and Antigravity accounts appear under **Usage → Limits**.
+Codex accounts show banked reset credits; select an account and choose **Use reset** to redeem one.
+No hub plugin is required. A hub with provider discovery also reports its other upstream providers,
+such as Mistral, OpenCode Go, or OpenRouter, with each vendor's own windows. A provider or window
+the hub cannot measure shows no bar rather than 0% or unlimited. Older hubs without provider
+discovery report only Codex, Claude, xAI (Grok), and Antigravity accounts.
 
 A hub with provider discovery also shares its model list with Pi: see
 [Pi models from a hub](providers-pi.md#models-from-a-cliproxyapi-hub). This connection does not
-supply an inference key. To have T3 Code set up the endpoint and key as well, use discovery: a hub the `t3discover` broker advertises appears at the top of **Usage**, and
-linking it mints one key for this machine and can set the endpoint and key on Claude Code, Codex,
-and Pi providers. See [Self-hosted discovery](remote-access.md#discover-and-run-other-services).
-Remove the hub from the same settings section when you no longer need it.
+supply an inference key. To have T3 Code set up the endpoint and key as well, use discovery: a hub
+the `t3discover` broker advertises appears at the top of **Usage**, and linking it mints one key for
+this machine and can set the endpoint and key on Claude Code, Codex, and Pi providers. See
+[Self-hosted discovery](remote-access.md#discover-and-run-other-services). Remove the hub from the
+same settings section when you no longer need it.
 
 ## Subscription usage widget
 

@@ -17,10 +17,12 @@ import {
   type ProviderInstanceConfig,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { msg } from "gt-react-native";
 import { View } from "react-native";
 
 import { ProviderIcon } from "../../../components/ProviderIcon";
 import { AppText as Text } from "../../../components/ui/AppText";
+import { m, type MessageResolver } from "../../../i18n/messages";
 
 const STATUS_DOT_CLASS: Record<ProviderStatusKey, string> = {
   disabled: "bg-foreground-tertiary",
@@ -42,16 +44,21 @@ export function isProviderUpdating(provider: ServerProvider | undefined) {
 export function describeProviderInstance(
   instance: ProviderInstanceConfig,
   provider: ServerProvider | undefined,
+  resolve: MessageResolver = m,
 ) {
   const enabled = resolveProviderInstanceEnabled(instance);
   const effective = provider && { ...provider, enabled };
   const statusKey = enabled ? getProviderStatusKey(effective) : "disabled";
-  const summary = enabled ? getProviderSummary(effective) : { headline: "Off", detail: null };
+  const summary = enabled
+    ? getProviderSummary(effective)
+    : { headline: resolve(msg("Off", { $context: "provider status, disabled" })), detail: null };
   const updating = isProviderUpdating(provider);
   return {
     enabled,
     statusKey,
-    headline: updating ? "Updating" : summary.headline,
+    headline: updating
+      ? resolve(msg("Updating", { $context: "provider status, update in progress" }))
+      : summary.headline,
     detail: summary.detail,
     needsAttention: statusKey === "warning" || statusKey === "error",
   };

@@ -32,6 +32,7 @@ import {
   type ProviderInstanceEnvironmentVariable,
   type SecretReference,
 } from "@t3tools/contracts";
+import { T, useGT } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
 
@@ -86,6 +87,7 @@ export function CommitTextInput(props: {
   readonly editable?: boolean;
   readonly autoFocus?: boolean;
 }) {
+  const gt = useGT();
   // `over` is the saved value the draft was typed against; a changed one remounted the input.
   const draft = useRef<{ readonly text: string; readonly over: string } | null>(null);
   // A secret's saved value never comes back, so a commit clears the field by remounting it.
@@ -110,8 +112,8 @@ export function CommitTextInput(props: {
       defaultValue={props.secret ? "" : props.value}
       placeholder={
         props.secret && props.configured
-          ? "Saved. Enter a new value to replace it."
-          : (props.placeholder ?? (props.secret ? "Not set" : undefined))
+          ? gt("Saved. Enter a new value to replace it.")
+          : (props.placeholder ?? (props.secret ? gt("Not set") : undefined))
       }
       secureTextEntry={props.secret}
       multiline={props.multiline}
@@ -151,6 +153,7 @@ export function SecretValueInput(props: {
   readonly onCommit: (value: string) => void;
   readonly onSecretChange: (secret: SecretReference) => void;
 }) {
+  const gt = useGT();
   const reference = isSecretReference(props.value) ? props.value : undefined;
   const savedKey = reference ? `${reference.provider}\u0000${reference.reference}` : null;
   const [chosen, setChosen] = useState(reference?.provider ?? null);
@@ -167,16 +170,24 @@ export function SecretValueInput(props: {
       ? reference.provider
       : null;
   const sourceLabel =
-    chosen === null ? "Stored value" : (source?.label ?? `${chosen} (unavailable)`);
+    chosen === null
+      ? gt("Stored value")
+      : (source?.label ?? gt("{source} (unavailable)", { source: chosen }));
   const actions: MenuAction[] = [
-    { id: STORED_VALUE, title: "Stored value", state: chosen === null ? "on" : "off" },
+    { id: STORED_VALUE, title: gt("Stored value"), state: chosen === null ? "on" : "off" },
     ...props.sources.map((candidate) => ({
       id: candidate.id,
       title: candidate.label,
       state: candidate.id === chosen ? ("on" as const) : ("off" as const),
     })),
     ...(unknownSource !== null
-      ? [{ id: unknownSource, title: `${unknownSource} (unavailable)`, state: "on" as const }]
+      ? [
+          {
+            id: unknownSource,
+            title: gt("{source} (unavailable)", { source: unknownSource }),
+            state: "on" as const,
+          },
+        ]
       : []),
   ];
   return (
@@ -186,8 +197,11 @@ export function SecretValueInput(props: {
           <Menu
             accessible
             accessibilityRole="button"
-            accessibilityLabel={`${props.accessibilityLabel} source: ${sourceLabel}`}
-            title="Value comes from"
+            accessibilityLabel={gt("{field} source: {source}", {
+              field: props.accessibilityLabel,
+              source: sourceLabel,
+            })}
+            title={gt("Value comes from")}
             actions={actions}
             onPressAction={({ nativeEvent }) => {
               if (!props.editable) return;
@@ -208,7 +222,7 @@ export function SecretValueInput(props: {
           accessibilityLabel={props.accessibilityLabel}
           value=""
           placeholder={
-            reference !== undefined ? "Enter a value to store instead" : props.placeholder
+            reference !== undefined ? gt("Enter a value to store instead") : props.placeholder
           }
           secret
           configured={reference === undefined && props.configured}
@@ -218,7 +232,7 @@ export function SecretValueInput(props: {
         />
       ) : (
         <CommitTextInput
-          accessibilityLabel={`${props.accessibilityLabel} reference`}
+          accessibilityLabel={gt("{field} reference", { field: props.accessibilityLabel })}
           value={reference?.provider === chosen ? reference.reference : ""}
           placeholder={source?.referencePlaceholder}
           mono
@@ -227,7 +241,7 @@ export function SecretValueInput(props: {
             if (source === undefined) return;
             const next = secretRequestReference(source, text);
             if (next === undefined) {
-              Dialog.alert("Invalid reference", source.invalidReferenceMessage);
+              Dialog.alert(gt("Invalid reference"), source.invalidReferenceMessage);
               return;
             }
             props.onSecretChange(next);
@@ -298,6 +312,7 @@ export function ProviderSettingsFields(props: {
   readonly sources: ReadonlyArray<SecretRequestSource>;
   readonly managed?: ManagedKeys | undefined;
 }) {
+  const gt = useGT();
   const fields = deriveProviderSettingsFields(props.definition, props.value);
   const isLocalAcp =
     props.definition.driverKind === "acpRegistry" &&
@@ -360,8 +375,8 @@ export function ProviderSettingsFields(props: {
               secretConfigured && !disabled ? (
                 <ControlPill
                   variant="pill"
-                  label="Clear"
-                  accessibilityLabel={`Clear ${field.label}`}
+                  label={gt("Clear", { $context: "verb, clear a saved value" })}
+                  accessibilityLabel={gt("Clear {field}", { field: field.label })}
                   onPress={() =>
                     props.onChange(nextProviderConfigWithFieldValue(props.value, field, ""))
                   }
@@ -419,6 +434,7 @@ function CommandArguments(props: {
   readonly separated: boolean;
   readonly onChange: (config: Record<string, unknown> | undefined) => void;
 }) {
+  const gt = useGT();
   const args = configuredCommandArgs(props.value);
   const [storedDraft, setDraft] = useState(() => seedRowsDraft(args, toCommandArgumentRows));
   const draft = reconcileRowsDraft(storedDraft, args, commandArgumentsEqual, toCommandArgumentRows);
@@ -434,15 +450,15 @@ function CommandArguments(props: {
   };
   return (
     <FieldBlock
-      label="Arguments"
-      description="One literal argument per row, in launch order."
+      label={gt("Arguments")}
+      description={gt("One literal argument per row, in launch order.")}
       separated={props.separated}
     >
       {draft.rows.map((argument, index) => (
         <View key={argument.id} className="flex-row items-center gap-2">
           <View className="min-w-0 flex-1">
             <CommitTextInput
-              accessibilityLabel={`Argument ${index + 1}`}
+              accessibilityLabel={gt("Argument {number}", { number: index + 1 })}
               value={argument.value}
               mono
               editable={!props.disabled}
@@ -455,7 +471,7 @@ function CommandArguments(props: {
           </View>
           <ControlPill
             icon="xmark"
-            accessibilityLabel={`Remove argument ${index + 1}`}
+            accessibilityLabel={gt("Remove argument {number}", { number: index + 1 })}
             disabled={props.disabled}
             onPress={() => update(draft.rows.filter((row) => row.id !== argument.id))}
           />
@@ -466,7 +482,7 @@ function CommandArguments(props: {
           <ControlPill
             variant="pill"
             icon="plus"
-            label="Add argument"
+            label={gt("Add argument")}
             onPress={() => update([...draft.rows, makeCommandArgumentDraftRow("")])}
           />
         </View>
@@ -487,6 +503,7 @@ export function ProviderEnvironmentFieldRows(props: {
   readonly onSecretChange: (field: ProviderEnvironmentField, secret: SecretReference) => void;
   readonly onRemove: (field: ProviderEnvironmentField) => void;
 }) {
+  const gt = useGT();
   return props.fields.map((field, index) => {
     const variable = props.environment?.find((entry) => entry.name === field.name);
     const managedReason = props.managedReason(field);
@@ -501,8 +518,8 @@ export function ProviderEnvironmentFieldRows(props: {
           variable && !disabled ? (
             <ControlPill
               variant="pill"
-              label="Clear"
-              accessibilityLabel={`Clear ${field.label}`}
+              label={gt("Clear", { $context: "verb, clear a saved value" })}
+              accessibilityLabel={gt("Clear {field}", { field: field.label })}
               onPress={() => props.onRemove(field)}
             />
           ) : null
@@ -544,6 +561,7 @@ export function ProviderEnvironmentVariables(props: {
   readonly managed?: { readonly names: ReadonlySet<string>; readonly reason: string } | undefined;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
 }) {
+  const gt = useGT();
   const [storedDraft, setDraft] = useState(() => seedEnvironmentDraft(props.environment));
   const draft = reconcileEnvironmentDraft(storedDraft, props.environment);
   if (draft !== storedDraft) setDraft(draft);
@@ -585,8 +603,9 @@ export function ProviderEnvironmentVariables(props: {
             <View className="flex-row items-center gap-2">
               <View className="min-w-0 flex-1">
                 <CommitTextInput
-                  accessibilityLabel={`Variable ${index + 1} name`}
+                  accessibilityLabel={gt("Variable {number} name", { number: index + 1 })}
                   value={variable.name}
+                  // oxlint-disable-next-line t3code/no-untranslated-copy -- environment variable identifier placeholder
                   placeholder="VARIABLE_NAME"
                   mono
                   // A saved sensitive value never comes back, so renaming it would drop the value.
@@ -600,8 +619,16 @@ export function ProviderEnvironmentVariables(props: {
                   icon={variable.sensitive ? "eye.slash" : "eye"}
                   accessibilityLabel={
                     variable.sensitive
-                      ? `${variable.name || `Variable ${index + 1}`} is sensitive. Make it plain text`
-                      : `${variable.name || `Variable ${index + 1}`} is plain text. Make it sensitive`
+                      ? variable.name
+                        ? gt("{name} is sensitive. Make it plain text", { name: variable.name })
+                        : gt("Variable {number} is sensitive. Make it plain text", {
+                            number: index + 1,
+                          })
+                      : variable.name
+                        ? gt("{name} is plain text. Make it sensitive", { name: variable.name })
+                        : gt("Variable {number} is plain text. Make it sensitive", {
+                            number: index + 1,
+                          })
                   }
                   disabled={props.disabled || variable.valueRedacted === true}
                   onPress={() => {
@@ -617,18 +644,28 @@ export function ProviderEnvironmentVariables(props: {
               ) : null}
               <ControlPill
                 icon="xmark"
-                accessibilityLabel={`Remove ${variable.name || `variable ${index + 1}`}`}
+                accessibilityLabel={
+                  variable.name
+                    ? gt("Remove {name}", { name: variable.name })
+                    : gt("Remove variable {number}", { number: index + 1 })
+                }
                 disabled={props.disabled}
                 onPress={() => publish(draft.rows.filter((row) => row.id !== variable.id))}
               />
             </View>
             {variable.sensitive ? (
               <SecretValueInput
-                accessibilityLabel={`${variable.name || `Variable ${index + 1}`} value`}
+                accessibilityLabel={
+                  variable.name
+                    ? gt("{name} value", { name: variable.name })
+                    : gt("Variable {number} value", { number: index + 1 })
+                }
                 value={variable.valueRedacted ? "" : variable.value}
                 configured={variable.valueRedacted === true}
                 sources={props.sources}
-                placeholder="value"
+                placeholder={gt("value", {
+                  $context: "placeholder for an environment variable value",
+                })}
                 mono
                 editable={!props.disabled}
                 onCommit={(value) => update(variable.id, { value })}
@@ -642,11 +679,17 @@ export function ProviderEnvironmentVariables(props: {
               />
             ) : (
               <CommitTextInput
-                accessibilityLabel={`${variable.name || `Variable ${index + 1}`} value`}
+                accessibilityLabel={
+                  variable.name
+                    ? gt("{name} value", { name: variable.name })
+                    : gt("Variable {number} value", { number: index + 1 })
+                }
                 value={
                   variable.valueRedacted || typeof variable.value !== "string" ? "" : variable.value
                 }
-                placeholder="value"
+                placeholder={gt("value", {
+                  $context: "placeholder for an environment variable value",
+                })}
                 mono
                 editable={!props.disabled}
                 onCommit={(value) => update(variable.id, { value })}
@@ -657,14 +700,14 @@ export function ProviderEnvironmentVariables(props: {
       )}
       {draft.rows.some((row) => row.valueRedacted === true) ? (
         <Text textRole="footnote" className="px-4 pb-3 text-foreground-muted">
-          Enter a new value to rename a saved one or make it plain text.
+          <T>Enter a new value to rename a saved one or make it plain text.</T>
         </Text>
       ) : null}
       {!props.disabled ? (
         <View className={draft.rows.length > 0 ? "border-t border-border-subtle" : undefined}>
           <ListActionRow
             icon="plus"
-            label="Add variable"
+            label={gt("Add variable")}
             onPress={() =>
               setDraft({
                 ...draft,
@@ -699,6 +742,7 @@ export function AccentColorPicker(props: {
   readonly disabled: boolean;
   readonly onCommit: (value: string) => void;
 }) {
+  const gt = useGT();
   const current = normalizeProviderAccentColor(props.value);
   const custom = current !== undefined && !ACCENT_PRESETS.some((color) => color === current);
   const swatch = (color: string | undefined, label: string, selected: boolean) => (
@@ -735,26 +779,31 @@ export function AccentColorPicker(props: {
   );
   return (
     <View className="flex-row flex-wrap items-center gap-1" accessibilityRole="radiogroup">
-      {swatch(undefined, "No accent color", current === undefined)}
-      {ACCENT_PRESETS.map((color) => swatch(color, `Accent ${color}`, color === current))}
-      {custom ? swatch(current, `Accent ${current}`, true) : null}
+      {swatch(undefined, gt("No accent color"), current === undefined)}
+      {ACCENT_PRESETS.map((color) =>
+        swatch(color, gt("Accent {color}", { color }), color === current),
+      )}
+      {custom ? swatch(current, gt("Accent {color}", { color: current }), true) : null}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Custom accent color"
+        accessibilityLabel={gt("Custom accent color")}
         disabled={props.disabled}
         hitSlop={4}
         onPress={() =>
           Dialog.prompt({
-            title: "Accent color",
-            message: "Enter a hex color such as #2563eb.",
+            title: gt("Accent color"),
+            message: gt("Enter a hex color such as {example}.", { example: "#2563eb" }),
             placeholder: "#2563eb",
             initialValue: current ?? "",
-            confirmText: "Save",
+            confirmText: gt("Save"),
             onConfirm: (value) => {
               const normalized = normalizeProviderAccentColor(value.trim());
               if (normalized) props.onCommit(normalized);
               else if (value.trim().length > 0)
-                Dialog.alert("Invalid color", "Enter a six-digit hex color such as #2563eb.");
+                Dialog.alert(
+                  gt("Invalid color"),
+                  gt("Enter a six-digit hex color such as {example}.", { example: "#2563eb" }),
+                );
               else props.onCommit("");
             },
           })

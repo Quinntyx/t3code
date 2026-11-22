@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ProviderInstanceId, RunId } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
 import {
   buildThreadActionMenuItems,
   threadContinuationRunId,
   type ThreadActionMenuState,
 } from "./threadActionMenu.logic";
-import { ProviderInstanceId, RunId } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
 const baseState: ThreadActionMenuState = {
   canOperate: true,
@@ -114,6 +114,11 @@ describe("buildThreadActionMenuItems", () => {
     });
     expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
     expect(items.find((item) => item.id === "turn-into-project")?.disabled).toBe(true);
+  });
+
+  it("disables only rename where no inline title editor exists", () => {
+    const items = buildThreadActionMenuItems({ ...baseState, canRename: false });
+    expect(items.filter((item) => item.disabled).map((item) => item.id)).toEqual(["rename"]);
   });
 });
 

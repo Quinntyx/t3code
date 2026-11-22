@@ -88,6 +88,12 @@ function mountMobileStream(reuseNearbyTouchProbe = false) {
       credentials: false,
       query: {},
     },
+    labels: {
+      page: "Browser page",
+      pageInput: "Browser page input",
+      pictureInPictureNotReady: "Not ready",
+      pictureInPictureUnavailable: "Unavailable",
+    },
   });
   vi.runOnlyPendingTimers();
   return {

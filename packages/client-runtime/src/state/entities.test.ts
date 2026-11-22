@@ -103,7 +103,7 @@ describe("V2 client presentation", () => {
     expect(isThreadWorking(capped)).toBe(false);
   });
 
-  it("presents a consumption cap hit as limited in the shell summary", () => {
+  it("presents a consumption cap hit as a usage_limit failure on the shell", () => {
     const shell = presentThreadShell(environmentId, {
       ...v2ThreadShell,
       latestRunId: RunId.make("run-consumption-cap"),
@@ -185,6 +185,19 @@ describe("V2 client presentation", () => {
         pendingBackgroundTasks: [],
       }).runtime,
     ).toBeNull();
+  });
+
+  it("keeps an imported thread that never ran out of Working", () => {
+    const imported = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      historyOrigin: "v1_import",
+      activeProviderThreadId: ProviderThreadId.make("provider-thread-imported"),
+      latestRunId: null,
+      activeRunId: null,
+      status: "idle",
+      pendingBackgroundTasks: [],
+    });
+    expect(isThreadWorking(imported)).toBe(false);
   });
 
   it.each([

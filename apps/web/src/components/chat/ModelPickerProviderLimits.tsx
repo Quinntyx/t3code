@@ -1,15 +1,21 @@
 import type { ServerProvider } from "@t3tools/contracts";
 import type { ProviderLimitsSummary, ProviderLimitWindow } from "@t3tools/shared/usageLimits";
+import { msg, useMessages } from "gt-react";
 import { Fragment } from "react";
 
+import { m, type MessageResolver } from "~/i18n/messages";
 import { cn } from "../../lib/utils";
 import { barColor, usePaceMark } from "../usage/UsageLimits";
 
 const LOW_REMAINING_PERCENT = 25;
 
-function shortWindowLabel(window: ProviderLimitWindow): string {
-  if (window.kind === "weekly") return "Wk";
-  if (window.kind === "monthly") return "Mo";
+function shortWindowLabel(window: ProviderLimitWindow, resolve: MessageResolver = m): string {
+  if (window.kind === "weekly") {
+    return resolve(msg("Wk", { $context: "abbreviated weekly usage window" }));
+  }
+  if (window.kind === "monthly") {
+    return resolve(msg("Mo", { $context: "abbreviated monthly usage window" }));
+  }
   const minutes = window.windowDurationMins;
   if (window.kind === "session" && minutes && minutes % 60 === 0 && minutes <= 24 * 60) {
     return `${minutes / 60}h`;
@@ -26,11 +32,12 @@ function LimitBar({
   readonly color: string;
   readonly onSelect: () => void;
 }) {
+  const resolve = useMessages();
   const [barRef, paceMark] = usePaceMark(window.timeLeftPercent);
   const remaining = window.remainingPercent;
   return (
     <>
-      <span className="truncate">{shortWindowLabel(window)}</span>
+      <span className="truncate">{shortWindowLabel(window, resolve)}</span>
       <span
         ref={barRef}
         className="pointer-events-auto relative block h-5 min-w-0 cursor-pointer"
@@ -94,11 +101,23 @@ export function ProviderLimitBars({
 }
 
 /** The bars are pointer-only, so the card's accessible name carries the same numbers. */
-export function describeProviderLimits(summary: ProviderLimitsSummary): string {
+export function describeProviderLimits(
+  summary: ProviderLimitsSummary,
+  resolve: MessageResolver = m,
+): string {
   const describe = (windows: readonly ProviderLimitWindow[]) =>
-    windows.map((window) => `${window.label} ${window.remainingPercent}% left`).join(", ");
+    windows
+      .map((window) =>
+        resolve(
+          msg("{label} {remaining}% left", {
+            label: window.label,
+            remaining: window.remainingPercent,
+          }),
+        ),
+      )
+      .join(", ");
   return [
-    summary.exhausted ? "Limit reached" : null,
+    summary.exhausted ? resolve(msg("Limit reached")) : null,
     summary.windows.length > 0 ? describe(summary.windows) : null,
     ...summary.sources.map((source) => `${source.label}: ${describe(source.windows)}`),
   ]

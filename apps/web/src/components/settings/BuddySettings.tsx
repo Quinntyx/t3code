@@ -1,4 +1,5 @@
 import { DEFAULT_UNIFIED_SETTINGS, type Buddy } from "@t3tools/contracts/settings";
+import { T, useGT } from "gt-react";
 import { BanIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Suspense, useState, type ReactNode } from "react";
 
@@ -12,12 +13,14 @@ import {
 } from "../buddy/buddyCharacters";
 import { useBuddyCatalog } from "../buddy/buddySources";
 import { SettingResetButton, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 const PREVIEW_HEIGHT_PX = 96;
 
 export function BuddySection() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
   const buddy = settings.buddy;
   const updateSettings = useUpdateScopedSettings();
@@ -31,11 +34,11 @@ export function BuddySection() {
   return (
     <SettingsSection
       id="appearance-buddy"
-      title="Buddy"
+      title={gt("Buddy")}
       headerAction={
         buddy !== DEFAULT_UNIFIED_SETTINGS.buddy ? (
           <SettingResetButton
-            label="buddy"
+            ariaLabel={gt("Reset buddy to default")}
             onClick={() => select(DEFAULT_UNIFIED_SETTINGS.buddy)}
           />
         ) : null
@@ -43,7 +46,9 @@ export function BuddySection() {
     >
       <div className="space-y-3 px-4 py-4 sm:px-5">
         <p className="text-xs text-muted-foreground">
-          A companion that reacts to the agent in the open thread. Drag it anywhere on screen.
+          <T>
+            A companion that reacts to the agent in the open thread. Drag it anywhere on screen.
+          </T>
         </p>
         <div
           id={searchableSetting("buddy").id}
@@ -51,8 +56,8 @@ export function BuddySection() {
           style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 12rem), 1fr))" }}
         >
           <BuddyCard
-            label="None"
-            description="No companion"
+            label={gt("None")}
+            description={gt("No companion")}
             isActive={buddy === "none"}
             onSelect={() => select("none")}
             preview={<BanIcon className="size-10 text-muted-foreground" strokeWidth={1.5} />}
@@ -121,6 +126,7 @@ function BuddySources({
   onChange: (urls: ReadonlyArray<string>) => void;
   catalog: ReturnType<typeof useBuddyCatalog>;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState("");
   const add = () => {
     const url = draft.trim();
@@ -133,15 +139,19 @@ function BuddySources({
     <div className="space-y-2 rounded-xl border border-border/70 bg-card/40 p-3">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <div className="text-sm font-medium text-foreground">Buddy sources</div>
+          <div className="text-sm font-medium text-foreground">
+            <T>Buddy sources</T>
+          </div>
           <div className="text-xs text-muted-foreground">
-            Git repositories laid out with one folder per buddy. Cloned with your existing
-            connections and re-pulled on load.
+            <T>
+              Git repositories laid out with one folder per buddy. Cloned with your existing
+              connections and re-pulled on load.
+            </T>
           </div>
         </div>
         <button
           type="button"
-          aria-label="Reload buddy sources"
+          aria-label={gt("Reload buddy sources")}
           className="cursor-pointer rounded-md p-1.5 text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           onClick={catalog.refresh}
         >
@@ -150,7 +160,7 @@ function BuddySources({
       </div>
       <div className="flex gap-2">
         <input
-          aria-label="Buddy source repository URL"
+          aria-label={gt("Buddy source repository URL")}
           className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           placeholder="https://git.example.com/you/buddy-arts.git"
           value={draft}
@@ -163,7 +173,7 @@ function BuddySources({
         />
         <button
           type="button"
-          aria-label="Add buddy source"
+          aria-label={gt("Add buddy source")}
           className="cursor-pointer rounded-md border border-border px-2 py-1.5 text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           onClick={add}
         >
@@ -171,7 +181,9 @@ function BuddySources({
         </button>
       </div>
       {repositoryUrls.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No sources yet.</p>
+        <p className="text-xs text-muted-foreground">
+          <T>No sources yet.</T>
+        </p>
       ) : (
         <ul className="space-y-1">
           {catalog.sources.map((source) => (
@@ -183,12 +195,14 @@ function BuddySources({
                 {source.repositoryUrl}
                 <span className="ml-2 text-muted-foreground">
                   {source.error ??
-                    `${source.buddies.length} ${source.buddies.length === 1 ? "buddy" : "buddies"}`}
+                    gt("{count, plural, one {{count} buddy} other {{count} buddies}}", {
+                      count: source.buddies.length,
+                    })}
                 </span>
               </span>
               <button
                 type="button"
-                aria-label={`Remove buddy source ${source.repositoryUrl}`}
+                aria-label={gt("Remove buddy source {url}", { url: source.repositoryUrl })}
                 className="cursor-pointer rounded p-1 text-muted-foreground outline-none hover:bg-destructive/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 onClick={() =>
                   onChange(repositoryUrls.filter((url) => url !== source.repositoryUrl))
@@ -217,11 +231,16 @@ function BuddyCard({
   onSelect: () => void;
   preview: ReactNode;
 }) {
+  const gt = useGT();
   return (
     <button
       type="button"
       aria-pressed={isActive}
-      aria-label={`Use ${label} buddy${isActive ? ", currently active" : ""}`}
+      aria-label={
+        isActive
+          ? gt("Use {label} buddy, currently active", { label })
+          : gt("Use {label} buddy", { label })
+      }
       className={cn(
         "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 text-left outline-none transition-colors hover:bg-accent/10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
         isActive && "bg-accent/30",

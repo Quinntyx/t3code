@@ -5,6 +5,7 @@ import {
   type ProjectId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { InfoIcon } from "lucide-react";
 import { useState, type RefObject } from "react";
 
@@ -103,6 +104,7 @@ function MergeDependentsForm({
   onCancel: () => void;
   onMerge: (choice: { restack: boolean; settle: boolean }) => void;
 }) {
+  const gt = useGT();
   const [restack, setRestack] = useState(canRestack);
   const [settle, setSettle] = useState(false);
   return (
@@ -110,7 +112,7 @@ function MergeDependentsForm({
       <PopoverTitle>{copy.title}</PopoverTitle>
       <div className="flex items-center gap-1 text-muted-foreground">
         <span className="min-w-0">{copy.moves}</span>
-        <InfoTip label="Where they move">{copy.movesInfo}</InfoTip>
+        <InfoTip label={gt("Where they move")}>{copy.movesInfo}</InfoTip>
       </div>
       <div className="flex items-center gap-1">
         <label className="flex min-w-0 items-center gap-2">
@@ -121,20 +123,20 @@ function MergeDependentsForm({
           />
           {copy.restack}
         </label>
-        <InfoTip label="What restacking does">{copy.restackInfo}</InfoTip>
+        <InfoTip label={gt("What restacking does")}>{copy.restackInfo}</InfoTip>
       </div>
       {offersSettle ? (
         <label className="flex min-w-0 items-center gap-2">
           <Checkbox checked={settle} onCheckedChange={(checked) => setSettle(checked === true)} />
-          Settle this thread
+          <T>Settle this thread</T>
         </label>
       ) : null}
       <div className="mt-1 flex justify-end gap-2">
         <Button size="xs" variant="outline" onClick={onCancel}>
-          Cancel
+          <T>Cancel</T>
         </Button>
         <Button size="xs" onClick={() => onMerge({ restack, settle })}>
-          Merge
+          <T>Merge</T>
         </Button>
       </div>
     </div>

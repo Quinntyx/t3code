@@ -3,13 +3,17 @@ import type {
   OrchestrationV2EmailDraft,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 export type EmailRequestItem = Extract<OrchestrationV2TurnItem, { readonly type: "email_request" }>;
 
-export const EMAIL_REQUEST_NO_PERMISSION_NOTE =
-  "Only a session that can run agents here can send this.";
-export const EMAIL_REQUEST_PRIVACY_NOTE =
-  "Sends from your own mail account, only when you press Send.";
+export const EMAIL_REQUEST_NO_PERMISSION_NOTE = msg(
+  "Only a session that can run agents here can send this.",
+);
+export const EMAIL_REQUEST_PRIVACY_NOTE = msg(
+  "Sends from your own mail account, only when you press Send.",
+);
 
 /** The editable fields, with address lists as the text the user types. */
 export interface EmailComposerFields {
@@ -92,11 +96,13 @@ export type EmailRequestDisplay =
       readonly label: string;
     };
 
-const recipientSummary = (draft: OrchestrationV2EmailDraft) => {
+const recipientSummary = (draft: OrchestrationV2EmailDraft, resolve: MFunctionType) => {
   const [first, ...rest] = [...draft.to, ...draft.cc, ...draft.bcc];
-  if (first === undefined) return "no one";
+  if (first === undefined) return resolve(msg("no one"));
   const name = (/^\s*"?([^"<]+?)"?\s*</.exec(first)?.[1] ?? first).trim();
-  return rest.length === 0 ? name : `${name} and ${rest.length} more`;
+  return rest.length === 0
+    ? name
+    : resolve(msg("{name} and {count} more", { name, count: rest.length }));
 };
 
 /**
@@ -106,23 +112,40 @@ const recipientSummary = (draft: OrchestrationV2EmailDraft) => {
 export function emailRequestDisplay(
   item: Pick<EmailRequestItem, "emailStatus" | "draft">,
   visibility: "local" | "inherited" | "synthetic",
+  resolve: MFunctionType = mFallback,
 ): EmailRequestDisplay {
-  const subject = item.draft.subject.trim() || "(no subject)";
+  const subject = item.draft.subject.trim() || resolve(msg("(no subject)"));
   switch (item.emailStatus) {
     case "pending":
       return visibility === "local"
         ? { kind: "pending" }
-        : { kind: "pending-elsewhere", label: `${subject} · Waiting in the original thread` };
+        : {
+            kind: "pending-elsewhere",
+            label: resolve(msg("{subject} · Waiting in the original thread", { subject })),
+          };
     case "sent":
       return {
         kind: "answered",
         outcome: "sent",
-        label: `Sent “${subject}” to ${recipientSummary(item.draft)}`,
+        label: resolve(
+          msg("Sent “{subject}” to {recipients}", {
+            subject,
+            recipients: recipientSummary(item.draft, resolve),
+          }),
+        ),
       };
     case "discarded":
-      return { kind: "answered", outcome: "discarded", label: `Discarded “${subject}”` };
+      return {
+        kind: "answered",
+        outcome: "discarded",
+        label: resolve(msg("Discarded “{subject}”", { subject })),
+      };
     case "cancelled":
-      return { kind: "answered", outcome: "ended", label: `“${subject}” · Draft ended` };
+      return {
+        kind: "answered",
+        outcome: "ended",
+        label: resolve(msg("“{subject}” · Draft ended", { subject })),
+      };
   }
 }
 
@@ -143,7 +166,10 @@ export function emailRequestAnswerInput(
 const USER_FACING_FAILURE_TAGS = new Set(["EmailRequestError", "EnvironmentAuthorizationError"]);
 
 /** Only known server errors pass their message through; anything else gets the generic copy. */
-export function emailRequestFailureMessage(failure: unknown): string {
+export function emailRequestFailureMessage(
+  failure: unknown,
+  resolve: MFunctionType = mFallback,
+): string {
   if (
     typeof failure === "object" &&
     failure !== null &&
@@ -156,5 +182,5 @@ export function emailRequestFailureMessage(failure: unknown): string {
   ) {
     return failure.message;
   }
-  return "Could not send the email. Try again.";
+  return resolve(msg("Could not send the email. Try again."));
 }

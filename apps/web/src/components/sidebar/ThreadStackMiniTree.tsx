@@ -1,6 +1,7 @@
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { threadOwnPullRequest } from "@t3tools/client-runtime/threadStacks";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { msg, useGT, useMessages } from "gt-react";
 
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "../../state/entities";
@@ -17,22 +18,23 @@ import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation"
 
 const STATUS_LABEL: Record<
   Exclude<SidebarThreadStatus, "ready">,
-  { label: string; className: string }
+  { readonly label: string; readonly className: string }
 > = {
-  preparing: { label: "Setting up", className: "text-info-foreground" },
-  working: { label: "Working", className: "text-info-foreground" },
-  stalled: { label: "Stalled", className: "text-info-foreground" },
-  pring: { label: "PRing", className: "text-teal-600 dark:text-teal-300/90" },
-  waiting: { label: "Waiting", className: "text-muted-foreground" },
-  approval: { label: "Approval", className: "text-warning-foreground" },
-  input: { label: "Input", className: "text-indigo-600 dark:text-indigo-300" },
-  request: { label: "Request", className: "text-guest-foreground" },
-  limited: { label: "Limited", className: "text-warning-foreground" },
-  failed: { label: "Failed", className: "text-error-foreground" },
+  preparing: { label: msg("Setting up"), className: "text-info-foreground" },
+  working: { label: msg("Working"), className: "text-info-foreground" },
+  stalled: { label: msg("Stalled"), className: "text-info-foreground" },
+  pring: { label: msg("PRing"), className: "text-teal-600 dark:text-teal-300/90" },
+  waiting: { label: msg("Waiting"), className: "text-muted-foreground" },
+  approval: { label: msg("Approval"), className: "text-warning-foreground" },
+  input: { label: msg("Input"), className: "text-indigo-600 dark:text-indigo-300" },
+  request: { label: msg("Request"), className: "text-guest-foreground" },
+  limited: { label: msg("Limited"), className: "text-warning-foreground" },
+  failed: { label: msg("Failed"), className: "text-error-foreground" },
 };
 
 /** A stack's threads as a small tree, for the hover card of any member. */
 export function ThreadStackMiniTree(props: { layout: string; currentThreadKey: string }) {
+  const gt = useGT();
   const entries = props.layout.split("\n").flatMap((line) => {
     const separator = line.indexOf(" ");
     const key = line.slice(separator + 1);
@@ -41,7 +43,11 @@ export function ThreadStackMiniTree(props: { layout: string; currentThreadKey: s
   });
   return (
     <div className="flex flex-col gap-1">
-      <div className="pl-0.5 font-medium text-foreground/75">Stack · {entries.length} threads</div>
+      <div className="pl-0.5 font-medium text-foreground/75">
+        {gt("Stack · {count, plural, one {{count} thread} other {{count} threads}}", {
+          count: entries.length,
+        })}
+      </div>
       <ul className="flex flex-col">
         {entries.map((entry) => (
           <StackMiniTreeItem
@@ -68,6 +74,8 @@ function StackMiniTreeLine(props: {
   depth: number;
   current: boolean;
 }) {
+  const gt = useGT();
+  const resolve = useMessages();
   const { thread } = props;
   const status = useSidebarThreadStatus(thread);
   const localLastVisitedAt = useUiStateStore(
@@ -79,9 +87,9 @@ function StackMiniTreeLine(props: {
   });
   const shown =
     status !== "ready"
-      ? STATUS_LABEL[status]
+      ? { label: resolve(STATUS_LABEL[status].label), className: STATUS_LABEL[status].className }
       : unread
-        ? { label: "Done", className: "text-success-foreground" }
+        ? { label: gt("Done"), className: "text-success-foreground" }
         : null;
   const ownPr = threadOwnPullRequest(thread);
   const prState = ownPr?.snapshot

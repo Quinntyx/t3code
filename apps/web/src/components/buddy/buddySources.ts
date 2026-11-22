@@ -1,5 +1,7 @@
+import { msg } from "gt-react";
 import { useEffect, useSyncExternalStore } from "react";
 
+import { m } from "~/i18n/messages";
 import { buddyCharacterFrom, type BuddyCharacter, type BuddyManifest } from "./buddyCharacters";
 
 export interface BuddySourceEntry {
@@ -79,7 +81,7 @@ const load = (key: string, refresh: boolean) => {
         sources: urls.map((repositoryUrl) => ({
           repositoryUrl,
           buddies: [],
-          error: "Could not read this source.",
+          error: m(msg("Could not read this source.")),
         })),
       });
     });

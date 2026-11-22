@@ -11,12 +11,18 @@ import type { EnvironmentThreadShell } from "./state/models.ts";
 import { threadSearchSubject, type ThreadSearchShell } from "./state/threadSearch.ts";
 import { effectiveSnoozed, type ThreadSnoozeShell } from "./state/threadSettled.ts";
 import { getThreadSortTimestamp } from "./state/threadSort.ts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
+const COMPOSER_THREAD_RESULT_LIMIT = 5;
 const COMPOSER_THREAD_TRIGGER_RESULT_LIMIT = 20;
 
 export type ComposerThreadCandidate = ThreadSearchShell &
+  Pick<EnvironmentThreadShell, "archivedAt" | "lineage">;
+
+export type ComposerThreadTriggerCandidate = ComposerThreadCandidate &
   ThreadSnoozeShell &
-  Pick<EnvironmentThreadShell, "archivedAt" | "lineage" | "settledOverride">;
+  Pick<EnvironmentThreadShell, "settledOverride">;
 
 export interface ComposerThreadItem {
   readonly id: string;
@@ -26,8 +32,10 @@ export interface ComposerThreadItem {
   readonly description: string;
 }
 
-interface ComposerThreadMatchInput {
-  readonly shells: ReadonlyArray<ComposerThreadCandidate>;
+interface ComposerThreadMatchInput<
+  TCandidate extends ComposerThreadCandidate = ComposerThreadCandidate,
+> {
+  readonly shells: ReadonlyArray<TCandidate>;
   readonly environmentId: EnvironmentId;
   /** The machines the composer's environment links to, by name. */
   readonly linkedEnvironments: ReadonlyMap<EnvironmentId, string>;
@@ -37,26 +45,39 @@ interface ComposerThreadMatchInput {
   readonly now: number;
 }
 
-/**
- * The agent reads threads on its own server and on the machines it links to, so
- * candidates stay within those. Subagent and side chat threads are left out.
- */
-function mentionableThreads(input: ComposerThreadMatchInput) {
+function isOwnSideChat(
+  shell: ComposerThreadCandidate,
+  input: Pick<ComposerThreadMatchInput, "environmentId" | "excludeThreadId">,
+): boolean {
+  // Closing an unused side chat deletes it, so only one with a message is offered.
+  return (
+    shell.lineage.sideChat === true &&
+    shell.environmentId === input.environmentId &&
+    shell.lineage.parentThreadId === input.excludeThreadId &&
+    shell.latestUserMessageAt !== null
+  );
+}
+
+function mentionableThreads<TCandidate extends ComposerThreadCandidate>(
+  input: ComposerThreadMatchInput<TCandidate>,
+  includeOwnSideChats: boolean,
+): TCandidate[] {
   return input.shells.filter(
     (shell) =>
       (shell.environmentId === input.environmentId ||
         input.linkedEnvironments.has(shell.environmentId)) &&
       shell.id !== input.excludeThreadId &&
       shell.archivedAt === null &&
-      isListedThreadLineage(shell.lineage),
+      (isListedThreadLineage(shell.lineage) ||
+        (includeOwnSideChats && isOwnSideChat(shell, input))),
   );
 }
 
-function rankThreadMatches(
-  candidates: ReadonlyArray<ComposerThreadCandidate>,
+function rankThreadMatches<TCandidate extends ComposerThreadCandidate>(
+  candidates: ReadonlyArray<TCandidate>,
   query: string,
   now: number,
-) {
+): TCandidate[] {
   return rankSearchItems(candidates, (shell, options) =>
     scoreThreadSearch(query, threadSearchSubject(shell, null), now, {
       ...options,
@@ -65,30 +86,63 @@ function rankThreadMatches(
   ).map(({ item }) => item);
 }
 
-function composerThreadItem(
-  shell: ComposerThreadCandidate,
+/**
+ * Threads to reference from the composer, matched and ranked like the command
+ * palette, without subagent threads or other threads' side chats. The agent reads threads
+ * on its own server and on the machines it links to, so candidates stay within those, and a
+ * linked machine's threads say which machine they are on.
+ */
+export function matchComposerThreadItems(
   input: ComposerThreadMatchInput,
-  noun: string,
-): ComposerThreadItem {
-  // A linked machine's threads say which machine they are on.
-  const machine =
-    shell.environmentId === input.environmentId
-      ? undefined
-      : input.linkedEnvironments.get(shell.environmentId);
-  return {
-    id: `thread:${shell.environmentId}:${shell.id}`,
-    type: "thread",
-    thread: { environmentId: shell.environmentId, threadId: shell.id },
-    label: shell.title,
-    description: machine === undefined ? noun : `${noun} on ${machine}`,
-  };
+  resolve: MFunctionType = mFallback,
+): ComposerThreadItem[] {
+  const query = foldSearchQuery(input.query);
+  if (query.length === 0) return [];
+  const candidates = mentionableThreads(input, true);
+  return rankThreadMatches(candidates, query, input.now)
+    .slice(0, COMPOSER_THREAD_RESULT_LIMIT)
+    .map((shell) => {
+      const machine =
+        shell.environmentId === input.environmentId
+          ? undefined
+          : input.linkedEnvironments.get(shell.environmentId);
+      return {
+        id: `thread:${shell.environmentId}:${shell.id}`,
+        type: "thread",
+        thread: { environmentId: shell.environmentId, threadId: shell.id },
+        label: shell.title,
+        description: isOwnSideChat(shell, input)
+          ? resolve(msg("Side chat"))
+          : machine === undefined
+            ? resolve(msg("Thread", { $context: "noun, search result type" }))
+            : resolve(msg("Thread on {machine}", { machine })),
+      };
+    });
 }
 
-const THREAD_SECTION_LABELS = ["Active", "Snoozed", "Settled"] as const;
-
-function threadSectionIndex(shell: ComposerThreadCandidate, now: string): number {
+function threadSectionIndex(shell: ComposerThreadTriggerCandidate, now: string): number {
   if (effectiveSnoozed(shell, { now })) return 1;
   return shell.settledOverride === "settled" ? 2 : 0;
+}
+
+function threadSectionDescription(
+  section: number,
+  machine: string | undefined,
+  resolve: MFunctionType,
+): string {
+  if (section === 1) {
+    return machine === undefined
+      ? resolve(msg("Snoozed"))
+      : resolve(msg("Snoozed on {machine}", { machine }));
+  }
+  if (section === 2) {
+    return machine === undefined
+      ? resolve(msg("Settled"))
+      : resolve(msg("Settled on {machine}", { machine }));
+  }
+  return machine === undefined
+    ? resolve(msg("Active"))
+    : resolve(msg("Active on {machine}", { machine }));
 }
 
 /**
@@ -97,10 +151,11 @@ function threadSectionIndex(shell: ComposerThreadCandidate, now: string): number
  * A bare `%` lists every thread that way.
  */
 export function matchComposerThreadTriggerItems(
-  input: ComposerThreadMatchInput,
+  input: ComposerThreadMatchInput<ComposerThreadTriggerCandidate>,
+  resolve: MFunctionType = mFallback,
 ): ComposerThreadItem[] {
   const query = foldSearchQuery(input.query);
-  const candidates = mentionableThreads(input);
+  const candidates = mentionableThreads(input, true);
   const matches = query.length === 0 ? candidates : rankThreadMatches(candidates, query, input.now);
   // @effect-diagnostics-next-line globalDate:off - Snooze checks compare wall-clock ISO times.
   const now = new Date(input.now).toISOString();
@@ -112,7 +167,21 @@ export function matchComposerThreadTriggerItems(
     }))
     .sort((left, right) => left.section - right.section || right.activityAt - left.activityAt)
     .slice(0, COMPOSER_THREAD_TRIGGER_RESULT_LIMIT)
-    .map(({ shell, section }) => composerThreadItem(shell, input, THREAD_SECTION_LABELS[section]!));
+    .map(({ shell, section }) => {
+      const machine =
+        shell.environmentId === input.environmentId
+          ? undefined
+          : input.linkedEnvironments.get(shell.environmentId);
+      return {
+        id: `thread:${shell.environmentId}:${shell.id}`,
+        type: "thread",
+        thread: { environmentId: shell.environmentId, threadId: shell.id },
+        label: shell.title,
+        description: isOwnSideChat(shell, input)
+          ? resolve(msg("Side chat"))
+          : threadSectionDescription(section, machine, resolve),
+      };
+    });
 }
 
 export interface ComposerEnvironmentCandidate {
@@ -132,13 +201,17 @@ export interface ComposerEnvironmentItem {
 
 /**
  * The user's machines the `@` picker offers, so the agent can link or work there. The
- * composer's own environment is left out. They need a query: bare `@` stays a file picker.
+ * composer's own environment is left out. Like threads, they need a query: bare `@` stays a
+ * file picker.
  */
-export function matchComposerEnvironmentItems(input: {
-  environments: ReadonlyArray<ComposerEnvironmentCandidate>;
-  environmentId: EnvironmentId;
-  query: string;
-}): ComposerEnvironmentItem[] {
+export function matchComposerEnvironmentItems(
+  input: {
+    environments: ReadonlyArray<ComposerEnvironmentCandidate>;
+    environmentId: EnvironmentId;
+    query: string;
+  },
+  resolve: MFunctionType = mFallback,
+): ComposerEnvironmentItem[] {
   const query = input.query.trim().toLowerCase();
   if (query.length === 0) return [];
   return input.environments
@@ -153,6 +226,6 @@ export function matchComposerEnvironmentItems(input: {
       environmentId: environment.environmentId,
       machine: environment.machine,
       label: environment.label,
-      description: "Machine",
+      description: resolve(msg("Machine", { $context: "noun, search result type" })),
     }));
 }

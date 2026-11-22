@@ -10,18 +10,22 @@ import {
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
 import {
-  type ComposerTokenTrigger,
-  detectComposerTokenTrigger,
+  type ComposerTrigger as SharedComposerTrigger,
+  detectComposerTrigger as detectSharedComposerTrigger,
 } from "@t3tools/shared/composerTrigger";
 import {
   splitPromptIntoComposerSegments,
   type ComposerPromptSegment,
 } from "./composer-editor-mentions";
 
-import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
+import {
+  resolveShortcutCommand,
+  type ShortcutEventLike,
+  type ShortcutMatchContext,
+} from "./keybindings";
 
 // `/model` opens the picker as a command here, so the chat composer reads only the word at the cursor.
-export type ComposerTrigger = ComposerTokenTrigger;
+export type ComposerTrigger = SharedComposerTrigger;
 export type ComposerTriggerKind = ComposerTrigger["kind"];
 export type ComposerSlashCommand = "model" | "side" | "btw" | "clear";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
@@ -57,6 +61,8 @@ export function composerRequiresModifier(
 export function composerSubmissionIntentForKey(input: {
   event: ShortcutEventLike & { isComposing?: boolean; keyCode?: number; repeat?: boolean };
   keybindings: ResolvedKeybindingsConfig;
+  /** The when-clause context ChatView's shortcut listeners see, so both resolve Enter alike. */
+  context: Partial<ShortcutMatchContext>;
   platform?: string;
   isSoftwareKeyboardOpen: boolean;
   isDraftThread: boolean;
@@ -71,6 +77,7 @@ export function composerSubmissionIntentForKey(input: {
   const command = resolveShortcutCommand(event, input.keybindings, {
     ...(input.platform === undefined ? {} : { platform: input.platform }),
     context: {
+      ...input.context,
       composerFocus: true,
       draftThreadRoute: input.isDraftThread,
       turnRunning: input.isRunning === true,
@@ -235,7 +242,7 @@ export function collapseExpandedComposerCursor(
 }
 
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
-  return detectComposerTokenTrigger(text, cursorInput);
+  return detectSharedComposerTrigger(text, cursorInput);
 }
 
 export function pastedPathQueryLength(

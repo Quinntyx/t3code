@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useGT } from "gt-react-native";
 import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { KeyboardController } from "react-native-keyboard-controller";
@@ -234,6 +235,7 @@ export function ThreadListDrawerHost({
   readonly side?: ThreadDrawerSide;
   readonly children: (drawer: ThreadListDrawerContextValue) => ReactNode;
 }) {
+  const gt = useGT();
   const drawer = useThreadDrawer(side);
   const { layout } = useAdaptiveWorkspaceLayout();
   const enabled = (side === "right" || Platform.OS === "android") && !layout.usesSplitView;
@@ -270,7 +272,7 @@ export function ThreadListDrawerHost({
         <Pressable
           className="flex-1"
           accessibilityRole="button"
-          accessibilityLabel={side === "left" ? "Close threads" : "Close thread details"}
+          accessibilityLabel={side === "left" ? gt("Close threads") : gt("Close thread details")}
           onPress={closeDrawer}
         />
       </Animated.View>

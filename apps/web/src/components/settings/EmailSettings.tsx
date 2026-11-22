@@ -1,4 +1,5 @@
 import { AuthSettingsWriteScope, DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useEnvironmentQuery } from "../../state/query";
@@ -16,10 +17,12 @@ import {
 import { ScopedSwitch } from "./ScopedSwitch";
 import { EmailInboxSettings } from "./EmailInboxSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 export function EmailSettingsPanel() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { environment } = useSettingsScope();
@@ -34,18 +37,20 @@ export function EmailSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="email" title="Email">
+      <SettingsSection id="email" title={gt("Email")}>
         <SettingsRow
           serverScoped
           settingKeys={["emailEnabled"]}
           {...searchableSetting("email-enabled")}
-          description="Agents draft emails in a card in the thread. Nothing is sent until you review it and press Send."
+          description={gt(
+            "Agents draft emails in a card in the thread. Nothing is sent until you review it and press Send.",
+          )}
           control={
             <ScopedSwitch
               settingKeys={["emailEnabled"]}
               checked={enabled}
               onCheckedChange={(checked) => updateSettings({ emailEnabled: Boolean(checked) })}
-              aria-label="Agents can draft emails"
+              aria-label={gt("Agents can draft emails")}
             />
           }
         />
@@ -54,11 +59,13 @@ export function EmailSettingsPanel() {
             serverScoped
             settingKeys={["emailAccountsFile"]}
             {...searchableSetting("email-accounts-file")}
-            description="Emails send with the accounts in this aerc config. Leave empty for aerc's default."
+            description={gt(
+              "Emails send with the accounts in this aerc config. Leave empty for aerc's default.",
+            )}
             resetAction={
               settings.emailAccountsFile !== DEFAULT_SERVER_SETTINGS.emailAccountsFile ? (
                 <SettingResetButton
-                  label="aerc accounts file"
+                  ariaLabel={gt("Reset aerc accounts file to default")}
                   onClick={() => updateSettings({ emailAccountsFile: "" })}
                 />
               ) : null
@@ -71,7 +78,7 @@ export function EmailSettingsPanel() {
                 onCommit={(next) => updateSettings({ emailAccountsFile: next })}
                 placeholder="~/.config/aerc/accounts.conf"
                 spellCheck={false}
-                aria-label="aerc accounts file"
+                aria-label={gt("aerc accounts file")}
               />
             }
           />
@@ -83,13 +90,13 @@ export function EmailSettingsPanel() {
       {enabled ? (
         <SettingsSection
           id="email-accounts"
-          title="Accounts"
+          title={gt("Accounts")}
           headerAction={
             canRead ? (
               <Button
                 size="icon-xs"
                 variant="ghost-muted"
-                aria-label="Reload accounts"
+                aria-label={gt("Reload accounts")}
                 disabled={isPending}
                 onClick={refresh}
               >
@@ -101,7 +108,9 @@ export function EmailSettingsPanel() {
           {!canRead ? (
             <SettingsRow
               {...searchableSetting("email-accounts")}
-              description="You need settings access on this environment to see its mail accounts."
+              description={gt(
+                "You need settings access on this environment to see its mail accounts.",
+              )}
             />
           ) : error !== null ? (
             <SettingsRow {...searchableSetting("email-accounts")} description={error} />
@@ -110,7 +119,7 @@ export function EmailSettingsPanel() {
             <SettingsRow
               {...searchableSetting("email-accounts")}
               title={data.file}
-              description={data.fileProblem ?? "No accounts in this file."}
+              description={data.fileProblem ?? gt("No accounts in this file.")}
             />
           ) : (
             data.accounts.map((account) => (
@@ -122,7 +131,9 @@ export function EmailSettingsPanel() {
                   account.problem === undefined ? (
                     <span className="text-muted-foreground">{account.name}</span>
                   ) : (
-                    <Badge variant="warning">Can't send</Badge>
+                    <Badge variant="warning">
+                      <T>Can't send</T>
+                    </Badge>
                   )
                 }
               />

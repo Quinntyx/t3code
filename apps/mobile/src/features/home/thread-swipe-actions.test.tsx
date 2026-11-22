@@ -7,6 +7,13 @@ import { describe, expect, it, vi } from "vite-plus/test";
 type SwipeableProps = ComponentProps<typeof ReanimatedSwipeable>;
 const harness = vi.hoisted(() => ({ timingTargets: [] as number[] }));
 
+vi.mock("gt-react-native", () => ({
+  msg: (text: string) => text,
+  useMessages: () => (text: string) => text,
+}));
+vi.mock("../settings/appearance/useScaledTextRole", () => ({
+  useScaledTextRole: () => ({ fontSize: 11, lineHeight: 14 }),
+}));
 vi.mock("../layout/adaptive-workspace-context", () => ({}));
 vi.mock("expo-haptics", () => ({}));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
@@ -18,6 +25,7 @@ vi.mock("../../components/ui/Menu", () => ({
 }));
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
+  useWindowDimensions: () => ({ width: 400, height: 800, scale: 2, fontScale: 1 }),
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Pressable: ({ children, onPress }: { children: ReactNode; onPress?: () => void }) => (
     <button type="button" onClick={onPress}>

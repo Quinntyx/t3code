@@ -2,7 +2,7 @@ import type { FunctionDeclaration } from "@google/genai";
 import { EnvironmentId, OrchestrationV2Command } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult, type Atom, type AtomRegistry } from "effect/reactivity";
-import type { AtomCommand } from "../state/runtime.ts";
+import { runAtomCommand, type AtomCommand } from "../state/runtime.ts";
 import type { VoiceTools } from "./session.ts";
 
 export interface VoiceEnvironmentView {
@@ -45,10 +45,10 @@ interface VoiceThreadStatus {
   readonly lastActiveAt: string | null;
 }
 
-type Dispatch = AtomCommand<
+type Dispatch<E> = AtomCommand<
   { readonly environmentId: EnvironmentId; readonly input: OrchestrationV2Command },
   unknown,
-  unknown
+  E
 > & {
   readonly permissionAtom: (
     environmentId: EnvironmentId | null,
@@ -144,9 +144,9 @@ const declarations: ReadonlyArray<FunctionDeclaration> = definitions.map(
   }),
 );
 
-export function createVoiceTools(options: {
+export function createVoiceTools<E>(options: {
   readonly registry: AtomRegistry.AtomRegistry;
-  readonly dispatch: Dispatch;
+  readonly dispatch: Dispatch<E>;
   readonly environments: () => ReadonlyArray<VoiceEnvironmentView>;
   readonly readThread: (environmentId: EnvironmentId, threadId: string) => Promise<unknown>;
   readonly uuid: () => string;
@@ -307,7 +307,10 @@ export function createVoiceTools(options: {
       const input = decodeCommand({ ...command, commandId: options.uuid() });
       if (!options.registry.get(options.dispatch.permissionAtom(environmentId, input)))
         throw new Error("This client's grant does not allow that command.");
-      const result = await options.dispatch.run(options.registry, { environmentId, input });
+      const result = await runAtomCommand(options.registry, options.dispatch, {
+        environmentId,
+        input,
+      });
       if (!AsyncResult.isSuccess(result))
         throw new Error("The client command failed or permission was revoked.");
       return { threadId, result: result.value };

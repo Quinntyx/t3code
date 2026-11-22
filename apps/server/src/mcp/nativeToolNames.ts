@@ -9,7 +9,11 @@ import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
+import { IssuesToolkit } from "./toolkits/issues/tools.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit } from "./toolkits/device/tools.ts";
+import { ThemeToolkit } from "./toolkits/theme/tools.ts";
+import { MessageToolkit } from "./toolkits/message/tools.ts";
+import { ToolSearchToolkit } from "./toolkits/toolSearch/tools.ts";
 
 /** Every name the toolkits register, read without building them: a proxy must not take one. */
 export const nativeToolNames: ReadonlySet<string> = new Set(
@@ -24,10 +28,14 @@ export const nativeToolNames: ReadonlySet<string> = new Set(
     AttachmentToolkit,
     ProjectToolkit,
     EnvironmentToolkit,
+    ThemeToolkit,
     PreviewControlsToolkit,
     WorktreeToolkit,
     PullRequestsToolkit,
+    IssuesToolkit,
     DeviceStandardToolkit,
     DeviceScreenshotToolkit,
+    MessageToolkit,
+    ToolSearchToolkit,
   ].flatMap((toolkit) => Object.keys(toolkit.tools)),
 );

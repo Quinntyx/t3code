@@ -28,9 +28,11 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import { AsyncResult } from "effect/reactivity";
 import Constants from "expo-constants";
+import { msg, useGT } from "gt-react-native";
 import { useState } from "react";
 
 import * as Dialog from "../../../components/ui/Dialog";
+import { m } from "../../../i18n/messages";
 import { useEnvironments } from "../../../state/environments";
 import { mobilePreferencesAtom } from "../../../state/preferences";
 import { serverEnvironment } from "../../../state/server";
@@ -52,7 +54,7 @@ export function failureMessage(
 export function reportCommandFailure(
   result: AtomCommandResult<unknown, unknown>,
   title: string,
-  fallback = "The settings update failed.",
+  fallback = m(msg("The settings update failed.")),
 ): boolean {
   if (result._tag === "Success") return true;
   if (!isAtomCommandInterrupted(result)) Dialog.alert(title, failureMessage(result, fallback));
@@ -97,10 +99,11 @@ export function useModelPreferences(settings: ServerSettings) {
 }
 
 export function useEnvironmentLabel(environmentId: EnvironmentId) {
+  const gt = useGT();
   return (
     useEnvironments().environments.find(
       (environment) => environment.environmentId === environmentId,
-    )?.label ?? "this device"
+    )?.label ?? gt("this device")
   );
 }
 
@@ -130,6 +133,7 @@ export function useEnvironmentServerSettings(environmentId: EnvironmentId) {
 
 /** The provider-instance writes the desktop provider settings make, for one environment. */
 export function useProviderInstanceActions(environmentId: EnvironmentId) {
+  const gt = useGT();
   const settings = useEnvironmentServerSettings(environmentId);
   const managedPolicy = useManagedPolicy(environmentId);
   const canManage = useEnvironmentScope(environmentId, AuthProvidersManageScope);
@@ -144,7 +148,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
   // Rendering checks scopes once; deferred commits and confirmations run later, so recheck then.
   const allowed = (scope: typeof AuthProvidersManageScope | typeof AuthSettingsWriteScope) => {
     if (readEnvironmentScope(environmentId, scope)) return true;
-    Dialog.alert("Not allowed", "This connection can no longer change these settings.");
+    Dialog.alert(gt("Not allowed"), gt("This connection can no longer change these settings."));
     return false;
   };
 
@@ -159,7 +163,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
         environmentId,
         input: { patch, providerInstanceMutation: { operation: "upsert", instanceId, instance } },
       }),
-      "Could not update provider",
+      gt("Could not update provider"),
     );
 
   const updateInstance = (
@@ -192,7 +196,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
           providerInstanceMutation: { operation: "create", instanceId, instance },
         },
       }),
-      "Could not add provider",
+      gt("Could not add provider"),
     );
 
   const deleteInstance = async (
@@ -205,7 +209,7 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
         environmentId,
         input: { patch: {}, providerInstanceMutation: { operation: "remove", instanceId } },
       }),
-      "Could not delete provider",
+      gt("Could not delete provider"),
     );
     const agentId = removed ? managedAcpRegistryAgentId(instance) : null;
     if (agentId === null) return removed;
@@ -213,8 +217,8 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
     const uninstall = await uninstallManagedBinary({ environmentId, input: { agentId } });
     reportCommandFailure(
       uninstall,
-      "Provider deleted, but managed files remain",
-      "Managed binary cleanup failed.",
+      gt("Provider deleted, but managed files remain"),
+      gt("Managed binary cleanup failed."),
     );
     return removed;
   };
@@ -232,14 +236,14 @@ export function useProviderInstanceActions(environmentId: EnvironmentId) {
           },
         },
       }),
-      "Could not reset provider",
+      gt("Could not reset provider"),
     );
 
   const updateSettings = async (patch: ServerSettingsPatch) =>
     allowed(AuthSettingsWriteScope) &&
     reportCommandFailure(
       await saveSettings({ environmentId, input: { patch } }),
-      "Could not save settings",
+      gt("Could not save settings"),
     );
 
   return {

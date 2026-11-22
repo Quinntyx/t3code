@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
@@ -18,6 +19,7 @@ export function ThreadListFilters(props: {
   /** List padding the scroller bleeds through so pills start where row content does. */
   readonly gutter: number;
 }) {
+  const gt = useGT();
   const { showHidden, setShowHidden } = useHiddenThreads();
   const selectedEnvironment = props.environments.find(
     (environment) => environment.environmentId === props.selectedEnvironmentId,
@@ -33,13 +35,13 @@ export function ThreadListFilters(props: {
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
       <ListFilterMenu
-        label={selectedEnvironment?.label ?? "All environments"}
-        accessibilityLabel="Filter threads by environment"
+        label={selectedEnvironment?.label ?? gt("All environments")}
+        accessibilityLabel={gt("Filter threads by environment")}
         active={selectedEnvironment !== undefined}
         actions={[
           {
             id: "all",
-            title: "All environments",
+            title: gt("All environments"),
             state: props.selectedEnvironmentId === null ? "on" : "off",
           },
           ...props.environments.map((environment) => ({
@@ -62,13 +64,13 @@ export function ThreadListFilters(props: {
         }}
       />
       <ListFilterMenu
-        label={selectedProject?.label ?? "All projects"}
-        accessibilityLabel="Filter threads by project"
+        label={selectedProject?.label ?? gt("All projects")}
+        accessibilityLabel={gt("Filter threads by project")}
         active={selectedProject !== undefined}
         actions={[
           {
             id: "all",
-            title: "All projects",
+            title: gt("All projects"),
             state: props.selectedProjectKey === null ? "on" : "off",
           },
           ...props.projects.map((project) => ({
@@ -88,14 +90,14 @@ export function ThreadListFilters(props: {
         }}
       />
       <ListFilterMenu
-        label={showHidden ? "Including hidden" : "Visible threads"}
-        accessibilityLabel="Show or exclude device-hidden threads"
+        label={showHidden ? gt("Including hidden") : gt("Visible threads")}
+        accessibilityLabel={gt("Show or exclude device-hidden threads")}
         active={showHidden}
         actions={[
-          { id: "visible", title: "Visible threads", state: showHidden ? "off" : "on" },
+          { id: "visible", title: gt("Visible threads"), state: showHidden ? "off" : "on" },
           {
             id: "hidden",
-            title: "Show hidden threads on this device",
+            title: gt("Show hidden threads on this device"),
             state: showHidden ? "on" : "off",
           },
         ]}
@@ -104,7 +106,7 @@ export function ThreadListFilters(props: {
       {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null || showHidden ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Reset thread filters"
+          accessibilityLabel={gt("Reset thread filters")}
           className="h-8 w-8 items-center justify-center"
           onPress={() => {
             props.onEnvironmentChange(null);

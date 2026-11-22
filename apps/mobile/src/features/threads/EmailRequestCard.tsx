@@ -15,6 +15,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import { T, useGT, useMessages } from "gt-react-native";
 import { useRef, useState } from "react";
 import { Pressable, View, type ColorValue } from "react-native";
 
@@ -32,9 +33,10 @@ export function EmailRequestCard(props: {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly iconColor: ColorValue;
 }) {
+  const m = useMessages();
   const { item, visibility } = props.projectedItem;
   if (item.type !== "email_request") return null;
-  const display = emailRequestDisplay(item, visibility);
+  const display = emailRequestDisplay(item, visibility, m);
   if (display.kind === "pending") {
     return <PendingEmailComposer environmentId={props.environmentId} item={item} />;
   }
@@ -67,6 +69,8 @@ function PendingEmailComposer(props: {
   readonly environmentId: EnvironmentId;
   readonly item: EmailRequestItem;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const { item } = props;
   const answer = useAtomCommand(serverEnvironment.answerEmailRequest, {
     label: "answer email request",
@@ -106,7 +110,11 @@ function PendingEmailComposer(props: {
     });
     if (result._tag === "Success") return emailComposerEdits.clear(item);
     if (isAtomCommandInterrupted(result)) return;
-    pipe(squashAtomCommandFailure(result), emailRequestFailureMessage, setError);
+    pipe(
+      squashAtomCommandFailure(result),
+      (failure) => emailRequestFailureMessage(failure, m),
+      setError,
+    );
   };
 
   const addressInput = (field: "to" | "cc" | "bcc", label: string) => (
@@ -125,6 +133,12 @@ function PendingEmailComposer(props: {
     />
   );
 
+  const toLabel = gt("To", { $context: "email recipient field" });
+  const ccLabel = gt("Cc", { $context: "email carbon copy field" });
+  const bccLabel = gt("Bcc", { $context: "email blind carbon copy field" });
+  const subjectLabel = gt("Subject", { $context: "email subject field" });
+  const messageLabel = gt("Message", { $context: "email body field" });
+
   return (
     <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
       <View className="flex-row items-center gap-2">
@@ -134,9 +148,11 @@ function PendingEmailComposer(props: {
           tintColorClassName="accent-foreground-muted"
           type="monochrome"
         />
-        <Text className="font-t3-bold text-base text-foreground">Email draft</Text>
+        <Text className="font-t3-bold text-base text-foreground">
+          <T>Email draft</T>
+        </Text>
       </View>
-      <Field label="From">
+      <Field label={gt("From", { $context: "email sender field" })}>
         <View className="flex-row flex-wrap gap-2">
           {item.accounts.map((account) => {
             const selected = account.name === fields.account;
@@ -166,28 +182,28 @@ function PendingEmailComposer(props: {
           })}
         </View>
       </Field>
-      <Field label="To">{addressInput("to", "To")}</Field>
+      <Field label={toLabel}>{addressInput("to", toLabel)}</Field>
       {showCopies ? (
         <>
-          <Field label="Cc">{addressInput("cc", "Cc")}</Field>
-          <Field label="Bcc">{addressInput("bcc", "Bcc")}</Field>
+          <Field label={ccLabel}>{addressInput("cc", ccLabel)}</Field>
+          <Field label={bccLabel}>{addressInput("bcc", bccLabel)}</Field>
         </>
       ) : (
         <View className="flex-row">
-          <Button label="Add Cc or Bcc" tone="text" onPress={() => setShowCopies(true)} />
+          <Button label={gt("Add Cc or Bcc")} tone="text" onPress={() => setShowCopies(true)} />
         </View>
       )}
-      <Field label="Subject">
+      <Field label={subjectLabel}>
         <TextInput
-          accessibilityLabel="Subject"
+          accessibilityLabel={subjectLabel}
           value={fields.subject}
           onChangeText={update("subject")}
           editable={!locked}
         />
       </Field>
-      <Field label="Message">
+      <Field label={messageLabel}>
         <TextInput
-          accessibilityLabel="Message"
+          accessibilityLabel={messageLabel}
           className="min-h-40"
           multiline
           textAlignVertical="top"
@@ -206,7 +222,7 @@ function PendingEmailComposer(props: {
         </Text>
       ) : null}
       <Button
-        label={submitting ? "Sending…" : "Send"}
+        label={submitting ? gt("Sending…") : gt("Send")}
         tone="primary"
         fullWidth
         disabled={locked || !canSend}
@@ -214,10 +230,10 @@ function PendingEmailComposer(props: {
       />
       <View className="flex-row items-center justify-between gap-2">
         <Text className="flex-1 font-sans text-xs text-foreground-muted">
-          {canAnswer ? EMAIL_REQUEST_PRIVACY_NOTE : EMAIL_REQUEST_NO_PERMISSION_NOTE}
+          {canAnswer ? m(EMAIL_REQUEST_PRIVACY_NOTE) : m(EMAIL_REQUEST_NO_PERMISSION_NOTE)}
         </Text>
         <Button
-          label="Discard"
+          label={gt("Discard")}
           tone="text"
           disabled={locked}
           onPress={() => void send({ type: "discard" })}

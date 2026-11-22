@@ -15,6 +15,8 @@ import {
   getProviderOptionCurrentValue,
 } from "@t3tools/shared/model";
 import { fileBasename } from "@t3tools/shared/path";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { isReasoningSelect } from "./modelTraits.ts";
 import type { EnvironmentProject, ThreadStructure } from "./state/models.ts";
@@ -47,33 +49,42 @@ export function matchingMachineHandoffProjects<T extends MachineHandoffProject>(
   );
 }
 
-export function machineHandoffBlocker(input: {
-  readonly sourceAvailable: boolean;
-  readonly sourceStatus: string | undefined;
-  readonly sourceConnected: boolean;
-  readonly targetConnected: boolean;
-  readonly sourceSupported: boolean;
-  readonly targetSupported: boolean;
-  readonly canExport: boolean;
-  readonly canImport: boolean;
-  readonly projectSelected: boolean;
-  readonly modelReady: boolean;
-}): string | null {
-  if (!input.sourceAvailable) return "The source thread or project is no longer available.";
+export function machineHandoffBlocker(
+  input: {
+    readonly sourceAvailable: boolean;
+    readonly sourceStatus: string | undefined;
+    readonly sourceConnected: boolean;
+    readonly targetConnected: boolean;
+    readonly sourceSupported: boolean;
+    readonly targetSupported: boolean;
+    readonly canExport: boolean;
+    readonly canImport: boolean;
+    readonly projectSelected: boolean;
+    readonly modelReady: boolean;
+  },
+  resolve: MFunctionType = mFallback,
+): string | null {
+  if (!input.sourceAvailable)
+    return resolve(msg("The source thread or project is no longer available."));
   if (
     ["preparing", "queued", "starting", "running", "waiting"].includes(input.sourceStatus ?? "")
   ) {
-    return "Stop the current turn before handing off this thread.";
+    return resolve(msg("Stop the current turn before handing off this thread."));
   }
-  if (!input.sourceConnected || !input.targetConnected) return "Both machines must be connected.";
+  if (!input.sourceConnected || !input.targetConnected)
+    return resolve(msg("Both machines must be connected."));
   if (!input.sourceSupported || !input.targetSupported)
-    return "Both machines must support machine handoffs. Update the server if needed.";
+    return resolve(
+      msg("Both machines must support machine handoffs. Update the server if needed."),
+    );
   if (!input.canExport || !input.canImport)
-    return "Permission to transfer threads and working files is required on both machines.";
+    return resolve(
+      msg("Permission to transfer threads and working files is required on both machines."),
+    );
   if (!input.projectSelected)
-    return "Choose the destination project, or clone the repository first.";
+    return resolve(msg("Choose the destination project, or clone the repository first."));
   if (!input.modelReady)
-    return "Choose an available provider and model on the destination machine.";
+    return resolve(msg("Choose an available provider and model on the destination machine."));
   return null;
 }
 
@@ -212,6 +223,7 @@ export function isHandoffFile(path: string): boolean {
 
 /** The trailing space lets the composer render the link as a file chip. */
 export function handoffFilePrompt(path: string): string {
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- agent prompt
   return `Continue from ${serializeComposerFileLink(path)} `;
 }
 

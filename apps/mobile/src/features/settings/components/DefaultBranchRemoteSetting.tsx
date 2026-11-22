@@ -1,4 +1,5 @@
 import type { ServerSettingsPatch } from "@t3tools/contracts";
+import { T, useGT, Var } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef } from "react";
 import { View } from "react-native";
 
@@ -10,6 +11,7 @@ export function DefaultBranchRemoteSetting(props: {
   disabled: boolean;
   onChange: (patch: ServerSettingsPatch) => void;
 }) {
+  const gt = useGT();
   // Save on exit too: Android Back hides the keyboard without ending editing.
   const draft = useRef<{ text: string; over: string | null } | null>(null);
   const save = () => {
@@ -25,20 +27,23 @@ export function DefaultBranchRemoteSetting(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- saves an unsent default remote draft to server settings when the section unmounts
   useEffect(() => () => saveOnUnmount(), []);
   return (
-    <SettingsSection title="Default remote">
+    <SettingsSection title={gt("Default remote")}>
       <View className="gap-2 px-4 py-3">
         <Text className="text-sm text-foreground-muted">
-          Branch pickers list this remote's branches with your local ones. Branches on other remotes
-          sit behind Other remotes. Falls back to origin when the project has no such remote.
+          <T>
+            Branch pickers list this remote's branches with your local ones. Branches on other
+            remotes sit behind Other remotes. Falls back to <Var>origin</Var> when the project has
+            no such remote.
+          </T>
         </Text>
         <AppTextInput
           key={props.value}
-          accessibilityLabel="Default remote"
+          accessibilityLabel={gt("Default remote")}
           onChangeText={(text) => {
             draft.current = { text, over: props.value };
           }}
           defaultValue={props.value ?? ""}
-          placeholder={props.value === null ? "Mixed" : "origin"}
+          placeholder={props.value === null ? gt("Mixed") : "origin"}
           editable={!props.disabled}
           autoCapitalize="none"
           autoCorrect={false}

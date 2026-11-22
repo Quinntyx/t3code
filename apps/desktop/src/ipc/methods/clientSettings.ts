@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { applyLanguage } from "../../i18n/messages.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import * as IpcChannels from "../channels.ts";
@@ -18,6 +19,16 @@ export const getClientSettings = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const getLegacyVisualSettings = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.GET_LEGACY_VISUAL_SETTINGS_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+  handler: Effect.fn("desktop.ipc.clientSettings.getLegacyVisualSettings")(function* () {
+    const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
+    return Option.getOrNull(yield* clientSettings.getLegacyVisualSettings);
+  }),
+});
+
 export const setClientSettings = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SET_CLIENT_SETTINGS_CHANNEL,
   payload: ClientSettingsSchema,
@@ -27,5 +38,6 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
     const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
     yield* clientSettings.set(settings);
     yield* snapShot.configure(settings);
+    yield* applyLanguage(settings.language);
   }),
 });

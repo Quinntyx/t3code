@@ -110,7 +110,7 @@ const withClientSettings = <A, E, R>(
       prefix: "t3-desktop-client-settings-test-",
     });
     return yield* effect.pipe(Effect.provide(layer(baseDir)));
-  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 describe("DesktopClientSettings", () => {
   it.effect("saves through a symlinked client settings file without replacing the link", () =>
@@ -204,6 +204,9 @@ describe("DesktopClientSettings", () => {
         assert.equal(error.operation, "read-file");
         assert.equal(error.path, environment.clientSettingsPath);
         assert.strictEqual(error.cause, cause);
+        const legacyError = yield* retryableSettings.getLegacyVisualSettings.pipe(Effect.flip);
+        assert.instanceOf(legacyError, DesktopClientSettings.DesktopClientSettingsReadError);
+        assert.equal(legacyError.operation, "read-file");
         assert.equal(
           yield* fileSystem.readFileString(environment.clientSettingsPath),
           savedContents,
@@ -211,6 +214,7 @@ describe("DesktopClientSettings", () => {
 
         failRead = false;
         assert.deepEqual(yield* retryableSettings.get, Option.some(savedSettings));
+        assert.deepEqual(yield* retryableSettings.getLegacyVisualSettings, Option.none());
       }),
     ),
   );

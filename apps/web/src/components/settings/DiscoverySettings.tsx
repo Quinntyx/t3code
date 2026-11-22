@@ -3,6 +3,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { T, useGT } from "gt-react";
 import { useState } from "react";
 
 import { requestConfirmDialog } from "../../confirmDialog";
@@ -12,6 +13,7 @@ import { Button } from "../ui/button";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function DiscoverySettings() {
+  const gt = useGT();
   const state = useAtomValue(directoryDiscovery.stateValueAtom);
   const refresh = useAtomCommand(directoryDiscovery.refresh, { reportFailure: false });
   const disconnect = useAtomCommand(directoryDiscovery.disconnect, { reportFailure: false });
@@ -22,7 +24,9 @@ export function DiscoverySettings() {
     if (
       action === "disconnect" &&
       !(await requestConfirmDialog(
-        "Disconnect discovery on this device? Its discovery listing will be removed. Existing direct environment connections remain.",
+        gt(
+          "Disconnect discovery on this device? Its discovery listing will be removed. Existing direct environment connections remain.",
+        ),
         { variant: "destructive" },
       ))
     )
@@ -33,17 +37,25 @@ export function DiscoverySettings() {
     setPending(false);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not update discovery.");
+      setError(failure instanceof Error ? failure.message : gt("Could not update discovery."));
     }
   };
   return (
-    <SettingsSection title="Discovery">
+    <SettingsSection title={gt("Discovery")}>
       <SettingsRow
-        title={state.directory?.label ?? "No discovery directory"}
+        title={state.directory?.label ?? gt("No discovery directory")}
         description={
           state.directory
-            ? `${state.directory.brokerOrigin} · ${state.hosts.length} discovered environments. Environments appear in the list above.`
-            : "Use Add environment to paste a discovery enrollment URL. Joining on desktop also makes its local environment discoverable."
+            ? gt(
+                "{brokerOrigin} · {count} discovered environments. Environments appear in the list above.",
+                {
+                  brokerOrigin: state.directory.brokerOrigin,
+                  count: state.hosts.length,
+                },
+              )
+            : gt(
+                "Use Add environment to paste a discovery enrollment URL. Joining on desktop also makes its local environment discoverable.",
+              )
         }
         control={
           state.directory ? (
@@ -54,7 +66,7 @@ export function DiscoverySettings() {
                 disabled={pending || state.refreshing}
                 onClick={() => void run("refresh")}
               >
-                {state.refreshing ? "Refreshing…" : "Refresh"}
+                {state.refreshing ? <T>Refreshing…</T> : <T>Refresh</T>}
               </Button>
               <Button
                 size="sm"
@@ -62,7 +74,7 @@ export function DiscoverySettings() {
                 disabled={pending}
                 onClick={() => void run("disconnect")}
               >
-                Disconnect discovery
+                <T>Disconnect discovery</T>
               </Button>
             </div>
           ) : undefined
@@ -72,11 +84,21 @@ export function DiscoverySettings() {
         <SettingsRow
           key={service.serviceId}
           title={service.label}
-          description={`${service.kind} · ${service.health} · ${service.linkedAt === null ? "not linked" : "linked"}. Link it and configure providers from the Usage tab.`}
+          description={
+            service.linkedAt === null
+              ? gt(
+                  "{kind} · {health} · not linked. Link it and configure providers from the Usage tab.",
+                  { kind: service.kind, health: service.health },
+                )
+              : gt(
+                  "{kind} · {health} · linked. Link it and configure providers from the Usage tab.",
+                  { kind: service.kind, health: service.health },
+                )
+          }
         />
       ))}
       {(error ?? state.error) ? (
-        <SettingsRow title="Discovery error" description={error ?? state.error} />
+        <SettingsRow title={gt("Discovery error")} description={error ?? state.error} />
       ) : null}
     </SettingsSection>
   );

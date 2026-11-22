@@ -82,6 +82,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
   { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
+  { key: "mod+f", command: "preview.find", when: "previewFocus" },
   { key: "mod+alt+shift+v", command: "voice.toggle", when: "!terminalFocus" },
   { key: "mod+alt+c", command: "voice.connect", when: "!terminalFocus" },
   { key: "mod+alt+x", command: "voice.disconnect", when: "!terminalFocus" },

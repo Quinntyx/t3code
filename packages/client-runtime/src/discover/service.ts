@@ -22,6 +22,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient, HttpClientRequest } from "effect/http";
+import { msg } from "gt-i18n";
 
 import {
   ConnectionBlockedError,
@@ -305,7 +306,7 @@ export const make = Effect.gen(function* () {
               generation === expected
                 ? {
                     ...value,
-                    error: "Could not connect a discovered environment. Refresh to try again.",
+                    error: msg("Could not connect a discovered environment. Refresh to try again."),
                   }
                 : value,
             ),
@@ -318,7 +319,9 @@ export const make = Effect.gen(function* () {
           generation === expected
             ? {
                 ...value,
-                error: "The discovery directory is unavailable. Saved connections are unchanged.",
+                error: msg(
+                  "The discovery directory is unavailable. Saved connections are unchanged.",
+                ),
               }
             : value,
         ),

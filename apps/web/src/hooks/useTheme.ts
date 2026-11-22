@@ -3,15 +3,18 @@ import type { DesktopBridge } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import * as Schema from "effect/Schema";
 import { useSyncExternalStore } from "react";
+import type { ThemeSettingsSchema } from "@t3tools/contracts";
 import {
   applyThemePalette,
   CUSTOM_THEMES_STORAGE_KEY,
+  getThemeStyleDefinition,
   invalidateCustomThemes,
   canonicalThemePreference,
   isKnownThemePreference,
   getThemePreferenceMode,
   getThemePreviewAppearance,
   parseThemeHalves,
+  resolveActiveThemeStyleState,
   resolveDesktopTheme,
   resolveThemeAppearance,
   resolveThemeHalf,
@@ -25,6 +28,18 @@ import {
   type ThemeHalves,
   type ThemePreferenceMode,
 } from "../themePalette";
+import {
+  DEFAULT_RESOLVED_THEME_EFFECTS,
+  ENVIRONMENT_STYLES_STORAGE_KEY,
+  readThemeSettingOverrides,
+  resetThemeSettingOverrides,
+  THEME_SETTING_OVERRIDES_STORAGE_KEY,
+  THEME_STYLE_STORAGE_KEY,
+  writeThemeSettingOverride,
+  type ResolvedThemeEffects,
+  type ThemeSettingOverridesMap,
+  type ThemeSettingValue,
+} from "../themeEffects";
 
 type Theme = ThemePreference;
 type ThemeSnapshot = {
@@ -34,12 +49,17 @@ type ThemeSnapshot = {
   followSystem: boolean;
   appearanceMode: ThemePreferenceMode;
   themeHalves: ThemeHalves | null;
+  themeStyle: string | null;
+  resolvedEffects: ResolvedThemeEffects;
+  settingOverrides: ThemeSettingOverridesMap;
 };
 
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
 
 const STORAGE_KEY = "t3code:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const EMPTY_SETTING_OVERRIDES: ThemeSettingOverridesMap = {};
 const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   theme: "system",
   resolvedTheme: "light",
@@ -47,7 +67,38 @@ const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   followSystem: true,
   appearanceMode: "system",
   themeHalves: null,
+  themeStyle: null,
+  resolvedEffects: DEFAULT_RESOLVED_THEME_EFFECTS,
+  settingOverrides: EMPTY_SETTING_OVERRIDES,
 };
+
+export function readThemeStyle(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(THEME_STYLE_STORAGE_KEY);
+    if (!raw) return null;
+    return getThemeStyleDefinition(raw)?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredSettingOverridesRaw(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(THEME_SETTING_OVERRIDES_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function getReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(REDUCED_MOTION_QUERY).matches
+  );
+}
 
 export function readThemeHalves(): ThemeHalves | null {
   return readStoredThemeHalves();
@@ -123,11 +174,24 @@ export class DesktopThemeSyncError extends Schema.TaggedError<DesktopThemeSyncEr
 
 const isDesktopThemeSyncError = Schema.is(DesktopThemeSyncError);
 
+type AppliedThemeKey = {
+  theme: Theme;
+  systemDark: boolean;
+  followSystem: boolean;
+  appearanceMode: ThemePreferenceMode;
+  themeHalves: ThemeHalves | null;
+  themeStyle: string | null;
+  settingOverridesRaw: string;
+  reducedMotion: boolean;
+};
+
 let listeners: Array<() => void> = [];
 let lastSnapshot: ThemeSnapshot | null = null;
+let lastSnapshotOverridesRaw = "";
+let lastSnapshotReducedMotion = false;
 let snapshotStale = true;
 let lastDesktopTheme: "light" | "dark" | "system" | null = null;
-let lastAppliedTheme: Omit<ThemeSnapshot, "resolvedTheme"> | null = null;
+let lastAppliedTheme: AppliedThemeKey | null = null;
 let themeStorageReadFailure: ThemeStorageError | null = null;
 
 function emitChange() {
@@ -312,12 +376,18 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
   const themeHalves = readStoredThemeHalves();
+  const themeStyle = readThemeStyle();
+  const settingOverridesRaw = readStoredSettingOverridesRaw();
+  const reducedMotion = getReducedMotion();
   if (
     lastAppliedTheme?.theme === theme &&
     lastAppliedTheme.systemDark === systemDark &&
     lastAppliedTheme.followSystem === followSystem &&
     lastAppliedTheme.appearanceMode === appearanceMode &&
-    themeHalvesSignature(lastAppliedTheme.themeHalves) === themeHalvesSignature(themeHalves)
+    themeHalvesSignature(lastAppliedTheme.themeHalves) === themeHalvesSignature(themeHalves) &&
+    lastAppliedTheme.themeStyle === themeStyle &&
+    lastAppliedTheme.settingOverridesRaw === settingOverridesRaw &&
+    lastAppliedTheme.reducedMotion === reducedMotion
   ) {
     syncDesktopTheme(theme, followSystem, appearanceMode);
     return;
@@ -333,9 +403,24 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     appearanceMode,
     themeHalves,
   );
-  applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
+  const overrides = readThemeSettingOverrides();
+  applyThemePalette(
+    resolveThemeHalf(theme, themeHalves, resolvedAppearance),
+    resolvedAppearance,
+    themeStyle,
+    overrides,
+  );
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
-  lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
+  lastAppliedTheme = {
+    theme,
+    systemDark,
+    followSystem,
+    appearanceMode,
+    themeHalves,
+    themeStyle,
+    settingOverridesRaw,
+    reducedMotion,
+  };
   syncBrowserChromeTheme();
   syncDesktopTheme(theme, followSystem, appearanceMode);
   if (suppressTransitions) {
@@ -405,6 +490,9 @@ function getSnapshot(): ThemeSnapshot {
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
   const themeHalves = readStoredThemeHalves();
+  const themeStyle = readThemeStyle();
+  const settingOverridesRaw = readStoredSettingOverridesRaw();
+  const reducedMotion = getReducedMotion();
 
   const resolvedTheme = resolveThemeAppearance(
     theme,
@@ -420,12 +508,34 @@ function getSnapshot(): ThemeSnapshot {
     lastSnapshot.systemDark === systemDark &&
     lastSnapshot.followSystem === followSystem &&
     lastSnapshot.appearanceMode === appearanceMode &&
-    themeHalvesSignature(lastSnapshot.themeHalves) === themeHalvesSignature(themeHalves)
+    themeHalvesSignature(lastSnapshot.themeHalves) === themeHalvesSignature(themeHalves) &&
+    lastSnapshot.themeStyle === themeStyle &&
+    lastSnapshotOverridesRaw === settingOverridesRaw &&
+    lastSnapshotReducedMotion === reducedMotion
   ) {
     return lastSnapshot;
   }
 
-  lastSnapshot = { theme, resolvedTheme, systemDark, followSystem, appearanceMode, themeHalves };
+  const settingOverrides = readThemeSettingOverrides();
+  const activePaletteId = resolveThemeHalf(theme, themeHalves, resolvedTheme);
+  const { effects: resolvedEffects } = resolveActiveThemeStyleState(
+    activePaletteId,
+    themeStyle,
+    settingOverrides,
+  );
+  lastSnapshotOverridesRaw = settingOverridesRaw;
+  lastSnapshotReducedMotion = reducedMotion;
+  lastSnapshot = {
+    theme,
+    resolvedTheme,
+    systemDark,
+    followSystem,
+    appearanceMode,
+    themeHalves,
+    themeStyle,
+    resolvedEffects,
+    settingOverrides,
+  };
   return lastSnapshot;
 }
 
@@ -441,6 +551,11 @@ function handleSystemAppearanceChange() {
   emitChange();
 }
 
+function handleReducedMotionChange() {
+  applyTheme(getStored(), { suppressTransitions: true });
+  emitChange();
+}
+
 function handleStorageChange(e: StorageEvent) {
   if (e.key === STORAGE_KEY) {
     themeStorageReadFailure = null;
@@ -449,10 +564,19 @@ function handleStorageChange(e: StorageEvent) {
   } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
     applyTheme(getStored(), { suppressTransitions: true });
     emitChange();
-  } else if (e.key === THEME_APPEARANCE_MODE_STORAGE_KEY || e.key === THEME_HALVES_STORAGE_KEY) {
+  } else if (
+    e.key === THEME_APPEARANCE_MODE_STORAGE_KEY ||
+    e.key === THEME_HALVES_STORAGE_KEY ||
+    e.key === THEME_STYLE_STORAGE_KEY ||
+    e.key === THEME_SETTING_OVERRIDES_STORAGE_KEY
+  ) {
     applyTheme(getStored(), { suppressTransitions: true });
     emitChange();
-  } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
+  } else if (
+    e.key === CUSTOM_THEMES_STORAGE_KEY ||
+    e.key === ENVIRONMENT_STYLES_STORAGE_KEY ||
+    e.key === null
+  ) {
     if (e.key === null) themeStorageReadFailure = null;
     invalidateCustomThemes();
     lastAppliedTheme = null;
@@ -469,10 +593,14 @@ function subscribe(listener: () => void): () => void {
 
   if (!removeWindowListeners) {
     const mq = typeof window.matchMedia === "function" ? window.matchMedia(MEDIA_QUERY) : null;
+    const reducedMq =
+      typeof window.matchMedia === "function" ? window.matchMedia(REDUCED_MOTION_QUERY) : null;
     mq?.addEventListener("change", handleSystemAppearanceChange);
+    reducedMq?.addEventListener("change", handleReducedMotionChange);
     window.addEventListener("storage", handleStorageChange);
     removeWindowListeners = () => {
       mq?.removeEventListener("change", handleSystemAppearanceChange);
+      reducedMq?.removeEventListener("change", handleReducedMotionChange);
       window.removeEventListener("storage", handleStorageChange);
     };
   }
@@ -489,6 +617,18 @@ function subscribe(listener: () => void): () => void {
 /** For shortcuts and other handlers outside React that read the theme at event time. */
 export function getThemeSnapshot(): ThemeSnapshot {
   return getSnapshot();
+}
+
+export function getResolvedThemeEffects(): ResolvedThemeEffects {
+  return getSnapshot().resolvedEffects;
+}
+
+export function subscribeThemeEffects(listener: () => void): () => void {
+  return subscribe(listener);
+}
+
+export function useThemeEffects(): ResolvedThemeEffects {
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot).resolvedEffects;
 }
 
 /** For code outside React (worker pools) that follows the rendered appearance. */
@@ -551,6 +691,54 @@ export function setTheme(next: Theme): boolean {
     return false;
   }
   applyTheme(next, { suppressTransitions: true });
+  emitChange();
+  return true;
+}
+
+/** Sets or clears the optional overlay style without disturbing palette or light/dark halves. */
+export function setThemeStyle(styleId: string | null): boolean {
+  if (typeof window === "undefined") return false;
+  const resolvedStyleId = styleId === null ? null : (getThemeStyleDefinition(styleId)?.id ?? null);
+  if (styleId !== null && resolvedStyleId === null) return false;
+  try {
+    if (resolvedStyleId === null) {
+      window.localStorage.removeItem(THEME_STYLE_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(THEME_STYLE_STORAGE_KEY, resolvedStyleId);
+    }
+  } catch (cause) {
+    const error = new ThemeStorageError({
+      operation: "write",
+      storageKey: THEME_STYLE_STORAGE_KEY,
+      cause,
+    });
+    console.error(error.message, {
+      operation: error.operation,
+      storageKey: error.storageKey,
+      ...safeErrorLogAttributes(error),
+    });
+    return false;
+  }
+  applyTheme(getStored(), { suppressTransitions: true });
+  emitChange();
+  return true;
+}
+
+export function setThemeSetting(
+  ownerId: string,
+  key: string,
+  value: ThemeSettingValue,
+  schema?: ThemeSettingsSchema,
+): boolean {
+  if (!writeThemeSettingOverride(ownerId, key, value, schema)) return false;
+  applyTheme(getStored(), { suppressTransitions: false });
+  emitChange();
+  return true;
+}
+
+export function resetThemeSettings(ownerId: string): boolean {
+  if (!resetThemeSettingOverrides(ownerId)) return false;
+  applyTheme(getStored(), { suppressTransitions: true });
   emitChange();
   return true;
 }
@@ -635,6 +823,7 @@ function clearThemeHalves(): boolean {
 export function refreshTheme({ preservePreview = false } = {}): void {
   if (typeof window === "undefined") return;
   lastAppliedTheme = null;
+  lastSnapshot = null;
   applyTheme(getStored(), { suppressTransitions: true, preservePreview });
   emitChange();
 }
@@ -656,6 +845,12 @@ export function useTheme() {
   return {
     theme,
     setTheme,
+    themeStyle: snapshot.themeStyle,
+    setThemeStyle,
+    resolvedEffects: snapshot.resolvedEffects,
+    settingOverrides: snapshot.settingOverrides,
+    setThemeSetting,
+    resetThemeSettings,
     setAppearanceMode,
     setFollowSystem,
     setThemeHalf,

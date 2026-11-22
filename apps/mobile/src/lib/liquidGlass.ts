@@ -1,8 +1,7 @@
+import { MAX_LIQUID_GLASS_BLUR, MAX_LIQUID_GLASS_PERCENT } from "@t3tools/contracts";
 import {
   DEFAULT_CLIENT_SETTINGS,
   MAX_GLASS_OPACITY,
-  MAX_LIQUID_GLASS_BLUR,
-  MAX_LIQUID_GLASS_PERCENT,
   MIN_GLASS_OPACITY,
 } from "@t3tools/contracts/settings";
 
@@ -30,10 +29,10 @@ export const LIQUID_GLASS_LIMITS = {
 export const DEFAULT_LIQUID_GLASS_PREFERENCES: LiquidGlassPreferences = {
   enabled: false,
   glassOpacity: DEFAULT_CLIENT_SETTINGS.glassOpacity,
-  blur: DEFAULT_CLIENT_SETTINGS.liquidGlassBlur,
-  saturation: DEFAULT_CLIENT_SETTINGS.liquidGlassSaturation,
-  refraction: DEFAULT_CLIENT_SETTINGS.liquidGlassRefraction,
-  dispersion: DEFAULT_CLIENT_SETTINGS.liquidGlassDispersion,
+  blur: 1,
+  saturation: 100,
+  refraction: 100,
+  dispersion: 100,
 };
 
 export function isLiquidGlassValue(

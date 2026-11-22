@@ -40,6 +40,13 @@ interface StackMergeReport {
   readonly restacks: ReadonlyArray<GitRestackThreadResult>;
 }
 
+export interface PullRequestStackMergeOptions extends PullRequestMergeStackInput {
+  /** Pin the target PR's head commit before merging (used by MCP callers). */
+  readonly expectedHeadSha?: string | undefined;
+  /** Refuse when the PR is not in any multi-layer stack (native or derived). */
+  readonly requireMultiLayer?: boolean | undefined;
+}
+
 export class PullRequestStackService extends Context.Service<
   PullRequestStackService,
   {
@@ -55,10 +62,59 @@ export class PullRequestStackService extends Context.Service<
       input: GitRestackThreadsInput,
     ) => Effect.Effect<GitRestackThreadsResult, GitRestackError>;
     readonly mergeStack: (
-      input: PullRequestMergeStackInput,
+      input: PullRequestStackMergeOptions,
     ) => Effect.Effect<PullRequestMergeStackResult, PullRequestService.PullRequestError>;
   }
 >()("t3/pullRequest/PullRequestStackService") {}
+
+/** Pin every unmerged layer up to `number` and merge through the host's native stack action. */
+export const mergeNativeStack = Effect.fn("PullRequestStackService.mergeNativeStack")(function* (
+  pullRequests: Pick<PullRequestService.PullRequestService["Service"], "stack" | "runAction">,
+  input: PullRequestStackMergeOptions,
+  preloadedStack?: Effect.Success<
+    ReturnType<PullRequestService.PullRequestService["Service"]["stack"]>
+  >,
+): Effect.fn.Return<PullRequestMergeStackResult, PullRequestService.PullRequestError> {
+  const ref = {
+    projectId: input.projectId,
+    repository: input.repository,
+    ...(input.host === undefined ? {} : { host: input.host }),
+    number: input.number,
+  };
+  const nativeStack =
+    preloadedStack !== undefined
+      ? preloadedStack
+      : yield* pullRequests.stack(ref, { bypassCache: true });
+  const end = nativeStack?.layers.findIndex((layer) => layer.number === input.number) ?? -1;
+  if (nativeStack === null || end === -1) {
+    return yield* new PullRequestOperationError({
+      operation: "mergeStack",
+      detail: `PR #${input.number} is not in a stack this host can merge. Merge it without stack.`,
+    });
+  }
+  const expectedStackHeads: Array<{ readonly number: number; readonly headSha: string }> = [];
+  for (const layer of nativeStack.layers.slice(0, end + 1)) {
+    if (layer.state === "merged") continue;
+    const headSha =
+      layer.number === input.number ? (input.expectedHeadSha ?? layer.headSha) : layer.headSha;
+    if (headSha === undefined) {
+      return yield* new PullRequestOperationError({
+        operation: "mergeStack",
+        detail: `The host did not report PR #${layer.number}'s head, so the stack cannot be pinned. Try again.`,
+      });
+    }
+    expectedStackHeads.push({ number: layer.number, headSha });
+  }
+  yield* pullRequests.runAction({
+    ...ref,
+    action: "merge",
+    stackNumber: nativeStack.number,
+    expectedStackHeads,
+    ...(input.expectedHeadSha === undefined ? {} : { expectedHeadSha: input.expectedHeadSha }),
+    ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+  });
+  return { merged: expectedStackHeads.map((layer) => layer.number) };
+});
 
 const sameRepository = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
 
@@ -217,10 +273,12 @@ export const make = Effect.gen(function* () {
     readonly merged: boolean;
     /** Fail instead of handing a blocked restack to the agent. */
     readonly mechanicalOnly: boolean;
+    /** When set, verify local HEAD matches this reviewed commit before rebasing. */
+    readonly expectedHeadSha?: string | undefined;
     readonly retargetFailed?: number;
   };
 
-  const restackThread = Effect.fn("PullRequestStackService.restackThread")(function* (
+  const restackThreadWithHead = Effect.fn("PullRequestStackService.restackThread")(function* (
     plan: RestackPlan,
   ) {
     const { thread } = plan;
@@ -258,7 +316,7 @@ export const make = Effect.gen(function* () {
               ...(forkPoint === undefined ? {} : { forkPoint }),
               ...(plan.retargetFailed === undefined ? {} : { retargetFailed: plan.retargetFailed }),
             }),
-          ).pipe(Effect.as(result("agent-asked", { reason })));
+          ).pipe(Effect.as({ result: result("agent-asked", { reason }), headSha: null }));
 
     const status = yield* git.statusDetailsLocal(cwd);
     const blocker = restackBlocker({
@@ -268,6 +326,16 @@ export const make = Effect.gen(function* () {
       hasWorkingTreeChanges: status.hasWorkingTreeChanges,
     });
     if (blocker !== null) return yield* handOff(blocker);
+
+    if (plan.expectedHeadSha !== undefined) {
+      const { commitSha: localHead } = yield* git.resolveCommit({ cwd, revision: "HEAD" });
+      if (localHead !== plan.expectedHeadSha) {
+        return yield* new GitRestackError({
+          threadId: thread.id,
+          detail: `\`${branch}\` local HEAD (${localHead.slice(0, 12)}) does not match pull request head (${plan.expectedHeadSha.slice(0, 12)}). Sync the branch before merging.`,
+        });
+      }
+    }
 
     let onto = plan.onto;
     let from = plan.from;
@@ -281,7 +349,8 @@ export const make = Effect.gen(function* () {
     }
     const rebase = yield* git.rebaseOnto({ cwd, onto, from });
     if (rebase.status === "conflicted") return yield* handOff("conflict", rebase.forkPoint);
-    if (rebase.status === "up-to-date") return result("up-to-date");
+    const { commitSha: headSha } = yield* git.resolveCommit({ cwd, revision: "HEAD" });
+    if (rebase.status === "up-to-date") return { result: result("up-to-date"), headSha };
     const push = yield* git.forcePushCurrentBranch(cwd).pipe(
       Effect.catchTags({
         GitCommandError: (cause) =>
@@ -291,18 +360,27 @@ export const make = Effect.gen(function* () {
           }).pipe(Effect.as("failed" as const)),
       }),
     );
-    if (push === "failed" && plan.mechanicalOnly) {
+    if (plan.mechanicalOnly && push !== "pushed") {
       return yield* new GitRestackError({
         threadId: thread.id,
-        detail: `\`${branch}\` was rebased but could not be pushed.`,
+        detail:
+          push === "no-upstream"
+            ? `\`${branch}\` was rebased but has no upstream branch to push to.`
+            : `\`${branch}\` was rebased but could not be pushed.`,
       });
     }
-    return result("restacked", push === "no-upstream" ? {} : { pushed: push === "pushed" });
+    return {
+      result: result("restacked", push === "no-upstream" ? {} : { pushed: push === "pushed" }),
+      headSha,
+    };
   });
 
+  const restackThread = (plan: RestackPlan) =>
+    restackThreadWithHead(plan).pipe(Effect.map((outcome) => outcome.result));
+
   /** Restack failures that are not handoffs become a typed error for the caller. */
-  const restackOrFail = (plan: RestackPlan) =>
-    restackThread(plan).pipe(
+  const restackOrFailWithHead = (plan: RestackPlan) =>
+    restackThreadWithHead(plan).pipe(
       Effect.mapError((cause) =>
         cause._tag === "GitRestackError"
           ? cause
@@ -313,6 +391,9 @@ export const make = Effect.gen(function* () {
             }),
       ),
     );
+
+  const restackOrFail = (plan: RestackPlan) =>
+    restackOrFailWithHead(plan).pipe(Effect.map((outcome) => outcome.result));
 
   const retargetAndRestack = Effect.fn("PullRequestStackService.retargetAndRestack")(function* (
     merged: PullRequestService.PullRequestMergeEvent,
@@ -523,13 +604,33 @@ export const make = Effect.gen(function* () {
       repository: input.repository,
       ...(input.host === undefined ? {} : { host: input.host }),
     };
-    const target = yield* pullRequests.summary({ ...ref, number: input.number });
+    const target = yield* pullRequests.summary(
+      { ...ref, number: input.number, allowStale: false },
+      { bypassCache: true },
+    );
     if (target.state !== "open") return yield* stop(`#${target.number} is not open.`);
-    if (target.stack != null) {
-      return yield* stop(
-        `#${target.number} is in a stack its host manages; merge it from that stack.`,
+
+    // Strict native-first precedence: consult the host's native stack API whenever the host
+    // supports native stacks or the PR reports native membership, and never fall back on failure.
+    const nativeSupported = yield* pullRequests.supportsNativeStacks({
+      ...ref,
+      number: target.number,
+    });
+    if (nativeSupported || target.stack != null) {
+      const nativeStack = yield* pullRequests.stack(
+        { ...ref, number: target.number },
+        { bypassCache: true },
       );
+      if (nativeStack !== null) {
+        return yield* mergeNativeStack(pullRequests, input, nativeStack);
+      }
+      if (target.stack != null) {
+        return yield* stop(
+          `#${target.number} is in a stack its host manages; merge it from that stack.`,
+        );
+      }
     }
+
     const threads = yield* projectThreads(target.projectId).pipe(
       Effect.mapError((cause) => stop("The project's threads could not be read.", cause)),
     );
@@ -550,12 +651,35 @@ export const make = Effect.gen(function* () {
             !chain.some((member) => member.number === candidate.number),
         );
       if (link === undefined) break;
-      const parent = yield* pullRequests.summary({ ...ref, number: link.number });
+      const parent = yield* pullRequests.summary(
+        { ...ref, number: link.number, allowStale: false },
+        { bypassCache: true },
+      );
       if (parent.state !== "open" || parent.headBranch !== below.baseBranch) break;
       chain.unshift(parent);
     }
 
+    if (input.requireMultiLayer === true && chain.length <= 1) {
+      return yield* stop(
+        `PR #${target.number} is not in a stack this host can merge. Merge it without stack.`,
+      );
+    }
+    for (const layer of chain) {
+      if (!layer.headSha) {
+        return yield* stop(
+          `The host did not report PR #${layer.number}'s head, so the stack cannot be pinned. Try again.`,
+        );
+      }
+    }
+    if (input.expectedHeadSha !== undefined && target.headSha !== input.expectedHeadSha) {
+      return yield* stop(
+        `PR #${target.number} moved since it was read (expected ${input.expectedHeadSha}, found ${target.headSha ?? "unknown"}).`,
+      );
+    }
+
     const merged: number[] = [];
+    let currentLayerHeadSha: string =
+      chain.length === 1 ? (input.expectedHeadSha ?? chain[0]!.headSha!) : chain[0]!.headSha!;
     for (const [index, layer] of chain.entries()) {
       const stoppedBefore = (reason: string) =>
         merged.length === 0
@@ -566,6 +690,7 @@ export const make = Effect.gen(function* () {
           ...ref,
           number: layer.number,
           action: "merge",
+          expectedHeadSha: currentLayerHeadSha,
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
         })
         .pipe(
@@ -573,7 +698,10 @@ export const make = Effect.gen(function* () {
             stop(stoppedBefore(`#${layer.number} could not be merged.`), cause),
           ),
         );
-      const confirmed = yield* pullRequests.summary({ ...ref, number: layer.number });
+      const confirmed = yield* pullRequests.summary(
+        { ...ref, number: layer.number, allowStale: false },
+        { bypassCache: true },
+      );
       if (confirmed.state !== "merged") {
         return yield* stop(
           stoppedBefore(
@@ -594,8 +722,22 @@ export const make = Effect.gen(function* () {
         restackDependents: false,
       });
       const nextRef = { ...ref, number: next.number };
+      const nextBeforeRestack = yield* pullRequests
+        .summary({ ...nextRef, allowStale: false }, { bypassCache: true })
+        .pipe(
+          Effect.mapError((cause) =>
+            stop(stoppedBefore(`#${next.number} could not be read before restacking.`), cause),
+          ),
+        );
+      if (!nextBeforeRestack.headSha || nextBeforeRestack.headSha !== next.headSha) {
+        return yield* stop(
+          stoppedBefore(
+            `#${next.number} moved while merging #${layer.number}. Review the new commits before continuing.`,
+          ),
+        );
+      }
       // The top of the stack may have no thread link for the merge follow-up to find.
-      if ((yield* pullRequests.summary(nextRef)).baseBranch === confirmed.headBranch) {
+      if (nextBeforeRestack.baseBranch === confirmed.headBranch) {
         yield* pullRequests
           .changeBaseBranch({ ...nextRef, baseBranch: confirmed.baseBranch })
           .pipe(
@@ -619,14 +761,35 @@ export const make = Effect.gen(function* () {
       if (owner === null || root === null) {
         return yield* stop(stoppedBefore(`#${next.number} has no thread to restack it in.`));
       }
-      yield* restackOrFail({
+      const restackOutcome = yield* restackOrFailWithHead({
         thread: owner,
         root,
         onto: confirmed.baseBranch,
         from: confirmed.headBranch,
         merged: true,
         mechanicalOnly: true,
+        expectedHeadSha: next.headSha!,
       }).pipe(Effect.mapError((cause) => stop(stoppedBefore(cause.detail), cause)));
+      if (!restackOutcome.headSha) {
+        return yield* stop(
+          stoppedBefore(`#${next.number} could not resolve its restacked commit.`),
+        );
+      }
+      const refreshedNext = yield* pullRequests
+        .summary({ ...nextRef, allowStale: false }, { bypassCache: true })
+        .pipe(
+          Effect.mapError((cause) =>
+            stop(stoppedBefore(`#${next.number} could not be re-read after restacking.`), cause),
+          ),
+        );
+      if (!refreshedNext.headSha || refreshedNext.headSha !== restackOutcome.headSha) {
+        return yield* stop(
+          stoppedBefore(
+            `#${next.number} head on the host (${refreshedNext.headSha ?? "unknown"}) does not match the restacked commit (${restackOutcome.headSha}).`,
+          ),
+        );
+      }
+      currentLayerHeadSha = refreshedNext.headSha;
     }
     return { merged };
   });

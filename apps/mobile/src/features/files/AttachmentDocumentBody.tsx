@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react-native";
 import { View } from "react-native";
 
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -39,28 +40,29 @@ export function AttachmentDocumentBody(props: {
   readonly onOpenNative: () => void;
 }) {
   const { document } = props;
+  const gt = useGT();
   if (document.error) {
     return (
       <View className="flex-1 items-center justify-center bg-sheet px-6">
         <EmptyState
-          title="File unavailable"
+          title={gt("File unavailable")}
           detail={document.error}
-          actionLabel="Try again"
+          actionLabel={gt("Try again")}
           onAction={document.retry}
         />
       </View>
     );
   }
   if (props.nativeViewer === "pending" || props.nativeViewer === "open") {
-    return <FilePreviewLoading message="Opening in file viewer..." />;
+    return <FilePreviewLoading message={gt("Opening in file viewer...")} />;
   }
   if (props.nativeViewer === "closed") {
     return (
       <View className="flex-1 items-center justify-center bg-sheet px-6">
         <EmptyState
           title={props.name}
-          detail="Open it in the file viewer, or download or share it from the menu."
-          actionLabel="Open"
+          detail={gt("Open it in the file viewer, or download or share it from the menu.")}
+          actionLabel={gt("Open")}
           onAction={props.onOpenNative}
         />
       </View>
@@ -68,15 +70,15 @@ export function AttachmentDocumentBody(props: {
   }
   // ZIP text entries are read into memory and have no file URI.
   if (document.needsText ? !document.content : !document.uri) {
-    return <FilePreviewLoading message="Loading file..." />;
+    return <FilePreviewLoading message={gt("Loading file...")} />;
   }
   if (document.needsText && document.content) {
     const { content, table } = document;
     return (
       <View className="flex-1 bg-sheet">
         {content.truncated ? (
-          <FilePreviewNotice title="Partial file">
-            Preview limited to the first 1 MB. Save or share the file to read it in full.
+          <FilePreviewNotice title={gt("Partial file")}>
+            {gt("Preview limited to the first 1 MB. Save or share the file to read it in full.")}
           </FilePreviewNotice>
         ) : null}
         {table && document.activeMode === "table" ? (
@@ -110,12 +112,12 @@ export function AttachmentDocumentBody(props: {
   return (
     <View className="flex-1 items-center justify-center bg-sheet px-6">
       <EmptyState
-        title="No preview for this file"
+        title={gt("No preview for this file")}
         detail={
           props.nativeError ??
-          "No app on this device can show this format. Save or share it to open it elsewhere."
+          gt("No app on this device can show this format. Save or share it to open it elsewhere.")
         }
-        actionLabel="Try again"
+        actionLabel={gt("Try again")}
         onAction={props.onOpenNative}
       />
     </View>

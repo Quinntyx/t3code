@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import {
   useLayoutEffect,
@@ -18,7 +19,7 @@ import {
 } from "./threadDetailsCardLayout";
 import { observeResize } from "../../lib/observeResize";
 import { requestWorkspaceFocus } from "../../lib/workspaceFocus";
-import { useClientSettings } from "../../hooks/useSettings";
+import { useThemeEffects } from "../../hooks/useTheme";
 
 export function ThreadDetailsCard({
   threadRef,
@@ -36,15 +37,15 @@ export function ThreadDetailsCard({
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
   children: (density: "full" | "compact" | "essential") => ReactNode;
 }) {
-  const detailsArea = workspaceAreaProps("details", 3, "Thread details");
+  const gt = useGT();
+  const detailsArea = workspaceAreaProps("details", 3, gt("Thread details"));
   const canvas = useChatCanvas();
   const preferredPlacement = canvas?.preferredDetailsCard ?? null;
   const placement = canvas?.detailsCardPlacement ?? null;
   const mode = placement ? "inline" : "popover";
   const topInset = canvas?.detailsCardTopInset ?? 0;
   // Floating panels clear the titlebar's toggles, so the card rises to the window's top edge.
-  const riseToTopEdge =
-    useClientSettings((settings) => settings.floatingPanelsEnabled) && topInset === 0;
+  const riseToTopEdge = useThemeEffects().floatingPanels.enabled && topInset === 0;
   const inlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
@@ -119,7 +120,7 @@ export function ThreadDetailsCard({
   const card = (
     <div
       className={cn(
-        "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-glass shadow-float",
+        "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-2xl floating-panels:rounded-glass floating-panels:shadow-float",
         mode === "popover" &&
           "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
       )}

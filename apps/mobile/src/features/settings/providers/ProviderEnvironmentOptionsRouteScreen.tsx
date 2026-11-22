@@ -1,5 +1,6 @@
 import type { MenuAction } from "@react-native-menu/menu";
 import type { StaticScreenProps } from "@react-navigation/native";
+import { idleCompactionModeLabel } from "@t3tools/client-runtime/contract-labels";
 import {
   backgroundActivityOverrideSettings,
   durationToSeconds,
@@ -22,6 +23,7 @@ import {
   resolveServerBackgroundActivitySettings,
 } from "@t3tools/shared/backgroundActivitySettings";
 import * as Duration from "effect/Duration";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -34,6 +36,7 @@ import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { ListChoiceRow } from "../../../components/ui/ListChoiceRow";
 import { Menu } from "../../../components/ui/Menu";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
+import { m, type MessageResolver } from "../../../i18n/messages";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { SettingsSection } from "../components/SettingsSection";
 import { FieldBlock } from "./ProviderFields";
@@ -45,6 +48,7 @@ import {
 import { sourceIdFromUrl } from "@t3tools/client-runtime/provider-settings/usage-hubs";
 
 type Actions = ReturnType<typeof useProviderInstanceActions>;
+const CLI_PROXY_NAME = "CLI Proxy";
 
 export function ProviderEnvironmentOptionsRouteScreen({
   route,
@@ -58,11 +62,12 @@ export function ProviderEnvironmentOptionsRouteScreen({
 }
 
 function EnvironmentOptions({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const actions = useProviderInstanceActions(environmentId);
   const environmentLabel = useEnvironmentLabel(environmentId);
   return (
-    <SettingsScreen title="Usage and background checks">
+    <SettingsScreen title={gt("Usage and background checks")}>
       <ScreenScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
@@ -87,6 +92,7 @@ function UsageHubs(props: {
   readonly environmentLabel: string;
   readonly actions: Actions;
 }) {
+  const gt = useGT();
   const { settings, canManage } = props.actions;
   const readOnly = !canManage;
   const sources = useSecretSources(props.environmentId);
@@ -95,11 +101,14 @@ function UsageHubs(props: {
 
   return (
     <SettingsSection
-      title="Usage hubs"
-      footer={`Show the quota of every account a CLIProxyAPI hub pools, next to the providers on ${props.environmentLabel}. Management keys stay on that server.`}
+      title={gt("Usage hubs")}
+      footer={gt(
+        "Show the quota of every account a CLIProxyAPI hub pools, next to the providers on {environment}. Management keys stay on that server.",
+        { environment: props.environmentLabel },
+      )}
     >
       {entries.length === 0 && !adding ? (
-        <FieldBlock label="No hubs configured" />
+        <FieldBlock label={gt("No hubs configured")} />
       ) : (
         entries.map(([id, source], index) => {
           const label = source.label?.trim() || source.url;
@@ -108,8 +117,8 @@ function UsageHubs(props: {
               key={id}
               label={label}
               description={[
-                "CLI Proxy",
-                source.enabled ? null : "Disabled",
+                CLI_PROXY_NAME,
+                source.enabled ? null : gt("Disabled", { $context: "usage hub status" }),
                 label !== source.url ? source.url : null,
               ]
                 .filter(Boolean)
@@ -119,14 +128,15 @@ function UsageHubs(props: {
                 readOnly ? null : (
                   <ControlPill
                     variant="pill"
-                    label="Remove"
-                    accessibilityLabel={`Remove ${label}`}
+                    label={gt("Remove", { $context: "verb, removes a usage hub" })}
+                    accessibilityLabel={gt("Remove {label}", { label })}
                     onPress={() =>
                       Dialog.confirm({
-                        title: `Remove ${label}?`,
-                        message:
+                        title: gt("Remove {label}?", { label }),
+                        message: gt(
                           "The hub's management key is deleted from this server. Its accounts leave the Limits view; the hub itself is untouched. Add it again with the URL and key to bring them back.",
-                        confirmText: "Remove hub",
+                        ),
+                        confirmText: gt("Remove hub"),
                         destructive: true,
                         onConfirm: () =>
                           void props.actions.updateSettings({ usageLimitSources: { [id]: null } }),
@@ -162,7 +172,7 @@ function UsageHubs(props: {
         />
       ) : (
         <View className="border-t border-border-subtle">
-          <ListActionRow icon="plus" label="Add hub" onPress={() => setAdding(true)} />
+          <ListActionRow icon="plus" label={gt("Add hub")} onPress={() => setAdding(true)} />
         </View>
       )}
     </SettingsSection>
@@ -179,6 +189,7 @@ function AddHubForm(props: {
     readonly label: string;
   }) => Promise<void>;
 }) {
+  const gt = useGT();
   const [url, setUrl] = useState("");
   const [managementKey, setManagementKey] = useState("");
   const [keySourceId, setKeySourceId] = useState<SecretRequestSource["id"] | null>(null);
@@ -187,7 +198,7 @@ function AddHubForm(props: {
   const [saving, setSaving] = useState(false);
   const canSave = url.trim().length > 0 && managementKey.trim().length > 0 && !saving;
   const keySourceActions: MenuAction[] = [
-    { id: "", title: "Stored value", state: keySource === undefined ? "on" : "off" },
+    { id: "", title: gt("Stored value"), state: keySource === undefined ? "on" : "off" },
     ...props.sources.map((source) => ({
       id: source.id,
       title: source.label,
@@ -197,9 +208,9 @@ function AddHubForm(props: {
   const inputClassName = "min-h-11 rounded-xl px-3 py-2 text-base";
   return (
     <View className={props.separated ? "border-t border-border-subtle" : undefined}>
-      <FieldBlock label="Hub URL">
+      <FieldBlock label={gt("Hub URL")}>
         <AppTextInput
-          accessibilityLabel="Hub URL"
+          accessibilityLabel={gt("Hub URL")}
           value={url}
           placeholder="https://hub.example.ts.net:8318"
           autoFocus
@@ -211,15 +222,19 @@ function AddHubForm(props: {
         />
       </FieldBlock>
       <FieldBlock
-        label="Management key"
+        label={gt("Management key")}
         separated
         trailing={
           props.sources.length > 0 ? (
             <Menu
               accessible
               accessibilityRole="button"
-              accessibilityLabel={`Management key source: ${keySource?.label ?? "Stored value"}`}
-              title="Value comes from"
+              accessibilityLabel={
+                keySource
+                  ? gt("Management key source: {source}", { source: keySource.label })
+                  : gt("Management key source: Stored value")
+              }
+              title={gt("Value comes from")}
               actions={keySourceActions}
               onPressAction={({ nativeEvent }) => {
                 setKeySourceId(
@@ -228,15 +243,15 @@ function AddHubForm(props: {
                 setManagementKey("");
               }}
             >
-              <ControlPill variant="pill" label={keySource?.label ?? "Stored value"} />
+              <ControlPill variant="pill" label={keySource?.label ?? gt("Stored value")} />
             </Menu>
           ) : null
         }
       >
         <AppTextInput
-          accessibilityLabel={keySource ? "Management key reference" : "Management key"}
+          accessibilityLabel={keySource ? gt("Management key reference") : gt("Management key")}
           value={managementKey}
-          placeholder={keySource?.referencePlaceholder ?? "Not set"}
+          placeholder={keySource?.referencePlaceholder ?? gt("Not set")}
           secureTextEntry={keySource === undefined}
           autoCapitalize="none"
           autoCorrect={false}
@@ -244,11 +259,15 @@ function AddHubForm(props: {
           onChangeText={setManagementKey}
         />
       </FieldBlock>
-      <FieldBlock label="Label" description="Optional. Defaults to the hub's host name." separated>
+      <FieldBlock
+        label={gt("Label")}
+        description={gt("Optional. Defaults to the hub's host name.")}
+        separated
+      >
         <AppTextInput
-          accessibilityLabel="Label"
+          accessibilityLabel={gt("Label")}
           value={label}
-          placeholder="e.g. Team hub"
+          placeholder={gt("e.g. Team hub")}
           autoCorrect={false}
           className={inputClassName}
           onChangeText={setLabel}
@@ -256,11 +275,11 @@ function AddHubForm(props: {
       </FieldBlock>
       <View className="flex-row gap-3 border-t border-border-subtle px-4 py-3">
         <View className="flex-1">
-          <Button label="Cancel" tone="secondary" fullWidth onPress={props.onCancel} />
+          <Button label={gt("Cancel")} tone="secondary" fullWidth onPress={props.onCancel} />
         </View>
         <View className="flex-1">
           <Button
-            label="Add hub"
+            label={gt("Add hub")}
             fullWidth
             loading={saving}
             disabled={!canSave}
@@ -269,7 +288,7 @@ function AddHubForm(props: {
                 ? secretRequestReference(keySource, managementKey)
                 : managementKey.trim();
               if (key === undefined) {
-                Dialog.alert("Invalid reference", keySource?.invalidReferenceMessage);
+                Dialog.alert(gt("Invalid reference"), keySource?.invalidReferenceMessage);
                 return;
               }
               setSaving(true);
@@ -286,14 +305,16 @@ function AddHubForm(props: {
 
 const HEALTH_INTERVAL_PRESETS = [60, 300, 900, 1_800, 3_600] as const;
 
-function formatInterval(seconds: number) {
-  if (seconds === 0) return "Off";
-  if (seconds % 3_600 === 0) return `${seconds / 3_600} hr`;
-  if (seconds % 60 === 0) return `${seconds / 60} min`;
-  return `${seconds} s`;
+function formatInterval(seconds: number, resolve: MessageResolver = m) {
+  if (seconds === 0) return resolve(msg("Off", { $context: "health check interval status" }));
+  if (seconds % 3_600 === 0) return resolve(msg("{count} hr", { count: seconds / 3_600 }));
+  if (seconds % 60 === 0) return resolve(msg("{count} min", { count: seconds / 60 }));
+  return resolve(msg("{count} s", { count: seconds }));
 }
 
 function HealthCheckInterval(props: { readonly actions: Actions }) {
+  const gt = useGT();
+  const messages = useMessages();
   const { settings, canWriteSettings, updateSettings } = props.actions;
   const resolved = resolveServerBackgroundActivitySettings(settings);
   const current = durationToSeconds(resolved.providerHealthRefreshInterval);
@@ -315,26 +336,30 @@ function HealthCheckInterval(props: { readonly actions: Actions }) {
       id: String(seconds),
       title:
         seconds === profileDefault
-          ? `${formatInterval(seconds)} (default)`
-          : formatInterval(seconds),
+          ? gt("{interval} (default)", { interval: formatInterval(seconds, messages) })
+          : formatInterval(seconds, messages),
       state: seconds === current ? "on" : "off",
     })),
-    { id: "custom", title: "Custom…" },
+    { id: "custom", title: gt("Custom…") },
   ];
   return (
     <SettingsSection
-      title="Health checks"
-      footer="The shared Background activity policy still decides whether a check may run when the timer fires. Custom intervals appear as Advanced in Maintenance settings."
+      title={gt("Health checks")}
+      footer={gt(
+        "The shared Background activity policy still decides whether a check may run when the timer fires. Custom intervals appear as Advanced in Maintenance settings.",
+      )}
     >
       <FieldBlock
-        label="Provider health check"
-        description="Refresh provider status, versions, and models in the background."
+        label={gt("Provider health check")}
+        description={gt("Refresh provider status, versions, and models in the background.")}
         trailing={
           <Menu
             accessible
             accessibilityRole="button"
-            accessibilityLabel={`Provider health check interval: ${formatInterval(current)}`}
-            title="Check every"
+            accessibilityLabel={gt("Provider health check interval: {interval}", {
+              interval: formatInterval(current, messages),
+            })}
+            title={gt("Check every")}
             actions={menuActions}
             onPressAction={({ nativeEvent }) => {
               if (!canWriteSettings) return;
@@ -345,15 +370,18 @@ function HealthCheckInterval(props: { readonly actions: Actions }) {
                 return;
               }
               Dialog.prompt({
-                title: "Health check interval",
-                message: "Seconds between checks. Enter 0 to turn them off.",
+                title: gt("Health check interval"),
+                message: gt("Seconds between checks. Enter 0 to turn them off."),
                 placeholder: String(profileDefault),
                 initialValue: String(current),
-                confirmText: "Save",
+                confirmText: gt("Save", { $context: "verb" }),
                 onConfirm: (value) => {
                   const seconds = Number(value.trim());
                   if (value.trim().length === 0 || !Number.isFinite(seconds) || seconds < 0) {
-                    Dialog.alert("Invalid interval", "Enter a whole number of seconds, 0 or more.");
+                    Dialog.alert(
+                      gt("Invalid interval"),
+                      gt("Enter a whole number of seconds, 0 or more."),
+                    );
                     return;
                   }
                   write(seconds);
@@ -363,7 +391,7 @@ function HealthCheckInterval(props: { readonly actions: Actions }) {
           >
             <ControlPill
               variant="pill"
-              label={formatInterval(current)}
+              label={formatInterval(current, messages)}
               disabled={!canWriteSettings}
             />
           </Menu>
@@ -374,19 +402,23 @@ function HealthCheckInterval(props: { readonly actions: Actions }) {
 }
 
 function IdleCompaction(props: { readonly actions: Actions }) {
+  const gt = useGT();
+  const messages = useMessages();
   const { settings, canWriteSettings, updateSettings } = props.actions;
   const current = globalIdleCompaction(settings);
   // A server from before modes has only the on/off switch, so it cannot store "Never".
   const neverAvailable = readsIdleCompactionModes(settings);
   return (
     <SettingsSection
-      title="Compact idle threads"
-      footer="When to compact an idle Claude thread over 200,000 tokens. Each Claude provider can override this."
+      title={gt("Compact idle threads")}
+      footer={gt(
+        "When to compact an idle Claude thread over 200,000 tokens. Each Claude provider can override this.",
+      )}
     >
       {IDLE_COMPACTION_MODES.map((mode, index) => (
         <ListChoiceRow
           key={mode.value}
-          label={mode.label}
+          label={idleCompactionModeLabel(mode.value, messages)}
           selected={current === mode.value}
           separated={index > 0}
           disabled={!canWriteSettings || (mode.value === "off" && !neverAvailable)}

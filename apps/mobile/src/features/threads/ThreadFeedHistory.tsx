@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { Pressable, View } from "react-native";
+import { useGT } from "gt-react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -129,6 +130,7 @@ export function ThreadHistoryScrollView(props: ComponentPropsWithRef<typeof Anim
 }
 
 export function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
+  const gt = useGT();
   const history = useContext(ThreadFeedHistoryContext);
   const { color } = useResolveClassNames("text-secondary-foreground");
   const pull = history?.pull;
@@ -141,8 +143,10 @@ export function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
       {props.hasMoreHistory ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Load earlier activity"
-          accessibilityHint="Pull down until the circle fills, then release, or tap to load earlier activity."
+          accessibilityLabel={gt("Load earlier activity")}
+          accessibilityHint={gt(
+            "Pull down until the circle fills, then release, or tap to load earlier activity.",
+          )}
           accessibilityState={{ disabled: props.loading, busy: props.loading }}
           disabled={props.loading}
           onPress={props.onLoadEarlier}
@@ -191,7 +195,7 @@ export function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
               props.loading ? "text-foreground-muted" : "text-secondary-foreground",
             )}
           >
-            {props.loading ? "Loading earlier activity…" : "Load earlier activity"}
+            {props.loading ? gt("Loading earlier activity…") : gt("Load earlier activity")}
           </AppText>
         </Pressable>
       ) : null}

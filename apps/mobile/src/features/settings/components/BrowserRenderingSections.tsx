@@ -8,6 +8,7 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useGT } from "gt-react-native";
 
 import { ListChoiceRow } from "../../../components/ui/ListChoiceRow";
 import { previewEnvironment } from "../../../state/preview";
@@ -15,7 +16,6 @@ import { SettingsSection } from "./SettingsSection";
 
 const NO_GPUS_ATOM = Atom.make(AsyncResult.success<ServerBrowserGpuList>({ gpus: [] }));
 const RENDER_SCALES: ReadonlyArray<ServerBrowserRenderScale> = [1, 1.5, 2, 3];
-const APPLIES = "Changing this reloads the environment's open browser tabs.";
 
 /** Null values mean the selected environments differ. */
 export function BrowserRenderingSections(props: {
@@ -25,6 +25,7 @@ export function BrowserRenderingSections(props: {
   readonly disabled: boolean;
   readonly write: (patch: ServerSettingsPatch) => void;
 }) {
+  const gt = useGT();
   // GPUs belong to one host, so they are listed only when one environment is selected.
   const discovered = useAtomValue(
     props.environmentId
@@ -35,10 +36,12 @@ export function BrowserRenderingSections(props: {
   const gpuChoices = [
     {
       id: DEFAULT_SERVER_BROWSER_GPU,
-      label: "Software",
-      description: `Render on the CPU. The default. ${APPLIES}`,
+      label: gt("Software", { $context: "browser GPU software rendering" }),
+      description: gt(
+        "Render on the CPU. The default. Changing this reloads the environment's open browser tabs.",
+      ),
     },
-    { id: "auto", label: "Automatic", description: "Let the browser pick a GPU." },
+    { id: "auto", label: gt("Automatic"), description: gt("Let the browser pick a GPU.") },
     ...gpus.map((gpu) => ({
       id: gpu.id,
       label: gpu.name,
@@ -46,12 +49,16 @@ export function BrowserRenderingSections(props: {
     })),
   ];
   if (props.gpu !== null && !gpuChoices.some((choice) => choice.id === props.gpu)) {
-    gpuChoices.push({ id: props.gpu, label: props.gpu, description: "Not found on this host." });
+    gpuChoices.push({
+      id: props.gpu,
+      label: props.gpu,
+      description: gt("Not found on this host."),
+    });
   }
 
   return (
     <>
-      <SettingsSection title="Browser GPU">
+      <SettingsSection title={gt("Browser GPU")}>
         {gpuChoices.map((choice, index) => (
           <ListChoiceRow
             key={choice.id}
@@ -64,13 +71,17 @@ export function BrowserRenderingSections(props: {
           />
         ))}
       </SettingsSection>
-      <SettingsSection title="Browser render scale">
+      <SettingsSection title={gt("Browser render scale")}>
         {RENDER_SCALES.map((scale, index) => (
           <ListChoiceRow
             key={scale}
             label={`${scale}×`}
             {...(scale === DEFAULT_SERVER_BROWSER_RENDER_SCALE
-              ? { description: `The default. ${APPLIES}` }
+              ? {
+                  description: gt(
+                    "The default. Changing this reloads the environment's open browser tabs.",
+                  ),
+                }
               : {})}
             selected={props.scale === scale}
             separated={index > 0}

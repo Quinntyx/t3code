@@ -1,4 +1,5 @@
 import { formatTokens } from "@t3tools/shared/usageFormat";
+import { T, useGT } from "gt-react";
 import { type ReactNode, useState } from "react";
 
 import { curvePath, niceScale, smoothCurve } from "./usageChartGeometry";
@@ -57,6 +58,7 @@ export function ThreadUsageChart({
   readonly formatTime: (iso: string, spanMs: number) => string;
   readonly formatTooltipTime: (iso: string) => string;
 }) {
+  const gt = useGT();
   const [hover, setHover] = useState<number | null>(null);
   const count = Math.max(2, ...series.map((entry) => entry.buckets.length));
   const peak = Math.max(0, ...series.flatMap((entry) => entry.buckets));
@@ -125,7 +127,7 @@ export function ThreadUsageChart({
             viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label={`Tokens per ${formatBucket(bucketMs)} by model`}
+            aria-label={gt("Tokens per {bucket} by model", { bucket: formatBucket(bucketMs) })}
           >
             {scale.ticks.map((tick) => (
               <line
@@ -204,7 +206,9 @@ export function ThreadUsageChart({
               ))}
               {series.length > 1 ? (
                 <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-1">
-                  <span className="text-muted-foreground">Total</span>
+                  <span className="text-muted-foreground">
+                    <T>Total</T>
+                  </span>
                   <span className="text-foreground tabular-nums">
                     {formatTokens(
                       series.reduce((sum, entry) => sum + (entry.buckets[hover] ?? 0), 0),
