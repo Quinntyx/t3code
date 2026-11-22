@@ -64,15 +64,17 @@ function useExitingNotices(items: ReadonlyArray<ComposerBannerStackItem>) {
     if (!row.exiting) return {};
     const release = () =>
       setExiting((current) => current.filter((entry) => entry.item.id !== row.item.id));
+    const releaseOnOpacity = (event: TransitionEvent) => {
+      if (event.target === event.currentTarget && event.propertyName === "opacity") release();
+    };
     return {
       "data-ending-style": "",
       inert: true,
       ref: (element: HTMLElement | null) => {
         if (element && !isFadingOut(element)) release();
       },
-      onTransitionEnd: (event: TransitionEvent) => {
-        if (event.target === event.currentTarget && event.propertyName === "opacity") release();
-      },
+      onTransitionEnd: releaseOnOpacity,
+      onTransitionCancel: releaseOnOpacity,
     };
   };
   return { rows, exitProps };

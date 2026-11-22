@@ -1,5 +1,5 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useLayoutEffect, useRef, useState, type FocusEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FocusEvent, type TransitionEvent } from "react";
 
 import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
@@ -91,6 +91,11 @@ export function ThreadDetailsRailPeek({
   );
   const height = Math.min(heights[section], available);
   const top = Math.max(0, Math.min(tops[section], available - height));
+  // A cancelled fade (a theme change mid-way) closes the peek like a finished one.
+  const closeOnFade = (event: TransitionEvent) => {
+    if (!open && event.target === event.currentTarget && event.propertyName === "opacity")
+      onClosed();
+  };
 
   return (
     <div
@@ -105,10 +110,8 @@ export function ThreadDetailsRailPeek({
       onKeyDown={(event) => {
         if (event.key === "Escape") onEscape();
       }}
-      onTransitionEnd={(event) => {
-        if (!open && event.target === event.currentTarget && event.propertyName === "opacity")
-          onClosed();
-      }}
+      onTransitionEnd={closeOnFade}
+      onTransitionCancel={closeOnFade}
       className={cn(
         "dropdown-glass absolute top-0 right-full isolate me-2 w-76 overflow-hidden rounded-glass-list-item shadow-float",
         // Reduced motion keeps the fade, which onClosed waits on, and drops the slide.

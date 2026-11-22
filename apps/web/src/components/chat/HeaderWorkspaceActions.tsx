@@ -68,10 +68,7 @@ export function HeaderWorkspaceActions({
   const showScripts = activeProjectScripts !== undefined && detailsVisible.scripts;
   const showGit =
     gitCwd !== null && hasProject && (detailsVisible.changes || detailsVisible.gitActions);
-  const fileScripts = useT3ProjectFileScripts(
-    environmentId,
-    activeProjectScripts !== undefined ? gitCwd : null,
-  );
+  const fileScripts = useT3ProjectFileScripts(environmentId, showScripts ? gitCwd : null);
   const scriptsControlProps = {
     environmentId,
     scripts: activeProjectScripts ?? [],

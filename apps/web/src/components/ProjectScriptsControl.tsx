@@ -358,7 +358,10 @@ export default function ProjectScriptsControl({
           {isPanel ? (
             <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
           ) : (
-            <GroupSeparator className="hidden @3xl/header-actions:block" />
+            <GroupSeparator
+              className="hidden @3xl/header-actions:block"
+              data-header-run-separator=""
+            />
           )}
           <Menu
             open={actionsMenuOpen.scripts}

@@ -363,6 +363,8 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const SIDEBAR_TAB_STORAGE_KEY = "t3code:sidebar:tab";
+const SIDEBAR_TAB_SCHEMA = Schema.Literals(["idle", "working", "snoozed"]);
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -585,7 +587,8 @@ function useSidebarThreads(input: {
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
-    expanded: settledShelfExpanded || settledPopoverOpen,
+    // Tabs list settled threads only in the popover, so the shelf's stored state does not load them.
+    expanded: (settledShelfExpanded && !sectionsTabbed) || settledPopoverOpen,
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
@@ -690,6 +693,7 @@ function useSidebarThreads(input: {
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
     },
+    visibleSettledThreads,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
@@ -1181,8 +1185,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Hold dropped rows until server placement is confirmed; block another pickup from replacing the hold.
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
-  const [threadSearchQuery, setThreadSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<SidebarTab>("idle");
+  const [searchInput, setThreadSearchQuery] = useState("");
+  // With the search row hidden there is no way to see or clear a query, so none applies.
+  const threadSearchQuery = sidebarSearchLayout === "hidden" ? "" : searchInput;
+  const [storedTab, setStoredTab] = useLocalStorage<SidebarTab, SidebarTab>(
+    SIDEBAR_TAB_STORAGE_KEY,
+    "idle",
+    SIDEBAR_TAB_SCHEMA,
+  );
   const [settledPopoverOpen, setSettledPopoverOpen] = useState(false);
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
@@ -1297,6 +1307,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       null,
   );
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // Search results replace the Idle column, so a query keeps that tab in front until it clears.
+  const activeTab: SidebarTab = isSearchingThreads ? "idle" : storedTab;
+  // Picking another tab takes the search away with it, rather than leaving it over an unseen list.
+  const setActiveTab = (tab: SidebarTab) => {
+    setStoredTab(tab);
+    if (tab !== "idle") {
+      setThreadSearchQuery("");
+      setSearchHighlightKey(null);
+    }
+  };
   // The open draft's first send names its thread in place; a finalized draft reached by
   // navigation resolves through its redirect instead, and still reveals.
   const routeKeyInPlace = routeDraftThread?.promotedTo != null;
@@ -1550,6 +1570,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleWorkingShelf,
     projectFolders,
     toggleProjectFolder,
+    visibleSettledThreads,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
@@ -4063,7 +4084,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     }
                     return items;
                   })()}
-                  {settledShelfExpanded && hiddenSettledCount > 0 ? (
+                  {settledShelfExpanded &&
+                  hiddenSettledCount > 0 &&
+                  sidebarSectionsLayout !== "tabs" ? (
                     <li className="list-none">
                       <button
                         type="button"
@@ -4103,12 +4126,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const settledButton =
     sidebarSectionsLayout === "tabs" ? (
       <SidebarSettledPopover
-        settledThreads={settledThreads}
+        settledThreads={visibleSettledThreads}
         projectByKey={projectByKey}
         projectDisplayNameByKey={projectDisplayNameByKey}
         onOpenChange={setSettledPopoverOpen}
-        hiddenCount={hiddenSettledCount}
         showMore={{
+          count: Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT),
           loading: olderSettledShelf.loading,
           failed: olderSettledShelf.failed,
           run: () => {
@@ -4149,7 +4172,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const tabSortableIdsIdle = tabItemsIdle.map(sidebarListItemId);
   const tabSortableIdsWorking = tabItemsWorking.map(sidebarListItemId);
   const tabSortableIdsSnoozed = tabItemsSnoozed.map(sidebarListItemId);
-  const effectiveTab: SidebarTab = isSearchingThreads ? "idle" : activeTab;
+  // A reveal of the open thread brings its tab forward, so its row is on screen. Only the reveal
+  // does this: a tab the user picked stays put while they browse.
+  const routeSectionForReveal =
+    !tabbed || routeReveal.pendingKey === null || routeRowThreadKey === null
+      ? undefined
+      : sectionByThreadKey.get(routeRowThreadKey);
+  if (routeSectionForReveal !== undefined) {
+    const routeTab: SidebarTab =
+      routeSectionForReveal === "working" || routeSectionForReveal === "snoozed"
+        ? routeSectionForReveal
+        : "idle";
+    if (routeTab !== activeTab) setActiveTab(routeTab);
+  }
   return (
     <SidebarFolderDrop>
       <SidebarChromeHeader isElectron={isElectron} actions={sidebarSearchRegion.actions} />
@@ -4169,7 +4204,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             fixedHeader={sidebarFixedHeader}
           >
             <SidebarTrack
-              active={effectiveTab}
+              active={activeTab}
               columns={{
                 // The tabs share the outer DndContext, so the tab and Settled drop targets see every row.
                 idle: renderThreadColumn(tabItemsIdle, tabSortableIdsIdle, { dnd: false }),
@@ -4187,7 +4222,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             />
           </SidebarContent>
           <SidebarTabs
-            value={effectiveTab}
+            value={activeTab}
             counts={{ working: workingThreadCount, snoozed: visibleSnoozedThreads.length }}
             onValueChange={setActiveTab}
           />

@@ -19,25 +19,28 @@ import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popov
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-const RECENT_SETTLED_COUNT = 8;
-
 export function SidebarSettledPopover(props: {
-  /** Settled threads from the shipped shelf derivation. */
+  /** The settled threads the shelf lists so far; "Show more" pages older ones in. */
   settledThreads: ReadonlyArray<EnvironmentThreadShell>;
   projectByKey: ReadonlyMap<string, Parameters<typeof ProjectFavicon>[0]["project"]>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   onUnsettle: (thread: EnvironmentThreadShell) => void;
   onOpen: (thread: EnvironmentThreadShell) => void;
   onOpenChange: (open: boolean) => void;
-  hiddenCount?: number;
-  showMore?: { readonly loading: boolean; readonly failed: boolean; readonly run: () => void };
+  /** `count` is how many the next page adds; zero when none are left. */
+  showMore: {
+    readonly count: number;
+    readonly loading: boolean;
+    readonly failed: boolean;
+    readonly run: () => void;
+  };
 }) {
   const gt = useGT();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const settledDrop = useDroppable({ id: sidebarSectionDropId("settled") });
   const paletteShortcut = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
   const [open, setOpenState] = useState(false);
-  const recent = sortSettledThreads(props.settledThreads).slice(0, RECENT_SETTLED_COUNT);
+  const recent = sortSettledThreads(props.settledThreads);
   const nowMs = Date.parse(useNowMinute());
   const title = gt("Recently settled");
   const setOpen = (next: boolean) => {
@@ -152,7 +155,7 @@ export function SidebarSettledPopover(props: {
               })
             )}
           </div>
-          {(props.hiddenCount ?? 0) > 0 && props.showMore ? (
+          {props.showMore.count > 0 ? (
             <button
               type="button"
               disabled={props.showMore.loading}
@@ -164,9 +167,7 @@ export function SidebarSettledPopover(props: {
                 ? gt("Loading")
                 : props.showMore.failed
                   ? gt("Could not load older threads. Retry")
-                  : gt("Show {count} more", {
-                      count: Math.min(props.hiddenCount ?? 0, 25),
-                    })}
+                  : gt("Show {count} more", { count: props.showMore.count })}
             </button>
           ) : null}
           <div className="mx-1.5 my-1 h-px bg-border" />

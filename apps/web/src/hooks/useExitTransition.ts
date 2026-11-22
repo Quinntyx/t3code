@@ -27,6 +27,10 @@ export function useExitTransition<T>(value: T | null, same: (a: T, b: T) => bool
     setHeld(value === null ? previous : null);
   }
   const exiting = value === null && held !== null;
+  const release = (event: TransitionEvent) => {
+    if (exiting && event.target === event.currentTarget && event.propertyName === "opacity")
+      setHeld(null);
+  };
   return {
     shown: value ?? held,
     exiting,
@@ -39,10 +43,9 @@ export function useExitTransition<T>(value: T | null, same: (a: T, b: T) => bool
             if (element && !isFadingOut(element)) setHeld(null);
           }
         : undefined,
-      onTransitionEnd: (event: TransitionEvent) => {
-        if (exiting && event.target === event.currentTarget && event.propertyName === "opacity")
-          setHeld(null);
-      },
+      onTransitionEnd: release,
+      // A theme change mid-fade cancels the transition instead of ending it.
+      onTransitionCancel: release,
     },
   };
 }

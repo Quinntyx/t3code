@@ -71,7 +71,10 @@ const layoutOverrides = vi.hoisted(() => ({
   sidebarSearch: "row" as "row" | "hidden",
   sidebarSections: "shelves" as "shelves" | "tabs",
 }));
-/** Sets the layout the mocked hook reports, back to stock on dispose; each layout test calls it first. */
+/**
+ * Sets the layout the mocked hook reports, back to stock on dispose with the remembered tab
+ * forgotten; each layout test calls it first.
+ */
 function setupLayout(layout: Partial<typeof layoutOverrides> = {}) {
   layoutOverrides.sidebarSearch = layout.sidebarSearch ?? "row";
   layoutOverrides.sidebarSections = layout.sidebarSections ?? "shelves";
@@ -79,6 +82,7 @@ function setupLayout(layout: Partial<typeof layoutOverrides> = {}) {
     [Symbol.dispose]: () => {
       layoutOverrides.sidebarSearch = "row";
       layoutOverrides.sidebarSections = "shelves";
+      localStorage.removeItem("t3code:sidebar:tab");
     },
   };
 }
@@ -163,6 +167,66 @@ function threadShell(projectId: ProjectId, index: number): EnvironmentThreadShel
     title: `Thread ${index}`,
   });
 }
+
+async function renderTabsSidebar(
+  threads: (project: Project) => EnvironmentThreadShell[],
+  /** The open thread, revealed as if just navigated to. */
+  revealThreadId?: string,
+) {
+  const currentProject = project("active");
+  const threadRef = {
+    environmentId: currentProject.environmentId,
+    threadId: ThreadId.make(revealThreadId ?? "thread-0"),
+  };
+  const revealKey =
+    revealThreadId === undefined ? null : `${currentProject.environmentId}:${revealThreadId}`;
+  vi.mocked(useProjects).mockReturnValue([currentProject]);
+  vi.mocked(useQuietThreadShells).mockReturnValue(threads(currentProject));
+  vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
+  vi.mocked(useServerConfigs).mockReturnValue(
+    new Map([
+      [
+        currentProject.environmentId,
+        {
+          scratchWorkspaceRoot: null,
+          shellThreadFamilies: false,
+        } as unknown as EnvironmentServerConfig,
+      ],
+    ]),
+  );
+  vi.mocked(useHandleNewThread).mockReturnValue({
+    activeDraftThread: null,
+    activeThread: null,
+    defaultProjectRef: {
+      environmentId: currentProject.environmentId,
+      projectId: currentProject.id,
+    },
+    defaultProjectFallbackReady: true,
+    handleNewThread: vi.fn().mockResolvedValue(null),
+    routeDraftId: null,
+    routeThreadRef: threadRef,
+  });
+  vi.mocked(useOrchestrationCommand).mockReturnValue(
+    vi.fn().mockResolvedValue({ _tag: "Success" }),
+  );
+  vi.mocked(readEnvironmentScope).mockReturnValue(true);
+  vi.mocked(useEnvironmentScope).mockReturnValue(true);
+  vi.mocked(useConnectedEnvironmentIds).mockReturnValue([currentProject.environmentId]);
+  return render(
+    <SidebarProvider>
+      <Sidebar routeReveal={{ observedKey: null, pendingKey: revealKey }} />
+    </SidebarProvider>,
+  );
+}
+const settledThread = (currentProject: Project, index: number) =>
+  makeThreadFixture({
+    environmentId: currentProject.environmentId,
+    projectId: currentProject.id,
+    id: ThreadId.make(`settled-${index}`),
+    title: `Settled thread ${index}`,
+    settledOverride: "settled",
+    settledAt: "2026-01-01T00:00:00.000Z",
+  });
 
 describe("sidebar render isolation", () => {
   // regression: #33100 Cmd+J re-rendered every sidebar row, which took hundreds of ms with many threads
@@ -462,16 +526,21 @@ describe("sidebar search layout", () => {
       .element(rowScreen.getByRole("button", { name: "New thread", exact: true }))
       .toBeInTheDocument();
 
+    await userEvent.fill(rowScreen.getByRole("combobox", { name: "Search threads" }), "no match");
+    await expect.element(rowScreen.getByText("Thread 0")).not.toBeInTheDocument();
+
+    // Hiding the row takes its query with it: nothing could show or clear it.
     layoutOverrides.sidebarSearch = "hidden";
-    await using hiddenScreen = await render(tree());
+    await rowScreen.rerender(tree());
     expect(
-      hiddenScreen.container.querySelector('[role="combobox"][aria-label="Search threads"]'),
+      rowScreen.container.querySelector('[role="combobox"][aria-label="Search threads"]'),
     ).toBeNull();
+    await expect.element(rowScreen.getByText("Thread 0")).toBeInTheDocument();
     await expect
-      .element(hiddenScreen.getByRole("button", { name: "New thread", exact: true }))
+      .element(rowScreen.getByRole("button", { name: "New thread", exact: true }))
       .toBeInTheDocument();
     await expect
-      .element(hiddenScreen.getByRole("button", { name: "Add project", exact: true }))
+      .element(rowScreen.getByRole("button", { name: "Add project", exact: true }))
       .toBeInTheDocument();
   });
 });
@@ -552,75 +621,52 @@ describe("sidebar sections layout", () => {
 });
 
 describe("sidebar recently settled popover", () => {
-  async function renderTabsSidebar(threads: (project: Project) => EnvironmentThreadShell[]) {
-    const currentProject = project("active");
-    const threadRef = {
-      environmentId: currentProject.environmentId,
-      threadId: ThreadId.make("thread-0"),
-    };
-    vi.mocked(useProjects).mockReturnValue([currentProject]);
-    vi.mocked(useQuietThreadShells).mockReturnValue(threads(currentProject));
-    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
-    vi.mocked(useServerConfigs).mockReturnValue(
-      new Map([
-        [
-          currentProject.environmentId,
-          {
-            scratchWorkspaceRoot: null,
-            shellThreadFamilies: false,
-          } as unknown as EnvironmentServerConfig,
-        ],
-      ]),
+  it("brings the open thread's tab forward when it is revealed", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    await using screen = await renderTabsSidebar(
+      (currentProject) => [
+        makeThreadFixture({
+          environmentId: currentProject.environmentId,
+          projectId: currentProject.id,
+          id: ThreadId.make("snoozed-0"),
+          title: "Snoozed thread 0",
+          snoozedAt: "2026-01-01T00:00:00.000Z",
+          snoozedUntil: "2099-01-01T00:00:00.000Z",
+        }),
+      ],
+      "snoozed-0",
     );
-    vi.mocked(useHandleNewThread).mockReturnValue({
-      activeDraftThread: null,
-      activeThread: null,
-      defaultProjectRef: {
-        environmentId: currentProject.environmentId,
-        projectId: currentProject.id,
-      },
-      defaultProjectFallbackReady: true,
-      handleNewThread: vi.fn().mockResolvedValue(null),
-      routeDraftId: null,
-      routeThreadRef: threadRef,
-    });
-    vi.mocked(useOrchestrationCommand).mockReturnValue(
-      vi.fn().mockResolvedValue({ _tag: "Success" }),
-    );
-    vi.mocked(readEnvironmentScope).mockReturnValue(true);
-    vi.mocked(useEnvironmentScope).mockReturnValue(true);
-    vi.mocked(useConnectedEnvironmentIds).mockReturnValue([currentProject.environmentId]);
-    return render(
-      <SidebarProvider>
-        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
-      </SidebarProvider>,
-    );
-  }
-  const settledThread = (currentProject: Project, index: number) =>
-    makeThreadFixture({
-      environmentId: currentProject.environmentId,
-      projectId: currentProject.id,
-      id: ThreadId.make(`settled-${index}`),
-      title: `Settled thread ${index}`,
-      settledOverride: "settled",
-      settledAt: "2026-01-01T00:00:00.000Z",
-    });
+    await expect
+      .element(screen.getByRole("tab", { name: /Snoozed/ }))
+      .toHaveAttribute("aria-selected", "true");
+  });
 
   it("lists settled threads with un-settle and view actions when sections are tabs", async () => {
     using _layout = setupLayout({ sidebarSections: "tabs" });
+    // Left open in the shelves layout; tabs page settled threads only in the popover.
+    localStorage.setItem("t3code:sidebar:settled-expanded", "true");
+    using _shelf = {
+      [Symbol.dispose]: () => localStorage.removeItem("t3code:sidebar:settled-expanded"),
+    };
     await using screen = await renderTabsSidebar((currentProject) =>
-      [0, 1].map((index) => settledThread(currentProject, index)),
+      Array.from({ length: 12 }, (_, index) => settledThread(currentProject, index)),
     );
     const button = screen.getByRole("button", { name: "Recently settled" });
     await expect.element(button).toBeInTheDocument();
     await userEvent.click(button);
-    await expect.element(page.getByText("Settled thread 0")).toBeInTheDocument();
+    await expect.element(page.getByText("Settled thread 0", { exact: true })).toBeInTheDocument();
     await expect
-      .element(page.getByRole("button", { name: /Un-settle Settled thread 0/ }))
+      .element(page.getByRole("button", { name: /^Un-settle Settled thread 0,/ }))
       .toBeInTheDocument();
     await expect
       .element(page.getByRole("button", { name: /Open Settled thread 0 without un-settling/ }))
       .toBeInTheDocument();
+    // The popover pages like the Settled shelf: its first page, then the rest.
+    await expect.element(page.getByRole("button", { name: /^Un-settle / }).nth(9)).toBeVisible();
+    expect(page.getByRole("button", { name: /^Un-settle / }).elements()).toHaveLength(10);
+    expect(screen.container.querySelector('[data-sidebar-row="settled:more"]')).toBeNull();
+    await userEvent.click(page.getByRole("button", { name: "Show 2 more" }));
+    await expect.element(page.getByRole("button", { name: /^Un-settle / }).nth(11)).toBeVisible();
   });
 
   it("takes an Idle row dragged onto the Recently settled button", async () => {

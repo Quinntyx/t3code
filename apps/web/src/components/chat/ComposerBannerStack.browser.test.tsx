@@ -43,6 +43,17 @@ it("drops a removed notice at once, or after a theme's fade out", async () => {
   expect(shown?.hasAttribute("data-ending-style")).toBe(true);
   expect(shown?.textContent).toBe("Branch changed");
   await vi.waitFor(() => expect(screen.container.textContent).toBe(""));
+
+  // A theme change mid-fade cancels the transition; the notice still leaves.
+  await screen.rerender(<ComposerBannerStack items={[notice("Offline", "environment")]} />);
+  const cancelled = screen.container.querySelector("[data-composer-banner-stack]");
+  await vi.waitFor(() => expect(cancelled?.getAnimations()).toEqual([]));
+  sheet.textContent =
+    "[data-composer-banner-stack][data-ending-style] { opacity: 0; transition: opacity 1h; }";
+  await screen.rerender(<ComposerBannerStack items={[]} />);
+  expect(cancelled?.hasAttribute("data-ending-style")).toBe(true);
+  sheet.textContent = "";
+  await vi.waitFor(() => expect(screen.container.textContent).toBe(""));
 });
 
 it("leaves the next attachment its own top edge when there are no notices", async () => {

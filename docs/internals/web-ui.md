@@ -29,8 +29,8 @@ stock arrangement must not change when one is added.
 
 - Read the region with `useThemeLayout()` in the component that owns it and branch there. Where a
   variant only changes how a shared leaf presents, give the leaf a new prop value or display mode
-  instead of a second copy. Either way the stock arm keeps its JSX, classes, defaults and stored
-  state exactly, so a stock render's DOM does not change.
+  instead of a second copy. Either way the stock arm keeps its structure, classes, defaults and
+  stored state; it gains at most the `data-` hooks below.
 - Variant UI lives in its own files beside the stock component and reuses the stock leaves
   through props.
 - A new region lists its stock arrangement first and gets a line in `THEME_LAYOUT_GUIDE`

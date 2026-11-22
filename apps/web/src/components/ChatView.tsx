@@ -1883,7 +1883,11 @@ export default function ChatView(props: ChatViewProps) {
     });
   // The chip replaces the strip for started git threads except where the row is not rendered.
   const showRunContextChip =
-    runContextLayout === "chip" && isServerThread && isGitRepo && !isMobileViewport;
+    runContextLayout === "chip" &&
+    composerMounted &&
+    isServerThread &&
+    isGitRepo &&
+    !isMobileViewport;
   const showEffectiveComposerContextStrip = showComposerContextStrip && !showRunContextChip;
   const terminalShortcutLabelOptions = {
     context: {

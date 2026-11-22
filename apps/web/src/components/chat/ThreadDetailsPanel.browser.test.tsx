@@ -86,6 +86,7 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { PopoverCreateHandle } from "../ui/popover";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout } from "./chatCanvasLayout";
+import { HeaderWorkspaceActions } from "./HeaderWorkspaceActions";
 import { ThreadDetailsPanel } from "./ThreadDetailsPanel";
 
 const threadRef: ScopedThreadRef = {
@@ -214,4 +215,25 @@ it("offers no Initialize Git before the server config says where No project live
   await expect
     .element(page.getByRole("button", { name: "Initialize Git" }))
     .not.toBeInTheDocument();
+});
+
+it("offers Initialize Git in the header when the workspace actions move there", async () => {
+  using _fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
+  const scriptResult = async () => ({ ok: true }) as never;
+  await using _screen = await render(
+    <HeaderWorkspaceActions
+      environmentId={threadRef.environmentId}
+      threadRef={threadRef}
+      hasProject
+      gitCwd={state.folder}
+      activeProjectScripts={undefined}
+      preferredScriptId={null}
+      onOpenChanges={undefined}
+      onRunProjectScript={() => {}}
+      onAddProjectScript={scriptResult}
+      onUpdateProjectScript={scriptResult}
+      onDeleteProjectScript={scriptResult}
+    />,
+  );
+  await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
 });

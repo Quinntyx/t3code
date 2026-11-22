@@ -95,6 +95,7 @@ export const THEME_CSS_HOOKS = [
     selector: "[data-header-ghost]",
     styles: "header toolbar button that is not the git split (Run, scripts menu)",
   },
+  { selector: "[data-header-run-separator]", styles: "divider between Run and its scripts menu" },
   { selector: "[data-changed-files-summary]", styles: "changed-files card count and diffstat" },
   {
     selector: "[data-changed-files-folder-toggle]",
@@ -198,6 +199,10 @@ export const THEME_CSS_PROPERTIES = [
   { name: "--chat-composer-outline", styles: "composer card border" },
   { name: "--chat-composer-radius", styles: "composer card corner radius" },
   { name: "--shadow-float", styles: "shadow of floating cards and the composer" },
+  {
+    name: "--chat-composer-drawer-inset",
+    styles: "how far the context strip under the composer is inset from the card's sides",
+  },
   {
     name: "--chat-composer-box-ps",
     styles: 'composer card padding (also -pe, -pt, -pb) with composerControls "below"',

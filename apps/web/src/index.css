@@ -760,6 +760,28 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   [data-chat-composer-main-surface] {
   box-shadow: none;
 }
+/* The context strip hangs under the controls row as its own tray, since the host paints no band. */
+:where(html[data-layout-composer-controls="below"]:not([data-liquid-glass-effect]))
+  [data-slot="composer-context-strip"] {
+  isolation: isolate;
+  min-height: 2rem;
+  padding: 0 calc(var(--chat-composer-drawer-inset) + 0.75rem);
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0 var(--chat-composer-drawer-inset);
+    z-index: -1;
+    pointer-events: none;
+    border: 1px solid var(--chat-composer-outline);
+    border-top-width: 0;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    background-color: var(--chat-composer-glass-surface);
+    box-shadow: var(--shadow-float);
+  }
+}
 
 /* Theme layout `sidebarSections: "tabs"`: one decelerating move between columns and the pill. */
 :where(html[data-layout-sidebar-sections="tabs"]) {
