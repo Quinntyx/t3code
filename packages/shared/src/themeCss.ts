@@ -67,6 +67,30 @@ export const THEME_CSS_HOOKS = [
     styles: "project icon with letters; its svg holds the tile",
   },
   { selector: "[data-chat-header]", styles: "chat header" },
+  {
+    selector: "[data-chat-header-actions]",
+    styles: "header workspace actions under workspaceActions: header",
+  },
+  { selector: "[data-chat-header-git-actions]", styles: "header git and changed-files split" },
+  { selector: "[data-chat-header-pr-chip]", styles: "pull request chip beside the thread title" },
+  {
+    selector: "[data-header-ghost]",
+    styles: "toolbar control drawn ghost-style by the header theme",
+  },
+  { selector: "[data-changed-files-summary]", styles: "changed-files card count and diffstat" },
+  {
+    selector: "[data-changed-files-folder-toggle]",
+    styles: "folder toggle on the changed-files card",
+  },
+  {
+    selector: "[data-changed-files-open-diff]",
+    styles: "open diff button on the changed-files card",
+  },
+  {
+    selector: "[data-changed-files-open-in]",
+    styles: "open-in editor split on the changed-files card",
+  },
+  { selector: "[data-changed-files-rows]", styles: "changed-files card file rows" },
   { selector: '[data-workspace-area="conversation"]', styles: "chat area, behind the messages" },
   { selector: ".messages-timeline-scroll", styles: "chat scroller" },
   { selector: "[data-timeline-row-kind]", styles: 'chat row, such as ="message" or ="work"' },

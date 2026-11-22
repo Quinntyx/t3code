@@ -330,6 +330,7 @@ export default function ProjectScriptsControl({
                   aria-label={gt("Run {name}", { name: primaryScript.name })}
                   // Tooltip replaces the button data-slot, so toolbar theming needs a separate hook.
                   data-toolbar-control=""
+                  data-header-ghost={isPanel ? undefined : "true"}
                   aria-disabled={!onRunScript || undefined}
                   onClick={() => onRunScript?.(primaryScript)}
                 />
@@ -377,6 +378,7 @@ export default function ProjectScriptsControl({
                         panel={isPanel}
                         aria-label={gt("Script actions")}
                         data-toolbar-control=""
+                        data-header-ghost={isPanel ? undefined : "true"}
                       />
                     }
                   />
@@ -453,7 +455,14 @@ export default function ProjectScriptsControl({
             }
           >
             <MenuTrigger
-              render={<Button size="xs" variant="outline" aria-label={gt("Project actions")} />}
+              render={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  aria-label={gt("Project actions")}
+                  data-header-ghost="true"
+                />
+              }
             >
               <WrenchIcon className="size-3.5" />
               <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
@@ -476,6 +485,7 @@ export default function ProjectScriptsControl({
                 className={isPanel ? undefined : "w-7 sm:w-6 @3xl/header-actions:w-auto!"}
                 aria-label={isPanel ? gt("Add project script") : gt("Add action")}
                 data-toolbar-control=""
+                data-header-ghost={isPanel ? undefined : "true"}
                 onClick={openAddDialog}
               />
             }

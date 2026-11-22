@@ -19,6 +19,8 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { observeResize } from "~/lib/observeResize";
+import { useThemeLayout } from "~/hooks/useTheme";
+import { ChangedFilesOpenIn } from "./ChangedFilesOpenIn";
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 const VIRTUALIZE_AFTER_ROWS = 250;
@@ -54,6 +56,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   } = props;
   const gt = useGT();
   const syncTimelineLayout = useSyncLayout();
+  const headerActions = useThemeLayout().workspaceActions === "header";
   const hiddenFileCount = totals.count - files.length;
   const hasDirectories = files.some((file) => /[/\\]/.test(file.path));
 
@@ -67,7 +70,10 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
         data-changed-files-header=""
         className="sticky top-2 z-10 flex items-center justify-between gap-2 rounded-t-glass bg-(color:--changed-files-fill) px-3 py-2 backdrop-blur-md dark:bg-transparent"
       >
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-foreground">
+        <div
+          data-changed-files-summary=""
+          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-foreground"
+        >
           <span>
             {gt(
               "{count, plural, one {{formattedCount} changed file} other {{formattedCount} changed files}}",
@@ -95,6 +101,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                     aria-label={
                       allDirectoriesExpanded ? gt("Collapse all folders") : gt("Expand all folders")
                     }
+                    data-changed-files-folder-toggle=""
                     data-scroll-anchor-ignore
                     onClick={() => {
                       onToggleAllDirectories();
@@ -114,6 +121,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
               </TooltipPopup>
             </Tooltip>
           )}
+          {headerActions ? <ChangedFilesOpenIn /> : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -122,6 +130,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                   size="xs"
                   variant="ghost-muted"
                   aria-label={gt("Open diff")}
+                  data-changed-files-open-diff=""
                   onClick={() => onOpenTurnDiff(runId, files[0]?.path)}
                 />
               }
@@ -373,7 +382,7 @@ function ChangedFilesRows({
   if (focusedIndex >= 0 && focusedIndex < start) indices.unshift(focusedIndex);
   if (focusedIndex >= end) indices.push(focusedIndex);
   return (
-    <div className="p-2">
+    <div data-changed-files-rows="" className="p-2">
       <div
         ref={containerRef}
         className="relative"

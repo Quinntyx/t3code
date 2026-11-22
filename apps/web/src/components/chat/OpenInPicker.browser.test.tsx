@@ -98,7 +98,7 @@ async function setup() {
   async function renderPicker(
     availableEditors: readonly EditorId[] = editors,
     panel = false,
-    { openInCwd = "/work/project", revealFileManager = false } = {},
+    { openInCwd = "/work/project", revealFileManager = false, card = false } = {},
   ) {
     await act(async () => {
       for (const listener of state.listeners) listener();
@@ -109,7 +109,7 @@ async function setup() {
           availableEditors={availableEditors}
           openInCwd={openInCwd}
           revealFileManager={revealFileManager}
-          displayMode={panel ? "panel" : "toolbar"}
+          displayMode={panel ? "panel" : card ? "card" : "toolbar"}
           compact={!panel}
         />
       );
@@ -166,6 +166,28 @@ async function setup() {
     [Symbol.asyncDispose]: () => environment.disposeAsync(),
   };
 }
+
+describe("conversation changed-files card", () => {
+  it("names the editor, opens it, and switches editor from its menu", async () => {
+    await using fixture = await setup();
+    const { renderPicker, byLabel, menuItems, click } = fixture;
+    state.allowed.add(selected);
+    state.run.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("No editor"))));
+    await renderPicker(editors, false, { card: true });
+
+    await click(byLabel("Open in VS Code"));
+    expect(state.run).toHaveBeenCalledTimes(1);
+    expect(state.run.mock.calls[0]![0]).toMatchObject({
+      environmentId: selected,
+      input: { cwd: "/work/project", editor: "vscode" },
+    });
+
+    await click(byLabel("Choose editor"));
+    await vi.waitFor(() => expect(menuItems().length).toBeGreaterThan(0));
+    await click(menuItems()[0]!);
+    expect(state.setPreferred).toHaveBeenCalledWith("vscode");
+  });
+});
 
 describe("host editor access", () => {
   it("uses the selected grant for both the button and a retained shortcut", async () => {

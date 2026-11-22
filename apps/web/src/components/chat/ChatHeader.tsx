@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type ProjectScript,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -43,7 +44,11 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { useThemeLayout } from "~/hooks/useTheme";
 import { GuestShareIndicator } from "./GuestShareControls";
+import { HeaderChatHeader } from "./HeaderChatHeader";
+import type { DraftId } from "../../composerDraftStore";
+import type { NewProjectScriptInput, ProjectScriptActionResult } from "../ProjectScriptsControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -58,6 +63,18 @@ interface ChatHeaderProps {
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  gitCwd: string | null;
+  activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  preferredScriptId: string | null;
+  draftId?: DraftId | undefined;
+  onOpenChanges: (() => void) | undefined;
+  onRunProjectScript: (script: ProjectScript) => void;
+  onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
+  onUpdateProjectScript: (
+    scriptId: string,
+    input: NewProjectScriptInput,
+  ) => Promise<ProjectScriptActionResult>;
+  onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
 
 function resolveRenameCommit(input: {
@@ -83,8 +100,18 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
+  gitCwd,
+  activeProjectScripts,
+  preferredScriptId,
+  draftId,
+  onOpenChanges,
+  onRunProjectScript,
+  onAddProjectScript,
+  onUpdateProjectScript,
+  onDeleteProjectScript,
 }: ChatHeaderProps) {
   const gt = useGT();
+  const workspaceActionsLayout = useThemeLayout().workspaceActions;
   const activeProjectName = activeProject?.isScratch ? gt("No project") : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
@@ -248,6 +275,33 @@ export const ChatHeader = memo(function ChatHeader({
       setRenaming(null);
     }
   };
+  if (workspaceActionsLayout === "header") {
+    return (
+      <HeaderChatHeader
+        activeThreadEnvironmentId={activeThreadEnvironmentId}
+        activeThreadId={activeThreadId}
+        activeThreadTitle={activeThreadTitle}
+        activeThreadLinkOrigin={activeThreadLinkOrigin}
+        isServerThread={isServerThread}
+        activeProject={activeProject}
+        parentThreadLink={parentThreadLink}
+        onOpenThread={onOpenThread}
+        rightPanelOpen={rightPanelOpen}
+        onNewThreadInProject={onNewThreadInProject}
+        {...(onOpenProjectSettings !== undefined ? { onOpenProjectSettings } : {})}
+        {...(onFindInThread !== undefined ? { onFindInThread } : {})}
+        gitCwd={gitCwd}
+        activeProjectScripts={activeProjectScripts}
+        preferredScriptId={preferredScriptId}
+        {...(draftId !== undefined ? { draftId } : {})}
+        onOpenChanges={onOpenChanges}
+        onRunProjectScript={onRunProjectScript}
+        onAddProjectScript={onAddProjectScript}
+        onUpdateProjectScript={onUpdateProjectScript}
+        onDeleteProjectScript={onDeleteProjectScript}
+      />
+    );
+  }
   return (
     <div
       ref={breadcrumbContainerRef}

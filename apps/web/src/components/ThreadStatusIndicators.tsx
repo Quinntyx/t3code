@@ -201,6 +201,8 @@ export interface ThreadPullRequestBadgePresentation {
   readonly toneClassName: string;
   readonly label: string;
   readonly text: string | number;
+  /** Further linked change requests, for a control that names the primary one and counts the rest. */
+  readonly others?: number;
 }
 
 type PullRequestBadgeState = ThreadPullRequestBadge["state"];
@@ -385,6 +387,7 @@ function resolveThreadPullRequestBadgePresentation(
       toneClassName: aggregate.toneClassName,
       label: moreLinkedBadgeLabel(badge.state, tooltip, badge.others, resolve),
       text: `+${badge.others + 1}`,
+      others: badge.others,
     };
   }
   return {
@@ -392,6 +395,7 @@ function resolveThreadPullRequestBadgePresentation(
     toneClassName: status?.colorClass ?? "text-muted-foreground",
     label: tooltip,
     text: number,
+    ...(badge?.kind === "pull-request" && badge.others > 0 ? { others: badge.others } : {}),
   };
 }
 
@@ -405,6 +409,7 @@ export function ThreadPullRequestBadgeControl({
   onOpenList,
   onOpenPullRequest,
   onContextMenu,
+  display = "aggregate",
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   badge: ThreadPullRequestBadge | null;
@@ -416,6 +421,8 @@ export function ThreadPullRequestBadgeControl({
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
   /** Replaces the enclosing row's menu with the pull request's own. */
   onContextMenu?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+  /** `primary-with-count` names the current change request and counts the rest beside it. */
+  display?: "aggregate" | "primary-with-count";
 }) {
   const m = useMessages();
   const presentation = resolveThreadPullRequestBadgePresentation({ badge, number, url, status }, m);
@@ -432,6 +439,7 @@ export function ThreadPullRequestBadgeControl({
       onOpenList={onOpenList}
       onOpenPullRequest={onOpenPullRequest}
       onContextMenu={onContextMenu}
+      display={display}
     />
   );
 }
@@ -447,6 +455,7 @@ function PullRequestBadge({
   onOpenList,
   onOpenPullRequest,
   onContextMenu,
+  display,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   presentation: NonNullable<ReturnType<typeof resolveThreadPullRequestBadgePresentation>>;
@@ -458,7 +467,13 @@ function PullRequestBadge({
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
   onContextMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+  display: "aggregate" | "primary-with-count";
 }) {
+  const others = presentation.others ?? 0;
+  const text =
+    display === "primary-with-count" && others > 0 && number !== undefined
+      ? number
+      : presentation.text;
   const onClick = opensList
     ? (event: MouseEvent<HTMLElement>) => {
         event.preventDefault();
@@ -496,7 +511,10 @@ function PullRequestBadge({
           className={cn("contents font-normal text-xs tabular-nums", presentation.toneClassName)}
         >
           <presentation.Icon aria-hidden className="size-3 shrink-0" />
-          <span className="text-secondary-label">{presentation.text}</span>
+          <span className="text-secondary-label">{text}</span>
+          {display === "primary-with-count" && others > 0 ? (
+            <span className="text-muted-foreground">{`+${others}`}</span>
+          ) : null}
         </span>
       </TooltipTrigger>
       <TooltipPopup

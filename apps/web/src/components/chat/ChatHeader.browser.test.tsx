@@ -4,6 +4,12 @@ import { userEvent } from "vite-plus/test/browser";
 
 const persisted = vi.hoisted(() => ({ title: "" }));
 const openMenu = vi.hoisted(() => vi.fn());
+const layout = vi.hoisted(() => ({ workspaceActions: "details" as "details" | "header" }));
+
+vi.mock(import("~/hooks/useTheme"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useThemeLayout: (() => ({ workspaceActions: layout.workspaceActions })) as never,
+}));
 vi.mock(import("../../state/session"), async (importOriginal) => ({
   ...(await importOriginal()),
   useEnvironmentScope: () => true,
@@ -37,6 +43,14 @@ function header(title: string) {
         onOpenThread={() => {}}
         rightPanelOpen={false}
         onNewThreadInProject={() => {}}
+        gitCwd={null}
+        activeProjectScripts={undefined}
+        preferredScriptId={null}
+        onOpenChanges={undefined}
+        onRunProjectScript={() => {}}
+        onAddProjectScript={async () => ({ _tag: "Success", value: undefined }) as never}
+        onUpdateProjectScript={async () => ({ _tag: "Success", value: undefined }) as never}
+        onDeleteProjectScript={async () => ({ _tag: "Success", value: undefined }) as never}
       />
       <div tabIndex={0}>Outside rename</div>
     </>
@@ -102,4 +116,19 @@ it("keeps the Escape that cancels a rename from also reaching window shortcuts",
   await expect.element(input).not.toBeInTheDocument();
   expect(persisted.title).toBe("New thread");
   expect(windowEscapes).toEqual([true]);
+});
+
+it("renders workspace actions in the header only when the layout switches", async () => {
+  using _reset = {
+    [Symbol.dispose]: () => {
+      layout.workspaceActions = "details";
+    },
+  };
+  {
+    await using _stock = await render(header("New thread"));
+    expect(document.querySelector("[data-chat-header-actions]")).toBeNull();
+  }
+  layout.workspaceActions = "header";
+  await using _variant = await render(header("New thread"));
+  expect(document.querySelector("[data-chat-header-actions]")).not.toBeNull();
 });

@@ -233,12 +233,13 @@ export const OpenInPicker = memo(function OpenInPicker({
   presentation?: "toolbar" | "menu";
   compact?: boolean;
   enableShortcut?: boolean;
-  displayMode?: "toolbar" | "panel";
+  displayMode?: "toolbar" | "panel" | "card";
   revealFileManager?: boolean;
 }) {
   const gt = useGT();
   const messages = useMessages();
   const isPanel = displayMode === "panel";
+  const isCard = displayMode === "card";
   const ActionGroup = isPanel ? "div" : Group;
   const panelAnchorRef = useRef<HTMLDivElement | null>(null);
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
@@ -301,6 +302,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       ? gt("Open in {editor}", { editor: primaryOption.label })
       : gt("Open in editor")
     : gt("Open", { $context: "verb, opens the project in the preferred editor" });
+  const cardPrimaryLabel = primaryOption?.label ?? gt("editor");
 
   const unavailableReason =
     remote.mode === "remote-unavailable"
@@ -393,12 +395,75 @@ export const OpenInPicker = memo(function OpenInPicker({
     );
   }
 
+  if (isCard) {
+    const cardHalf =
+      "inline-flex h-full cursor-pointer items-center outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-64";
+    return (
+      <div
+        role="group"
+        aria-label={gt("Open in editor")}
+        className="flex h-7 items-center rounded-md text-sm font-medium text-foreground hover:bg-accent has-data-popup-open:bg-accent sm:h-6 sm:text-xs"
+        data-changed-files-open-in=""
+      >
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={gt("Open in {editor}", { editor: cardPrimaryLabel })}
+                disabled={!preferredEditor || !openInCwd || !canOpenEditor}
+                className={cn(cardHalf, "gap-1.5 rounded-s-md ps-2 pe-0.5")}
+                {...(enableShortcut && !backgroundThread
+                  ? { [OPEN_FAVORITE_EDITOR_ATTRIBUTE]: "" }
+                  : {})}
+                onClick={() => {
+                  if (!preferredEditor) return;
+                  const label = editorLabelForPlatform(preferredEditor, navigator.platform);
+                  void openInEditor(preferredEditor).then((opened) => {
+                    if (opened) announce(gt("Opened in {editor}", { editor: label }));
+                  });
+                }}
+              />
+            }
+          >
+            {primaryOption?.Icon ? (
+              <primaryOption.Icon
+                aria-hidden="true"
+                className={cn("size-3.5", getOpenInIconClass(primaryOption.kind))}
+              />
+            ) : null}
+            <span className="hidden @[24rem]/changed-files:inline">{cardPrimaryLabel}</span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {gt("Open in {editor}", { editor: cardPrimaryLabel })}
+          </TooltipPopup>
+        </Tooltip>
+        <Menu open={menuOpen} onOpenChange={setMenuOpen}>
+          <MenuTrigger
+            disabled={isHostEditorDenied}
+            render={
+              <button
+                type="button"
+                aria-label={gt("Choose editor")}
+                className={cn(cardHalf, "rounded-e-md ps-0.5 pe-1.5 text-muted-foreground")}
+              />
+            }
+          >
+            <ChevronDownIcon aria-hidden="true" className="size-3" />
+          </MenuTrigger>
+          <MenuPopup align="end">{editorItems}</MenuPopup>
+        </Menu>
+      </div>
+    );
+  }
+
   const primaryControlLabel = compact ? gt("Open file in preferred editor") : primaryLabel;
   const primaryControl = (
     <ThreadDetailsControl
       aria-label={primaryControlLabel}
       // Tooltip replaces the button data-slot, so toolbar theming needs a separate hook.
       data-toolbar-control=""
+      data-header-ghost={isPanel ? undefined : "true"}
       size={isPanel ? "sm" : "xs"}
       variant={isPanel ? "ghost" : "outline"}
       part="primary"
@@ -464,6 +529,7 @@ export const OpenInPicker = memo(function OpenInPicker({
                   <ThreadDetailsControl
                     aria-label={gt("Choose editor")}
                     data-toolbar-control=""
+                    data-header-ghost={isPanel ? undefined : "true"}
                     size={isPanel ? "sm" : "icon-xs"}
                     variant={isPanel ? "ghost" : "outline"}
                     part="secondary"
