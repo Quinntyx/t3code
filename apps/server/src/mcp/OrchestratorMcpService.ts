@@ -2828,37 +2828,6 @@ const make = Effect.gen(function* () {
         }
         workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
       }
-      let stackedOn: string | undefined;
-      if (input.isolation === "stack" && !isRetryOfAcceptedDelegation) {
-        const project = yield* requireProject(parent.thread.projectId);
-        const status = yield* gitDriver
-          .statusDetailsLocal(parent.thread.worktreePath ?? project.workspaceRoot)
-          .pipe(
-            Effect.mapError(() =>
-              failure("invalid_request", "Unable to read this thread's checkout."),
-            ),
-          );
-        if (status.branch === null || status.hasWorkingTreeChanges) {
-          return yield* failure(
-            "invalid_request",
-            status.branch === null
-              ? `Isolation "stack" starts the child from this thread's branch, and this checkout has none. Create a branch and commit first.`
-              : "Commit first: stacked threads start from your last commit.",
-          );
-        }
-        yield* gitDriver
-          .resolveCommit({ cwd: project.workspaceRoot, revision: `refs/heads/${status.branch}` })
-          .pipe(
-            Effect.mapError(() =>
-              failure(
-                "invalid_request",
-                `Isolation "stack" creates the child checkout in project "${project.title}" (${project.workspaceRoot}), which has no branch \`${status.branch}\`. Use isolation "worktree".`,
-              ),
-            ),
-          );
-        stackedOn = status.branch;
-        workspaceStrategy = { type: "worktree", baseRef: status.branch, startFromOrigin: false };
-      }
       const parentNodeId = parentRun.rootNodeId;
       // The command commits the child's preparing run, which only this call
       // prepares, so a caller that goes away must not stop it in between.
@@ -2876,7 +2845,7 @@ const make = Effect.gen(function* () {
               parentThreadId: scope.thread.threadId,
               parentRunId: parentRun.id,
               parentNodeId,
-              task: taskPrompt(input, stackedOn),
+              task: taskPrompt(input),
               ...(input.title === undefined ? {} : { title: input.title }),
               modelSelection: target.modelSelection,
               runtimeMode,

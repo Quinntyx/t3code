@@ -658,7 +658,9 @@ const CreatePullRequestTool = Tool.make("pull_request_create", {
     environmentId: OrchestratorMcpEnvironmentTarget,
     title: TrimmedNonEmptyString,
     body: Schema.String,
-    base: Schema.optional(TrimmedNonEmptyString),
+    base: Schema.optional(TrimmedNonEmptyString).annotate({
+      description: "Omit to let T3 resolve it, starting with the base it recorded for this branch.",
+    }),
     draft: Schema.optional(Schema.Boolean),
   }),
   success: CreatePullRequestResult,
