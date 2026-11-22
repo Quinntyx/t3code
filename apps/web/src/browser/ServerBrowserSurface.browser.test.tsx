@@ -721,4 +721,56 @@ describe("ServerBrowserSurface frames", () => {
     await act(() => mocks.painted?.());
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
+
+  it("clears the not-drawing alert when the same tab replaces its stream", async () => {
+    setup();
+    const container = document.createElement("div");
+    container.style.cssText = "width: 400px; height: 300px; display: flex;";
+    const screen = await render(
+      <ServerBrowserSurface
+        environmentId={EnvironmentId.make("environment-frames-reconnect")}
+        threadId="thread-frames-reconnect"
+        tabId="tab-frames-reconnect"
+        visible
+        followSize={false}
+        className="flex-1"
+      />,
+      { container },
+    );
+    try {
+      await vi.waitFor(() => expect(mocks.createClient).toHaveBeenCalledTimes(1));
+      using _timers = fakeTimers();
+      const handlers = mocks.createClient.mock.calls.at(-1)![1];
+      await act(() => handlers.onConnectedChange(true));
+      await act(() => vi.advanceTimersByTime(10_000));
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("not drawing it");
+
+      // Replacing the stream on the same tab (e.g. toggling followSize or visibility) must clear the stale alert.
+      await screen.rerender(
+        <ServerBrowserSurface
+          environmentId={EnvironmentId.make("environment-frames-reconnect")}
+          threadId="thread-frames-reconnect"
+          tabId="tab-frames-reconnect"
+          visible={false}
+          followSize={false}
+          className="flex-1"
+        />,
+      );
+      await screen.rerender(
+        <ServerBrowserSurface
+          environmentId={EnvironmentId.make("environment-frames-reconnect")}
+          threadId="thread-frames-reconnect"
+          tabId="tab-frames-reconnect"
+          visible
+          followSize={false}
+          className="flex-1"
+        />,
+      );
+      expect(mocks.createClient).toHaveBeenCalledTimes(2);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(container.textContent).toContain("Connecting to remote browser");
+    } finally {
+      await screen.unmount();
+    }
+  });
 });

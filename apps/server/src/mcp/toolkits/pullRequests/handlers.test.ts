@@ -37,6 +37,7 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import * as PullRequestStackService from "../../../pullRequest/PullRequestStackService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -154,6 +155,7 @@ interface HarnessOptions {
     PullRequestOperationError
   >;
   readonly pullRequests?: Partial<PullRequestService.PullRequestService["Service"]>;
+  readonly pullRequestStacks?: Partial<PullRequestStackService.PullRequestStackService["Service"]>;
   readonly git?: Partial<GitManager.GitManager["Service"]>;
 }
 
@@ -178,6 +180,22 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
       yield* Ref.update(commands, (recorded) => [...recorded, command]);
       return { sequence: 1, storedEvents: [] };
     });
+  const pullRequestsLayer = Layer.mock(PullRequestService.PullRequestService)(
+    options.pullRequests ?? {},
+  );
+  const pullRequestStacksLayer = Layer.effect(
+    PullRequestStackService.PullRequestStackService,
+    Effect.gen(function* () {
+      const pullRequests = yield* PullRequestService.PullRequestService;
+      return PullRequestStackService.PullRequestStackService.of({
+        start: () => Effect.void,
+        afterMerge: () => Effect.succeed({ retargeted: [], failed: [], restacks: [] }),
+        restackDependents: () => Effect.succeed({ threads: [] }),
+        mergeStack: (input) => PullRequestStackService.mergeNativeStack(pullRequests, input),
+        ...options.pullRequestStacks,
+      });
+    }),
+  ).pipe(Layer.provide(pullRequestsLayer));
   const layerDependencies = Layer.mergeAll(
     Layer.mock(PullRequestWatchService.PullRequestWatchService)({}),
     Layer.mock(ProjectService.ProjectService)({
@@ -207,7 +225,8 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
         Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
-    Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
+    pullRequestsLayer,
+    pullRequestStacksLayer,
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,

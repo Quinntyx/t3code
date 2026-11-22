@@ -3541,7 +3541,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             )}
           >
             {showCollapsedMobilePromptRow ? (
-              <div className="flex items-center justify-between gap-2 px-(--chat-composer-action-inset) py-2">
+              <div className="flex items-center justify-between gap-2 px-(--chat-composer-collapsed-inset) py-2">
                 <button
                   type="button"
                   data-chat-composer-transition-prompt="true"
@@ -3626,7 +3626,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               }}
               data-chat-composer-body="true"
               className={cn(
-                "relative px-(--chat-composer-action-inset) pt-(--chat-composer-action-inset) pb-2",
+                "relative px-(--chat-composer-body-inset) pt-(--chat-composer-body-top) pb-2",
                 isComposerCollapsedMobile && "hidden",
               )}
             >

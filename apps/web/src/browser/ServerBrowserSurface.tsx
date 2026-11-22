@@ -536,6 +536,8 @@ export function ServerBrowserSurface(props: {
           clearInput();
         },
         onGone: () => {
+          clearNoFrameTimer();
+          setFramesStalled(false);
           painter.reset();
           hasFrameRef.current = false;
           viewportRef.current = null;
@@ -570,6 +572,7 @@ export function ServerBrowserSurface(props: {
     return () => {
       painter.stop();
       clearNoFrameTimer();
+      setFramesStalled(false);
       audio.stop();
       if (audioRef.current === audio) audioRef.current = null;
       if (refreshTimer !== null) clearTimeout(refreshTimer);
@@ -578,6 +581,7 @@ export function ServerBrowserSurface(props: {
       hasFrameRef.current = false;
       viewportRef.current = null;
       setCurrentFramePainted(false);
+      setFileChooser(null);
       controlRef.current = null;
       setControlState(null);
       controlChanged(null);

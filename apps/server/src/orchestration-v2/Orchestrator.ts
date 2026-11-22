@@ -17626,7 +17626,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             const activeRun = child.runs
               .filter((run) => isLiveRun(run) && !monitorRunIds.has(run.id))
               .toSorted((a, b) => b.ordinal - a.ordinal)[0];
-            const cancelledRun = followUpRun ?? activeRun ?? progressAfterTurn(child).resultRun;
+            const stalled = stalledRun(child.runs, child.turnItems);
+            const stalledOriginalRun =
+              followUpRun === undefined &&
+              child.thread.forkedFrom?.type === "node" &&
+              child.thread.forkedFrom.nodeId === input.taskId &&
+              stalled !== null &&
+              stalled.delegatedTaskId === undefined
+                ? stalled
+                : undefined;
+            const cancelledRun =
+              followUpRun ?? activeRun ?? stalledOriginalRun ?? progressAfterTurn(child).resultRun;
             const now = yield* DateTime.now;
             const cancelledTask =
               task !== undefined && unsettled && cancelledRun !== undefined

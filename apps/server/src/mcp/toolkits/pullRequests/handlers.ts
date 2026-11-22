@@ -261,6 +261,7 @@ const make = Effect.gen(function* () {
   const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
   const watches = yield* PullRequestWatchService.PullRequestWatchService;
   const pullRequests = yield* PullRequestService.PullRequestService;
+  const pullRequestStacks = yield* PullRequestStackService.PullRequestStackService;
   const git = yield* GitManager.GitManager;
 
   const projects = yield* ProjectService.ProjectService;
@@ -1143,14 +1144,7 @@ const make = Effect.gen(function* () {
             requireMultiLayer: true,
             ...(input.method === undefined ? {} : { mergeMethod: input.method }),
           };
-          const stacks = yield* Effect.serviceOption(
-            PullRequestStackService.PullRequestStackService,
-          );
-          yield* (
-            Option.isSome(stacks)
-              ? stacks.value.mergeStack(stackMergeInput)
-              : PullRequestStackService.mergeNativeStack(pullRequests, stackMergeInput)
-          ).pipe(Effect.mapError(forgeFailure));
+          yield* pullRequestStacks.mergeStack(stackMergeInput).pipe(Effect.mapError(forgeFailure));
         } else {
           yield* pullRequests
             .runAction({

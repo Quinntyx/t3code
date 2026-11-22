@@ -4,13 +4,16 @@ import type { ThemeSettingsSchema } from "@t3tools/contracts";
 import {
   BUILT_IN_LIQUID_GLASS_STYLE,
   coerceThemeSettingValue,
+  DEFAULT_RESOLVED_THEME_EFFECTS,
   isThemeSettingVisible,
   migrateLegacyDesktopForkVisualSettings,
   migrateLegacyForkVisualSettings,
   readThemeSettingOverrides,
   resolveThemeEffectsAndSettings,
+  startThemeEffectController,
   THEME_SETTING_OVERRIDES_STORAGE_KEY,
   THEME_STYLE_STORAGE_KEY,
+  type ResolvedThemeEffects,
 } from "./themeEffects";
 
 function withMockLocalStorage(initial: Record<string, string> = {}) {
@@ -278,5 +281,83 @@ describe("migrateLegacyForkVisualSettings", () => {
       overrides: {},
     });
     expect(resolved.cssVariables["--theme-style-setting-radius"]).toBe("8");
+  });
+});
+
+describe("startThemeEffectController", () => {
+  afterEach(() => {
+    if ("document" in globalThis) {
+      Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+
+  it("toggles data-liquid-glass-effect on documentElement without setting data-liquid-glass", () => {
+    const attrs = new Set<string>();
+    const root = {
+      toggleAttribute: (name: string, force?: boolean) => {
+        if (force) attrs.add(name);
+        else attrs.delete(name);
+        return attrs.has(name);
+      },
+      removeAttribute: (name: string) => {
+        attrs.delete(name);
+      },
+    };
+    Object.defineProperty(globalThis, "window", {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, "document", {
+      value: { documentElement: root },
+      configurable: true,
+      writable: true,
+    });
+
+    let current: ResolvedThemeEffects = {
+      ...DEFAULT_RESOLVED_THEME_EFFECTS,
+      liquidGlass: {
+        ...DEFAULT_RESOLVED_THEME_EFFECTS.liquidGlass,
+        requested: true,
+        enabled: false,
+      },
+      floatingPanels: { enabled: true },
+    };
+    const listeners = new Set<() => void>();
+    const notify = () => {
+      for (const cb of listeners) cb();
+    };
+    const stop = startThemeEffectController(
+      () => current,
+      (cb) => {
+        listeners.add(cb);
+        return () => {
+          listeners.delete(cb);
+        };
+      },
+    );
+
+    expect(attrs.has("data-liquid-glass-effect")).toBe(true);
+    expect(attrs.has("data-liquid-glass")).toBe(false);
+    expect(attrs.has("data-floating-panels")).toBe(true);
+
+    current = DEFAULT_RESOLVED_THEME_EFFECTS;
+    notify();
+    expect(attrs.has("data-liquid-glass-effect")).toBe(false);
+    expect(attrs.has("data-floating-panels")).toBe(false);
+
+    current = {
+      ...DEFAULT_RESOLVED_THEME_EFFECTS,
+      liquidGlass: {
+        ...DEFAULT_RESOLVED_THEME_EFFECTS.liquidGlass,
+        requested: true,
+        enabled: false,
+      },
+    };
+    notify();
+    expect(attrs.has("data-liquid-glass-effect")).toBe(true);
+
+    stop();
+    expect(attrs.has("data-liquid-glass-effect")).toBe(false);
   });
 });

@@ -731,6 +731,7 @@ export function startThemeEffectController(
     const effects = getEffects();
     root.toggleAttribute("data-ambient-shimmer", effects.ambientShimmer.enabled);
     root.toggleAttribute("data-floating-panels", effects.floatingPanels.enabled);
+    root.toggleAttribute("data-liquid-glass-effect", effects.liquidGlass.requested);
 
     if (effects.liquidGlass.enabled) {
       if (liquidGlass) {
@@ -761,5 +762,6 @@ export function startThemeEffectController(
     }
     root.removeAttribute("data-ambient-shimmer");
     root.removeAttribute("data-floating-panels");
+    root.removeAttribute("data-liquid-glass-effect");
   };
 }

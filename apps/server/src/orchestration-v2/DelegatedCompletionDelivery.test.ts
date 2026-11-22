@@ -4758,6 +4758,285 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
       }),
     );
 
+    it.effect(
+      "commits cancelledRunId and settles when cancelling a stalled original delegation",
+      () =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const now = yield* DateTime.now;
+          const parentThreadId = ThreadId.make("thread:cancel-stalled-original-parent");
+          const projectId = ProjectId.make("project:cancel-stalled-original");
+          const parentRunId = RunId.make("run:cancel-stalled-original-parent");
+          const rootNodeId = NodeId.make("node:cancel-stalled-original-parent");
+          yield* seedParentWithTerminalTask({
+            threadId: parentThreadId,
+            projectId,
+            runId: parentRunId,
+            rootNodeId,
+            taskId: NodeId.make("node:cancel-stalled-original-seed"),
+            deliveryState: "acknowledged",
+            parentRunStatus: "completed",
+            now,
+          });
+          const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+          const child = yield* seedRestartCancelledChild({
+            parentThreadId,
+            projectId,
+            parentRunId,
+            rootNodeId,
+            name: "cancel-stalled-original-child",
+            completionWake: "always",
+            continuationPending: false,
+            runStatus: "completed",
+            now,
+          });
+          const originalRun = (yield* orchestrator.getThreadProjection(
+            child.childThreadId,
+          )).runs.find((run) => run.id === child.childRunId)!;
+          const childProviderThreadId = ProviderThreadId.make(
+            "provider-thread:cancel-stalled-original-child",
+          );
+          const childRootNodeId = NodeId.make("node:cancel-stalled-original-child-root");
+          yield* eventSink.write({
+            commandId: CommandId.make("command:cancel-stalled-original-overload"),
+            events: [
+              {
+                id: EventId.make("event:cancel-stalled-original-bg"),
+                type: "provider-thread.updated",
+                threadId: child.childThreadId,
+                runId: originalRun.id,
+                driver,
+                providerInstanceId: modelSelection.instanceId,
+                occurredAt: now,
+                payload: {
+                  ...parent.providerThreads[0]!,
+                  id: childProviderThreadId,
+                  appThreadId: child.childThreadId,
+                  pendingBackgroundTasks: [
+                    { taskId: "bg-orig", kind: "command" as const, awaited: true as const },
+                  ],
+                },
+              },
+              {
+                id: EventId.make("event:cancel-stalled-original-error"),
+                type: "turn-item.updated",
+                threadId: child.childThreadId,
+                occurredAt: now,
+                payload: {
+                  id: TurnItemId.make("item:cancel-stalled-original-error"),
+                  type: "error",
+                  threadId: child.childThreadId,
+                  runId: originalRun.id,
+                  nodeId: childRootNodeId,
+                  providerThreadId: childProviderThreadId,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: 2,
+                  status: "failed",
+                  title: "Provider failure",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  failure: {
+                    class: "provider_error",
+                    message: "The API is overloaded.",
+                    code: "api_error_529",
+                    retryable: true,
+                    overloaded: true,
+                  },
+                },
+              },
+              {
+                id: EventId.make("event:cancel-stalled-original-failed"),
+                type: "run.updated",
+                threadId: child.childThreadId,
+                runId: originalRun.id,
+                occurredAt: now,
+                payload: {
+                  ...originalRun,
+                  providerThreadId: childProviderThreadId,
+                  rootNodeId: childRootNodeId,
+                  status: "failed",
+                  startedAt: now,
+                  completedAt: now,
+                },
+              },
+            ],
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          const held = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+            (task) => task.id === child.taskId,
+          )!;
+          assert.isNull(held.result);
+          assert.equal(held.status, "running");
+
+          yield* orchestrator.cancelDelegatedTask({
+            parentThreadId,
+            taskId: child.taskId,
+            command: {
+              type: "thread.stop",
+              commandId: CommandId.make("command:cancel-stalled-original-stop"),
+              threadId: child.childThreadId,
+              stopDelegatedTasks: false,
+            },
+            stopDescendants: () => Effect.void,
+          });
+
+          const cancelled = (yield* orchestrator.getThreadProjection(
+            parentThreadId,
+          )).subagents.find((task) => task.id === child.taskId)!;
+          assert.equal(cancelled.cancelledRunId, originalRun.id);
+          assert.equal(cancelled.status, "failed");
+          assert.equal(cancelled.completionDelivery?.state, "disposed");
+          assert.isNotNull(cancelled.result);
+          const childAfter = yield* orchestrator.getThreadProjection(child.childThreadId);
+          assert.equal(childAfter.providerThreads[0]?.pendingBackgroundTasks?.length, 1);
+        }),
+    );
+
+    it.effect(
+      "commits cancelledRunId and settles when cancelling a stalled follow-up delegation",
+      () =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const now = yield* DateTime.now;
+          const parentThreadId = ThreadId.make("thread:cancel-stalled-followup-parent");
+          const projectId = ProjectId.make("project:cancel-stalled-followup");
+          const parentRunId = RunId.make("run:cancel-stalled-followup-parent");
+          const rootNodeId = NodeId.make("node:cancel-stalled-followup-parent");
+          yield* seedParentWithTerminalTask({
+            threadId: parentThreadId,
+            projectId,
+            runId: parentRunId,
+            rootNodeId,
+            taskId: NodeId.make("node:cancel-stalled-followup-seed"),
+            deliveryState: "acknowledged",
+            parentRunStatus: "completed",
+            now,
+          });
+          const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+          const child = yield* seedRestartCancelledChild({
+            parentThreadId,
+            projectId,
+            parentRunId,
+            rootNodeId,
+            name: "cancel-stalled-followup-child",
+            completionWake: "always",
+            continuationPending: false,
+            runStatus: "completed",
+            now,
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "agent",
+            creationSource: "mcp",
+            commandId: CommandId.make("command:cancel-stalled-followup-send"),
+            threadId: child.childThreadId,
+            senderThreadId: parentThreadId,
+            messageId: MessageId.make("message:cancel-stalled-followup-send"),
+            text: "Continue.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          });
+          const followupRun = (yield* orchestrator.getThreadProjection(
+            child.childThreadId,
+          )).runs.find((run) => run.delegatedTaskId !== undefined && run.ordinal > 1)!;
+          const followupTaskId = followupRun.delegatedTaskId!;
+          yield* eventSink.write({
+            commandId: CommandId.make("command:cancel-stalled-followup-overload"),
+            events: [
+              {
+                id: EventId.make("event:cancel-stalled-followup-bg"),
+                type: "provider-thread.updated",
+                threadId: child.childThreadId,
+                runId: followupRun.id,
+                driver,
+                providerInstanceId: modelSelection.instanceId,
+                occurredAt: now,
+                payload: {
+                  ...parent.providerThreads[0]!,
+                  id: ProviderThreadId.make("provider-thread:cancel-stalled-followup-child"),
+                  appThreadId: child.childThreadId,
+                  pendingBackgroundTasks: [
+                    { taskId: "bg-followup", kind: "command" as const, awaited: true as const },
+                  ],
+                },
+              },
+              {
+                id: EventId.make("event:cancel-stalled-followup-error"),
+                type: "turn-item.updated",
+                threadId: child.childThreadId,
+                occurredAt: now,
+                payload: {
+                  id: TurnItemId.make("item:cancel-stalled-followup-error"),
+                  type: "error",
+                  threadId: child.childThreadId,
+                  runId: followupRun.id,
+                  nodeId: followupRun.rootNodeId,
+                  providerThreadId: null,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: 2,
+                  status: "failed",
+                  title: "Provider failure",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  failure: {
+                    class: "provider_error",
+                    message: "The API is overloaded.",
+                    code: "api_error_529",
+                    retryable: true,
+                    overloaded: true,
+                  },
+                },
+              },
+              {
+                id: EventId.make("event:cancel-stalled-followup-failed"),
+                type: "run.updated",
+                threadId: child.childThreadId,
+                runId: followupRun.id,
+                occurredAt: now,
+                payload: { ...followupRun, status: "failed", startedAt: now, completedAt: now },
+              },
+            ],
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          const held = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+            (task) => task.id === followupTaskId,
+          )!;
+          assert.isNull(held.result);
+          assert.equal(held.status, "running");
+
+          yield* orchestrator.cancelDelegatedTask({
+            parentThreadId,
+            taskId: followupTaskId,
+            command: {
+              type: "thread.stop",
+              commandId: CommandId.make("command:cancel-stalled-followup-stop"),
+              threadId: child.childThreadId,
+              stopDelegatedTasks: false,
+            },
+            stopDescendants: () => Effect.void,
+          });
+
+          const cancelled = (yield* orchestrator.getThreadProjection(
+            parentThreadId,
+          )).subagents.find((task) => task.id === followupTaskId)!;
+          assert.equal(cancelled.cancelledRunId, followupRun.id);
+          assert.equal(cancelled.status, "failed");
+          assert.equal(cancelled.completionDelivery?.state, "disposed");
+          assert.isNotNull(cancelled.result);
+          const childAfter = yield* orchestrator.getThreadProjection(child.childThreadId);
+          assert.equal(childAfter.providerThreads[0]?.pendingBackgroundTasks?.length, 1);
+        }),
+    );
+
     it.effect("serializes a recovered child answer with its parent and tracks the follow-up", () =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
