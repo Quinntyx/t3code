@@ -70,6 +70,7 @@ export function BranchToolbarRunContextChip({
   onMoveTo,
   onAddToMachine,
   onCopyWorkspacePath,
+  workspaceOpenIn,
   open,
   view,
   onOpenChange,
@@ -95,6 +96,8 @@ export function BranchToolbarRunContextChip({
   onMoveTo: (environmentId: string) => void;
   onAddToMachine: (environmentId: string | null) => void;
   onCopyWorkspacePath: () => void;
+  /** Opens the workspace in an editor, so the editor stays reachable from the run context. */
+  workspaceOpenIn?: ReactNode;
   open: boolean;
   view: RunContextChipView;
   onOpenChange: (open: boolean) => void;
@@ -269,24 +272,27 @@ export function BranchToolbarRunContextChip({
                 label={gt("Workspace")}
                 icon={<WorkspaceIcon aria-hidden />}
                 action={
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          variant="ghost-muted"
-                          size="icon-xs"
-                          aria-label={gt("Copy full path")}
-                          disabled={workspace.path === null}
-                          onClick={onCopyWorkspacePath}
-                        />
-                      }
-                    >
-                      <CopyIcon aria-hidden />
-                    </TooltipTrigger>
-                    <TooltipPopup>
-                      <T>Copy full path</T>
-                    </TooltipPopup>
-                  </Tooltip>
+                  <span className="flex items-center gap-0.5">
+                    {workspaceOpenIn}
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            variant="ghost-muted"
+                            size="icon-xs"
+                            aria-label={gt("Copy full path")}
+                            disabled={workspace.path === null}
+                            onClick={onCopyWorkspacePath}
+                          />
+                        }
+                      >
+                        <CopyIcon aria-hidden />
+                      </TooltipTrigger>
+                      <TooltipPopup>
+                        <T>Copy full path</T>
+                      </TooltipPopup>
+                    </Tooltip>
+                  </span>
                 }
               >
                 <span className="shrink-0">{workspace.label}</span>

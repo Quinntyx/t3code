@@ -1,5 +1,9 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { useAtomValue } from "@effect/atom-react";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
+import { OpenInPicker } from "./chat/OpenInPicker";
+import { serverEnvironment } from "../state/server";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { useRightPanelStore } from "../rightPanelStore";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -163,6 +167,7 @@ export function BranchToolbarBranchSelector({
       (environment) => environment.environmentId === environmentId,
     ) ?? null;
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
   const updateThreadMetadata = useAtomCommand(
@@ -1064,6 +1069,18 @@ export function BranchToolbarBranchSelector({
           runContext.onAddToMachine(targetEnvironmentId as EnvironmentId | null)
         }
         onCopyWorkspacePath={copyWorkspacePath}
+        workspaceOpenIn={
+          workspacePath === null ? null : (
+            <OpenInPicker
+              environmentId={environmentId}
+              keybindings={serverConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS}
+              availableEditors={serverConfig?.availableEditors ?? []}
+              openInCwd={workspacePath}
+              displayMode="card"
+              enableShortcut={false}
+            />
+          )
+        }
         open={isBranchMenuOpen}
         view={chipView}
         onOpenChange={handleOpenChange}
