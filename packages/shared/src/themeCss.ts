@@ -127,6 +127,10 @@ export const THEME_CSS_HOOKS = [
     selector: "[data-chat-composer-row]",
     styles: 'controls row under the composer card (layout composerControls "below")',
   },
+  {
+    selector: "[data-run-context-chip]",
+    styles: 'run context chip in the composer controls (layout runContext "chip")',
+  },
   { selector: "[data-chat-composer-stop]", styles: "composer stop button" },
   {
     selector: "[data-chat-context-meter]",

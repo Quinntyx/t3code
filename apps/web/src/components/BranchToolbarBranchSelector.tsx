@@ -17,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { GitBranchIcon } from "lucide-react";
+import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { m } from "../i18n/messages";
 import {
   useEffect,
@@ -31,6 +32,7 @@ import {
 } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import type { AddProjectTarget } from "../hooks/useAddProjectTargets";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
@@ -38,6 +40,7 @@ import { usePaginatedBranches } from "../state/queries";
 import { useProjectClone } from "../state/projectClones";
 import { readThreadShell, useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
+import { useEnvironment } from "../state/environments";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -55,6 +58,7 @@ import {
   deriveLocalBranchNameFromRemoteRef,
   isBranchHoldCurrent,
   isWorktreeChangeBlocked,
+  resolveBranchRunContextDetail,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
@@ -62,9 +66,12 @@ import {
   resolveConfirmedSelectedRef,
   resolveDefaultWorktreeBaseBranch,
   resolveDraftEnvModeAfterBranchChange,
+  resolveLockedWorkspaceLabel,
+  resolveMachineConnectionDetail,
   resolveEffectiveEnvMode,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
+  type EnvironmentOption,
 } from "./BranchToolbar.logic";
 import {
   ThreadPullRequestBadgeControl,
@@ -76,6 +83,12 @@ import { ComboboxItem, ComboboxTrigger } from "./ui/combobox";
 import { ComposerControl } from "./chat/ComposerControl";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { BranchPicker, BranchPickerRefItem, useBranchPickerRemoteView } from "./BranchPicker";
+import {
+  BranchToolbarRunContextChip,
+  RunContextRowButton,
+  type RunContextChipView,
+  type RunContextMachine,
+} from "./BranchToolbarRunContextChip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 export interface BranchToolbarBranchSelectorHandle {
@@ -87,6 +100,9 @@ interface BranchToolbarBranchSelectorProps {
   ref?: Ref<BranchToolbarBranchSelectorHandle>;
   className?: string;
   displayMode?: "toolbar" | "panel";
+  /** `chip` renders the run-context chip whose popover holds this picker. */
+  presentation?: "default" | "chip";
+  runContext?: RunContextChipInput;
   environmentId: EnvironmentId;
   threadId: ThreadId;
   draftId?: DraftId;
@@ -100,6 +116,18 @@ interface BranchToolbarBranchSelectorProps {
   onComposerFocusRequest?: () => void;
 }
 
+export interface RunContextChipInput {
+  environmentId: EnvironmentId;
+  workspaceRoot: string;
+  worktreePath: string | null;
+  showGitControls: boolean;
+  machineHandoffBusy: boolean;
+  availableEnvironments: readonly EnvironmentOption[] | undefined;
+  onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
+  addTargets: readonly AddProjectTarget[];
+  onAddToMachine: (environmentId: EnvironmentId | null) => void;
+}
+
 const WORKTREE_CHANGE_BLOCKED_MESSAGE = msg("Stop the current turn to switch worktrees.");
 
 function toBranchActionErrorMessage(error: unknown): string {
@@ -111,6 +139,8 @@ export function BranchToolbarBranchSelector({
   ref,
   className,
   displayMode = "toolbar",
+  presentation = "default",
+  runContext,
   environmentId,
   threadId,
   draftId,
@@ -126,6 +156,12 @@ export function BranchToolbarBranchSelector({
   const gt = useGT();
   const messages = useMessages();
   const composerFloatingLayerProps = useComposerMenuProps();
+  const [chipView, setChipView] = useState<RunContextChipView>("info");
+  const chipPresentation = useEnvironment(environmentId);
+  const activeEnvironment =
+    runContext?.availableEnvironments?.find(
+      (environment) => environment.environmentId === environmentId,
+    ) ?? null;
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
@@ -679,6 +715,7 @@ export function BranchToolbarBranchSelector({
     }
     if (!open) {
       setBranchQuery("");
+      setChipView("info");
     }
   };
 
@@ -687,10 +724,12 @@ export function BranchToolbarBranchSelector({
     () => ({
       open: () => {
         if (isInitialBranchesLoadPending || isBranchActionPending) return;
+        // composer.branch jumps straight to the picker, which lives in the chip's popover.
+        if (presentation === "chip") setChipView("branch");
         handleOpenChange(true);
       },
     }),
-    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending],
+    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending, presentation],
   );
 
   const triggerLabel = resolveBranchTriggerLabel(
@@ -725,6 +764,39 @@ export function BranchToolbarBranchSelector({
   );
   const openPrLink = useOpenPrLink(threadRef);
   const linkedIssues = serverThread?.issues ?? [];
+
+  const branchRunContextDetail =
+    resolvedActiveBranch !== null && branchStatusQuery.data?.refName === resolvedActiveBranch
+      ? resolveBranchRunContextDetail(branchStatusQuery.data)
+      : null;
+  const copyWorkspacePath = () => {
+    const path = runContext?.worktreePath ?? runContext?.workspaceRoot ?? null;
+    if (path === null) return;
+    const clipboardPath = formatFilePathForClipboard(path);
+    void writeTextToClipboard(clipboardPath, {
+      target: "workspace path",
+      unavailableMessage: msg("Clipboard API is unavailable while copying workspace path."),
+      failureMessage: msg("Failed to copy workspace path to the clipboard."),
+    }).then(
+      (didCopy) => {
+        if (!didCopy) return;
+        toastManager.add({
+          type: "success",
+          title: gt("Path copied"),
+          description: clipboardPath,
+        });
+      },
+      (error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: gt("Failed to copy path"),
+            description: toBranchActionErrorMessage(error),
+          }),
+        );
+      },
+    );
+  };
 
   function selectPickerItem(itemValue: string) {
     if (itemValue === checkoutPullRequestItemValue && prReference && onCheckoutPullRequestRequest) {
@@ -812,7 +884,7 @@ export function BranchToolbarBranchSelector({
     );
   }
 
-  return (
+  const picker = (
     <BranchPicker
       items={branchPickerItems}
       filteredItems={filteredBranchPickerItems}
@@ -845,6 +917,7 @@ export function BranchToolbarBranchSelector({
           : undefined
       }
       remotes={remoteView.remotes(branchRefState.data?.remoteNames)}
+      inline={presentation === "chip"}
       popupProps={{
         align: displayMode === "panel" ? "start" : "end",
         side: displayMode === "panel" ? "bottom" : "top",
@@ -926,4 +999,88 @@ export function BranchToolbarBranchSelector({
       </div>
     </BranchPicker>
   );
+
+  if (presentation === "chip" && runContext !== undefined) {
+    const workspaceLabel = resolveLockedWorkspaceLabel(
+      runContext.worktreePath,
+      runContext.worktreePath ? "worktree" : "local",
+      messages,
+    );
+    const chipMachine: RunContextMachine = {
+      kind: activeEnvironment?.machine ?? "server",
+      label: activeEnvironment?.label ?? chipPresentation?.label ?? gt("This machine"),
+      connection: resolveMachineConnectionDetail({
+        isPrimary: activeEnvironment?.isPrimary ?? true,
+        relayManaged: chipPresentation?.relayManaged ?? false,
+        displayUrl: chipPresentation?.displayUrl ?? null,
+        connectionPhase: chipPresentation?.connection.phase ?? "connected",
+      }),
+    };
+    const workspacePath = runContext.worktreePath ?? runContext.workspaceRoot;
+    const prTitle = branchPr?.title?.trim();
+    return (
+      <BranchToolbarRunContextChip
+        machine={chipMachine}
+        workspace={{
+          kind: runContext.worktreePath ? "worktree" : "checkout",
+          label: workspaceLabel,
+          path: workspacePath,
+        }}
+        branchName={resolvedActiveBranch}
+        branchDetail={branchRunContextDetail}
+        prSummary={prNumber === undefined ? null : `#${prNumber}${prTitle ? `: ${prTitle}` : ""}`}
+        prAction={
+          prNumber === undefined ? null : (
+            <ThreadPullRequestBadgeControl
+              render={<RunContextRowButton icon aria-label={gt("Pull request")} />}
+              badge={prBadge}
+              pullRequests={serverThread?.pullRequests ?? []}
+              number={prNumber}
+              url={prUrl}
+              status={prStatus}
+              onOpenList={() => useRightPanelStore.getState().open(threadRef, "pull-requests")}
+              onOpenPullRequest={(event, targetUrl = prUrl) => {
+                if (targetUrl) openPrLink(event, targetUrl);
+              }}
+            />
+          )
+        }
+        showGitControls={runContext.showGitControls}
+        canMove={
+          runContext.onEnvironmentChange !== undefined &&
+          (runContext.addTargets.length > 0 || (runContext.availableEnvironments?.length ?? 0) > 1)
+        }
+        moveBusy={runContext.machineHandoffBusy}
+        moveDisabled={false}
+        moveTargets={(runContext.availableEnvironments ?? []).filter(
+          (environment) =>
+            environment.environmentId !== environmentId && environment.projectId !== null,
+        )}
+        addTargets={runContext.addTargets}
+        onMoveTo={(targetEnvironmentId) =>
+          runContext.onEnvironmentChange?.(targetEnvironmentId as EnvironmentId)
+        }
+        onAddToMachine={(targetEnvironmentId) =>
+          runContext.onAddToMachine(targetEnvironmentId as EnvironmentId | null)
+        }
+        onCopyWorkspacePath={copyWorkspacePath}
+        open={isBranchMenuOpen}
+        view={chipView}
+        onOpenChange={handleOpenChange}
+        onViewChange={setChipView}
+        ariaLabel={gt("Run context: {context}", {
+          context: [chipMachine.label, workspaceLabel, resolvedActiveBranch]
+            .filter(Boolean)
+            .join(", "),
+        })}
+        tooltip={[chipMachine.label, workspaceLabel, resolvedActiveBranch]
+          .filter(Boolean)
+          .join(" · ")}
+        onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
+        branchPicker={picker}
+      />
+    );
+  }
+
+  return picker;
 }

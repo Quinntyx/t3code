@@ -129,6 +129,64 @@ export function resolveLockedWorkspaceLabel(
     : resolve(msg("Local checkout"));
 }
 
+const CONNECTION_PHASE_LABELS: Record<string, string> = {
+  available: msg("Connected"),
+  connected: msg("Connected"),
+  connecting: msg("Connecting…"),
+  reconnecting: msg("Reconnecting…"),
+  offline: msg("Offline"),
+  unsupported: msg("Unsupported"),
+  error: msg("Connection error"),
+};
+
+/** How the run-context chip names the machine's connection: this device, T3 Connect, or its address. */
+export function resolveMachineConnectionDetail(
+  input: {
+    isPrimary: boolean;
+    relayManaged: boolean;
+    displayUrl: string | null;
+    connectionPhase: string;
+  },
+  resolve: MessageResolver = m,
+): string {
+  const route = input.isPrimary
+    ? resolve(msg("This machine"))
+    : input.relayManaged
+      ? "T3 Connect"
+      : input.displayUrl === null
+        ? resolve(msg("Linked"))
+        : (hostOf(input.displayUrl) ?? input.displayUrl);
+  const phase = CONNECTION_PHASE_LABELS[input.connectionPhase];
+  return phase === undefined || phase === CONNECTION_PHASE_LABELS.connected
+    ? route
+    : `${route} · ${resolve(phase)}`;
+}
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The branch's standing against its upstream, as the run-context popover states it. */
+export function resolveBranchRunContextDetail(
+  input: {
+    hasUpstream: boolean;
+    aheadCount: number;
+    behindCount: number;
+  },
+  resolve: MessageResolver = m,
+): string | null {
+  if (!input.hasUpstream) return null;
+  const parts = [
+    input.aheadCount > 0 ? resolve(msg("{count} ahead", { count: input.aheadCount })) : null,
+    input.behindCount > 0 ? resolve(msg("{count} behind", { count: input.behindCount })) : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" · ") : resolve(msg("Up to date"));
+}
+
 export interface PreviousWorktreeSeed {
   branch: string | null;
   worktreePath: string;

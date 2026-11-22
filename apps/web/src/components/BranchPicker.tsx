@@ -71,6 +71,7 @@ export function BranchPicker({
   popupProps,
   renderItem,
   getItemType,
+  inline = false,
   children,
 }: {
   items: string[];
@@ -91,6 +92,8 @@ export function BranchPicker({
   popupProps: Omit<ComponentProps<typeof ComboboxPopup>, "children">;
   renderItem: (value: string, index: number) => ReactNode;
   getItemType?: ((value: string) => string) | undefined;
+  /** Renders the list where the trigger sits, for popovers that hold the picker themselves. */
+  inline?: boolean;
   children: ReactNode;
 }) {
   const gt = useGT();
@@ -173,6 +176,157 @@ export function BranchPicker({
   };
   const branchScrollRef = useLegendListRef(branchListRef, updateBranchListScrollFades);
 
+  const pickerBody = (
+    <>
+      <ComboboxSearchInput
+        placeholder={gt("Search refs...")}
+        value={query}
+        onChange={(event) => {
+          onQueryChange(event.target.value);
+          void branchListRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+        }}
+        onKeyDown={(event) => {
+          if (
+            remotes &&
+            remoteView.kind !== "default" &&
+            event.key === "Backspace" &&
+            query.length === 0
+          ) {
+            event.preventDefault();
+            changeRemoteView(parentBranchPickerRemoteView(remoteView, remotes.otherRemoteNames));
+            return;
+          }
+          // The combobox keeps Tab in its input, so the remotes row needs an explicit way in.
+          if (event.key === "Tab" && !event.shiftKey && otherRemotesButtonRef.current) {
+            (
+              event as typeof event & { preventBaseUIHandler?: () => void }
+            ).preventBaseUIHandler?.();
+            event.preventDefault();
+            otherRemotesButtonRef.current.focus();
+            return;
+          }
+          if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229)
+            return;
+          // A tier change clears the tracked highlight while autoHighlight still marks the first row.
+          const trackedValue = highlightedValueRef.current;
+          const highlightedValue =
+            trackedValue !== null && listItems.includes(trackedValue)
+              ? trackedValue
+              : remotes && remoteView.kind !== "default"
+                ? (listItems[0] ?? null)
+                : null;
+          if (highlightedValue === null) return;
+          (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
+          event.preventDefault();
+          event.stopPropagation();
+          highlightedValueRef.current = null;
+          selectItem(highlightedValue);
+        }}
+      />
+      {remotes && remoteView.kind !== "default" ? (
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-3 py-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+          onClick={() =>
+            changeRemoteView(parentBranchPickerRemoteView(remoteView, remotes.otherRemoteNames))
+          }
+        >
+          <ChevronLeftIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">
+            {remoteView.kind === "remote" ? remoteView.remoteName : gt("Other remotes")}
+          </span>
+        </button>
+      ) : null}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <ComboboxEmpty>
+          {remoteListItems ? <T>No remotes found.</T> : <T>No refs found.</T>}
+        </ComboboxEmpty>
+        <div className="relative flex min-h-0 w-full max-h-56 flex-1 flex-col overflow-hidden">
+          <ComboboxListVirtualized className="flex size-full min-h-0 min-w-0 flex-col">
+            <LegendList<string>
+              ref={branchScrollRef}
+              data={listItems}
+              initialScrollOffset={0}
+              keyExtractor={(item) => item}
+              {...(getItemType && !remoteListItems ? { getItemType } : {})}
+              renderItem={({ item, index }) => renderListItem(item, index)}
+              extraData={renderListItem}
+              estimatedItemSize={28}
+              drawDistance={336}
+              onScroll={updateBranchListScrollFades}
+              onLayout={updateBranchListScrollFades}
+              onReady={updateBranchListScrollFades}
+              onEndReached={fetchNextBranchPage}
+              onEndReachedThreshold={0.5}
+              className={cn(
+                "min-h-0 max-h-56 scrollbar-gutter-stable overflow-x-hidden overscroll-y-contain ps-1 pe-0 py-2",
+                getVirtualizedScrollFadeClassName({
+                  top: showTopBranchScrollFade,
+                  bottom: showBottomBranchScrollFade,
+                }),
+              )}
+            />
+          </ComboboxListVirtualized>
+        </div>
+        {remotes && remoteView.kind === "default" && remotes.otherRemoteNames.length > 0 ? (
+          <button
+            ref={otherRemotesButtonRef}
+            type="button"
+            className="flex min-w-0 items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-left text-xs hover:bg-accent/50"
+            onClick={() => {
+              highlightedValueRef.current = null;
+              onQueryChange("");
+              remotes.onOpenOtherRemotes();
+            }}
+          >
+            <span className="shrink-0 font-medium text-muted-foreground">
+              <T>Other remotes</T>
+            </span>
+            <span className="flex min-w-0 items-center gap-1 text-muted-foreground/70">
+              <span className="truncate">{remotes.otherRemoteNames.join(", ")}</span>
+              <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            </span>
+          </button>
+        ) : null}
+        {originControl ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <label
+                  htmlFor={startFromOriginSwitchId}
+                  className="flex cursor-pointer items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-xs"
+                >
+                  <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
+                    <RefreshIcon aria-hidden="true" className="size-3 shrink-0" />
+                    <span className="truncate">
+                      <T>Start from remote</T>
+                    </span>
+                  </span>
+                  <Switch
+                    id={startFromOriginSwitchId}
+                    checked={originControl.checked}
+                    size="sm"
+                    aria-label={gt("Start worktree from remote")}
+                    onCheckedChange={(checked) => originControl.onCheckedChange(Boolean(checked))}
+                  />
+                </label>
+              }
+            />
+            <TooltipPopup side="top" className="max-w-72 whitespace-normal">
+              <T>
+                Uses the latest commit of the base branch’s tracked remote branch, even if its name
+                differs. Otherwise uses the same-named branch on origin. Uses your local branch if
+                that remote branch is missing.
+              </T>
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {notice ? <ComboboxStatus>{notice}</ComboboxStatus> : null}
+        {statusText ? <ComboboxStatus>{statusText}</ComboboxStatus> : null}
+      </div>
+    </>
+  );
+
   return (
     <Combobox
       items={remoteListItems ?? items}
@@ -190,160 +344,15 @@ export function BranchPicker({
         });
       }}
       onOpenChange={handleOpenChange}
-      open={open}
+      open={inline ? true : open}
       value={value}
     >
       {children}
-      <ComboboxPopup {...popupProps}>
-        <ComboboxSearchInput
-          placeholder={gt("Search refs...")}
-          value={query}
-          onChange={(event) => {
-            onQueryChange(event.target.value);
-            void branchListRef.current?.scrollToOffset?.({ offset: 0, animated: false });
-          }}
-          onKeyDown={(event) => {
-            if (
-              remotes &&
-              remoteView.kind !== "default" &&
-              event.key === "Backspace" &&
-              query.length === 0
-            ) {
-              event.preventDefault();
-              changeRemoteView(parentBranchPickerRemoteView(remoteView, remotes.otherRemoteNames));
-              return;
-            }
-            // The combobox keeps Tab in its input, so the remotes row needs an explicit way in.
-            if (event.key === "Tab" && !event.shiftKey && otherRemotesButtonRef.current) {
-              (
-                event as typeof event & { preventBaseUIHandler?: () => void }
-              ).preventBaseUIHandler?.();
-              event.preventDefault();
-              otherRemotesButtonRef.current.focus();
-              return;
-            }
-            if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229)
-              return;
-            // A tier change clears the tracked highlight while autoHighlight still marks the first row.
-            const trackedValue = highlightedValueRef.current;
-            const highlightedValue =
-              trackedValue !== null && listItems.includes(trackedValue)
-                ? trackedValue
-                : remotes && remoteView.kind !== "default"
-                  ? (listItems[0] ?? null)
-                  : null;
-            if (highlightedValue === null) return;
-            (
-              event as typeof event & { preventBaseUIHandler?: () => void }
-            ).preventBaseUIHandler?.();
-            event.preventDefault();
-            event.stopPropagation();
-            highlightedValueRef.current = null;
-            selectItem(highlightedValue);
-          }}
-        />
-        {remotes && remoteView.kind !== "default" ? (
-          <button
-            type="button"
-            className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-3 py-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
-            onClick={() =>
-              changeRemoteView(parentBranchPickerRemoteView(remoteView, remotes.otherRemoteNames))
-            }
-          >
-            <ChevronLeftIcon aria-hidden="true" className="size-3.5 shrink-0" />
-            <span className="truncate">
-              {remoteView.kind === "remote" ? remoteView.remoteName : gt("Other remotes")}
-            </span>
-          </button>
-        ) : null}
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ComboboxEmpty>
-            {remoteListItems ? <T>No remotes found.</T> : <T>No refs found.</T>}
-          </ComboboxEmpty>
-          <div className="relative flex min-h-0 w-full max-h-56 flex-1 flex-col overflow-hidden">
-            <ComboboxListVirtualized className="flex size-full min-h-0 min-w-0 flex-col">
-              <LegendList<string>
-                ref={branchScrollRef}
-                data={listItems}
-                initialScrollOffset={0}
-                keyExtractor={(item) => item}
-                {...(getItemType && !remoteListItems ? { getItemType } : {})}
-                renderItem={({ item, index }) => renderListItem(item, index)}
-                extraData={renderListItem}
-                estimatedItemSize={28}
-                drawDistance={336}
-                onScroll={updateBranchListScrollFades}
-                onLayout={updateBranchListScrollFades}
-                onReady={updateBranchListScrollFades}
-                onEndReached={fetchNextBranchPage}
-                onEndReachedThreshold={0.5}
-                className={cn(
-                  "min-h-0 max-h-56 scrollbar-gutter-stable overflow-x-hidden overscroll-y-contain ps-1 pe-0 py-2",
-                  getVirtualizedScrollFadeClassName({
-                    top: showTopBranchScrollFade,
-                    bottom: showBottomBranchScrollFade,
-                  }),
-                )}
-              />
-            </ComboboxListVirtualized>
-          </div>
-          {remotes && remoteView.kind === "default" && remotes.otherRemoteNames.length > 0 ? (
-            <button
-              ref={otherRemotesButtonRef}
-              type="button"
-              className="flex min-w-0 items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-left text-xs hover:bg-accent/50"
-              onClick={() => {
-                highlightedValueRef.current = null;
-                onQueryChange("");
-                remotes.onOpenOtherRemotes();
-              }}
-            >
-              <span className="shrink-0 font-medium text-muted-foreground">
-                <T>Other remotes</T>
-              </span>
-              <span className="flex min-w-0 items-center gap-1 text-muted-foreground/70">
-                <span className="truncate">{remotes.otherRemoteNames.join(", ")}</span>
-                <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0" />
-              </span>
-            </button>
-          ) : null}
-          {originControl ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <label
-                    htmlFor={startFromOriginSwitchId}
-                    className="flex cursor-pointer items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-xs"
-                  >
-                    <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
-                      <RefreshIcon aria-hidden="true" className="size-3 shrink-0" />
-                      <span className="truncate">
-                        <T>Start from remote</T>
-                      </span>
-                    </span>
-                    <Switch
-                      id={startFromOriginSwitchId}
-                      checked={originControl.checked}
-                      size="sm"
-                      aria-label={gt("Start worktree from remote")}
-                      onCheckedChange={(checked) => originControl.onCheckedChange(Boolean(checked))}
-                    />
-                  </label>
-                }
-              />
-              <TooltipPopup side="top" className="max-w-72 whitespace-normal">
-                <T>
-                  Uses the latest commit of the base branch’s tracked remote branch, even if its
-                  name differs. Otherwise uses the same-named branch on origin. Uses your local
-                  branch if that remote branch is missing.
-                </T>
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
-          {notice ? <ComboboxStatus>{notice}</ComboboxStatus> : null}
-          {statusText ? <ComboboxStatus>{statusText}</ComboboxStatus> : null}
-        </div>
-      </ComboboxPopup>
+      {inline ? (
+        <div className="flex min-h-0 flex-col">{pickerBody}</div>
+      ) : (
+        <ComboboxPopup {...popupProps}>{pickerBody}</ComboboxPopup>
+      )}
     </Combobox>
   );
 }

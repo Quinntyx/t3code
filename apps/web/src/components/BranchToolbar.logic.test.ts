@@ -7,11 +7,13 @@ import {
   resolveBranchSelectionTarget,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolveBranchRunContextDetail,
   resolveBranchToolbarPrBranch,
   resolveConfirmedSelectedRef,
   resolveDefaultWorktreeBaseBranch,
   resolveLocalCheckoutBranchMismatch,
   resolveLockedWorkspaceLabel,
+  resolveMachineConnectionDetail,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
   isBranchHoldCurrent,
@@ -430,5 +432,68 @@ describe("resolveConfirmedSelectedRef", () => {
     expect(resolveConfirmedSelectedRef(listed, refs === null ? null : { refs }).worktreePath).toBe(
       expected,
     );
+  });
+});
+
+describe("resolveMachineConnectionDetail", () => {
+  it("names this device for the primary environment", () => {
+    expect(
+      resolveMachineConnectionDetail({
+        isPrimary: true,
+        relayManaged: true,
+        displayUrl: "http://10.0.0.4:3000",
+        connectionPhase: "connected",
+      }),
+    ).toBe("This machine");
+  });
+
+  it("names a relay route and a direct address", () => {
+    expect(
+      resolveMachineConnectionDetail({
+        isPrimary: false,
+        relayManaged: true,
+        displayUrl: null,
+        connectionPhase: "connected",
+      }),
+    ).toBe("T3 Connect");
+    expect(
+      resolveMachineConnectionDetail({
+        isPrimary: false,
+        relayManaged: false,
+        displayUrl: "http://studio.local:3773/",
+        connectionPhase: "connected",
+      }),
+    ).toBe("studio.local:3773");
+  });
+
+  it("adds a connection problem after the route", () => {
+    expect(
+      resolveMachineConnectionDetail({
+        isPrimary: false,
+        relayManaged: true,
+        displayUrl: null,
+        connectionPhase: "offline",
+      }),
+    ).toBe("T3 Connect · Offline");
+  });
+});
+
+describe("resolveBranchRunContextDetail", () => {
+  it("reads ahead and behind from the branch's upstream", () => {
+    expect(
+      resolveBranchRunContextDetail({ hasUpstream: true, aheadCount: 2, behindCount: 0 }),
+    ).toBe("2 ahead");
+    expect(
+      resolveBranchRunContextDetail({ hasUpstream: true, aheadCount: 2, behindCount: 1 }),
+    ).toBe("2 ahead · 1 behind");
+    expect(
+      resolveBranchRunContextDetail({ hasUpstream: true, aheadCount: 0, behindCount: 0 }),
+    ).toBe("Up to date");
+  });
+
+  it("says nothing without an upstream", () => {
+    expect(
+      resolveBranchRunContextDetail({ hasUpstream: false, aheadCount: 0, behindCount: 0 }),
+    ).toBeNull();
   });
 });
