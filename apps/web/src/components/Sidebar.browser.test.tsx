@@ -641,6 +641,17 @@ describe("sidebar recently settled popover", () => {
       .toHaveAttribute("aria-selected", "true");
   });
 
+  it("leaves the tabs to the user while a settled thread is open", async () => {
+    using _layout = setupLayout({ sidebarSections: "tabs" });
+    await using screen = await renderTabsSidebar(
+      (currentProject) => [settledThread(currentProject, 0)],
+      "settled-0",
+    );
+    const working = screen.getByRole("tab", { name: /Working/ });
+    await userEvent.click(working);
+    await expect.element(working).toHaveAttribute("aria-selected", "true");
+  });
+
   it("lists settled threads with un-settle and view actions when sections are tabs", async () => {
     using _layout = setupLayout({ sidebarSections: "tabs" });
     // Left open in the shelves layout; tabs page settled threads only in the popover.

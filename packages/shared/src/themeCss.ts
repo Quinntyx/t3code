@@ -170,6 +170,11 @@ export const THEME_CSS_HOOKS = [
   { selector: '[data-slot="popover-popup"]', styles: "popover" },
   { selector: '[data-slot="menu-popup"]', styles: "menu" },
   { selector: '[data-slot="tooltip-popup"]', styles: "tooltip" },
+  { selector: '[data-slot="select-popup"]', styles: "select list" },
+  { selector: '[data-slot="combobox-popup"]', styles: "combobox list, such as the project filter" },
+  { selector: '[data-slot="autocomplete-popup"]', styles: "autocomplete list" },
+  { selector: '[data-slot="preview-card-popup"]', styles: "hover preview card" },
+  { selector: '[data-slot="toast-popup"]', styles: "toast" },
   { selector: '[data-slot="scroll-area-scrollbar"]', styles: "overlay scrollbar" },
   { selector: '[data-slot="scroll-area-thumb"]', styles: "overlay scrollbar thumb" },
   {

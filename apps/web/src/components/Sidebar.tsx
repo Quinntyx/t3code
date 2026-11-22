@@ -1307,11 +1307,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       null,
   );
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // The tab the open thread brought forward, until the user picks one or opens another thread.
+  const [followedRoute, setFollowedRoute] = useState<{
+    readonly key: string | null;
+    readonly tab: SidebarTab | null;
+  }>({ key: null, tab: null });
   // Search results replace the Idle column, so a query keeps that tab in front until it clears.
-  const activeTab: SidebarTab = isSearchingThreads ? "idle" : storedTab;
+  const activeTab: SidebarTab = isSearchingThreads ? "idle" : (followedRoute.tab ?? storedTab);
   // Picking another tab takes the search away with it, rather than leaving it over an unseen list.
   const setActiveTab = (tab: SidebarTab) => {
     setStoredTab(tab);
+    setFollowedRoute((current) => ({ key: current.key, tab: null }));
     if (tab !== "idle") {
       setThreadSearchQuery("");
       setSearchHighlightKey(null);
@@ -4172,18 +4178,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const tabSortableIdsIdle = tabItemsIdle.map(sidebarListItemId);
   const tabSortableIdsWorking = tabItemsWorking.map(sidebarListItemId);
   const tabSortableIdsSnoozed = tabItemsSnoozed.map(sidebarListItemId);
-  // A reveal of the open thread brings its tab forward, so its row is on screen. Only the reveal
-  // does this: a tab the user picked stays put while they browse.
-  const routeSectionForReveal =
-    !tabbed || routeReveal.pendingKey === null || routeRowThreadKey === null
-      ? undefined
-      : sectionByThreadKey.get(routeRowThreadKey);
-  if (routeSectionForReveal !== undefined) {
-    const routeTab: SidebarTab =
-      routeSectionForReveal === "working" || routeSectionForReveal === "snoozed"
-        ? routeSectionForReveal
-        : "idle";
-    if (routeTab !== activeTab) setActiveTab(routeTab);
+  // Opening a thread brings its tab forward once, so its row is on screen; a tab picked afterwards
+  // stays. Settled threads are listed in the popover, so they move no tab.
+  const routeSection =
+    routeRowThreadKey === null ? undefined : sectionByThreadKey.get(routeRowThreadKey);
+  if (
+    tabbed &&
+    routeRowThreadKey !== followedRoute.key &&
+    (routeRowThreadKey === null || routeSection !== undefined)
+  ) {
+    setFollowedRoute({
+      key: routeRowThreadKey,
+      tab:
+        routeSection === "working" || routeSection === "snoozed"
+          ? routeSection
+          : routeSection === "pinned" || routeSection === "active"
+            ? "idle"
+            : null,
+    });
   }
   return (
     <SidebarFolderDrop>

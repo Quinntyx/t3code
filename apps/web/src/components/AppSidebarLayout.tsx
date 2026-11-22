@@ -460,6 +460,7 @@ export function AppSidebarLayout({
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const floatingPanels = useThemeEffects().floatingPanels.enabled;
+  const sidebarSearchLayout = useThemeLayout().sidebarSearch;
   const sidebarSheetViewport = useMediaQuery("max-md");
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // A clamped drag may not change width, so viewport changes need a separate subscription.
@@ -507,7 +508,11 @@ export function AppSidebarLayout({
         <AmbientShimmer />
         {showSidebar ? (
           <>
-            <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
+            <SidebarBrandWidthProbe
+              isElectron={isElectron}
+              reserveActions={sidebarSearchLayout === "hidden"}
+              onWidthChange={setBrandWidth}
+            />
             <Sidebar
               side="left"
               variant={floatingPanels ? "floating" : "sidebar"}

@@ -105,9 +105,12 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
 export function SidebarBrandWidthProbe({
   isElectron,
+  reserveActions = false,
   onWidthChange,
 }: {
   isElectron: boolean;
+  /** Room for the search row's four buttons when a theme moves them beside the brand. */
+  reserveActions?: boolean;
   onWidthChange: (width: number) => void;
 }) {
   const observeWidth = (probe: HTMLDivElement) => {
@@ -125,6 +128,7 @@ export function SidebarBrandWidthProbe({
       <div className="ml-[var(--workspace-titlebar-content-left)] flex gap-1">
         <SidebarBrandMark onBackdrop={false} />
         {isElectron ? <div className="w-[calc(2*var(--workspace-titlebar-control-size))]" /> : null}
+        {reserveActions ? <div className="ml-1 w-28" /> : null}
       </div>
     </div>
   );
