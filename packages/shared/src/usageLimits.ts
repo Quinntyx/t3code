@@ -117,13 +117,14 @@ export function usageWindowsForModel(
       const family = model.match(/^(gemini|claude|gpt)-/)?.[1];
       const geminiTier =
         family === "gemini" ? model.match(/(?:^|-)(argon|carbon)(?:-|$)/)?.[1] : undefined;
+      const hasTieredGemini = matching.some((window) => /^gemini-(argon|carbon)-/.test(window.id));
       return matching.filter((window) => {
         const geminiBucketTier = window.id.match(/^gemini-(argon|carbon)-/)?.[1];
         if (geminiBucketTier !== undefined) {
           return family === undefined || (family === "gemini" && geminiTier === geminiBucketTier);
         }
         const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
-        if (pool === "gemini" && geminiTier !== undefined) return false;
+        if (pool === "gemini" && geminiTier !== undefined && hasTieredGemini) return false;
         return (
           pool === undefined ||
           family === undefined ||
@@ -161,7 +162,8 @@ function exhaustedUsageWindows(
   now: number,
   model?: string,
 ) {
-  const exhausted = usageWindowsForModel(provider, model).filter(
+  const applicable = usageWindowsForModel(provider, model);
+  const exhausted = applicable.filter(
     (window) =>
       (window.usedPercent ?? 0) >= 100 &&
       (!window.resetsAt ||
@@ -171,7 +173,8 @@ function exhaustedUsageWindows(
   if (
     model !== undefined &&
     (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
-    /^(auto|default|grok|composer)/.test(model)
+    /^(auto|default|grok|composer)/.test(model) &&
+    applicable.some((window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed")
   ) {
     const api = exhausted.find((window) => window.id === "apiPercentUsed");
     const auto = exhausted.find((window) => window.id === "autoPercentUsed");
@@ -197,11 +200,12 @@ export function usageLimitResetAt(
   const windows = exhaustedUsageWindows(provider, now, model);
   if (windows.length === 0) return null;
   const resets = windows.map((window) => Date.parse(window.resetsAt ?? ""));
-  // Cursor's own models can spend either pool; other limits must all reset.
+  // Cursor's own models can spend either pool when split pools are reported; other limits must all reset.
   const alternativePools =
-    provider?.driver === "cursor" &&
+    (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
     model !== undefined &&
-    /^(auto|default|grok|composer)/.test(model);
+    /^(auto|default|grok|composer)/.test(model) &&
+    windows.some((window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed");
   if (!alternativePools && resets.some((reset) => !Number.isFinite(reset))) return null;
   const known = resets.filter(Number.isFinite);
   if (known.length === 0) return null;

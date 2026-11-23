@@ -9394,6 +9394,28 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         })).find((row) => row.id === threadId),
       );
       yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = ${originalRow!.payload_json} WHERE thread_id = ${threadId}`;
+      const [originalRunRow] = yield* sql<{
+        payload_json: string;
+      }>`SELECT payload_json FROM orchestration_v2_projection_runs WHERE run_id = ${original.id}`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.modelSelection.model', 'gpt-5.4-mini')
+        WHERE thread_id = ${threadId}`;
+      yield* sql`UPDATE orchestration_v2_projection_runs
+        SET payload_json = json_set(payload_json, '$.usageLimitContinuationOfRunId', 'run:limit-shell:prior')
+        WHERE run_id = ${original.id}`;
+      const switchedContinuationCandidate = (yield* store.getLimitRecoveryCandidates({
+        now,
+        autoResume: true,
+        snooze: false,
+      })).find((row) => row.id === threadId);
+      assert.equal(switchedContinuationCandidate?.latestRunModel, original.modelSelection.model);
+      assert.equal(switchedContinuationCandidate?.threadModel, "gpt-5.4-mini");
+      assert.equal(
+        switchedContinuationCandidate?.latestRunUsageLimitContinuationOfRunId,
+        "run:limit-shell:prior",
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = ${originalRow!.payload_json} WHERE thread_id = ${threadId}`;
+      yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json = ${originalRunRow!.payload_json} WHERE run_id = ${original.id}`;
       const activeProviderThreadId = ProviderThreadId.make("provider-thread:limit-shell:bg-tasks");
       const bgProviderThread = {
         id: activeProviderThreadId,

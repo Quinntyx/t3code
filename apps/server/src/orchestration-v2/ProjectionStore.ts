@@ -265,11 +265,11 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
   /** Model of the failed run, so observed limit resets match its quota pool. */
-  readonly latestRunModel?: string | null;
+  readonly latestRunModel: string | null;
   /** Thread's currently selected model, which a limit-resume dispatch will run. */
-  readonly threadModel?: string | null;
+  readonly threadModel: string | null;
   /** Set when the failed run was itself a usage-limit continuation of an earlier run. */
-  readonly latestRunUsageLimitContinuationOfRunId?: RunId | null;
+  readonly latestRunUsageLimitContinuationOfRunId: RunId | null;
 };
 
 export type ProjectionStallRecoveryCandidate = Pick<

@@ -13778,6 +13778,22 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         const resumed = yield* orchestrator.getThreadProjection(early.threadId);
         assert.lengthOf(resumed.runs, 2);
         assert.isNull(resumed.thread.snoozedUntil);
+        // Switching to a different model on the same instance rejects an early resume and rotates
+        // the recovery request id so the normal reset-clock resume still runs when resetAt arrives.
+        const switched = yield* limitedThread("switched");
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("recovery:switch-model:switched"),
+          threadId: switched.threadId,
+          modelSelection: { ...modelSelection, model: "gpt-5.3-other" },
+        });
+        yield* orchestrator.dispatch(switched.resume);
+        const afterSwitchedEarly = yield* orchestrator.getThreadProjection(switched.threadId);
+        assert.lengthOf(afterSwitchedEarly.runs, 1);
+        assert.notEqual(
+          afterSwitchedEarly.thread.limitRecovery?.requestId,
+          switched.resume.usageLimitRecoveryRequestId,
+        );
       }),
   );
 

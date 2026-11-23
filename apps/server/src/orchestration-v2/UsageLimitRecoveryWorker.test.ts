@@ -444,6 +444,48 @@ it("ignores reports that do not move the allowance", () => {
     changes(limits([window("go_rolling", 30)]), limits([window("go_rolling", 15)])),
     { observed: [], spent: [] },
   );
+  // A resetsAt jump while spend is rising does not prove allowance came back.
+  assert.deepEqual(
+    changes(
+      limits([{ ...window("primary", 1, "2026-07-01T00:00:00.000Z"), windowDurationMins: 300 }]),
+      limits([{ ...window("primary", 2, "2026-07-01T05:00:00.000Z"), windowDurationMins: 300 }]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // A monthly window omitting windowDurationMins still uses a monthly rollover threshold.
+  assert.deepEqual(
+    changes(
+      limits([
+        {
+          id: "go_monthly",
+          kind: "monthly",
+          label: "Monthly",
+          usedPercent: 40,
+          resetsAt: "2026-08-01T00:00:00.000Z",
+        },
+      ]),
+      limits([
+        {
+          id: "go_monthly",
+          kind: "monthly",
+          label: "Monthly",
+          usedPercent: 40,
+          resetsAt: "2026-08-01T01:00:00.000Z",
+        },
+      ]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // An unsupported report (logout / API key / no subscription) clears prior limits instead of
+  // retaining them as probeFailed does, so a later login's 0% reading is only a fresh baseline.
+  const afterLogout = report(
+    new Map([[instanceId, limits([window("primary", 100)])]]),
+    limits([], { unavailable: { reason: "unsupported" } }),
+  );
+  assert.isDefined(afterLogout.limits.get(instanceId)?.unavailable);
+  assert.isUndefined(
+    report(afterLogout.limits, limits([window("primary", 0)])).observedWindows.get(instanceId),
+  );
 });
 
 const waitingThread = (
@@ -455,6 +497,9 @@ const waitingThread = (
   status: "failed",
   lastErrorClass: "usage_limit",
   latestRunId: RunId.make("run:waiting"),
+  latestRunModel: null,
+  threadModel: null,
+  latestRunUsageLimitContinuationOfRunId: null,
   usageLimitResetAt: resetAt,
   latestRunCompletedAt: DateTime.makeUnsafe("2026-06-30T00:00:00.000Z"),
   updatedAt: DateTime.makeUnsafe("2026-06-30T00:00:00.000Z"),
@@ -664,6 +709,10 @@ it.effect(
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-07-01T00:00:00.000Z"));
       const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+      const domainEvents = yield* Queue.unbounded<{
+        readonly event: OrchestrationV2DomainEvent;
+        readonly onPull?: Deferred.Deferred<void>;
+      }>();
       const dispatched = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
       const now = yield* DateTime.now;
       const futureResetAt = DateTime.formatIso(DateTime.add(now, { hours: 2 }));
@@ -758,7 +807,18 @@ it.effect(
             Layer.mock(ThreadManagement.ThreadManagementService)({
               dispatch: (command) => Queue.offer(dispatched, command).pipe(Effect.as({} as never)),
             }),
-            Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.fromEffect(
+                Queue.take(domainEvents).pipe(
+                  Effect.tap((entry) =>
+                    entry.onPull === undefined
+                      ? Effect.void
+                      : Deferred.succeed(entry.onPull, undefined),
+                  ),
+                  Effect.map((entry) => entry.event),
+                ),
+              ).pipe(Stream.forever),
+            }),
             Layer.mock(ServerSettings.ServerSettingsService)({
               getSettings: Effect.succeed({
                 autoResumeLimitedThreads: true,
@@ -831,6 +891,24 @@ it.effect(
           },
         };
         yield* Ref.set(candidatesRef, [piProxyThread, piGoContinuationFailed, agGeminiThread]);
+        // Cancelling an unstarted queued message must not clear the early-resume loop guard.
+        const unstartedCancelApplied = yield* Deferred.make<void>();
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "run.updated",
+            threadId: piGoThread.id,
+            payload: { status: "cancelled", startedAt: null },
+          } as unknown as OrchestrationV2DomainEvent,
+        });
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "turn-item.updated",
+            threadId: piGoThread.id,
+            payload: { type: "assistant_message" },
+          } as unknown as OrchestrationV2DomainEvent,
+          onPull: unstartedCancelApplied,
+        });
+        yield* Deferred.await(unstartedCancelApplied);
         yield* TestClock.adjust("1 second");
         // Even if go_rolling flaps 100 -> 0 again, pi-go must not early-resume again for the same continuation.
         // Meanwhile gemini-5h resets 100 -> 0 (while 3p-weekly is back to 100): ag-gemini DOES resume.
@@ -845,6 +923,41 @@ it.effect(
         const second = yield* Queue.take(dispatched);
         assert.equal("threadId" in second ? second.threadId : null, agGeminiThread.id);
         assert.equal(yield* Queue.size(dispatched), 0);
+
+        // A completed run on pi-go clears the early-resume guard so a later recovery can early-resume.
+        const completedApplied = yield* Deferred.make<void>();
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "run.updated",
+            threadId: piGoThread.id,
+            payload: { status: "completed", startedAt: failedAgainAt },
+          } as unknown as OrchestrationV2DomainEvent,
+        });
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "turn-item.updated",
+            threadId: piGoThread.id,
+            payload: { type: "assistant_message" },
+          } as unknown as OrchestrationV2DomainEvent,
+          onPull: completedApplied,
+        });
+        yield* Deferred.await(completedApplied);
+        yield* Ref.set(candidatesRef, [piProxyThread, piGoContinuationFailed]);
+        yield* TestClock.adjust("1 second");
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const afterCompleted = yield* Queue.take(dispatched);
+        assert.equal("threadId" in afterCompleted ? afterCompleted.threadId : null, piGoThread.id);
+        assert.isTrue(
+          afterCompleted.type === "message.dispatch" &&
+            afterCompleted.usageLimitResetObserved === true,
+        );
 
         // A later manual run on pi-go (not a continuation of run 1) is NOT suppressed by run 1's guard.
         yield* TestClock.adjust("5 seconds");
@@ -983,33 +1096,54 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
         ),
       ),
     );
-    const codexSnapshot = (usedPercent?: number, fingerprint?: string) =>
+    const codexSnapshot = (
+      usedPercent?: number | "unsupported",
+      options?: {
+        readonly fingerprint?: string;
+        readonly email?: string;
+        readonly unauthenticated?: boolean;
+      },
+    ) =>
       [
         {
           instanceId: codexId,
           driver: ProviderDriverKind.make("codex"),
+          auth: {
+            status: options?.unauthenticated ? "unauthenticated" : "authenticated",
+            ...(options?.email === undefined ? {} : { email: options.email }),
+          },
           ...(usedPercent === undefined
             ? {}
-            : {
-                usageLimits: limits(
-                  [window("primary", usedPercent, futureResetAt)],
-                  fingerprint === undefined ? {} : { credentialFingerprint: fingerprint },
-                ),
-              }),
+            : usedPercent === "unsupported"
+              ? { usageLimits: limits([], { unavailable: { reason: "unsupported" } }) }
+              : {
+                  usageLimits: limits(
+                    [window("primary", usedPercent, futureResetAt)],
+                    options?.fingerprint === undefined
+                      ? {}
+                      : { credentialFingerprint: options.fingerprint },
+                  ),
+                }),
         },
       ] as unknown as ReadonlyArray<ServerProvider>;
     yield* Effect.gen(function* () {
       // 1. Mid-sweep invalidation: a reset triggers a sweep, then the window turns 100% spent
       //    while SQL is in flight. The pre-dispatch recheck must cancel the stale early dispatch.
-      yield* Queue.offer(providerChanges, { providers: codexSnapshot(100, "acct-a") });
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "a@example.com" }),
+      });
       yield* Queue.take(sweeps);
       yield* Ref.set(gateFirstSql, true);
-      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0, "acct-a") });
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "a@example.com" }),
+      });
       yield* Deferred.await(sqlStarted);
       const spentApplied = yield* Deferred.make<void>();
-      yield* Queue.offer(providerChanges, { providers: codexSnapshot(100, "acct-a") });
       yield* Queue.offer(providerChanges, {
-        providers: codexSnapshot(100, "acct-a"),
+        providers: codexSnapshot(100, { email: "a@example.com" }),
+      });
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "a@example.com" }),
         onPull: spentApplied,
       });
       yield* Deferred.await(spentApplied);
@@ -1019,17 +1153,38 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
       assert.equal(yield* Queue.take(sweeps), false);
       assert.equal(yield* Queue.size(dispatched), 0);
 
-      // 2. Logout / cleared usageLimits must drop resetObservedWindows so signing into a new
-      //    account cannot inherit an earlier account's reset marker.
-      yield* Ref.set(candidatesRef, []);
-      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0, "acct-a") });
-      assert.equal(yield* Queue.take(sweeps), true);
-      yield* Queue.offer(providerChanges, { providers: codexSnapshot(undefined) });
-      assert.equal(yield* Queue.take(sweeps), false);
+      // 2. Direct account switch without credentialFingerprint (e.g. native Codex email switch)
+      //    must drop prior limits and reset markers so switching from 100% acct A to 0% acct B
+      //    does not fire a false reset.
       yield* Ref.set(candidatesRef, [
         makeCandidate("run:codex:2", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
       ]);
-      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0, "acct-b") });
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "b@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 3. Explicit logout / unsupported usageLimits clears resetObservedWindows and seen limits.
+      yield* Ref.set(candidatesRef, []);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "b@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "b@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot("unsupported", { unauthenticated: true }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:3", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "c@example.com" }),
+      });
       assert.equal(yield* Queue.take(sweeps), false);
       assert.equal(yield* Queue.size(dispatched), 0);
     }).pipe(Effect.provide(layer));
