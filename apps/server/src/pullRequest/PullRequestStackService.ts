@@ -96,7 +96,14 @@ export const mergeNativeStack = Effect.fn("PullRequestStackService.mergeNativeSt
   for (const layer of nativeStack.layers.slice(0, end + 1)) {
     if (layer.state === "merged") continue;
     const headSha =
-      layer.number === input.number ? (input.expectedHeadSha ?? layer.headSha) : layer.headSha;
+      layer.number !== input.number
+        ? layer.headSha
+        : input.expectedHeadSha === undefined
+          ? layer.headSha
+          : layer.headSha !== undefined &&
+              PullRequestService.isHeadSha(layer.headSha, input.expectedHeadSha)
+            ? layer.headSha
+            : input.expectedHeadSha;
     if (headSha === undefined) {
       return yield* new PullRequestOperationError({
         operation: "mergeStack",
@@ -671,15 +678,17 @@ export const make = Effect.gen(function* () {
         );
       }
     }
-    if (input.expectedHeadSha !== undefined && target.headSha !== input.expectedHeadSha) {
+    if (
+      input.expectedHeadSha !== undefined &&
+      !PullRequestService.isHeadSha(target.headSha ?? "", input.expectedHeadSha)
+    ) {
       return yield* stop(
         `PR #${target.number} moved since it was read (expected ${input.expectedHeadSha}, found ${target.headSha ?? "unknown"}).`,
       );
     }
 
     const merged: number[] = [];
-    let currentLayerHeadSha: string =
-      chain.length === 1 ? (input.expectedHeadSha ?? chain[0]!.headSha!) : chain[0]!.headSha!;
+    let currentLayerHeadSha: string = chain[0]!.headSha!;
     for (const [index, layer] of chain.entries()) {
       const stoppedBefore = (reason: string) =>
         merged.length === 0

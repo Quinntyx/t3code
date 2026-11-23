@@ -6,7 +6,8 @@ import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import SubagentLineageIndex from "./Migrations/104_SubagentLineageIndex.ts";
+import VoiceNotificationIndex from "./Migrations/111_VoiceNotificationIndex.ts";
+import SubagentLineageIndex from "./Migrations/112_SubagentLineageIndex.ts";
 import { reconciledForkHistory } from "./reconcileForkMigration.ts";
 
 // Historical fork migration 81 lacked `json_valid(payload_json)` before migration 103 hardened it.
@@ -71,6 +72,34 @@ describe("legacy fork migration reconciliation", () => {
         `;
 
         // Second startup must be an idempotent read-only no-op.
+        yield* sql`PRAGMA query_only = ON`;
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect.each([false, true])(
+    "upgrades prior fork database through 103 (with 104=%s) onto upstream 103..110 + fork 111..112",
+    (withSubagentIndex) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 102 });
+        yield* Migrator.make({})({
+          loader: Migrator.fromRecord({
+            "103_VoiceNotificationIndex": VoiceNotificationIndex,
+            ...(withSubagentIndex ? { "104_SubagentLineageIndex": SubagentLineageIndex } : {}),
+          }),
+        });
+
+        const executed = yield* runMigrations();
+        assert.deepStrictEqual(
+          executed,
+          migrationManifest.filter(([id]) => id >= 103),
+        );
+        assert.deepStrictEqual(yield* readHistory, migrationManifest);
+        const indexes = yield* readIndexes;
+        assert.isDefined(indexes.get("orchestration_v2_projection_turn_items_voice_idx"));
+        assert.isTrue(indexes.has("orchestration_v2_projection_threads_subagent_parent_idx"));
+
         yield* sql`PRAGMA query_only = ON`;
         assert.deepStrictEqual(yield* runMigrations(), []);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

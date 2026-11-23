@@ -14,6 +14,8 @@ import { DeviceScreenshotToolkit, DeviceStandardToolkit } from "./toolkits/devic
 import { ThemeToolkit } from "./toolkits/theme/tools.ts";
 import { MessageToolkit } from "./toolkits/message/tools.ts";
 import { ToolSearchToolkit } from "./toolkits/toolSearch/tools.ts";
+import { WorkflowToolkit } from "./toolkits/workflow/tools.ts";
+import { FeedbackToolkit } from "./toolkits/feedback/tools.ts";
 
 /** Every name the toolkits register, read without building them: a proxy must not take one. */
 export const nativeToolNames: ReadonlySet<string> = new Set(
@@ -37,5 +39,7 @@ export const nativeToolNames: ReadonlySet<string> = new Set(
     DeviceScreenshotToolkit,
     MessageToolkit,
     ToolSearchToolkit,
+    WorkflowToolkit,
+    FeedbackToolkit,
   ].flatMap((toolkit) => Object.keys(toolkit.tools)),
 );

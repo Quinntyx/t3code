@@ -76,7 +76,7 @@ function Harness() {
     threadPanelPresentation: "inline",
     isServerThread: true,
     embedded: false,
-    isGitRepo: true,
+    diffAvailable: true,
     browserAvailable: false,
     canOperatePreview: false,
     diffOpen,

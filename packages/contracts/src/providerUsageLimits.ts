@@ -120,6 +120,8 @@ export const UsageLimitSourceAccount = Schema.Struct({
   label: Schema.optional(TrimmedNonEmptyString),
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
+  /** The models the hub routes to this account. */
+  models: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   usageLimits: ServerProviderUsageLimits,
 });
 export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;

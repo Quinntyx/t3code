@@ -90,7 +90,6 @@ function createHandler(
     composerPreviewAnnotations: [],
     composerReviewComments: [],
     composerEditorRef: { current: null },
-    composerMenuOpenRef: { current: options.menuOpen ?? false },
     composerMenuItemsRef: { current: [] },
     activeComposerMenuItemRef: { current: null },
     setComposerDraftPrompt: vi.fn(),
@@ -102,7 +101,11 @@ function createHandler(
     dismissComposerTrigger,
     nudgeComposerMenuHighlight: vi.fn(),
     onSelectComposerItem: vi.fn(),
-    resolveActiveComposerTrigger: () => ({ trigger: null }),
+    resolveActiveComposerTrigger: () => ({
+      trigger: options.menuOpen
+        ? { kind: "slash-command", query: "", rangeStart: 0, rangeEnd: 1 }
+        : null,
+    }),
     readComposerSnapshot: () => ({ value: promptRef.current }),
     applyPromptReplacement: () => false,
     submitComposer: vi.fn(),

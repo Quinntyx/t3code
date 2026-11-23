@@ -19,12 +19,14 @@ import {
   IDLE_COMPACTION_TITLES,
 } from "@t3tools/client-runtime/user-message";
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
-import { renderCodexDirectivesForCopy } from "@t3tools/shared/codexMarkdownDirectives";
+import { renderCodexDirectivesForCopy } from "~/markdown/markdownText";
 import {
   commandDisplayText,
   commandProgramName,
 } from "@t3tools/client-runtime/work-log/command-label";
 import {
+  commandlessCommandLabel,
+  genericCommandStatusLabel,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
@@ -162,6 +164,12 @@ export function workEntryDisplayLabel(
   const toolPresentation = resolveWorkEntryToolPresentation(entry, undefined, resolve);
   if (toolPresentation) return toolPresentation.displayName;
   if (entry.command?.trim()) return commandDisplayText(entry.command);
+  const commandless = commandlessCommandLabel(
+    entry,
+    liveActivityToolStatus(entry.toolLifecycleStatus, false),
+    resolve,
+  );
+  if (commandless) return commandless;
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
     const searchLabel =
@@ -276,17 +284,7 @@ export function liveWorkEntryLabel(
   if (command) {
     const program = commandProgramName(command);
     if (program == null) {
-      return resolve(
-        status === "inProgress"
-          ? msg("Running command")
-          : status === "failed"
-            ? msg("Failed command")
-            : status === "declined"
-              ? msg("Declined command")
-              : status === "stopped"
-                ? msg("Stopped command")
-                : msg("Ran command"),
-      );
+      return genericCommandStatusLabel(status, resolve);
     }
     return resolve(
       status === "inProgress"
@@ -300,7 +298,10 @@ export function liveWorkEntryLabel(
               : msg("Ran {program}", { program }),
     );
   }
-  return workEntryDisplayLabel(entry, workspaceRoot, resolve);
+  return (
+    commandlessCommandLabel(entry, status, resolve) ??
+    workEntryDisplayLabel(entry, workspaceRoot, resolve)
+  );
 }
 
 export function workEntryIsVisibleInGroup(
@@ -1627,6 +1628,8 @@ export function deriveMessagesTimelineRows(
     timelineEntries: ReadonlyArray<TimelineEntry>;
     pendingApprovalRequestIds?: ReadonlySet<RuntimeRequestId>;
     latestRun?: TimelineLatestRun | null;
+    /** The usage-limited run whose failure row the recovery notice replaces. */
+    usageLimitRunId?: RunId | null;
     runningRunId?: RunId | null;
     expandedRunIds?: ReadonlySet<RunId>;
     expandedAttemptIds?: ReadonlySet<RunAttemptId>;
@@ -2393,6 +2396,11 @@ export function deriveMessagesTimelineRows(
     }
   }
 
+  const latestTimelineEntry = timelineEntries.at(-1);
+  const replyIsStreaming =
+    latestTimelineEntry?.kind === "message" &&
+    latestTimelineEntry.message.role === "assistant" &&
+    latestTimelineEntry.message.streaming;
   const hasWorkingRow = nextRows.some((row) => row.kind === "working");
   if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
@@ -2400,6 +2408,7 @@ export function deriveMessagesTimelineRows(
   if (
     input.isWorking &&
     input.latestRun?.turnEnded !== true &&
+    !replyIsStreaming &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     !compactionOnlyRunFinished &&

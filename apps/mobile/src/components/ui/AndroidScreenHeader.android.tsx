@@ -26,6 +26,7 @@ export interface AndroidHeaderAction {
   readonly selected?: boolean;
   readonly subtitle?: string;
   readonly destructive?: boolean;
+  readonly iconScale?: number;
   readonly overflowOnly?: boolean;
 }
 
@@ -167,6 +168,7 @@ export function AndroidScreenHeader(props: {
                     selected={action.selected}
                     icon={action.icon}
                     floating={floating}
+                    iconScale={action.iconScale}
                     onPress={action.onPress}
                   />
                 ),

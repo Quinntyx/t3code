@@ -119,7 +119,7 @@ describe("drawer Git quick action", () => {
       expect(state.navigate).toHaveBeenCalledExactlyOnceWith("GitConfirm", {
         environmentId: "environment",
         threadId: "thread",
-        confirmAction: "commit_push",
+        confirmAction: includesCommit === "true" ? "commit_push" : "push",
         branchName: "main",
         includesCommit,
       });

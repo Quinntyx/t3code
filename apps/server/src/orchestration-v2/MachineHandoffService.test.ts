@@ -272,6 +272,7 @@ it.effect.each([
               faviconPath: null,
               projectIcon: null,
               scripts: [],
+              trackedFolders: [],
               pinnedAt: null,
               archivedAt: null,
               createdAt: "2026-10-01T00:00:00Z",

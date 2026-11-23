@@ -194,13 +194,43 @@ export function withExecutedModelNote(
 /** Run signal of the notice that carries a provider's stop reason on a completed run. */
 export const PROVIDER_STOP_REASON_SIGNAL = "provider-stop-reason";
 
-function stopNotice(
+/** Turn item types `subagentResultForRun` reads; load at least these for its projection. */
+export const SUBAGENT_RESULT_TURN_ITEM_TYPES = [
+  "assistant_message",
+  "error",
+  "system_notice",
+  "run_interrupt_result",
+] as const satisfies ReadonlyArray<OrchestrationV2TurnItem["type"]>;
+
+/** The item carrying a provider's stop reason for a run, which its delegated result ends with. */
+export function subagentStopNotice(
   projection: Pick<OrchestrationV2ThreadProjection, "turnItems">,
   run: OrchestrationV2Run,
-): string | undefined {
-  const id = derive.runSignalTurnItem({ runId: run.id, signal: PROVIDER_STOP_REASON_SIGNAL });
-  const notice = projection.turnItems.find((item) => item.id === id);
-  return notice?.type === "system_notice" ? notice.message : undefined;
+) {
+  // Codex ends a hook-stopped turn as completed or interrupted, depending on its version.
+  const ids = [
+    derive.runSignalTurnItem({ runId: run.id, signal: PROVIDER_STOP_REASON_SIGNAL }),
+    derive.runSignalTurnItem({ runId: run.id, signal: "interrupt-result" }),
+  ];
+  return projection.turnItems.find(
+    (
+      item,
+    ): item is Extract<
+      OrchestrationV2TurnItem,
+      { readonly type: "system_notice" | "run_interrupt_result" }
+    > =>
+      ids.includes(item.id) &&
+      (item.type === "system_notice" || item.type === "run_interrupt_result"),
+  );
+}
+
+function withStopNotice(
+  projection: Pick<OrchestrationV2ThreadProjection, "turnItems">,
+  run: OrchestrationV2Run,
+  text: string,
+): string {
+  const notice = subagentStopNotice(projection, run);
+  return notice === undefined ? text : `${text}\n\n${notice.message}`;
 }
 
 type MonitorNotice = Pick<OrchestrationV2ConversationMessage, "runId" | "notification">;
@@ -263,7 +293,7 @@ export function subagentResultForRun(
     run.status !== "completed" ||
     result.messageId !== null ||
     result.turnItemId !== null ||
-    stopNotice(projection, run) !== undefined
+    subagentStopNotice(projection, run) !== undefined
   )
     return result;
   for (const earlier of delegatedTaskReportRuns(
@@ -320,19 +350,21 @@ function resultOfRun(
     failure !== undefined && turnItem !== null && turnItem.ordinal < failure.ordinal
       ? (message?.text ?? turnItem.text)
       : undefined;
+  const report = message?.text ?? turnItem?.text;
   const text =
     (failure?.type === "error"
       ? reportBeforeFailure === undefined
         ? failure.failure.message
         : `${failure.failure.message}\n\nLast assistant message before the run failed:\n\n${reportBeforeFailure}`
       : undefined) ??
-    message?.text ??
-    turnItem?.text ??
-    (run.status === "completed"
-      ? ["Child task completed without an assistant result.", stopNotice(projection, run)]
-          .filter((part) => part !== undefined)
-          .join("\n\n")
-      : `Child task ended with status ${run.status}.`);
+    withStopNotice(
+      projection,
+      run,
+      report ??
+        (run.status === "completed"
+          ? "Child task completed without an assistant result."
+          : `Child task ended with status ${run.status}.`),
+    );
   const executedModel = latestProviderTurnForAttempt(
     projection.providerTurns,
     run.activeAttemptId,
@@ -365,7 +397,7 @@ export function delegatedTaskProgress(projection: {
   /** The failure and Stop items that decide whether a failed run is stalled. */
   readonly turnItems: OrchestrationV2ThreadProjection["turnItems"];
   readonly messages: ReadonlyArray<
-    Pick<OrchestrationV2ConversationMessage, "runId" | "notification">
+    Pick<OrchestrationV2ConversationMessage, "runId" | "notification" | "createdBy">
   >;
   readonly subagents: ReadonlyArray<
     Pick<OrchestrationV2ThreadProjection["subagents"][number], "status" | "completionDelivery">
@@ -384,11 +416,17 @@ export function delegatedTaskProgress(projection: {
   // "failed" status would otherwise hand the parent a failure between attempts.
   const stalledRunId = stalledRun(projection.runs, projection.turnItems)?.id ?? null;
   const stalled = (run: { readonly id: OrchestrationV2Run["id"] }) => run.id === stalledRunId;
-  const active = workRuns.some(
-    (run) =>
-      stalled(run) ||
-      (!terminal(run.status) && !(run.status === "queued" && run.queueHeld === true)),
+  const held = (run: OrchestrationV2Run) => run.status === "queued" && run.queueHeld === true;
+  const active = workRuns.some((run) => stalled(run) || (!terminal(run.status) && !held(run)));
+  // Held wakes wait on nobody, but a held message the user wrote is the child's next work.
+  const userRunIds = new Set(
+    projection.messages.flatMap((message) =>
+      message.createdBy === "user" && message.notification === undefined && message.runId !== null
+        ? [message.runId]
+        : [],
+    ),
   );
+  const awaitsUserRun = workRuns.some((run) => held(run) && userRunIds.has(run.id));
   const children =
     projection.subagents.some(subagentHoldsCompletion) ||
     projection.providerThreads.some((thread) =>
@@ -402,12 +440,14 @@ export function delegatedTaskProgress(projection: {
     .toSorted((a, b) => (runRanAfter(a, b) ? -1 : runRanAfter(b, a) ? 1 : 0))[0];
   return {
     state:
-      active || resultRun === undefined
+      active || awaitsUserRun || resultRun === undefined
         ? ("working" as const)
         : children
           ? ("waiting_for_children" as const)
           : ("result_available" as const),
     resultRun,
+    /** Working only because of a held message the user wrote, which a cancel does not wait for. */
+    onlyAwaitsUserRun: awaitsUserRun && !active && resultRun !== undefined,
   };
 }
 

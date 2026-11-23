@@ -27,6 +27,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabelsCopy";
+import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   closestCenter,
   DndContext,
@@ -40,6 +41,7 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   AudioLines,
+  Bot,
   CircleDotIcon,
   Smartphone,
   ChevronDown,
@@ -68,6 +70,7 @@ import {
 
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
+import { linkedThreadTitle } from "~/linkedThreadSurface";
 import { bulkCloseAvailability, type RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { issueStatePresentation } from "~/components/issue/issuePresentation";
@@ -142,11 +145,16 @@ export interface RightPanelTabsProps {
   onActivate: (surface: RightPanelSurface) => void;
   onRenameDevice?: (surfaceId: string, title: string) => void;
   onCloseSurface: (surface: RightPanelSurface) => void;
+  /** Moves a subagent, side chat or linked thread tab to the main screen. */
+  onOpenInMainView?: (
+    surface: Extract<RightPanelSurface, { kind: "thread" | "linked-thread" }>,
+  ) => void;
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
   onMoveSurface?: (surfaceId: string, toIndex: number) => void;
   onCopyFilePath: (relativePath: string) => void;
+  onDuplicateBrowser?: (surface: RightPanelSurface) => void;
   onAddBrowser: () => void;
   /** Keep separate from the DOM click handler so a MouseEvent cannot become a profile id. */
   onAddBrowserInProfile: (profileId: string) => void;
@@ -225,8 +233,10 @@ const SURFACE_UNAVAILABLE_HINTS = {
 } as const;
 
 type TabContextMenuAction =
+  | "open-in-main-view"
   | "rename"
   | "copy-path"
+  | "duplicate"
   | "toggle-mute"
   | "close"
   | "close-others"
@@ -640,8 +650,14 @@ function surfaceTitle(
       return resolve(msg("Voice"));
     case "device":
       return surface.title ?? surface.target?.name ?? resolve(msg("Device"));
-    case "side-chat":
-      return resolve(msg("Side chat"));
+    case "thread":
+      // Until the thread's own title loads.
+      return resolve(msg("Thread"));
+    case "linked-thread":
+      return linkedThreadTitle(
+        surface,
+        resolve(msg("Thread on {label}", { label: surface.label })),
+      );
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return resolve(msg("Browser"));
@@ -734,10 +750,12 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "issue":
       return <IssueSurfaceIcon surface={surface} environmentId={environmentId} />;
-    case "side-chat":
+    case "thread":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "voice":
       return <AudioLines className="size-3 shrink-0" />;
+    case "linked-thread":
+      return <MessagesSquare className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -767,16 +785,16 @@ function sideChatTabState(shell: EnvironmentThreadShell | null) {
   return threadRuntimeIsActive(shell.runtime) ? "running" : null;
 }
 
-// Static dots: a side chat tab can stay open for a whole run.
+// Static dots: a side chat or subagent tab can stay open for a whole run.
 function SideChatTabIcon(props: { environmentId: EnvironmentId | null; threadId: ThreadId }) {
-  const state = sideChatTabState(
-    useQuietThreadShell(
-      props.environmentId === null ? null : scopeThreadRef(props.environmentId, props.threadId),
-    ),
+  const shell = useQuietThreadShell(
+    props.environmentId === null ? null : scopeThreadRef(props.environmentId, props.threadId),
   );
+  const state = sideChatTabState(shell);
+  const Icon = shell !== null && shell.lineage.sideChat !== true ? Bot : MessagesSquare;
   return (
     <>
-      <MessagesSquare className="size-3 shrink-0" />
+      <Icon className="size-3 shrink-0" />
       {state === null ? null : (
         <span
           className={cn(
@@ -1010,11 +1028,16 @@ function RightPanelTab(
   });
   const dragListeners = surface.kind === "voice" ? {} : listeners;
   const sideChatShell = useQuietThreadShell(
-    surface.kind === "side-chat" && props.environmentId !== null
+    surface.kind === "thread" && props.environmentId !== null
       ? scopeThreadRef(props.environmentId, surface.threadId)
       : null,
   );
-  const title = sideChatShell?.title ?? props.title;
+  const title =
+    sideChatShell === null
+      ? props.title
+      : sideChatShell.lineage.sideChat === true
+        ? sideChatShell.title
+        : formatSubagentDisplayTitle(sideChatShell.title);
   const sideChatState = sideChatTabState(sideChatShell);
   const content = (
     <>
@@ -1176,6 +1199,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
   if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
 
+  const addSurfaceMenuBlocked = () =>
+    !addSurfaceMenuOpen && document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS) !== null;
   const onNewSurfaceKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing) return;
     if (
@@ -1184,7 +1209,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       }) !== "rightPanel.new"
     )
       return;
-    if (!addSurfaceMenuOpen && document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS)) return;
+    if (addSurfaceMenuBlocked()) return;
     event.preventDefault();
     event.stopPropagation();
     if (!event.repeat) {
@@ -1192,11 +1217,20 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       setAddSurfaceMenuOpen(true);
     }
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes a document keydown listener for the new surface shortcut while the panel is open
+  // Forwarded from a focused browser page. Focusing the trigger here would let ChatView's
+  // window-focus handler see a plain button and refocus the composer, closing the menu.
+  const onMenuAction = useEffectEvent((action: string) => {
+    if (action === "rightPanel.new" && !addSurfaceMenuBlocked()) setAddSurfaceMenuOpen(true);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes document keydown and the desktop menu action (forwarded from a focused browser page) for the new surface shortcut while the panel is open
   useEffect(() => {
     if (props.open === false) return;
     document.addEventListener("keydown", onNewSurfaceKeyDown, true);
-    return () => document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
+    const unsubscribe = window.desktopBridge?.onMenuAction(onMenuAction);
+    return () => {
+      document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
+      unsubscribe?.();
+    };
   }, [props.open]);
 
   const updateTabScrollState = (viewport: HTMLDivElement) => {
@@ -1336,6 +1370,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     const bulk = bulkCloseAvailability(props.surfaces, surface.id);
 
     const items: ContextMenuItem<TabContextMenuAction>[] = [];
+    if ((surface.kind === "thread" || surface.kind === "linked-thread") && props.onOpenInMainView) {
+      items.push({ id: "open-in-main-view", label: gt("Open in main view") });
+    }
     if (surface.kind === "device" && props.onRenameDevice)
       items.push({ id: "rename", label: gt("Rename") });
     if (surface.kind === "file" && surface.attachment === undefined) {
@@ -1353,6 +1390,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       : (menuOverlay?.audioMuted ?? false);
     if (surface.kind === "preview") {
       const unavailable = unavailableAudioTabIds.has(menuStreamedTabId ?? "");
+      items.push({
+        id: "duplicate",
+        label: gt("Duplicate"),
+        disabled: !props.browserAvailable || !menuPreviewTabId || !props.onDuplicateBrowser,
+      });
       items.push({
         id: "toggle-mute",
         label: unavailable
@@ -1387,6 +1429,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
     const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
     switch (action) {
+      case "open-in-main-view":
+        if (surface.kind === "thread" || surface.kind === "linked-thread") {
+          props.onOpenInMainView?.(surface);
+        }
+        break;
       case "rename":
         setRenamingDevice(surface.id);
         break;
@@ -1394,6 +1441,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         if (surface.kind === "file" && surface.attachment === undefined) {
           props.onCopyFilePath(surface.relativePath);
         }
+        break;
+      case "duplicate":
+        props.onDuplicateBrowser?.(surface);
         break;
       case "toggle-mute": {
         if (menuStreamedTabId) {

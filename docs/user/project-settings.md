@@ -68,6 +68,11 @@ Logs are collected only while enabled and are cleared when you disable it or
 restart the app. Long log lines are truncated. This does not collect server or
 native system logs.
 
+## Projects with several repositories
+
+A project covers every repository inside its folder, and any folder you add under **Settings →
+Projects → Repositories**; see [Projects with several repositories](multi-repo-projects.md).
+
 ## Pin and archive projects
 
 Pinned projects come first in the project pickers: the project picker on a new thread, the
