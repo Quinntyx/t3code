@@ -46,6 +46,21 @@ describe("extractToolActivityPresentation", () => {
     ).toEqual({ toolSource: source });
   });
 
+  it.each(["mcp:t3-code", "mcp:t3_code", "mcp:t3-code-direct", "mcp:t3-code-thread_1"])(
+    "normalizes retained T3 Code integration source %s to T3 Code",
+    (key) => {
+      expect(
+        extractToolActivityPresentation({
+          type: "dynamic_tool",
+          toolName: "t3-code.--help",
+          toolSource: { key, name: "t3 code", kind: "integration" },
+        }),
+      ).toEqual({
+        toolSource: { key: "mcp:t3-code", name: "T3 Code", kind: "integration" },
+      });
+    },
+  );
+
   it("retains valid image paths independently of redacted output", () => {
     expect(
       extractToolActivityPresentation({ viewedImagePath: " /workspace/reference.webp " }),

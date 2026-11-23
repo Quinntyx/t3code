@@ -1,5 +1,9 @@
 import type { ToolActivityIcon, ToolActivitySource } from "@t3tools/contracts";
-import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
+import {
+  isT3McpServerName,
+  resolveT3McpToolDefinition,
+  T3_CODE_DISPLAY_NAME,
+} from "@t3tools/shared/t3McpToolPresentation";
 
 export function normalizeMcpText(value: unknown, maxLength = 160): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -43,11 +47,13 @@ export function mcpToolPresentation(input: {
     normalizeMcpText(input.title) ??
     (server && tool ? normalizeMcpText(tool.replace(/[_-]+/gu, " ")) : undefined);
   if (!server) return title ? { title } : {};
-  const name =
-    normalizeMcpText(input.serverDisplayName) ??
-    normalizeMcpText(source && Reflect.get(source, "name")) ??
-    normalizeMcpText(server.replace(/[_-]+/gu, " ")) ??
-    server;
+  const isT3Server = isT3McpServerName(server);
+  const name = isT3Server
+    ? T3_CODE_DISPLAY_NAME
+    : (normalizeMcpText(input.serverDisplayName) ??
+      normalizeMcpText(source && Reflect.get(source, "name")) ??
+      normalizeMcpText(server.replace(/[_-]+/gu, " ")) ??
+      server);
   const logoUrl =
     normalizeMcpHttpUrl(input.iconUrl) ??
     normalizeMcpHttpUrl(source && Reflect.get(source, "logoUrl"));
@@ -61,7 +67,7 @@ export function mcpToolPresentation(input: {
     ...(title ? { title } : {}),
     ...(icon ? { toolIcon: icon } : {}),
     toolSource: {
-      key: `mcp:${server.toLowerCase()}`,
+      key: isT3Server ? "mcp:t3-code" : `mcp:${server.toLowerCase()}`,
       name,
       kind: "integration",
       ...(icon ? { icon } : {}),

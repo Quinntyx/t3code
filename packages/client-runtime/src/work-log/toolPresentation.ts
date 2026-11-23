@@ -1,4 +1,5 @@
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/mediaPreview";
+import { isT3McpServerName, T3_CODE_DISPLAY_NAME } from "@t3tools/shared/t3McpToolPresentation";
 import { COMPUTER_USE_TOOL_SOURCE, dynamicToolSurface } from "@t3tools/shared/toolActivity";
 import type {
   ToolActivityIcon,
@@ -105,7 +106,14 @@ function activitySource(value: unknown): ToolActivitySource | undefined {
     return undefined;
   }
   const icon = activityIcon(source?.icon);
-  return { key, name, kind, ...(icon ? { icon } : {}) };
+  const isT3Integration =
+    kind === "integration" && key.startsWith("mcp:") && isT3McpServerName(key.slice("mcp:".length));
+  return {
+    key: isT3Integration ? "mcp:t3-code" : key,
+    name: isT3Integration ? T3_CODE_DISPLAY_NAME : name,
+    kind,
+    ...(icon ? { icon } : {}),
+  };
 }
 
 export function extractToolActivityPresentation(

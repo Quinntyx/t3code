@@ -20,4 +20,19 @@ describe("mcpToolPresentation", () => {
       toolSource: { key: "mcp:weather", name: "weather", kind: "integration" },
     });
   });
+
+  it.each(["t3-code", "t3_code", "t3code", "t3-code-direct", "t3-code-thread_1"])(
+    "brands fallback T3 Code MCP server %s as T3 Code",
+    (serverName) => {
+      expect(
+        mcpToolPresentation({
+          serverName,
+          toolName: "--help",
+        }),
+      ).toEqual({
+        title: "help",
+        toolSource: { key: "mcp:t3-code", name: "T3 Code", kind: "integration" },
+      });
+    },
+  );
 });
