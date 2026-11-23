@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   EmailRequestError,
   type OrchestrationV2EmailDraft,
+  type OrchestrationV2EmailEditedField,
   type OrchestrationV2EmailRequestStatus,
   ProviderInstanceId,
   type OrchestrationV2ServerCommand,
@@ -11,9 +12,7 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
 
 import { emailRecordReplaces } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -58,6 +57,7 @@ const withService = <A, E>(
     let emailStatus: OrchestrationV2EmailRequestStatus = "pending";
     let cardId: string = turnItemId;
     let cardDraft = drafted;
+    let cardEdited: ReadonlyArray<OrchestrationV2EmailEditedField> | undefined = undefined;
     let recorded = false;
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
@@ -104,6 +104,7 @@ const withService = <A, E>(
           Effect.sync(
             () =>
               ({
+                thread: { id: threadId, deletedAt: null },
                 runs: [
                   {
                     id: "run-1",
@@ -123,6 +124,7 @@ const withService = <A, E>(
                     accounts,
                     draft: cardDraft,
                     emailStatus,
+                    ...(cardEdited === undefined ? {} : { edited: cardEdited }),
                   },
                 ],
               }) as never,
@@ -136,6 +138,7 @@ const withService = <A, E>(
               recorded = true;
               emailStatus = command.emailStatus;
               cardDraft = command.draft;
+              cardEdited = command.edited;
             }
             return {} as never;
           }),
@@ -147,7 +150,7 @@ const withService = <A, E>(
     }).pipe(Effect.provide(EmailRequests.layer.pipe(Layer.provide(layerDependencies))));
   });
 
-it.effect("sends the user's edited email and records what was sent", () =>
+it.effect("sends the user's edited email, records edits, and wakes the agent", () =>
   withService(({ service, sent, dispatched }) =>
     Effect.gen(function* () {
       const edited = {
@@ -162,11 +165,17 @@ it.effect("sends the user's edited email and records what was sent", () =>
       });
       assert.deepEqual(sent, [edited]);
       assert.equal(dispatched.length, 1);
-      assert.include(dispatched[0] as object, {
-        type: "email_request.record",
-        emailStatus: "sent",
-      });
-      assert.deepEqual((dispatched[0] as { draft: unknown }).draft, edited);
+      const record = dispatched[0] as Extract<
+        OrchestrationV2ServerCommand,
+        { type: "email_request.record" }
+      >;
+      assert.equal(record.type, "email_request.record");
+      assert.equal(record.emailStatus, "sent");
+      assert.deepEqual(record.draft, edited);
+      assert.deepEqual(record.edited, ["from", "subject"]);
+      assert.include(record.wake?.text ?? "", "Ada <ada@gmail.com>");
+      assert.include(record.wake?.text ?? "", "Edited fields before sending: from, subject.");
+      assert.equal(record.wake?.notification.outcome, "completed");
     }),
   ),
 );
@@ -188,7 +197,7 @@ it.effect("a double click sends once", () =>
   ),
 );
 
-it.effect("discarding sends nothing, and a card is answered once", () =>
+it.effect("discarding sends nothing, wakes the agent, and answers the card once", () =>
   withService(({ service, sent, dispatched }) =>
     Effect.gen(function* () {
       yield* service.answer({
@@ -196,7 +205,13 @@ it.effect("discarding sends nothing, and a card is answered once", () =>
         turnItemId,
         answer: { type: "discard" },
       });
-      assert.include(dispatched[0] as object, { emailStatus: "discarded" });
+      const record = dispatched[0] as Extract<
+        OrchestrationV2ServerCommand,
+        { type: "email_request.record" }
+      >;
+      assert.equal(record.emailStatus, "discarded");
+      assert.equal(record.wake?.notification.outcome, "cancelled");
+      assert.include(record.wake?.text ?? "", "discarded");
       const again = yield* service
         .answer({
           threadId,
@@ -210,47 +225,42 @@ it.effect("discarding sends nothing, and a card is answered once", () =>
   ),
 );
 
-it.effect(
-  "refuses to send for an agent that stopped, or without recipients or a known account",
-  () =>
-    Effect.gen(function* () {
-      yield* withService(
-        ({ service, sent }) =>
-          Effect.gen(function* () {
-            const error = yield* service
-              .answer({
-                threadId,
-                turnItemId,
-                answer: { type: "send", draft: drafted },
-              })
-              .pipe(Effect.flip);
-            assert.equal(error.reason, "agent_stopped");
-            assert.deepEqual(sent, []);
-          }),
-        { runStatus: "completed" },
-      );
-      yield* withService(({ service, sent }) =>
+it.effect("sends even after the drafting run has completed, and still rejects invalid drafts", () =>
+  Effect.gen(function* () {
+    yield* withService(
+      ({ service, sent }) =>
         Effect.gen(function* () {
-          const noRecipients = yield* service
-            .answer({
-              threadId,
-              turnItemId,
-              answer: { type: "send", draft: { ...drafted, to: [] } },
-            })
-            .pipe(Effect.flip);
-          assert.equal(noRecipients.reason, "no_recipients");
-          const unknown = yield* service
-            .answer({
-              threadId,
-              turnItemId,
-              answer: { type: "send", draft: { ...drafted, account: "work" } },
-            })
-            .pipe(Effect.flip);
-          assert.equal(unknown.reason, "unknown_account");
-          assert.deepEqual(sent, []);
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "send", draft: drafted },
+          });
+          assert.deepEqual(sent, [drafted]);
         }),
-      );
-    }),
+      { runStatus: "completed" },
+    );
+    yield* withService(({ service, sent }) =>
+      Effect.gen(function* () {
+        const noRecipients = yield* service
+          .answer({
+            threadId,
+            turnItemId,
+            answer: { type: "send", draft: { ...drafted, to: [] } },
+          })
+          .pipe(Effect.flip);
+        assert.equal(noRecipients.reason, "no_recipients");
+        const unknown = yield* service
+          .answer({
+            threadId,
+            turnItemId,
+            answer: { type: "send", draft: { ...drafted, account: "work" } },
+          })
+          .pipe(Effect.flip);
+        assert.equal(unknown.reason, "unknown_account");
+        assert.deepEqual(sent, []);
+      }),
+    );
+  }),
 );
 
 it.effect("a failed send leaves the card pending and says why", () =>
@@ -275,25 +285,23 @@ const draftInput = {
   threadId,
   providerInstanceId: ProviderInstanceId.make("claudeAgent"),
   requestNamespace: "test",
-  request: { to: ["prof@school.edu"], subject: "Office hours", body: "Hi", timeoutMs: 1_000 },
+  request: { to: ["prof@school.edu"], subject: "Office hours", body: "Hi" },
 };
 
 it.effect(
-  "a native inbox reply waits for review and preserves server-derived threading after user edits",
+  "a native inbox reply returns pending immediately and preserves server-derived threading after user edits",
   () =>
     withService(({ service, sent, dispatched }) =>
       Effect.gen(function* () {
-        const waiting = yield* Effect.forkChild(
-          service.draft({
-            ...draftInput,
-            request: {
-              ...draftInput.request,
-              to: [],
-              replyTo: { account: "gmail", messageId: "original@example.invalid" },
-            },
-          }),
-        );
-        yield* TestClock.adjust("600 millis");
+        const result = yield* service.draft({
+          ...draftInput,
+          request: {
+            ...draftInput.request,
+            to: [],
+            replyTo: { account: "gmail", messageId: "original@example.invalid" },
+          },
+        });
+        assert.equal(result.status, "pending");
         const pending = dispatched[0] as Extract<
           OrchestrationV2ServerCommand,
           { type: "email_request.record" }
@@ -315,8 +323,6 @@ it.effect(
             },
           },
         });
-        yield* TestClock.adjust("1 second");
-        assert.equal((yield* Fiber.join(waiting)).status, "sent");
         assert.equal(sent[0]?.inReplyTo, "<original@example.invalid>");
         assert.deepEqual(sent[0]?.references, [
           "<earlier@example.invalid>",
@@ -326,28 +332,18 @@ it.effect(
     ),
 );
 
-it.effect("a draft nobody answers closes and reports that it timed out", () =>
+it.effect("retrying with the same clientRequestId returns the card's current outcome", () =>
   withService(({ service, dispatched }) =>
     Effect.gen(function* () {
-      const waiting = yield* Effect.forkChild(service.draft(draftInput));
-      yield* TestClock.adjust("2 seconds");
-      assert.deepEqual(yield* Fiber.join(waiting), { status: "timed_out" });
-      assert.deepEqual(
-        dispatched.map((command) => (command as { emailStatus?: string }).emailStatus),
-        ["pending", "cancelled"],
-      );
-    }),
-  ),
-);
+      const request = { ...draftInput.request, clientRequestId: "draft-1" };
+      const first = yield* service.draft({ ...draftInput, request });
+      if (first.status !== "pending") {
+        assert.fail(`Expected pending draft, got ${first.status}`);
+      }
+      const second = yield* service.draft({ ...draftInput, request });
+      assert.deepEqual(second, first);
+      assert.equal(dispatched.length, 1);
 
-it.effect(
-  "a send in flight when the wait times out is reported as sent, as the user edited it",
-  () =>
-    Effect.gen(function* () {
-      const sendGate = {
-        started: yield* Deferred.make<void>(),
-        open: yield* Deferred.make<void>(),
-      };
       const edited = {
         ...drafted,
         account: "gmail",
@@ -355,35 +351,22 @@ it.effect(
         cc: ["advisor@school.edu"],
         bcc: ["ada@gmail.com"],
       };
-      yield* withService(
-        ({ service, dispatched }) =>
-          Effect.gen(function* () {
-            const waiting = yield* Effect.forkChild(service.draft(draftInput));
-            yield* TestClock.adjust("600 millis");
-            const pending = dispatched[0] as { turnItemId: TurnItemId };
-            const sending = yield* Effect.forkChild(
-              service.answer({
-                threadId,
-                turnItemId: pending.turnItemId,
-                answer: { type: "send", draft: edited },
-              }),
-            );
-            yield* Deferred.await(sendGate.started);
-            yield* TestClock.adjust("2 seconds");
-            yield* Deferred.succeed(sendGate.open, undefined);
-            yield* Fiber.join(sending);
-            assert.deepEqual(yield* Fiber.join(waiting), {
-              status: "sent",
-              message: "Email sent.",
-              from: "Ada <ada@gmail.com>",
-              to: edited.to,
-              cc: edited.cc,
-              bcc: edited.bcc,
-              subject: "Office hours",
-              edited: ["from", "to", "cc", "bcc", "body"],
-            });
-          }),
-        { sendGate },
-      );
+      yield* service.answer({
+        threadId,
+        turnItemId: first.turnItemId,
+        answer: { type: "send", draft: edited },
+      });
+      const afterSend = yield* service.draft({ ...draftInput, request });
+      assert.deepEqual(afterSend, {
+        status: "sent",
+        message: "Email sent.",
+        from: "Ada <ada@gmail.com>",
+        to: edited.to,
+        cc: edited.cc,
+        bcc: edited.bcc,
+        subject: "Office hours",
+        edited: ["from", "to", "cc", "bcc", "body"],
+      });
     }),
+  ),
 );

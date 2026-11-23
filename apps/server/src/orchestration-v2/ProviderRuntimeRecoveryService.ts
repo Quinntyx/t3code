@@ -778,8 +778,9 @@ export const make = Effect.gen(function* () {
             !unsentResumePromptIds.has(candidate.id) &&
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate) &&
-            // A link card waits on the user, not the run, and answers by message.
+            // Link and email cards wait on the user, not the run, and answer by message.
             candidate.type !== "link_request" &&
+            candidate.type !== "email_request" &&
             // The orchestrator queues a steer the provider never reported reading.
             !(
               candidate.type === "user_message" &&
