@@ -27,6 +27,7 @@ import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -35,6 +36,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
@@ -2549,6 +2551,101 @@ describe("ThreadSettlementServiceV2 settled previews", () => {
           );
         }).pipe(Effect.provide(fixture.layer));
       }),
+  );
+
+  it.effect(
+    "completes an in-flight preview close cleanly if the thread is unsettled during beforeClose",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const settled = appThread("inflight-close-preview", "settled");
+        const currentThreads = [settled];
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads,
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          const previewEvents = yield* previews.subscribeEvents;
+          const beforeCloseStarted = yield* Deferred.make<void>();
+          const releaseBeforeClose = yield* Deferred.make<void>();
+          yield* previews.registerBeforeClose(() =>
+            Deferred.succeed(beforeCloseStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseBeforeClose)),
+            ),
+          );
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const tab = yield* previews.open({
+            threadId: settled.id,
+            url: "https://example.com/inflight",
+          });
+
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+
+          const closedFiber = yield* Effect.forkChild(nextClosedTabId(previewEvents));
+          yield* TestClock.adjust("5 minutes");
+          yield* Deferred.await(beforeCloseStarted);
+
+          const unsettled: OrchestrationV2AppThread = {
+            ...settled,
+            settledOverride: "active",
+            settledAt: null,
+          };
+          currentThreads[0] = unsettled;
+          const unsettleEvent = threadEvent("thread.unsettled", unsettled);
+          yield* fixture.publishEvent(unsettleEvent);
+          while ((yield* Queue.take(fixture.observedEvents)) !== unsettleEvent.id) {}
+
+          yield* Deferred.succeed(releaseBeforeClose, undefined);
+          const closedTab = yield* Fiber.join(closedFiber);
+          assert.strictEqual(closedTab._tag, "Some");
+          if (closedTab._tag === "Some") {
+            assert.strictEqual(closedTab.value, tab.tabId);
+          }
+          assert.deepStrictEqual((yield* previews.list({ threadId: settled.id })).sessions, []);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect("cancels pending preview closes when the service scope closes", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const settled = appThread("scope-disposal-preview", "settled");
+      const fixture = yield* makeHarness({
+        snapshot: makeSnapshot([]),
+        currentThreads: [settled],
+      });
+
+      const serviceScope = yield* Scope.make();
+      const services = yield* Layer.buildWithScope(fixture.layer, serviceScope);
+      const { previews, tabId } = yield* Effect.gen(function* () {
+        const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+        const previews = yield* PreviewManager.PreviewManager;
+        yield* startHarness(service, fixture.activation, fixture.snapshotReads).pipe(
+          Scope.provide(serviceScope),
+        );
+        const tab = yield* previews.open({
+          threadId: settled.id,
+          url: "https://example.com/scope-owned",
+        });
+
+        yield* fixture.publishEvent(settledEvent(settled));
+        yield* Queue.take(fixture.closedIdle);
+        yield* TestClock.adjust("2 minutes");
+        return { previews, tabId: tab.tabId };
+      }).pipe(Effect.provide(services));
+
+      yield* Scope.close(serviceScope, Exit.void);
+      yield* TestClock.adjust("5 minutes");
+      assert.deepStrictEqual(
+        (yield* previews.list({ threadId: settled.id })).sessions.map((s) => s.tabId),
+        [tabId],
+      );
+    }),
   );
 });
 

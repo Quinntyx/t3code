@@ -353,7 +353,6 @@ export const make = Effect.gen(function* () {
   // Keep delayed preview closes out of `threadSweeps` so `drain` does not wait for the grace period.
   const settledPreviewCloses = yield* FiberSet.make<void>();
   interface PendingPreviewClose {
-    readonly settledAtMs: number;
     readonly token: object;
     readonly fiber: Fiber.Fiber<void, never>;
   }
@@ -748,6 +747,7 @@ export const make = Effect.gen(function* () {
           ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
         }),
       );
+      if (pendingPreviewCloses.get(threadId)?.token !== token) return;
       if (
         current === null ||
         current.deletedAt !== null ||
@@ -759,21 +759,25 @@ export const make = Effect.gen(function* () {
         }
         return;
       }
-      yield* Effect.forEach(
-        tabIds,
-        (tabId) =>
-          previews.close({ threadId, tabId }).pipe(
-            Effect.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.interrupt
-                : Effect.logWarning("closing a settled thread preview tab failed", {
-                    threadId,
-                    tabId,
-                    cause: Cause.pretty(cause),
-                  }),
+      // Once teardown starts, finish publishing `closed` so cancellation cannot leave a tab half-closed.
+      pendingPreviewCloses.delete(threadId);
+      yield* Effect.uninterruptible(
+        Effect.forEach(
+          tabIds,
+          (tabId) =>
+            previews.close({ threadId, tabId }).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.interrupt
+                  : Effect.logWarning("closing a settled thread preview tab failed", {
+                      threadId,
+                      tabId,
+                      cause: Cause.pretty(cause),
+                    }),
+              ),
             ),
-          ),
-        { concurrency: "unbounded", discard: true },
+          { concurrency: "unbounded", discard: true },
+        ),
       );
     }).pipe(
       Effect.catchCause((cause) =>
@@ -794,7 +798,7 @@ export const make = Effect.gen(function* () {
     );
 
     const fiber = yield* FiberSet.run(settledPreviewCloses)(closeAfterGrace);
-    pendingPreviewCloses.set(threadId, { settledAtMs, token, fiber });
+    pendingPreviewCloses.set(threadId, { token, fiber });
   });
 
   // Skip settle scripts in shared checkouts where other threads may still work.
