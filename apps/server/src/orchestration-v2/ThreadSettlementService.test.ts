@@ -2554,6 +2554,146 @@ describe("ThreadSettlementServiceV2 settled previews", () => {
   );
 
   it.effect(
+    "ignores duplicate thread.settled after a zero-tab settlement so later tabs stay open",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const settled = appThread("zero-tab-duplicate-preview", "settled");
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads: [settled],
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+
+          const laterTab = yield* previews.open({
+            threadId: settled.id,
+            url: "https://example.com/opened-after-zero-tab-settle",
+          });
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+
+          yield* TestClock.adjust("5 minutes");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: settled.id })).sessions.map((s) => s.tabId),
+            [laterTab.tabId],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect(
+    "skips closing previews when unsettle arrives while the deadline projection read is suspended",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const settled = appThread("suspended-read-preview", "settled");
+        const currentThreads = [settled];
+        const readCount = yield* Ref.make(0);
+        const deadlineReadStarted = yield* Deferred.make<void>();
+        const releaseDeadlineRead = yield* Deferred.make<void>();
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads,
+          projections: {
+            getSettlementCandidates: () => Effect.succeed([]),
+            getThread: (threadId: ThreadId) =>
+              Effect.gen(function* () {
+                const count = yield* Ref.updateAndGet(readCount, (n) => n + 1);
+                // First read is during cleanUpSettledThread; second read is at the 5-minute deadline.
+                if (count === 2) {
+                  yield* Deferred.succeed(deadlineReadStarted, undefined);
+                  yield* Deferred.await(releaseDeadlineRead);
+                }
+                const found = currentThreads.find((candidate) => candidate.id === threadId);
+                return found ?? settled;
+              }),
+          } as unknown as ProjectionStore.ProjectionStoreV2Shape,
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const tab = yield* previews.open({
+            threadId: settled.id,
+            url: "https://example.com/suspended-read",
+          });
+
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+
+          yield* TestClock.adjust("5 minutes");
+          yield* Deferred.await(deadlineReadStarted);
+
+          const unsettled: OrchestrationV2AppThread = {
+            ...settled,
+            settledOverride: "active",
+            settledAt: null,
+          };
+          const unsettleEvent = threadEvent("thread.unsettled", unsettled);
+          yield* fixture.publishEvent(unsettleEvent);
+          while ((yield* Queue.take(fixture.observedEvents)) !== unsettleEvent.id) {}
+
+          // Even if the suspended read still returns the pre-unsettle snapshot, token invalidation blocks close.
+          yield* Deferred.succeed(releaseDeadlineRead, undefined);
+          yield* TestClock.adjust("1 second");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: settled.id })).sessions.map((s) => s.tabId),
+            [tab.tabId],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect(
+    "ignores a stale thread.settled event whose settledAt no longer matches the current settlement",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const firstSettled: OrchestrationV2AppThread = {
+          ...appThread("stale-settled-event-preview", "settled"),
+          settledAt: at(0),
+        };
+        const secondSettled: OrchestrationV2AppThread = {
+          ...firstSettled,
+          settledAt: at(10 * 60 * 1_000),
+        };
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads: [secondSettled],
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const tab = yield* previews.open({
+            threadId: firstSettled.id,
+            url: "https://example.com/newer-settlement",
+          });
+
+          yield* fixture.publishEvent(settledEvent(firstSettled));
+          yield* Queue.take(fixture.closedIdle);
+
+          yield* TestClock.adjust("5 minutes");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: firstSettled.id })).sessions.map((s) => s.tabId),
+            [tab.tabId],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect(
     "completes an in-flight preview close cleanly if the thread is unsettled during beforeClose",
     () =>
       Effect.gen(function* () {

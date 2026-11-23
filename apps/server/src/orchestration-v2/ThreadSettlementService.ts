@@ -803,11 +803,11 @@ export const make = Effect.gen(function* () {
 
   // Skip settle scripts in shared checkouts where other threads may still work.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
-    function* (threadId: ThreadId) {
+    function* (threadId: ThreadId, eventSettledAtMs: number | null) {
       const settled = yield* projections.getThread(threadId);
       if (settled.deletedAt !== null || settled.settledOverride !== "settled") return;
       const settledAtMs = toMillis(settled.settledAt);
-      if (settledAtMs !== null) {
+      if (settledAtMs !== null && (eventSettledAtMs === null || settledAtMs === eventSettledAtMs)) {
         yield* scheduleSettledPreviewClose(threadId, settledAtMs);
       }
       yield* terminals.closeOnSettle({ threadId });
@@ -861,7 +861,9 @@ export const make = Effect.gen(function* () {
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.settled":
-        return cleanUpSettledThread(event.threadId).pipe(Effect.andThen(enqueueFullSweep()));
+        return cleanUpSettledThread(event.threadId, toMillis(event.payload.settledAt)).pipe(
+          Effect.andThen(enqueueFullSweep()),
+        );
       case "thread.unsettled":
       case "thread.pinned":
         return cancelSettledPreviewClose(event.threadId);
