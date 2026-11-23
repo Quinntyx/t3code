@@ -109,6 +109,8 @@ function tool(
   return { displayName, labels, icon, summaryAction };
 }
 
+export const T3_CODE_DISPLAY_NAME = "T3 Code";
+
 // Codex registers "t3-code-direct" for T3 tools kept out of Code Mode.
 const T3_MCP_SERVER_ALIASES = new Set([
   "t3-code",
@@ -117,6 +119,16 @@ const T3_MCP_SERVER_ALIASES = new Set([
   "t3-code-direct",
   "t3_code_direct",
 ]);
+
+export function isT3McpServerName(serverName: string | null | undefined): boolean {
+  if (typeof serverName !== "string") return false;
+  const normalized = serverName.trim().toLowerCase();
+  return (
+    T3_MCP_SERVER_ALIASES.has(normalized) ||
+    normalized === "t3 code" ||
+    normalized.startsWith("t3-code-")
+  );
+}
 
 const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   link_pull_request: tool(
