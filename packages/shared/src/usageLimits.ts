@@ -146,8 +146,10 @@ export function usageWindowsForModel(
         if (!window.id.startsWith("seven_day_")) return true;
         const scope = window.id
           .slice("seven_day_".length)
-          .replace(/^claude_/, "")
-          .replace(/^_+|_+$/g, "");
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")
+          .replace(/^claude_/, "");
         return scope.length === 0 || boundedModel.includes(`_${scope}_`);
       });
     }

@@ -332,10 +332,40 @@ interface ProviderAccountIdentity {
 interface ObservedProviderState {
   readonly version: number;
   readonly seen: ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>;
+  readonly rawLimits: ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>;
   readonly observedAt: ReadonlyMap<ProviderInstanceId, number>;
   readonly drivers: ReadonlyMap<ProviderInstanceId, ServerProvider["driver"]>;
   readonly accountIdentities: ReadonlyMap<ProviderInstanceId, ProviderAccountIdentity>;
   readonly resetObservedWindows: ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, number>>;
+}
+
+function sameUsageLimitsSnapshot(
+  previous: ServerProviderUsageLimits,
+  next: ServerProviderUsageLimits,
+): boolean {
+  if (previous === next) return true;
+  if (
+    previous.checkedAt !== next.checkedAt ||
+    previous.ownerDriver !== next.ownerDriver ||
+    previous.credentialFingerprint !== next.credentialFingerprint ||
+    previous.unavailable?.reason !== next.unavailable?.reason ||
+    previous.unavailable?.message !== next.unavailable?.message ||
+    previous.windows.length !== next.windows.length
+  ) {
+    return false;
+  }
+  return previous.windows.every((prevWindow, index) => {
+    const nextWindow = next.windows[index];
+    return (
+      nextWindow !== undefined &&
+      prevWindow.id === nextWindow.id &&
+      prevWindow.kind === nextWindow.kind &&
+      prevWindow.usedPercent === nextWindow.usedPercent &&
+      prevWindow.resetsAt === nextWindow.resetsAt &&
+      prevWindow.windowDurationMins === nextWindow.windowDurationMins &&
+      sameWindowScope(prevWindow, nextWindow)
+    );
+  });
 }
 
 function normalizedIdentityField(
@@ -432,7 +462,7 @@ function reconcileProviderAccountIdentity(input: {
       return { keepBaseline: false, switched: true, effectiveId: nextId };
     }
     return {
-      keepBaseline: prevLimits !== undefined,
+      keepBaseline: hadUsableBaseline,
       switched: false,
       effectiveId: hadUsableBaseline ? mergeAccountIdentity(prevId, nextId) : nextId,
     };
@@ -444,7 +474,9 @@ function reconcileProviderAccountIdentity(input: {
     (prevId !== undefined &&
       nextId !== undefined &&
       (!accountIdentitiesMatch(prevId, nextId) ||
-        (prevId.fingerprint !== undefined && nextId.fingerprint === undefined))) ||
+        IDENTITY_FIELDS.some(
+          (field) => prevId[field] !== undefined && nextId[field] === undefined,
+        ))) ||
     (prevId !== undefined) !== (nextId !== undefined);
   if (identityBroken) {
     return { keepBaseline: false, switched: true, effectiveId: nextId };
@@ -598,6 +630,7 @@ const makeSweep = Effect.gen(function* () {
   const providerState = yield* Ref.make<ObservedProviderState>({
     version: 0,
     seen: initialSeen,
+    rawLimits: initialSeen,
     observedAt: new Map(
       [...initialSeen.entries()].flatMap(([instanceId, limits]) =>
         limits.unavailable === undefined ? [[instanceId, initialAt] as const] : [],
@@ -856,32 +889,61 @@ const makeSweep = Effect.gen(function* () {
         const at = DateTime.toEpochMillis(yield* DateTime.now);
         yield* Ref.update(providerState, (current) => {
           const previousSeen = new Map<ProviderInstanceId, ServerProviderUsageLimits>();
+          const changedLimits = new Map<ProviderInstanceId, ServerProviderUsageLimits>();
+          const unchangedInstances = new Set<ProviderInstanceId>();
           const switchedInstances = new Set<ProviderInstanceId>();
           const effectiveIdentities = new Map<ProviderInstanceId, ProviderAccountIdentity>();
           for (const [instanceId, reported] of nextLimits) {
             const prevLimits = current.seen.get(instanceId);
+            const prevRaw = current.rawLimits.get(instanceId);
             const reconciled = reconcileProviderAccountIdentity({
               prevLimits,
               prevId: current.accountIdentities.get(instanceId),
               reported,
               nextId: nextAccountIdentities.get(instanceId),
             });
-            if (reconciled.switched) switchedInstances.add(instanceId);
-            if (reconciled.keepBaseline && prevLimits !== undefined) {
-              previousSeen.set(instanceId, prevLimits);
-            }
             if (reconciled.effectiveId !== undefined) {
               effectiveIdentities.set(instanceId, reconciled.effectiveId);
             }
+            if (reconciled.switched) switchedInstances.add(instanceId);
+            // When another provider triggers streamChanges or probe recovery re-emits the same
+            // untouched usageLimits snapshot on an unchanged account, carry state forward as-is so
+            // observedAt does not advance and carried windows do not expire without a fresh probe.
+            if (
+              !reconciled.switched &&
+              reconciled.keepBaseline &&
+              prevLimits !== undefined &&
+              prevRaw !== undefined &&
+              sameUsageLimitsSnapshot(prevRaw, reported)
+            ) {
+              unchangedInstances.add(instanceId);
+              continue;
+            }
+            changedLimits.set(instanceId, reported);
+            if (reconciled.keepBaseline && prevLimits !== undefined) {
+              previousSeen.set(instanceId, prevLimits);
+            }
           }
-          const report = observeLimitReport(previousSeen, nextLimits, at);
-          // Rebuild observations only for instances still present with usable limits so logout,
-          // unsupported probes, provider removal, or account switches never leave stale markers.
+          const report = observeLimitReport(previousSeen, changedLimits, at);
+          const nextSeen = new Map<ProviderInstanceId, ServerProviderUsageLimits>();
           const resetObservedWindows = new Map<ProviderInstanceId, ReadonlyMap<string, number>>();
           const nextObservedAt = new Map<ProviderInstanceId, number>();
+          for (const instanceId of unchangedInstances) {
+            const prevLimits = current.seen.get(instanceId);
+            if (prevLimits !== undefined) nextSeen.set(instanceId, prevLimits);
+            const prevAt = current.observedAt.get(instanceId);
+            if (prevAt !== undefined) nextObservedAt.set(instanceId, prevAt);
+            const prevObserved = current.resetObservedWindows.get(instanceId);
+            if (prevObserved !== undefined && prevObserved.size > 0) {
+              resetObservedWindows.set(instanceId, prevObserved);
+            }
+          }
+          // Rebuild observations only for instances still present with usable limits so logout,
+          // unsupported probes, provider removal, or account switches never leave stale markers.
           for (const [instanceId, limits] of report.limits) {
+            nextSeen.set(instanceId, limits);
             if (limits.unavailable !== undefined) continue;
-            const reported = nextLimits.get(instanceId);
+            const reported = changedLimits.get(instanceId);
             if (reported?.unavailable?.reason === "probeFailed") {
               const prevAt = current.observedAt.get(instanceId);
               if (prevAt !== undefined) nextObservedAt.set(instanceId, prevAt);
@@ -903,7 +965,8 @@ const makeSweep = Effect.gen(function* () {
           }
           return {
             version: current.version + 1,
-            seen: report.limits,
+            seen: nextSeen,
+            rawLimits: nextLimits,
             observedAt: nextObservedAt,
             drivers: nextDrivers,
             accountIdentities: effectiveIdentities,

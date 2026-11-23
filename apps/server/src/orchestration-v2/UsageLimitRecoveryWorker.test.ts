@@ -1277,8 +1277,8 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
       assert.equal(yield* Queue.take(sweeps), true);
       assert.equal(yield* Queue.size(dispatched), 0);
 
-      // 7. Disjoint non-empty identities ({ email } -> { workspaceId }) and dropped
-      //    credentialFingerprint on a usable snapshot both invalidate baselines and markers.
+      // 7. Disjoint non-empty identities ({ email } -> { workspaceId }) and dropped identity
+      //    fields (fingerprint or workspaceId) on a usable snapshot all invalidate baselines.
       yield* Ref.set(candidatesRef, [
         makeCandidate("run:codex:8", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
       ]);
@@ -1300,37 +1300,60 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
       });
       assert.equal(yield* Queue.take(sweeps), false);
       assert.equal(yield* Queue.size(dispatched), 0);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "team@example.com", workspaceId: "ws-team" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "team@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
 
       // 8. A sibling window resetting while another applicable window is still spent does not fire
-      //    merely because wall clock passes the spent window's resetsAt without a fresh probe.
+      //    merely because wall clock passes the spent window's resetsAt without a fresh probe—
+      //    even when an unrelated provider update re-emits the unchanged snapshot.
       const shortBlockResetAt = DateTime.formatIso(
         DateTime.add(yield* DateTime.now, { minutes: 5 }),
       );
-      const multiWindowSnapshot = (primaryUsed: number, secondaryUsed: number) =>
+      const multiWindowSnapshot = (primaryUsed: number, secondaryUsed: number, checkedAt: string) =>
         [
           {
             instanceId: codexId,
             driver: ProviderDriverKind.make("codex"),
             auth: { status: "authenticated", email: "h@example.com" },
-            usageLimits: limits([
-              window("primary", primaryUsed, futureResetAt),
-              window("secondary", secondaryUsed, shortBlockResetAt),
-            ]),
+            usageLimits: limits(
+              [
+                window("primary", primaryUsed, futureResetAt),
+                window("secondary", secondaryUsed, shortBlockResetAt),
+              ],
+              { checkedAt },
+            ),
           },
         ] as unknown as ReadonlyArray<ServerProvider>;
       yield* Ref.set(candidatesRef, [
         makeCandidate("run:codex:9", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
       ]);
-      yield* Queue.offer(providerChanges, { providers: multiWindowSnapshot(100, 100) });
+      yield* Queue.offer(providerChanges, {
+        providers: multiWindowSnapshot(100, 100, "2026-07-01T00:00:00.000Z"),
+      });
       assert.equal(yield* Queue.take(sweeps), false);
-      yield* Queue.offer(providerChanges, { providers: multiWindowSnapshot(0, 100) });
+      yield* Queue.offer(providerChanges, {
+        providers: multiWindowSnapshot(0, 100, "2026-07-01T00:01:00.000Z"),
+      });
       assert.equal(yield* Queue.take(sweeps), true);
       assert.equal(yield* Queue.size(dispatched), 0);
-      // Advance past secondary's resetsAt without a fresh probe; triggering a probeFailed (which
-      // keeps the stale snapshot) must not let primary's earlier reset wake the thread.
+      // Advance past secondary's resetsAt and re-emit the exact unchanged codex snapshot (as
+      // happens when another provider changes or probe recovery preserves the old snapshot).
       yield* TestClock.setTime(Date.parse(shortBlockResetAt) + 1_000);
       yield* Queue.offer(providerChanges, {
-        providers: codexSnapshot("probeFailed", { email: "h@example.com" }),
+        providers: [
+          ...multiWindowSnapshot(0, 100, "2026-07-01T00:01:00.000Z"),
+          {
+            instanceId: ProviderInstanceId.make("claude_other"),
+            driver: ProviderDriverKind.make("claudeAgent"),
+          } as unknown as ServerProvider,
+        ],
       });
       assert.equal(yield* Queue.take(sweeps), true);
       assert.equal(yield* Queue.size(dispatched), 0);
