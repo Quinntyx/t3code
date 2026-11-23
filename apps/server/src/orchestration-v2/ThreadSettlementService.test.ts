@@ -18,6 +18,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadShell,
+  type PreviewEvent,
   type PullRequestSummary,
   type ServerSettings as ContractServerSettings,
   type ServerSettingsPatch,
@@ -26,6 +27,7 @@ import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -38,6 +40,7 @@ import { TestClock } from "effect/testing";
 
 import * as GitManager from "../git/GitManager.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
@@ -781,6 +784,10 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     Path.layer,
   );
 
+  const previewLayer = PreviewManager.layer.pipe(
+    Layer.provide(Layer.succeed(SecureRandom.SecureRandom, testCrypto)),
+  );
+
   return {
     activation,
     settings,
@@ -812,7 +819,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     layer: Layer.effect(
       ThreadSettlementService.ThreadSettlementServiceV2,
       ThreadSettlementService.make,
-    ).pipe(Layer.provide(layerDependencies)),
+    ).pipe(Layer.provide(layerDependencies), Layer.provideMerge(previewLayer)),
   };
 });
 
@@ -2277,6 +2284,271 @@ describe("ThreadSettlementServiceV2 terminals", () => {
         assert.strictEqual((yield* Queue.take(fixture.scriptRuns)).threadId, thread.id);
       }).pipe(Effect.provide(fixture.layer));
     }),
+  );
+});
+
+describe("ThreadSettlementServiceV2 settled previews", () => {
+  const threadEvent = (
+    type: "thread.unsettled" | "thread.pinned" | "thread.deleted",
+    thread: OrchestrationV2AppThread,
+    suffix = "1",
+  ): OrchestrationV2DomainEvent => ({
+    type,
+    id: EventId.make(`event:${type}:${thread.id}:${suffix}`),
+    threadId: thread.id,
+    occurredAt: DateTime.makeUnsafe(NOW),
+    payload: thread,
+  });
+
+  const nextClosedTabId = (subscription: PubSub.Subscription<PreviewEvent>) =>
+    Stream.fromSubscription(subscription).pipe(
+      Stream.filter((event) => event.type === "closed"),
+      Stream.map((event) => event.tabId),
+      Stream.runHead,
+    );
+
+  it.effect(
+    "closes tabs present at settlement after 5 minutes even when settledAt is backdated, while sparing tabs opened later",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const backdatedSettled: OrchestrationV2AppThread = {
+          ...appThread("backdated-preview-thread", "settled"),
+          settledAt: at(-5 * DAY_MS),
+        };
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads: [backdatedSettled],
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          const previewEvents = yield* previews.subscribeEvents;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const initialTab = yield* previews.open({
+            threadId: backdatedSettled.id,
+            url: "https://example.com/before-settle",
+            runtime: "server",
+          });
+
+          yield* fixture.publishEvent(settledEvent(backdatedSettled));
+          yield* Queue.take(fixture.closedIdle);
+
+          const laterTab = yield* previews.open({
+            threadId: backdatedSettled.id,
+            url: "https://example.com/after-settle",
+            runtime: "server",
+          });
+
+          yield* TestClock.adjust("4 minutes");
+          yield* TestClock.adjust("59 seconds");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: backdatedSettled.id })).sessions.map((s) => s.tabId),
+            [initialTab.tabId, laterTab.tabId],
+          );
+
+          const closedFiber = yield* Effect.forkChild(nextClosedTabId(previewEvents));
+          yield* TestClock.adjust("1 second");
+          const closedTab = yield* Fiber.join(closedFiber);
+          assert.strictEqual(closedTab._tag, "Some");
+          if (closedTab._tag === "Some") {
+            assert.strictEqual(closedTab.value, initialTab.tabId);
+          }
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: backdatedSettled.id })).sessions.map((s) => s.tabId),
+            [laterTab.tabId],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect(
+    "cancels the grace timer on unsettle and starts a fresh 5 minutes on a later re-settle",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const initialSettled = appThread("unsettle-preview-thread", "settled");
+        const currentThreads = [initialSettled];
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads,
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          const previewEvents = yield* previews.subscribeEvents;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const tab = yield* previews.open({
+            threadId: initialSettled.id,
+            url: "https://example.com/keep-me",
+          });
+
+          yield* fixture.publishEvent(settledEvent(initialSettled));
+          yield* Queue.take(fixture.closedIdle);
+          yield* TestClock.adjust("2 minutes");
+
+          const unsettled: OrchestrationV2AppThread = {
+            ...initialSettled,
+            settledOverride: "active",
+            settledAt: null,
+          };
+          currentThreads[0] = unsettled;
+          const unsettleEvent = threadEvent("thread.unsettled", unsettled);
+          yield* fixture.publishEvent(unsettleEvent);
+          while ((yield* Queue.take(fixture.observedEvents)) !== unsettleEvent.id) {}
+
+          yield* TestClock.adjust("4 minutes");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: initialSettled.id })).sessions.map((s) => s.tabId),
+            [tab.tabId],
+          );
+
+          const resettled: OrchestrationV2AppThread = {
+            ...initialSettled,
+            settledOverride: "settled",
+            settledAt: at(6 * 60 * 1_000),
+          };
+          currentThreads[0] = resettled;
+          yield* fixture.publishEvent(settledEvent(resettled));
+          yield* Queue.take(fixture.closedIdle);
+
+          yield* TestClock.adjust("4 minutes");
+          yield* TestClock.adjust("59 seconds");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: initialSettled.id })).sessions.map((s) => s.tabId),
+            [tab.tabId],
+          );
+
+          const closedFiber = yield* Effect.forkChild(nextClosedTabId(previewEvents));
+          yield* TestClock.adjust("1 second");
+          yield* Fiber.join(closedFiber);
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: initialSettled.id })).sessions,
+            [],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect.each(["pinned", "projection-reengaged", "deleted"] as const)(
+    "skips closing previews when the thread is %s before the 5-minute deadline",
+    (change) =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const settled = appThread(`promoted-${change}`, "settled");
+        const currentThreads = [settled];
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads,
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const tab = yield* previews.open({
+            threadId: settled.id,
+            url: "https://example.com/promoted",
+          });
+
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+          yield* TestClock.adjust("2 minutes");
+
+          if (change === "pinned") {
+            const pinned: OrchestrationV2AppThread = {
+              ...settled,
+              pinnedAt: at(2 * 60 * 1_000),
+              settledOverride: "active",
+              settledAt: null,
+            };
+            currentThreads[0] = pinned;
+            const event = threadEvent("thread.pinned", pinned);
+            yield* fixture.publishEvent(event);
+            while ((yield* Queue.take(fixture.observedEvents)) !== event.id) {}
+          } else if (change === "deleted") {
+            const deleted: OrchestrationV2AppThread = {
+              ...settled,
+              deletedAt: at(2 * 60 * 1_000),
+            };
+            currentThreads[0] = deleted;
+            const event = threadEvent("thread.deleted", deleted);
+            yield* fixture.publishEvent(event);
+            while ((yield* Queue.take(fixture.observedEvents)) !== event.id) {}
+          } else {
+            currentThreads[0] = {
+              ...settled,
+              settledOverride: "active",
+              settledAt: null,
+            };
+          }
+
+          yield* TestClock.adjust("5 minutes");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: settled.id })).sessions.map((s) => s.tabId),
+            [tab.tabId],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+  );
+
+  it.effect(
+    "ignores duplicate thread.settled events for the same settlement without extending the deadline or capturing later tabs",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const settled = appThread("duplicate-settled-preview", "settled");
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads: [settled],
+        });
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          const previews = yield* PreviewManager.PreviewManager;
+          const previewEvents = yield* previews.subscribeEvents;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+
+          const firstTab = yield* previews.open({
+            threadId: settled.id,
+            url: "https://example.com/first",
+          });
+
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+
+          yield* TestClock.adjust("3 minutes");
+          const secondTab = yield* previews.open({
+            threadId: settled.id,
+            url: "https://example.com/second",
+          });
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+
+          // Two more minutes hits the original 5-minute mark; duplicate settle must not extend it.
+          const closedFiber = yield* Effect.forkChild(nextClosedTabId(previewEvents));
+          yield* TestClock.adjust("2 minutes");
+          const closedTab = yield* Fiber.join(closedFiber);
+          assert.strictEqual(closedTab._tag, "Some");
+          if (closedTab._tag === "Some") {
+            assert.strictEqual(closedTab.value, firstTab.tabId);
+          }
+
+          // Another duplicate after expiry must not schedule closure of the tab opened post-settlement.
+          yield* fixture.publishEvent(settledEvent(settled));
+          yield* Queue.take(fixture.closedIdle);
+          yield* TestClock.adjust("5 minutes");
+          assert.deepStrictEqual(
+            (yield* previews.list({ threadId: settled.id })).sessions.map((s) => s.tabId),
+            [secondTab.tabId],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
   );
 });
 
