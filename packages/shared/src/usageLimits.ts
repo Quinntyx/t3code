@@ -102,16 +102,28 @@ export function usageWindowsForModel(
   if (model === undefined) return matching;
   // A provider reading another provider's login reports that login's pool, so classify by its owner.
   switch (provider?.usageLimits?.ownerDriver ?? provider?.driver) {
-    case "cursor":
+    case "cursor": {
+      const hasSplitPools = matching.some(
+        (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
+      );
+      if (!hasSplitPools) return matching;
       return /^(auto|default|grok|composer)/.test(model)
         ? matching.filter(
             (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
           )
         : matching.filter((window) => window.id === "apiPercentUsed");
+    }
     case "antigravity": {
       const family = model.match(/^(gemini|claude|gpt)-/)?.[1];
+      const geminiTier =
+        family === "gemini" ? model.match(/(?:^|-)(argon|carbon)(?:-|$)/)?.[1] : undefined;
       return matching.filter((window) => {
+        const geminiBucketTier = window.id.match(/^gemini-(argon|carbon)-/)?.[1];
+        if (geminiBucketTier !== undefined) {
+          return family === undefined || (family === "gemini" && geminiTier === geminiBucketTier);
+        }
         const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
+        if (pool === "gemini" && geminiTier !== undefined) return false;
         return (
           pool === undefined ||
           family === undefined ||
@@ -121,10 +133,11 @@ export function usageWindowsForModel(
       });
     }
     case "claudeAgent": {
-      const family = model.match(/(?:^|[-/])(opus|sonnet|haiku)(?:-|$)/)?.[1];
+      const normalizedModel = model.toLowerCase().replace(/[^a-z0-9]+/g, "_");
       return matching.filter((window) => {
-        const scope = window.id.match(/^seven_day_(?:claude_)?(opus|sonnet|haiku)(?:_|$)/)?.[1];
-        return scope === undefined || family === undefined || scope === family;
+        if (!window.id.startsWith("seven_day_")) return true;
+        const scope = window.id.slice("seven_day_".length).replace(/^claude_/, "");
+        return scope.length === 0 || normalizedModel.includes(scope);
       });
     }
     case "codex": {

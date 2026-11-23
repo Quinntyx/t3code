@@ -15,6 +15,7 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -285,22 +286,29 @@ const changes = (
   previous: ServerProviderUsageLimits | undefined,
   next: ServerProviderUsageLimits,
 ) => {
-  const { observed, spent } = report(
+  const { observedWindows, spentWindows } = report(
     previous === undefined ? new Map() : new Map([[instanceId, previous]]),
     next,
   );
-  return { observed, spent };
+  return {
+    observed: observedWindows.get(instanceId) ?? [],
+    spent: spentWindows.get(instanceId) ?? [],
+  };
 };
 
-it("observes an instance whose allowance came back", () => {
+it("observes windows whose allowance came back", () => {
   assert.deepEqual(changes(limits([window("primary", 100)]), limits([window("primary", 0)])), {
-    observed: [instanceId],
+    observed: ["primary"],
     spent: [],
   });
-  // A probe that never reached 100% still gives the allowance back.
+  // A probe that never reached 100% still observes a reset to zero or a large drop near exhaustion.
   assert.deepEqual(
     changes(limits([window("primary", 99)]), limits([window("primary", 0)])).observed,
-    [instanceId],
+    ["primary"],
+  );
+  assert.deepEqual(
+    changes(limits([window("primary", 95)]), limits([window("primary", 50)])).observed,
+    ["primary"],
   );
   // A window that rolled over to a later reset clock came back even at the same spend.
   assert.deepEqual(
@@ -308,31 +316,31 @@ it("observes an instance whose allowance came back", () => {
       limits([window("primary", 40)]),
       limits([window("primary", 40, "2026-07-01T05:00:00.000Z")]),
     ).observed,
-    [instanceId],
+    ["primary"],
   );
 });
 
-it("holds an instance whose allowance is still spent", () => {
-  // One window resetting does not free a model the other window still blocks.
+it("tracks spent and recovered windows independently", () => {
+  // One window resetting while another stays spent reports both windows accurately.
   assert.deepEqual(
     changes(
       limits([window("primary", 100), window("weekly", 100)]),
       limits([window("primary", 0), window("weekly", 100)]),
     ),
-    { observed: [], spent: [instanceId] },
+    { observed: ["primary"], spent: ["weekly"] },
   );
-  // A probe that stops reporting a spent window has not shown that it came back.
+  // A probe that stops reporting a spent window carries it forward as still spent.
   assert.deepEqual(
     changes(limits([window("primary", 100), window("weekly", 40)]), limits([window("weekly", 39)])),
-    { observed: [], spent: [instanceId] },
+    { observed: [], spent: ["primary"] },
   );
 });
 
 it("remembers a spent window a probe stopped reporting", () => {
   const first = report(new Map(), limits([window("primary", 100), window("weekly", 40)]));
-  assert.deepEqual(first.spent, [instanceId]);
+  assert.deepEqual(first.spentWindows.get(instanceId), ["primary"]);
   const partial = report(first.limits, limits([window("weekly", 39)]));
-  assert.deepEqual(partial.observed, []);
+  assert.isUndefined(partial.observedWindows.get(instanceId));
   assert.deepEqual(
     partial.limits
       .get(instanceId)
@@ -342,16 +350,18 @@ it("remembers a spent window a probe stopped reporting", () => {
   );
   // The window comes back reported and unspent, so the allowance really did return.
   const recovered = report(partial.limits, limits([window("primary", 0), window("weekly", 39)]));
-  assert.deepEqual(recovered.observed, [instanceId]);
+  assert.deepEqual(recovered.observedWindows.get(instanceId), ["primary"]);
+  assert.isUndefined(recovered.spentWindows.get(instanceId));
 });
 
 it("does not keep a spent window that has no reset clock", () => {
   const first = report(new Map(), limits([window("five_hour", 100), budget("monthly_spend", 100)]));
-  assert.deepEqual(first.spent, [instanceId]);
+  assert.deepEqual(first.spentWindows.get(instanceId), ["five_hour", "monthly_spend"]);
   // The budget stops being reported and never had a clock, so it cannot hold the instance spent
   // forever; the session window coming back is the allowance returning.
   const recovered = report(first.limits, limits([window("five_hour", 0)]));
-  assert.deepEqual(recovered.observed, [instanceId]);
+  assert.deepEqual(recovered.observedWindows.get(instanceId), ["five_hour"]);
+  assert.isUndefined(recovered.spentWindows.get(instanceId));
   assert.deepEqual(
     recovered.limits.get(instanceId)?.windows.map((entry) => entry.id),
     ["five_hour"],
@@ -363,12 +373,20 @@ it("ignores the rounding gap between a probe and streamed usage", () => {
     changes(limits([window("primary", 58)]), limits([window("primary", 57.99999999999999)])),
     { observed: [], spent: [] },
   );
+  assert.deepEqual(changes(limits([window("primary", 100)]), limits([window("primary", 99.49)])), {
+    observed: [],
+    spent: [],
+  });
+  assert.deepEqual(
+    changes(limits([window("primary", 95.51)]), limits([window("primary", 95.49)])),
+    { observed: [], spent: [] },
+  );
 });
 
 it("ignores reports that do not move the allowance", () => {
   assert.deepEqual(changes(limits([window("primary", 100)]), limits([window("primary", 100)])), {
     observed: [],
-    spent: [instanceId],
+    spent: ["primary"],
   });
   // The first report only establishes a baseline.
   assert.deepEqual(changes(undefined, limits([window("primary", 0)])), { observed: [], spent: [] });
@@ -378,7 +396,7 @@ it("ignores reports that do not move the allowance", () => {
       limits([window("primary", 100)]),
       limits([], { unavailable: { reason: "probeFailed" } }),
     ),
-    { observed: [], spent: [instanceId] },
+    { observed: [], spent: ["primary"] },
   );
   // Another login's windows describe a different allowance.
   assert.deepEqual(
@@ -388,15 +406,13 @@ it("ignores reports that do not move the allowance", () => {
     ),
     { observed: [], spent: [] },
   );
-  // Small API clock jitter on resetsAt is not a window rollover.
+  // Small API clock jitter on resetsAt is not a window rollover, even when duration is omitted on sparse updates.
   assert.deepEqual(
     changes(
       limits([
         { ...window("3p-weekly", 80, "2026-07-01T00:00:00.000Z"), windowDurationMins: 10080 },
       ]),
-      limits([
-        { ...window("3p-weekly", 80, "2026-07-01T00:02:00.000Z"), windowDurationMins: 10080 },
-      ]),
+      limits([window("3p-weekly", 80, "2026-07-01T01:00:00.000Z")]),
     ),
     { observed: [], spent: [] },
   );
@@ -408,7 +424,14 @@ it("ignores reports that do not move the allowance", () => {
     ),
     { observed: [], spent: [] },
   );
-  // Small rolling decay on an unspent window does not mean a blocking limit reset.
+  // Small rolling decay on an unspent window (even at 90-99%) does not mean a blocking limit reset.
+  assert.deepEqual(
+    changes(limits([window("go_rolling", 94)]), limits([window("go_rolling", 93)])),
+    {
+      observed: [],
+      spent: [],
+    },
+  );
   assert.deepEqual(changes(limits([window("gemini-5h", 1.7)]), limits([window("gemini-5h", 0)])), {
     observed: [],
     spent: [],
@@ -651,6 +674,8 @@ it.effect(
         providerInstanceId: piInstanceId,
         latestRunId: RunId.make("run:pi-proxy:1"),
         latestRunModel: "cliproxyapi/gpt-6.2-sol",
+        threadModel: "cliproxyapi/gpt-6.2-sol",
+        latestRunUsageLimitContinuationOfRunId: null,
         latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
         updatedAt: DateTime.subtract(now, { minutes: 5 }),
         limitRecovery: {
@@ -660,11 +685,29 @@ it.effect(
           requestId: CommandId.make("recovery:pi-proxy"),
         },
       });
+      const piSwitchedThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:pi-switched"),
+        providerInstanceId: piInstanceId,
+        latestRunId: RunId.make("run:pi-switched:1"),
+        latestRunModel: "opencode-go/big-pickle",
+        threadModel: "cliproxyapi/gpt-6.2-sol",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:pi-switched:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:pi-switched"),
+        },
+      });
       const piGoThread = waitingThread(futureResetAt, {
         id: ThreadId.make("thread:pi-go"),
         providerInstanceId: piInstanceId,
         latestRunId: RunId.make("run:pi-go:1"),
         latestRunModel: "opencode-go/big-pickle",
+        threadModel: "opencode-go/big-pickle",
+        latestRunUsageLimitContinuationOfRunId: null,
         latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
         updatedAt: DateTime.subtract(now, { minutes: 5 }),
         limitRecovery: {
@@ -679,6 +722,8 @@ it.effect(
         providerInstanceId: agInstanceId,
         latestRunId: RunId.make("run:ag-gemini:1"),
         latestRunModel: "gemini-4-neon",
+        threadModel: "gemini-4-neon",
+        latestRunUsageLimitContinuationOfRunId: null,
         latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
         updatedAt: DateTime.subtract(now, { minutes: 5 }),
         limitRecovery: {
@@ -688,9 +733,10 @@ it.effect(
           requestId: CommandId.make("recovery:ag-gemini"),
         },
       });
+      // Place non-matching threads before piGoThread so any false match dispatches first.
       const candidatesRef = yield* Ref.make<
         ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>
-      >([piProxyThread, piGoThread, agGeminiThread]);
+      >([piProxyThread, piSwitchedThread, agGeminiThread, piGoThread]);
       const layer = UsageLimitRecoveryWorker.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -754,7 +800,8 @@ it.effect(
           snapshot({ goRolling: 100, gemini5h: 100, thirdPartyWeekly: 100 }),
         );
         // OpenCode Go resets and 3p-weekly resets while gemini-5h stays spent:
-        // only pi-go matches; pi-proxy (cliproxyapi/*) and ag-gemini (gemini-*) must stay waiting.
+        // only pi-go matches; pi-proxy (cliproxyapi/*), pi-switched (switched to unmonitored model),
+        // and ag-gemini (gemini-*) must stay waiting.
         yield* Queue.offer(
           providerChanges,
           snapshot({ goRolling: 0, gemini5h: 100, thirdPartyWeekly: 0 }),
@@ -763,31 +810,29 @@ it.effect(
         assert.equal("threadId" in first ? first.threadId : null, piGoThread.id);
         assert.equal(yield* Queue.size(dispatched), 0);
 
-        // Now pi-go fails again immediately on run 2 for the same reset window (2s jitter).
+        // Now pi-go fails again immediately on run 2 (continuation of run 1) for the same reset window (2s jitter).
         const jitteredResetAt = DateTime.formatIso(
           DateTime.add(DateTime.makeUnsafe(futureResetAt), { seconds: 2 }),
         );
         yield* TestClock.adjust("5 seconds");
         const failedAgainAt = yield* DateTime.now;
-        yield* Ref.set(candidatesRef, [
-          piProxyThread,
-          {
-            ...piGoThread,
-            latestRunId: RunId.make("run:pi-go:2"),
-            usageLimitResetAt: jitteredResetAt,
-            latestRunCompletedAt: failedAgainAt,
-            updatedAt: failedAgainAt,
-            limitRecovery: {
-              runId: RunId.make("run:pi-go:2"),
-              resetAt: jitteredResetAt,
-              autoResume: true,
-              requestId: CommandId.make("recovery:pi-go:2"),
-            },
+        const piGoContinuationFailed = {
+          ...piGoThread,
+          latestRunId: RunId.make("run:pi-go:2"),
+          latestRunUsageLimitContinuationOfRunId: piGoThread.latestRunId,
+          usageLimitResetAt: jitteredResetAt,
+          latestRunCompletedAt: failedAgainAt,
+          updatedAt: failedAgainAt,
+          limitRecovery: {
+            runId: RunId.make("run:pi-go:2"),
+            resetAt: jitteredResetAt,
+            autoResume: true,
+            requestId: CommandId.make("recovery:pi-go:2"),
           },
-          agGeminiThread,
-        ]);
+        };
+        yield* Ref.set(candidatesRef, [piProxyThread, piGoContinuationFailed, agGeminiThread]);
         yield* TestClock.adjust("1 second");
-        // Even if go_rolling flaps 100 -> 0 again, pi-go must not early-resume again for the same reset window.
+        // Even if go_rolling flaps 100 -> 0 again, pi-go must not early-resume again for the same continuation.
         // Meanwhile gemini-5h resets 100 -> 0 (while 3p-weekly is back to 100): ag-gemini DOES resume.
         yield* Queue.offer(
           providerChanges,
@@ -801,23 +846,41 @@ it.effect(
         assert.equal("threadId" in second ? second.threadId : null, agGeminiThread.id);
         assert.equal(yield* Queue.size(dispatched), 0);
 
-        // Once the real reset clock passes, the suppressed threads still auto-resume normally.
-        yield* Ref.set(candidatesRef, [
-          piProxyThread,
-          {
-            ...piGoThread,
-            latestRunId: RunId.make("run:pi-go:2"),
-            usageLimitResetAt: jitteredResetAt,
-            latestRunCompletedAt: failedAgainAt,
-            updatedAt: failedAgainAt,
-            limitRecovery: {
-              runId: RunId.make("run:pi-go:2"),
-              resetAt: jitteredResetAt,
-              autoResume: true,
-              requestId: CommandId.make("recovery:pi-go:2"),
-            },
+        // A later manual run on pi-go (not a continuation of run 1) is NOT suppressed by run 1's guard.
+        yield* TestClock.adjust("5 seconds");
+        const manualFailedAt = yield* DateTime.now;
+        const piGoManualFailed = {
+          ...piGoContinuationFailed,
+          latestRunId: RunId.make("run:pi-go:3"),
+          latestRunUsageLimitContinuationOfRunId: null,
+          latestRunCompletedAt: manualFailedAt,
+          updatedAt: manualFailedAt,
+          limitRecovery: {
+            runId: RunId.make("run:pi-go:3"),
+            resetAt: jitteredResetAt,
+            autoResume: true,
+            requestId: CommandId.make("recovery:pi-go:3"),
           },
-        ]);
+        };
+        yield* Ref.set(candidatesRef, [piProxyThread, piGoManualFailed]);
+        yield* TestClock.adjust("1 second");
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const manualResumed = yield* Queue.take(dispatched);
+        assert.equal("threadId" in manualResumed ? manualResumed.threadId : null, piGoThread.id);
+        assert.isTrue(
+          manualResumed.type === "message.dispatch" &&
+            manualResumed.usageLimitResetObserved === true,
+        );
+
+        // Once the real reset clock passes, pi-proxy and pi-switched still auto-resume normally.
+        yield* Ref.set(candidatesRef, [piProxyThread, piSwitchedThread]);
         yield* TestClock.setTime(Date.parse(jitteredResetAt));
         yield* Queue.offer(
           providerChanges,
@@ -830,7 +893,7 @@ it.effect(
             "threadId" in third ? third.threadId : null,
             "threadId" in fourth ? fourth.threadId : null,
           ],
-          [piProxyThread.id, piGoThread.id],
+          [piProxyThread.id, piSwitchedThread.id],
         );
         assert.isFalse(third.type === "message.dispatch" && third.usageLimitResetObserved === true);
         assert.isFalse(
@@ -838,6 +901,139 @@ it.effect(
         );
       }).pipe(Effect.provide(layer));
     }),
+);
+
+it.effect("drops reset observations on logout/account clear and rechecks mid-sweep updates", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-07-01T00:00:00.000Z"));
+    const providerChanges = yield* Queue.unbounded<{
+      readonly providers: ReadonlyArray<ServerProvider>;
+      readonly onPull?: Deferred.Deferred<void>;
+    }>();
+    const dispatched = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+    const sqlStarted = yield* Deferred.make<void>();
+    const releaseSql = yield* Deferred.make<void>();
+    const gateFirstSql = yield* Ref.make(false);
+    const sweeps = yield* Queue.unbounded<boolean>();
+    const now = yield* DateTime.now;
+    const futureResetAt = DateTime.formatIso(DateTime.add(now, { hours: 2 }));
+    const codexId = ProviderInstanceId.make("codex_main");
+    const makeCandidate = (runId: string, failedAt: DateTime.Utc) =>
+      waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:codex-race"),
+        providerInstanceId: codexId,
+        latestRunId: RunId.make(runId),
+        latestRunModel: "gpt-5.3-codex",
+        threadModel: "gpt-5.3-codex",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: failedAt,
+        updatedAt: failedAt,
+        limitRecovery: {
+          runId: RunId.make(runId),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make(`recovery:${runId}`),
+        },
+      });
+    const candidatesRef = yield* Ref.make<
+      ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>
+    >([makeCandidate("run:codex:1", DateTime.subtract(now, { minutes: 5 }))]);
+    // Pull one report at a time so an `onPull` barrier resolves only after the prior report's
+    // providerState Ref.update has committed.
+    const providerStream = Stream.fromEffect(
+      Queue.take(providerChanges).pipe(
+        Effect.tap((entry) =>
+          entry.onPull === undefined ? Effect.void : Deferred.succeed(entry.onPull, undefined),
+        ),
+        Effect.map((entry) => entry.providers),
+      ),
+    ).pipe(Stream.forever);
+    const layer = UsageLimitRecoveryWorker.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
+            getLimitRecoveryCandidates: (options) =>
+              Effect.gen(function* () {
+                if (options.resetObserved === true && (yield* Ref.getAndSet(gateFirstSql, false))) {
+                  yield* Deferred.succeed(sqlStarted, undefined);
+                  yield* Deferred.await(releaseSql);
+                }
+                yield* Queue.offer(sweeps, options.resetObserved === true);
+                return options.resetObserved === true ? yield* Ref.get(candidatesRef) : [];
+              }),
+            getLimitRecoveryWakeAt: () => Effect.succeed(null),
+            hasActivePullRequestThread: () => Effect.succeed(false),
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: (command) => Queue.offer(dispatched, command).pipe(Effect.as({} as never)),
+          }),
+          Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed({
+              autoResumeLimitedThreads: true,
+              autoResumePullRequestThreadsFirst: false,
+              snoozeLimitedThreads: false,
+            } as never),
+            streamChanges: Stream.never,
+          }),
+          layerProviderRegistry(providerStream),
+          layerResetSources(),
+        ),
+      ),
+    );
+    const codexSnapshot = (usedPercent?: number, fingerprint?: string) =>
+      [
+        {
+          instanceId: codexId,
+          driver: ProviderDriverKind.make("codex"),
+          ...(usedPercent === undefined
+            ? {}
+            : {
+                usageLimits: limits(
+                  [window("primary", usedPercent, futureResetAt)],
+                  fingerprint === undefined ? {} : { credentialFingerprint: fingerprint },
+                ),
+              }),
+        },
+      ] as unknown as ReadonlyArray<ServerProvider>;
+    yield* Effect.gen(function* () {
+      // 1. Mid-sweep invalidation: a reset triggers a sweep, then the window turns 100% spent
+      //    while SQL is in flight. The pre-dispatch recheck must cancel the stale early dispatch.
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(100, "acct-a") });
+      yield* Queue.take(sweeps);
+      yield* Ref.set(gateFirstSql, true);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0, "acct-a") });
+      yield* Deferred.await(sqlStarted);
+      const spentApplied = yield* Deferred.make<void>();
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(100, "acct-a") });
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, "acct-a"),
+        onPull: spentApplied,
+      });
+      yield* Deferred.await(spentApplied);
+      yield* Deferred.succeed(releaseSql, undefined);
+      assert.equal(yield* Queue.take(sweeps), true);
+      // Coalesced follow-up sweep after the 100% update runs with no reset observations.
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 2. Logout / cleared usageLimits must drop resetObservedWindows so signing into a new
+      //    account cannot inherit an earlier account's reset marker.
+      yield* Ref.set(candidatesRef, []);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0, "acct-a") });
+      assert.equal(yield* Queue.take(sweeps), true);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(undefined) });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:2", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0, "acct-b") });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+    }).pipe(Effect.provide(layer));
+  }),
 );
 
 const limited = (id: string, hasLinkedPullRequest: boolean) => ({ id, hasLinkedPullRequest });

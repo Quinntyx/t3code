@@ -9080,6 +9080,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             usageLimitResetAt: sqlShell.usageLimitResetAt,
             latestRunId: sqlShell.latestRunId,
             latestRunModel: original.modelSelection.model,
+            threadModel: original.modelSelection.model,
+            latestRunUsageLimitContinuationOfRunId: null,
             latestRunCompletedAt: sqlShell.latestRunCompletedAt,
             updatedAt: sqlShell.updatedAt,
             archivedAt: sqlShell.archivedAt,
