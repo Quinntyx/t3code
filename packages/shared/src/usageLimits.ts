@@ -141,16 +141,22 @@ export function usageWindowsForModel(
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "_")
         .replace(/^_+|_+$/g, "");
+      const boundedModel = `_${normalizedModel}_`;
       return matching.filter((window) => {
         if (!window.id.startsWith("seven_day_")) return true;
         const scope = window.id
           .slice("seven_day_".length)
           .replace(/^claude_/, "")
           .replace(/^_+|_+$/g, "");
-        return scope.length === 0 || normalizedModel.includes(scope);
+        return scope.length === 0 || boundedModel.includes(`_${scope}_`);
       });
     }
     case "codex": {
+      // Spark has its own Codex rate-limit bucket, which the Codex adapter omits from the main
+      // allowance windows, so unscoped Codex windows do not govern Spark models.
+      if (/(?:^|[-/])spark(?:$|[-/])/i.test(model)) {
+        return matching.filter((window) => window.modelIds !== undefined);
+      }
       // Seat-based plans spend credits only past their plan windows, so the credit cap blocks only plans without them.
       const hasPlanWindows = windows.some(
         (window) => window.id === "primary" || window.id === "secondary",

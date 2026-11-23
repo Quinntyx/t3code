@@ -134,8 +134,6 @@ const MIN_UNSPENT_RESET_TO_ZERO_PERCENT = 10;
 const NEAR_EXHAUSTED_PERCENT = 90;
 /** Minimum percentage-point drop required at 90-99% so small rolling decay does not trigger a reset. */
 const MIN_NEAR_EXHAUSTED_DROP_PERCENT = 25;
-/** Tolerance for matching a retried continuation failure back to the reset window of its early resume. */
-const SAME_RESET_WINDOW_MS = 5 * 60 * 1000;
 
 const FALLBACK_WINDOW_DURATION_MINS: Readonly<
   Record<ServerProviderUsageWindow["kind"], number | undefined>
@@ -161,11 +159,35 @@ function minResetAdvanceMs(
   return Math.max(MIN_RESET_ADVANCE_MS, Math.floor((durationMins * 60 * 1000) / 2));
 }
 
+function sameScopeList(
+  previous: ReadonlyArray<string> | undefined,
+  next: ReadonlyArray<string> | undefined,
+): boolean {
+  if (previous === undefined || next === undefined) return previous === next;
+  const previousSet = new Set(previous);
+  const nextSet = new Set(next);
+  if (previousSet.size !== nextSet.size) return false;
+  for (const entry of nextSet) {
+    if (!previousSet.has(entry)) return false;
+  }
+  return true;
+}
+
+function sameWindowScope(
+  seen: ServerProviderUsageWindow,
+  window: ServerProviderUsageWindow,
+): boolean {
+  return (
+    sameScopeList(seen.modelIds, window.modelIds) &&
+    sameScopeList(seen.providerIds, window.providerIds)
+  );
+}
+
 function windowResetObserved(
   seen: ServerProviderUsageWindow,
   window: ServerProviderUsageWindow,
 ): boolean {
-  if (spent(window)) return false;
+  if (spent(window) || !sameWindowScope(seen, window)) return false;
   const drop = seen.usedPercent - window.usedPercent;
   if (spent(seen)) {
     // Probes and streamed usage round differently; require a full percentage point drop so
@@ -198,10 +220,13 @@ function windowResetObserved(
  * or rolls over to a new period means the allowance came back: a scheduled reset that arrived
  * early, or a redeemed reset credit.
  */
-function observedResetWindowIds(
+function observedWindowChanges(
   previous: ServerProviderUsageLimits | undefined,
   next: ServerProviderUsageLimits,
-): ReadonlyArray<string> {
+): {
+  readonly observed: ReadonlyArray<string>;
+  readonly invalidated: ReadonlyArray<string>;
+} {
   if (
     previous === undefined ||
     previous.unavailable !== undefined ||
@@ -209,17 +234,24 @@ function observedResetWindowIds(
     (previous.credentialFingerprint !== undefined &&
       next.credentialFingerprint !== undefined &&
       previous.credentialFingerprint !== next.credentialFingerprint)
-  )
-    return [];
+  ) {
+    return { observed: [], invalidated: [] };
+  }
   const before = new Map(previous.windows.map((window) => [window.id, window]));
-  const ids: Array<string> = [];
+  const observed: Array<string> = [];
+  const invalidated: Array<string> = [];
   for (const window of next.windows) {
     const seen = before.get(window.id);
-    if (seen !== undefined && windowResetObserved(seen, window)) {
-      ids.push(window.id);
+    if (seen === undefined) continue;
+    if (!sameWindowScope(seen, window)) {
+      invalidated.push(window.id);
+      continue;
+    }
+    if (windowResetObserved(seen, window)) {
+      observed.push(window.id);
     }
   }
-  return ids;
+  return { observed, invalidated };
 }
 
 /**
@@ -269,10 +301,12 @@ export function observeLimitReport(
 ): {
   readonly observedWindows: ReadonlyMap<ProviderInstanceId, ReadonlyArray<string>>;
   readonly spentWindows: ReadonlyMap<ProviderInstanceId, ReadonlyArray<string>>;
+  readonly invalidatedWindows: ReadonlyMap<ProviderInstanceId, ReadonlyArray<string>>;
   readonly limits: ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>;
 } {
   const observedWindows = new Map<ProviderInstanceId, ReadonlyArray<string>>();
   const spentWindows = new Map<ProviderInstanceId, ReadonlyArray<string>>();
+  const invalidatedWindows = new Map<ProviderInstanceId, ReadonlyArray<string>>();
   const limits = new Map<ProviderInstanceId, ServerProviderUsageLimits>();
   for (const [instanceId, reported] of next) {
     const current = mergeLimits(previous.get(instanceId), reported, nowMs);
@@ -280,10 +314,11 @@ export function observeLimitReport(
     if (current.unavailable !== undefined) continue;
     const spentIds = current.windows.filter(spent).map((window) => window.id);
     if (spentIds.length > 0) spentWindows.set(instanceId, spentIds);
-    const resetIds = observedResetWindowIds(previous.get(instanceId), current);
-    if (resetIds.length > 0) observedWindows.set(instanceId, resetIds);
+    const changes = observedWindowChanges(previous.get(instanceId), current);
+    if (changes.observed.length > 0) observedWindows.set(instanceId, changes.observed);
+    if (changes.invalidated.length > 0) invalidatedWindows.set(instanceId, changes.invalidated);
   }
-  return { observedWindows, spentWindows, limits };
+  return { observedWindows, spentWindows, invalidatedWindows, limits };
 }
 
 interface ProviderAccountIdentity {
@@ -297,6 +332,7 @@ interface ProviderAccountIdentity {
 interface ObservedProviderState {
   readonly version: number;
   readonly seen: ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>;
+  readonly observedAt: ReadonlyMap<ProviderInstanceId, number>;
   readonly drivers: ReadonlyMap<ProviderInstanceId, ServerProvider["driver"]>;
   readonly accountIdentities: ReadonlyMap<ProviderInstanceId, ProviderAccountIdentity>;
   readonly resetObservedWindows: ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, number>>;
@@ -348,25 +384,22 @@ function hasAuthIdentity(identity: ProviderAccountIdentity | undefined): boolean
   );
 }
 
-function accountIdentitiesConflict(
+const IDENTITY_FIELDS = ["fingerprint", "workspaceId", "profileId", "email", "endpoint"] as const;
+
+function accountIdentitiesMatch(
   previous: ProviderAccountIdentity,
   next: ProviderAccountIdentity,
 ): boolean {
-  return (
-    (previous.fingerprint !== undefined &&
-      next.fingerprint !== undefined &&
-      previous.fingerprint !== next.fingerprint) ||
-    (previous.workspaceId !== undefined &&
-      next.workspaceId !== undefined &&
-      previous.workspaceId !== next.workspaceId) ||
-    (previous.profileId !== undefined &&
-      next.profileId !== undefined &&
-      previous.profileId !== next.profileId) ||
-    (previous.email !== undefined && next.email !== undefined && previous.email !== next.email) ||
-    (previous.endpoint !== undefined &&
-      next.endpoint !== undefined &&
-      previous.endpoint !== next.endpoint)
-  );
+  let shared = 0;
+  for (const field of IDENTITY_FIELDS) {
+    const prevValue = previous[field];
+    const nextValue = next[field];
+    if (prevValue !== undefined && nextValue !== undefined) {
+      if (prevValue !== nextValue) return false;
+      shared += 1;
+    }
+  }
+  return shared > 0;
 }
 
 function mergeAccountIdentity(
@@ -376,6 +409,51 @@ function mergeAccountIdentity(
   if (previous === undefined) return next;
   if (next === undefined) return previous;
   return { ...previous, ...next };
+}
+
+function reconcileProviderAccountIdentity(input: {
+  readonly prevLimits: ServerProviderUsageLimits | undefined;
+  readonly prevId: ProviderAccountIdentity | undefined;
+  readonly reported: ServerProviderUsageLimits;
+  readonly nextId: ProviderAccountIdentity | undefined;
+}): {
+  readonly keepBaseline: boolean;
+  readonly switched: boolean;
+  readonly effectiveId: ProviderAccountIdentity | undefined;
+} {
+  const { prevLimits, prevId, reported, nextId } = input;
+  const hadUsableBaseline = prevLimits !== undefined && prevLimits.unavailable === undefined;
+  if (reported.unavailable?.reason === "probeFailed") {
+    const authLost = hasAuthIdentity(prevId) && !hasAuthIdentity(nextId);
+    const mismatched =
+      prevId !== undefined && nextId !== undefined && !accountIdentitiesMatch(prevId, nextId);
+    const identityAppeared = hadUsableBaseline && prevId === undefined && nextId !== undefined;
+    if (authLost || mismatched || identityAppeared) {
+      return { keepBaseline: false, switched: true, effectiveId: nextId };
+    }
+    return {
+      keepBaseline: prevLimits !== undefined,
+      switched: false,
+      effectiveId: hadUsableBaseline ? mergeAccountIdentity(prevId, nextId) : nextId,
+    };
+  }
+  if (reported.unavailable !== undefined || !hadUsableBaseline) {
+    return { keepBaseline: false, switched: false, effectiveId: nextId };
+  }
+  const identityBroken =
+    (prevId !== undefined &&
+      nextId !== undefined &&
+      (!accountIdentitiesMatch(prevId, nextId) ||
+        (prevId.fingerprint !== undefined && nextId.fingerprint === undefined))) ||
+    (prevId !== undefined) !== (nextId !== undefined);
+  if (identityBroken) {
+    return { keepBaseline: false, switched: true, effectiveId: nextId };
+  }
+  return {
+    keepBaseline: true,
+    switched: false,
+    effectiveId: mergeAccountIdentity(prevId, nextId),
+  };
 }
 
 function accountIdentitiesByInstance(providers: ReadonlyArray<ServerProvider>) {
@@ -399,6 +477,7 @@ function observedResetAtForThread(input: {
   readonly threadModel: string | null;
   readonly driver: ServerProvider["driver"] | undefined;
   readonly usageLimits: ServerProviderUsageLimits | undefined;
+  readonly observedAtMs: number | undefined;
   readonly observedWindows: ReadonlyMap<string, number> | undefined;
   readonly nowMs: number;
 }): number | undefined {
@@ -409,6 +488,7 @@ function observedResetAtForThread(input: {
     threadModel,
     driver,
     usageLimits,
+    observedAtMs,
     observedWindows,
     nowMs,
   } = input;
@@ -424,6 +504,9 @@ function observedResetAtForThread(input: {
   if (latestRunModel !== null && threadModel !== null && latestRunModel !== threadModel) {
     return undefined;
   }
+  // Evaluate exhaustion at the time the latest usable snapshot was observed so an unrefreshed
+  // blocking window cannot age out by wall clock and let an earlier sibling reset fire early.
+  const exhaustionCheckMs = observedAtMs ?? nowMs;
   const model = latestRunModel ?? threadModel;
   let applicable: ReadonlyArray<ServerProviderUsageWindow>;
   if (model !== null) {
@@ -431,9 +514,11 @@ function observedResetAtForThread(input: {
     const provider = { driver, usageLimits };
     applicable = usageWindowsForModel(provider, model);
     if (applicable.length === 0) return undefined;
-    if (exhaustedUsageWindow(provider, nowMs, model) !== undefined) return undefined;
+    if (exhaustedUsageWindow(provider, exhaustionCheckMs, model) !== undefined) return undefined;
   } else {
-    if (exhaustedUsageWindow({ driver, usageLimits }, nowMs) !== undefined) return undefined;
+    if (exhaustedUsageWindow({ driver, usageLimits }, exhaustionCheckMs) !== undefined) {
+      return undefined;
+    }
     applicable = usageLimits.windows;
   }
   let latest: number | undefined;
@@ -508,17 +593,26 @@ const makeSweep = Effect.gen(function* () {
   // Atomic versioned snapshot of provider limits, drivers, account identities, and per-window
   // reset timestamps so sweeps never tear across updates or keep observations across account changes.
   const initialProviders = yield* providers.getProviders;
+  const initialSeen = limitsByInstance(initialProviders);
+  const initialAt = DateTime.toEpochMillis(yield* DateTime.now);
   const providerState = yield* Ref.make<ObservedProviderState>({
     version: 0,
-    seen: limitsByInstance(initialProviders),
+    seen: initialSeen,
+    observedAt: new Map(
+      [...initialSeen.entries()].flatMap(([instanceId, limits]) =>
+        limits.unavailable === undefined ? [[instanceId, initialAt] as const] : [],
+      ),
+    ),
     drivers: driversByInstance(initialProviders),
-    accountIdentities: accountIdentitiesByInstance(initialProviders),
+    accountIdentities: accountIdentitiesByInstance(
+      initialProviders.filter((provider) => initialSeen.has(provider.instanceId)),
+    ),
     resetObservedWindows: new Map(),
   });
-  // Tracks the last early reset-observed resume per thread so an immediate continuation failure
-  // in the same reset window waits for its recorded clock instead of looping.
+  // Tracks the last early reset-observed resume per thread so a continuation failure waits for its
+  // recorded reset clock (even if the provider revises resetAt) instead of looping.
   const earlyResumed = yield* Ref.make<
-    ReadonlyMap<ThreadId, { readonly continuedFromRunId: RunId; readonly resetMs: number }>
+    ReadonlyMap<ThreadId, { readonly continuedFromRunId: RunId; readonly expiresAtMs: number }>
   >(new Map());
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
@@ -529,18 +623,14 @@ const makeSweep = Effect.gen(function* () {
     thread: ProjectionStore.ProjectionLimitRecoveryCandidate,
     earlyAttempted: ReadonlyMap<
       ThreadId,
-      { readonly continuedFromRunId: RunId; readonly resetMs: number }
+      { readonly continuedFromRunId: RunId; readonly expiresAtMs: number }
     >,
     nowMs: number,
   ): number | undefined => {
-    const resetMs =
-      thread.usageLimitResetAt == null ? Number.NaN : Date.parse(thread.usageLimitResetAt);
     const priorEarly = earlyAttempted.get(thread.id);
     if (
       priorEarly !== undefined &&
-      thread.latestRunUsageLimitContinuationOfRunId === priorEarly.continuedFromRunId &&
-      Number.isFinite(resetMs) &&
-      Math.abs(priorEarly.resetMs - resetMs) <= SAME_RESET_WINDOW_MS
+      thread.latestRunUsageLimitContinuationOfRunId === priorEarly.continuedFromRunId
     ) {
       return undefined;
     }
@@ -551,6 +641,7 @@ const makeSweep = Effect.gen(function* () {
       threadModel: thread.threadModel,
       driver: state.drivers.get(thread.providerInstanceId),
       usageLimits: state.seen.get(thread.providerInstanceId),
+      observedAtMs: state.observedAt.get(thread.providerInstanceId),
       observedWindows: state.resetObservedWindows.get(thread.providerInstanceId),
       nowMs,
     });
@@ -670,20 +761,22 @@ const makeSweep = Effect.gen(function* () {
           yield* threads.dispatch(dispatchCommand);
           if (
             dispatchCommand.type === "message.dispatch" &&
-            dispatchCommand.usageLimitContinuationOfRunId !== undefined &&
-            thread.usageLimitResetAt != null
+            dispatchCommand.usageLimitContinuationOfRunId !== undefined
           ) {
-            const resetMs = Date.parse(thread.usageLimitResetAt);
+            const resetMs =
+              thread.usageLimitResetAt == null ? Number.NaN : Date.parse(thread.usageLimitResetAt);
             const continuedFromRunId = dispatchCommand.usageLimitContinuationOfRunId;
+            const expiresAtMs =
+              Math.max(Number.isFinite(resetMs) ? resetMs : nowMs, nowMs) + MAX_OVERDUE_ARM_MS;
             yield* Ref.update(earlyResumed, (current) => {
               const updated = new Map(current);
-              if (dispatchCommand.usageLimitResetObserved === true && Number.isFinite(resetMs)) {
-                updated.set(thread.id, { continuedFromRunId, resetMs });
+              if (dispatchCommand.usageLimitResetObserved === true) {
+                updated.set(thread.id, { continuedFromRunId, expiresAtMs });
               } else {
                 updated.delete(thread.id);
               }
               for (const [id, entry] of updated) {
-                if (entry.resetMs + SAME_RESET_WINDOW_MS < nowMs) updated.delete(id);
+                if (entry.expiresAtMs < nowMs) updated.delete(id);
               }
               return updated;
             });
@@ -762,66 +855,45 @@ const makeSweep = Effect.gen(function* () {
         const nextAccountIdentities = accountIdentitiesByInstance(providerList);
         const at = DateTime.toEpochMillis(yield* DateTime.now);
         yield* Ref.update(providerState, (current) => {
-          // Drop prior baselines for any instance whose account identity conflicted or broke
-          // (lost/gained identity on a usable snapshot), while keeping transient probeFailed
-          // snapshots on an unchanged account intact.
           const previousSeen = new Map<ProviderInstanceId, ServerProviderUsageLimits>();
           const switchedInstances = new Set<ProviderInstanceId>();
           const effectiveIdentities = new Map<ProviderInstanceId, ProviderAccountIdentity>();
           for (const [instanceId, reported] of nextLimits) {
-            const prevId = current.accountIdentities.get(instanceId);
-            const nextId = nextAccountIdentities.get(instanceId);
             const prevLimits = current.seen.get(instanceId);
-            if (reported.unavailable?.reason === "probeFailed") {
-              const authLost = hasAuthIdentity(prevId) && !hasAuthIdentity(nextId);
-              const conflicted =
-                prevId !== undefined &&
-                nextId !== undefined &&
-                accountIdentitiesConflict(prevId, nextId);
-              const identityAppeared =
-                prevLimits !== undefined &&
-                prevLimits.unavailable === undefined &&
-                prevId === undefined &&
-                nextId !== undefined;
-              if (authLost || conflicted || identityAppeared) {
-                switchedInstances.add(instanceId);
-                if (nextId !== undefined) effectiveIdentities.set(instanceId, nextId);
-              } else {
-                if (prevLimits !== undefined) previousSeen.set(instanceId, prevLimits);
-                const mergedId = mergeAccountIdentity(prevId, nextId);
-                if (mergedId !== undefined) effectiveIdentities.set(instanceId, mergedId);
-              }
-              continue;
+            const reconciled = reconcileProviderAccountIdentity({
+              prevLimits,
+              prevId: current.accountIdentities.get(instanceId),
+              reported,
+              nextId: nextAccountIdentities.get(instanceId),
+            });
+            if (reconciled.switched) switchedInstances.add(instanceId);
+            if (reconciled.keepBaseline && prevLimits !== undefined) {
+              previousSeen.set(instanceId, prevLimits);
             }
-            if (reported.unavailable !== undefined) {
-              if (nextId !== undefined) effectiveIdentities.set(instanceId, nextId);
-              continue;
+            if (reconciled.effectiveId !== undefined) {
+              effectiveIdentities.set(instanceId, reconciled.effectiveId);
             }
-            const identityBroken =
-              (prevId !== undefined &&
-                nextId !== undefined &&
-                (accountIdentitiesConflict(prevId, nextId) ||
-                  (prevId.fingerprint !== undefined && nextId.fingerprint === undefined))) ||
-              (prevLimits !== undefined &&
-                prevLimits.unavailable === undefined &&
-                (prevId !== undefined) !== (nextId !== undefined));
-            if (identityBroken) {
-              switchedInstances.add(instanceId);
-              if (nextId !== undefined) effectiveIdentities.set(instanceId, nextId);
-              continue;
-            }
-            if (prevLimits !== undefined) previousSeen.set(instanceId, prevLimits);
-            const mergedId = mergeAccountIdentity(prevId, nextId);
-            if (mergedId !== undefined) effectiveIdentities.set(instanceId, mergedId);
           }
           const report = observeLimitReport(previousSeen, nextLimits, at);
           // Rebuild observations only for instances still present with usable limits so logout,
           // unsupported probes, provider removal, or account switches never leave stale markers.
           const resetObservedWindows = new Map<ProviderInstanceId, ReadonlyMap<string, number>>();
+          const nextObservedAt = new Map<ProviderInstanceId, number>();
           for (const [instanceId, limits] of report.limits) {
-            if (limits.unavailable !== undefined || switchedInstances.has(instanceId)) continue;
+            if (limits.unavailable !== undefined) continue;
+            const reported = nextLimits.get(instanceId);
+            if (reported?.unavailable?.reason === "probeFailed") {
+              const prevAt = current.observedAt.get(instanceId);
+              if (prevAt !== undefined) nextObservedAt.set(instanceId, prevAt);
+            } else {
+              nextObservedAt.set(instanceId, at);
+            }
+            if (switchedInstances.has(instanceId)) continue;
             const nextWindowMap = new Map(current.resetObservedWindows.get(instanceId));
             for (const windowId of report.spentWindows.get(instanceId) ?? []) {
+              nextWindowMap.delete(windowId);
+            }
+            for (const windowId of report.invalidatedWindows.get(instanceId) ?? []) {
               nextWindowMap.delete(windowId);
             }
             for (const windowId of report.observedWindows.get(instanceId) ?? []) {
@@ -832,6 +904,7 @@ const makeSweep = Effect.gen(function* () {
           return {
             version: current.version + 1,
             seen: report.limits,
+            observedAt: nextObservedAt,
             drivers: nextDrivers,
             accountIdentities: effectiveIdentities,
             resetObservedWindows,

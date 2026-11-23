@@ -334,6 +334,16 @@ it("tracks spent and recovered windows independently", () => {
     changes(limits([window("primary", 100), window("weekly", 40)]), limits([window("weekly", 39)])),
     { observed: [], spent: ["primary"] },
   );
+  // A window whose modelIds/providerIds scope changed is a fresh baseline, not a reset, and
+  // invalidates any prior reset marker for that window id.
+  const scopeChanged = report(
+    new Map([
+      [instanceId, limits([{ ...window("budget_1", 100), modelIds: ["opencode/model-a"] }])],
+    ]),
+    limits([{ ...window("budget_1", 0), modelIds: ["opencode/model-b"] }]),
+  );
+  assert.deepEqual(scopeChanged.observedWindows.get(instanceId) ?? [], []);
+  assert.deepEqual(scopeChanged.invalidatedWindows.get(instanceId) ?? [], ["budget_1"]);
 });
 
 it("remembers a spent window a probe stopped reporting", () => {
@@ -871,9 +881,10 @@ it.effect(
         assert.equal("threadId" in first ? first.threadId : null, piGoThread.id);
         assert.equal(yield* Queue.size(dispatched), 0);
 
-        // Now pi-go fails again immediately on run 2 (continuation of run 1) for the same reset window (2s jitter).
-        const jitteredResetAt = DateTime.formatIso(
-          DateTime.add(DateTime.makeUnsafe(futureResetAt), { seconds: 2 }),
+        // Now pi-go fails again immediately on run 2 (continuation of run 1) with a revised retry
+        // deadline 30 minutes later: it must still wait for its recorded clock rather than looping.
+        const revisedResetAt = DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe(futureResetAt), { minutes: 30 }),
         );
         yield* TestClock.adjust("5 seconds");
         const failedAgainAt = yield* DateTime.now;
@@ -881,12 +892,12 @@ it.effect(
           ...piGoThread,
           latestRunId: RunId.make("run:pi-go:2"),
           latestRunUsageLimitContinuationOfRunId: piGoThread.latestRunId,
-          usageLimitResetAt: jitteredResetAt,
+          usageLimitResetAt: revisedResetAt,
           latestRunCompletedAt: failedAgainAt,
           updatedAt: failedAgainAt,
           limitRecovery: {
             runId: RunId.make("run:pi-go:2"),
-            resetAt: jitteredResetAt,
+            resetAt: revisedResetAt,
             autoResume: true,
             requestId: CommandId.make("recovery:pi-go:2"),
           },
@@ -971,7 +982,7 @@ it.effect(
           updatedAt: manualFailedAt,
           limitRecovery: {
             runId: RunId.make("run:pi-go:3"),
-            resetAt: jitteredResetAt,
+            resetAt: revisedResetAt,
             autoResume: true,
             requestId: CommandId.make("recovery:pi-go:3"),
           },
@@ -995,7 +1006,7 @@ it.effect(
 
         // Once the real reset clock passes, pi-proxy and pi-switched still auto-resume normally.
         yield* Ref.set(candidatesRef, [piProxyThread, piSwitchedThread]);
-        yield* TestClock.setTime(Date.parse(jitteredResetAt));
+        yield* TestClock.setTime(Date.parse(revisedResetAt));
         yield* Queue.offer(
           providerChanges,
           snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
@@ -1262,6 +1273,64 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
       assert.equal(yield* Queue.take(sweeps), false);
       yield* Queue.offer(providerChanges, {
         providers: codexSnapshot(0, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 7. Disjoint non-empty identities ({ email } -> { workspaceId }) and dropped
+      //    credentialFingerprint on a usable snapshot both invalidate baselines and markers.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:8", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "f@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { workspaceId: "ws-other" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "g@example.com", fingerprint: "fp-g" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "g@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 8. A sibling window resetting while another applicable window is still spent does not fire
+      //    merely because wall clock passes the spent window's resetsAt without a fresh probe.
+      const shortBlockResetAt = DateTime.formatIso(
+        DateTime.add(yield* DateTime.now, { minutes: 5 }),
+      );
+      const multiWindowSnapshot = (primaryUsed: number, secondaryUsed: number) =>
+        [
+          {
+            instanceId: codexId,
+            driver: ProviderDriverKind.make("codex"),
+            auth: { status: "authenticated", email: "h@example.com" },
+            usageLimits: limits([
+              window("primary", primaryUsed, futureResetAt),
+              window("secondary", secondaryUsed, shortBlockResetAt),
+            ]),
+          },
+        ] as unknown as ReadonlyArray<ServerProvider>;
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:9", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, { providers: multiWindowSnapshot(100, 100) });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, { providers: multiWindowSnapshot(0, 100) });
+      assert.equal(yield* Queue.take(sweeps), true);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      // Advance past secondary's resetsAt without a fresh probe; triggering a probeFailed (which
+      // keeps the stale snapshot) must not let primary's earlier reset wake the thread.
+      yield* TestClock.setTime(Date.parse(shortBlockResetAt) + 1_000);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot("probeFailed", { email: "h@example.com" }),
       });
       assert.equal(yield* Queue.take(sweeps), true);
       assert.equal(yield* Queue.size(dispatched), 0);
