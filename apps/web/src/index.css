@@ -758,6 +758,97 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     var(--app-scrollbar-width) 100%;
 }
 
+/* Fade the timeline behind the bottom of the stock composer so scrolling content
+   never bleeds behind the unblurred context strip or bottom safe-area gutter.
+   Liquid Glass renders the strip as an attached refractive pill, so it keeps
+   the timeline live behind it. */
+html:not([data-liquid-glass-effect]) .messages-timeline-scroll.timeline-composer-bottom-fade {
+  --timeline-fade-top: 0px;
+  /* Reach 0% opacity where the card's bottom rounded corners (1rem) begin so
+     high-contrast timeline content never peeks out in the exterior corner notches. */
+  --timeline-fade-bottom-clear: calc(var(--chat-timeline-bottom-clear, 0px) + 1rem);
+  --timeline-fade-bottom-ramp: 1.5rem;
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0px,
+      rgb(0 0 0 / 10%) calc(var(--timeline-fade-top) * 0.1),
+      rgb(0 0 0 / 30%) calc(var(--timeline-fade-top) * 0.24),
+      rgb(0 0 0 / 58%) calc(var(--timeline-fade-top) * 0.42),
+      rgb(0 0 0 / 82%) calc(var(--timeline-fade-top) * 0.62),
+      rgb(0 0 0 / 96%) calc(var(--timeline-fade-top) * 0.82),
+      black var(--timeline-fade-top),
+      black calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp)),
+      rgb(0 0 0 / 96%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.82),
+      rgb(0 0 0 / 82%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.62),
+      rgb(0 0 0 / 58%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.42),
+      rgb(0 0 0 / 30%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.24),
+      rgb(0 0 0 / 10%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.1),
+      transparent calc(100% - var(--timeline-fade-bottom-clear)),
+      transparent 100%
+    ),
+    linear-gradient(black, black);
+  -webkit-mask-position:
+    top left,
+    right;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size:
+    100% 100%,
+    var(--app-scrollbar-width) 100%;
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0px,
+      rgb(0 0 0 / 10%) calc(var(--timeline-fade-top) * 0.1),
+      rgb(0 0 0 / 30%) calc(var(--timeline-fade-top) * 0.24),
+      rgb(0 0 0 / 58%) calc(var(--timeline-fade-top) * 0.42),
+      rgb(0 0 0 / 82%) calc(var(--timeline-fade-top) * 0.62),
+      rgb(0 0 0 / 96%) calc(var(--timeline-fade-top) * 0.82),
+      black var(--timeline-fade-top),
+      black calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp)),
+      rgb(0 0 0 / 96%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.82),
+      rgb(0 0 0 / 82%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.62),
+      rgb(0 0 0 / 58%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.42),
+      rgb(0 0 0 / 30%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.24),
+      rgb(0 0 0 / 10%)
+        calc(100% - var(--timeline-fade-bottom-clear) - var(--timeline-fade-bottom-ramp) * 0.1),
+      transparent calc(100% - var(--timeline-fade-bottom-clear)),
+      transparent 100%
+    ),
+    linear-gradient(black, black);
+  mask-position:
+    top left,
+    right;
+  mask-repeat: no-repeat;
+  mask-size:
+    100% 100%,
+    var(--app-scrollbar-width) 100%;
+}
+
+html:not([data-liquid-glass-effect])
+  .messages-timeline-scroll.timeline-composer-bottom-fade.topbar-scroll-fade {
+  --timeline-fade-top: var(--workspace-titlebar-scroll-fade-height);
+}
+
+html[dir="rtl"]:not([data-liquid-glass-effect])
+  .messages-timeline-scroll.timeline-composer-bottom-fade {
+  -webkit-mask-position:
+    top left,
+    left;
+  mask-position:
+    top left,
+    left;
+}
+
 /* Virtualizers own their native scroll element, so they cannot use ScrollArea's
    viewport fade. Keep the scrollbar lane opaque while sharing the same fade
    contract across those lists. */
