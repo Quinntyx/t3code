@@ -37,7 +37,7 @@ const ExternalConnectorsTool = Tool.make("external_connectors", {
 
 const ComposeEmailTool = Tool.make("compose_email", {
   description:
-    "Draft an email or reply in a card and wait for the user to review, edit and send or discard it. A request to reply authorizes a draft, never an unreviewed send. Always use this tool, not a shell, SMTP or mail client. Returns what was sent.",
+    "Draft an email or reply in a card for the user to review, edit and send or discard. A request to reply authorizes a draft, never an unreviewed send. Always use this tool, not a shell, SMTP or mail client. Returns `pending`; the outcome arrives as a message in this thread. Do not wait, poll, or call it again to check.",
   parameters: OrchestratorMcpComposeEmailInput,
   success: OrchestratorMcpComposeEmailResult,
   failure: OrchestratorMcpFailure,

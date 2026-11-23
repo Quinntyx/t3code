@@ -116,6 +116,7 @@ import Migration0101 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
 import Migration0102 from "./Migrations/102_ThreadItemCounts.ts";
 import Migration0103 from "./Migrations/103_VoiceNotificationIndex.ts";
 import Migration0104 from "./Migrations/104_SubagentLineageIndex.ts";
+import Migration0105 from "./Migrations/105_WaitingEmailRequestIndex.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -223,6 +224,7 @@ const migrationEntries = [
   [102, "ThreadItemCounts", Migration0102],
   [103, "VoiceNotificationIndex", Migration0103],
   [104, "SubagentLineageIndex", Migration0104],
+  [105, "WaitingEmailRequestIndex", Migration0105],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
