@@ -497,6 +497,7 @@ const waitingThread = (
   status: "failed",
   lastErrorClass: "usage_limit",
   latestRunId: RunId.make("run:waiting"),
+  latestRunProviderInstanceId: overrides.providerInstanceId ?? ProviderInstanceId.make("codex"),
   latestRunModel: null,
   threadModel: null,
   latestRunUsageLimitContinuationOfRunId: null,
@@ -1097,10 +1098,11 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
       ),
     );
     const codexSnapshot = (
-      usedPercent?: number | "unsupported",
+      usedPercent?: number | "unsupported" | "probeFailed",
       options?: {
         readonly fingerprint?: string;
         readonly email?: string;
+        readonly workspaceId?: string;
         readonly unauthenticated?: boolean;
       },
     ) =>
@@ -1111,11 +1113,12 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
           auth: {
             status: options?.unauthenticated ? "unauthenticated" : "authenticated",
             ...(options?.email === undefined ? {} : { email: options.email }),
+            ...(options?.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
           },
           ...(usedPercent === undefined
             ? {}
-            : usedPercent === "unsupported"
-              ? { usageLimits: limits([], { unavailable: { reason: "unsupported" } }) }
+            : usedPercent === "unsupported" || usedPercent === "probeFailed"
+              ? { usageLimits: limits([], { unavailable: { reason: usedPercent } }) }
               : {
                   usageLimits: limits(
                     [window("primary", usedPercent, futureResetAt)],
@@ -1186,6 +1189,81 @@ it.effect("drops reset observations on logout/account clear and rechecks mid-swe
         providers: codexSnapshot(0, { email: "c@example.com" }),
       });
       assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 4. Transient probeFailed on an unchanged account with both credentialFingerprint and
+      //    auth.email retains baseline limits so the subsequent 100 -> 0 recovery still fires.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:4", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "c@example.com", fingerprint: "fp-c" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot("probeFailed", { email: "c@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, {
+          email: "c@example.com",
+          workspaceId: "ws-c",
+          fingerprint: "fp-c",
+        }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      const recovered = yield* Queue.take(dispatched);
+      assert.isTrue(
+        recovered.type === "message.dispatch" && recovered.usageLimitResetObserved === true,
+      );
+
+      // 5. Losing or gaining account identity on a usable snapshot (e.g. account -> anonymous or
+      //    anonymous -> account) invalidates baselines and reset markers so an anonymous gap can
+      //    never fabricate or carry a reset across accounts.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:5", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "d@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      // Even if the anonymous snapshot itself observes 100 -> 0, switching to identified account E
+      // clears the anonymous reset marker instead of carrying it into E.
+      yield* Ref.set(candidatesRef, []);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(100) });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0) });
+      assert.equal(yield* Queue.take(sweeps), true);
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:6", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 6. A thread whose failed run belonged to another provider instance (same model) must not
+      //    early-resume on this instance's reset.
+      yield* Ref.set(candidatesRef, [
+        {
+          ...makeCandidate("run:codex:7", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+          latestRunProviderInstanceId: ProviderInstanceId.make("codex_other"),
+        },
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
       assert.equal(yield* Queue.size(dispatched), 0);
     }).pipe(Effect.provide(layer));
   }),

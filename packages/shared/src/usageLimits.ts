@@ -84,7 +84,10 @@ function hubRouteDrivers(
   return origin && routesByOrigin.size > 0 ? new Set() : null;
 }
 
-type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
+type UsageLimitProvider = {
+  readonly driver?: ServerProvider["driver"] | undefined;
+  readonly usageLimits?: ServerProviderUsageLimits | undefined;
+};
 
 export function usageWindowsForModel(
   provider: ServerProvider | UsageLimitProvider | undefined,
@@ -134,10 +137,16 @@ export function usageWindowsForModel(
       });
     }
     case "claudeAgent": {
-      const normalizedModel = model.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+      const normalizedModel = model
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
       return matching.filter((window) => {
         if (!window.id.startsWith("seven_day_")) return true;
-        const scope = window.id.slice("seven_day_".length).replace(/^claude_/, "");
+        const scope = window.id
+          .slice("seven_day_".length)
+          .replace(/^claude_/, "")
+          .replace(/^_+|_+$/g, "");
         return scope.length === 0 || normalizedModel.includes(scope);
       });
     }

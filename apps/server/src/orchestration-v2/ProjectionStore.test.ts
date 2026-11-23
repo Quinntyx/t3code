@@ -9079,6 +9079,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             lastErrorClass: sqlShell.lastErrorClass,
             usageLimitResetAt: sqlShell.usageLimitResetAt,
             latestRunId: sqlShell.latestRunId,
+            latestRunProviderInstanceId: sqlShell.providerInstanceId,
             latestRunModel: original.modelSelection.model,
             threadModel: original.modelSelection.model,
             latestRunUsageLimitContinuationOfRunId: null,
@@ -9414,7 +9415,20 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         switchedContinuationCandidate?.latestRunUsageLimitContinuationOfRunId,
         "run:limit-shell:prior",
       );
-      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = ${originalRow!.payload_json} WHERE thread_id = ${threadId}`;
+      assert.equal(switchedContinuationCandidate?.latestRunProviderInstanceId, providerInstanceId);
+      // Switching the thread to a different provider instance excludes it from candidates so the
+      // new instance's resets cannot trigger or consume the original provider's recovery receipt.
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET provider_instance_id = 'codex-other'
+        WHERE thread_id = ${threadId}`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET provider_instance_id = ${providerInstanceId}, payload_json = ${originalRow!.payload_json}
+        WHERE thread_id = ${threadId}`;
       yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json = ${originalRunRow!.payload_json} WHERE run_id = ${original.id}`;
       const activeProviderThreadId = ProviderThreadId.make("provider-thread:limit-shell:bg-tasks");
       const bgProviderThread = {

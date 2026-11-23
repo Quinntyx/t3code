@@ -13794,6 +13794,45 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           afterSwitchedEarly.thread.limitRecovery?.requestId,
           switched.resume.usageLimitRecoveryRequestId,
         );
+        // Switching to another provider instance with the same model also rejects and rotates
+        // requestId so switching back before resetAt preserves the clock-due resume.
+        const providerSwitched = yield* limitedThread("provider-switched");
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("recovery:switch-provider:away"),
+          threadId: providerSwitched.threadId,
+          modelSelection: {
+            ...modelSelection,
+            instanceId: alternateProviderInstance.instanceId,
+          },
+        });
+        yield* orchestrator.dispatch(providerSwitched.resume);
+        const afterProviderSwitched = yield* orchestrator.getThreadProjection(
+          providerSwitched.threadId,
+        );
+        assert.lengthOf(afterProviderSwitched.runs, 1);
+        assert.notEqual(
+          afterProviderSwitched.thread.limitRecovery?.requestId,
+          providerSwitched.resume.usageLimitRecoveryRequestId,
+        );
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("recovery:switch-provider:back"),
+          threadId: providerSwitched.threadId,
+          modelSelection,
+        });
+        yield* TestClock.setTime(Date.parse(resetAt));
+        const dueMs = DateTime.toEpochMillis(yield* DateTime.now);
+        const shellsAtReset = (yield* orchestrator.getShellSnapshot()).threads;
+        for (const id of [switched.threadId, providerSwitched.threadId]) {
+          const dueShell = shellsAtReset.find((thread) => thread.id === id)!;
+          const clockDue = limitRecoveryCommand(dueShell, true, dueMs, false);
+          assert(
+            clockDue?.type === "message.dispatch" && clockDue.usageLimitResetObserved !== true,
+          );
+          yield* orchestrator.dispatch(clockDue);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(id)).runs, 2);
+        }
       }),
   );
 
