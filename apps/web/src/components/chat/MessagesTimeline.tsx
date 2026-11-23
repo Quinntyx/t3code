@@ -45,6 +45,7 @@ import {
   useEffectEvent,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type Ref,
   type SyntheticEvent,
@@ -330,6 +331,8 @@ interface MessagesTimelineProps {
   /** Composer space to center the empty state against; held steady through collapse. */
   emptyPlaceholderInset: number;
   topFadeEnabled?: boolean;
+  /** Height below the composer card where scrolling content fades out in stock style. */
+  bottomFadeClearance?: number;
   historyControls?: MessagesTimelineHistoryControls | undefined;
   findExpanded?: boolean;
   findQuery?: string;
@@ -428,6 +431,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   hideEmptyPlaceholder = false,
   emptyPlaceholderInset,
   topFadeEnabled = false,
+  bottomFadeClearance = 0,
   historyControls,
 }: MessagesTimelineProps) {
   const gt = useGT();
@@ -1454,6 +1458,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
             ref={attachTimelineViewportElement}
             className="relative h-full min-h-0"
             data-assistant-citation-viewport="true"
+            style={
+              bottomFadeClearance > 0
+                ? ({ "--chat-timeline-bottom-clear": `${bottomFadeClearance}px` } as CSSProperties)
+                : undefined
+            }
           >
             {onCiteAssistantText && citationThreadRef ? (
               <AssistantSelectionToolbar
@@ -1507,6 +1516,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               className={cn(
                 "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
                 topFadeEnabled && "topbar-scroll-fade",
+                bottomFadeClearance > 0 && "timeline-composer-bottom-fade",
               )}
               ListHeaderComponent={listHeader}
               ListFooterComponent={timelineListFooter}

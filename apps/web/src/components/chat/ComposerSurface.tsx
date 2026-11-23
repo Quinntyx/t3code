@@ -114,14 +114,14 @@ function Main({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-/** A row under the card (environment, worktree, branch); page-coloured glass by default, attached pill under Liquid Glass. */
+/** A row under the card (environment, worktree, branch); transparent over the faded timeline by default, attached pill under Liquid Glass. */
 function ContextStrip({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="composer-context-strip"
       className={cn(
-        "group/composer-context surface-glass relative flex w-full items-center gap-2 overflow-x-clip px-2 pt-2 text-muted-foreground",
-        "[html[data-liquid-glass-effect]_&]:isolate [html[data-liquid-glass-effect]_&]:z-20 [html[data-liquid-glass-effect]_&]:h-(--chat-composer-context-extension) [html[data-liquid-glass-effect]_&]:bg-transparent [html[data-liquid-glass-effect]_&]:px-(--chat-composer-drawer-padding,2rem) [html[data-liquid-glass-effect]_&]:pt-0 [html[data-liquid-glass-effect]_&]:backdrop-blur-none [html[data-liquid-glass-effect]_&]:backdrop-saturate-100",
+        "group/composer-context relative flex w-full items-center gap-2 overflow-x-clip px-2 pt-2 text-muted-foreground",
+        "[html[data-liquid-glass-effect]_&]:isolate [html[data-liquid-glass-effect]_&]:z-20 [html[data-liquid-glass-effect]_&]:h-(--chat-composer-context-extension) [html[data-liquid-glass-effect]_&]:px-(--chat-composer-drawer-padding,2rem) [html[data-liquid-glass-effect]_&]:pt-0",
         "[html[data-liquid-glass-effect]_&]:before:pointer-events-none [html[data-liquid-glass-effect]_&]:before:absolute [html[data-liquid-glass-effect]_&]:before:inset-x-(--chat-composer-drawer-inset,1.75rem) [html[data-liquid-glass-effect]_&]:before:inset-y-0 [html[data-liquid-glass-effect]_&]:before:-z-1 [html[data-liquid-glass-effect]_&]:before:rounded-b-(--chat-composer-strip-radius) [html[data-liquid-glass-effect]_&]:before:border [html[data-liquid-glass-effect]_&]:before:border-t-0 [html[data-liquid-glass-effect]_&]:before:border-(--chat-composer-outline) [html[data-liquid-glass-effect]_&]:before:bg-(--chat-composer-glass-fill) [html[data-liquid-glass-effect]_&]:before:composer-frost",
         "[html[data-liquid-glass-effect]_&]:after:pointer-events-none [html[data-liquid-glass-effect]_&]:after:absolute [html[data-liquid-glass-effect]_&]:after:inset-x-(--chat-composer-drawer-inset,1.75rem) [html[data-liquid-glass-effect]_&]:after:inset-y-0 [html[data-liquid-glass-effect]_&]:after:-z-1 [html[data-liquid-glass-effect]_&]:after:rounded-b-(--chat-composer-strip-radius) [html[data-liquid-glass-effect]_&]:after:shadow-float [html[data-liquid-glass-effect]_&]:after:[clip-path:inset(0_-100px_-100px_-100px)]",
         "not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:[html[data-liquid-glass-effect]_&]:before:bg-(--chat-composer-glass-surface)",

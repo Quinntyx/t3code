@@ -776,6 +776,8 @@ export default function ChatView(props: ChatViewProps) {
   const [composerReservedHeight, setComposerReservedHeight] = useState(0);
   const composerReservedHeightRef = useRef(0);
   const composerExpandedHeightRef = useRef(0);
+  const [composerBottomClearance, setComposerBottomClearance] = useState(0);
+  const composerBottomClearanceRef = useRef(0);
   const [scrollToEndClearance, setScrollToEndClearance] = useState(0);
   const fanoutSelectionsAtom = draftFanoutSelectionsAtom(routeThreadKey);
   const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
@@ -2376,6 +2378,18 @@ export default function ChatView(props: ChatViewProps) {
       composerReservedHeightRef.current = reservedHeight;
       setComposerReservedHeight(reservedHeight);
     }
+    const stackRect = stack?.getBoundingClientRect();
+    const host = stack?.querySelector<HTMLElement>('[data-slot="composer-host"]');
+    const hostRect = host?.getBoundingClientRect();
+    // Measure host against the same animated stack so draft-to-thread FLIP translation cancels out.
+    const bottomClearance =
+      !isDraftHeroState && stackRect && hostRect && hostRect.height > 0
+        ? Math.max(0, Math.ceil(stackRect.bottom - hostRect.bottom))
+        : 0;
+    if (composerBottomClearanceRef.current !== bottomClearance) {
+      composerBottomClearanceRef.current = bottomClearance;
+      setComposerBottomClearance(bottomClearance);
+    }
     const mainSurface = composerOverlayElement?.querySelector<HTMLElement>(
       '[data-chat-composer-main-surface="true"]',
     );
@@ -2434,7 +2448,8 @@ export default function ChatView(props: ChatViewProps) {
     composerOverlayElement,
     isDraftHeroState,
     publishComposerOverlayHeightStable,
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The scroll-to-bottom button changes the overlay's height without resizing the observed node first.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Context strip visibility and the scroll-to-bottom button change overlay geometry without always resizing the observed node first.
+    showComposerContextStrip,
     showScrollToBottom,
   ]);
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(activeThreadRef);
@@ -3741,6 +3756,7 @@ export default function ChatView(props: ChatViewProps) {
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                   emptyPlaceholderInset={composerReservedHeight}
                   topFadeEnabled={!hasTimelineTopBanner}
+                  bottomFadeClearance={composerBottomClearance}
                   {...(threadHistoryControls === undefined
                     ? {}
                     : { historyControls: threadHistoryControls })}
