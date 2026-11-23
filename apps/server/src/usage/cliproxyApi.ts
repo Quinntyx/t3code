@@ -729,6 +729,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     const driver = hubProviderDriver(provider.id);
     const name = provider.name.trim() || provider.id;
+    const models = [...new Set((provider.model_ids ?? []).map((id) => id.trim()).filter(Boolean))];
     const usage = yield* managementRequest(
       hub,
       `v8/management/providers/${encodeURIComponent(provider.id)}/usage`,
@@ -739,6 +740,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
           id: provider.id,
           driver,
           label: name,
+          ...(models.length > 0 ? { models } : {}),
           usageLimits: makeUnavailableUsageLimits({
             checkedAt: now,
             reason: "probeFailed",
@@ -760,6 +762,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
           driver,
           ...(email ? { email } : { label: label || name }),
           ...(plan ? { plan } : {}),
+          ...(models.length > 0 ? { models } : {}),
           usageLimits: hubAccountLimits(account, isoOrUndefined(account.checked_at) ?? now),
         },
       ];

@@ -10,7 +10,7 @@ import VoiceNotificationIndex from "./Migrations/111_VoiceNotificationIndex.ts";
 import SubagentLineageIndex from "./Migrations/112_SubagentLineageIndex.ts";
 import { reconciledForkHistory } from "./reconcileForkMigration.ts";
 
-// Historical fork migration 81 lacked `json_valid(payload_json)` before migration 103 hardened it.
+// Historical fork migration 81 lacked `json_valid(payload_json)` before migration 111 hardened it.
 const LegacyVoiceNotificationIndex = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
@@ -38,7 +38,7 @@ const readIndexes = Effect.gen(function* () {
 
 describe("legacy fork migration reconciliation", () => {
   it.effect.each([false, true])(
-    "upgrades legacy fork database through 81 (with 82=%s) onto upstream 81..102 + fork 103..104",
+    "upgrades legacy fork database through 81 (with 82=%s) onto upstream 81..110 + fork 111..112",
     (withSubagentIndex) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -62,7 +62,7 @@ describe("legacy fork migration reconciliation", () => {
         assert.include(voiceIndexSql, "json_valid(payload_json)");
         assert.isTrue(indexes.has("orchestration_v2_projection_threads_subagent_parent_idx"));
 
-        // Malformed system_notice JSON must not fail index maintenance after migration 103 rebuilds it.
+        // Malformed system_notice JSON must not fail index maintenance after migration 111 rebuilds it.
         yield* sql`
           INSERT INTO orchestration_v2_projection_turn_items (
             turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
@@ -131,6 +131,52 @@ describe("legacy fork migration reconciliation", () => {
           migrationManifest.filter(([id]) => id <= 81),
         );
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("respects bounded toMigrationInclusive targets on prior-fork 103..104 tails", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 102 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({
+          "103_VoiceNotificationIndex": VoiceNotificationIndex,
+          "104_SubagentLineageIndex": SubagentLineageIndex,
+        }),
+      });
+      const before = yield* readHistory;
+
+      // Targeting <= 102 must leave prior-fork 103/104 untouched.
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 102 }), []);
+      assert.deepStrictEqual(yield* readHistory, before);
+
+      // Targeting 103 removes the prior-fork tail so canonical 103 actually runs.
+      const executed = yield* runMigrations({ toMigrationInclusive: 103 });
+      assert.deepStrictEqual(
+        executed,
+        migrationManifest.filter(([id]) => id === 103),
+      );
+      assert.deepStrictEqual(
+        yield* readHistory,
+        migrationManifest.filter(([id]) => id <= 103),
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("rejects dual legacy 81..82 + prior-fork 103..104 tails without modifying ledger", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 102 });
+      yield* sql`
+        UPDATE effect_sql_migrations SET name = 'VoiceNotificationIndex' WHERE migration_id = 81
+      `;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (103, 'VoiceNotificationIndex'), (104, 'SubagentLineageIndex')
+      `;
+      const before = yield* readHistory;
+      assert.isNull(reconciledForkHistory(before.map(([id, name]) => ({ id, name }))));
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(runMigrations())));
+      assert.deepStrictEqual(yield* readHistory, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("rejects invalid fork tails without modifying the ledger", () =>

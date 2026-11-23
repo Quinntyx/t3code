@@ -86,7 +86,10 @@ export class WorkspacePaths extends Context.Service<
   {
     readonly normalizeWorkspaceRoot: (
       workspaceRoot: string,
-      options?: { readonly createIfMissing?: boolean },
+      options?: {
+        readonly createIfMissing?: boolean;
+        readonly resolveMainCheckout?: boolean;
+      },
     ) => Effect.Effect<
       string,
       | WorkspaceRootNotExistsError
@@ -172,7 +175,9 @@ const make = Effect.gen(function* () {
         normalizedWorkspaceRoot,
       });
     }
-    return yield* resolveMainCheckout(normalizedWorkspaceRoot);
+    return options?.resolveMainCheckout === false
+      ? normalizedWorkspaceRoot
+      : yield* resolveMainCheckout(normalizedWorkspaceRoot);
   });
 
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =

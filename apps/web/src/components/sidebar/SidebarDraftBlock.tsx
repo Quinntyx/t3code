@@ -277,6 +277,8 @@ export function useSidebarDrafts(
 /** An unsent draft stacked on the branch of the thread it sits under. */
 export const StackedSidebarDraftRow = memo(function StackedSidebarDraftRow(props: {
   draftId: DraftId;
+  terminalLabels: ReadonlyMap<string, string>;
+  jumpLabel: string | null;
   isActive: boolean;
   navigationParent: string;
   onNavigate: (draftId: DraftId) => void;
@@ -287,12 +289,13 @@ export const StackedSidebarDraftRow = memo(function StackedSidebarDraftRow(props
   ) => void;
 }) {
   const composer = useComposerThreadDraft(props.draftId);
+  const session = useComposerDraftStore((store) => store.draftThreadsByThreadKey[props.draftId]);
   return (
     <SidebarDraftRow
       draftId={props.draftId}
       composer={composer}
-      terminalLabel={null}
-      jumpLabel={null}
+      terminalLabel={session ? draftTerminalLabel(session, props.terminalLabels) : null}
+      jumpLabel={props.jumpLabel}
       project={null}
       projectDisplayName={null}
       hideProject
@@ -313,7 +316,7 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   /** Drafts listed under their stack instead, one id per line. */
-  stackedDraftIds?: string;
+  stackedDraftIds?: string | undefined;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (

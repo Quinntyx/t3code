@@ -13,13 +13,19 @@ import {
   displayLimitWindows,
   hubRoutes,
   instanceHubs,
+  type LimitPoolAmount,
   type LimitPoolWindow,
+  quotaDriverForModel,
 } from "@t3tools/shared/usageLimits";
 import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
 
 export type ThreadDetailsLimits =
   | { readonly kind: "instance"; readonly limits: ServerProviderUsageLimits }
-  | { readonly kind: "pool"; readonly windows: readonly LimitPoolWindow[] };
+  | {
+      readonly kind: "pool";
+      readonly windows: readonly LimitPoolWindow[];
+      readonly amounts: readonly LimitPoolAmount[];
+    };
 
 // collectLimitAccounts keys its input by environment; the card reads one, so any id serves.
 const CARD_ENVIRONMENT = EnvironmentId.make("thread-details");
@@ -35,15 +41,28 @@ export function resolveThreadDetailsLimits(
   if (!provider) return null;
   const report = collectProviderUsageLimits(provider.instanceId, providers, sources, now, model);
   // Only this instance's data: the report keeps one instance per login, and any other entry may be
-  // a different login or workspace, so fall back to the instance's own snapshot.
+  // a different login or workspace, so prefer a usable entry for this instance, else its snapshot.
+  const ownEntries =
+    report?.accounts.filter((entry) => entry.instanceId === provider.instanceId) ?? [];
   const own =
-    report?.accounts.find((entry) => entry.instanceId === provider.instanceId)?.limits ??
+    ownEntries.find((entry) => limitsNotice(entry.limits) === null)?.limits ??
+    ownEntries[0]?.limits ??
     provider.usageLimits;
-  if (!own) return null;
   const hubs = instanceHubs(provider, sources);
-  if (limitsNotice(own) === null || hubs.length === 0) return { kind: "instance", limits: own };
-  // An instance sent to a hub reads no limits of its own; its hub pools the accounts it spends.
-  return hubPool(provider.driver, model, providers, hubs, now) ?? { kind: "instance", limits: own };
+  if (own && limitsNotice(own) === null) return { kind: "instance", limits: own };
+  if (hubs.length > 0) {
+    // An instance sent to a hub reads no limits of its own; its hub pools the accounts it spends.
+    const modelProvider = model?.split(/[/:]/)[0];
+    const skipPiHub =
+      provider.driver === "pi" &&
+      model !== null &&
+      !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "");
+    const pool = skipPiHub
+      ? null
+      : hubPool(quotaDriverForModel(provider.driver, model), model, providers, hubs, now);
+    if (pool) return pool;
+  }
+  return own ? { kind: "instance", limits: own } : null;
 }
 
 export function nextPoolReset(window: LimitPoolWindow, now: number) {
@@ -83,13 +102,24 @@ function hubPool(
   if (readable.length === 0) return null;
   // A signed-in login joins the pool only as a fresher reading of an account the hub routes to.
   const signedIn = providers.filter((provider) =>
-    readable.some(
-      (account) =>
-        account.driver === provider.driver &&
+    readable.some((account) => {
+      const email = account.email?.toLowerCase();
+      if (email === undefined) return false;
+      const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
+      if (
+        account.driver === ownDriver &&
         account.workspaceId === provider.auth.workspaceId &&
-        account.email !== undefined &&
-        account.email.toLowerCase() === provider.auth.email?.toLowerCase(),
-    ),
+        email === provider.auth.email?.toLowerCase()
+      ) {
+        return true;
+      }
+      return (provider.usageSources ?? []).some(
+        (source) =>
+          account.driver === (source.limits.ownerDriver ?? source.driver) &&
+          account.workspaceId === source.workspaceId &&
+          email === source.email?.toLowerCase(),
+      );
+    }),
   );
   const presentations = new Map([
     [
@@ -101,7 +131,13 @@ function hubPool(
     ],
   ]);
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
-  return pools.length > 0 ? { kind: "pool", windows: pools.flatMap(displayLimitWindows) } : null;
+  return pools.length > 0
+    ? {
+        kind: "pool",
+        windows: pools.flatMap(displayLimitWindows),
+        amounts: pools.flatMap((pool) => pool.amounts),
+      }
+    : null;
 }
 
 export function poolSources(window: LimitPoolWindow) {

@@ -13,7 +13,7 @@ import {
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { antigravityWindowLimitsModel, hubRoutes } from "@t3tools/shared/usageLimits";
+import { hubPoolResetAt, usageOrigin } from "@t3tools/shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -31,7 +31,6 @@ import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretReso
 import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
-import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
 export class UsageLimitSources extends Context.Service<
@@ -333,33 +332,7 @@ export const layer = Layer.effect(UsageLimitSources, make).pipe(
   Layer.provide(SecretResolverLayer.layer),
 );
 
-/** A hub returns a usage limit only when every account it routes the model to is spent. */
-export function hubPoolResetAt(
-  sources: ReadonlyArray<UsageLimitSourceSnapshot>,
-  driver: ProviderDriverKind,
-  model: string | null,
-  now: number,
-): string | null {
-  let earliest: number | null = null;
-  const routes = hubRoutes(sources, driver, model);
-  for (const account of sources.flatMap((source) => source.accounts).filter(routes)) {
-    // An unread account may be the one still blocked, so its refill is unknown.
-    if (account.usageLimits.unavailable) return null;
-    const spent = account.usageLimits.windows.filter(
-      (window) =>
-        window.usedPercent >= 100 &&
-        windowLimitsModel(window, model) &&
-        (account.driver !== "antigravity" || antigravityWindowLimitsModel(window, model)),
-    );
-    if (spent.length === 0) return null;
-    const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
-    if (resets.some((reset) => !Number.isFinite(reset))) return null;
-    const recoversAt = Math.max(...resets);
-    if (recoversAt <= now) return null;
-    earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
-  }
-  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
-}
+export { hubPoolResetAt };
 
 export class UsageLimitResetFallback extends Context.Reference<{
   readonly resetAt: (
@@ -371,6 +344,17 @@ export class UsageLimitResetFallback extends Context.Reference<{
   defaultValue: () => ({ resetAt: () => Effect.succeed(null) }),
 }) {}
 
+function sameHubOrigin(source: UsageLimitSourceSnapshot, endpoint: string): boolean {
+  const rawOrigin = source.origin ?? source.endpoint;
+  if (!rawOrigin) return false;
+  const normalizedEndpoint = usageOrigin(endpoint);
+  const normalizedSource = usageOrigin(rawOrigin);
+  if (normalizedEndpoint !== null && normalizedSource !== null) {
+    return normalizedEndpoint === normalizedSource;
+  }
+  return rawOrigin === endpoint;
+}
+
 export const layerResetFallback = Layer.effect(
   UsageLimitResetFallback,
   Effect.gen(function* () {
@@ -379,7 +363,7 @@ export const layerResetFallback = Layer.effect(
       resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (driver, endpoint, model) {
         // Only the hub at the instance's endpoint serves its turns.
         const atEndpoint = Effect.map(sources.current, (current) =>
-          current.filter((source) => source.origin === endpoint),
+          current.filter((source) => sameHubOrigin(source, endpoint)),
         );
         if ((yield* atEndpoint).length === 0) return null;
         // The pool usually ran out after the last poll, so the cached accounts still show room.

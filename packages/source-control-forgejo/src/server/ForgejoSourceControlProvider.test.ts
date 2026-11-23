@@ -1022,7 +1022,7 @@ it.effect("lists Forgejo pull requests in the target repository it is given", ()
     const provider = yield* ForgejoSourceControlProvider.make;
     yield* provider.listChangeRequests({
       cwd: "/repo",
-      targetRepository: "team/project",
+      repository: "team/project",
       headSelector: "maria:feature",
       state: "open",
     });

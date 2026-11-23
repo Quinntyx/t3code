@@ -45,7 +45,7 @@ function usageDriverLabel(driver: string): string {
 // One hub is often entered as localhost in settings and 127.0.0.1 in a model base URL.
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
-function usageOrigin(value: string): string | null {
+export function usageOrigin(value: string): string | null {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
@@ -58,6 +58,10 @@ function usageOrigin(value: string): string | null {
 
 function usageRoutesByOrigin(provider: ServerProvider): ReadonlyMap<string, ReadonlySet<string>> {
   const routes = new Map<string, Set<string>>();
+  const endpointOrigin = provider.auth.endpoint ? usageOrigin(provider.auth.endpoint) : null;
+  if (endpointOrigin) {
+    routes.set(endpointOrigin, new Set([String(provider.driver)]));
+  }
   for (const route of provider.usageRoutes ?? []) {
     const origin = usageOrigin(route.origin);
     if (!origin) continue;
@@ -118,18 +122,8 @@ function exhaustedUsageWindows(
           ? [api]
           : [];
     }
-    case "antigravity": {
-      const family = model.match(/^(gemini|claude|gpt)-/)?.[1];
-      return exhausted.filter((window) => {
-        const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
-        return (
-          pool === undefined ||
-          family === undefined ||
-          pool === family ||
-          (pool === "3p" && (family === "claude" || family === "gpt"))
-        );
-      });
-    }
+    case "antigravity":
+      return exhausted.filter((window) => antigravityWindowLimitsModel(window, model));
     case "claudeAgent": {
       const family = model.match(/(?:^|[-/])(opus|sonnet|haiku)(?:-|$)/)?.[1];
       return exhausted.filter((window) => {
@@ -182,6 +176,19 @@ export function usageLimitResetAt(
   return DateTime.formatIso(DateTime.makeUnsafe(reset));
 }
 
+export function quotaDriverForModel(
+  driver: ServerProvider["driver"],
+  model?: string | null,
+): ServerProvider["driver"] {
+  if (driver !== "pi" && driver !== "opencode") return driver;
+  const modelId = model?.split(/[/:]/).at(-1);
+  if (modelId?.startsWith("claude-")) return "claudeAgent" as ServerProvider["driver"];
+  if (modelId !== undefined && /^(?:gpt-|codex(?:-|$)|o\d(?:-|$))/.test(modelId)) {
+    return "codex" as ServerProvider["driver"];
+  }
+  return driver;
+}
+
 export function usageLimitSourceResetAt(
   sources: UsageLimitSourceSnapshots,
   provider: ServerProvider | undefined,
@@ -189,38 +196,34 @@ export function usageLimitSourceResetAt(
   model?: string,
 ): string | null {
   if (provider === undefined) return null;
-  const modelId = model?.split(/[/:]/).at(-1);
-  const quotaDriver = modelId?.startsWith("claude-")
-    ? "claudeAgent"
-    : modelId !== undefined && /^(?:gpt-|codex(?:-|$)|o\d(?:-|$))/.test(modelId)
-      ? "codex"
-      : provider.driver;
+  const quotaDriver = quotaDriverForModel(provider.driver, model);
   const modelProvider = model?.split(/[/:]/)[0];
   const nativeSources =
     provider.driver === "pi" && modelProvider !== "openai-codex"
       ? []
       : (provider.usageSources ?? []);
-  const accounts = nativeSources.map((source) => ({
-    driver: source.driver,
-    usageLimits: source.limits,
-  }));
-  const routesByOrigin = usageRoutesByOrigin(provider);
-  for (const source of sources) {
-    if (provider.driver === "pi" && !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "")) continue;
-    if (source.error) continue;
-    const drivers = hubRouteDrivers(provider, routesByOrigin, source);
-    if (drivers !== null && !drivers.has(quotaDriver)) continue;
-    accounts.push(...source.accounts);
-  }
-  let earliest: string | null = null;
-  for (const account of accounts) {
-    if (account.driver !== quotaDriver) continue;
-    const resetAt = usageLimitResetAt(account, now, model);
-    if (resetAt !== null && (earliest === null || Date.parse(resetAt) < Date.parse(earliest))) {
-      earliest = resetAt;
+  let earliestNative: string | null = null;
+  for (const source of nativeSources) {
+    if (source.driver !== quotaDriver) continue;
+    const resetAt = usageLimitResetAt(
+      { driver: source.driver, usageLimits: source.limits },
+      now,
+      model,
+    );
+    if (
+      resetAt !== null &&
+      (earliestNative === null || Date.parse(resetAt) < Date.parse(earliestNative))
+    ) {
+      earliestNative = resetAt;
     }
   }
-  return earliest;
+  if (earliestNative !== null) return earliestNative;
+  if (provider.driver === "pi" && !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "")) {
+    return null;
+  }
+  const hubs = instanceHubs(provider, sources).filter((source) => !source.error);
+  if (hubs.length === 0) return null;
+  return hubPoolResetAt(hubs, quotaDriver, model ?? null, now);
 }
 
 export function resolveNewThreadModelSelection(input: {
@@ -1207,13 +1210,42 @@ export function withUsageLimitsCommands(
   });
 }
 
-/** The hubs an instance sends its requests through: those whose address is its endpoint. */
+/**
+ * The hubs an instance sends its requests through: those matching its auth endpoint or any
+ * configured `usageRoutes` origin (normalizing loopback hosts like `127.0.0.1` and `localhost`).
+ */
 export function instanceHubs(
-  provider: ServerProvider,
+  provider: Pick<ServerProvider, "auth" | "usageRoutes">,
   sources: UsageLimitSourceSnapshots,
 ): UsageLimitSourceSnapshots {
-  const endpoint = provider.auth.endpoint;
-  return endpoint === undefined ? [] : sources.filter((source) => source.origin === endpoint);
+  const origins = new Set<string>();
+  const endpointOrigin = provider.auth.endpoint ? usageOrigin(provider.auth.endpoint) : null;
+  if (endpointOrigin) origins.add(endpointOrigin);
+  for (const route of provider.usageRoutes ?? []) {
+    const origin = usageOrigin(route.origin);
+    if (origin) origins.add(origin);
+  }
+  if (origins.size === 0) return [];
+  return sources.filter((source) => {
+    const rawOrigin = source.origin ?? source.endpoint;
+    const origin = rawOrigin ? usageOrigin(rawOrigin) : null;
+    return origin !== null && origins.has(origin);
+  });
+}
+
+const CLAUDE_SCOPED_WINDOW_PREFIX = "seven_day_";
+const claudeScopeToken = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+
+/** A model-scoped Claude weekly allowance blocks only its own model; an unknown model is not blocked. */
+function claudeWindowLimitsModel(
+  window: Pick<ServerProviderUsageWindow, "id">,
+  model: string | null,
+): boolean {
+  if (!window.id.startsWith(CLAUDE_SCOPED_WINDOW_PREFIX)) return true;
+  return (
+    model !== null &&
+    claudeScopeToken(model).includes(window.id.slice(CLAUDE_SCOPED_WINDOW_PREFIX.length))
+  );
 }
 
 // Antigravity meters Gemini Argon, Gemini Carbon, other Gemini, and Claude/GPT models apart.
@@ -1244,9 +1276,12 @@ export function hubRoutes(
   const full = model?.replace(/\[1m\]$/i, "");
   // The hub routes a thinking suffix such as "gpt-5.2(high)" by its base model when one lists it.
   const base = full?.replace(/\([^)]*\)$/, "");
+  // Pi prefixes routed model slugs with its provider id (e.g. "cliproxyapi/claude-opus-4-6").
+  const unprefixed = base?.includes("/") ? base.slice(base.lastIndexOf("/") + 1) : undefined;
   const lists = (id: string | undefined) =>
-    sources.some((source) => source.accounts.some((account) => account.models?.includes(id ?? "")));
-  const slug = lists(base) ? base : full;
+    id !== undefined &&
+    sources.some((source) => source.accounts.some((account) => account.models?.includes(id)));
+  const slug = lists(base) ? base : lists(full) ? full : lists(unprefixed) ? unprefixed : full;
   const listed = (account: UsageLimitSourceAccount) =>
     slug !== undefined && account.models?.includes(slug) === true;
   const serving = new Set(
@@ -1258,6 +1293,34 @@ export function hubRoutes(
   // An account whose model list was unreadable may serve the model too.
   return (account) =>
     account.models ? listed(account) : serving.has(account.driver) || account.driver === driver;
+}
+
+/** A hub returns a usage limit only when every account it routes the model to is spent. */
+export function hubPoolResetAt(
+  sources: UsageLimitSourceSnapshots,
+  driver: ServerProvider["driver"],
+  model: string | null,
+  now: number,
+): string | null {
+  let earliest: number | null = null;
+  const routes = hubRoutes(sources, driver, model);
+  for (const account of sources.flatMap((source) => source.accounts).filter(routes)) {
+    // An unread account may be the one still blocked, so its refill is unknown.
+    if (account.usageLimits.unavailable) return null;
+    const spent = account.usageLimits.windows.filter(
+      (window) =>
+        window.usedPercent >= 100 &&
+        claudeWindowLimitsModel(window, model) &&
+        (account.driver !== "antigravity" || antigravityWindowLimitsModel(window, model)),
+    );
+    if (spent.length === 0) return null;
+    const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
+    if (resets.some((reset) => !Number.isFinite(reset))) return null;
+    const recoversAt = Math.max(...resets);
+    if (recoversAt <= now) return null;
+    earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+  }
+  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
 }
 
 export function collectProviderUsageLimits(

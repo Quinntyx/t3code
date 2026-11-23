@@ -29,7 +29,11 @@ import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
-import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
+import {
+  quotaDriverForModel,
+  usageLimitResetAt,
+  usageLimitSourceResetAt,
+} from "@t3tools/shared/usageLimits";
 import {
   ProviderTurnAnalytics,
   type ProviderTurnAnalyticsContext,
@@ -750,35 +754,43 @@ export const layer: Layer.Layer<
                     (instance) => instance?.snapshot.getSnapshot ?? Effect.undefined,
                   )
                 : undefined;
-              const endpoint = snapshot?.auth.endpoint;
-              const failingModel =
-                needsUsageLimitReset &&
-                (endpoint !== undefined ||
-                  input.analyticsContext?.modelSelection.model === undefined)
-                  ? yield* Effect.gen(function* () {
-                      // The failing run's model, which may differ from a selection changed mid-turn.
-                      const { runs } =
-                        input.runId === undefined
-                          ? { runs: [] }
-                          : yield* projections.getThreadRecords(input.threadId, ["runs"], {
-                              runIds: [input.runId],
-                            });
-                      return (
-                        runs[0]?.modelSelection ??
-                        (yield* projections.getThread(input.threadId)).modelSelection
-                      ).model;
-                    }).pipe(Effect.orElseSucceed(() => null))
-                  : null;
+              const failingModel = needsUsageLimitReset
+                ? yield* Effect.gen(function* () {
+                    // The failing run's model, which may differ from a selection changed mid-turn.
+                    const { runs } =
+                      input.runId === undefined
+                        ? { runs: [] }
+                        : yield* projections.getThreadRecords(input.threadId, ["runs"], {
+                            runIds: [input.runId],
+                          });
+                    return (
+                      runs[0]?.modelSelection ??
+                      (yield* projections.getThread(input.threadId)).modelSelection
+                    ).model;
+                  }).pipe(
+                    Effect.orElseSucceed(
+                      () => input.analyticsContext?.modelSelection.model ?? null,
+                    ),
+                  )
+                : null;
+              const quotaDriver = quotaDriverForModel(input.event.driver, failingModel);
+              const modelProvider = failingModel?.split(/[/:]/)[0];
+              const routedHubOrigin =
+                snapshot?.driver === "pi" && !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "")
+                  ? undefined
+                  : (snapshot?.usageRoutes?.find((route) => route.driver === quotaDriver)?.origin ??
+                    snapshot?.usageRoutes?.[0]?.origin);
+              const endpoint = snapshot?.auth.endpoint ?? routedHubOrigin;
               const hubResetAt =
                 endpoint === undefined
                   ? null
-                  : yield* usageLimitResets.resetAt(input.event.driver, endpoint, failingModel);
+                  : yield* usageLimitResets.resetAt(quotaDriver, endpoint, failingModel);
               const resetAt = needsUsageLimitReset
                 ? (hubResetAt ??
                   (yield* fallbackUsageLimitResetAt(
                     snapshot,
                     occurredAt,
-                    input.analyticsContext?.modelSelection.model ?? failingModel ?? undefined,
+                    failingModel ?? input.analyticsContext?.modelSelection.model ?? undefined,
                   )))
                 : null;
               const failure = resetAt === null ? reported : { ...reported, resetAt };

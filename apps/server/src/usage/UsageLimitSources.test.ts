@@ -596,6 +596,25 @@ it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold t
     );
     // The last poll saw room; the account was spent after it.
     expect(yield* lookup).toBe(at(2));
+    // Loopback aliases (127.0.0.1 vs localhost) match the same hub origin.
+    const loopbackHub = { ...roomLeft, origin: "http://127.0.0.1:8317" };
+    current = [loopbackHub];
+    const loopbackLookup = UsageLimitSources.UsageLimitResetFallback.pipe(
+      Effect.flatMap((fallback) =>
+        fallback.resetAt(ProviderDriverKind.make("claudeAgent"), "http://localhost:8317", null),
+      ),
+      Effect.provide(
+        UsageLimitSources.layerResetFallback.pipe(
+          Layer.provide(
+            Layer.mock(UsageLimitSources.UsageLimitSources)({
+              current: Effect.sync(() => current),
+              refresh: Effect.void,
+            }),
+          ),
+        ),
+      ),
+    );
+    expect(yield* loopbackLookup).toBe(at(2));
     current = [cached];
     refresh = Effect.never;
     const stalled = yield* Effect.forkChild(lookup);

@@ -435,6 +435,24 @@ it.layer(layerTest)("ProjectService", (it) => {
       assert.deepEqual((yield* update("move", { workspaceRoot: moved })).trackedFolders, [
         { path: `${moved}/web`, name: "web", discovered: true },
       ]);
+
+      // A multi-repo workspace containing `main/` and sibling repos keeps its root intact.
+      const multiRepo = yield* fileSystem.realPath(
+        yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-multirepo-" }),
+      );
+      yield* fileSystem.makeDirectory(`${multiRepo}/main/.git`, { recursive: true });
+      yield* fileSystem.makeDirectory(`${multiRepo}/api/.git`, { recursive: true });
+      const multiCreated = yield* service.create({
+        commandId: CommandId.make("command:tracked:create:multirepo"),
+        projectId: ProjectId.make("project:multirepo"),
+        title: "MultiRepo",
+        workspaceRoot: multiRepo,
+      });
+      assert.equal(multiCreated.workspaceRoot, multiRepo);
+      assert.deepEqual(multiCreated.trackedFolders, [
+        { path: `${multiRepo}/api`, name: "api", discovered: true },
+        { path: `${multiRepo}/main`, name: "main", discovered: true },
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

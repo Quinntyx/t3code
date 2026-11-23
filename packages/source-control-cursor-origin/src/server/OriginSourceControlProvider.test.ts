@@ -27,7 +27,7 @@ it.effect("looks up existing pull requests in the same explicit target used for 
     yield* provider.listChangeRequests({
       cwd: "/repo",
       headSelector: "feature",
-      targetRepository: "base/repo",
+      repository: "base/repo",
       state: "open",
     });
     yield* provider.listChangeRequests({

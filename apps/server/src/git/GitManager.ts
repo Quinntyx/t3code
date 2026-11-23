@@ -2252,7 +2252,7 @@ export const make = Effect.gen(function* () {
   ) =>
     headContext.targetRepositoryNameWithOwner === null
       ? {}
-      : { targetRepository: headContext.targetRepositoryNameWithOwner };
+      : { repository: headContext.targetRepositoryNameWithOwner };
 
   const findOpenPr = Effect.fn("findOpenPr")(function* (
     cwd: string,

@@ -55,15 +55,6 @@ function scopedWindowId(displayName: string): string {
   return `${SCOPED_WINDOW_PREFIX}${scopeToken(displayName)}`;
 }
 
-/** A model-scoped weekly allowance blocks only its own model; an unknown model is not blocked. */
-export function windowLimitsModel(
-  window: Pick<ServerProviderUsageWindow, "id">,
-  model: string | null,
-): boolean {
-  if (!window.id.startsWith(SCOPED_WINDOW_PREFIX)) return true;
-  return model !== null && scopeToken(model).includes(window.id.slice(SCOPED_WINDOW_PREFIX.length));
-}
-
 function scopedWindow(
   displayName: string,
   usedPercent: number,

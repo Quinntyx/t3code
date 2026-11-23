@@ -405,7 +405,7 @@ export const make = Effect.gen(function* () {
     listChangeRequests: Effect.fn("ForgejoSourceControlProvider.listChangeRequests")(
       function* (input) {
         const repo = yield* cli.resolveRepository(input);
-        const targetRepository = input.targetRepository ?? repo.repository;
+        const repository = input.repository ?? repo.repository;
         const source = SourceControlProvider.sourceControlRefFromInput(input);
         const branch = SourceControlProvider.sourceBranch(input);
         const limit = input.limit ?? 20;
@@ -423,7 +423,7 @@ export const make = Effect.gen(function* () {
           }
           return results;
         };
-        const key = `${repo.baseUrl}\n${targetRepository}`;
+        const key = `${repo.baseUrl}\n${repository}`;
         let unfiltered = unfilteredPulls.get(key);
         let firstPage: ReadonlyArray<ForgejoPull> | undefined;
         if (!unfiltered) {
@@ -432,7 +432,7 @@ export const make = Effect.gen(function* () {
             const items = yield* request(
               {
                 ...input,
-                path: `${repositoryPath(targetRepository)}/pulls?state=${input.state === "merged" ? "closed" : input.state}&head=${encodeURIComponent(branch)}&sort=recentupdate&limit=50&page=${page}`,
+                path: `${repositoryPath(repository)}/pulls?state=${input.state === "merged" ? "closed" : input.state}&head=${encodeURIComponent(branch)}&sort=recentupdate&limit=50&page=${page}`,
               },
               Schema.Array(ForgejoPullRequestSchema),
             );
@@ -454,7 +454,7 @@ export const make = Effect.gen(function* () {
           if (!unfiltered) return results.slice(0, limit);
         }
         const pulls = yield* unfiltered.lock.withPermits(1)(
-          readUnfilteredPulls(input, targetRepository, unfiltered, firstPage),
+          readUnfilteredPulls(input, repository, unfiltered, firstPage),
         );
         const candidates = matching(pulls.values()).toSorted(
           (left, right) =>
@@ -470,7 +470,7 @@ export const make = Effect.gen(function* () {
           const current = yield* request(
             {
               ...input,
-              path: `${repositoryPath(targetRepository)}/pulls/${candidate.number}`,
+              path: `${repositoryPath(repository)}/pulls/${candidate.number}`,
             },
             ForgejoPullRequestSchema,
           ).pipe(

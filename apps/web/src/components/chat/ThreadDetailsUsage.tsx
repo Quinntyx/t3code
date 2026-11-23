@@ -73,7 +73,18 @@ export function ThreadDetailsUsage({
     >
       <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
         {resolved.kind === "pool" ? (
-          resolved.windows.map((window) => <PoolRow key={window.id} window={window} now={now} />)
+          <>
+            {resolved.windows.map((window) => (
+              <PoolRow key={window.id} window={window} now={now} />
+            ))}
+            <UsageAmountLines
+              amounts={resolved.amounts.flatMap((line) =>
+                line.total ? [{ id: line.id, label: line.label, amount: line.total }] : [],
+              )}
+              now={now}
+              className="col-span-3 px-2.5"
+            />
+          </>
         ) : (
           <InstanceRows limits={resolved.limits} now={now} />
         )}

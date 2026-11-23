@@ -548,17 +548,27 @@ export function rightPanelHostRef(ref: ScopedThreadRef): ScopedThreadRef {
   return panelHosts.get(scopedThreadKey(ref)) ?? ref;
 }
 
+interface RightPanelUserActionOptions {
+  readonly closesView?: boolean;
+  /** The user picked a thread surface, so the panel should show it rather than Voice. */
+  readonly selectsSurface: boolean;
+}
+
 const userAction = (
   state: RightPanelStoreState,
   guestKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
-  closesView = false,
-  /** The user picked a thread surface, so the panel should show it rather than Voice. */
-  selectsSurface = false,
+  options: RightPanelUserActionOptions,
 ): Partial<RightPanelStoreState> => {
   const host = panelHosts.get(guestKey);
   const threadKey = host === undefined ? guestKey : scopedThreadKey(host);
-  return userActionOnThread(state, threadKey, updater, closesView, selectsSurface);
+  return userActionOnThread(
+    state,
+    threadKey,
+    updater,
+    options.closesView ?? false,
+    options.selectsSurface,
+  );
 };
 
 const userActionOnThread = (
@@ -634,7 +644,8 @@ const closeAction = (
   state: RightPanelStoreState,
   threadKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
-): Partial<RightPanelStoreState> => userAction(state, threadKey, updater, true);
+): Partial<RightPanelStoreState> =>
+  userAction(state, threadKey, updater, { closesView: true, selectsSurface: false });
 
 /** The thread surfaces a bulk close removes, in the order the panel displays them. Voice is pinned
  * into that display but belongs to the app, so it is never a target or a victim. */
@@ -951,39 +962,36 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               }
               return upsertSurface(current, singletonSurface(kind));
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       openDevice: (ref, target, automatic = false) =>
-        set((state) =>
-          (automatic ? automaticUpdate : userAction)(
-            state,
-            scopedThreadKey(ref),
-            (current) => {
-              const id =
-                `device:${encodeURIComponent(target.hostId)}:${encodeURIComponent(target.deviceId)}` as const;
-              if (automatic && current.dismissedDeviceSurfaceIds?.includes(id)) return current;
-              const surface: ThreadRightPanelSurface = { id, kind: "device", target };
-              const existing = current.surfaces.find((entry) => entry.id === id);
-              const surfaces = existing
-                ? current.surfaces.filter((entry) => entry.id !== "device")
-                : current.surfaces.map((entry) => (entry.id === "device" ? surface : entry));
-              return upsertSurface(
-                {
-                  ...current,
-                  surfaces,
-                  dismissedDeviceSurfaceIds: (current.dismissedDeviceSurfaceIds ?? []).filter(
-                    (entry) => entry !== id,
-                  ),
-                },
-                existing ?? surface,
-              );
-            },
-            false,
-            true,
-          ),
-        ),
+        set((state) => {
+          const update = (current: ThreadRightPanelState) => {
+            const id =
+              `device:${encodeURIComponent(target.hostId)}:${encodeURIComponent(target.deviceId)}` as const;
+            if (automatic && current.dismissedDeviceSurfaceIds?.includes(id)) return current;
+            const surface: ThreadRightPanelSurface = { id, kind: "device", target };
+            const existing = current.surfaces.find((entry) => entry.id === id);
+            const surfaces = existing
+              ? current.surfaces.filter((entry) => entry.id !== "device")
+              : current.surfaces.map((entry) => (entry.id === "device" ? surface : entry));
+            return upsertSurface(
+              {
+                ...current,
+                surfaces,
+                dismissedDeviceSurfaceIds: (current.dismissedDeviceSurfaceIds ?? []).filter(
+                  (entry) => entry !== id,
+                ),
+              },
+              existing ?? surface,
+            );
+          };
+          const key = scopedThreadKey(ref);
+          return automatic
+            ? automaticUpdate(state, key, update)
+            : userAction(state, key, update, { selectsSurface: true });
+        }),
       openThread: (ref, threadId) =>
         set((state) =>
           rightPanelHostRef(ref).threadId === threadId
@@ -992,25 +1000,29 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 state,
                 scopedThreadKey(ref),
                 (current) => upsertSurface(current, threadSurface(threadId)),
-                false,
-                true,
+                { selectsSurface: true },
               ),
         ),
       openLinkedThread: (ref, target) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const surface = linkedThreadSurface(target);
-            const next = upsertSurface(current, surface);
-            return {
-              ...next,
-              // A later click may know the title or label an earlier one did not.
-              surfaces: next.surfaces.map((entry) =>
-                entry.id === surface.id && entry.kind === "linked-thread"
-                  ? { ...surface, title: surface.title ?? entry.title }
-                  : entry,
-              ),
-            };
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              const surface = linkedThreadSurface(target);
+              const next = upsertSurface(current, surface);
+              return {
+                ...next,
+                // A later click may know the title or label an earlier one did not.
+                surfaces: next.surfaces.map((entry) =>
+                  entry.id === surface.id && entry.kind === "linked-thread"
+                    ? { ...surface, title: surface.title ?? entry.title }
+                    : entry,
+                ),
+              };
+            },
+            { selectsSurface: true },
+          ),
         ),
       setLinkedThreadTitle: (ref, surfaceId, title) =>
         set((state) => {
@@ -1030,20 +1042,25 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         }),
       renameDevice: (ref, surfaceId, title) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
-            ...current,
-            surfaces: current.surfaces.map((surface) =>
-              surface.id === surfaceId && surface.kind === "device"
-                ? {
-                    ...surface,
-                    title:
-                      title.trim() ||
-                      surface.target?.name ||
-                      m(msg("Device", { $context: "a simulator or emulator" })),
-                  }
-                : surface,
-            ),
-          })),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => ({
+              ...current,
+              surfaces: current.surfaces.map((surface) =>
+                surface.id === surfaceId && surface.kind === "device"
+                  ? {
+                      ...surface,
+                      title:
+                        title.trim() ||
+                        surface.target?.name ||
+                        m(msg("Device", { $context: "a simulator or emulator" })),
+                    }
+                  : surface,
+              ),
+            }),
+            { selectsSurface: false },
+          ),
         ),
       openBrowser: (ref, tabId) =>
         set((state) =>
@@ -1057,8 +1074,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 : current.surfaces;
               return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       openPullRequest: (ref, target) =>
@@ -1081,8 +1097,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 }),
               };
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       openIssue: (ref, target) =>
@@ -1102,8 +1117,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                   }
                 : next;
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       setPullRequestDetailTab: (ref, surfaceId, detailTab) =>
@@ -1174,8 +1188,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                   : [...withoutStandaloneExplorer, surface],
               };
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       navigateFolder: (ref, surfaceId, relativePath, folderTrail, keepSource = false) =>
@@ -1206,8 +1219,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               });
               return { ...current, isOpen: true, activeSurfaceId: target.id, surfaces };
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       openAttachment: (ref, attachment) =>
@@ -1224,8 +1236,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 attachmentSurface(attachment),
               );
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       openTerminal: (ref, terminalId) =>
@@ -1234,8 +1245,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             state,
             scopedThreadKey(ref),
             (current) => upsertSurface(current, terminalSurface(terminalId)),
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
@@ -1260,23 +1270,27 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 };
               }),
             }),
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       activateTerminal: (ref, surfaceId, terminalId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
-            ...current,
-            activeSurfaceId: surfaceId,
-            surfaces: current.surfaces.map((surface) =>
-              surface.id === surfaceId &&
-              surface.kind === "terminal" &&
-              surface.terminalIds.includes(terminalId)
-                ? { ...surface, activeTerminalId: terminalId }
-                : surface,
-            ),
-          })),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => ({
+              ...current,
+              activeSurfaceId: surfaceId,
+              surfaces: current.surfaces.map((surface) =>
+                surface.id === surfaceId &&
+                surface.kind === "terminal" &&
+                surface.terminalIds.includes(terminalId)
+                  ? { ...surface, activeTerminalId: terminalId }
+                  : surface,
+              ),
+            }),
+            { selectsSurface: false },
+          ),
         ),
       closeTerminal: (ref, surfaceId, terminalId) =>
         set((state) =>
@@ -1319,13 +1333,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       activateSurface: (ref, surfaceId) =>
         set((state) =>
-          userAction(
-            state,
-            scopedThreadKey(ref),
-            (current) => activated(current, surfaceId),
-            false,
-            true,
-          ),
+          userAction(state, scopedThreadKey(ref), (current) => activated(current, surfaceId), {
+            selectsSurface: true,
+          }),
         ),
       revealSurface: (ref, surfaceId) =>
         set((state) => revealAction(state, scopedThreadKey(ref), surfaceId)),
@@ -1459,14 +1469,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             state,
             scopedThreadKey(ref),
             (current) => (current.isOpen ? current : { ...current, isOpen: true }),
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       close: (ref) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            current.isOpen ? { ...current, isOpen: false } : current,
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => (current.isOpen ? { ...current, isOpen: false } : current),
+            { selectsSurface: false },
           ),
         ),
       setMaximized: (ref, maximized) =>
@@ -1479,10 +1491,15 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       toggleVisibility: (ref) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
-            ...current,
-            isOpen: !current.isOpen,
-          })),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => ({
+              ...current,
+              isOpen: !current.isOpen,
+            }),
+            { selectsSurface: false },
+          ),
         ),
       toggle: (ref, kind) =>
         set((state) =>
@@ -1505,8 +1522,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               }
               return upsertSurface(current, singletonSurface(kind));
             },
-            false,
-            true,
+            { selectsSurface: true },
           ),
         ),
       setThreadPanelOpen: (ref, presentation, open) =>

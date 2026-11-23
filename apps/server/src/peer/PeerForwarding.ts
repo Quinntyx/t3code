@@ -270,7 +270,8 @@ const make = Effect.gen(function* () {
     if (
       watcherThreadId === undefined ||
       scope.thread?.subagent === true ||
-      input.untilDelegatedWorkSettled === true
+      input.untilDelegatedWorkSettled === true ||
+      input.untilOutput === true
     ) {
       return yield* waitForThread(scope, environmentId, input);
     }

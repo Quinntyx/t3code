@@ -21,8 +21,10 @@ import {
   collectLimitPools,
   elapsedShare,
   exhaustedUsageWindow,
+  instanceHubs,
   paceOf,
   paceRemainingPercent,
+  usageLimitSourceResetAt,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
 } from "./usageLimits.ts";
@@ -2011,5 +2013,77 @@ describe("ChatGPT sharing presentation", () => {
         auth: { status: "unauthenticated", subscriptionSharing: true },
       }),
     ).toBe(false);
+  });
+});
+
+describe("hub routing and pool resets", () => {
+  const claude = ProviderDriverKind.make("claudeAgent");
+  const pi = ProviderDriverKind.make("pi");
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+  const spentWindow = {
+    id: "five_hour",
+    kind: "session" as const,
+    label: "Session",
+    usedPercent: 100,
+    resetsAt: "2026-09-03T14:00:00.000Z",
+  };
+  const openWindow = { ...spentWindow, usedPercent: 40 };
+
+  it("matches hubs across loopback aliases and usageRoutes", () => {
+    const hubSnapshot = {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Hub",
+      origin: "http://127.0.0.1:8317",
+      checkedAt,
+      accounts: [],
+    };
+    const piProvider = provider({
+      driver: pi,
+      auth: { status: "authenticated" },
+      usageRoutes: [{ origin: "http://localhost:8317", driver: claude }],
+    });
+    expect(instanceHubs(piProvider, [hubSnapshot])).toEqual([hubSnapshot]);
+  });
+
+  it("returns null from usageLimitSourceResetAt when any routed hub account still has room", () => {
+    const claudeHubProvider = provider({
+      driver: claude,
+      auth: { status: "authenticated", endpoint: "http://localhost:8317" },
+    });
+    const mixedHub = {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Hub",
+      origin: "http://127.0.0.1:8317",
+      checkedAt,
+      accounts: [
+        {
+          id: "a.json",
+          driver: claude,
+          models: ["claude-opus-4-6"],
+          usageLimits: { checkedAt, windows: [spentWindow] },
+        },
+        {
+          id: "b.json",
+          driver: claude,
+          models: ["claude-opus-4-6"],
+          usageLimits: { checkedAt, windows: [openWindow] },
+        },
+      ],
+    };
+    expect(
+      usageLimitSourceResetAt([mixedHub], claudeHubProvider, now, "claude-opus-4-6"),
+    ).toBeNull();
+    const allSpentHub = {
+      ...mixedHub,
+      accounts: mixedHub.accounts.map((account) => ({
+        ...account,
+        usageLimits: { checkedAt, windows: [spentWindow] },
+      })),
+    };
+    expect(usageLimitSourceResetAt([allSpentHub], claudeHubProvider, now, "claude-opus-4-6")).toBe(
+      "2026-09-03T14:00:00.000Z",
+    );
   });
 });

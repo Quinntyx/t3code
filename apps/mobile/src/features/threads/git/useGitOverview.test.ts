@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   status: null as VcsStatusResult | null,
+  project: null as {
+    id: string;
+    title: string;
+    trackedFolders: ReadonlyArray<string>;
+  } | null,
   canWrite: true,
   busy: false,
   navigate: vi.fn(),
@@ -25,7 +30,7 @@ vi.mock("../../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () =>
 vi.mock("../../../state/use-thread-selection", () => ({
   useThreadSelection: () => ({
     selectedThread: { id: "thread", environmentId: "environment", branch: "feature" },
-    selectedThreadProject: null,
+    selectedThreadProject: state.project,
     selectedEnvironmentRuntime: null,
   }),
 }));
@@ -47,6 +52,11 @@ vi.mock("../../../state/use-selected-thread-git-actions", () => ({
   }),
 }));
 vi.mock("../../../state/query", () => ({ useEnvironmentQuery: () => ({ data: state.status }) }));
+vi.mock("../../../state/filesystem", () => ({ filesystemEnvironment: { taskFolder: () => null } }));
+vi.mock("../../../state/thread-repository-pins", () => ({
+  useThreadRepositoryPins: () => [],
+  unpinRepositoryFromThread: () => {},
+}));
 vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
 vi.mock("./gitSheetComponents", () => ({ statusSummary: () => "" }));
 vi.mock("../LinkedPullRequestList", () => ({ useLinkedPullRequestLines: () => [] }));
@@ -67,6 +77,7 @@ describe("drawer Git quick action", () => {
     vi.clearAllMocks();
     state.canWrite = true;
     state.busy = false;
+    state.project = null;
     state.status = {
       isRepo: true,
       hasPrimaryRemote: true,
@@ -164,5 +175,26 @@ describe("drawer Git quick action", () => {
     await git.runQuickAction();
     expect(state.openPr).toHaveBeenCalledExactlyOnceWith("https://example.com/pr/1");
     expect(state.runAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("thread Git overview sources", () => {
+  it("lists a plain folder's tracked repositories instead of a branch", () => {
+    state.status = { ...state.status!, isRepo: false };
+    state.project = {
+      id: "project",
+      title: "Monorepo",
+      trackedFolders: ["/repo/a", "/repo/b"],
+    };
+    const git = overview();
+    expect(git.isRepo).toBe(false);
+    expect(git.listsRepositories).toBe(true);
+    expect(git.trackedRepositoryCount).toBe(2);
+    expect(git.currentBranchLabel).toBe("Monorepo");
+    expect(git.currentStatusSummary).toBe("2 repositories");
+    expect(git.quickAction).toMatchObject({
+      disabled: true,
+      hint: "This workspace is not a git repository.",
+    });
   });
 });

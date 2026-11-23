@@ -78,8 +78,10 @@ export function showGitActionResult({
   appAtomRegistry.set(gitActionResultsAtom, results);
 }
 
-export function keepGitActionResultVisible(): void {
-  for (const entry of appAtomRegistry.get(gitActionResultsAtom).values()) clearTimeout(entry.timer);
+export function keepGitActionResultVisible(threadRef: ScopedThreadRef | null): void {
+  if (threadRef === null) return;
+  const entry = appAtomRegistry.get(gitActionResultsAtom).get(gitActionResultKey(threadRef));
+  if (entry !== undefined) clearTimeout(entry.timer);
 }
 
 export function dismissGitActionResult(threadRef: ScopedThreadRef | null): void {

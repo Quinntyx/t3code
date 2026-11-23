@@ -288,7 +288,7 @@ describe("GitCafeSourceControlProvider", () => {
       const provider = yield* GitCafeSourceControlProvider.make;
       yield* provider.listChangeRequests({
         cwd: "/repo",
-        targetRepository: "team/project",
+        repository: "team/project",
         headSelector: "fork:feature",
         state: "open",
       });

@@ -144,4 +144,34 @@ describe("resolveThreadDetailsLimits", () => {
       rows: [{ label: "Session", left: 70, accounts: 1, from: { hubs: ["Hub"], signedIn: false } }],
     });
   });
+
+  it("resolves pooled hub limits for a Pi instance with usageRoutes and no own usageLimits", () => {
+    const piId = ProviderInstanceId.make("pi");
+    const piProvider: ServerProvider = {
+      ...claudeInstance(unsupported),
+      instanceId: piId,
+      driver: ProviderDriverKind.make("pi"),
+      auth: { status: "authenticated" },
+      usageLimits: undefined,
+      usageRoutes: [{ origin: "http://localhost:8317", driver: claude }],
+    };
+    const sources = [
+      hub(
+        "Hub",
+        [{ id: "a.json", models: ["claude-opus-4-6"], limits: limitsAt(25) }],
+        "http://127.0.0.1:8317",
+      ),
+    ];
+    const resolved = resolveThreadDetailsLimits(
+      piId,
+      "cliproxyapi/claude-opus-4-6",
+      [piProvider],
+      sources,
+      now,
+    );
+    expect(resolved?.kind).toBe("pool");
+    if (resolved?.kind === "pool") {
+      expect(resolved.windows.map((window) => window.remainingPercent)).toEqual([75]);
+    }
+  });
 });

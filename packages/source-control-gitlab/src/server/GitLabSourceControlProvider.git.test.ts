@@ -69,7 +69,7 @@ it.effect("lists a nested-group fork's merge requests by source branch and names
       const changeRequests = yield* provider.listChangeRequests({
         cwd: "/repo",
         headSelector,
-        targetRepository: "Group/Upstream/Repository",
+        repository: "Group/Upstream/Repository",
         state: "all",
         limit: 20,
       });

@@ -228,7 +228,7 @@ export class AzureDevOpsCli extends Context.Service<
 
     readonly listPullRequests: (input: {
       readonly cwd: string;
-      readonly targetRepository?: string;
+      readonly repository?: string;
       readonly headSelector: string;
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
@@ -625,7 +625,7 @@ export const make = Effect.gen(function* () {
           toAzureStatus(input.state),
           "--top",
           String(input.limit ?? 20),
-          ...targetRepositoryArgs(input.targetRepository),
+          ...targetRepositoryArgs(input.repository),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),

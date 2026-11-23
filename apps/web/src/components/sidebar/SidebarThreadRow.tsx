@@ -1430,60 +1430,65 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <TooltipPopup>{visibilityLabel}</TooltipPopup>
     </Tooltip>
   );
-  const diff = latestRunDiff(thread);
-  // Only the trailing icons would remain, so the row moves them to the title line instead.
-  const metaLineEmpty =
-    props.environmentLabel === null &&
-    prBadge === null &&
-    issueBadge === null &&
-    diff === null &&
-    runningTerminalIds.length === 0;
-  const metaLine = metaLineEmpty ? null : (
-    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
-      {props.environmentLabel !== null ? (
-        <>
-          <EnvironmentMachineIcon
-            aria-hidden
-            kind={props.environmentMachine}
-            className="size-3.5 shrink-0 text-icon-muted"
-          />
-          <span className="min-w-0 flex-1 truncate">{props.environmentLabel}</span>
-        </>
-      ) : (
-        <span className="flex-1" />
-      )}
-      {terminalStatusIcon}
-      {prBadge}
-      {issueBadge}
-      {diff ? (
-        <span className="shrink-0 font-mono">
-          <span className="text-diff-addition-foreground">+{formatDiffCount(diff.insertions)}</span>{" "}
-          <span className="text-diff-deletion-foreground">−{formatDiffCount(diff.deletions)}</span>
-        </span>
-      ) : null}
-      <span
-        aria-hidden
-        className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-      >
-        <SidebarProviderStack
-          thread={thread}
-          providerEntryByInstanceId={props.providerEntryByInstanceId}
-        />
-      </span>
-    </div>
-  );
-  const titleLineIcons = metaLineEmpty ? (
-    <span aria-hidden className="inline-flex shrink-0 items-center gap-1">
-      <SidebarProviderStack
-        thread={thread}
-        providerEntryByInstanceId={props.providerEntryByInstanceId}
-      />
-    </span>
-  ) : null;
-
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";
     const inFolder = variant === "folder" || multiline;
+    const diff = multiline ? latestRunDiff(thread) : null;
+    // Only the trailing icons would remain, so the row moves them to the title line instead.
+    const metaLineEmpty =
+      !multiline ||
+      (props.environmentLabel === null &&
+        prBadge === null &&
+        issueBadge === null &&
+        diff === null &&
+        runningTerminalIds.length === 0);
+    const metaLine = metaLineEmpty ? null : (
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+        {props.environmentLabel !== null ? (
+          <>
+            <EnvironmentMachineIcon
+              aria-hidden
+              kind={props.environmentMachine}
+              className="size-3.5 shrink-0 text-icon-muted"
+            />
+            <span className="min-w-0 flex-1 truncate">{props.environmentLabel}</span>
+          </>
+        ) : (
+          <span className="flex-1" />
+        )}
+        {terminalStatusIcon}
+        {prBadge}
+        {issueBadge}
+        {diff ? (
+          <span className="shrink-0 font-mono">
+            <span className="text-diff-addition-foreground">
+              +{formatDiffCount(diff.insertions)}
+            </span>{" "}
+            <span className="text-diff-deletion-foreground">
+              −{formatDiffCount(diff.deletions)}
+            </span>
+          </span>
+        ) : null}
+        <span
+          aria-hidden
+          className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+        >
+          <SidebarProviderStack
+            thread={thread}
+            providerEntryByInstanceId={props.providerEntryByInstanceId}
+          />
+        </span>
+      </div>
+    );
+    const titleLineIcons =
+      multiline && metaLineEmpty ? (
+        <span aria-hidden className="inline-flex shrink-0 items-center gap-1">
+          <SidebarProviderStack
+            thread={thread}
+            providerEntryByInstanceId={props.providerEntryByInstanceId}
+          />
+        </span>
+      ) : null;
     return (
       <li
         data-thread-item={threadKey}
@@ -1766,9 +1771,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   providerEntryByInstanceId={props.providerEntryByInstanceId}
                 />
               </span>
-              <span className="min-w-0 flex-1 truncate-fade">
-                {props.hideProject ? null : props.projectDisplayName}
-              </span>
+              {props.hideProject ? (
+                <span className="flex-1" />
+              ) : (
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  {props.projectDisplayName ? (
+                    <span className="min-w-0 truncate-fade">{props.projectDisplayName}</span>
+                  ) : null}
+                  {props.environmentLabel !== null ? (
+                    <span className="inline-flex min-w-0 shrink items-center gap-1 text-muted-foreground/75">
+                      <EnvironmentMachineIcon
+                        aria-hidden
+                        kind={props.environmentMachine}
+                        className="size-3 shrink-0 text-icon-muted"
+                      />
+                      <span className="min-w-0 truncate">{props.environmentLabel}</span>
+                    </span>
+                  ) : null}
+                </span>
+              )}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (

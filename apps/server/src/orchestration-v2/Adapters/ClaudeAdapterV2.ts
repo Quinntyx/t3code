@@ -11434,8 +11434,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               context.assistant.streamBlocks.clear();
               const usage: ClaudeMessageUsage = event.message.usage ?? {};
               context.streamUsage = { messageId: event.message.id, usage };
+              context.mainUsageModel = event.message.model;
               if (event.message.usage !== undefined) {
-                context.mainUsageModel = event.message.model;
                 recordTurnMessageUsage(
                   context,
                   message,

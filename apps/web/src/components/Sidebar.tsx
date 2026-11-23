@@ -611,7 +611,7 @@ function useSidebarThreads(input: {
     : routeThreadOnly(snoozedThreads, shelfRouteThreadKey);
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
-    : routeStackOnly(workingThreads, stackByRootKey, routeRowThreadKey);
+    : routeStackOnly(workingThreads, stackByRootKey, shelfRouteThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -1383,6 +1383,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
       if (
         draftKey !== routeDraftIdForRows &&
+        draftTerminalLabel(session, draftTerminalLabels) === null &&
         !composerDraftHasUserContent(store.draftsByThreadKey[draftKey])
       ) {
         continue;
@@ -1656,11 +1657,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeDraftIdForRows,
     draftTerminalLabels,
   );
-  // Draft rows sit above the threads, so jumps and traversal reach them first.
-  // Search hides them, so they drop out while it is open.
+  // Top-level drafts sit above threads; stacked drafts sit immediately after their parent row.
+  // Search hides drafts, so they drop out while it is open.
   const listedDraftIds = isSearchingThreads ? EMPTY_DRAFT_IDS : draftIds;
-  const draftIdByRowKey = new Map<string, DraftId>(listedDraftIds.map((id) => [`draft:${id}`, id]));
-  const orderedRowKeys = [...draftIdByRowKey.keys(), ...orderedThreadKeys];
+  const stackedDraftIdList = isSearchingThreads
+    ? EMPTY_DRAFT_IDS
+    : [...stackedDraftsByParentKey.values()].flat();
+  const stackedDraftIdSet = new Set(stackedDraftIdList);
+  const topLevelDraftIds = listedDraftIds.filter((id) => !stackedDraftIdSet.has(id));
+  const allListedDraftIds = [...topLevelDraftIds, ...stackedDraftIdList];
+  const draftIdByRowKey = new Map<string, DraftId>(
+    allListedDraftIds.map((id) => [`draft:${id}`, id]),
+  );
+  const orderedRowKeys = [
+    ...topLevelDraftIds.map((id) => `draft:${id}`),
+    ...orderedThreadKeys.flatMap((threadKey) => {
+      const stacked = isSearchingThreads ? undefined : stackedDraftsByParentKey.get(threadKey);
+      return stacked && stacked.length > 0
+        ? [threadKey, ...stacked.map((draftId) => `draft:${draftId}`)]
+        : [threadKey];
+    }),
+  ];
   const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
   const routeRowKey = draftIdByRowKey.has(routeDraftRowKey) ? routeDraftRowKey : routeRowThreadKey;
 
@@ -3227,7 +3244,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
   const draftJumpLabelById = showJumpHints
     ? new Map(
-        listedDraftIds.flatMap((id) => {
+        allListedDraftIds.flatMap((id) => {
           const label = jumpLabelByKey.get(`draft:${id}`);
           return label ? [[id, label] as const] : [];
         }),
@@ -3882,6 +3899,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarStackBranch key={`draft:${draftId}`}>
                                 <StackedSidebarDraftRow
                                   draftId={draftId}
+                                  terminalLabels={draftTerminalLabels}
+                                  jumpLabel={draftJumpLabelById?.get(draftId) ?? null}
                                   isActive={draftId === routeDraftIdForRows}
                                   navigationParent={nodeKey}
                                   onNavigate={navigateToDraft}

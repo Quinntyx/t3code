@@ -880,6 +880,7 @@ describe("CLIProxyAPI v8 provider discovery", () => {
         driver: "mistral",
         label: "mistral",
         plan: "Pro",
+        models: ["explode-mid", "mid-stream-route"],
         usageLimits: {
           checkedAt: "2026-11-14T04:04:28.000Z",
           windows: [
@@ -918,6 +919,11 @@ describe("CLIProxyAPI v8 provider discovery", () => {
           ?.usageLimits.windows.map((window) => window.amount),
       ).toEqual([undefined, undefined, undefined]);
       // OpenRouter key spend has no cap, so it is a money line rather than a bar.
+      expect(byId.get("openrouter:2982a7cb4bdfb064")?.models).toEqual([
+        "mid-stream-route",
+        "my-custom-model",
+        "z-ai/glm-5.3-flash",
+      ]);
       expect(byId.get("openrouter:2982a7cb4bdfb064")?.usageLimits).toEqual({
         checkedAt: "2026-11-14T04:04:28.000Z",
         windows: [],

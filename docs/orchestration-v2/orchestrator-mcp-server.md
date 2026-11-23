@@ -479,13 +479,6 @@ status and does not cancel work. `output` carries what the run submitted
 against its `outputSchema`; with `untilOutput`, a completed run that has not
 submitted yet is waited on until it has.
 
-### `t3_workflow`
-
-Starts, lists, reads, signals, resumes and cancels [workflow runs](../internals/workflows.md), and
-lists the questions runs ask a person. It is advertised to clients outside a thread only, such as
-the `t3 workflow` CLI, so it costs no thread any context; an agent in a thread drives workflows
-through that CLI. `start` is idempotent on `idempotencyKey` and `signal` on `signalId`.
-
 A caller with its own thread waits at most a minute, so its turn does not sit in
 a tool call. If the run is still going, the wait records a thread watch on the
 caller and returns `next` telling it to end its turn. `ThreadWatchReactor` wakes
@@ -495,9 +488,16 @@ the wait began, so waiting again after that wake does not repeat it. A thread in
 a linked environment is followed over the link until its run ends. Watches show
 as awaited background work, and Stop ends them. Waits on a task the caller
 delegated, waits from a delegated child, and waits with
-`untilDelegatedWorkSettled` get no watch. CLI and
+`untilDelegatedWorkSettled` or `untilOutput` get no watch. CLI and
 linked-environment callers have no thread to wake, so they block for the whole
 timeout as before.
+
+### `t3_workflow`
+
+Starts, lists, reads, signals, resumes and cancels [workflow runs](../internals/workflows.md), and
+lists the questions runs ask a person. It is advertised to clients outside a thread only, such as
+the `t3 workflow` CLI, so it costs no thread any context; an agent in a thread drives workflows
+through that CLI. `start` is idempotent on `idempotencyKey` and `signal` on `signalId`.
 
 ### `t3_thread_interrupt`
 

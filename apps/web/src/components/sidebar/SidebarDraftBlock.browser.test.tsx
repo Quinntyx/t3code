@@ -13,6 +13,7 @@ const NO_TERMINAL_LABELS: ReadonlyMap<string, string> = new Map();
 function DraftBlock(props: {
   routeDraftId?: string | null;
   terminalLabels?: ReadonlyMap<string, string>;
+  stackedDraftIds?: string;
 }) {
   const routeDraftId = props.routeDraftId ?? null;
   const terminalLabels = props.terminalLabels ?? NO_TERMINAL_LABELS;
@@ -25,6 +26,7 @@ function DraftBlock(props: {
       jumpLabelByDraftId={null}
       projectByKey={new Map()}
       projectDisplayNameByKey={new Map()}
+      stackedDraftIds={props.stackedDraftIds}
       routeDraftId={routeDraftId}
       onNavigateToDraft={vi.fn()}
       onDraftContextMenu={vi.fn()}
@@ -137,4 +139,15 @@ it("lists empty drafts by terminal label while their terminal exists, active or 
   await screen.rerender(block(null));
   await expect.element(rows).toHaveAccessibleName("dev, Unsent draft");
   expect(rows.elements()).toHaveLength(1);
+
+  await screen.rerender(
+    <ul>
+      <DraftBlock
+        routeDraftId={null}
+        terminalLabels={terminalLabels}
+        stackedDraftIds={terminalDraftId}
+      />
+    </ul>,
+  );
+  await expect.element(rows).not.toBeInTheDocument();
 });

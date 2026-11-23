@@ -4,15 +4,14 @@ import Animated, { FadeIn, FadeOut, ReduceMotion } from "react-native-reanimated
 import { Toast } from "../../components/ui/Toast";
 import { useBarInset } from "../../components/ui/useBarInset";
 import { MOBILE_MOTION } from "../../lib/designTokens";
-import {
-  keepGitActionResultVisible,
-  type GitActionProgress,
-} from "../../state/use-vcs-action-state";
+import type { GitActionProgress } from "../../state/use-vcs-action-state";
 
 export function GitActionProgressOverlay(props: {
   readonly progress: GitActionProgress;
   readonly onDismiss: () => void;
   readonly onOpenPullRequest?: (url: string) => Promise<boolean>;
+  /** Keeps this thread's result on screen; a caller without a result leaves it undefined. */
+  readonly onKeepVisible?: (() => void) | undefined;
 }) {
   const gt = useGT();
   const { progress, onDismiss } = props;
@@ -42,7 +41,7 @@ export function GitActionProgressOverlay(props: {
     >
       <Toast
         singleLine
-        onExpand={keepGitActionResultVisible}
+        onExpand={props.onKeepVisible}
         {...(progress.phase === "error"
           ? { dismissMode: "swipe", onDismiss }
           : { dismissMode: "button", onDismiss: undefined })}

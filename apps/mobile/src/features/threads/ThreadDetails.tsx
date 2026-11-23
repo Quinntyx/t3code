@@ -24,6 +24,7 @@ import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { InspectorSheetContext } from "../layout/workspace-inspector-sheet";
 import { getTerminalStatusLabel } from "../terminal/terminalMenu";
 import { GitBranchesContent } from "./git/GitBranchesSheet";
+import { ThreadRepositoryRows } from "./git/ThreadRepositoryRows";
 import { useGitOverview, type GitOverview } from "./git/useGitOverview";
 import { PullRequestDiffStats } from "../pull-requests/PullRequestPresentation";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
@@ -184,6 +185,19 @@ function ThreadDetailsBody(props: BodyProps) {
         ) : null}
 
         <WorkspaceSummary {...props} git={git} hasThread={hasThread} />
+
+        {hasThread && git.listsRepositories && git.projectId !== null ? (
+          <ThreadRepositoryRows
+            threadRef={git.threadRef}
+            projectId={git.projectId}
+            threadCwd={git.selectedThreadCwd}
+            taskFolder={git.taskFolder}
+            reachesTracked={git.reachesTracked}
+            onTaskFolderChange={git.refreshTaskFolder}
+            explainsEmpty={!git.isRepo}
+            onOpen={git.openRepository}
+          />
+        ) : null}
 
         {hasThread && git.linkedPrLines.length > 0 ? (
           <ListSection

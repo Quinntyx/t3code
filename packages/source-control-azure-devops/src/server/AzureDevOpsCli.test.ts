@@ -263,7 +263,7 @@ describe("AzureDevOpsCli.layer", () => {
       yield* az.listPullRequests({
         cwd: "/somewhere",
         headSelector: "user/feat/1-(#2)-slug",
-        targetRepository: "base-project/base-repo",
+        repository: "base-project/base-repo",
         state: "open",
       });
 

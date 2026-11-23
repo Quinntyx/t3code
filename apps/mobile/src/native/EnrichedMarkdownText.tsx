@@ -27,6 +27,7 @@ import {
 } from "react-native-enriched-markdown";
 import { codeFenceRenderer } from "./codeBlockMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import { strongFontWeight } from "./markdownStrongWeight";
 import { MermaidCodeBlock } from "./MermaidCodeBlock";
 import type { SelectableMarkdownTextProps } from "./SelectableMarkdownText.types";
 
@@ -101,7 +102,7 @@ function enrichedStyle(
     strong: {
       color: style.strongColor,
       fontFamily: style.boldFontFamily,
-      fontWeight: (style.boldByWeight ?? boldFontWeight !== undefined) ? "bold" : "normal",
+      fontWeight: strongFontWeight(style.boldByWeight, Platform.OS),
     },
     link: { color: style.linkColor, underline: false },
     code: {

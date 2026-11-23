@@ -291,10 +291,14 @@ export const make = Effect.gen(function* () {
     readonly projectId?: ProjectId;
     readonly workspaceRoot: string;
     readonly createIfMissing?: boolean;
+    readonly resolveMainCheckout?: boolean;
   }) =>
     workspacePaths
       .normalizeWorkspaceRoot(input.workspaceRoot, {
         createIfMissing: input.createIfMissing ?? false,
+        ...(input.resolveMainCheckout === undefined
+          ? {}
+          : { resolveMainCheckout: input.resolveMainCheckout }),
       })
       .pipe(
         Effect.mapError(
@@ -541,6 +545,7 @@ export const make = Effect.gen(function* () {
         projectId: input.projectId,
         workspaceRoot: input.workspaceRoot,
         createIfMissing: input.createWorkspaceRootIfMissing ?? false,
+        resolveMainCheckout: (input.trackedFolders?.length ?? 0) === 0,
       });
       yield* rejectWorktreeContainer(input.projectId, workspaceRoot);
       const trackedFolders = yield* normalizeTrackedFolders(
@@ -855,6 +860,7 @@ export const make = Effect.gen(function* () {
       Effect.forEach(
         rows,
         Effect.fn("ProjectService.resolveExistingWorktreeContainer")(function* (row) {
+          if (row.trackedFolders.length > 0) return;
           const workspaceRoot = yield* normalizeWorkspaceRoot({
             projectId: row.projectId,
             workspaceRoot: row.workspaceRoot,

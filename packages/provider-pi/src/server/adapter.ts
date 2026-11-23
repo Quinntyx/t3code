@@ -382,31 +382,76 @@ type PiMessageTokenUsage = Pick<
   "inputTokens" | "cachedInputTokens" | "outputTokens"
 >;
 
+function nonNegativeInteger(input: unknown, key: string): number | undefined {
+  const value = recordNumber(input, key);
+  return value === undefined || value < 0 ? undefined : Math.trunc(value);
+}
+
+function optionalNonNegativeInteger(
+  input: unknown,
+  key: string,
+): { readonly ok: true; readonly value: number | undefined } | { readonly ok: false } {
+  const raw = recordField(input, key);
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = recordNumber(input, key);
+  return value === undefined || !Number.isSafeInteger(value) || value < 0
+    ? { ok: false }
+    : { ok: true, value };
+}
+
 function piMessageUsage(usage: unknown): PiMessageUsage | null {
-  const input = recordNumber(usage, "input");
-  const output = recordNumber(usage, "output");
-  const cacheRead = recordNumber(usage, "cacheRead");
-  const cacheWrite = recordNumber(usage, "cacheWrite");
+  const input = optionalNonNegativeInteger(usage, "input");
+  const output = optionalNonNegativeInteger(usage, "output");
+  const cacheRead = optionalNonNegativeInteger(usage, "cacheRead");
+  const cacheWrite = optionalNonNegativeInteger(usage, "cacheWrite");
   if (
-    input === undefined ||
-    output === undefined ||
-    cacheRead === undefined ||
-    cacheWrite === undefined ||
-    ![input, output, cacheRead, cacheWrite].every(
-      (value) => Number.isSafeInteger(value) && value >= 0,
-    )
+    !input.ok ||
+    !output.ok ||
+    !cacheRead.ok ||
+    !cacheWrite.ok ||
+    input.value === undefined ||
+    output.value === undefined
   )
     return null;
-  const reasoning = recordNumber(usage, "reasoning");
+  const cachedInputTokens = cacheRead.value ?? 0;
+  const cacheCreationTokens = cacheWrite.value ?? 0;
+  const reasoning = optionalNonNegativeInteger(usage, "reasoning");
   return {
     // Pi reports disjoint input/cache counters; T3 input includes both cache categories.
-    inputTokens: input + cacheRead + cacheWrite,
-    outputTokens: output,
-    cachedInputTokens: cacheRead,
-    cacheCreationTokens: cacheWrite,
-    ...(reasoning !== undefined && Number.isSafeInteger(reasoning) && reasoning >= 0
-      ? { reasoningTokens: Math.min(output, reasoning) }
+    inputTokens: input.value + cachedInputTokens + cacheCreationTokens,
+    outputTokens: output.value,
+    cachedInputTokens,
+    cacheCreationTokens,
+    ...(reasoning.ok && reasoning.value !== undefined
+      ? { reasoningTokens: Math.min(output.value, reasoning.value) }
       : {}),
+  };
+}
+
+function toPiMessageTokenUsage(usage: PiMessageUsage): PiMessageTokenUsage {
+  return {
+    inputTokens: usage.inputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    outputTokens: usage.outputTokens,
+  };
+}
+
+/** Partial fallback when a live streaming chunk omits fields required by `piMessageUsage`. */
+function partialPiMessageTokenUsage(usage: unknown): PiMessageTokenUsage {
+  const uncachedInputTokens = nonNegativeInteger(usage, "input");
+  const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
+  const outputTokens = nonNegativeInteger(usage, "output");
+  return {
+    ...(uncachedInputTokens === undefined
+      ? {}
+      : {
+          inputTokens:
+            uncachedInputTokens +
+            (cachedInputTokens ?? 0) +
+            (nonNegativeInteger(usage, "cacheWrite") ?? 0),
+        }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
   };
 }
 
@@ -1061,30 +1106,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         );
       });
 
-      const nonNegativeInteger = (input: unknown, key: string): number | undefined => {
-        const value = recordNumber(input, key);
-        return value === undefined ? undefined : Math.max(0, Math.trunc(value));
-      };
-
-      // Pi counts uncached input, cache reads and cache writes separately; input includes all three.
-      const piMessageTokenUsage = (usage: unknown): PiMessageTokenUsage => {
-        const uncachedInputTokens = nonNegativeInteger(usage, "input");
-        const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
-        const outputTokens = nonNegativeInteger(usage, "output");
-        return {
-          ...(uncachedInputTokens === undefined
-            ? {}
-            : {
-                inputTokens:
-                  uncachedInputTokens +
-                  (cachedInputTokens ?? 0) +
-                  (nonNegativeInteger(usage, "cacheWrite") ?? 0),
-              }),
-          ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-          ...(outputTokens === undefined ? {} : { outputTokens }),
-        };
-      };
-
       const rememberModelContextWindow = (model: unknown): number | null => {
         const provider = recordString(model, "provider");
         const id = recordString(model, "id");
@@ -1213,7 +1234,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           if (messageUsage !== null) turn.pendingUsage = messageUsage;
           const usedTokens = nonNegativeInteger(usage, "totalTokens");
           if (usedTokens !== undefined && usedTokens > 0) {
-            turn.lastMessageUsage = piMessageTokenUsage(usage);
+            turn.lastMessageUsage =
+              messageUsage !== null
+                ? toPiMessageTokenUsage(messageUsage)
+                : partialPiMessageTokenUsage(usage);
           }
           const contextChanged =
             usedTokens !== undefined &&
@@ -2608,6 +2632,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
             const finalUsage = piMessageUsage(recordField(message, "usage"));
+            if (finalUsage !== null) {
+              turn.lastMessageUsage = toPiMessageTokenUsage(finalUsage);
+            }
             const usage = finalUsage ?? turn.pendingUsage;
             if (usage !== null)
               turn.completedUsage =

@@ -43,7 +43,11 @@ import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
 import { clearPendingThreadCreationOutcome } from "../../state/pending-thread-creation";
 import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draft";
 import { useEnvironmentQuery } from "../../state/query";
-import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
+import {
+  dismissGitActionResult,
+  keepGitActionResultVisible,
+  useGitActionProgress,
+} from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
@@ -1046,6 +1050,7 @@ function ThreadRouteContent(
       <GitActionProgressOverlay
         progress={gitActionProgress}
         onDismiss={() => dismissGitActionResult(gitActionThreadRef)}
+        onKeepVisible={() => keepGitActionResultVisible(gitActionThreadRef)}
         onOpenPullRequest={openPullRequest}
       />
 

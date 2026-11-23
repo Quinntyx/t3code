@@ -1,12 +1,15 @@
 import * as Dialog from "../../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../../native/useOpenPullRequest";
 import {
+  type GitActionMenuItem,
   type GitActionRequestInput,
+  type GitQuickAction,
   buildMenuItems,
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
   resolveQuickAction,
 } from "@t3tools/client-runtime/state/vcs";
+import type { ThreadRepositorySection } from "@t3tools/client-runtime/state/thread-repositories";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
@@ -14,7 +17,16 @@ import { useGT, useMessages } from "gt-react-native";
 import { use, useState } from "react";
 
 import { changeRequestTermKind } from "../../../lib/changeRequestTerm";
+import { filesystemEnvironment } from "../../../state/filesystem";
 import { useEnvironmentQuery } from "../../../state/query";
+import {
+  gitRepositoryRouteParams,
+  type GitRepositoryTarget,
+} from "../../../state/thread-git-target";
+import {
+  unpinRepositoryFromThread,
+  useThreadRepositoryPins,
+} from "../../../state/thread-repository-pins";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
@@ -26,18 +38,26 @@ import { useLinkedPullRequestLines } from "../LinkedPullRequestList";
 import { useLinkedPullRequestActions } from "../useLinkedPullRequestActions";
 
 export type GitOverview = ReturnType<typeof useGitOverview>;
-type GitMenuItem = ReturnType<typeof buildMenuItems>[number];
+type GitOverviewMenuItem = {
+  readonly item: GitActionMenuItem;
+  readonly disabledReason: string | null;
+};
 
+/**
+ * Everything the Git overview surfaces read: the sheet route, the thread details pane and drawer.
+ * `repository` names a tracked repository instead of the thread's own folder.
+ */
 export function useGitOverview(props: {
   readonly environmentId: string;
   readonly threadId: string;
   readonly presentation: "sheet" | "inspector" | "drawer";
-  readonly onNavigate?: () => void;
+  readonly repository?: GitRepositoryTarget | undefined;
+  readonly onNavigate?: (() => void) | undefined;
 }) {
   const gt = useGT();
   const m = useMessages();
   const navigation = useNavigation();
-  const { presentation, onNavigate } = props;
+  const { presentation, onNavigate, repository } = props;
   const environmentId = EnvironmentId.make(props.environmentId);
   const threadId = ThreadId.make(props.threadId);
   const closeInspectorSheet = use(InspectorSheetContext);
@@ -52,29 +72,79 @@ export function useGitOverview(props: {
     replace: presentation === "sheet",
     context: selectedThread ?? undefined,
   });
-  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
+  const repositoryParams = gitRepositoryRouteParams(repository);
+  const threadWorktree = useSelectedThreadWorktree();
+  const { selectedThreadWorktreePath } = threadWorktree;
+  const selectedThreadCwd = repository?.cwd ?? threadWorktree.selectedThreadCwd;
+  const threadRef = { environmentId, threadId };
+  const pinnedRepositories = useThreadRepositoryPins(threadRef);
+  const isPinnedRepository =
+    repository !== undefined &&
+    pinnedRepositories.some((pin) => pin.repositoryPath === repository.key);
   const linkedPrLines = useLinkedPullRequestLines(selectedThread, selectedEnvironmentRuntime);
   const linkedPrActions = useLinkedPullRequestActions({
     thread: selectedThread,
     project: selectedThreadProject,
     runtime: selectedEnvironmentRuntime,
   });
-  const gitState = useSelectedThreadGitState();
-  const gitActions = useSelectedThreadGitActions();
+  const gitState = useSelectedThreadGitState(repository);
+  const gitActions = useSelectedThreadGitActions(repository);
   const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
 
-  const gitStatus = useEnvironmentQuery(
+  const gitStatusQuery = useEnvironmentQuery(
     selectedThread !== null && selectedThreadCwd !== null
       ? vcsEnvironment.status({
           environmentId: selectedThread.environmentId,
           input: { cwd: selectedThreadCwd },
         })
       : null,
-  ).data;
+  );
+  const gitStatus = gitStatusQuery.data;
 
-  const currentBranchLabel = gitStatus?.refName ?? selectedThread?.branch ?? gt("Detached HEAD");
-  const busy = gitState.gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
+  // A plain folder that tracks repositories has no branch of its own; its turns still have diffs.
+  const projectRepositoryCount = selectedThreadProject?.trackedFolders?.length ?? 0;
+  const trackedRepositoryCount = isRepo || repository !== undefined ? 0 : projectRepositoryCount;
+  // A worktree thread reaches tracked repositories only through its own task folder.
+  const taskFolderQuery = useEnvironmentQuery(
+    selectedThread !== null && selectedThreadWorktreePath !== null && projectRepositoryCount > 0
+      ? filesystemEnvironment.taskFolder({
+          environmentId: selectedThread.environmentId,
+          input: { worktreePath: selectedThreadWorktreePath },
+        })
+      : null,
+  );
+  const taskFolder = taskFolderQuery.data?.taskFolder ?? null;
+  // Also for a project that tracks nothing: a thread can change a submodule.
+  const listsRepositories = repository === undefined && selectedThreadProject !== null;
+  const reachesTracked =
+    projectRepositoryCount > 0 && (selectedThreadWorktreePath === null || taskFolder !== null);
+  const currentBranchLabel =
+    repository !== undefined
+      ? repository.name
+      : trackedRepositoryCount > 0
+        ? // A task folder's plain project folder has no branch; its repositories are on the thread's.
+          ((taskFolder === null ? null : selectedThread?.branch) ??
+          selectedThreadProject?.title ??
+          gt("Repositories"))
+        : (gitStatus?.refName ?? selectedThread?.branch ?? gt("Detached HEAD"));
+  const currentStatusSummary =
+    repository !== undefined
+      ? gitStatus?.isRepo
+        ? `${gitStatus.refName ?? gt("Detached HEAD")} · ${statusSummary(gitStatus, m)}`
+        : statusSummary(gitStatus, m)
+      : taskFolder !== null && trackedRepositoryCount > 0
+        ? gt(
+            "{count, plural, one {{count} repository worktree} other {{count} repository worktrees}}",
+            { count: taskFolder.repositories.length },
+          )
+        : trackedRepositoryCount > 0
+          ? gt("{count, plural, one {{count} repository} other {{count} repositories}}", {
+              count: trackedRepositoryCount,
+            })
+          : statusSummary(gitStatus, m);
+  const worktreePath = repository === undefined ? selectedThreadWorktreePath : null;
+  const busy = gitState.gitOperationLabel !== null;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus?.isDefaultRef ?? false;
   const behindCount = gitStatus?.behindCount ?? 0;
@@ -93,7 +163,7 @@ export function useGitOverview(props: {
   const writeBlocked =
     !canWriteSourceControl &&
     (resolvedQuickAction.kind === "run_action" || resolvedQuickAction.kind === "run_pull");
-  const quickAction = !isRepo
+  const quickAction: GitQuickAction = !isRepo
     ? {
         ...resolvedQuickAction,
         disabled: true,
@@ -107,36 +177,9 @@ export function useGitOverview(props: {
         }
       : resolvedQuickAction;
 
-  const rowStatusDetail = (item: GitMenuItem): string | undefined => {
-    if (gitStatus == null) return undefined;
-    if (item.dialogAction === "commit" && gitStatus.hasWorkingTreeChanges) {
-      const fileCount = gitStatus.workingTree?.files.length ?? 0;
-      return gt("{count, plural, one {{count} file changed} other {{count} files changed}}", {
-        count: fileCount,
-      });
-    }
-    if (item.dialogAction === "push" && (gitStatus.aheadCount ?? 0) > 0) {
-      const ahead = gitStatus.aheadCount ?? 0;
-      return gt("{count, plural, one {{count} commit ahead} other {{count} commits ahead}}", {
-        count: ahead,
-      });
-    }
-    if (item.kind === "open_pr" && gitStatus.pr?.number != null) {
-      return gt(
-        "{term, select, mr {MR #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}} cr {change request #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}} other {PR #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}}}",
-        {
-          term,
-          number: gitStatus.pr.number,
-          state: gitStatus.pr.state ?? "open",
-        },
-      );
-    }
-    return undefined;
-  };
+  const menuItems = isRepo ? buildMenuItems(gitStatus ?? null, busy, hasPrimaryRemote, m) : [];
 
-  const menuItems = (
-    isRepo ? buildMenuItems(gitStatus ?? null, busy, hasPrimaryRemote, m) : []
-  ).map((item) => {
+  const sheetMenuItems: GitOverviewMenuItem[] = menuItems.map((item) => {
     const itemWriteBlocked = !canWriteSourceControl && item.kind !== "open_pr";
     return {
       item: { ...item, disabled: item.disabled || itemWriteBlocked },
@@ -151,9 +194,38 @@ export function useGitOverview(props: {
             },
             m,
           ),
-      statusDetail: rowStatusDetail(item),
     };
   });
+
+  const rowStatusDetail = (item: GitActionMenuItem): string | undefined => {
+    const status = gitStatus ?? null;
+    if (status == null) {
+      return undefined;
+    }
+    if (item.dialogAction === "commit" && status.hasWorkingTreeChanges) {
+      const fileCount = status.workingTree?.files.length ?? 0;
+      return gt("{count, plural, one {{count} file changed} other {{count} files changed}}", {
+        count: fileCount,
+      });
+    }
+    if (item.dialogAction === "push" && (status.aheadCount ?? 0) > 0) {
+      const ahead = status.aheadCount ?? 0;
+      return gt("{count, plural, one {{count} commit ahead} other {{count} commits ahead}}", {
+        count: ahead,
+      });
+    }
+    if (item.kind === "open_pr" && status.pr?.number != null) {
+      return gt(
+        "{term, select, mr {MR #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}} cr {change request #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}} other {PR #{number} {state, select, open {open} closed {closed} merged {merged} other {{state}}}}}",
+        {
+          term,
+          number: status.pr.number,
+          state: status.pr.state ?? "open",
+        },
+      );
+    }
+    return undefined;
+  };
 
   const openLinkedPullRequest = async (url: string) => {
     onNavigate?.();
@@ -212,11 +284,11 @@ export function useGitOverview(props: {
         navigation.navigate("GitConfirm", {
           environmentId: String(environmentId),
           threadId: String(threadId),
+          ...repositoryParams,
           confirmAction: confirmableAction,
           branchName,
           includesCommit: String(
-            (input.action === "commit_push" || input.action === "commit_push_pr") &&
-              !!gitStatus?.hasWorkingTreeChanges,
+            input.action === "commit_push" || input.action === "commit_push_pr",
           ),
         }),
       );
@@ -240,7 +312,7 @@ export function useGitOverview(props: {
     }
   };
 
-  const onPressMenuItem = async (item: GitMenuItem) => {
+  const onPressMenuItem = async (item: GitActionMenuItem) => {
     if (item.disabled) return;
     if (item.kind === "open_pr") {
       await openExistingPr();
@@ -252,6 +324,7 @@ export function useGitOverview(props: {
         navigation.navigate("GitCommit", {
           environmentId: String(environmentId),
           threadId: String(threadId),
+          ...repositoryParams,
         }),
       );
       return;
@@ -263,6 +336,27 @@ export function useGitOverview(props: {
     if (item.dialogAction === "create_pr") {
       await runActionWithPrompt({ action: "create_pr" });
     }
+  };
+
+  const openRepository = (section: ThreadRepositorySection) => {
+    const params = {
+      environmentId: String(environmentId),
+      threadId: String(threadId),
+      repositoryCwd: section.cwd,
+      repositoryName: section.name,
+    };
+    // A sheet swaps in place, so closing the repository or running an action lands on the thread.
+    if (presentation === "sheet") {
+      navigation.dispatch(StackActions.replace("GitOverview", params));
+    } else {
+      presentRoute(() => navigation.dispatch(StackActions.push("GitOverview", params)));
+    }
+  };
+
+  const unpinRepository = () => {
+    if (repository === undefined) return;
+    unpinRepositoryFromThread(threadRef, repository.key);
+    navigation.goBack();
   };
 
   const openReview = () => {
@@ -293,24 +387,37 @@ export function useGitOverview(props: {
 
   return {
     gitStatus: gitStatus ?? null,
-    currentBranchLabel,
-    currentStatusSummary: statusSummary(gitStatus ?? null, m),
-    worktreePath: selectedThreadWorktreePath,
-    terminology,
-    busy,
     isRepo,
+    trackedRepositoryCount,
+    taskFolder,
+    refreshTaskFolder: taskFolderQuery.refresh,
+    listsRepositories,
+    reachesTracked,
+    projectId: selectedThreadProject?.id ?? null,
+    selectedThreadCwd,
+    worktreePath,
+    threadRef,
+    repository,
+    isPinnedRepository,
+    unpinRepository,
+    currentBranchLabel,
+    currentStatusSummary,
+    busy,
     behindCount,
     canWriteSourceControl,
     canChangeThreadBranch,
-    menuItems,
+    sheetMenuItems,
+    rowStatusDetail,
     onPressMenuItem,
     quickAction,
     runQuickAction,
     pull: () => void gitActions.onPullSelectedThreadBranch(),
+    refreshSelectedThreadGitStatus: gitActions.refreshSelectedThreadGitStatus,
+    openRepository,
     openReview,
     openBranches,
-    openUrl,
     openLinkedPullRequest,
+    openPullRequest,
     isRefreshing,
     refresh,
     linkedPrLines,

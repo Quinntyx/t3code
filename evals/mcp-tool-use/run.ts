@@ -3368,7 +3368,9 @@ const main = Effect.gen(function* () {
       setup.world?.agentFeedback ?? "off",
     ]);
   const base = yield* buildFor("top", true, true, false, true);
-  const bases = new Map<string, Base>();
+  const bases = new Map<string, Base>([
+    [JSON.stringify(["top", true, true, false, true, null, "off"]), base],
+  ]);
   for (const testCase of selected) {
     const key = baseKey(testCase);
     if (bases.has(key)) continue;

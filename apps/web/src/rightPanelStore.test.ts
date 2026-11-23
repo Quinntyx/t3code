@@ -148,6 +148,15 @@ describe("global Voice surface", () => {
     // The thread on screen picking its own surface does.
     store.activateSurface(refA, "diff");
     expect(useRightPanelStore.getState().voiceActive).toBe(false);
+    // Opening a linked thread on the visible thread also moves focus off Voice.
+    store.setVoiceActive(true);
+    store.openLinkedThread(refA, {
+      ...refB,
+      viaEnvironmentId: refA.environmentId,
+      label: "Thread B",
+      title: "Thread B",
+    });
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
   });
 
   it("reveals a thread's surface over Voice only for the thread on screen", () => {

@@ -188,8 +188,6 @@ export class SourceControlProvider extends Context.Service<
     readonly listChangeRequests: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
-      /** The repository, as in `createChangeRequest`'s `target`, to search; absent is the host's default. */
-      readonly targetRepository?: string;
       readonly source?: SourceControlRefSelector;
       readonly headSelector: string;
       readonly state: ChangeRequestState | "all";

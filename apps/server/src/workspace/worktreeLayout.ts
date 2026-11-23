@@ -10,6 +10,19 @@ export const makeResolveMainCheckout = Effect.gen(function* () {
     const gitEntry = yield* fs.stat(path.join(main, ".git")).pipe(Effect.orElseSucceed(() => null));
     if (gitEntry?.type !== "Directory" && gitEntry?.type !== "File") return workspaceRoot;
 
+    // A folder holding sibling standalone git repositories is a multi-repo workspace, not a
+    // single-repo worktree container (where sibling worktrees have a `.git` file, not directory).
+    const entries = yield* fs
+      .readDirectory(workspaceRoot)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    for (const entry of entries) {
+      if (entry === "main") continue;
+      const siblingGit = yield* fs
+        .stat(path.join(workspaceRoot, entry, ".git"))
+        .pipe(Effect.orElseSucceed(() => null));
+      if (siblingGit?.type === "Directory") return workspaceRoot;
+    }
+
     // A main/ child inside an existing repository is not a worktree container.
     let ancestor = yield* fs
       .realPath(workspaceRoot)

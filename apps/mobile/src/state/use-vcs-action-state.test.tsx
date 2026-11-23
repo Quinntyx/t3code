@@ -22,6 +22,7 @@ vi.mock("./vcs", async () => {
 import { appAtomRegistry } from "./atom-registry";
 import {
   dismissGitActionResult,
+  keepGitActionResultVisible,
   showGitActionResult,
   useGitActionProgress,
 } from "./use-vcs-action-state";
@@ -115,6 +116,28 @@ describe("thread Git result banners", () => {
       expect(banner.text).toBe("");
       banner.select(owner);
       expect(banner.text).toBe("Pulled");
+    } finally {
+      dismissGitActionResult(owner);
+      dismissGitActionResult(otherThread);
+    }
+  });
+
+  it("keeps only the inspected thread's result visible, so the others still expire", () => {
+    vi.useFakeTimers();
+    using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    try {
+      showGitActionResult({ threadRef: owner, type: "error", title: "Rejected" });
+      showGitActionResult({ threadRef: otherThread, type: "success", title: "Pulled" });
+      vi.advanceTimersByTime(4_000);
+
+      keepGitActionResultVisible(owner);
+      vi.advanceTimersByTime(10_000);
+
+      using banner = mountGitBanner();
+      banner.select(owner);
+      expect(banner.text).toBe("Rejected");
+      banner.select(otherThread);
+      expect(banner.text).toBe("");
     } finally {
       dismissGitActionResult(owner);
       dismissGitActionResult(otherThread);

@@ -1342,7 +1342,7 @@ it.effect("lists and creates in a named target repository over gh's default", ()
     const listing = yield* provider
       .listChangeRequests({
         cwd: "/repo",
-        targetRepository: "me/web",
+        repository: "me/web",
         headSelector: "feature",
         state: "open",
       })
