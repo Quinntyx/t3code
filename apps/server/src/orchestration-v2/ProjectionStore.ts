@@ -264,6 +264,14 @@ export type ProjectionLimitRecoveryCandidate = Pick<
 > & {
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
+  /** Provider instance of the failed run, so provider switches never borrow another instance's reset. */
+  readonly latestRunProviderInstanceId: ProviderInstanceId;
+  /** Model of the failed run, so observed limit resets match its quota pool. */
+  readonly latestRunModel: string | null;
+  /** Thread's currently selected model, which a limit-resume dispatch will run. */
+  readonly threadModel: string | null;
+  /** Set when the failed run was itself a usage-limit continuation of an earlier run. */
+  readonly latestRunUsageLimitContinuationOfRunId: RunId | null;
 };
 
 export type ProjectionStallRecoveryCandidate = Pick<
@@ -5185,11 +5193,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly run_id: string;
+          readonly provider_instance_id: string;
           readonly completed_at: string | null;
+          readonly model: string | null;
+          readonly usage_limit_continuation_of_run_id: string | null;
           readonly failure_payload_json: string;
           readonly last_error: string | null;
         }>`
-          SELECT t.payload_json, r.run_id, r.completed_at,
+          SELECT t.payload_json, r.run_id, r.provider_instance_id, r.completed_at,
+            json_extract(r.payload_json, '$.modelSelection.model') AS model,
+            json_extract(r.payload_json, '$.usageLimitContinuationOfRunId') AS usage_limit_continuation_of_run_id,
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
@@ -5237,6 +5250,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ELSE 0 END
             )
             AND t.archived_at IS NULL
+            AND t.provider_instance_id = r.provider_instance_id
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_valid(item.payload_json)
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
@@ -5303,6 +5317,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             lastErrorClass: summary.lastErrorClass,
             usageLimitResetAt: summary.usageLimitResetAt,
             latestRunId: RunId.make(row.run_id),
+            latestRunProviderInstanceId: ProviderInstanceId.make(row.provider_instance_id),
+            latestRunModel: row.model,
+            threadModel: thread.modelSelection.model,
+            latestRunUsageLimitContinuationOfRunId:
+              row.usage_limit_continuation_of_run_id === null
+                ? null
+                : RunId.make(row.usage_limit_continuation_of_run_id),
             latestRunCompletedAt:
               row.completed_at === null ? null : DateTime.makeUnsafe(row.completed_at),
             updatedAt: thread.updatedAt,

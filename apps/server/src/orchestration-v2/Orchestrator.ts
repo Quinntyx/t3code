@@ -7466,6 +7466,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const hasPendingRuntimeRequest = projection.runtimeRequests.some(
         (request) => request.status === "pending",
       );
+      const modelChangedBeforeEarlyResume =
+        resetObserved &&
+        run != null &&
+        projection.thread.modelSelection.model !== run.modelSelection.model;
+      const providerChangedBeforeResume =
+        run != null && projection.thread.providerInstanceId !== run.providerInstanceId;
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
         failure?.class !== "usage_limit" ||
@@ -7476,10 +7482,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         recovery.runId !== run.id ||
         recovery.resetAt !== failure.resetAt ||
         (!resetObserved && Date.parse(recovery.resetAt) > DateTime.toEpochMillis(now)) ||
+        modelChangedBeforeEarlyResume ||
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
         projection.thread.settledOverride === "settled" ||
-        projection.thread.providerInstanceId !== run.providerInstanceId ||
+        providerChangedBeforeResume ||
         hasPendingRuntimeRequest ||
         snoozeHolds
       ) {
@@ -7489,7 +7496,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           recovery.runId === command.usageLimitContinuationOfRunId &&
           ((projection.thread.snoozedUntil != null &&
             DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)) ||
-            ((agentsWaiting || hasPendingRuntimeRequest) &&
+            ((agentsWaiting ||
+              hasPendingRuntimeRequest ||
+              modelChangedBeforeEarlyResume ||
+              providerChangedBeforeResume) &&
               run?.id === command.usageLimitContinuationOfRunId &&
               failure?.class === "usage_limit" &&
               recovery.resetAt === failure.resetAt &&

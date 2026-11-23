@@ -84,43 +84,50 @@ function hubRouteDrivers(
   return origin && routesByOrigin.size > 0 ? new Set() : null;
 }
 
-type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
+type UsageLimitProvider = {
+  readonly driver?: ServerProvider["driver"] | undefined;
+  readonly usageLimits?: ServerProviderUsageLimits | undefined;
+};
 
-function exhaustedUsageWindows(
-  provider: UsageLimitProvider | undefined,
-  now: number,
+export function usageWindowsForModel(
+  provider: ServerProvider | UsageLimitProvider | undefined,
   model?: string,
-) {
+): ReadonlyArray<ServerProviderUsageWindow> {
+  if (provider?.usageLimits?.unavailable) return [];
   const windows = provider?.usageLimits?.windows ?? [];
-  const exhausted = windows.filter(
+  const matching = windows.filter(
     (window) =>
-      (window.usedPercent ?? 0) >= 100 &&
       (model === undefined || window.modelIds === undefined || window.modelIds.includes(model)) &&
       (model === undefined ||
         window.providerIds === undefined ||
-        window.providerIds.includes(model.split("/")[0] ?? "")) &&
-      (!window.resetsAt ||
-        !Number.isFinite(Date.parse(window.resetsAt)) ||
-        Date.parse(window.resetsAt) > now),
+        window.providerIds.includes(model.split("/")[0] ?? "")),
   );
-  if (model === undefined) return exhausted;
+  if (model === undefined) return matching;
   // A provider reading another provider's login reports that login's pool, so classify by its owner.
   switch (provider?.usageLimits?.ownerDriver ?? provider?.driver) {
     case "cursor": {
-      const api = exhausted.find((window) => window.id === "apiPercentUsed");
-      const auto = exhausted.find((window) => window.id === "autoPercentUsed");
+      const hasSplitPools = matching.some(
+        (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
+      );
+      if (!hasSplitPools) return matching;
       return /^(auto|default|grok|composer)/.test(model)
-        ? auto && api
-          ? [api, auto]
-          : []
-        : api
-          ? [api]
-          : [];
+        ? matching.filter(
+            (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
+          )
+        : matching.filter((window) => window.id === "apiPercentUsed");
     }
     case "antigravity": {
       const family = model.match(/^(gemini|claude|gpt)-/)?.[1];
-      return exhausted.filter((window) => {
+      const geminiTier =
+        family === "gemini" ? model.match(/(?:^|-)(argon|carbon)(?:-|$)/)?.[1] : undefined;
+      const hasTieredGemini = matching.some((window) => /^gemini-(argon|carbon)-/.test(window.id));
+      return matching.filter((window) => {
+        const geminiBucketTier = window.id.match(/^gemini-(argon|carbon)-/)?.[1];
+        if (geminiBucketTier !== undefined) {
+          return family === undefined || (family === "gemini" && geminiTier === geminiBucketTier);
+        }
         const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
+        if (pool === "gemini" && geminiTier !== undefined && hasTieredGemini) return false;
         return (
           pool === undefined ||
           family === undefined ||
@@ -130,30 +137,71 @@ function exhaustedUsageWindows(
       });
     }
     case "claudeAgent": {
-      const family = model.match(/(?:^|[-/])(opus|sonnet|haiku)(?:-|$)/)?.[1];
-      return exhausted.filter((window) => {
-        const scope = window.id.match(/^seven_day_(?:claude_)?(opus|sonnet|haiku)(?:_|$)/)?.[1];
-        return scope === undefined || family === undefined || scope === family;
+      const normalizedModel = model
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      const boundedModel = `_${normalizedModel}_`;
+      return matching.filter((window) => {
+        if (!window.id.startsWith("seven_day_")) return true;
+        const scope = window.id
+          .slice("seven_day_".length)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")
+          .replace(/^claude_/, "");
+        return scope.length === 0 || boundedModel.includes(`_${scope}_`);
       });
     }
     case "codex": {
+      // Spark has its own Codex rate-limit bucket, which the Codex adapter omits from the main
+      // allowance windows, so unscoped Codex windows do not govern Spark models.
+      if (/(?:^|[-/])spark(?:$|[-/])/i.test(model)) {
+        return matching.filter((window) => window.modelIds !== undefined);
+      }
       // Seat-based plans spend credits only past their plan windows, so the credit cap blocks only plans without them.
       const hasPlanWindows = windows.some(
         (window) => window.id === "primary" || window.id === "secondary",
       );
-      return exhausted.filter((window) => window.id !== "individual" || !hasPlanWindows);
+      return matching.filter((window) => window.id !== "individual" || !hasPlanWindows);
     }
     case "opencode":
-      return exhausted.filter(
+      return matching.filter(
         (window) => !window.id.startsWith("go_") || model.startsWith("opencode-go/"),
       );
     default:
-      return exhausted;
+      return matching;
   }
 }
 
+function exhaustedUsageWindows(
+  provider: UsageLimitProvider | undefined,
+  now: number,
+  model?: string,
+) {
+  const applicable = usageWindowsForModel(provider, model);
+  const exhausted = applicable.filter(
+    (window) =>
+      (window.usedPercent ?? 0) >= 100 &&
+      (!window.resetsAt ||
+        !Number.isFinite(Date.parse(window.resetsAt)) ||
+        Date.parse(window.resetsAt) > now),
+  );
+  if (
+    model !== undefined &&
+    (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
+    /^(auto|default|grok|composer)/.test(model) &&
+    applicable.some((window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed")
+  ) {
+    const api = exhausted.find((window) => window.id === "apiPercentUsed");
+    const auto = exhausted.find((window) => window.id === "autoPercentUsed");
+    return auto && api ? [api, auto] : [];
+  }
+  return exhausted;
+}
+
 export function exhaustedUsageWindow(
-  provider: ServerProvider | undefined,
+  provider: ServerProvider | UsageLimitProvider | undefined,
   now: number,
   model?: string,
 ) {
@@ -169,11 +217,12 @@ export function usageLimitResetAt(
   const windows = exhaustedUsageWindows(provider, now, model);
   if (windows.length === 0) return null;
   const resets = windows.map((window) => Date.parse(window.resetsAt ?? ""));
-  // Cursor's own models can spend either pool; other limits must all reset.
+  // Cursor's own models can spend either pool when split pools are reported; other limits must all reset.
   const alternativePools =
-    provider?.driver === "cursor" &&
+    (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
     model !== undefined &&
-    /^(auto|default|grok|composer)/.test(model);
+    /^(auto|default|grok|composer)/.test(model) &&
+    windows.some((window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed");
   if (!alternativePools && resets.some((reset) => !Number.isFinite(reset))) return null;
   const known = resets.filter(Number.isFinite);
   if (known.length === 0) return null;
