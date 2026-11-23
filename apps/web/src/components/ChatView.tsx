@@ -2378,12 +2378,13 @@ export default function ChatView(props: ChatViewProps) {
       composerReservedHeightRef.current = reservedHeight;
       setComposerReservedHeight(reservedHeight);
     }
-    const host = composerOverlayElement?.querySelector<HTMLElement>('[data-slot="composer-host"]');
-    const overlayRect = composerOverlayElement?.getBoundingClientRect();
+    const stackRect = stack?.getBoundingClientRect();
+    const host = stack?.querySelector<HTMLElement>('[data-slot="composer-host"]');
     const hostRect = host?.getBoundingClientRect();
+    // Measure host against the same animated stack so draft-to-thread FLIP translation cancels out.
     const bottomClearance =
-      !isDraftHeroState && overlayRect && hostRect && hostRect.height > 0
-        ? Math.max(0, Math.ceil(overlayRect.bottom - hostRect.bottom))
+      !isDraftHeroState && stackRect && hostRect && hostRect.height > 0
+        ? Math.max(0, Math.ceil(stackRect.bottom - hostRect.bottom))
         : 0;
     if (composerBottomClearanceRef.current !== bottomClearance) {
       composerBottomClearanceRef.current = bottomClearance;
