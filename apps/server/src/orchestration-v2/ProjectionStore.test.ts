@@ -9079,6 +9079,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             lastErrorClass: sqlShell.lastErrorClass,
             usageLimitResetAt: sqlShell.usageLimitResetAt,
             latestRunId: sqlShell.latestRunId,
+            latestRunModel: original.modelSelection.model,
             latestRunCompletedAt: sqlShell.latestRunCompletedAt,
             updatedAt: sqlShell.updatedAt,
             archivedAt: sqlShell.archivedAt,
@@ -9315,6 +9316,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       })).find((row) => row.id === threadId)!;
       assert.deepEqual(observed.limitRecovery, recovery);
       assert.equal(observed.providerInstanceId, providerInstanceId);
+      assert.equal(observed.latestRunModel, original.modelSelection.model);
       const due = (yield* store.getLimitRecoveryCandidates({
         ...recoveryOptions,
         now: reset,

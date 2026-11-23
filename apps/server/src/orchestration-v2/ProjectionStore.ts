@@ -264,6 +264,8 @@ export type ProjectionLimitRecoveryCandidate = Pick<
 > & {
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
+  /** Model of the failed run, so observed limit resets match its quota pool. */
+  readonly latestRunModel?: string | null;
 };
 
 export type ProjectionStallRecoveryCandidate = Pick<
@@ -5186,10 +5188,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly payload_json: string;
           readonly run_id: string;
           readonly completed_at: string | null;
+          readonly model: string | null;
           readonly failure_payload_json: string;
           readonly last_error: string | null;
         }>`
           SELECT t.payload_json, r.run_id, r.completed_at,
+            json_extract(r.payload_json, '$.modelSelection.model') AS model,
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
@@ -5303,6 +5307,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             lastErrorClass: summary.lastErrorClass,
             usageLimitResetAt: summary.usageLimitResetAt,
             latestRunId: RunId.make(row.run_id),
+            latestRunModel: row.model,
             latestRunCompletedAt:
               row.completed_at === null ? null : DateTime.makeUnsafe(row.completed_at),
             updatedAt: thread.updatedAt,

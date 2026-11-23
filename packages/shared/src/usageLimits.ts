@@ -86,40 +86,31 @@ function hubRouteDrivers(
 
 type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
 
-function exhaustedUsageWindows(
-  provider: UsageLimitProvider | undefined,
-  now: number,
+export function usageWindowsForModel(
+  provider: ServerProvider | UsageLimitProvider | undefined,
   model?: string,
-) {
+): ReadonlyArray<ServerProviderUsageWindow> {
+  if (provider?.usageLimits?.unavailable) return [];
   const windows = provider?.usageLimits?.windows ?? [];
-  const exhausted = windows.filter(
+  const matching = windows.filter(
     (window) =>
-      (window.usedPercent ?? 0) >= 100 &&
       (model === undefined || window.modelIds === undefined || window.modelIds.includes(model)) &&
       (model === undefined ||
         window.providerIds === undefined ||
-        window.providerIds.includes(model.split("/")[0] ?? "")) &&
-      (!window.resetsAt ||
-        !Number.isFinite(Date.parse(window.resetsAt)) ||
-        Date.parse(window.resetsAt) > now),
+        window.providerIds.includes(model.split("/")[0] ?? "")),
   );
-  if (model === undefined) return exhausted;
+  if (model === undefined) return matching;
   // A provider reading another provider's login reports that login's pool, so classify by its owner.
   switch (provider?.usageLimits?.ownerDriver ?? provider?.driver) {
-    case "cursor": {
-      const api = exhausted.find((window) => window.id === "apiPercentUsed");
-      const auto = exhausted.find((window) => window.id === "autoPercentUsed");
+    case "cursor":
       return /^(auto|default|grok|composer)/.test(model)
-        ? auto && api
-          ? [api, auto]
-          : []
-        : api
-          ? [api]
-          : [];
-    }
+        ? matching.filter(
+            (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
+          )
+        : matching.filter((window) => window.id === "apiPercentUsed");
     case "antigravity": {
       const family = model.match(/^(gemini|claude|gpt)-/)?.[1];
-      return exhausted.filter((window) => {
+      return matching.filter((window) => {
         const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
         return (
           pool === undefined ||
@@ -131,7 +122,7 @@ function exhaustedUsageWindows(
     }
     case "claudeAgent": {
       const family = model.match(/(?:^|[-/])(opus|sonnet|haiku)(?:-|$)/)?.[1];
-      return exhausted.filter((window) => {
+      return matching.filter((window) => {
         const scope = window.id.match(/^seven_day_(?:claude_)?(opus|sonnet|haiku)(?:_|$)/)?.[1];
         return scope === undefined || family === undefined || scope === family;
       });
@@ -141,19 +132,43 @@ function exhaustedUsageWindows(
       const hasPlanWindows = windows.some(
         (window) => window.id === "primary" || window.id === "secondary",
       );
-      return exhausted.filter((window) => window.id !== "individual" || !hasPlanWindows);
+      return matching.filter((window) => window.id !== "individual" || !hasPlanWindows);
     }
     case "opencode":
-      return exhausted.filter(
+      return matching.filter(
         (window) => !window.id.startsWith("go_") || model.startsWith("opencode-go/"),
       );
     default:
-      return exhausted;
+      return matching;
   }
 }
 
+function exhaustedUsageWindows(
+  provider: UsageLimitProvider | undefined,
+  now: number,
+  model?: string,
+) {
+  const exhausted = usageWindowsForModel(provider, model).filter(
+    (window) =>
+      (window.usedPercent ?? 0) >= 100 &&
+      (!window.resetsAt ||
+        !Number.isFinite(Date.parse(window.resetsAt)) ||
+        Date.parse(window.resetsAt) > now),
+  );
+  if (
+    model !== undefined &&
+    (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
+    /^(auto|default|grok|composer)/.test(model)
+  ) {
+    const api = exhausted.find((window) => window.id === "apiPercentUsed");
+    const auto = exhausted.find((window) => window.id === "autoPercentUsed");
+    return auto && api ? [api, auto] : [];
+  }
+  return exhausted;
+}
+
 export function exhaustedUsageWindow(
-  provider: ServerProvider | undefined,
+  provider: ServerProvider | UsageLimitProvider | undefined,
   now: number,
   model?: string,
 ) {

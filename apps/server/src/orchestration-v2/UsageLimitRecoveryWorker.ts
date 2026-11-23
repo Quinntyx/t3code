@@ -5,12 +5,19 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
   type ProviderInstanceId,
+  type RunId,
   type ServerProvider,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
+import {
+  exhaustedUsageWindow,
+  usageLimitResetAt,
+  usageLimitSourceResetAt,
+  usageWindowsForModel,
+} from "@t3tools/shared/usageLimits";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -115,15 +122,66 @@ export function limitRecoveryCommand(
 
 const spent = (window: ServerProviderUsageWindow) => window.usedPercent >= 100;
 
+/** Minimum forward jump in `resetsAt` to count as a period rollover rather than API clock jitter. */
+const MIN_RESET_ADVANCE_MS = 5 * 60 * 1000;
+/** Minimum percentage-point drop for an unspent probe reading to count as a reset to zero. */
+const MIN_UNSPENT_RESET_TO_ZERO_PERCENT = 10;
+/** High-water spend threshold where a whole-point drop still indicates a limit came back. */
+const NEAR_EXHAUSTED_PERCENT = 90;
+/** Tolerance for matching a retried failure back to the reset window of an earlier early resume. */
+const SAME_RESET_WINDOW_MS = 5 * 60 * 1000;
+
+function minResetAdvanceMs(window: ServerProviderUsageWindow): number {
+  if (
+    window.windowDurationMins === undefined ||
+    !Number.isFinite(window.windowDurationMins) ||
+    window.windowDurationMins <= 0
+  ) {
+    return MIN_RESET_ADVANCE_MS;
+  }
+  return Math.max(MIN_RESET_ADVANCE_MS, Math.floor((window.windowDurationMins * 60 * 1000) / 2));
+}
+
+function windowResetObserved(
+  seen: ServerProviderUsageWindow,
+  window: ServerProviderUsageWindow,
+): boolean {
+  if (spent(window)) return false;
+  const prevRounded = Math.round(seen.usedPercent);
+  const nextRounded = Math.round(window.usedPercent);
+  if (spent(seen)) {
+    // Probes and streamed usage round differently, so only a whole point means less spend.
+    if (nextRounded < prevRounded) return true;
+  } else if (
+    // A probe that never saw 100% still observes a real reset (such as 99% -> 0% or 40% -> 0%
+    // on a redeemed credit), while small rolling decay (1.7% -> 0% or 35% -> 34%) is not a reset.
+    (prevRounded >= NEAR_EXHAUSTED_PERCENT && nextRounded < prevRounded) ||
+    (nextRounded === 0 && prevRounded >= MIN_UNSPENT_RESET_TO_ZERO_PERCENT)
+  ) {
+    return true;
+  }
+  // An idle 0% rolling window moving its reset clock forward is wall-clock drift, not a reset.
+  if (prevRounded <= 0) return false;
+  const wasReset = seen.resetsAt === undefined ? null : Date.parse(seen.resetsAt);
+  const nowReset = window.resetsAt === undefined ? null : Date.parse(window.resetsAt);
+  return (
+    wasReset !== null &&
+    nowReset !== null &&
+    Number.isFinite(wasReset) &&
+    Number.isFinite(nowReset) &&
+    nowReset - wasReset >= minResetAdvanceMs(window)
+  );
+}
+
 /**
- * A provider reports the same windows on every probe, so a window with less spend than before, or
- * a reset clock that moved past it, means the allowance came back: a scheduled reset that arrived
+ * A provider reports the same windows on every probe, so a window that recovers from exhaustion
+ * or rolls over to a new period means the allowance came back: a scheduled reset that arrived
  * early, or a redeemed reset credit.
  */
-function limitResetObserved(
+function observedResetWindowIds(
   previous: ServerProviderUsageLimits | undefined,
   next: ServerProviderUsageLimits,
-): boolean {
+): ReadonlyArray<string> {
   if (
     previous === undefined ||
     previous.unavailable !== undefined ||
@@ -132,17 +190,16 @@ function limitResetObserved(
       next.credentialFingerprint !== undefined &&
       previous.credentialFingerprint !== next.credentialFingerprint)
   )
-    return false;
+    return [];
   const before = new Map(previous.windows.map((window) => [window.id, window]));
-  return next.windows.some((window) => {
+  const ids: Array<string> = [];
+  for (const window of next.windows) {
     const seen = before.get(window.id);
-    if (seen === undefined) return false;
-    // Probes and streamed usage round differently, so only a whole point means less spend.
-    if (Math.round(window.usedPercent) < Math.round(seen.usedPercent)) return true;
-    const wasReset = seen.resetsAt === undefined ? null : Date.parse(seen.resetsAt);
-    const nowReset = window.resetsAt === undefined ? null : Date.parse(window.resetsAt);
-    return wasReset !== null && nowReset !== null && nowReset > wasReset;
-  });
+    if (seen !== undefined && windowResetObserved(seen, window)) {
+      ids.push(window.id);
+    }
+  }
+  return ids;
 }
 
 const spentWindow = (limits: ServerProviderUsageLimits) => limits.windows.some(spent);
@@ -177,8 +234,8 @@ const mergeLimits = (
 };
 
 /**
- * Folds one provider report into what was last known per instance, and says which instances gained
- * allowance and which spent it again. An unreadable probe says nothing either way.
+ * Folds one provider report into what was last known per instance, and says which instances and
+ * windows gained allowance and which spent it again. An unreadable probe says nothing either way.
  */
 export function observeLimitReport(
   previous: ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>,
@@ -186,20 +243,66 @@ export function observeLimitReport(
   nowMs: number,
 ): {
   readonly observed: ReadonlyArray<ProviderInstanceId>;
+  readonly observedWindows: ReadonlyMap<ProviderInstanceId, ReadonlyArray<string>>;
   readonly spent: ReadonlyArray<ProviderInstanceId>;
+  readonly spentWindows: ReadonlyMap<ProviderInstanceId, ReadonlyArray<string>>;
   readonly limits: ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>;
 } {
   const observed: Array<ProviderInstanceId> = [];
-  const spent: Array<ProviderInstanceId> = [];
+  const observedWindows = new Map<ProviderInstanceId, ReadonlyArray<string>>();
+  const spentInstances: Array<ProviderInstanceId> = [];
+  const spentWindows = new Map<ProviderInstanceId, ReadonlyArray<string>>();
   const limits = new Map<ProviderInstanceId, ServerProviderUsageLimits>();
   for (const [instanceId, reported] of next) {
     const current = mergeLimits(previous.get(instanceId), reported, nowMs);
     limits.set(instanceId, current);
     if (current.unavailable !== undefined) continue;
-    if (spentWindow(current)) spent.push(instanceId);
-    else if (limitResetObserved(previous.get(instanceId), current)) observed.push(instanceId);
+    const spentIds = current.windows.filter(spent).map((window) => window.id);
+    if (spentIds.length > 0) spentWindows.set(instanceId, spentIds);
+    const resetIds = observedResetWindowIds(previous.get(instanceId), current);
+    if (resetIds.length > 0) observedWindows.set(instanceId, resetIds);
+    if (spentWindow(current)) spentInstances.push(instanceId);
+    else if (resetIds.length > 0) observed.push(instanceId);
   }
-  return { observed, spent, limits };
+  return { observed, observedWindows, spent: spentInstances, spentWindows, limits };
+}
+
+/**
+ * Returns the latest observed reset time among windows that actually govern the failed run's
+ * model, or undefined if no applicable window recovered or an applicable window is still spent.
+ */
+function observedResetAtForThread(input: {
+  readonly model?: string | null | undefined;
+  readonly provider: Pick<ServerProvider, "driver" | "usageLimits"> | undefined;
+  readonly observedWindows: ReadonlyMap<string, number> | undefined;
+  readonly nowMs: number;
+}): number | undefined {
+  const { model, provider, observedWindows, nowMs } = input;
+  if (
+    observedWindows === undefined ||
+    observedWindows.size === 0 ||
+    provider?.usageLimits === undefined ||
+    provider.usageLimits.unavailable !== undefined
+  ) {
+    return undefined;
+  }
+  let applicable: ReadonlyArray<ServerProviderUsageWindow>;
+  if (model != null) {
+    applicable = usageWindowsForModel(provider, model);
+    if (applicable.length === 0) return undefined;
+    if (exhaustedUsageWindow(provider, nowMs, model) !== undefined) return undefined;
+  } else {
+    if (spentWindow(provider.usageLimits)) return undefined;
+    applicable = provider.usageLimits.windows;
+  }
+  let latest: number | undefined;
+  for (const window of applicable) {
+    const observedAt = observedWindows.get(window.id);
+    if (observedAt !== undefined && (latest === undefined || observedAt > latest)) {
+      latest = observedAt;
+    }
+  }
+  return latest;
 }
 
 // Events that can make a thread a candidate or change its command; streaming items cannot.
@@ -248,6 +351,9 @@ const limitsByInstance = (providers: ReadonlyArray<ServerProvider>) =>
     ),
   );
 
+const driversByInstance = (providers: ReadonlyArray<ServerProvider>) =>
+  new Map(providers.map((provider) => [provider.instanceId, provider.driver] as const));
+
 const logUnlessInterrupted = (message: string) => (cause: Cause.Cause<unknown>) =>
   Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logWarning(message, { cause });
 
@@ -258,10 +364,23 @@ const makeSweep = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const providers = yield* ProviderRegistry.ProviderRegistry;
   const due = DueHint.make();
-  // When each instance's allowance came back before the reset time its waiting threads recorded.
-  // A thread that failed after that report keeps its own clock, so one report cannot retry it
-  // twice, and a window that is spent again clears the instance.
-  const resetObservedAt = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(new Map());
+  // Per-window reset timestamps observed before waiting threads' recorded reset clocks. A thread
+  // that failed after that report keeps its own clock, and a window that is spent again clears it.
+  const resetObservedWindows = yield* Ref.make<
+    ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, number>>
+  >(new Map());
+  // Tracks an early reset-observed resume per thread so a subsequent failure in the same reset
+  // window waits for its recorded clock instead of looping on provider usage updates.
+  const earlyResumed = yield* Ref.make<
+    ReadonlyMap<ThreadId, { readonly runId: RunId; readonly resetMs: number }>
+  >(new Map());
+  const initialProviders = yield* providers.getProviders;
+  const seen = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>>(
+    limitsByInstance(initialProviders),
+  );
+  const drivers = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider["driver"]>>(
+    driversByInstance(initialProviders),
+  );
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const eventSink = yield* EventSink.EventSinkV2;
@@ -272,7 +391,10 @@ const makeSweep = Effect.gen(function* () {
     if (yield* due.isIdle(nowMs)) return;
     const readVersion = yield* due.version;
     const preferences = yield* settings.getSettings;
-    const resets = yield* Ref.get(resetObservedAt);
+    const resets = yield* Ref.get(resetObservedWindows);
+    const seenLimits = yield* Ref.get(seen);
+    const seenDrivers = yield* Ref.get(drivers);
+    const earlyAttempted = yield* Ref.get(earlyResumed);
     const failures = yield* projections.getUsageLimitFailuresWithoutReset();
     if (failures.length > 0) {
       const sources = yield* usageSources.current;
@@ -322,12 +444,35 @@ const makeSweep = Effect.gen(function* () {
     // Only a thread with a command competes for the first allowance; a waiting one that must keep
     // its own clock cannot hold the others back.
     const ready = candidates.flatMap((thread) => {
+      const resetMs =
+        thread.usageLimitResetAt == null ? Number.NaN : Date.parse(thread.usageLimitResetAt);
+      const priorEarly = earlyAttempted.get(thread.id);
+      const earlySuppressed =
+        priorEarly !== undefined &&
+        priorEarly.runId !== thread.latestRunId &&
+        Number.isFinite(resetMs) &&
+        Math.abs(priorEarly.resetMs - resetMs) <= SAME_RESET_WINDOW_MS;
+      const providerLimits = seenLimits.get(thread.providerInstanceId);
+      const resetObserved = earlySuppressed
+        ? undefined
+        : observedResetAtForThread({
+            model: thread.latestRunModel,
+            provider:
+              providerLimits === undefined
+                ? undefined
+                : {
+                    driver: seenDrivers.get(thread.providerInstanceId)!,
+                    usageLimits: providerLimits,
+                  },
+            observedWindows: resets.get(thread.providerInstanceId),
+            nowMs,
+          });
       const command = limitRecoveryCommand(
         thread,
         preferences.autoResumeLimitedThreads,
         nowMs,
         preferences.snoozeLimitedThreads,
-        resets.get(thread.providerInstanceId),
+        resetObserved,
       );
       return command === null
         ? []
@@ -355,6 +500,26 @@ const makeSweep = Effect.gen(function* () {
           });
         } else {
           yield* threads.dispatch(command);
+          if (
+            command.type === "message.dispatch" &&
+            command.usageLimitContinuationOfRunId !== undefined &&
+            thread.usageLimitResetAt != null
+          ) {
+            const resetMs = Date.parse(thread.usageLimitResetAt);
+            const continuedRunId = command.usageLimitContinuationOfRunId;
+            yield* Ref.update(earlyResumed, (current) => {
+              const updated = new Map(current);
+              if (command.usageLimitResetObserved === true && Number.isFinite(resetMs)) {
+                updated.set(thread.id, { runId: continuedRunId, resetMs });
+              } else {
+                updated.delete(thread.id);
+              }
+              for (const [id, entry] of updated) {
+                if (entry.resetMs + SAME_RESET_WINDOW_MS < nowMs) updated.delete(id);
+              }
+              return updated;
+            });
+          }
         }
       }).pipe(
         Effect.catchCause((cause) =>
@@ -410,26 +575,51 @@ const makeSweep = Effect.gen(function* () {
     ),
   );
   yield* forkParked(Stream.runForEach(settings.streamChanges, () => due.invalidate));
-  const seen = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProviderUsageLimits>>(
-    limitsByInstance(yield* providers.getProviders),
-  );
   yield* forkParked(
-    Stream.runForEach(providers.streamChanges, (providers) =>
+    Stream.runForEach(providers.streamChanges, (providerList) =>
       Effect.gen(function* () {
-        const next = limitsByInstance(providers);
+        const next = limitsByInstance(providerList);
         const at = DateTime.toEpochMillis(yield* DateTime.now);
-        const { observed, spent } = yield* Ref.modify(seen, (previous) => {
-          const report = observeLimitReport(previous, next, at);
-          return [report, report.limits] as const;
+        const { report, previous } = yield* Ref.modify(seen, (prev) => {
+          const report = observeLimitReport(prev, next, at);
+          return [{ report, previous: prev }, report.limits] as const;
         });
-        if (observed.length > 0 || spent.length > 0) {
-          yield* Ref.update(resetObservedAt, (current) => {
-            const updated = new Map(current);
-            for (const instanceId of spent) updated.delete(instanceId);
-            for (const instanceId of observed) updated.set(instanceId, at);
-            return updated;
-          });
-        }
+        yield* Ref.set(drivers, driversByInstance(providerList));
+        yield* Ref.update(resetObservedWindows, (current) => {
+          const updated = new Map(
+            [...current].map(([id, windows]) => [id, new Map(windows)] as const),
+          );
+          let changed = false;
+          for (const [instanceId, limits] of report.limits) {
+            const prev = previous.get(instanceId);
+            if (
+              prev?.credentialFingerprint !== undefined &&
+              limits.credentialFingerprint !== undefined &&
+              prev.credentialFingerprint !== limits.credentialFingerprint
+            ) {
+              if (updated.delete(instanceId)) changed = true;
+              continue;
+            }
+            const spentIds = report.spentWindows.get(instanceId);
+            if (spentIds !== undefined && spentIds.length > 0) {
+              const existing = updated.get(instanceId);
+              if (existing !== undefined) {
+                for (const windowId of spentIds) {
+                  if (existing.delete(windowId)) changed = true;
+                }
+                if (existing.size === 0) updated.delete(instanceId);
+              }
+            }
+            const observedIds = report.observedWindows.get(instanceId);
+            if (observedIds !== undefined && observedIds.length > 0) {
+              const map = updated.get(instanceId) ?? new Map<string, number>();
+              for (const windowId of observedIds) map.set(windowId, at);
+              updated.set(instanceId, map);
+              changed = true;
+            }
+          }
+          return changed ? updated : current;
+        });
         yield* requestSweep;
       }),
     ).pipe(

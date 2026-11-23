@@ -3,6 +3,7 @@ import {
   CommandId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ServerCommand,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   type ServerProvider,
@@ -387,6 +388,39 @@ it("ignores reports that do not move the allowance", () => {
     ),
     { observed: [], spent: [] },
   );
+  // Small API clock jitter on resetsAt is not a window rollover.
+  assert.deepEqual(
+    changes(
+      limits([
+        { ...window("3p-weekly", 80, "2026-07-01T00:00:00.000Z"), windowDurationMins: 10080 },
+      ]),
+      limits([
+        { ...window("3p-weekly", 80, "2026-07-01T00:02:00.000Z"), windowDurationMins: 10080 },
+      ]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // An idle 0% rolling window moving its reset clock forward is wall-clock drift, not a reset.
+  assert.deepEqual(
+    changes(
+      limits([{ ...window("go_rolling", 0, "2026-07-01T00:00:00.000Z"), windowDurationMins: 300 }]),
+      limits([{ ...window("go_rolling", 0, "2026-07-01T05:00:00.000Z"), windowDurationMins: 300 }]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // Small rolling decay on an unspent window does not mean a blocking limit reset.
+  assert.deepEqual(changes(limits([window("gemini-5h", 1.7)]), limits([window("gemini-5h", 0)])), {
+    observed: [],
+    spent: [],
+  });
+  assert.deepEqual(
+    changes(limits([window("gemini-weekly", 35)]), limits([window("gemini-weekly", 34)])),
+    { observed: [], spent: [] },
+  );
+  assert.deepEqual(
+    changes(limits([window("go_rolling", 30)]), limits([window("go_rolling", 15)])),
+    { observed: [], spent: [] },
+  );
 });
 
 const waitingThread = (
@@ -599,6 +633,211 @@ it.effect("resumes a waiting thread as soon as the provider reports the limit ba
       );
     }).pipe(Effect.provide(layer));
   }),
+);
+
+it.effect(
+  "matches observed resets to the failed run's quota pool and stops early-resume loops",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-07-01T00:00:00.000Z"));
+      const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+      const dispatched = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+      const now = yield* DateTime.now;
+      const futureResetAt = DateTime.formatIso(DateTime.add(now, { hours: 2 }));
+      const piInstanceId = ProviderInstanceId.make("pi_main");
+      const agInstanceId = ProviderInstanceId.make("antigravity_main");
+      const piProxyThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:pi-proxy"),
+        providerInstanceId: piInstanceId,
+        latestRunId: RunId.make("run:pi-proxy:1"),
+        latestRunModel: "cliproxyapi/gpt-6.2-sol",
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:pi-proxy:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:pi-proxy"),
+        },
+      });
+      const piGoThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:pi-go"),
+        providerInstanceId: piInstanceId,
+        latestRunId: RunId.make("run:pi-go:1"),
+        latestRunModel: "opencode-go/big-pickle",
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:pi-go:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:pi-go"),
+        },
+      });
+      const agGeminiThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:ag-gemini"),
+        providerInstanceId: agInstanceId,
+        latestRunId: RunId.make("run:ag-gemini:1"),
+        latestRunModel: "gemini-4-neon",
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:ag-gemini:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:ag-gemini"),
+        },
+      });
+      const candidatesRef = yield* Ref.make<
+        ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>
+      >([piProxyThread, piGoThread, agGeminiThread]);
+      const layer = UsageLimitRecoveryWorker.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
+              getLimitRecoveryCandidates: (options) =>
+                Ref.get(candidatesRef).pipe(
+                  Effect.map((rows) =>
+                    options.resetObserved === true ||
+                    DateTime.toEpochMillis(options.now) >= Date.parse(futureResetAt)
+                      ? rows
+                      : [],
+                  ),
+                ),
+              getLimitRecoveryWakeAt: () => Effect.succeed(null),
+              hasActivePullRequestThread: () => Effect.succeed(false),
+            }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              dispatch: (command) => Queue.offer(dispatched, command).pipe(Effect.as({} as never)),
+            }),
+            Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                autoResumeLimitedThreads: true,
+                autoResumePullRequestThreadsFirst: false,
+                snoozeLimitedThreads: false,
+              } as never),
+              streamChanges: Stream.never,
+            }),
+            layerProviderRegistry(Stream.fromQueue(providerChanges)),
+            layerResetSources(),
+          ),
+        ),
+      );
+      const snapshot = (input: {
+        readonly goRolling: number;
+        readonly gemini5h: number;
+        readonly thirdPartyWeekly: number;
+      }) =>
+        [
+          {
+            instanceId: piInstanceId,
+            driver: ProviderDriverKind.make("pi"),
+            usageLimits: limits([window("go_rolling", input.goRolling, futureResetAt)], {
+              ownerDriver: ProviderDriverKind.make("opencode"),
+            }),
+          },
+          {
+            instanceId: agInstanceId,
+            driver: ProviderDriverKind.make("antigravity"),
+            usageLimits: limits([
+              window("gemini-5h", input.gemini5h, futureResetAt),
+              window("3p-weekly", input.thirdPartyWeekly, futureResetAt),
+            ]),
+          },
+        ] as unknown as ReadonlyArray<ServerProvider>;
+      yield* Effect.gen(function* () {
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 100, thirdPartyWeekly: 100 }),
+        );
+        // OpenCode Go resets and 3p-weekly resets while gemini-5h stays spent:
+        // only pi-go matches; pi-proxy (cliproxyapi/*) and ag-gemini (gemini-*) must stay waiting.
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 100, thirdPartyWeekly: 0 }),
+        );
+        const first = yield* Queue.take(dispatched);
+        assert.equal("threadId" in first ? first.threadId : null, piGoThread.id);
+        assert.equal(yield* Queue.size(dispatched), 0);
+
+        // Now pi-go fails again immediately on run 2 for the same reset window (2s jitter).
+        const jitteredResetAt = DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe(futureResetAt), { seconds: 2 }),
+        );
+        yield* TestClock.adjust("5 seconds");
+        const failedAgainAt = yield* DateTime.now;
+        yield* Ref.set(candidatesRef, [
+          piProxyThread,
+          {
+            ...piGoThread,
+            latestRunId: RunId.make("run:pi-go:2"),
+            usageLimitResetAt: jitteredResetAt,
+            latestRunCompletedAt: failedAgainAt,
+            updatedAt: failedAgainAt,
+            limitRecovery: {
+              runId: RunId.make("run:pi-go:2"),
+              resetAt: jitteredResetAt,
+              autoResume: true,
+              requestId: CommandId.make("recovery:pi-go:2"),
+            },
+          },
+          agGeminiThread,
+        ]);
+        yield* TestClock.adjust("1 second");
+        // Even if go_rolling flaps 100 -> 0 again, pi-go must not early-resume again for the same reset window.
+        // Meanwhile gemini-5h resets 100 -> 0 (while 3p-weekly is back to 100): ag-gemini DOES resume.
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 100, thirdPartyWeekly: 100 }),
+        );
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const second = yield* Queue.take(dispatched);
+        assert.equal("threadId" in second ? second.threadId : null, agGeminiThread.id);
+        assert.equal(yield* Queue.size(dispatched), 0);
+
+        // Once the real reset clock passes, the suppressed threads still auto-resume normally.
+        yield* Ref.set(candidatesRef, [
+          piProxyThread,
+          {
+            ...piGoThread,
+            latestRunId: RunId.make("run:pi-go:2"),
+            usageLimitResetAt: jitteredResetAt,
+            latestRunCompletedAt: failedAgainAt,
+            updatedAt: failedAgainAt,
+            limitRecovery: {
+              runId: RunId.make("run:pi-go:2"),
+              resetAt: jitteredResetAt,
+              autoResume: true,
+              requestId: CommandId.make("recovery:pi-go:2"),
+            },
+          },
+        ]);
+        yield* TestClock.setTime(Date.parse(jitteredResetAt));
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const third = yield* Queue.take(dispatched);
+        const fourth = yield* Queue.take(dispatched);
+        assert.deepEqual(
+          [
+            "threadId" in third ? third.threadId : null,
+            "threadId" in fourth ? fourth.threadId : null,
+          ],
+          [piProxyThread.id, piGoThread.id],
+        );
+        assert.isFalse(third.type === "message.dispatch" && third.usageLimitResetObserved === true);
+        assert.isFalse(
+          fourth.type === "message.dispatch" && fourth.usageLimitResetObserved === true,
+        );
+      }).pipe(Effect.provide(layer));
+    }),
 );
 
 const limited = (id: string, hasLinkedPullRequest: boolean) => ({ id, hasLinkedPullRequest });
