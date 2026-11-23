@@ -159,6 +159,21 @@ describe("global Voice surface", () => {
     expect(useRightPanelStore.getState().voiceActive).toBe(false);
   });
 
+  it("moves focus off Voice when the visible thread picks a terminal pane", () => {
+    const store = useRightPanelStore.getState();
+    store.setVisibleThread(scopedThreadKey(refA));
+    store.openTerminal(refA, "term-1");
+    store.splitTerminal(refA, "terminal:term-1", "term-2");
+    store.setVoiceOpen(true);
+    useRightPanelStore.getState().activateTerminal(refA, "terminal:term-1", "term-1");
+    expect(useRightPanelStore.getState().voiceActive).toBe(false);
+    // A thread that is not on screen still leaves the visible panel on Voice.
+    store.setVoiceActive(true);
+    store.openTerminal(refB, "term-3");
+    useRightPanelStore.getState().activateTerminal(refB, "terminal:term-3", "term-3");
+    expect(useRightPanelStore.getState().voiceActive).toBe(true);
+  });
+
   it("reveals a thread's surface over Voice only for the thread on screen", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, "tab-a");

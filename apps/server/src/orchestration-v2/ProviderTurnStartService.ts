@@ -1056,15 +1056,18 @@ export const layer: Layer.Layer<
         session.providerSession.capabilities.turns.supportsNativeGoals === true;
       // Native goal commands go verbatim; handoff history waits a turn.
       const goalCommand = goalDriver && parsedGoal !== null;
+      // Non-native `/goal <objective>` expands to a normal prompt, so inline handoffs and context apply.
+      const providerSlashCommand = slashCommand && !(!goalDriver && parsedGoal?.type === "set");
       // Elsewhere T3 Code owns the goal, so the provider gets the objective as an instruction.
       const messageText = withMessageSenderNote(
         providerMessage,
-        !goalDriver && parsedGoal?.type === "set"
-          ? goalTurnPrompt(parsedGoal.objective)
-          : projectComposerContextForProvider({
-              text: providerMessage.text,
-              records: providerMessage.context?.records ?? [],
-            }),
+        projectComposerContextForProvider({
+          text:
+            !goalDriver && parsedGoal?.type === "set"
+              ? goalTurnPrompt(parsedGoal.objective)
+              : providerMessage.text,
+          records: providerMessage.context?.records ?? [],
+        }),
       );
       // Part of the user text, so every way a turn starts carries it, after the user's own words.
       const userText =
@@ -1736,7 +1739,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: context.budget,
-            deferInline: slashCommand,
+            deferInline: providerSlashCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -2140,7 +2143,7 @@ export const layer: Layer.Layer<
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {
           const delivery = yield* deliverContextHandoffs({
             handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
-            deferInline: compact || slashCommand,
+            deferInline: compact || providerSlashCommand,
             providerThread: runningProviderThread,
             budget,
             alreadyDeliveredItemIds: deliveredItemIds,
@@ -2159,7 +2162,7 @@ export const layer: Layer.Layer<
           const start = compact ? session.compactThread! : session.startTurn;
           // Like history, the side chat context waits for a turn that sends a prompt.
           const sideChatContext =
-            sideChatHandoff === undefined || compact || slashCommand
+            sideChatHandoff === undefined || compact || providerSlashCommand
               ? ""
               : sideChatHandoff.summaryText;
           // Record inline handoffs before startTurn so an immediate dropped terminal can restore them.
@@ -2179,7 +2182,7 @@ export const layer: Layer.Layer<
           const { resume: _resume, ...contextInput } = startInput;
           const { message: resumeMessage, resume: _resumeIntent, ...resumeInput } = startInput;
           const missedAttachments =
-            compact || slashCommand
+            compact || providerSlashCommand
               ? []
               : retryHandoff.attachments.filter(
                   (missed) =>
@@ -2190,7 +2193,7 @@ export const layer: Layer.Layer<
           // A resume that must be prompted still needs a request, or the agent has nothing to do.
           const requestText =
             turnInput.resume && prompted && userText === "" ? RESUME_PROMPT : userText;
-          const text = slashCommand ? userText : withInlineContext(context, requestText);
+          const text = providerSlashCommand ? userText : withInlineContext(context, requestText);
           const operation =
             turnInput.resume && !prompted
               ? (session.resumeTurn?.({ ...resumeInput, messageId: resumeMessage.messageId }) ??

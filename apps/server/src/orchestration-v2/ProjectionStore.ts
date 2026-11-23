@@ -10197,6 +10197,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE json_type(link.value, '$.watch') IS NOT NULL
               )
               ELSE 0 END
+            OR CASE WHEN ${indexedField("$.threadWatches[0]", "json_type")} IS NOT NULL
+              THEN 1 ELSE 0 END
+            OR CASE WHEN ${indexedField("$.awaitedScheduledTaskIds[0]", "json_type")} IS NOT NULL
+              THEN 1 ELSE 0 END
+            OR t.thread_id IN (
+              SELECT err.thread_id FROM orchestration_v2_projection_turn_items err
+              WHERE err.type = 'error'
+                AND err.status = 'failed'
+                AND json_extract(err.payload_json, '$.failure.overloaded') IS 1
+            )
           ) AS may_be_live,
           -- One list for the whole read, found through the child_thread_id index. A lookup per
           -- thread would parse the payload of every subagent row.

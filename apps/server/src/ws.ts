@@ -2976,7 +2976,15 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.pullRequestsMergeStack]: (input) =>
-          withPullRequestViewer(input, pullRequestStacks.mergeStack(input)),
+          withPullRequestViewer(input, pullRequestStacks.mergeStack(input)).pipe(
+            Effect.tap(() =>
+              resolvePullRequestSyncKey(input).pipe(
+                Effect.flatMap((key) =>
+                  key === null ? Effect.void : pullRequestSync.requestSync(key),
+                ),
+              ),
+            ),
+          ),
         [WS_METHODS.pullRequestsUpdate]: (input) =>
           withPullRequestViewer(input, pullRequests.update(input)),
         [WS_METHODS.pullRequestsComment]: (input) =>

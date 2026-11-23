@@ -453,6 +453,16 @@ it.layer(layerTest)("ProjectService", (it) => {
         { path: `${multiRepo}/api`, name: "api", discovered: true },
         { path: `${multiRepo}/main`, name: "main", discovered: true },
       ]);
+      // getByWorkspaceRoot and update preserve a tracked-folder workspace root above `main/.git`.
+      const lookedUp = yield* service.getByWorkspaceRoot(multiRepo);
+      assert.equal(Option.getOrThrow(lookedUp).workspaceRoot, multiRepo);
+      const updatedMulti = yield* service.update({
+        commandId: CommandId.make("command:tracked:update:multirepo"),
+        projectId: ProjectId.make("project:multirepo"),
+        workspaceRoot: multiRepo,
+        trackedFolders: [folder(`${multiRepo}/api`)],
+      });
+      assert.equal(updatedMulti.workspaceRoot, multiRepo);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

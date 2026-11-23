@@ -2665,7 +2665,7 @@ function renderFeedEntry(
               {unsent ? (
                 // React Native has no visually-hidden text; a transparent 1px node carries the state.
                 <Text className="absolute h-px w-px overflow-hidden opacity-0">
-                  {UNSENT_MESSAGE_ANNOUNCEMENT}
+                  {m(UNSENT_MESSAGE_ANNOUNCEMENT)}
                 </Text>
               ) : null}
               {foldRowId !== null ? (

@@ -115,6 +115,7 @@ export class TaskFolders extends Context.Service<
       {
         readonly taskFolder: TaskFolder;
         readonly branch: string;
+        readonly baseBranch: string | null;
         /** The project's own command made the checkouts, from whatever start it chose. */
         readonly laidOutByProject: boolean;
         /** A repository's worktree starts from the commit just fetched from its remote. */
@@ -1028,13 +1029,15 @@ const make = Effect.gen(function* () {
           return {
             taskFolder,
             branch,
+            baseBranch: taskFolder.projectIsWorktree ? (input.baseBranch ?? null) : null,
             laidOutByProject: true,
             repositoriesStartedFromOrigin: false,
           };
         }
+        let projectBaseBranch: string | null = null;
         if (taskPlan.projectIsRepository) {
           yield* fileSystem.makeDirectory(path.dirname(empty.projectPath), { recursive: true });
-          yield* git
+          const createdProject = yield* git
             .createWorktree(
               {
                 cwd: taskPlan.projectRoot,
@@ -1046,6 +1049,7 @@ const make = Effect.gen(function* () {
               input.projectProgress === undefined ? {} : { progress: input.projectProgress },
             )
             .pipe(Effect.onExit(recordBranch(taskPlan.projectRoot)));
+          projectBaseBranch = createdProject.baseBranch ?? null;
         } else {
           yield* linkFolder(taskPlan.projectRoot, empty.projectPath, taskPlan.trackedRepositories);
         }
@@ -1105,7 +1109,13 @@ const make = Effect.gen(function* () {
         }
         const taskFolder = current();
         yield* store.put(taskFolder);
-        return { taskFolder, branch, laidOutByProject: false, repositoriesStartedFromOrigin };
+        return {
+          taskFolder,
+          branch,
+          baseBranch: projectBaseBranch,
+          laidOutByProject: false,
+          repositoriesStartedFromOrigin,
+        };
       }).pipe(
         Effect.onError(() =>
           // Recorded first: a checkout the rollback cannot remove must still be known afterwards.

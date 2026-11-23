@@ -11,7 +11,7 @@ import { brokenVersionDetail } from "@t3tools/provider-core/server/compatibility
 import { satisfiesSemverRange } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 
-// Pinned to upstream e6d521012d so fork release versions never mis-match remote t3CodeRange policies.
+// Pinned to upstream 7e5a4398f5 so fork release versions never mis-match remote t3CodeRange policies.
 export const UPSTREAM_T3_CODE_VERSION = "0.1.11";
 
 const StableVersion = TrimmedNonEmptyString.pipe(

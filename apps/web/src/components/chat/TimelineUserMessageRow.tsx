@@ -311,6 +311,7 @@ function AutomationMessageRow({
 }) {
   const ctx = use(TimelineRowCtx);
   const gt = useGT();
+  const m = useMessages();
   const [expanded, setExpanded] = useState(false);
   const revealRef = findRevealRef(() => setExpanded(true));
   const { text, scheduledTaskId } = resolveUserMessagePresentation(row.message);
@@ -326,7 +327,7 @@ function AutomationMessageRow({
 
   return (
     <div className="group flex flex-col items-end gap-1" data-user-message-attribution="automation">
-      <UserMessageIntentNote row={row} hidden={unsent} />
+      <UserMessageIntentNote row={row} unread={unsent} />
       <div
         className={cn(
           "min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
@@ -337,7 +338,7 @@ function AutomationMessageRow({
         data-user-message-bubble=""
       >
         <MessageAuthorHeading>{gt("Automation")}</MessageAuthorHeading>
-        {unsent ? <span className="sr-only">{UNSENT_MESSAGE_ANNOUNCEMENT}</span> : null}
+        {unsent ? <span className="sr-only">{m(UNSENT_MESSAGE_ANNOUNCEMENT)}</span> : null}
         <FoldedMessageHeader
           icon={CalendarClockIcon}
           label={gt("Automation")}
@@ -962,7 +963,7 @@ function UserTimelineRow({
           <GuestMessageName name={userMessage.guestName} />
         </div>
       ) : null}
-      <UserMessageIntentNote row={row} hidden={unsent} />
+      <UserMessageIntentNote row={row} unread={unsent} />
       {mediaAboveText ? (
         <div className="flex max-w-[80%] justify-end">
           {/* The heading leads the media so screen readers reach it before the images. */}
@@ -1005,7 +1006,7 @@ function UserTimelineRow({
                 : gt("{name} (guest)", { name: userMessage.guestName })}
           </MessageAuthorHeading>
         )}
-        {unsent ? <span className="sr-only">{UNSENT_MESSAGE_ANNOUNCEMENT}</span> : null}
+        {unsent ? <span className="sr-only">{m(UNSENT_MESSAGE_ANNOUNCEMENT)}</span> : null}
         {folded ? (
           <FoldedMessageHeader
             icon={MessagesSquareIcon}
@@ -1184,16 +1185,16 @@ function UserTimelineRow({
 /** The marker keeps its row while pending, so delivery does not move the bubble. */
 function UserMessageIntentNote({
   row,
-  hidden,
+  unread,
 }: {
   readonly row: Extract<TimelineRow, { kind: "message" }>;
-  readonly hidden: boolean;
+  readonly unread: boolean;
 }) {
   const intent = row.message.inputIntent;
   // A burst of steers carries one label, on its first message.
   if ((intent !== "steer" && intent !== "promoted_queued_to_steer") || row.continuesSteer)
     return null;
-  return <UserMessageIntentMarker intent={intent} hidden={hidden} />;
+  return <UserMessageIntentMarker intent={intent} unread={unread} />;
 }
 
 const ACTIONS_REVEAL_CLASS_NAME =
@@ -1201,10 +1202,10 @@ const ACTIONS_REVEAL_CLASS_NAME =
 
 function UserMessageIntentMarker({
   intent,
-  hidden,
+  unread,
 }: {
   readonly intent: "steer" | "promoted_queued_to_steer";
-  readonly hidden: boolean;
+  readonly unread: boolean;
 }) {
   const gt = useGT();
   return (
@@ -1212,21 +1213,24 @@ function UserMessageIntentMarker({
       <TooltipTrigger
         render={
           <div
-            className={cn(
-              "me-1 flex items-center justify-end gap-1 text-xs leading-none text-muted-foreground",
-              hidden && "invisible",
-            )}
+            className="me-1 flex items-center justify-end gap-1 text-xs leading-none text-muted-foreground"
             data-user-message-intent={intent}
           />
         }
       >
         <Redo2Icon aria-hidden="true" className="size-3" />
-        {gt("Steer", { $context: "noun, a message that steers the running turn" })}
+        {unread
+          ? gt("Steer · waiting to be read")
+          : gt("Steer", { $context: "noun, a message that steers the running turn" })}
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {intent === "promoted_queued_to_steer"
-          ? gt("Originally queued, then promoted to steer the active turn")
-          : gt("Steered the active turn")}
+        {unread
+          ? gt(
+              "Waiting for the agent to read this. It reads steers between steps, after a running command finishes.",
+            )
+          : intent === "promoted_queued_to_steer"
+            ? gt("Originally queued, then promoted to steer the active turn")
+            : gt("Steered the active turn")}
       </TooltipPopup>
     </Tooltip>
   );

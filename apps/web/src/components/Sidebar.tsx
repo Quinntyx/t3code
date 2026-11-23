@@ -620,18 +620,27 @@ function useSidebarThreads(input: {
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
           );
+          // A closed folder still shows the open thread's stack, and hints at the rest.
+          const visibleThreads = collapsed
+            ? routeStackOnly(folder.threads, stackByRootKey, shelfRouteThreadKey)
+            : folder.threads;
+          const visibleKeys = collapsed
+            ? new Set(
+                visibleThreads
+                  .flatMap((root) => stackMembers(root, stackByRootKey))
+                  .map(threadShellKey),
+              )
+            : null;
           return {
             group: folder.group,
             collapsed,
-            // A closed folder still shows the open thread's stack, and hints at the rest.
-            threads: collapsed
-              ? routeStackOnly(folder.threads, stackByRootKey, routeRowThreadKey)
-              : folder.threads,
-            hiddenThreads: collapsed
-              ? folder.threads
-                  .flatMap((root) => stackMembers(root, stackByRootKey))
-                  .filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
-              : EMPTY_THREADS,
+            threads: visibleThreads,
+            hiddenThreads:
+              visibleKeys === null
+                ? EMPTY_THREADS
+                : folder.threads
+                    .flatMap((root) => stackMembers(root, stackByRootKey))
+                    .filter((thread) => !visibleKeys.has(threadShellKey(thread))),
           };
         });
   const orderedThreads = [

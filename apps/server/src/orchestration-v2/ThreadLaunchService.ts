@@ -876,7 +876,7 @@ const make = Effect.gen(function* () {
                   Effect.map((created) => ({
                     path: created.taskFolder.projectPath,
                     refName: created.branch,
-                    baseBranch: baseRefName ?? null,
+                    baseBranch: created.baseBranch,
                   })),
                   Effect.mapError(mapError(input, "provision-worktree", threadId)),
                 );

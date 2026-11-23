@@ -1289,7 +1289,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                   : surface,
               ),
             }),
-            { selectsSurface: false },
+            { selectsSurface: true },
           ),
         ),
       closeTerminal: (ref, surfaceId, terminalId) =>

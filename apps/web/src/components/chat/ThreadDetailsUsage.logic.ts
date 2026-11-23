@@ -12,10 +12,9 @@ import {
   collectProviderUsageLimits,
   displayLimitWindows,
   hubRoutes,
-  instanceHubs,
   type LimitPoolAmount,
   type LimitPoolWindow,
-  quotaDriverForModel,
+  resolveInstanceHubRoutes,
 } from "@t3tools/shared/usageLimits";
 import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
 
@@ -48,18 +47,11 @@ export function resolveThreadDetailsLimits(
     ownEntries.find((entry) => limitsNotice(entry.limits) === null)?.limits ??
     ownEntries[0]?.limits ??
     provider.usageLimits;
-  const hubs = instanceHubs(provider, sources);
+  const { driver: quotaDriver, hubs } = resolveInstanceHubRoutes(provider, sources, model);
   if (own && limitsNotice(own) === null) return { kind: "instance", limits: own };
   if (hubs.length > 0) {
     // An instance sent to a hub reads no limits of its own; its hub pools the accounts it spends.
-    const modelProvider = model?.split(/[/:]/)[0];
-    const skipPiHub =
-      provider.driver === "pi" &&
-      model !== null &&
-      !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "");
-    const pool = skipPiHub
-      ? null
-      : hubPool(quotaDriverForModel(provider.driver, model), model, providers, hubs, now);
+    const pool = hubPool(quotaDriver, model, providers, hubs, now);
     if (pool) return pool;
   }
   return own ? { kind: "instance", limits: own } : null;

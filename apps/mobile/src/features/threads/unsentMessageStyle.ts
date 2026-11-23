@@ -1,3 +1,5 @@
+import { msg } from "gt-react-native";
+
 import { GUEST_PENDING_EDGE_CLASS_NAME } from "./guestMessageStyle";
 
 /** A message the agent has not received yet: unfilled, with a dashed edge, like a pending guest message. */
@@ -8,4 +10,4 @@ export function unsentMessageBubbleClassName(tone: "default" | "guest" = "defaul
 }
 
 /** The dashed edge is the only sighted cue, so the state is spoken as well. */
-export const UNSENT_MESSAGE_ANNOUNCEMENT = "Waiting for the agent to receive this message";
+export const UNSENT_MESSAGE_ANNOUNCEMENT = msg("Waiting for the agent to receive this message");

@@ -597,7 +597,95 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
         const err = yield* failingNative.service.mergeStack(target).pipe(Effect.flip);
         assert.include(err.message, "Host stack API down.");
         assert.deepStrictEqual(failingNative.merges, []);
+
+        // Native-stack host without stackActions (e.g. TanStack Source): merges the target PR
+        // directly without `stackNumber`, since the host lands every layer below it automatically.
+        const tanstackStyle = yield* makeService({
+          root,
+          threads: stack(worktrees).threads,
+          summaries: [
+            summary(1, "a", "main"),
+            summary(2, "b", "a"),
+            summary(3, "c", "b", "open", {
+              stack: { number: 9, position: 3, size: 3, base: "main" },
+            }),
+          ],
+          supportsNativeStacks: false,
+          nativeStack: Effect.succeed({
+            id: "stack-9",
+            number: 9,
+            url: "https://source.tanstack.com/acme/app/stacks/9",
+            base: "main",
+            layers: [
+              {
+                number: 1,
+                title: "#1",
+                url: "https://source.tanstack.com/acme/app/pull/1",
+                state: "merged",
+                isDraft: false,
+                headBranch: "a",
+                baseBranch: "main",
+                headSha: "aaa",
+              },
+              {
+                number: 2,
+                title: "#2",
+                url: "https://source.tanstack.com/acme/app/pull/2",
+                state: "open",
+                isDraft: false,
+                headBranch: "b",
+                baseBranch: "a",
+                headSha: "bbb",
+              },
+              {
+                number: 3,
+                title: "#3",
+                url: "https://source.tanstack.com/acme/app/pull/3",
+                state: "open",
+                isDraft: false,
+                headBranch: "c",
+                baseBranch: "b",
+                headSha: "ccc",
+              },
+            ],
+          }),
+        });
+        assert.deepStrictEqual(yield* tanstackStyle.service.mergeStack(target), { merged: [2, 3] });
+        assert.deepStrictEqual(tanstackStyle.merges, [3]);
+        assert.deepStrictEqual(tanstackStyle.nativeStackMerges, []);
       }),
+    );
+
+    it.effect(
+      "refuses restacking a shared-checkout thread while another thread is active there",
+      () =>
+        Effect.gen(function* () {
+          const { root, worktrees } = yield* makeRepository;
+          const { resolveHeadSha } = yield* attachOrigin(root, worktrees);
+          const base = stack(worktrees);
+          // Thread b runs in the shared project root (worktreePath: null), alongside an active sibling.
+          const sharedThreads = [
+            ...base.threads.map((thread) =>
+              thread.branch === "b" ? { ...thread, worktreePath: null } : thread,
+            ),
+            {
+              ...base.threads[0]!,
+              id: ThreadId.make("thread-shared-busy"),
+              branch: "other",
+              worktreePath: null,
+              activeRunId: RunId.make("run-busy-shared"),
+            },
+          ];
+          const sharedHarness = yield* makeService({
+            root,
+            resolveHeadSha,
+            threads: sharedThreads,
+            summaries: base.summaries,
+          });
+          const err = yield* sharedHarness.service.mergeStack(target).pipe(Effect.flip);
+          assert.deepStrictEqual(sharedHarness.merges, [1]);
+          assert.include(err.message, "a turn was running");
+        }),
     );
 
     it.effect(

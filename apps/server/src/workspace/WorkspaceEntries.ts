@@ -186,7 +186,7 @@ export const make = Effect.gen(function* () {
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
   ): Effect.fn.Return<string, WorkspaceEntriesError> {
-    return yield* workspacePaths.normalizeWorkspaceRoot(cwd);
+    return yield* workspacePaths.normalizeWorkspaceRoot(cwd, { resolveMainCheckout: false });
   });
 
   // Refreshing goes through `get`, which restarts the map's idle timer, so idleness is measured

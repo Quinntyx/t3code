@@ -1115,11 +1115,6 @@ export default function ChatView(props: ChatViewProps) {
   });
   // A stalled thread shows the retry notice in place of its error; there is nothing to fix.
   const stalled = activeThreadShell?.runtime?.stalled === true;
-  // The run whose limit rows client-runtime hides (deriveUsageLimitNoticeRows).
-  const usageLimitRunId =
-    serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
-      ? (serverLatestRun?.runId ?? null)
-      : null;
   const timelineThreadError =
     (limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError) ||
     (stalled && visibleThreadError === serverRuntime?.lastError)
@@ -3818,7 +3813,6 @@ export default function ChatView(props: ChatViewProps) {
                   listRef={legendListRef}
                   runs={serverProjection?.runs ?? []}
                   latestRun={activeActivityRun}
-                  usageLimitRunId={usageLimitRunId}
                   announcedRun={announcedRun(activeActivityRun, serverProjection?.runs ?? [])}
                   stalled={activeRuntime?.stalled === true}
                   detailBehindShell={isDetailBehindShell(

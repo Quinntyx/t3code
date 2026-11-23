@@ -680,9 +680,14 @@ export const makeCliproxyApi = Effect.gen(function* () {
     return { id: account.id, driver: provider.driver, ...reading };
   });
 
+  const providerModelIds = (provider: HubManagementProvider): ReadonlyArray<string> => [
+    ...new Set((provider.model_ids ?? []).map((id) => id.trim()).filter(Boolean)),
+  ];
+
   const readNativeAccounts = Effect.fn("CliproxyApi.readNativeAccounts")(function* (
     hub: CliproxyHub,
     providers?: ReadonlySet<string>,
+    fallbackModelsByProvider?: ReadonlyMap<string, ReadonlyArray<string>>,
   ): Effect.fn.Return<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError> {
     const accounts = yield* authFiles(hub).pipe(
       Effect.mapError((error) =>
@@ -718,7 +723,9 @@ export const makeCliproxyApi = Effect.gen(function* () {
     );
     return readings.map((reading, index) => {
       const listed = models[index];
-      return listed && Option.isSome(listed) ? { ...reading, models: listed.value } : reading;
+      if (listed && Option.isSome(listed)) return { ...reading, models: listed.value };
+      const fallback = fallbackModelsByProvider?.get(readable[index]!.account.provider);
+      return fallback && fallback.length > 0 ? { ...reading, models: fallback } : reading;
     });
   });
 
@@ -729,7 +736,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     const driver = hubProviderDriver(provider.id);
     const name = provider.name.trim() || provider.id;
-    const models = [...new Set((provider.model_ids ?? []).map((id) => id.trim()).filter(Boolean))];
+    const models = providerModelIds(provider);
     const usage = yield* managementRequest(
       hub,
       `v8/management/providers/${encodeURIComponent(provider.id)}/usage`,
@@ -800,13 +807,18 @@ export const makeCliproxyApi = Effect.gen(function* () {
       Effect.forEach(list, (provider) => readProviderUsage(hub, provider), {
         concurrency: 4,
       }).pipe(Effect.map((accounts) => accounts.flat()));
+    const nativeModels = new Map(
+      native.map((provider) => [provider.id, providerModelIds(provider)]),
+    );
     const [nativeAccounts, hubAccounts] = yield* Effect.all(
       [
         native.length === 0
           ? Effect.succeed([])
-          : readNativeAccounts(hub, new Set(native.map((provider) => provider.id))).pipe(
-              Effect.catch(() => readHubUsage(native)),
-            ),
+          : readNativeAccounts(
+              hub,
+              new Set(native.map((provider) => provider.id)),
+              nativeModels,
+            ).pipe(Effect.catch(() => readHubUsage(native))),
         readHubUsage(
           enabled.filter(
             (provider) => provider.usage_supported === true && !HUB_PROVIDERS.has(provider.id),

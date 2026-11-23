@@ -9,6 +9,7 @@ import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
   CommandId,
+  ComposerContextId,
   ContextHandoffId,
   ContextTransferId,
   GitCommandError,
@@ -2571,10 +2572,56 @@ effectIt.effect.each(
       }
       harness.tryHandlePromptCommand.mockReturnValue(Effect.succeed(false));
       yield* harness.start;
-      expect(harness.startTurn.mock.calls[0]?.[0].message.text).toBe(
-        nativeGoals ? "/goal all tests pass" : goalTurnPrompt("all tests pass"),
-      );
+      const sentText = harness.startTurn.mock.calls[0]?.[0].message.text;
+      if (nativeGoals) {
+        expect(sentText).toBe("/goal all tests pass");
+      } else {
+        expect(sentText).toContain("SIDE_CHAT_CONTEXT");
+        expect(sentText).toContain(goalTurnPrompt("all tests pass"));
+      }
     }),
+);
+
+effectIt.effect("projects composer context records on T3-managed /goal turns", () =>
+  Effect.gen(function* () {
+    const text = "/goal ship [app.ts](t3-context://v1/mention/ctx-mention)";
+    const harness = makeLocalCommandHarness({
+      text,
+      goalDriver: "opencode",
+      nativeGoals: false,
+      sideChat: { contextRun: "failed", switchedProvider: true, unsentResume: false },
+    });
+    const projection = harness.projection();
+    harness.setProjection({
+      ...projection,
+      messages: projection.messages.map((message) =>
+        message.text === text
+          ? {
+              ...message,
+              context: {
+                version: 1 as const,
+                records: [
+                  {
+                    version: 1 as const,
+                    contextId: ComposerContextId.make("ctx-mention"),
+                    kind: "mention" as const,
+                    label: "app.ts",
+                    path: "src/app.ts",
+                  },
+                ],
+              },
+            }
+          : message,
+      ),
+    });
+    harness.tryHandlePromptCommand.mockReturnValue(Effect.succeed(false));
+    yield* harness.start;
+    const sentText = harness.startTurn.mock.calls[0]?.[0].message.text;
+    expect(sentText).toContain("SIDE_CHAT_CONTEXT");
+    expect(sentText).toContain("Goal for this thread: ship ");
+    expect(sentText).toContain("src/app.ts");
+    expect(sentText).not.toContain("t3-context://v1/mention/ctx-mention");
+  }),
 );
 
 effectIt.effect.each(["before-start", "during-fork"] as const)(

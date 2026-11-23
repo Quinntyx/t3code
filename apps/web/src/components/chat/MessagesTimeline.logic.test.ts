@@ -4966,7 +4966,6 @@ describe("failed turn transcript", () => {
             startedAt: DateTime.formatIso(at),
             completedAt: DateTime.formatIso(at),
           },
-          usageLimitRunId: runId,
           isWorking: false,
           turnDiffSummaries: [],
           supportsConversationRollback: false,

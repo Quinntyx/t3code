@@ -359,7 +359,6 @@ export function deriveResumableRunId(
         "turnItems" | "attempts" | "providerTurns" | "providerThreads" | "providerSessions"
       >
     >,
-  _runtime?: Pick<ThreadStructureRuntime, "lastErrorClass"> | null,
 ): RunId | null {
   const run = resumableContinuationRun(projection.runs);
   if (run === null) return null;

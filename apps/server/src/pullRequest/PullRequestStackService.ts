@@ -175,11 +175,16 @@ const shouldRetarget = (
 /** Why a restack cannot run unattended, or null when it can. */
 function restackBlocker(input: {
   readonly thread: Pick<OrchestrationV2ThreadShell, "activeRunId" | "pendingRuntimeRequest">;
+  readonly sharedCheckoutBusy?: boolean;
   readonly checkedOutBranch: string | null;
   readonly branch: string;
   readonly hasWorkingTreeChanges: boolean;
 }): GitRestackHandoffReason | null {
-  if (input.thread.activeRunId !== null || input.thread.pendingRuntimeRequest !== null) {
+  if (
+    input.thread.activeRunId !== null ||
+    input.thread.pendingRuntimeRequest !== null ||
+    input.sharedCheckoutBusy === true
+  ) {
     return "busy";
   }
   if (input.checkedOutBranch !== input.branch) return "checkout";
@@ -325,9 +330,21 @@ export const make = Effect.gen(function* () {
             }),
           ).pipe(Effect.as({ result: result("agent-asked", { reason }), headSha: null }));
 
+    const sharedCheckoutBusy =
+      thread.worktreePath !== null
+        ? false
+        : (yield* projectThreads(thread.projectId).pipe(Effect.orElseSucceed(() => []))).some(
+            (candidate) =>
+              candidate.id !== thread.id &&
+              (candidate.worktreePath === null || candidate.worktreePath === cwd) &&
+              (candidate.activeRunId !== null ||
+                (candidate.activityRunStatus ?? null) !== null ||
+                candidate.pendingRuntimeRequest !== null),
+          );
     const status = yield* git.statusDetailsLocal(cwd);
     const blocker = restackBlocker({
       thread,
+      sharedCheckoutBusy,
       branch,
       checkedOutBranch: status.branch,
       hasWorkingTreeChanges: status.hasWorkingTreeChanges,
@@ -629,7 +646,29 @@ export const make = Effect.gen(function* () {
         { bypassCache: true },
       );
       if (nativeStack !== null) {
-        return yield* mergeNativeStack(pullRequests, input, nativeStack);
+        if (nativeSupported) {
+          return yield* mergeNativeStack(pullRequests, input, nativeStack);
+        }
+        // Native-stack host without a separate stack action (such as TanStack Source): merging
+        // the target PR directly lands every unmerged layer below it on its own.
+        const targetIndex = nativeStack.layers.findIndex((layer) => layer.number === target.number);
+        const mergedLayers =
+          targetIndex < 0
+            ? [target.number]
+            : nativeStack.layers
+                .slice(0, targetIndex + 1)
+                .filter((layer) => layer.state !== "merged")
+                .map((layer) => layer.number);
+        yield* pullRequests.runAction({
+          ...ref,
+          number: target.number,
+          action: "merge",
+          ...(input.expectedHeadSha === undefined
+            ? {}
+            : { expectedHeadSha: input.expectedHeadSha }),
+          ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+        });
+        return { merged: mergedLayers.length > 0 ? mergedLayers : [target.number] };
       }
       if (target.stack != null) {
         return yield* stop(

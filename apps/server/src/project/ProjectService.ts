@@ -521,9 +521,8 @@ export const make = Effect.gen(function* () {
   const getByWorkspaceRoot: ProjectService["Service"]["getByWorkspaceRoot"] = Effect.fn(
     "ProjectService.getByWorkspaceRoot",
   )(function* (workspaceRoot, options) {
-    const normalized = yield* normalizeWorkspaceRoot({ workspaceRoot });
-    const row = yield* (
-      options?.includeDeleted === true
+    const findRow = (normalized: string) =>
+      (options?.includeDeleted === true
         ? projects
             .list({ includeDeleted: true })
             .pipe(
@@ -532,9 +531,22 @@ export const make = Effect.gen(function* () {
               ),
             )
         : projects.findActiveByWorkspaceRoot(normalized)
-    ).pipe(
-      Effect.mapError((cause) => new ProjectOperationError({ operation: "list-projects", cause })),
-    );
+      ).pipe(
+        Effect.mapError(
+          (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
+        ),
+      );
+    const exact = yield* normalizeWorkspaceRoot({
+      workspaceRoot,
+      resolveMainCheckout: false,
+    });
+    const exactRow = yield* findRow(exact);
+    if (Option.isSome(exactRow)) {
+      return Option.some(yield* hydrate(exactRow.value));
+    }
+    const resolved = yield* normalizeWorkspaceRoot({ workspaceRoot });
+    if (resolved === exact) return Option.none();
+    const row = yield* findRow(resolved);
     return Option.isNone(row) ? Option.none() : Option.some(yield* hydrate(row.value));
   });
 
@@ -577,12 +589,17 @@ export const make = Effect.gen(function* () {
       if (input.workspaceRoot !== undefined && input.workspaceRoot !== previousRoot) {
         yield* rejectWslSharePath(input.projectId, input.workspaceRoot);
       }
+      const nextHasTrackedFolders =
+        input.trackedFolders !== undefined
+          ? input.trackedFolders.length > 0
+          : existing.value.trackedFolders.length > 0 || (input.trackFolders?.length ?? 0) > 0;
       const workspaceRoot =
         input.workspaceRoot === undefined
           ? previousRoot
           : yield* normalizeWorkspaceRoot({
               projectId: input.projectId,
               workspaceRoot: input.workspaceRoot,
+              resolveMainCheckout: !nextHasTrackedFolders,
             });
       if (workspaceRoot !== previousRoot) {
         yield* rejectWorktreeContainer(input.projectId, workspaceRoot);

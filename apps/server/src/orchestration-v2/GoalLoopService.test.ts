@@ -116,8 +116,18 @@ const dispatchedFor = (input: {
   readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   readonly thread?: OrchestrationV2AppThread;
   readonly runs?: ReadonlyArray<OrchestrationV2Run>;
+  readonly messages?: ReadonlyArray<{
+    readonly role: string;
+    readonly createdBy: string;
+    readonly createdAt: DateTime.Utc;
+  }>;
   readonly runtimeRequests?: ReadonlyArray<{ readonly status: string }>;
-  readonly turnItems?: ReadonlyArray<{ readonly type: string; readonly status: string }>;
+  readonly turnItems?: ReadonlyArray<{
+    readonly type: string;
+    readonly status: string;
+    readonly startedAt?: DateTime.Utc;
+    readonly updatedAt?: DateTime.Utc;
+  }>;
   readonly subagents?: ReadonlyArray<OrchestrationV2Subagent>;
   readonly review?: ReturnType<typeof overloadedRunFact>;
 }) =>
@@ -147,7 +157,7 @@ const dispatchedFor = (input: {
               : {
                   thread: input.thread ?? appThread(),
                   runs: input.runs ?? [run("run-1", "completed")],
-                  messages: [],
+                  messages: input.messages ?? [],
                   runtimeRequests: input.runtimeRequests ?? [],
                   turnItems: input.turnItems ?? [],
                   subagents: input.subagents ?? [],
@@ -349,6 +359,20 @@ it.effect.each(
       ["a stopped overload", { ...overloadedRunFact("run-1", true), thread: appThread() }],
       ["an email draft", { turnItems: [{ type: "email_request", status: "waiting" }] }],
       ["a secret request", { turnItems: [{ type: "secret_request", status: "waiting" }] }],
+      ["a feedback request", { turnItems: [{ type: "feedback_request", status: "waiting" }] }],
+      [
+        "an unanswered link request",
+        {
+          turnItems: [
+            {
+              type: "link_request",
+              status: "waiting",
+              updatedAt: DateTime.makeUnsafe(2_000),
+            },
+          ],
+          messages: [{ role: "user", createdBy: "user", createdAt: DateTime.makeUnsafe(1_000) }],
+        },
+      ],
       ["an earlier live run", { runs: [run("run-0", "running"), run("run-1", "completed")] }],
       ["a live run", { runs: [run("run-1", "completed"), run("run-2", "running")] }],
       ["a queued run", { runs: [run("run-1", "completed"), run("run-2", "queued")] }],
@@ -363,6 +387,27 @@ it.effect.each(
     });
 
     assert.deepEqual(dispatched, []);
+  }),
+);
+
+it.effect("continues past a link_request once the user posts a newer message", () =>
+  Effect.gen(function* () {
+    const dispatched = yield* dispatchedFor({
+      events: [completedRun("run-1")],
+      turnItems: [
+        {
+          type: "link_request",
+          status: "waiting",
+          updatedAt: DateTime.makeUnsafe(1_000),
+        },
+      ],
+      messages: [{ role: "user", createdBy: "user", createdAt: DateTime.makeUnsafe(2_000) }],
+    });
+
+    assert.deepEqual(
+      dispatched.map((command) => command.type),
+      ["delegated_task.request"],
+    );
   }),
 );
 

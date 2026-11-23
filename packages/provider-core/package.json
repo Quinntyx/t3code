@@ -27,6 +27,10 @@
       "types": "./src/server/auth.ts",
       "import": "./src/server/auth.ts"
     },
+    "./server/codexUsageLimits": {
+      "types": "./src/server/codexUsageLimits.ts",
+      "import": "./src/server/codexUsageLimits.ts"
+    },
     "./server/collectStreamText": {
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"

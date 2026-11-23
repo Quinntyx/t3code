@@ -31,7 +31,8 @@ import {
 import { T, useGT, useMessages } from "gt-react";
 
 import { ensureLocalApi } from "../../localApi";
-import { managedInstanceLocks, useManagedPolicy } from "../../state/managedPolicy";
+import { managedInstanceLocks } from "@t3tools/client-runtime/provider-settings/instance";
+import { useManagedPolicy } from "../../state/managedPolicy";
 import { ManagedControl } from "../ManagedPolicy";
 import { useEnvironmentHttpBaseUrl } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";

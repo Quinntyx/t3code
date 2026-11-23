@@ -1,6 +1,9 @@
-import type { ServerProviderUsageLimits, ServerProviderUsageWindow } from "@t3tools/contracts";
+import type { ServerProviderUsageLimits } from "@t3tools/contracts";
 import {
-  clampPercent,
+  codexRateLimitsToWindows,
+  type CodexRateLimitWindow,
+} from "@t3tools/provider-core/server/codexUsageLimits";
+import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
@@ -20,9 +23,6 @@ import { readPiCredential } from "./piCredentials.ts";
 
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const PROBE_TIMEOUT_MS = 5_000;
-const SESSION_MINS = 5 * 60;
-const WEEK_MINS = 7 * 24 * 60;
-const MONTH_MINS = 30 * 24 * 60;
 
 const CodexWindow = Schema.Struct({
   used_percent: Schema.Finite,
@@ -61,37 +61,15 @@ function chatGptAccountId(token: string): string | undefined {
   return claims?.["https://api.openai.com/auth"]?.chatgpt_account_id?.trim() || undefined;
 }
 
-function isoFromEpochSeconds(value: number | null | undefined): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
-  const dt = DateTime.make(value * 1000);
-  return Option.isSome(dt) ? DateTime.formatIso(dt.value) : undefined;
-}
-
-function windowKind(mins: number): ServerProviderUsageWindow["kind"] {
-  if (mins >= MONTH_MINS) return "monthly";
-  if (mins >= WEEK_MINS) return "weekly";
-  return "session";
-}
-
-function toWindow(
-  id: string,
+function toCodexRateLimitWindow(
   window: typeof CodexWindow.Type | null | undefined,
-  fallbackMins: number,
-): ServerProviderUsageWindow | undefined {
-  if (!window || !Number.isFinite(window.used_percent)) return undefined;
-  const windowDurationMins =
-    typeof window.limit_window_seconds === "number"
-      ? window.limit_window_seconds / 60
-      : fallbackMins;
-  const kind = windowKind(windowDurationMins);
-  const resetsAt = isoFromEpochSeconds(window.reset_at);
+): CodexRateLimitWindow | null {
+  if (!window) return null;
   return {
-    id,
-    kind,
-    label: kind === "session" ? "Session" : kind === "weekly" ? "Weekly" : "Monthly",
-    usedPercent: clampPercent(window.used_percent),
-    windowDurationMins,
-    ...(resetsAt ? { resetsAt } : {}),
+    usedPercent: window.used_percent,
+    resetsAt: window.reset_at ?? null,
+    windowDurationMins:
+      typeof window.limit_window_seconds === "number" ? window.limit_window_seconds / 60 : null,
   };
 }
 
@@ -135,15 +113,11 @@ export const readPiCodexUsageLimits = Effect.fn("readPiCodexUsageLimits")(functi
     const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
       Effect.flatMap(HttpClientResponse.schemaBodyJson(CodexUsage)),
     );
-    const isMonthlyPlan = body.plan_type === "free" || body.plan_type === "go";
-    const windows = [
-      toWindow(
-        "primary",
-        body.rate_limit?.primary_window,
-        isMonthlyPlan ? MONTH_MINS : SESSION_MINS,
-      ),
-      toWindow("secondary", body.rate_limit?.secondary_window, WEEK_MINS),
-    ].filter((window): window is ServerProviderUsageWindow => window !== undefined);
+    const windows = codexRateLimitsToWindows({
+      planType: body.plan_type ?? null,
+      primary: toCodexRateLimitWindow(body.rate_limit?.primary_window),
+      secondary: toCodexRateLimitWindow(body.rate_limit?.secondary_window),
+    });
     return {
       limits: makeUsageLimits({ checkedAt, windows }),
       email: body.email?.trim() || undefined,

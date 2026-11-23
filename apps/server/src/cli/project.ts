@@ -219,9 +219,9 @@ const makeProjectCliRuntimeLayer = (layerProjectService: typeof RuntimeLayer.lay
 
 const normalizeWorkspaceRootForProjectCommand = Effect.fn(
   "normalizeWorkspaceRootForProjectCommand",
-)(function* (workspaceRoot: string) {
+)(function* (workspaceRoot: string, options?: { readonly resolveMainCheckout?: boolean }) {
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-  return yield* workspacePaths.normalizeWorkspaceRoot(workspaceRoot);
+  return yield* workspacePaths.normalizeWorkspaceRoot(workspaceRoot, options);
 });
 
 const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
@@ -263,6 +263,24 @@ const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(function* (
       id: exactIdMatch.id,
       title: exactIdMatch.title,
       workspaceRoot: exactIdMatch.workspaceRoot,
+    } satisfies ProjectMutationTarget;
+  }
+
+  const exactWorkspaceRootResult = yield* Effect.result(
+    normalizeWorkspaceRootForProjectCommand(trimmedIdentifier, { resolveMainCheckout: false }),
+  );
+  const exactWorkspaceRoot =
+    exactWorkspaceRootResult._tag === "Success"
+      ? exactWorkspaceRootResult.success
+      : exactWorkspaceRootResult.failure.normalizedWorkspaceRoot;
+  const directWorkspaceMatch = activeProjects.find(
+    (project) => project.workspaceRoot === exactWorkspaceRoot,
+  );
+  if (directWorkspaceMatch) {
+    return {
+      id: directWorkspaceMatch.id,
+      title: directWorkspaceMatch.title,
+      workspaceRoot: directWorkspaceMatch.workspaceRoot,
     } satisfies ProjectMutationTarget;
   }
 
@@ -392,7 +410,9 @@ const projectAddCommand = Command.make("add", {
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
-        const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
+        const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot, {
+          resolveMainCheckout: flags.track.length === 0,
+        });
         const existingProject = snapshot.projects.find(
           (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
         );

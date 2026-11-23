@@ -3,7 +3,9 @@ import {
   MessageId,
   goalReviewPrompt,
   goalTurnPrompt,
+  type OrchestrationV2ConversationMessage,
   type OrchestrationV2RunStatus,
+  type OrchestrationV2TurnItem,
   type ThreadId,
 } from "@t3tools/contracts";
 import { overloadedRun, stalledRun } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -24,10 +26,76 @@ const LIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2RunStatus> = new Set([
 ]);
 
 /** Reading the overload failure and the waiting cards is all the gates need. */
-const GOAL_TURN_ITEM_TYPES = ["error", "secret_request", "email_request"] as const;
+const GOAL_TURN_ITEM_TYPES = [
+  "error",
+  "secret_request",
+  "email_request",
+  "link_request",
+  "feedback_request",
+] as const;
 
-const isWaitingUserInputCard = (item: { readonly type: string; readonly status: string }) =>
-  (item.type === "secret_request" || item.type === "email_request") && item.status === "waiting";
+function latestUserAuthoredMessageTimestamp(
+  messages: ReadonlyArray<
+    Pick<OrchestrationV2ConversationMessage, "role" | "createdBy" | "createdAt">
+  >,
+): DateTime.Utc | null {
+  let latest: DateTime.Utc | null = null;
+  for (const message of messages) {
+    if (message.role !== "user" || message.createdBy !== "user") continue;
+    if (latest === null || DateTime.isGreaterThan(message.createdAt, latest)) {
+      latest = message.createdAt;
+    }
+  }
+  return latest;
+}
+
+/** Exhaustive over every turn item kind so new interactive cards cannot silently bypass goal gates. */
+function isWaitingUserInputCard(
+  item: OrchestrationV2TurnItem,
+  latestUserAuthoredMessageAt: DateTime.Utc | null,
+): boolean {
+  switch (item.type) {
+    case "secret_request":
+    case "email_request":
+    case "feedback_request":
+      return item.status === "waiting";
+    case "link_request":
+      return (
+        item.status === "waiting" &&
+        (latestUserAuthoredMessageAt === null ||
+          !DateTime.isGreaterThan(latestUserAuthoredMessageAt, item.startedAt ?? item.updatedAt))
+      );
+    case "notification":
+    case "user_message":
+    case "assistant_message":
+    case "reasoning":
+    case "proposed_plan":
+    case "todo_list":
+    case "user_input_request":
+    case "file_change":
+    case "command_execution":
+    case "file_search":
+    case "web_search":
+    case "approval_request":
+    case "checkpoint":
+    case "run_interrupt_request":
+    case "run_interrupt_result":
+    case "system_notice":
+    case "error":
+    case "compaction":
+    case "handoff":
+    case "fork":
+    case "thread_created":
+    case "subagent":
+    case "dynamic_tool":
+      return false;
+    default: {
+      const _exhaustive: never = item;
+      void _exhaustive;
+      return false;
+    }
+  }
+}
 
 /**
  * T3 Code drives `/goal` itself where the provider has no native goal. Each turn ends with a
@@ -65,12 +133,13 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId) {
       const records = yield* projections.getThreadRecords(
         threadId,
-        ["runs", "runtimeRequests", "turnItems"],
+        ["runs", "runtimeRequests", "turnItems", "messages"],
         { turnItemTypes: GOAL_TURN_ITEM_TYPES },
       );
       const goal = records.thread.goal ?? null;
       if (goal?.status !== "active") return;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const latestUserMessageAt = latestUserAuthoredMessageTimestamp(records.messages);
       if (
         records.thread.archivedAt !== null ||
         records.thread.deletedAt !== null ||
@@ -83,7 +152,7 @@ export const make = Effect.gen(function* () {
         // An overloaded latest run is the recovery worker's job; a goal turn here would replace
         // its retry, and after a Stop the user asked for rest.
         overloadedRun(records.runs, records.turnItems) !== null ||
-        records.turnItems.some(isWaitingUserInputCard) ||
+        records.turnItems.some((item) => isWaitingUserInputCard(item, latestUserMessageAt)) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
@@ -119,12 +188,13 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId) {
       const records = yield* projections.getThreadRecords(
         threadId,
-        ["runs", "runtimeRequests", "turnItems"],
+        ["runs", "runtimeRequests", "turnItems", "messages"],
         { turnItemTypes: GOAL_TURN_ITEM_TYPES },
       );
       const goal = records.thread.goal ?? null;
       if (goal?.status !== "active") return;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const latestUserMessageAt = latestUserAuthoredMessageTimestamp(records.messages);
       if (
         records.thread.archivedAt !== null ||
         records.thread.deletedAt !== null ||
@@ -135,7 +205,7 @@ export const make = Effect.gen(function* () {
         // The recovery worker owns an overloaded latest run; reviewing it here would replace
         // its retry, and after a Stop the user asked for rest.
         overloadedRun(records.runs, records.turnItems) !== null ||
-        records.turnItems.some(isWaitingUserInputCard) ||
+        records.turnItems.some((item) => isWaitingUserInputCard(item, latestUserMessageAt)) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;

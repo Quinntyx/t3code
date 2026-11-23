@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+
 import { cn } from "~/lib/utils";
 import { guestBubbleClassName } from "./guestMessageStyle";
 
@@ -9,4 +11,4 @@ export function unsentMessageBubbleClassName(tone: "default" | "guest" = "defaul
 }
 
 /** The dashed edge is the only sighted cue, so the state is spoken as well. */
-export const UNSENT_MESSAGE_ANNOUNCEMENT = "Waiting for the agent to receive this message";
+export const UNSENT_MESSAGE_ANNOUNCEMENT = msg("Waiting for the agent to receive this message");

@@ -520,7 +520,7 @@ function ActionDock(
           <DockTile
             icon="text.bubble"
             label={gt("Review", { $context: "code review action" })}
-            disabled={git.busy || !git.isRepo}
+            disabled={git.busy || !(git.isRepo || git.trackedRepositoryCount > 0)}
             onPress={git.openReview}
           />
         ) : null}

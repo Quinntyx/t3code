@@ -27,6 +27,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
+import { isPiHubModelProvider, usageOrigin } from "@t3tools/shared/usageLimits";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
@@ -104,18 +105,9 @@ function piModelsFromSettings(
   );
 }
 
-function usageOrigin(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
-  } catch {
-    return null;
-  }
-}
-
 function piUsageDriver(provider: string, api: string | undefined): ProviderDriverKind | null {
   if (provider === "openai-codex") return ProviderDriverKind.make("codex");
-  if (provider === "cliproxyapi" || provider.startsWith("cliproxyapi-")) {
+  if (isPiHubModelProvider(provider)) {
     return ProviderDriverKind.make(api === "anthropic-messages" ? "claudeAgent" : "codex");
   }
   return null;

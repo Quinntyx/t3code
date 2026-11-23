@@ -1771,25 +1771,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   providerEntryByInstanceId={props.providerEntryByInstanceId}
                 />
               </span>
-              {props.hideProject ? (
-                <span className="flex-1" />
-              ) : (
-                <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  {props.projectDisplayName ? (
-                    <span className="min-w-0 truncate-fade">{props.projectDisplayName}</span>
-                  ) : null}
-                  {props.environmentLabel !== null ? (
-                    <span className="inline-flex min-w-0 shrink items-center gap-1 text-muted-foreground/75">
-                      <EnvironmentMachineIcon
-                        aria-hidden
-                        kind={props.environmentMachine}
-                        className="size-3 shrink-0 text-icon-muted"
-                      />
-                      <span className="min-w-0 truncate">{props.environmentLabel}</span>
-                    </span>
-                  ) : null}
-                </span>
-              )}
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                {!props.hideProject && props.projectDisplayName ? (
+                  <span className="min-w-0 truncate-fade">{props.projectDisplayName}</span>
+                ) : null}
+                {props.environmentLabel !== null ? (
+                  <span className="inline-flex min-w-0 shrink items-center gap-1 text-muted-foreground/75">
+                    <EnvironmentMachineIcon
+                      aria-hidden
+                      kind={props.environmentMachine}
+                      className="size-3 shrink-0 text-icon-muted"
+                    />
+                    <span className="min-w-0 truncate">{props.environmentLabel}</span>
+                  </span>
+                ) : null}
+              </span>
               {sortable?.isDragging ? (
                 dragDestination
               ) : (

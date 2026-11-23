@@ -28,6 +28,7 @@ import {
   RuntimeRequestId,
   RunAttemptId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
   type ThreadPullRequestLink,
@@ -12596,6 +12597,150 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         }
       }
     }),
+  );
+
+  it.effect(
+    "flags stalled threads, threadWatches, and awaitedScheduledTaskIds as mayBeLive in listActiveShellIndex",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const baseThread = (id: ThreadId) => ({
+          createdBy: "user" as const,
+          creationSource: "web" as const,
+          id,
+          projectId: ProjectId.make("project:may-be-live-parity"),
+          title: id,
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          activeProviderThreadId: null,
+          forkedFrom: null,
+          branch: null,
+          worktreePath: null,
+          lineage: {
+            parentThreadId: ThreadId.make("thread:may-be-live-parent"),
+            relationshipToParent: "subagent" as const,
+            rootThreadId: ThreadId.make("thread:may-be-live-parent"),
+          },
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        });
+
+        const watchedId = ThreadId.make("thread:may-be-live:watched");
+        yield* store.apply({
+          id: EventId.make("event:may-be-live:watched:create"),
+          type: "thread.created",
+          threadId: watchedId,
+          occurredAt: now,
+          payload: {
+            ...baseThread(watchedId),
+            threadWatches: [
+              {
+                threadId: ThreadId.make("thread:may-be-live:target"),
+                runId: RunId.make("run:may-be-live:target"),
+                startedAt: DateTime.formatIso(now),
+              },
+            ],
+          },
+        });
+
+        const awaitedId = ThreadId.make("thread:may-be-live:awaited");
+        yield* store.apply({
+          id: EventId.make("event:may-be-live:awaited:create"),
+          type: "thread.created",
+          threadId: awaitedId,
+          occurredAt: now,
+          payload: {
+            ...baseThread(awaitedId),
+            awaitedScheduledTaskIds: [ScheduledTaskId.make("sched-1")],
+          },
+        });
+
+        const stalledId = ThreadId.make("thread:may-be-live:stalled");
+        const stalledRunId = RunId.make("run:may-be-live:stalled");
+        const stalledRootNodeId = NodeId.make("node:may-be-live:stalled");
+        yield* store.apply({
+          id: EventId.make("event:may-be-live:stalled:create"),
+          type: "thread.created",
+          threadId: stalledId,
+          occurredAt: now,
+          payload: baseThread(stalledId),
+        });
+        yield* store.apply({
+          id: EventId.make("event:may-be-live:stalled:run"),
+          type: "run.created",
+          threadId: stalledId,
+          runId: stalledRunId,
+          driver,
+          providerInstanceId,
+          occurredAt: now,
+          payload: {
+            id: stalledRunId,
+            threadId: stalledId,
+            ordinal: 1,
+            providerInstanceId,
+            modelSelection,
+            providerThreadId: null,
+            userMessageId: MessageId.make("message:may-be-live:stalled"),
+            rootNodeId: stalledRootNodeId,
+            activeAttemptId: null,
+            status: "failed",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        });
+        yield* store.apply({
+          id: EventId.make("event:may-be-live:stalled:error"),
+          type: "turn-item.updated",
+          threadId: stalledId,
+          runId: stalledRunId,
+          nodeId: stalledRootNodeId,
+          driver,
+          providerInstanceId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make("item:may-be-live:stalled:error"),
+            threadId: stalledId,
+            runId: stalledRunId,
+            nodeId: stalledRootNodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            type: "error",
+            status: "failed",
+            title: "Overloaded",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            failure: {
+              class: "provider_error",
+              code: null,
+              message: "overloaded",
+              overloaded: true,
+              retryable: true,
+            },
+          },
+        });
+
+        yield* assertShellIndexCoversShells();
+        const index = yield* store.listActiveShellIndex();
+        const byId = new Map(index.map((entry) => [entry.id, entry.mayBeLive] as const));
+        assert.isTrue(byId.get(watchedId), "threadWatches must set mayBeLive");
+        assert.isTrue(byId.get(awaitedId), "awaitedScheduledTaskIds must set mayBeLive");
+        assert.isTrue(byId.get(stalledId), "stalled subagent must set mayBeLive");
+      }),
   );
 
   it.effect("finds capped threads with background work and active delegates", () =>

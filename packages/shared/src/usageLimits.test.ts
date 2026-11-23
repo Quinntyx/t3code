@@ -21,9 +21,11 @@ import {
   collectLimitPools,
   elapsedShare,
   exhaustedUsageWindow,
-  instanceHubs,
+  hubPoolResetAt,
+  hubRoutes,
   paceOf,
   paceRemainingPercent,
+  resolveInstanceHubRoutes,
   usageLimitSourceResetAt,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
@@ -2029,21 +2031,147 @@ describe("hub routing and pool resets", () => {
   };
   const openWindow = { ...spentWindow, usedPercent: 40 };
 
-  it("matches hubs across loopback aliases and usageRoutes", () => {
-    const hubSnapshot = {
-      id: UsageLimitSourceId.make("hub"),
+  it("matches hubs across loopback aliases, usageRoutes, :fast suffixes, t3-discover-*, and multi-hub isolation", () => {
+    const codex = ProviderDriverKind.make("codex");
+    const hubA = {
+      id: UsageLimitSourceId.make("hub-a"),
       kind: "cliproxy" as const,
-      label: "Hub",
+      label: "Hub A",
       origin: "http://127.0.0.1:8317",
       checkedAt,
-      accounts: [],
+      accounts: [
+        {
+          id: "claude.json",
+          driver: claude,
+          usageLimits: { checkedAt, windows: [spentWindow] },
+        },
+      ],
+    };
+    const hubB = {
+      id: UsageLimitSourceId.make("hub-b"),
+      kind: "cliproxy" as const,
+      label: "Hub B",
+      origin: "http://127.0.0.1:8318",
+      checkedAt,
+      accounts: [
+        {
+          id: "claude-spare.json",
+          driver: claude,
+          usageLimits: { checkedAt, windows: [openWindow] },
+        },
+        {
+          id: "codex.json",
+          driver: codex,
+          usageLimits: { checkedAt, windows: [spentWindow] },
+        },
+      ],
     };
     const piProvider = provider({
+      instanceId: ProviderInstanceId.make("pi"),
       driver: pi,
       auth: { status: "authenticated" },
-      usageRoutes: [{ origin: "http://localhost:8317", driver: claude }],
+      usageLimits: undefined,
+      usageRoutes: [
+        { origin: "http://localhost:8317", driver: claude },
+        { origin: "http://localhost:8318", driver: codex },
+      ],
     });
-    expect(instanceHubs(piProvider, [hubSnapshot])).toEqual([hubSnapshot]);
+    // Per-driver multi-hub isolation + :fast + t3-discover-*
+    expect(
+      resolveInstanceHubRoutes(piProvider, [hubA, hubB], "cliproxy/claude-opus-4-6:fast"),
+    ).toEqual({
+      driver: claude,
+      hubs: [hubA],
+      origins: ["http://localhost:8317"],
+    });
+    expect(
+      resolveInstanceHubRoutes(piProvider, [hubA, hubB], "t3-discover-local/gpt-5.4:fast"),
+    ).toEqual({
+      driver: codex,
+      hubs: [hubB],
+      origins: ["http://localhost:8318"],
+    });
+    // Direct non-hub Pi model skips CLIProxyAPI hubs.
+    expect(resolveInstanceHubRoutes(piProvider, [hubA, hubB], "openai-codex/gpt-5.4")).toEqual({
+      driver: codex,
+      hubs: [],
+      origins: [],
+    });
+    // Because Hub B is routed only for Codex, Hub B's open Claude account does not suppress Hub A's Claude reset.
+    expect(
+      usageLimitSourceResetAt([hubA, hubB], piProvider, now, "cliproxy/claude-opus-4-6:fast"),
+    ).toBe("2026-09-03T14:00:00.000Z");
+    // collectProviderUsageLimits uses quotaDriverForModel and respects Pi direct vs routed boundaries.
+    const routedReport = collectProviderUsageLimits(
+      piProvider.instanceId,
+      [piProvider],
+      [hubA, hubB],
+      now,
+      "cliproxy/claude-opus-4-6:fast",
+    );
+    expect(routedReport?.accounts.map((account) => account.id)).toEqual(["hub-a:claude.json"]);
+    const directReport = collectProviderUsageLimits(
+      piProvider.instanceId,
+      [piProvider],
+      [hubA, hubB],
+      now,
+      "anthropic/claude-opus-4-6",
+    );
+    expect(directReport?.accounts.some((account) => account.id === "hub-b:codex.json")).toBe(false);
+  });
+
+  it("routes vendor-namespaced v8 slugs and ignores expired windows in hubPoolResetAt", () => {
+    const openrouter = ProviderDriverKind.make("openrouter");
+    const v8Hub = {
+      id: UsageLimitSourceId.make("v8"),
+      kind: "cliproxy" as const,
+      label: "V8 Hub",
+      origin: "http://127.0.0.1:8317",
+      checkedAt,
+      accounts: [
+        {
+          id: "openrouter:1",
+          driver: openrouter,
+          models: ["z-ai/glm-5.3-flash"],
+          usageLimits: { checkedAt, windows: [spentWindow] },
+        },
+      ],
+    };
+    const matcher = hubRoutes([v8Hub], pi, "cliproxyapi/z-ai/glm-5.3-flash");
+    expect(v8Hub.accounts.filter(matcher).map((account) => account.id)).toEqual(["openrouter:1"]);
+
+    // An expired exhausted window must not override or block reset computation when paired with an active exhausted window.
+    const expiredWindow = { ...spentWindow, id: "expired", resetsAt: "2026-09-03T10:00:00.000Z" };
+    const undatedWindow = {
+      id: "undated",
+      kind: "weekly" as const,
+      label: "Weekly",
+      usedPercent: 100,
+    };
+    const hubWithExpired = {
+      ...v8Hub,
+      accounts: [
+        {
+          id: "a.json",
+          driver: claude,
+          usageLimits: { checkedAt, windows: [expiredWindow, spentWindow] },
+        },
+      ],
+    };
+    expect(hubPoolResetAt([hubWithExpired], claude, "claude-opus-4-6", now)).toBe(
+      "2026-09-03T14:00:00.000Z",
+    );
+    const hubWithUndated = {
+      ...v8Hub,
+      accounts: [
+        {
+          id: "a.json",
+          driver: claude,
+          usageLimits: { checkedAt, windows: [expiredWindow, undatedWindow] },
+        },
+      ],
+    };
+    expect(hubPoolResetAt([hubWithUndated], claude, "claude-opus-4-6", now)).toBeNull();
   });
 
   it("returns null from usageLimitSourceResetAt when any routed hub account still has room", () => {

@@ -379,7 +379,11 @@ const config: ExpoConfig = {
             },
             {
               fontFamily: "AtkinsonHyperlegible-Bold",
-              fontDefinitions: [{ path: atkinsonFonts.bold, weight: 700 }],
+              // Like DM Sans: 400 catches a relative bold step, 700 keeps fallback glyphs bold.
+              fontDefinitions: [
+                { path: atkinsonFonts.bold, weight: 400 },
+                { path: atkinsonFonts.bold, weight: 700 },
+              ],
             },
             // Code surfaces bold tokens by weight, so this family keeps both weights; iOS uses the same family name.
             {

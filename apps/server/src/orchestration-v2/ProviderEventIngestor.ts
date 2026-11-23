@@ -30,7 +30,7 @@ import * as SqlError from "effect/sql/SqlError";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
-  quotaDriverForModel,
+  resolveInstanceHubRoutes,
   usageLimitResetAt,
   usageLimitSourceResetAt,
 } from "@t3tools/shared/usageLimits";
@@ -773,18 +773,25 @@ export const layer: Layer.Layer<
                     ),
                   )
                 : null;
-              const quotaDriver = quotaDriverForModel(input.event.driver, failingModel);
-              const modelProvider = failingModel?.split(/[/:]/)[0];
-              const routedHubOrigin =
-                snapshot?.driver === "pi" && !/^cliproxy(?:api)?(?:-|$)/.test(modelProvider ?? "")
-                  ? undefined
-                  : (snapshot?.usageRoutes?.find((route) => route.driver === quotaDriver)?.origin ??
-                    snapshot?.usageRoutes?.[0]?.origin);
-              const endpoint = snapshot?.auth.endpoint ?? routedHubOrigin;
+              const hubRoutesForFailure = snapshot
+                ? resolveInstanceHubRoutes(
+                    { ...snapshot, driver: snapshot.driver ?? input.event.driver },
+                    [],
+                    failingModel,
+                  )
+                : null;
+              const endpoint =
+                hubRoutesForFailure && hubRoutesForFailure.origins.length > 0
+                  ? (snapshot?.auth.endpoint ?? hubRoutesForFailure.origins[0])
+                  : undefined;
               const hubResetAt =
-                endpoint === undefined
+                endpoint === undefined || hubRoutesForFailure === null
                   ? null
-                  : yield* usageLimitResets.resetAt(quotaDriver, endpoint, failingModel);
+                  : yield* usageLimitResets.resetAt(
+                      hubRoutesForFailure.driver,
+                      endpoint,
+                      failingModel,
+                    );
               const resetAt = needsUsageLimitReset
                 ? (hubResetAt ??
                   (yield* fallbackUsageLimitResetAt(
