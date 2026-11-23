@@ -726,14 +726,14 @@ export const make = Effect.gen(function* () {
   // backdate settledAt to the thread's last activity.
   const scheduleSettledPreviewClose = Effect.fn(
     "ThreadSettlementServiceV2.scheduleSettledPreviewClose",
-  )(function* (threadId: ThreadId, settledAtMs: number) {
+  )(function* (threadId: ThreadId, settledAtMs: number, eventOccurredAtMs: number) {
     if (previewCloseHandledAt.get(threadId) === settledAtMs) return;
     const existing = pendingPreviewCloses.get(threadId);
     if (existing !== undefined) {
       pendingPreviewCloses.delete(threadId);
       yield* Fiber.interrupt(existing.fiber).pipe(Effect.forkDetach);
     }
-    const { sessions } = yield* previews.list({ threadId });
+    const { sessions } = yield* previews.list({ threadId, openedAtOrBeforeMs: eventOccurredAtMs });
     previewCloseHandledAt.set(threadId, settledAtMs);
     const tabIds = sessions.map((session) => session.tabId);
     if (tabIds.length === 0) return;
@@ -803,12 +803,12 @@ export const make = Effect.gen(function* () {
 
   // Skip settle scripts in shared checkouts where other threads may still work.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
-    function* (threadId: ThreadId, eventSettledAtMs: number | null) {
+    function* (threadId: ThreadId, eventSettledAtMs: number | null, eventOccurredAtMs: number) {
       const settled = yield* projections.getThread(threadId);
       if (settled.deletedAt !== null || settled.settledOverride !== "settled") return;
       const settledAtMs = toMillis(settled.settledAt);
       if (settledAtMs !== null && (eventSettledAtMs === null || settledAtMs === eventSettledAtMs)) {
-        yield* scheduleSettledPreviewClose(threadId, settledAtMs);
+        yield* scheduleSettledPreviewClose(threadId, settledAtMs, eventOccurredAtMs);
       }
       yield* terminals.closeOnSettle({ threadId });
       const worktreePath = settled.worktreePath;
@@ -861,9 +861,11 @@ export const make = Effect.gen(function* () {
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.settled":
-        return cleanUpSettledThread(event.threadId, toMillis(event.payload.settledAt)).pipe(
-          Effect.andThen(enqueueFullSweep()),
-        );
+        return cleanUpSettledThread(
+          event.threadId,
+          toMillis(event.payload.settledAt),
+          DateTime.toEpochMillis(event.occurredAt),
+        ).pipe(Effect.andThen(enqueueFullSweep()));
       case "thread.unsettled":
       case "thread.pinned":
         return cancelSettledPreviewClose(event.threadId);

@@ -2335,7 +2335,20 @@ describe("ThreadSettlementServiceV2 settled previews", () => {
             runtime: "server",
           });
 
-          yield* fixture.publishEvent(settledEvent(backdatedSettled));
+          yield* TestClock.adjust("1 second");
+          const settleAt = at(1_000);
+          yield* TestClock.adjust("1 second");
+          // Opened after settlement committed, before the settlement worker processes the event.
+          const openedBeforeWorkerTab = yield* previews.open({
+            threadId: backdatedSettled.id,
+            url: "https://example.com/after-commit-before-worker",
+            runtime: "server",
+          });
+
+          yield* fixture.publishEvent({
+            ...settledEvent(backdatedSettled),
+            occurredAt: settleAt,
+          });
           yield* Queue.take(fixture.closedIdle);
 
           const laterTab = yield* previews.open({
@@ -2348,7 +2361,7 @@ describe("ThreadSettlementServiceV2 settled previews", () => {
           yield* TestClock.adjust("59 seconds");
           assert.deepStrictEqual(
             (yield* previews.list({ threadId: backdatedSettled.id })).sessions.map((s) => s.tabId),
-            [initialTab.tabId, laterTab.tabId],
+            [initialTab.tabId, openedBeforeWorkerTab.tabId, laterTab.tabId],
           );
 
           const closedFiber = yield* Effect.forkChild(nextClosedTabId(previewEvents));
@@ -2360,7 +2373,7 @@ describe("ThreadSettlementServiceV2 settled previews", () => {
           }
           assert.deepStrictEqual(
             (yield* previews.list({ threadId: backdatedSettled.id })).sessions.map((s) => s.tabId),
-            [laterTab.tabId],
+            [openedBeforeWorkerTab.tabId, laterTab.tabId],
           );
         }).pipe(Effect.provide(fixture.layer));
       }),
@@ -2607,9 +2620,13 @@ describe("ThreadSettlementServiceV2 settled previews", () => {
               Effect.gen(function* () {
                 const count = yield* Ref.updateAndGet(readCount, (n) => n + 1);
                 // First read is during cleanUpSettledThread; second read is at the 5-minute deadline.
+                // Keep the read uninterruptible so cancellation exercises the post-read token check.
                 if (count === 2) {
-                  yield* Deferred.succeed(deadlineReadStarted, undefined);
-                  yield* Deferred.await(releaseDeadlineRead);
+                  yield* Effect.uninterruptible(
+                    Deferred.succeed(deadlineReadStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseDeadlineRead)),
+                    ),
+                  );
                 }
                 const found = currentThreads.find((candidate) => candidate.id === threadId);
                 return found ?? settled;
