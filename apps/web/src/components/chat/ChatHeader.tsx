@@ -52,6 +52,7 @@ interface ChatHeaderProps {
   activeThreadLinkOrigin?: string | null | undefined;
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
+  scratchMode?: boolean;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
   onOpenThread: (threadId: ThreadId) => void;
   rightPanelOpen: boolean;
@@ -77,6 +78,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadLinkOrigin,
   isServerThread,
   activeProject,
+  scratchMode = false,
   parentThreadLink,
   onOpenThread,
   rightPanelOpen,
@@ -332,7 +334,9 @@ export const ChatHeader = memo(function ChatHeader({
           </>
         ) : null}
         <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
-          {renamingTitle !== null ? (
+          {scratchMode ? (
+            <WorkspaceBreadcrumbText>{gt("Scratch")}</WorkspaceBreadcrumbText>
+          ) : renamingTitle !== null ? (
             <input
               autoFocus
               dir="auto"

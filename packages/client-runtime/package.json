@@ -722,6 +722,10 @@
     "./provider-settings/usage-hubs": {
       "types": "./src/providerSettings/usageHubs.ts",
       "default": "./src/providerSettings/usageHubs.ts"
+    },
+    "./state/scratch-key": {
+      "types": "./src/state/scratchKey.ts",
+      "default": "./src/state/scratchKey.ts"
     }
   },
   "scripts": {

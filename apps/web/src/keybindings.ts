@@ -113,8 +113,10 @@ export function shortcutConflictKey(
 function shortcutForContext(binding: ResolvedKeybindingRule, context: ShortcutMatchContext) {
   const shortcut = binding.shortcut;
   // Resolve persisted Mod+Enter against send preference without rewriting saved shortcuts.
+  // Armed scratch sends on plain Enter, so Mod+Enter stays background send even when composerRequiresModifier is set.
   if (
     context.composerRequiresModifier &&
+    !context.scratchArmed &&
     (binding.command === "composer.sendAlternate" ||
       binding.command === "composer.sendBackground") &&
     shortcut.key === "enter" &&

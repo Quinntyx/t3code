@@ -101,12 +101,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   {
     key: "mod+enter",
     command: "composer.sendBackground",
-    when: "composerFocus && draftThreadRoute",
+    when: "(composerFocus || scratchArmed) && draftThreadRoute",
   },
   {
     key: "mod+alt+enter",
     command: "composer.sendBackground",
-    when: "composerFocus && draftThreadRoute",
+    when: "(composerFocus || scratchArmed) && draftThreadRoute",
   },
   {
     key: "mod+alt+enter",
@@ -135,6 +135,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
   { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },
   { key: "mod+z", command: "thread.undo", when: "!terminalFocus && !editableFocus" },
+  // Not mod+e: the editor binds that to inline code.
+  {
+    key: "mod+alt+e",
+    command: "scratch.toggle",
+    when: "draftThreadRoute && !terminalFocus && !previewFocus",
+  },
   ...THREAD_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     key: `mod+${index + 1}`,
     command,

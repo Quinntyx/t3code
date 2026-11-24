@@ -1,6 +1,22 @@
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { useGT, useMessages } from "gt-react";
+import type { ChatImageAttachment, ScratchKey } from "@t3tools/contracts";
+import { deriveScratchKey } from "@t3tools/client-runtime/state/scratch-key";
+import {
+  extractScratchImageIds,
+  formatScratchImageMarkdown,
+  scratchChunkPreviewTitle,
+} from "@t3tools/shared/scratchDocument";
+import { scratchEnvironment, useScratchOwnerEnvironment } from "../state/scratch";
+import { releaseDraftAttachments } from "../lib/attachmentUploadQueue";
+import { stripInlineContextReferences } from "../lib/composerContextReferences";
+import { ScratchArmedComposerBar } from "./scratch/ScratchArmedComposerBar";
+import { ScratchCanvas, type ScratchCanvasHandle } from "./scratch/ScratchCanvas";
+import type { ScratchArmedRange } from "./scratch/ScratchArmPlugin";
+import { useScratchDocument } from "./scratch/useScratchDocument";
+import { useScratchImageUpload } from "./scratch/useScratchImageUpload";
+import { resolveScratchAttachmentUrl } from "./scratch/scratchAttachmentUrl";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -223,7 +239,7 @@ import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
-import { newMessageId } from "~/lib/utils";
+import { newMessageId, randomUUID } from "~/lib/utils";
 import {
   isInSideChatPane,
   resolveThreadOpenRoute,
@@ -1709,12 +1725,68 @@ export default function ChatView(props: ChatViewProps) {
     backgroundSubmissionPending,
     hasWorktreeSetupCard: worktreeSetup !== null,
   });
+  const scratchKey = activeProject ? deriveScratchKey(activeProject) : null;
+  const isDraftScratchMode =
+    isDraftHeroState && activeProject !== null && !embedded && scratchKey !== null;
+  const composerHeroLayout = isDraftHeroState && !isDraftScratchMode;
+  const scratchOwner = useScratchOwnerEnvironment({
+    scratchKey,
+    fallbackEnvironmentId: activeProject?.environmentId ?? environmentId,
+    memberEnvironmentIds: logicalProjectEnvironments.map((entry) => entry.environmentId),
+  });
+  const scratchOwnerEnvId = scratchOwner.environmentId;
+  const hasScratchWriteScope = useAtomValue(
+    scratchEnvironment.save.permissionAtom(scratchOwnerEnvId),
+  );
+  const scratchDocument = useScratchDocument({
+    environmentId: scratchOwnerEnvId,
+    scratchKey: scratchKey ?? ("scratch-unavailable" as ScratchKey),
+    enabled: isDraftScratchMode && scratchOwner.settled && scratchOwner.ownerConnected,
+  });
+  const canWriteScratch =
+    hasScratchWriteScope &&
+    scratchOwner.settled &&
+    scratchOwner.ownerConnected &&
+    scratchDocument.isLoaded;
+  const uploadScratchImages = useScratchImageUpload({
+    environmentId: scratchOwnerEnvId,
+    scratchKey: scratchKey ?? ("scratch-unavailable" as ScratchKey),
+  });
+  const [scratchArmedState, setScratchArmedState] = useState<{
+    readonly ownerEnvId: EnvironmentId;
+    readonly scratchKey: ScratchKey;
+    readonly range: ScratchArmedRange;
+    readonly markdown: string;
+  } | null>(null);
+  const scratchArmed =
+    scratchArmedState !== null &&
+    scratchArmedState.scratchKey === scratchKey &&
+    scratchArmedState.ownerEnvId === scratchOwnerEnvId
+      ? scratchArmedState
+      : null;
+  const setScratchArmed = (
+    next: { readonly range: ScratchArmedRange; readonly markdown: string } | null,
+  ) => {
+    setScratchArmedState(
+      next === null || scratchKey === null
+        ? null
+        : { ...next, ownerEnvId: scratchOwnerEnvId, scratchKey },
+    );
+  };
+  const [scratchSending, setScratchSending] = useState(false);
+  const scratchCanvasRef = useRef<ScratchCanvasHandle | null>(null);
+  const scratchStagingRef = useRef(false);
+  const getActiveScratchKey = useStableCallback(() => scratchKey);
+  const getActiveScratchOwnerEnvId = useStableCallback(() => scratchOwnerEnvId);
+  const clearComposerDraftPromptAndImages = useComposerDraftStore(
+    (store) => store.clearComposerPromptAndImages,
+  );
   const {
     transitionGroupRef: draftHeroTransitionGroupRef,
     composerAnchorRef: draftHeroComposerAnchorRef,
     captureComposerRect: captureDraftHeroComposerRect,
   } = useDraftHeroLayoutTransition(
-    isDraftHeroState,
+    composerHeroLayout,
     panelAnimationsActive,
     panelAnimationDurationMs,
   );
@@ -2368,7 +2440,7 @@ export default function ChatView(props: ChatViewProps) {
       '[data-chat-composer-stack="true"]',
     );
     const expandedComposerHeight =
-      isDraftHeroState && stack ? Math.ceil(stack.getBoundingClientRect().height) : nextHeight;
+      composerHeroLayout && stack ? Math.ceil(stack.getBoundingClientRect().height) : nextHeight;
     const mobileCollapsed = Boolean(
       stack?.querySelector('[data-chat-composer-mobile-collapsed="true"]'),
     );
@@ -2437,7 +2509,7 @@ export default function ChatView(props: ChatViewProps) {
 
     updateHeight();
     // The hero overlay fills the pane, so the composer's own growth only shows on its stack.
-    const stack = isDraftHeroState
+    const stack = composerHeroLayout
       ? composerOverlayElement.querySelector<HTMLElement>('[data-chat-composer-stack="true"]')
       : null;
     return observeResize(
@@ -2446,7 +2518,7 @@ export default function ChatView(props: ChatViewProps) {
     );
   }, [
     composerOverlayElement,
-    isDraftHeroState,
+    composerHeroLayout,
     publishComposerOverlayHeightStable,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Context strip visibility and the scroll-to-bottom button change overlay geometry without always resizing the observed node first.
     showComposerContextStrip,
@@ -2867,6 +2939,106 @@ export default function ChatView(props: ChatViewProps) {
     setTerminalUiLaunchContext(null);
   }
 
+  const stageQuickComposerIntoScratch = () => {
+    if (!isDraftScratchMode || !canWriteScratch || scratchKey === null || scratchStagingRef.current)
+      return;
+    const capturedScratchKey = scratchKey;
+    const capturedOwnerEnvId = scratchOwnerEnvId;
+    const capturedRouteThreadKey = routeThreadKey;
+    const stagedText = stripInlineContextReferences(promptRef.current).trim();
+    const stagedImages = [...composerImagesRef.current];
+    if (stagedText.length === 0 && stagedImages.length === 0) return;
+    scratchStagingRef.current = true;
+    void (async () => {
+      const files = stagedImages.map((image) => image.file);
+      const uploaded = files.length === 0 ? [] : await uploadScratchImages(files);
+      if (
+        uploaded.length !== files.length ||
+        getActiveScratchKey() !== capturedScratchKey ||
+        getActiveScratchOwnerEnvId() !== capturedOwnerEnvId ||
+        currentRouteThreadKeyRef.current !== capturedRouteThreadKey
+      ) {
+        return;
+      }
+      const inserted = [
+        stagedText,
+        ...uploaded.map((image) => formatScratchImageMarkdown(image.attachmentId, image.name)),
+      ]
+        .filter((part) => part.length > 0)
+        .join("\n\n");
+      if (inserted.length === 0) return;
+      if (scratchCanvasRef.current?.insertBelowCursor(inserted) == null) return;
+      const stagedImageIds = new Set(stagedImages.map((image) => image.id));
+      clearComposerDraftPromptAndImages(composerDraftTarget, {
+        preserveFiles: true,
+        onlyImageIds: stagedImageIds,
+        expectedStrippedPrompt: stagedText,
+      });
+      releaseDraftAttachments(stagedImages);
+      const nextDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+      composerImagesRef.current = [...(nextDraft?.images ?? [])];
+      promptRef.current = nextDraft?.prompt ?? "";
+      composerRef.current?.resetCursorState();
+    })().finally(() => {
+      scratchStagingRef.current = false;
+    });
+  };
+
+  const handleScratchToggle = () => {
+    if (!isDraftScratchMode || scratchSending) return;
+    if (scratchArmed !== null) {
+      scratchCanvasRef.current?.releaseArmed();
+      setScratchArmed(null);
+      return;
+    }
+    const activeElement = document.activeElement;
+    const scratchFocused =
+      activeElement instanceof Element && activeElement.closest("[data-scratch-canvas]") !== null;
+    if (scratchFocused) {
+      if (canWriteScratch && scratchCanvasRef.current?.hasNonEmptySelection()) {
+        scratchCanvasRef.current.armSelection();
+        return;
+      }
+      scratchCanvasRef.current?.saveView();
+      scratchCanvasRef.current?.setInactiveCaretVisible(true);
+      focusComposerStable();
+      return;
+    }
+    const stageableText = stripInlineContextReferences(promptRef.current).trim();
+    if (canWriteScratch && (stageableText.length > 0 || composerImagesRef.current.length > 0)) {
+      void stageQuickComposerIntoScratch();
+      return;
+    }
+    scratchCanvasRef.current?.focusRemembered();
+  };
+  const handleScratchToggleStable = useStableCallback(handleScratchToggle);
+
+  const releaseArmedOnEscape = useStableCallback(() => {
+    scratchCanvasRef.current?.releaseArmed();
+    setScratchArmed(null);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens for Escape outside the editor to release an armed scratch chunk
+  useEffect(() => {
+    if (!isDraftScratchMode || scratchArmed === null || scratchSending) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "Escape") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        target?.closest('[role="dialog"], [role="menu"], [role="listbox"], [data-popup-open]') !==
+          null ||
+        document.querySelector(
+          '[role="dialog"], [role="menu"], [role="listbox"], [data-popup-open]',
+        ) !== null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      releaseArmedOnEscape();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isDraftScratchMode, releaseArmedOnEscape, scratchArmed, scratchSending]);
+
   const getShortcutContext = (eventTarget: EventTarget | null = document.activeElement) => ({
     terminalFocus: getTerminalFocusOwner() !== null,
     terminalOpen: Boolean(terminalUiState.terminalOpen),
@@ -2878,6 +3050,7 @@ export default function ChatView(props: ChatViewProps) {
     composerFocus:
       document.activeElement?.getAttribute("data-testid") === "composer-editor" &&
       isInSideChatPane(document.activeElement) === embedded,
+    scratchArmed: isDraftScratchMode && scratchArmed !== null,
     draftThreadRoute: routeKind === "draft",
     turnRunning: phase === "running" || phase === "connecting",
     composerRequiresModifier: composerRequiresModifier(settings.sendShortcut, promptRef.current),
@@ -2921,6 +3094,14 @@ export default function ChatView(props: ChatViewProps) {
         if (!isServerThread || serverConfig?.threadFind !== true || activeThreadKey === null)
           return false;
         openThreadFind(activeThreadKey);
+      },
+      "scratch.toggle": () => {
+        if (!isDraftScratchMode) return false;
+        handleScratchToggleStable();
+      },
+      "composer.sendBackground": () => {
+        if (!isDraftScratchMode || scratchArmed === null) return false;
+        void handleScratchArmedSendStable("background");
       },
       "composer.cycleHost": ({ event }) => {
         if (!canChangeEnvironment && !(canChangeMachine && hasMultipleEnvironments)) return false;
@@ -3134,7 +3315,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     isSendBusy: isSendBusy || movingThread !== null,
     sendQueuesBehindSetup,
-    isDraftHeroState,
+    isDraftHeroState: composerHeroLayout,
     panelAnimationsActive,
     panelAnimationDurationMs,
     keepFullHistory,
@@ -3186,6 +3367,164 @@ export default function ChatView(props: ChatViewProps) {
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
   const onComposerSendStable = useStableCallback(onSend);
+  const handleScratchArmedSend = (mode: "foreground" | "background") => {
+    if (!isDraftScratchMode || !canWriteScratch || scratchArmed === null || scratchSending) return;
+
+    const capturedScratchKey = scratchKey;
+    const capturedOwnerEnvId = scratchOwnerEnvId;
+    const capturedTarget = scratchDocument.captureTarget();
+    setScratchSending(true);
+    void (async () => {
+      // Wait for any inline image uploads inside the armed chunk, then flush edits before extracting.
+      await scratchCanvasRef.current?.waitForPendingUploads();
+      if (
+        getActiveScratchKey() !== capturedScratchKey ||
+        getActiveScratchOwnerEnvId() !== capturedOwnerEnvId
+      ) {
+        return;
+      }
+      await scratchDocument.flush();
+      if (
+        getActiveScratchKey() !== capturedScratchKey ||
+        getActiveScratchOwnerEnvId() !== capturedOwnerEnvId
+      ) {
+        return;
+      }
+      const chunk = scratchCanvasRef.current?.extractArmedChunk();
+      if (chunk === null || chunk === undefined) return;
+      const text = chunk.prompt.trim();
+      if (text.length === 0 && chunk.attachmentIds.length === 0) return;
+
+      const baseRevision = scratchDocument.getRevision();
+      const liveAttachments = scratchDocument.getAttachments();
+      const sameEnvironment = capturedOwnerEnvId === environmentId;
+      let serverAttachments: ChatImageAttachment[] = [];
+      let crossEnvImages: ComposerImageAttachment[] = [];
+      const createdPreviewUrls: string[] = [];
+
+      if (chunk.attachmentIds.length > 0) {
+        if (sameEnvironment) {
+          serverAttachments = chunk.attachmentIds.flatMap((attachmentId): ChatImageAttachment[] => {
+            const meta = liveAttachments.find(
+              (candidate) => candidate.attachmentId === attachmentId,
+            );
+            if (!meta) return [];
+            return [
+              {
+                type: "image",
+                id: meta.attachmentId,
+                name: meta.name,
+                mimeType: meta.mimeType,
+                sizeBytes: meta.sizeBytes,
+              },
+            ];
+          });
+          if (serverAttachments.length !== chunk.attachmentIds.length) {
+            toastManager.add({
+              type: "error",
+              title: gt("Could not add the image"),
+            });
+            return;
+          }
+        } else {
+          const downloaded = await Promise.all(
+            chunk.attachmentIds.map(
+              async (attachmentId): Promise<ComposerImageAttachment | null> => {
+                const meta = liveAttachments.find(
+                  (candidate) => candidate.attachmentId === attachmentId,
+                );
+                const url = await resolveScratchAttachmentUrl(capturedOwnerEnvId, attachmentId);
+                if (url === null) return null;
+                const response = await fetch(url).catch(() => null);
+                if (response === null || !response.ok) return null;
+                const blob = await response.blob();
+                const mimeType = meta?.mimeType ?? blob.type;
+                if (!mimeType.startsWith("image/")) return null;
+                const name = meta?.name ?? `scratch-image-${attachmentId.slice(0, 8)}`;
+                const file = new File([blob], name, { type: mimeType });
+                const previewUrl = URL.createObjectURL(file);
+                createdPreviewUrls.push(previewUrl);
+                return {
+                  type: "image",
+                  id: randomUUID(),
+                  name,
+                  mimeType,
+                  sizeBytes: file.size,
+                  file,
+                  previewUrl,
+                };
+              },
+            ),
+          );
+          if (downloaded.some((item) => item === null)) {
+            for (const url of createdPreviewUrls) URL.revokeObjectURL(url);
+            toastManager.add({
+              type: "error",
+              title: gt("Could not copy scratch images to the target machine"),
+            });
+            return;
+          }
+          crossEnvImages = downloaded.filter(
+            (item): item is ComposerImageAttachment => item !== null,
+          );
+        }
+      }
+
+      const consumptionId = randomUUID();
+      let accepted = false;
+      await onComposerSendStable(undefined, "auto", mode, undefined, {
+        prompt: text,
+        images: crossEnvImages,
+        serverAttachments,
+        onAccepted: () => {
+          accepted = true;
+        },
+      });
+      if (!accepted) {
+        for (const url of createdPreviewUrls) URL.revokeObjectURL(url);
+        if (
+          getActiveScratchKey() === capturedScratchKey &&
+          getActiveScratchOwnerEnvId() === capturedOwnerEnvId &&
+          scratchCanvasRef.current?.getArmedState() == null
+        ) {
+          setScratchArmed(null);
+        }
+        return;
+      }
+      if (mode === "background" || multipleModelSelections !== null) {
+        for (const url of createdPreviewUrls) URL.revokeObjectURL(url);
+      }
+
+      const consumed = await scratchDocument.consumeRange({
+        target: capturedTarget,
+        consumptionId,
+        baseMarkdown: chunk.fullMarkdown,
+        baseRevision,
+        nextMarkdown: chunk.nextMarkdown,
+        nextCursorOffset: chunk.nextCursorOffset,
+        attachmentIds: chunk.attachmentIds,
+      });
+      if (
+        getActiveScratchKey() === capturedScratchKey &&
+        getActiveScratchOwnerEnvId() === capturedOwnerEnvId
+      ) {
+        if (!consumed.ok) {
+          scratchCanvasRef.current?.releaseArmed();
+        }
+        setScratchArmed(null);
+      }
+    })().finally(() => {
+      setScratchSending(false);
+    });
+  };
+  const handleScratchArmedSendStable = useStableCallback(handleScratchArmedSend);
+  const scratchToggleShortcutLabel = shortcutLabelForCommand(keybindings, "scratch.toggle", {
+    context: {
+      draftThreadRoute: true,
+      terminalFocus: false,
+      previewFocus: false,
+    },
+  });
   const sendPreviewAnnotation = (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
@@ -3600,6 +3939,7 @@ export default function ChatView(props: ChatViewProps) {
               activeThreadTitle={activeThread.title}
               activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}
               activeProject={activeProject ?? null}
+              scratchMode={isDraftScratchMode}
               parentThreadLink={headerParentThreadLink}
               onOpenThread={onOpenRelatedThreadStable}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
@@ -3624,7 +3964,7 @@ export default function ChatView(props: ChatViewProps) {
             threadRef={activeThreadRef}
             preview={canvasPreview}
             detailsCardTopInset={isThreadFindActive ? THREAD_FIND_BAR_RESERVED_HEIGHT : 0}
-            composerOverlayElement={isDraftHeroState ? null : composerOverlayElement}
+            composerOverlayElement={composerHeroLayout ? null : composerOverlayElement}
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
             onDragOver={workspaceFileDropHandlers.onDragOver}
@@ -3654,6 +3994,34 @@ export default function ChatView(props: ChatViewProps) {
               {...conversationArea}
               className={cn("relative flex min-h-0 flex-1 flex-col", chatCanvasClassName)}
             >
+              {isDraftScratchMode && scratchKey !== null ? (
+                <div
+                  data-scratch-canvas-surface
+                  className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background"
+                >
+                  <ScratchCanvas
+                    key={`${scratchOwnerEnvId}|${scratchKey}`}
+                    ref={scratchCanvasRef}
+                    environmentId={scratchOwnerEnvId}
+                    scratchKey={scratchKey}
+                    document={scratchDocument}
+                    bottomPaddingPx={composerReservedHeight}
+                    readOnly={scratchSending || !canWriteScratch}
+                    onUploadImage={async (file) => {
+                      const [uploaded] = await uploadScratchImages([file]);
+                      return uploaded ?? null;
+                    }}
+                    onArmedChange={setScratchArmed}
+                    onArmedSend={(mode) => void handleScratchArmedSendStable(mode)}
+                    onExpandImage={(url, alt) =>
+                      onExpandTimelineImageStable({
+                        images: [{ src: url, name: alt }],
+                        index: 0,
+                      })
+                    }
+                  />
+                </div>
+              ) : null}
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
                   pendingApprovals={pendingApprovals}
@@ -3785,7 +4153,7 @@ export default function ChatView(props: ChatViewProps) {
               inert={isRevertingCheckpoint}
               data-chat-composer-overlay="true"
               className={
-                isDraftHeroState
+                composerHeroLayout
                   ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
@@ -3795,7 +4163,7 @@ export default function ChatView(props: ChatViewProps) {
                   data-chat-composer-stack="true"
                   className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
                 >
-                  {isDraftHeroState ? (
+                  {composerHeroLayout ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
                         className="pb-4 group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
@@ -3912,7 +4280,7 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                                 bannerItems={
-                                  isDraftHeroState || composerBannerItems.length === 0
+                                  composerHeroLayout || composerBannerItems.length === 0
                                     ? EMPTY_COMPOSER_BANNER_ITEMS
                                     : composerBannerItems
                                 }
@@ -4007,6 +4375,36 @@ export default function ChatView(props: ChatViewProps) {
                                 onRemoveEditingQueuedAttachment={
                                   queuedRunEdit.removeEditingAttachment
                                 }
+                                scratchArmedBar={
+                                  isDraftScratchMode && scratchArmed !== null ? (
+                                    <ScratchArmedComposerBar
+                                      title={scratchChunkPreviewTitle(
+                                        scratchArmed.markdown,
+                                        gt("Selection"),
+                                      )}
+                                      imageCount={
+                                        extractScratchImageIds(scratchArmed.markdown).length
+                                      }
+                                      releaseShortcutLabel={scratchToggleShortcutLabel}
+                                      onScrollToArmed={() =>
+                                        scratchCanvasRef.current?.scrollToArmed()
+                                      }
+                                      onRelease={() => {
+                                        scratchCanvasRef.current?.releaseArmed();
+                                        setScratchArmed(null);
+                                      }}
+                                    />
+                                  ) : undefined
+                                }
+                                scratchArmedCanSend={
+                                  isDraftScratchMode &&
+                                  canWriteScratch &&
+                                  scratchArmed !== null &&
+                                  !scratchSending
+                                }
+                                onScratchArmedSend={(mode) =>
+                                  void handleScratchArmedSendStable(mode)
+                                }
                               />
                             )}
                           </div>
@@ -4077,7 +4475,7 @@ export default function ChatView(props: ChatViewProps) {
                           </div>
                         </div>
                       </ComposerSurface.Shell>
-                      {isDraftHeroState && composerBannerItems.length > 0 ? (
+                      {composerHeroLayout && composerBannerItems.length > 0 ? (
                         // Out of flow, like the headline, so a notice never moves the centered composer.
                         // Short windows pin the composer to the bottom, where an out-of-flow notice
                         // would fall off-screen, so there it takes space and lifts the composer.

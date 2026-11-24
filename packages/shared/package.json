@@ -646,6 +646,10 @@
     "./paletteSearchCopy": {
       "types": "./src/paletteSearchCopy.ts",
       "import": "./src/paletteSearchCopy.ts"
+    },
+    "./scratchDocument": {
+      "types": "./src/scratchDocument.ts",
+      "import": "./src/scratchDocument.ts"
     }
   },
   "scripts": {

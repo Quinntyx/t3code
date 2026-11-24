@@ -27,6 +27,11 @@ const ATTACHMENT_ID_PATTERN = new RegExp(
 );
 
 export const PENDING_ATTACHMENT_THREAD_SEGMENT = "pending";
+export const SCRATCH_ATTACHMENT_THREAD_SEGMENT = "scratch";
+const RESERVED_ATTACHMENT_THREAD_SEGMENTS = new Set([
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+  SCRATCH_ATTACHMENT_THREAD_SEGMENT,
+]);
 const PENDING_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PARTIAL_UPLOAD_MAX_AGE_MS = 60 * 60 * 1000;
 
@@ -42,7 +47,7 @@ export function toSafeThreadAttachmentSegment(threadId: string): string | null {
   if (segment.length === 0) {
     return null;
   }
-  return segment === PENDING_ATTACHMENT_THREAD_SEGMENT ? "_pending" : segment;
+  return RESERVED_ATTACHMENT_THREAD_SEGMENTS.has(segment) ? `_${segment}` : segment;
 }
 
 export function attachmentFileExtension(fileName: string): string {
@@ -66,6 +71,10 @@ function attachmentIdExtensionSuffix(extension: string | undefined): string {
 
 export function createPendingAttachmentId(extension?: string): string {
   return `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
+}
+
+export function createScratchAttachmentId(extension?: string): string {
+  return `${SCRATCH_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
 }
 
 export function parseAttachmentUuid(attachmentId: string): string | null {
@@ -228,7 +237,10 @@ export function planAttachmentClaim(input: {
   if (!toSafeThreadAttachmentSegment(input.threadId)) {
     return { ok: false, reason: "invalid thread id" };
   }
-  if (requestedSegment !== PENDING_ATTACHMENT_THREAD_SEGMENT) {
+  if (
+    requestedSegment !== PENDING_ATTACHMENT_THREAD_SEGMENT &&
+    requestedSegment !== SCRATCH_ATTACHMENT_THREAD_SEGMENT
+  ) {
     return { ok: false, reason: "attachment must be a pending upload" };
   }
 

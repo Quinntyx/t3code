@@ -58,4 +58,12 @@ describe("t3code/no-native-title-tooltip", () => {
   );
 
   rule.invalid("reports title on an anchor", `const el = <a href="#" title="Learn more">More</a>;`);
+
+  rule.invalid(
+    "reports title on DOM-forwarding UI primitives",
+    `const el = <Kbd variant="outline" title="Send with Enter">↵</Kbd>;`,
+    (output) => {
+      assert.match(output, /Tooltip \+ TooltipTrigger \+ TooltipPopup/);
+    },
+  );
 });
