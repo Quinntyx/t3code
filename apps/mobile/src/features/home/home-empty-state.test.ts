@@ -25,6 +25,7 @@ function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState
     isLoadingConnections: false,
     hasConnections: true,
     hasLoadedShellSnapshot: true,
+    hasFreshShellSnapshot: true,
     hasPendingShellSnapshot: false,
     hasSyncingConnectedEnvironment: false,
     hasReadyEnvironment: true,
@@ -96,6 +97,19 @@ describe("home empty state", () => {
       }),
       1,
       { title: "No threads yet", loading: false, showsAddEnvironment: true },
+    ],
+    [
+      "reports environment unavailable when offline with only a cached shell snapshot",
+      workspaceState({
+        hasLoadedShellSnapshot: true,
+        hasFreshShellSnapshot: false,
+        hasPendingShellSnapshot: false,
+        hasReadyEnvironment: false,
+        connectionState: "offline",
+        networkStatus: "offline",
+      }),
+      1,
+      { title: "Environment unavailable", loading: false, showsAddEnvironment: true },
     ],
   ] as const)("%s", (_name, state, projectCount, expected) => {
     const { title, loading, showsAddEnvironment } = deriveHomeEmptyState(state, projectCount);

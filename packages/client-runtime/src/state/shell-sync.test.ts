@@ -27,6 +27,7 @@ import {
   type PreparedConnection,
 } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -1668,7 +1669,9 @@ describe("environment shell cold start", () => {
       expect(coldReload.input).not.toHaveProperty("httpSnapshotFallback");
       expect(yield* Ref.get(h.httpLoads)).toBe(1);
       yield* Queue.offer(coldReload.events, { kind: "synchronized" });
-      expect((yield* h.liveAt(HTTP_SEQUENCE)).generation).toBeGreaterThan(0);
+      const firstLive = yield* h.liveAt(HTTP_SEQUENCE);
+      expect(firstLive.generation).toBeGreaterThan(0);
+      expect(firstLive.fresh).toBe(true);
 
       // A warm reconnect resumes the in-memory shell and falls back the same way.
       yield* h.reconnect;
@@ -1683,7 +1686,97 @@ describe("environment shell cold start", () => {
       expect(warmReload.input).toMatchObject({ afterSequence: HTTP_SEQUENCE + 1 });
       expect(yield* Ref.get(h.httpLoads)).toBe(2);
       yield* Queue.offer(warmReload.events, { kind: "synchronized" });
-      yield* h.liveAt(HTTP_SEQUENCE + 1);
+      const secondLive = yield* h.liveAt(HTTP_SEQUENCE + 1);
+      expect(secondLive.fresh).toBe(true);
     }),
+  );
+
+  it.effect(
+    "marks shell fresh only after live sync and resets fresh on long background resume",
+    () =>
+      Effect.gen(function* () {
+        const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
+        const subscriptions = yield* Queue.unbounded<Queue.Queue<OrchestrationV2ShellStreamItem>>();
+        const client = {
+          [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
+                yield* Queue.offer(subscriptions, events);
+                return Stream.fromQueue(events);
+              }),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make(Option.some(session(client))),
+          prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        });
+        const cache = Persistence.EnvironmentCacheStore.of({
+          loadShell: () => Effect.succeedSome(LIVE_SHELL_SNAPSHOT),
+          saveShell: () => Effect.void,
+          loadThread: () => Effect.succeedNone,
+          saveThread: () => Effect.void,
+          removeThread: () => Effect.void,
+          loadServerConfig: () => Effect.succeedNone,
+          saveServerConfig: () => Effect.void,
+          loadVcsRefs: () => Effect.succeedNone,
+          saveVcsRefs: () => Effect.void,
+          removeVcsRefs: () => Effect.void,
+          clearVcsRefs: () => Effect.void,
+          clear: () => Effect.void,
+        });
+        const shellState = yield* makeEnvironmentShellState().pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, {
+            load: () => Effect.succeedNone,
+          }),
+          Effect.provide(ConnectionWakeups.layer({ changes: Stream.fromQueue(wakeups) })),
+        );
+
+        // Cached snapshot is present for protocol resume, but fresh is false until live sync.
+        const initial = yield* SubscriptionRef.get(shellState);
+        expect(Option.isSome(initial.snapshot)).toBe(true);
+        expect(initial.fresh).toBe(false);
+
+        const first = yield* Queue.take(subscriptions);
+        yield* Queue.offerAll(first, [
+          { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT },
+          { kind: "synchronized" },
+        ]);
+        const live = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => state.status === "live"),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(live.fresh).toBe(true);
+
+        // Brief app switch probe keeps fresh true to avoid flickering back to skeletons.
+        yield* Queue.offer(wakeups, "application-active-probe");
+        const probed = yield* Queue.take(subscriptions);
+        expect((yield* SubscriptionRef.get(shellState)).fresh).toBe(true);
+        yield* Queue.offer(probed, { kind: "synchronized" });
+        yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => state.status === "live"),
+          Stream.runHead,
+        );
+
+        // Long background resume resets fresh to false until the server confirms sync again.
+        yield* Queue.offer(wakeups, "application-active-long");
+        const resumed = yield* Queue.take(subscriptions);
+        expect((yield* SubscriptionRef.get(shellState)).fresh).toBe(false);
+        yield* Queue.offer(resumed, { kind: "synchronized" });
+        const synced = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => state.status === "live" && state.fresh),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(synced.fresh).toBe(true);
+      }),
   );
 });

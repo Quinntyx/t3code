@@ -18,15 +18,7 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import {
-  use,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-} from "react";
+import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
   ScrollView,
@@ -100,7 +92,7 @@ import {
 import { createSwipeRowActivation } from "./swipe-row-activation";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
 import { useFabScroll } from "./FabScrollContext";
-import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
+import { ThreadListSkeleton } from "../threads/ThreadListSkeleton";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
@@ -120,6 +112,7 @@ interface HomeScreenProps {
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  readonly showsSkeleton: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
@@ -621,18 +614,33 @@ export function HomeScreen(props: HomeScreenProps) {
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
     threadListV2Layout.settledCount > 0;
-  // A hidden list gets no layout, so it never reports its rows as laid out.
-  const hasRowsToLayOut = props.visible && hasAnyThreads && threadListV2Items.length > 0;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the native launch splash, which is outside React, until the rows are gone or this list unmounts; a layout effect runs before the splash hides in this commit
-  useLayoutEffect(() => {
-    return hasRowsToLayOut ? holdLaunchSplashForHomeRows() : undefined;
-  }, [hasRowsToLayOut]);
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null
       : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
         "this environment");
   const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, m);
+
+  if (props.showsSkeleton) {
+    return (
+      <View className={containerClassName}>
+        <ScreenContent surface={sidebarSurface ? "drawer" : "screen"}>
+          <View className={cn("flex-1", Platform.OS !== "android" && contentBackground)}>
+            <ThreadListSkeleton
+              variant="home"
+              style={{
+                paddingTop: Platform.OS === "ios" ? contentTopInset : 16,
+                paddingLeft:
+                  (contentSideInsets?.left ?? 0) + (sidebarSurface ? 8 : 0) + androidListGutter,
+                paddingRight:
+                  (contentSideInsets?.right ?? 0) + (sidebarSurface ? 8 : 0) + androidListGutter,
+              }}
+            />
+          </View>
+        </ScreenContent>
+      </View>
+    );
+  }
 
   if (!hasAnyThreads) {
     return (
@@ -781,7 +789,6 @@ export function HomeScreen(props: HomeScreenProps) {
                 itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
                 ref={listRef}
                 onLoad={() => {
-                  settleLaunchSplashHomeRows();
                   activateVisibleRows(threadListV2Items);
                 }}
                 onTouchStart={(event) => trackListTouches(event, true)}

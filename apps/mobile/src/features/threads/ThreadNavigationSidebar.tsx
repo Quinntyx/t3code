@@ -29,7 +29,10 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
+import { freshShellEnvironmentIdsAtom, syncingShellEnvironmentIdsAtom } from "../../state/shell";
 import { steadyNavigationThreadShellsAtom } from "../../state/threads";
+import { ThreadListSkeleton } from "./ThreadListSkeleton";
+import { filterFreshThreads, shouldShowThreadListSkeleton } from "./thread-list-skeleton-state";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { useThreadListNow } from "./use-thread-list-now";
@@ -136,7 +139,12 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
+  const freshEnvironmentIds = useAtomValue(freshShellEnvironmentIdsAtom);
+  const syncingEnvironmentIds = useAtomValue(syncingShellEnvironmentIdsAtom);
+  const threads = filterFreshThreads(
+    useAtomValue(steadyNavigationThreadShellsAtom),
+    freshEnvironmentIds,
+  );
   const selectedThreadKey = useSidebarRowThreadKey(props.selectedThreadKey);
   const selectedThread =
     threads.find(
@@ -588,10 +596,37 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
+  const hasScopedFreshRows =
+    threads.some(
+      (thread) =>
+        thread.archivedAt === null &&
+        (options.selectedEnvironmentId === null ||
+          thread.environmentId === options.selectedEnvironmentId),
+    ) ||
+    pendingTasks.some(
+      (task) =>
+        options.selectedEnvironmentId === null ||
+        task.environmentId === options.selectedEnvironmentId,
+    );
+  const showsSkeleton = shouldShowThreadListSkeleton({
+    isLoadingConnections: catalogState.isLoadingConnections,
+    hasConnections: catalogState.hasConnections,
+    networkStatus: catalogState.networkStatus,
+    selectedEnvironmentId: options.selectedEnvironmentId,
+    syncingEnvironmentIds,
+    hasVisibleRows: hasScopedFreshRows,
+  });
   const showAddEnvironment =
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
     !catalogState.hasConnectingEnvironment;
+  const isEnvironmentUnavailable =
+    !catalogState.hasFreshShellSnapshot &&
+    catalogState.hasConnections &&
+    (catalogState.connectionState === "available" ||
+      catalogState.connectionState === "offline" ||
+      catalogState.connectionState === "error" ||
+      catalogState.connectionState === "unsupported");
   const listEmpty = (
     <View>
       <Text
@@ -603,17 +638,19 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       >
         {catalogState.isLoadingConnections
           ? gt("Loading threads…")
-          : showAddEnvironment
-            ? gt("No environments connected")
-            : props.searchQuery.trim().length > 0
-              ? threadSearch.isPending
-                ? gt("Searching thread messages…")
-                : threadSearch.failed
-                  ? gt("Couldn't search thread messages")
-                  : gt("No matching threads")
-              : selectedProjectScope !== null
-                ? gt("No threads in {project}", { project: selectedProjectScope.title })
-                : gt("No threads yet")}
+          : isEnvironmentUnavailable
+            ? (catalogState.connectionError ?? gt("Environment unavailable"))
+            : showAddEnvironment
+              ? gt("No environments connected")
+              : props.searchQuery.trim().length > 0
+                ? threadSearch.isPending
+                  ? gt("Searching thread messages…")
+                  : threadSearch.failed
+                    ? gt("Couldn't search thread messages")
+                    : gt("No matching threads")
+                : selectedProjectScope !== null
+                  ? gt("No threads in {project}", { project: selectedProjectScope.title })
+                  : gt("No threads yet")}
       </Text>
       {showAddEnvironment ? (
         <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
@@ -634,40 +671,47 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       <>
         {header}
         <View className="flex-1">
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
-            <GestureDetector gesture={sidebarScrollGesture}>
-              <AnimatedLegendList
-                renderScrollComponent={NativeScrollView}
-                itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
-                data={listItems}
-                drawDistance={500}
-                estimatedItemSize={64}
-                extraData={listExtraData}
-                getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
-                keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
-                automaticallyAdjustsScrollIndicatorInsets
-                // The column lays the list under its bar, glass or solid; UIKit insets it past both.
-                contentInsetAdjustmentBehavior="automatic"
-                contentContainerStyle={[
-                  styles.threadListContent,
-                  {
-                    paddingBottom: Math.max(insets.bottom, 16) + 16,
-                    paddingTop: 6,
-                  },
-                ]}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-                {...scrollGateHandlers}
-                recycleItems
-                scrollEventThrottle={16}
-                showsVerticalScrollIndicator={false}
-                style={styles.threadList}
-                ListEmptyComponent={listEmpty}
-              />
-            </GestureDetector>
-          </SwipeableScrollGateProvider>
+          {showsSkeleton ? (
+            <ThreadListSkeleton
+              variant="sidebar"
+              style={[styles.threadListContent, { paddingTop: 6 }]}
+            />
+          ) : (
+            <SwipeableScrollGateProvider enabled={swipeEnabled}>
+              <GestureDetector gesture={sidebarScrollGesture}>
+                <AnimatedLegendList
+                  renderScrollComponent={NativeScrollView}
+                  itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                  data={listItems}
+                  drawDistance={500}
+                  estimatedItemSize={64}
+                  extraData={listExtraData}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={sidebarItemsAreEqual}
+                  keyExtractor={(item) => item.key}
+                  renderItem={renderListItem}
+                  automaticallyAdjustsScrollIndicatorInsets
+                  // The column lays the list under its bar, glass or solid; UIKit insets it past both.
+                  contentInsetAdjustmentBehavior="automatic"
+                  contentContainerStyle={[
+                    styles.threadListContent,
+                    {
+                      paddingBottom: Math.max(insets.bottom, 16) + 16,
+                      paddingTop: 6,
+                    },
+                  ]}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  recycleItems
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.threadList}
+                  ListEmptyComponent={listEmpty}
+                />
+              </GestureDetector>
+            </SwipeableScrollGateProvider>
+          )}
           <ThreadUndoNotice visible={props.visible} />
         </View>
       </>
@@ -688,7 +732,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           overflow: "hidden",
         }}
       >
-        {listItems.length === 0 ? (
+        {showsSkeleton ? (
+          <ThreadListSkeleton variant="sidebar" style={{ paddingTop: 6 }} />
+        ) : listItems.length === 0 ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>

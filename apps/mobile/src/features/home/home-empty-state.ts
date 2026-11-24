@@ -48,7 +48,7 @@ function deriveEmptyState(
       catalogState.connectionState === "offline" ||
       catalogState.connectionState === "error" ||
       catalogState.connectionState === "unsupported") &&
-    !catalogState.hasLoadedShellSnapshot
+    !catalogState.hasFreshShellSnapshot
   ) {
     return {
       title:
@@ -76,7 +76,7 @@ function deriveEmptyState(
     };
   }
 
-  if (projectCount === 0 && catalogState.hasLoadedShellSnapshot) {
+  if (projectCount === 0 && catalogState.hasFreshShellSnapshot) {
     return {
       title: resolve(msg("No projects found")),
       detail: resolve(msg("The connected environment did not report any projects.")),

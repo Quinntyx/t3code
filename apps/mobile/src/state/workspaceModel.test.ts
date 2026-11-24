@@ -72,6 +72,7 @@ describe("mobile workspace projection", () => {
       networkStatus: "offline",
       environments,
       shellSummary: EMPTY_SHELL_SUMMARY,
+      hasFreshShellSnapshot: false,
       hasSyncingConnectedEnvironment: false,
     });
 
@@ -96,10 +97,12 @@ describe("mobile workspace projection", () => {
       networkStatus: "online",
       environments,
       shellSummary: CACHED_SHELL_SUMMARY,
+      hasFreshShellSnapshot: false,
       hasSyncingConnectedEnvironment: false,
     });
 
     expect(state.hasLoadedShellSnapshot).toBe(true);
+    expect(state.hasFreshShellSnapshot).toBe(false);
     expect(state.hasPendingShellSnapshot).toBe(true);
     expect(state.hasSyncingConnectedEnvironment).toBe(false);
     expect(state.hasReadyEnvironment).toBe(false);

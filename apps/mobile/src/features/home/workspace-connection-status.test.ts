@@ -8,6 +8,7 @@ function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState
     isLoadingConnections: false,
     hasConnections: true,
     hasLoadedShellSnapshot: true,
+    hasFreshShellSnapshot: true,
     hasPendingShellSnapshot: false,
     hasSyncingConnectedEnvironment: false,
     hasReadyEnvironment: true,

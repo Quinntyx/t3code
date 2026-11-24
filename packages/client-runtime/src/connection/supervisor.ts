@@ -64,6 +64,9 @@ const LONG_RESUME_PROBE_TIMEOUT = "1500 millis";
 // the host answers while the socket stays silent, the socket is dead.
 const SILENT_SOCKET_CHECK_AFTER = "500 millis";
 const SILENT_SOCKET_RECHECK_EVERY = "1 second";
+// After a long suspension a stale pooled connection can fail the first host check;
+// retry promptly before LONG_RESUME_PROBE_TIMEOUT cuts off the check.
+const LONG_RESUME_SILENT_SOCKET_RECHECK_EVERY = "250 millis";
 const FRAME_CHECK_EVERY = "100 millis";
 // Off the LAN one lost packet can stall a live socket for a second, so a remote
 // socket must stay silent this long, except after a long resume. It must end
@@ -327,6 +330,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const currentEntry = yield* Ref.make(entry);
   const currentRoutes = Ref.get(currentEntry).pipe(Effect.map(connectionRoutes));
   const preferredRouteId = yield* Ref.make(Option.none<string>());
+  // Set when replacing a silent socket whose host just answered on its active route;
+  // kept separate from preferredRouteId so a failed replacement does not trigger route cooldown.
+  const replacementRouteId = yield* Ref.make(Option.none<string>());
   const routeCooldowns = yield* Ref.make<ReadonlyMap<string, bigint>>(new Map());
   // Outlives sessions so a reconnect shows a refusal seen earlier; a route leaves once it connects.
   const refusedRoutes = yield* Ref.make(NO_REFUSED_ROUTES);
@@ -345,13 +351,20 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const latest = yield* Ref.get(currentEntry);
     const routes = connectionRoutes(latest);
     const preferred = yield* Ref.getAndSet(preferredRouteId, Option.none());
-    if (Option.isNone(preferred)) return latest;
-    const route = routes.find(
-      (candidate) => connectionRouteId(candidate.target) === preferred.value,
-    );
+    const replacement = yield* Ref.getAndSet(replacementRouteId, Option.none());
+    const chosen = Option.isSome(preferred) ? preferred : replacement;
+    const skipFirstRouteCheck = Option.isNone(preferred) && Option.isSome(replacement);
+    if (Option.isNone(chosen)) return { entry: latest, skipFirstRouteCheck: false };
+    const route = routes.find((candidate) => connectionRouteId(candidate.target) === chosen.value);
     return route === undefined
-      ? latest
-      : entryWithRoutes(latest, [route, ...routes.filter((candidate) => candidate !== route)]);
+      ? { entry: latest, skipFirstRouteCheck: false }
+      : {
+          entry: entryWithRoutes(latest, [
+            route,
+            ...routes.filter((candidate) => candidate !== route),
+          ]),
+          skipFirstRouteCheck,
+        };
   });
 
   const learnRoutesFrom = Effect.fnUntraced(function* (
@@ -514,11 +527,15 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     lastFailure: ConnectionAttemptError | null,
     synchronizedRoutes: Ref.Ref<number>,
   ) {
-    return yield* driver.connect(yield* attemptEntry, (progress) =>
-      (progress.stage === "synchronizing"
-        ? Ref.update(synchronizedRoutes, (count) => count + 1)
-        : Effect.void
-      ).pipe(Effect.andThen(reportProgress(attempt, nextGeneration, lastFailure, progress))),
+    const { entry: nextEntry, skipFirstRouteCheck } = yield* attemptEntry;
+    return yield* driver.connect(
+      nextEntry,
+      (progress) =>
+        (progress.stage === "synchronizing"
+          ? Ref.update(synchronizedRoutes, (count) => count + 1)
+          : Effect.void
+        ).pipe(Effect.andThen(reportProgress(attempt, nextGeneration, lastFailure, progress))),
+      skipFirstRouteCheck ? { skipFirstRouteCheck: true } : undefined,
     );
   });
 
@@ -779,8 +796,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     );
     const hostAnswersWhileSilent = Effect.gen(function* () {
       // A radio still waking up or a stale pooled connection can fail one check.
+      const recheckEvery = longResume
+        ? LONG_RESUME_SILENT_SOCKET_RECHECK_EVERY
+        : SILENT_SOCKET_RECHECK_EVERY;
       while ((yield* driver.checkHost(lease.prepared)) !== "answered") {
-        yield* Effect.sleep(SILENT_SOCKET_RECHECK_EVERY);
+        yield* Effect.sleep(recheckEvery);
       }
       if (!answersQuickly(routeKind) && !longResume) {
         const silentFor = (yield* Clock.monotonicTimeNanos) - startedAt;
@@ -892,8 +912,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           continue;
         }
         if (probeEvent._tag === "SocketSilent") {
-          // The host is reachable, so replace the socket at once, even while
-          // the network reports offline.
+          // The host just answered on this route, so replace the socket on it at once
+          // without waiting on other saved routes or the offline report.
+          yield* Ref.set(replacementRouteId, Option.some(connectionRouteId(lease.prepared.target)));
           yield* stopProbe;
           return true;
         }
@@ -1199,6 +1220,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       if (!currentIntent.desired) {
         resetRetryLadder();
         latestFailure = null;
+        yield* Ref.set(replacementRouteId, Option.none());
         yield* clearLease;
         yield* setState(availableState(currentIntent, generation));
         yield* waitForSignal;

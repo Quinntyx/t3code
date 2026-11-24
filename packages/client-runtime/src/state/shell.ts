@@ -58,6 +58,12 @@ export interface EnvironmentShellState {
    * so they are read again.
    */
   readonly generation: number;
+  /**
+   * True once this shell has reached a live server sync in the current foreground session.
+   * Starts false on cold launch (even with a cached snapshot) and resets to false on a long
+   * background resume until the next live sync completes.
+   */
+  readonly fresh: boolean;
   /** Sequences of the thread removals applied since the latest authoritative snapshot. */
   readonly removedAt: ReadonlyMap<ThreadId, number>;
 }
@@ -71,6 +77,7 @@ export const EMPTY_SHELL_STATE: EnvironmentShellState = {
   status: "empty",
   error: Option.none(),
   generation: 0,
+  fresh: false,
   removedAt: EMPTY_REMOVALS,
 };
 
@@ -374,6 +381,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
             error: Option.none(),
             // A cache resume that caught up is as current as a snapshot for generation readers.
             generation: next.generation === 0 ? ++lastShellGeneration : next.generation,
+            fresh: true,
           };
         }
         continue;
@@ -387,12 +395,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           : { resolvedRepositoryIdentityRoots: item.resolvedRepositoryIdentityRoots },
       );
       if (authoritative) receivedAuthoritativeSnapshot = true;
+      const nextStatus: EnvironmentShellStatus =
+        fromHttp && disconnected ? "cached" : waiting || fromHttp ? "synchronizing" : "live";
       next = {
         snapshot: Option.some(nextSnapshot),
-        status:
-          fromHttp && disconnected ? "cached" : waiting || fromHttp ? "synchronizing" : "live",
+        status: nextStatus,
         error: Option.none(),
         generation: authoritative ? ++lastShellGeneration : next.generation,
+        fresh: nextStatus === "live" ? true : next.fresh,
         removedAt: authoritative ? EMPTY_REMOVALS : next.removedAt,
       };
     }
@@ -626,7 +636,16 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     Option.match(wakeups, {
       onNone: () => Stream.never,
       onSome: (service) =>
-        service.changes.pipe(Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup)),
+        service.changes.pipe(
+          Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup),
+          Stream.tap((reason) =>
+            reason === "application-active-long"
+              ? SubscriptionRef.update(state, (current) =>
+                  current.fresh ? { ...current, fresh: false } : current,
+                )
+              : Effect.void,
+          ),
+        ),
     }),
   );
 
@@ -867,6 +886,11 @@ function createEnvironmentShellProgressAtoms(
         Atom.withLabel(`environment-shell-has-snapshot:${environmentId}`),
       ),
     ),
+    freshAtom: Atom.family((environmentId: EnvironmentId) =>
+      Atom.make((get) => get(stateValueAtom(environmentId)).fresh).pipe(
+        Atom.withLabel(`environment-shell-fresh:${environmentId}`),
+      ),
+    ),
   };
 }
 
@@ -891,13 +915,15 @@ export function createEnvironmentShellAtoms<R, E>(
     ).pipe(Atom.withLabel(`environment-shell-state-value:${environmentId}`)),
   );
 
-  const { statusAtom, hasSnapshotAtom } = createEnvironmentShellProgressAtoms(stateValueAtom);
+  const { statusAtom, hasSnapshotAtom, freshAtom } =
+    createEnvironmentShellProgressAtoms(stateValueAtom);
 
   return {
     stateAtom,
     stateValueAtom,
     statusAtom,
     hasSnapshotAtom,
+    freshAtom,
   };
 }
 
@@ -916,6 +942,26 @@ export function createLiveShellEnvironmentIdsAtom(input: {
     previous = next;
     return next;
   }).pipe(Atom.withLabel("live-shell-environment-ids"));
+}
+
+/**
+ * Environments whose shell has completed a live sync in the current foreground session.
+ * Stays true across brief resume probes, and clears on cold start or a long background resume.
+ */
+export function createFreshShellEnvironmentIdsAtom(input: {
+  readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  readonly freshAtom: (environmentId: EnvironmentId) => Atom.Atom<boolean>;
+}) {
+  let previous: ReadonlySet<EnvironmentId> = new Set();
+  return Atom.make((get) => {
+    const next = new Set<EnvironmentId>();
+    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
+      if (get(input.freshAtom(environmentId))) next.add(environmentId);
+    }
+    if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+    previous = next;
+    return next;
+  }).pipe(Atom.withLabel("fresh-shell-environment-ids"));
 }
 
 export * from "./models.ts";

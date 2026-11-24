@@ -12,7 +12,12 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 
 import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { useProjects } from "../../state/entities";
+import { freshShellEnvironmentIdsAtom, syncingShellEnvironmentIdsAtom } from "../../state/shell";
 import { steadyNavigationThreadShellsAtom } from "../../state/threads";
+import {
+  filterFreshThreads,
+  shouldShowThreadListSkeleton,
+} from "../threads/thread-list-skeleton-state";
 import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -54,9 +59,10 @@ export function HomeRouteScreen() {
   const projects = useProjects();
   // Stop rebuilding the streaming thread list while Thread covers Home.
   const visible = useHomeRouteVisible();
-  const threads = useLaunchingThreads(
-    useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible),
-  );
+  const freshEnvironmentIds = useAtomValueWhileVisible(freshShellEnvironmentIdsAtom, visible);
+  const syncingEnvironmentIds = useAtomValueWhileVisible(syncingShellEnvironmentIdsAtom, visible);
+  const rawThreads = useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible);
+  const threads = useLaunchingThreads(filterFreshThreads(rawThreads, freshEnvironmentIds));
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -152,6 +158,23 @@ export function HomeRouteScreen() {
   const { showHidden, setShowHidden } = useHiddenThreads();
   const selectedProjectKey =
     resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
+  const hasScopedFreshRows =
+    threads.some(
+      (thread) =>
+        thread.archivedAt === null &&
+        (selectedEnvironmentId === null || thread.environmentId === selectedEnvironmentId),
+    ) ||
+    pendingTasks.some(
+      (task) => selectedEnvironmentId === null || task.environmentId === selectedEnvironmentId,
+    );
+  const showsSkeleton = shouldShowThreadListSkeleton({
+    isLoadingConnections: catalogState.isLoadingConnections,
+    hasConnections: catalogState.hasConnections,
+    networkStatus: catalogState.networkStatus,
+    selectedEnvironmentId,
+    syncingEnvironmentIds,
+    hasVisibleRows: hasScopedFreshRows,
+  });
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
@@ -237,6 +260,7 @@ export function HomeRouteScreen() {
             searchQuery={searchQuery}
             selectedEnvironmentId={selectedEnvironmentId}
             selectedProjectKey={selectedProjectKey}
+            showsSkeleton={showsSkeleton}
             threads={threads}
             visible={visible}
           />

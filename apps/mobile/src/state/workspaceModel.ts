@@ -29,6 +29,8 @@ export interface WorkspaceConnectionState {
 
 export interface WorkspaceState extends WorkspaceConnectionState {
   readonly hasLoadedShellSnapshot: boolean;
+  /** True once at least one enabled environment has completed a live sync in this foreground session. */
+  readonly hasFreshShellSnapshot: boolean;
   readonly hasPendingShellSnapshot: boolean;
   readonly hasSyncingConnectedEnvironment: boolean;
   readonly shellSnapshotError: string | null;
@@ -102,11 +104,13 @@ export function projectWorkspaceState(input: {
   readonly networkStatus: NetworkStatus;
   readonly environments: ReadonlyArray<WorkspaceEnvironment>;
   readonly shellSummary: EnvironmentShellSummary;
+  readonly hasFreshShellSnapshot: boolean;
   readonly hasSyncingConnectedEnvironment: boolean;
 }): WorkspaceState {
   return {
     ...projectWorkspaceConnectionState(input),
     hasLoadedShellSnapshot: input.shellSummary.hasSnapshot,
+    hasFreshShellSnapshot: input.hasFreshShellSnapshot,
     hasPendingShellSnapshot: input.shellSummary.hasSynchronizingShell,
     hasSyncingConnectedEnvironment: input.hasSyncingConnectedEnvironment,
     shellSnapshotError: input.shellSummary.firstError,
