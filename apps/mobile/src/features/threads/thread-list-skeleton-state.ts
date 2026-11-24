@@ -26,49 +26,16 @@ export function filterFreshThreads<T extends { readonly environmentId: Environme
   return filtered.length === 0 ? EMPTY_THREADS : filtered;
 }
 
-function matchesProjectRefs(
-  environmentId: EnvironmentId,
-  projectId: ProjectId,
-  projectRefs: ReadonlyArray<ScopedThreadListProjectRef> | null,
-): boolean {
-  if (projectRefs === null) return true;
-  return projectRefs.some(
-    (ref) => ref.environmentId === environmentId && ref.projectId === projectId,
-  );
-}
-
-export function hasScopedFreshThreadListRows(input: {
-  readonly threads: ReadonlyArray<{
-    readonly archivedAt: string | null;
-    readonly environmentId: EnvironmentId;
-    readonly projectId: ProjectId;
-  }>;
-  readonly pendingTasks: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly projectId: ProjectId;
-  }>;
+export function resolveSingleScopedEnvironmentId(input: {
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly projectRefs: ReadonlyArray<ScopedThreadListProjectRef> | null;
-  readonly settledCount?: number;
-}): boolean {
-  if ((input.settledCount ?? 0) > 0) return true;
-  if (
-    input.threads.some(
-      (thread) =>
-        thread.archivedAt === null &&
-        (input.selectedEnvironmentId === null ||
-          thread.environmentId === input.selectedEnvironmentId) &&
-        matchesProjectRefs(thread.environmentId, thread.projectId, input.projectRefs),
-    )
-  ) {
-    return true;
-  }
-  return input.pendingTasks.some(
-    (task) =>
-      (input.selectedEnvironmentId === null ||
-        task.environmentId === input.selectedEnvironmentId) &&
-      matchesProjectRefs(task.environmentId, task.projectId, input.projectRefs),
-  );
+}): EnvironmentId | null {
+  if (input.selectedEnvironmentId !== null) return input.selectedEnvironmentId;
+  if (input.projectRefs === null || input.projectRefs.length === 0) return null;
+  const firstEnvironmentId = input.projectRefs[0]!.environmentId;
+  return input.projectRefs.every((ref) => ref.environmentId === firstEnvironmentId)
+    ? firstEnvironmentId
+    : null;
 }
 
 export function shouldShowThreadListSkeleton(input: {

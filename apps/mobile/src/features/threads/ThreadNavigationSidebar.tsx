@@ -42,7 +42,7 @@ import { deriveSelectedEnvironmentEmptyState } from "../home/home-empty-state";
 import { ThreadListSkeleton } from "./ThreadListSkeleton";
 import {
   filterFreshThreads,
-  hasScopedFreshThreadListRows,
+  resolveSingleScopedEnvironmentId,
   shouldShowThreadListSkeleton,
 } from "./thread-list-skeleton-state";
 import { useThreadSearch } from "../../state/queries";
@@ -610,13 +610,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     />
   );
   const selectedProjectRefs = selectedProjectScope?.projectRefs ?? null;
-  const hasScopedFreshRows = hasScopedFreshThreadListRows({
-    threads: launchingThreads,
-    pendingTasks,
-    selectedEnvironmentId: options.selectedEnvironmentId,
-    projectRefs: selectedProjectRefs,
-    settledCount: threadListV2Layout.settledCount,
-  });
   const showsSkeleton = shouldShowThreadListSkeleton({
     isLoadingConnections: catalogState.isLoadingConnections,
     hasConnections: catalogState.hasConnections,
@@ -624,14 +617,18 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     selectedEnvironmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectRefs,
     syncingEnvironmentIds,
-    hasVisibleRows: hasScopedFreshRows,
+    hasVisibleRows: threadListV2Items.length > 0,
   });
-  const selectedEnvironmentShellError = useEnvironmentShellError(options.selectedEnvironmentId);
+  const scopedUnavailableEnvironmentId = resolveSingleScopedEnvironmentId({
+    selectedEnvironmentId: options.selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
+  });
+  const selectedEnvironmentShellError = useEnvironmentShellError(scopedUnavailableEnvironmentId);
   const selectedEnvironment =
-    options.selectedEnvironmentId === null
+    scopedUnavailableEnvironmentId === null
       ? null
       : (workspaceEnvironments.find(
-          (environment) => environment.environmentId === options.selectedEnvironmentId,
+          (environment) => environment.environmentId === scopedUnavailableEnvironmentId,
         ) ?? null);
   const selectedEnvironmentUnavailable =
     selectedEnvironment === null
@@ -656,7 +653,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     !catalogState.hasReadyEnvironment &&
     !isAwaitingApproval &&
     !selectedEnvironmentUnavailable?.loading &&
-    (!catalogState.hasConnectingEnvironment || isEnvironmentUnavailable);
+    (!catalogState.hasConnectingEnvironment ||
+      isEnvironmentUnavailable ||
+      selectedEnvironmentUnavailable !== null);
   const workspaceUnavailableText = isAwaitingApproval
     ? (runtimeConnectionErrorText(catalogState, messages) ?? gt("Waiting for approval on the host"))
     : ((catalogState.shellSnapshotError !== null

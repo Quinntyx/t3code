@@ -393,17 +393,20 @@ describe("createOlderSettledThreadAtoms", () => {
       const count = (value: OlderSettled | null) => value?.counts.get(project);
       registry.mount(olderAtom);
 
-      // A cached shell: its counts stand, read nothing.
+      // A cached shell: its counts stand as unverified, read nothing.
       setShell({ snapshot: shellSnapshot({ sequence: 5, asOfSequence: 3, count: 5 }) });
       expect(count(registry.get(olderAtom))).toBe(5);
-      // This session's snapshot: its counts are current until something changes.
+      expect(registry.get(olderAtom)?.countsFresh).toBe(false);
+      // This session's fresh snapshot: its counts are current until something changes.
       setShell({
         snapshot: shellSnapshot({ sequence: 3, asOfSequence: 3, count: 5 }),
         generation: 1,
+        fresh: true,
       });
       expect(count(registry.get(olderAtom))).toBe(5);
+      expect(registry.get(olderAtom)?.countsFresh).toBe(true);
 
-      // A removal can change the count: one read once changes stop for a moment.
+      // A removal can change the count: unverified until the debounced read completes.
       yield* Queue.offer(
         replies,
         Effect.succeed({
@@ -415,19 +418,25 @@ describe("createOlderSettledThreadAtoms", () => {
       setShell({
         snapshot: shellSnapshot({ sequence: 4, asOfSequence: 3, count: 5 }),
         generation: 1,
+        fresh: true,
         removedAt: new Map([[ThreadId.make("gone"), 4]]),
       });
       expect(count(registry.get(olderAtom))).toBe(5);
+      expect(registry.get(olderAtom)?.countsFresh).toBe(false);
       yield* TestClock.adjust("500 millis");
-      expect(count(yield* until(olderAtom, (value) => count(value) === 4))).toBe(4);
+      const refreshed = yield* until(olderAtom, (value) => count(value) === 4);
+      expect(count(refreshed)).toBe(4);
+      expect(refreshed?.countsFresh).toBe(true);
       expect(requests).toEqual([{ before: { settledAt: before }, limit: 0 }]);
 
-      // A new snapshot brings its own counts and drops the read.
+      // A new fresh snapshot brings its own counts and drops the read.
       setShell({
         snapshot: shellSnapshot({ sequence: 9, asOfSequence: 9, count: 7 }),
         generation: 2,
+        fresh: true,
       });
       expect(count(registry.get(olderAtom))).toBe(7);
+      expect(registry.get(olderAtom)?.countsFresh).toBe(true);
       expect(requests).toHaveLength(1);
     }),
   );

@@ -93,6 +93,7 @@ import { createSwipeRowActivation } from "./swipe-row-activation";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
 import { useFabScroll } from "./FabScrollContext";
 import { ThreadListSkeleton } from "../threads/ThreadListSkeleton";
+import { shouldShowThreadListSkeleton } from "../threads/thread-list-skeleton-state";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState, type HomeEmptyState } from "./home-empty-state";
@@ -114,7 +115,7 @@ interface HomeScreenProps {
   readonly selectedEnvironmentUnavailable: Omit<HomeEmptyState, "showsAddEnvironment"> | null;
   readonly selectedProjectKey: string | null;
   readonly freshEnvironmentIds: ReadonlySet<EnvironmentId>;
-  readonly showsSkeleton: boolean;
+  readonly syncingEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
@@ -622,15 +623,42 @@ export function HomeScreen(props: HomeScreenProps) {
       ? null
       : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
         "this environment");
+  const showsSkeleton = shouldShowThreadListSkeleton({
+    isLoadingConnections: props.catalogState.isLoadingConnections,
+    hasConnections: props.catalogState.hasConnections,
+    networkStatus: props.catalogState.networkStatus,
+    selectedEnvironmentId: props.selectedEnvironmentId,
+    projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
+    syncingEnvironmentIds: props.syncingEnvironmentIds,
+    hasVisibleRows: threadListV2Items.length > 0,
+  });
   const emptyState = props.selectedEnvironmentUnavailable
     ? {
         ...props.selectedEnvironmentUnavailable,
         showsAddEnvironment:
           !props.selectedEnvironmentUnavailable.loading && !props.catalogState.hasReadyEnvironment,
       }
-    : deriveHomeEmptyState(props.catalogState, props.projects.length, m);
+    : !props.catalogState.isLoadingConnections &&
+        props.catalogState.hasConnections &&
+        v2ScopedProjectGroup !== null
+      ? {
+          title: gt("No threads in {name}", { name: v2ScopedProjectGroup.title }),
+          detail: gt("Choose another project or create a new task."),
+          loading: false,
+          showsAddEnvironment: false,
+        }
+      : !props.catalogState.isLoadingConnections &&
+          props.catalogState.hasConnections &&
+          selectedEnvironmentLabel !== null
+        ? {
+            title: gt("No threads in {name}", { name: selectedEnvironmentLabel }),
+            detail: gt("Choose another environment or create a new task."),
+            loading: false,
+            showsAddEnvironment: false,
+          }
+        : deriveHomeEmptyState(props.catalogState, props.projects.length, m);
 
-  if (props.showsSkeleton && threadListV2Layout.settledCount === 0) {
+  if (showsSkeleton) {
     return (
       <View className={containerClassName}>
         <ScreenContent surface={sidebarSurface ? "drawer" : "screen"}>

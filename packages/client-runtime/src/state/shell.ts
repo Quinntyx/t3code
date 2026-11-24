@@ -270,16 +270,24 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* runCachePersistence(persistence, persist).pipe(Effect.forkScoped);
 
-  const setDisconnected = Ref.set(awaitingCompletion, false).pipe(
-    Effect.andThen(
-      SubscriptionRef.update(state, (current) => ({
-        ...current,
-        status: shellStatusForSnapshot(current.snapshot),
-      })),
-    ),
-    Effect.andThen(flushLiveShellSnapshot.pipe(Effect.forkScoped)),
-    Effect.asVoid,
-  );
+  // Server items, deferred link fills, and lifecycle resets share this lock so an in-flight batch
+  // cannot overwrite a disconnect, stream error, or long-resume freshness invalidation.
+  const snapshotWriteLock = yield* Semaphore.make(1);
+
+  const setDisconnected = snapshotWriteLock
+    .withPermit(
+      Effect.gen(function* () {
+        if (Option.isNone(yield* SubscriptionRef.get(supervisor.session))) {
+          yield* Ref.set(activeSubscription, null);
+        }
+        yield* Ref.set(awaitingCompletion, false);
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          status: shellStatusForSnapshot(current.snapshot),
+        }));
+      }),
+    )
+    .pipe(Effect.andThen(flushLiveShellSnapshot.pipe(Effect.forkScoped)), Effect.asVoid);
   const setSynchronizing = SubscriptionRef.update(state, (current) => ({
     ...current,
     status: "synchronizing" as const,
@@ -305,24 +313,26 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         },
   );
   const setStreamError = (error: unknown) =>
-    Ref.set(awaitingCompletion, false).pipe(
-      Effect.andThen(Effect.logWarning("Could not synchronize the environment shell.")),
+    Effect.logWarning("Could not synchronize the environment shell.").pipe(
       Effect.annotateLogs({
         environmentId,
         ...safeErrorLogAttributes(error),
       }),
       Effect.andThen(
-        SubscriptionRef.update(state, (current) => ({
-          ...current,
-          status: shellStatusForSnapshot(current.snapshot),
-          error: Option.some(SHELL_SYNCHRONIZATION_ERROR_MESSAGE),
-        })),
+        snapshotWriteLock.withPermit(
+          Ref.set(activeSubscription, null).pipe(
+            Effect.andThen(Ref.set(awaitingCompletion, false)),
+            Effect.andThen(
+              SubscriptionRef.update(state, (current) => ({
+                ...current,
+                status: shellStatusForSnapshot(current.snapshot),
+                error: Option.some(SHELL_SYNCHRONIZATION_ERROR_MESSAGE),
+              })),
+            ),
+          ),
+        ),
       ),
     );
-
-  // Server items and deferred link fills both read the snapshot and write it back; one at a
-  // time, so neither can overwrite what the other wrote in between.
-  const snapshotWriteLock = yield* Semaphore.make(1);
 
   const applyLocked = Effect.fnUntraced(function* (
     items: ReadonlyArray<OrchestrationV2ShellStreamItem>,
@@ -364,7 +374,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           ...next,
           removedAt: removedAt ?? next.removedAt,
           snapshot: Option.some(applyShellStreamEvents(next.snapshot.value, deltas)),
-          status: waiting ? "synchronizing" : "live",
+          status: waiting || !next.fresh ? "synchronizing" : "live",
           error: Option.none(),
         };
       }

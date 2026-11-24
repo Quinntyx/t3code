@@ -74,7 +74,10 @@ export function useOlderSettledShelf(input: {
     /** Older settled threads in scope that are not local; add it to the local Settled rows. */
     unloadedCount: () =>
       unloadedOlderSettledCount({
-        olderSettled: olderOf,
+        olderSettled: (environmentId) => {
+          const older = olderOf(environmentId);
+          return older?.countsFresh === false ? null : older;
+        },
         scopes,
         threads: registry
           .get(environmentThreadShells.threadShellsAtom)

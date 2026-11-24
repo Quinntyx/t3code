@@ -1635,6 +1635,103 @@ describe("EnvironmentSupervisor", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect(
+    "upgrades a running network-change check when a long resume arrives before the check finishes",
+    () =>
+      Effect.gen(function* () {
+        const lanTarget = new BearerConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: "Test environment",
+          connectionId: "bearer:lan",
+        });
+        const tailnetTarget = new BearerConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: "Test environment",
+          connectionId: "bearer:tailnet",
+        });
+        const multiRouteEntry: ConnectionCatalogEntry = {
+          target: lanTarget,
+          profile: Option.some(
+            new BearerConnectionProfile({
+              connectionId: lanTarget.connectionId,
+              environmentId: TARGET.environmentId,
+              label: "Test environment",
+              httpBaseUrl: "http://192.168.1.10:3773",
+              wsBaseUrl: "ws://192.168.1.10:3773",
+            }),
+          ),
+          alternateRoutes: [
+            {
+              target: tailnetTarget,
+              profile: Option.some(
+                new BearerConnectionProfile({
+                  connectionId: tailnetTarget.connectionId,
+                  environmentId: TARGET.environmentId,
+                  label: "Test environment",
+                  httpBaseUrl: "http://100.100.10.10:3773",
+                  wsBaseUrl: "ws://100.100.10.10:3773",
+                  network: "tailscale",
+                }),
+              ),
+            },
+          ],
+          enabled: true,
+        };
+        const routeChecks = yield* Ref.make<ReadonlyArray<string>>([]);
+        const preparedTargets = yield* Ref.make<ReadonlyArray<string>>([]);
+        let hostCheckAttempts = 0;
+        const harness = yield* makeHarness({
+          checkRoute: (route) =>
+            Ref.update(routeChecks, (checks) => [
+              ...checks,
+              route.target._tag === "BearerConnectionTarget"
+                ? route.target.connectionId
+                : route.target._tag,
+            ]).pipe(
+              Effect.andThen(
+                route.target._tag === "BearerConnectionTarget" &&
+                  route.target.connectionId === lanTarget.connectionId
+                  ? Effect.never
+                  : Effect.succeed<ConnectionDriver.RouteCheck>("answered"),
+              ),
+            ),
+          prepare: (_attempt, target) =>
+            Ref.update(preparedTargets, (targets) => [
+              ...targets,
+              target._tag === "BearerConnectionTarget" ? target.connectionId : target._tag,
+            ]).pipe(Effect.as(preparedFor(target))),
+          initialConfig: () => Effect.succeed(PROBE_CAPABLE_CONFIG),
+          probe: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
+          checkHost: () =>
+            Effect.sync((): ConnectionDriver.RouteCheck =>
+              ++hostCheckAttempts === 1 ? "silent" : "answered",
+            ),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(multiRouteEntry, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
+
+        yield* TestClock.adjust("500 millis");
+        yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+        yield* Ref.set(routeChecks, []);
+
+        // Network change starts the slower silent-socket check; long resume arrives 100ms later
+        // and upgrades the running check so the 250ms recheck answers and replaces on tailnet
+        // directly before the 1500ms probe deadline expires.
+        yield* harness.wake("network-changed");
+        yield* TestClock.adjust("100 millis");
+        yield* harness.wake("application-active-long");
+        yield* TestClock.adjust("750 millis");
+        yield* awaitState(
+          supervisor.state,
+          (state) => state.phase === "connected" && state.generation === 2,
+        );
+        expect(hostCheckAttempts).toBe(2);
+        expect(yield* Ref.get(routeChecks)).not.toContain("bearer:tailnet");
+        expect(yield* Ref.get(preparedTargets)).toEqual(["bearer:tailnet", "bearer:tailnet"]);
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("leaves a web or desktop foreground probe to its own deadline", () =>
     Effect.gen(function* () {
       const harness = yield* makeSilentSocketHarness({

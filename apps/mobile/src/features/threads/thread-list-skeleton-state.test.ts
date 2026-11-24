@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   filterFreshThreads,
-  hasScopedFreshThreadListRows,
+  resolveSingleScopedEnvironmentId,
   shouldShowThreadListSkeleton,
 } from "./thread-list-skeleton-state";
 
@@ -112,7 +112,7 @@ describe("shouldShowThreadListSkeleton", () => {
       expected: false,
     },
     {
-      name: "shows skeleton when a selected project's environment is still syncing even if another environment has fresh rows elsewhere",
+      name: "shows skeleton when a selected project's environment is still syncing and no filtered rows match",
       input: {
         isLoadingConnections: false,
         hasConnections: true,
@@ -120,12 +120,7 @@ describe("shouldShowThreadListSkeleton", () => {
         selectedEnvironmentId: null,
         projectRefs: [{ environmentId: ENV_B, projectId: PROJECT_2 }],
         syncingEnvironmentIds: new Set<EnvironmentId>([ENV_B]),
-        hasVisibleRows: hasScopedFreshThreadListRows({
-          threads: [{ archivedAt: null, environmentId: ENV_A, projectId: PROJECT_1 }],
-          pendingTasks: [],
-          selectedEnvironmentId: null,
-          projectRefs: [{ environmentId: ENV_B, projectId: PROJECT_2 }],
-        }),
+        hasVisibleRows: false,
       },
       expected: true,
     },
@@ -156,5 +151,29 @@ describe("shouldShowThreadListSkeleton", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(shouldShowThreadListSkeleton(input)).toBe(expected);
+  });
+
+  it("resolves a single scoped environment id from environment or project filters", () => {
+    expect(
+      resolveSingleScopedEnvironmentId({
+        selectedEnvironmentId: ENV_A,
+        projectRefs: [{ environmentId: ENV_B, projectId: PROJECT_2 }],
+      }),
+    ).toBe(ENV_A);
+    expect(
+      resolveSingleScopedEnvironmentId({
+        selectedEnvironmentId: null,
+        projectRefs: [{ environmentId: ENV_B, projectId: PROJECT_2 }],
+      }),
+    ).toBe(ENV_B);
+    expect(
+      resolveSingleScopedEnvironmentId({
+        selectedEnvironmentId: null,
+        projectRefs: [
+          { environmentId: ENV_A, projectId: PROJECT_1 },
+          { environmentId: ENV_B, projectId: PROJECT_2 },
+        ],
+      }),
+    ).toBeNull();
   });
 });

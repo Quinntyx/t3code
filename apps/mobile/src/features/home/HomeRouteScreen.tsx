@@ -20,8 +20,7 @@ import {
 } from "../../state/threads";
 import {
   filterFreshThreads,
-  hasScopedFreshThreadListRows,
-  shouldShowThreadListSkeleton,
+  resolveSingleScopedEnvironmentId,
 } from "../threads/thread-list-skeleton-state";
 import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -134,26 +133,6 @@ export function HomeRouteScreen() {
     setSelectedProjectKey,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
-  const selectedEnvironmentShellError = useEnvironmentShellError(selectedEnvironmentId);
-  const selectedEnvironment =
-    selectedEnvironmentId === null
-      ? null
-      : (workspaceEnvironments.find(
-          (environment) => environment.environmentId === selectedEnvironmentId,
-        ) ?? null);
-  const selectedEnvironmentUnavailable =
-    selectedEnvironment === null
-      ? null
-      : deriveSelectedEnvironmentEmptyState(
-          {
-            networkStatus: catalogState.networkStatus,
-            environment: selectedEnvironment,
-            hasFreshSnapshot: freshEnvironmentIds.has(selectedEnvironment.environmentId),
-            isActivelySyncing: syncingEnvironmentIds.has(selectedEnvironment.environmentId),
-            shellError: selectedEnvironmentShellError,
-          },
-          m,
-        );
   const projectScopes = useMemo(
     () =>
       buildHomeProjectScopes(
@@ -184,22 +163,30 @@ export function HomeRouteScreen() {
   const { showHidden, setShowHidden } = useHiddenThreads();
   const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, listOptions);
   const selectedProjectKey = selectedProjectScope?.key ?? null;
-  const selectedProjectRefs = selectedProjectScope?.projectRefs ?? null;
-  const hasScopedFreshRows = hasScopedFreshThreadListRows({
-    threads,
-    pendingTasks,
+  const scopedUnavailableEnvironmentId = resolveSingleScopedEnvironmentId({
     selectedEnvironmentId,
-    projectRefs: selectedProjectRefs,
+    projectRefs: selectedProjectScope?.projectRefs ?? null,
   });
-  const showsSkeleton = shouldShowThreadListSkeleton({
-    isLoadingConnections: catalogState.isLoadingConnections,
-    hasConnections: catalogState.hasConnections,
-    networkStatus: catalogState.networkStatus,
-    selectedEnvironmentId,
-    projectRefs: selectedProjectRefs,
-    syncingEnvironmentIds,
-    hasVisibleRows: hasScopedFreshRows,
-  });
+  const selectedEnvironmentShellError = useEnvironmentShellError(scopedUnavailableEnvironmentId);
+  const selectedEnvironment =
+    scopedUnavailableEnvironmentId === null
+      ? null
+      : (workspaceEnvironments.find(
+          (environment) => environment.environmentId === scopedUnavailableEnvironmentId,
+        ) ?? null);
+  const selectedEnvironmentUnavailable =
+    selectedEnvironment === null
+      ? null
+      : deriveSelectedEnvironmentEmptyState(
+          {
+            networkStatus: catalogState.networkStatus,
+            environment: selectedEnvironment,
+            hasFreshSnapshot: freshEnvironmentIds.has(selectedEnvironment.environmentId),
+            isActivelySyncing: syncingEnvironmentIds.has(selectedEnvironment.environmentId),
+            shellError: selectedEnvironmentShellError,
+          },
+          m,
+        );
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
@@ -287,7 +274,7 @@ export function HomeRouteScreen() {
             selectedEnvironmentUnavailable={selectedEnvironmentUnavailable}
             selectedProjectKey={selectedProjectKey}
             freshEnvironmentIds={freshEnvironmentIds}
-            showsSkeleton={showsSkeleton}
+            syncingEnvironmentIds={syncingEnvironmentIds}
             threads={threads}
             visible={visible}
           />

@@ -60,6 +60,7 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
     projectRefs: null,
     searchQuery: "",
     searchMatches: new Map(),
+    freshEnvironmentIds: environmentIds,
     settlementEnvironmentIds: environmentIds,
     snoozeEnvironmentIds: environmentIds,
     pinReorderEnvironmentIds: environmentIds,
@@ -299,6 +300,7 @@ it("counts filtered loaded settled rows as local, then restores their visible co
       projectRefs: null,
       searchQuery: "",
       searchMatches: new Map(),
+      freshEnvironmentIds: new Set([environmentId]),
       settlementEnvironmentIds: new Set([environmentId]),
       snoozeEnvironmentIds: new Set([environmentId]),
       pinReorderEnvironmentIds: new Set(),
@@ -417,7 +419,49 @@ it("omits cached older settled counts for environments that have not synced fres
   act(() => root.render(probe()));
   expect(observed.at(-1)?.layout.settledCount).toBe(0);
 
+  // Even after the environment marks fresh, unverified older-settled counts stay hidden until refreshed.
+  act(() => {
+    registry.set(
+      shelfAtom,
+      new Map<EnvironmentId, OlderSettledShelfEnvironment>([
+        [
+          environmentId,
+          {
+            older: {
+              before,
+              beforeMs: Date.parse(before),
+              counts: new Map([[projectId, 12]]),
+              countsFresh: false,
+            },
+            pages: { reads: [], frontier: null, status: "ready" as const },
+          },
+        ],
+      ]),
+    );
+  });
   freshEnvironmentIds = new Set([environmentId]);
+  act(() => root.render(probe()));
+  expect(observed.at(-1)?.layout.settledCount).toBe(0);
+
+  act(() => {
+    registry.set(
+      shelfAtom,
+      new Map<EnvironmentId, OlderSettledShelfEnvironment>([
+        [
+          environmentId,
+          {
+            older: {
+              before,
+              beforeMs: Date.parse(before),
+              counts: new Map([[projectId, 12]]),
+              countsFresh: true,
+            },
+            pages: { reads: [], frontier: null, status: "ready" as const },
+          },
+        ],
+      ]),
+    );
+  });
   act(() => root.render(probe()));
   expect(observed.at(-1)?.layout.settledCount).toBe(12);
 });

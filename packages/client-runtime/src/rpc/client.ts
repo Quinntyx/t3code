@@ -343,6 +343,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
               let expectedFailureRetries = 0;
               // Not reset by a first value: a stream can emit before every chunk failure.
               let streamFailureRetries = 0;
+              // Reset on first value so a single transient blip on a healthy session does not
+              // cause a much later socket close to flash an error before the supervisor drops it.
+              let transportFailuresSinceLastItem = 0;
               const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
@@ -362,6 +365,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
                             expectedFailureRetries = 0;
+                            transportFailuresSinceLastItem = 0;
                           }),
                         ),
                       );
@@ -426,12 +430,15 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         (isTransportFailure || isChunkDecodeDefect)
                       ) {
                         const retries = streamFailureRetries++;
+                        const transportRetries = isTransportFailure
+                          ? transportFailuresSinceLastItem++
+                          : 0;
                         // Leave the first transport failure silent so a normal socket close does
                         // not flash a stream error before the supervisor drops the session, then
                         // surface persistent same-session failures.
                         const reportFailure =
                           isTransportFailure &&
-                          retries > 0 &&
+                          transportRetries > 0 &&
                           options?.onExpectedFailure !== undefined
                             ? options.onExpectedFailure(cause)
                             : Effect.void;

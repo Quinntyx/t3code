@@ -961,6 +961,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           if (isLongResume(probeEvent.signal) && !longResume) {
             longResume = true;
             longResumeStartedAt = yield* Clock.monotonicTimeNanos;
+            // Upgrade any slower check already running (such as one started by a network change)
+            // to the long-resume cadence and zero remote silence window.
+            if (silentSocket !== undefined) {
+              yield* Fiber.interrupt(silentSocket);
+              silentSocket = undefined;
+            }
           }
           yield* armSilentSocketCheck(probeEvent.signal);
           const signalDeadline =

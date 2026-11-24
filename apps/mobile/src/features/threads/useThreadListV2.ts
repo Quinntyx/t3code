@@ -53,8 +53,8 @@ export function useThreadListV2(input: {
   readonly searchQuery: string;
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
   readonly searchMatches: ReadonlyMap<string, unknown>;
-  /** When provided, older settled counts and pages are read only for fresh environments. */
-  readonly freshEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  /** Older settled counts and pages are read only for fresh environments. */
+  readonly freshEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly snoozeEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly pinReorderEnvironmentIds: ReadonlySet<EnvironmentId>;
@@ -133,9 +133,7 @@ export function useThreadListV2(input: {
         environmentId: input.environmentId,
         projectRefs: input.projectRefs,
         settlementEnvironmentIds: input.settlementEnvironmentIds,
-        ...(input.freshEnvironmentIds === undefined
-          ? {}
-          : { freshEnvironmentIds: input.freshEnvironmentIds }),
+        freshEnvironmentIds: input.freshEnvironmentIds,
       }),
     [
       input.environmentId,
